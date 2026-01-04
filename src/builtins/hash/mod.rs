@@ -401,7 +401,9 @@ pub fn php_hash_update_file(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
     let filename = match &vm.arena.get(args[1]).value {
         Val::String(s) => String::from_utf8_lossy(s).to_string(),
         _ => {
-            return Err("hash_update_file(): Argument #2 ($filename) must be of type string".into());
+            return Err(
+                "hash_update_file(): Argument #2 ($filename) must be of type string".into(),
+            );
         }
     };
 

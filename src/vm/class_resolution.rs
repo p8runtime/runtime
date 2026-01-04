@@ -193,6 +193,8 @@ mod tests {
             static_properties: std::collections::HashMap::new(),
             abstract_methods: std::collections::HashSet::new(),
             allows_dynamic_properties: false,
+            attributes: Vec::new(),
+            enum_cases: Vec::new(),
         };
         vm.context.classes.insert(grandparent_sym, grandparent_def);
 
@@ -212,6 +214,8 @@ mod tests {
             static_properties: std::collections::HashMap::new(),
             abstract_methods: std::collections::HashSet::new(),
             allows_dynamic_properties: false,
+            attributes: Vec::new(),
+            enum_cases: Vec::new(),
         };
         vm.context.classes.insert(parent_sym, parent_def);
 
@@ -231,6 +235,8 @@ mod tests {
             static_properties: std::collections::HashMap::new(),
             abstract_methods: std::collections::HashSet::new(),
             allows_dynamic_properties: false,
+            attributes: Vec::new(),
+            enum_cases: Vec::new(),
         };
         vm.context.classes.insert(child_sym, child_def);
 
@@ -262,6 +268,8 @@ mod tests {
             static_properties: std::collections::HashMap::new(),
             abstract_methods: std::collections::HashSet::new(),
             allows_dynamic_properties: false,
+            attributes: Vec::new(),
+            enum_cases: Vec::new(),
         };
         vm.context.classes.insert(parent_sym, parent_def);
 
@@ -281,6 +289,8 @@ mod tests {
             static_properties: std::collections::HashMap::new(),
             abstract_methods: std::collections::HashSet::new(),
             allows_dynamic_properties: false,
+            attributes: Vec::new(),
+            enum_cases: Vec::new(),
         };
         vm.context.classes.insert(child_sym, child_def);
 

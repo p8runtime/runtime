@@ -44,6 +44,11 @@ impl Extension for JsonExtension {
         registry.register_function(b"json_last_error", json::php_json_last_error);
         registry.register_function(b"json_last_error_msg", json::php_json_last_error_msg);
         registry.register_function(b"json_validate", json::php_json_validate);
+        registry.register_function(b"gop_json_encode", json::gop_json_encode);
+        registry.register_function(b"gop_json_decode", json::gop_json_decode);
+        registry.register_function(b"gop_json_last_error", json::gop_json_last_error);
+        registry.register_function(b"gop_json_last_error_msg", json::gop_json_last_error_msg);
+        registry.register_function(b"gop_json_validate", json::gop_json_validate);
 
         // Register JSON error constants
         use crate::core::value::Val;

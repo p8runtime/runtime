@@ -1,6 +1,9 @@
 use crate::core::value::{ArrayKey, Handle, Val};
+use crate::runtime::context::EnumBackedType;
 use crate::vm::engine::{PropertyCollectionMode, VM};
+use crate::vm::frame::{GeneratorData, GeneratorState};
 use indexmap::IndexMap;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 //=============================================================================
@@ -129,10 +132,56 @@ pub fn closure_from_callable(_vm: &mut VM, args: &[Handle]) -> Result<Handle, St
 // Generator class methods
 // Reference: $PHP_SRC_PATH/Zend/zend_generators.c
 pub fn generator_current(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    let this_handle = vm
+        .frames
+        .last()
+        .and_then(|f| f.this)
+        .ok_or("Generator::current() called outside object context")?;
+
+    let payload_handle = match &vm.arena.get(this_handle).value {
+        Val::Object(payload_handle) => *payload_handle,
+        _ => return Err("Generator::current() expects object context".into()),
+    };
+
+    let payload = vm.arena.get(payload_handle);
+    if let Val::ObjPayload(obj_data) = &payload.value {
+        if let Some(internal) = &obj_data.internal {
+            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
+                let data = gen_data.borrow();
+                if let Some(handle) = data.current_val {
+                    return Ok(handle);
+                }
+            }
+        }
+    }
+
     Ok(vm.arena.alloc(Val::Null))
 }
 
 pub fn generator_key(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    let this_handle = vm
+        .frames
+        .last()
+        .and_then(|f| f.this)
+        .ok_or("Generator::key() called outside object context")?;
+
+    let payload_handle = match &vm.arena.get(this_handle).value {
+        Val::Object(payload_handle) => *payload_handle,
+        _ => return Err("Generator::key() expects object context".into()),
+    };
+
+    let payload = vm.arena.get(payload_handle);
+    if let Val::ObjPayload(obj_data) = &payload.value {
+        if let Some(internal) = &obj_data.internal {
+            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
+                let data = gen_data.borrow();
+                if let Some(handle) = data.current_key {
+                    return Ok(handle);
+                }
+            }
+        }
+    }
+
     Ok(vm.arena.alloc(Val::Null))
 }
 
@@ -154,11 +203,60 @@ pub fn generator_throw(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, String>
 }
 
 pub fn generator_valid(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    let this_handle = vm
+        .frames
+        .last()
+        .and_then(|f| f.this)
+        .ok_or("Generator::valid() called outside object context")?;
+
+    let payload_handle = match &vm.arena.get(this_handle).value {
+        Val::Object(payload_handle) => *payload_handle,
+        _ => return Err("Generator::valid() expects object context".into()),
+    };
+
+    let payload = vm.arena.get(payload_handle);
+    if let Val::ObjPayload(obj_data) = &payload.value {
+        if let Some(internal) = &obj_data.internal {
+            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
+                let data = gen_data.borrow();
+                let is_valid = !matches!(data.state, GeneratorState::Finished)
+                    && data.current_val.is_some();
+                return Ok(vm.arena.alloc(Val::Bool(is_valid)));
+            }
+        }
+    }
+
     Ok(vm.arena.alloc(Val::Bool(false)))
 }
 
 pub fn generator_get_return(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Ok(vm.arena.alloc(Val::Null))
+    let this_handle = vm
+        .frames
+        .last()
+        .and_then(|f| f.this)
+        .ok_or("Generator::getReturn() called outside object context")?;
+
+    let payload_handle = match &vm.arena.get(this_handle).value {
+        Val::Object(payload_handle) => *payload_handle,
+        _ => return Err("Generator::getReturn() expects object context".into()),
+    };
+
+    let payload = vm.arena.get(payload_handle);
+    if let Val::ObjPayload(obj_data) = &payload.value {
+        if let Some(internal) = &obj_data.internal {
+            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
+                let data = gen_data.borrow();
+                if let Some(handle) = data.return_val {
+                    return Ok(handle);
+                }
+                return Err(
+                    "Generator::getReturn() cannot be called before generator has returned".into(),
+                );
+            }
+        }
+    }
+
+    Err("Generator::getReturn() called on invalid generator".into())
 }
 
 // Fiber class methods (PHP 8.1+)
@@ -277,19 +375,89 @@ pub fn stringable_to_string(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, St
 // UnitEnum interface (PHP 8.1+)
 // Reference: $PHP_SRC_PATH/Zend/zend_enum.c
 pub fn unit_enum_cases(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    // Returns array of all enum cases
-    Ok(vm
-        .arena
-        .alloc(Val::Array(crate::core::value::ArrayData::new().into())))
+    let class_sym = vm
+        .current_called_scope()
+        .ok_or("UnitEnum::cases() called outside class scope")?;
+    let class_def = vm
+        .context
+        .classes
+        .get(&class_sym)
+        .ok_or("UnitEnum::cases(): Enum class not found")?;
+
+    let mut array = crate::core::value::ArrayData::new();
+    for (idx, case_def) in class_def.enum_cases.iter().enumerate() {
+        array.insert(crate::core::value::ArrayKey::Int(idx as i64), case_def.handle);
+    }
+
+    Ok(vm.arena.alloc(Val::Array(array.into())))
 }
 
 // BackedEnum interface (PHP 8.1+)
-pub fn backed_enum_from(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Err("BackedEnum::from() not yet implemented".into())
+pub fn backed_enum_from(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let result = resolve_backed_enum_case(vm, args, true)?;
+    Ok(result)
 }
 
-pub fn backed_enum_try_from(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Ok(vm.arena.alloc(Val::Null))
+pub fn backed_enum_try_from(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    match resolve_backed_enum_case(vm, args, false) {
+        Ok(handle) => Ok(handle),
+        Err(err) if err == "__try_from_value_error" => Ok(vm.arena.alloc(Val::Null)),
+        Err(err) => Err(err),
+    }
+}
+
+fn resolve_backed_enum_case(
+    vm: &mut VM,
+    args: &[Handle],
+    strict_error: bool,
+) -> Result<Handle, String> {
+    let class_sym = vm
+        .current_called_scope()
+        .ok_or("BackedEnum::from() called outside class scope")?;
+    let class_def = vm
+        .context
+        .classes
+        .get(&class_sym)
+        .ok_or("BackedEnum::from(): Enum class not found")?;
+    let backed_type = class_def.enum_backed_type.ok_or(
+        "BackedEnum::from() called on non-backed enum".to_string(),
+    )?;
+
+    if args.len() != 1 {
+        return Err("BackedEnum::from() expects exactly 1 argument".into());
+    }
+
+    let arg_val = vm.arena.get(args[0]).value.clone();
+    let matches_type = match (backed_type, &arg_val) {
+        (EnumBackedType::Int, Val::Int(_)) => true,
+        (EnumBackedType::String, Val::String(_)) => true,
+        _ => false,
+    };
+    if !matches_type {
+        return Err("BackedEnum::from() expects value of correct backing type".into());
+    }
+
+    for case_def in &class_def.enum_cases {
+        if let Some(case_val) = &case_def.value {
+            if values_equal(case_val, &arg_val) {
+                return Ok(case_def.handle);
+            }
+        }
+    }
+
+    if strict_error {
+        Err("BackedEnum::from(): Value not found in enum".into())
+    } else {
+        Err("__try_from_value_error".into())
+    }
+}
+
+fn values_equal(a: &Val, b: &Val) -> bool {
+    match (a, b) {
+        (Val::Int(a), Val::Int(b)) => a == b,
+        (Val::String(a), Val::String(b)) => a == b,
+        _ => false,
+    }
 }
 
 // SensitiveParameterValue class (PHP 8.2+)

@@ -1,4 +1,5 @@
 use crate::core::value::{Handle, Symbol, Val};
+use crate::runtime::context::AttributeInstance;
 use crate::vm::opcode::OpCode;
 use indexmap::IndexMap;
 use std::cell::RefCell;
@@ -14,6 +15,7 @@ pub struct UserFunc {
     pub is_generator: bool,
     pub statics: Rc<RefCell<HashMap<Symbol, Handle>>>,
     pub return_type: Option<ReturnType>,
+    pub attributes: Vec<AttributeInstance>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +54,7 @@ pub struct FuncParam {
     pub param_type: Option<ReturnType>,
     pub is_variadic: bool,
     pub default_value: Option<Val>,
+    pub attributes: Vec<AttributeInstance>,
 }
 
 #[derive(Debug, Clone)]

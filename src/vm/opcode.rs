@@ -115,16 +115,22 @@ pub enum OpCode {
 
     // Objects
     DefClass(Symbol, Option<Symbol>), // Define class (name, parent)
+    DefEnum(Symbol, u8),              // Define enum (name, backed_type: 0=unit,1=int,2=string)
     DefInterface(Symbol),             // Define interface (name)
     DefTrait(Symbol),                 // Define trait (name)
     AddInterface(Symbol, Symbol),     // (class_name, interface_name)
     UseTrait(Symbol, Symbol),         // (class_name, trait_name)
     AllowDynamicProperties(Symbol), // Mark class as allowing dynamic properties (for #[AllowDynamicProperties])
+    AddClassAttribute(Symbol, u16), // (class_name, attr_const_idx)
     MarkAbstract(Symbol),           // Mark class as abstract
     FinalizeClass(Symbol), // Validate class after all methods are defined (interfaces, abstract methods)
     DefMethod(Symbol, Symbol, u32, Visibility, bool, bool), // (class_name, method_name, func_idx, visibility, is_static, is_abstract)
     DefProp(Symbol, Symbol, u16, Visibility, u32, bool), // (class_name, prop_name, default_val_idx, visibility, type_hint_idx, is_readonly)
     DefClassConst(Symbol, Symbol, u16, Visibility), // (class_name, const_name, val_idx, visibility)
+    AddMethodAttribute(Symbol, Symbol, u16), // (class_name, method_name, attr_const_idx)
+    AddPropertyAttribute(Symbol, Symbol, u16, bool), // (class_name, prop_name, attr_const_idx, is_static)
+    AddClassConstAttribute(Symbol, Symbol, u16), // (class_name, const_name, attr_const_idx)
+    DefEnumCase(Symbol, Symbol, u16, bool), // (class_name, case_name, val_idx, has_value)
     DefStaticProp(Symbol, Symbol, u16, Visibility, u32), // (class_name, prop_name, default_val_idx, visibility, type_hint_idx)
     FetchClassConst(Symbol, Symbol),                     // (class_name, const_name) -> [Val]
     FetchClassConstDynamic(Symbol),                      // [Class] -> [Val] (const_name is arg)

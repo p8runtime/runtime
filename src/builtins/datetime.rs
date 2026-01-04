@@ -308,7 +308,7 @@ fn format_php_date(dt: &ChronoDateTime<Tz>, format: &str) -> String {
                 let offset = offset.abs();
                 let hours = offset / 3600;
                 let minutes = (offset % 3600) / 60;
-                result.push_str(&format!("{}{}:{:02}", sign, hours, minutes));
+                result.push_str(&format!("{}{:02}:{:02}", sign, hours, minutes));
             }
             'p' => {
                 let offset = dt.offset().fix().local_minus_utc();
@@ -1787,9 +1787,9 @@ pub fn php_localtime(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
 /// date_default_timezone_get(): string
 pub fn php_date_default_timezone_get(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Ok(vm
-        .arena
-        .alloc(Val::String(vm.context.config.timezone.as_bytes().to_vec().into())))
+    Ok(vm.arena.alloc(Val::String(
+        vm.context.config.timezone.as_bytes().to_vec().into(),
+    )))
 }
 
 /// date_default_timezone_set(string $timezoneId): bool

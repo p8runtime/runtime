@@ -4,7 +4,7 @@ use crate::vm::engine::VM;
 use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -15,6 +15,15 @@ use std::rc::Rc;
 pub struct FileHandle {
     pub file: RefCell<File>,
     pub path: PathBuf,
+    pub mode: String,
+    pub eof: RefCell<bool>,
+}
+
+/// In-memory stream handle for php://memory and php://temp
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct MemoryHandle {
+    pub cursor: RefCell<Cursor<Vec<u8>>>,
     pub mode: String,
     pub eof: RefCell<bool>,
 }
@@ -122,9 +131,20 @@ pub fn php_fopen(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         _ => return Err("fopen(): Mode must be string".into()),
     };
 
-    let path = bytes_to_path(&path_bytes)?;
     let mode_str =
         std::str::from_utf8(&mode_bytes).map_err(|_| "Invalid mode encoding".to_string())?;
+
+    let path_str = String::from_utf8_lossy(&path_bytes);
+    if path_str.eq_ignore_ascii_case("php://memory") || path_str.eq_ignore_ascii_case("php://temp") {
+        let resource = MemoryHandle {
+            cursor: RefCell::new(Cursor::new(Vec::new())),
+            mode: mode_str.to_string(),
+            eof: RefCell::new(false),
+        };
+        return Ok(vm.arena.alloc(Val::Resource(Rc::new(resource))));
+    }
+
+    let path = bytes_to_path(&path_bytes)?;
 
     // Parse mode
     let (read, write, append, truncate) = parse_mode(&mode_bytes)?;
@@ -174,7 +194,9 @@ pub fn php_fclose(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let is_resource = {
         let val = vm.arena.get(args[0]);
         match &val.value {
-            Val::Resource(rc) => rc.is::<FileHandle>() || rc.is::<PipeResource>(),
+            Val::Resource(rc) => {
+                rc.is::<FileHandle>() || rc.is::<PipeResource>() || rc.is::<MemoryHandle>()
+            }
             _ => false,
         }
     };
@@ -226,6 +248,22 @@ pub fn php_fread(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
         if bytes_read == 0 {
             *fh.eof.borrow_mut() = true;
+        }
+
+        buffer.truncate(bytes_read);
+        return Ok(vm.arena.alloc(Val::String(Rc::new(buffer))));
+    }
+
+    if let Some(mh) = resource_rc.downcast_ref::<MemoryHandle>() {
+        let mut buffer = vec![0u8; length];
+        let bytes_read = mh
+            .cursor
+            .borrow_mut()
+            .read(&mut buffer)
+            .map_err(|e| format!("fread(): {}", e))?;
+
+        if bytes_read == 0 {
+            *mh.eof.borrow_mut() = true;
         }
 
         buffer.truncate(bytes_read);
@@ -313,6 +351,21 @@ pub fn php_fwrite(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             .write(write_data)
             .map_err(|e| format!("fwrite(): {}", e))?;
 
+        return Ok(vm.arena.alloc(Val::Int(bytes_written as i64)));
+    }
+
+    if let Some(mh) = resource_rc.downcast_ref::<MemoryHandle>() {
+        let write_data = if let Some(max) = max_len {
+            &data[..data.len().min(max)]
+        } else {
+            &data
+        };
+
+        let bytes_written = mh
+            .cursor
+            .borrow_mut()
+            .write(write_data)
+            .map_err(|e| format!("fwrite(): {}", e))?;
         return Ok(vm.arena.alloc(Val::Int(bytes_written as i64)));
     }
 
@@ -1039,6 +1092,14 @@ pub fn php_fseek(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             *fh.eof.borrow_mut() = false;
             return Ok(vm.arena.alloc(Val::Int(0)));
         }
+        if let Some(mh) = rc.downcast_ref::<MemoryHandle>() {
+            mh.cursor
+                .borrow_mut()
+                .seek(seek_from)
+                .map_err(|e| format!("fseek(): {}", e))?;
+            *mh.eof.borrow_mut() = false;
+            return Ok(vm.arena.alloc(Val::Int(0)));
+        }
     }
 
     Err("fseek(): supplied argument is not a valid stream resource".into())
@@ -1057,6 +1118,14 @@ pub fn php_ftell(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         if let Some(fh) = rc.downcast_ref::<FileHandle>() {
             let pos = fh
                 .file
+                .borrow_mut()
+                .stream_position()
+                .map_err(|e| format!("ftell(): {}", e))?;
+            return Ok(vm.arena.alloc(Val::Int(pos as i64)));
+        }
+        if let Some(mh) = rc.downcast_ref::<MemoryHandle>() {
+            let pos = mh
+                .cursor
                 .borrow_mut()
                 .stream_position()
                 .map_err(|e| format!("ftell(): {}", e))?;
@@ -1085,6 +1154,14 @@ pub fn php_rewind(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             *fh.eof.borrow_mut() = false;
             return Ok(vm.arena.alloc(Val::Bool(true)));
         }
+        if let Some(mh) = rc.downcast_ref::<MemoryHandle>() {
+            mh.cursor
+                .borrow_mut()
+                .seek(SeekFrom::Start(0))
+                .map_err(|e| format!("rewind(): {}", e))?;
+            *mh.eof.borrow_mut() = false;
+            return Ok(vm.arena.alloc(Val::Bool(true)));
+        }
     }
 
     Err("rewind(): supplied argument is not a valid stream resource".into())
@@ -1102,6 +1179,10 @@ pub fn php_feof(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if let Val::Resource(rc) = &resource_val.value {
         if let Some(fh) = rc.downcast_ref::<FileHandle>() {
             let eof = *fh.eof.borrow();
+            return Ok(vm.arena.alloc(Val::Bool(eof)));
+        }
+        if let Some(mh) = rc.downcast_ref::<MemoryHandle>() {
+            let eof = *mh.eof.borrow();
             return Ok(vm.arena.alloc(Val::Bool(eof)));
         }
     }
@@ -1167,6 +1248,43 @@ pub fn php_fgets(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
             return Ok(vm.arena.alloc(Val::String(Rc::new(line))));
         }
+        if let Some(mh) = rc.downcast_ref::<MemoryHandle>() {
+            let mut line = Vec::new();
+            let mut buf = [0u8; 1];
+            let mut bytes_read = 0;
+
+            loop {
+                let n = mh
+                    .cursor
+                    .borrow_mut()
+                    .read(&mut buf)
+                    .map_err(|e| format!("fgets(): {}", e))?;
+
+                if n == 0 {
+                    break;
+                }
+
+                line.push(buf[0]);
+                bytes_read += 1;
+
+                if buf[0] == b'\n' {
+                    break;
+                }
+
+                if let Some(max) = max_len {
+                    if bytes_read >= max - 1 {
+                        break;
+                    }
+                }
+            }
+
+            if bytes_read == 0 {
+                *mh.eof.borrow_mut() = true;
+                return Ok(vm.arena.alloc(Val::Bool(false)));
+            }
+
+            return Ok(vm.arena.alloc(Val::String(Rc::new(line))));
+        }
     }
 
     Err("fgets(): supplied argument is not a valid stream resource".into())
@@ -1197,9 +1315,112 @@ pub fn php_fgetc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
             return Ok(vm.arena.alloc(Val::String(Rc::new(vec![buf[0]]))));
         }
+        if let Some(mh) = rc.downcast_ref::<MemoryHandle>() {
+            let mut buf = [0u8; 1];
+            let bytes_read = mh
+                .cursor
+                .borrow_mut()
+                .read(&mut buf)
+                .map_err(|e| format!("fgetc(): {}", e))?;
+
+            if bytes_read == 0 {
+                *mh.eof.borrow_mut() = true;
+                return Ok(vm.arena.alloc(Val::Bool(false)));
+            }
+
+            return Ok(vm.arena.alloc(Val::String(Rc::new(vec![buf[0]]))));
+        }
     }
 
     Err("fgetc(): supplied argument is not a valid stream resource".into())
+}
+
+/// stream_get_contents(resource, length = -1, offset = -1) - Read remaining contents from stream
+/// Reference: $PHP_SRC_PATH/ext/standard/streamsfuncs.c - PHP_FUNCTION(stream_get_contents)
+pub fn php_stream_get_contents(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 3 {
+        return Err("stream_get_contents() expects between 1 and 3 parameters".into());
+    }
+
+    let length = if args.len() >= 2 {
+        match &vm.arena.get(args[1]).value {
+            Val::Int(i) => *i,
+            _ => return Err("stream_get_contents(): Length must be integer".into()),
+        }
+    } else {
+        -1
+    };
+
+    if length < -1 {
+        return Err("stream_get_contents(): Length must be greater than or equal to -1".into());
+    }
+
+    let offset = if args.len() == 3 {
+        match &vm.arena.get(args[2]).value {
+            Val::Int(i) => Some(*i),
+            _ => return Err("stream_get_contents(): Offset must be integer".into()),
+        }
+    } else {
+        None
+    };
+
+    let resource_rc = match &vm.arena.get(args[0]).value {
+        Val::Resource(rc) => rc.clone(),
+        _ => return Err("stream_get_contents(): supplied argument is not a valid stream resource".into()),
+    };
+
+    let read_all = |reader: &mut dyn Read| -> Result<Vec<u8>, String> {
+        let mut buffer = Vec::new();
+        if length == -1 {
+            reader
+                .read_to_end(&mut buffer)
+                .map_err(|e| format!("stream_get_contents(): {}", e))?;
+        } else {
+            let mut limited = reader.take(length as u64);
+            limited
+                .read_to_end(&mut buffer)
+                .map_err(|e| format!("stream_get_contents(): {}", e))?;
+        }
+        Ok(buffer)
+    };
+
+    if let Some(fh) = resource_rc.downcast_ref::<FileHandle>() {
+        if let Some(off) = offset {
+            if off < 0 {
+                return Err("stream_get_contents(): Offset must be greater than or equal to 0".into());
+            }
+            fh.file
+                .borrow_mut()
+                .seek(SeekFrom::Start(off as u64))
+                .map_err(|e| format!("stream_get_contents(): {}", e))?;
+        }
+        let mut file = fh.file.borrow_mut();
+        let buffer = read_all(&mut *file)?;
+        if buffer.is_empty() {
+            *fh.eof.borrow_mut() = true;
+        }
+        return Ok(vm.arena.alloc(Val::String(Rc::new(buffer))));
+    }
+
+    if let Some(mh) = resource_rc.downcast_ref::<MemoryHandle>() {
+        if let Some(off) = offset {
+            if off < 0 {
+                return Err("stream_get_contents(): Offset must be greater than or equal to 0".into());
+            }
+            mh.cursor
+                .borrow_mut()
+                .seek(SeekFrom::Start(off as u64))
+                .map_err(|e| format!("stream_get_contents(): {}", e))?;
+        }
+        let mut cursor = mh.cursor.borrow_mut();
+        let buffer = read_all(&mut *cursor)?;
+        if buffer.is_empty() {
+            *mh.eof.borrow_mut() = true;
+        }
+        return Ok(vm.arena.alloc(Val::String(Rc::new(buffer))));
+    }
+
+    Err("stream_get_contents(): supplied argument is not a valid stream resource".into())
 }
 
 /// fputs(resource, string) - Alias for fwrite
@@ -1223,6 +1444,9 @@ pub fn php_fflush(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
                 .borrow_mut()
                 .flush()
                 .map_err(|e| format!("fflush(): {}", e))?;
+            return Ok(vm.arena.alloc(Val::Bool(true)));
+        }
+        if rc.is::<MemoryHandle>() {
             return Ok(vm.arena.alloc(Val::Bool(true)));
         }
     }

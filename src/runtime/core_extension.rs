@@ -1,18 +1,113 @@
 use crate::builtins::{
     array, bcmath, class, exception, exec, filesystem, function, http, math, output_control, pcre,
-    spl, string, url, variable,
+    reflection, spl, string, url, variable,
 };
-use crate::core::value::{Val, Visibility};
+use crate::core::value::{Handle, Val, Visibility};
 use crate::runtime::context::RequestContext;
 use crate::runtime::extension::{Extension, ExtensionInfo, ExtensionResult};
 use crate::runtime::registry::{ExtensionRegistry, NativeClassDef, NativeMethodEntry};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Core extension runtime state
 #[derive(Debug, Default)]
 pub struct CoreExtensionData {
     pub strtok_string: Option<Vec<u8>>,
     pub strtok_pos: usize,
+    pub array_pointers: HashMap<Handle, usize>,
+    pub rng: Mt19937,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Mt19937 {
+    mt: [u32; 624],
+    index: usize,
+    seeded: bool,
+}
+
+impl Default for Mt19937 {
+    fn default() -> Self {
+        Self {
+            mt: [0; 624],
+            index: 624,
+            seeded: false,
+        }
+    }
+}
+
+impl Mt19937 {
+    fn seed(&mut self, seed: u32) {
+        self.mt[0] = seed;
+        for i in 1..624 {
+            let prev = self.mt[i - 1];
+            self.mt[i] = 1812433253u32
+                .wrapping_mul(prev ^ (prev >> 30))
+                .wrapping_add(i as u32);
+        }
+        self.index = 624;
+        self.seeded = true;
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        if self.index >= 624 {
+            self.twist();
+        }
+
+        let mut y = self.mt[self.index];
+        self.index += 1;
+
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c5680;
+        y ^= (y << 15) & 0xefc60000;
+        y ^= y >> 18;
+
+        y
+    }
+
+    fn twist(&mut self) {
+        const N: usize = 624;
+        const M: usize = 397;
+        const MATRIX_A: u32 = 0x9908b0df;
+        const UPPER_MASK: u32 = 0x80000000;
+        const LOWER_MASK: u32 = 0x7fffffff;
+
+        for i in 0..N {
+            let y = (self.mt[i] & UPPER_MASK) | (self.mt[(i + 1) % N] & LOWER_MASK);
+            let mut val = self.mt[(i + M) % N] ^ (y >> 1);
+            if y & 1 != 0 {
+                val ^= MATRIX_A;
+            }
+            self.mt[i] = val;
+        }
+        self.index = 0;
+    }
+}
+
+impl CoreExtensionData {
+    pub fn rng_seed(&mut self, seed: u32) {
+        self.rng.seed(seed);
+    }
+
+    pub fn rng_next_u31(&mut self) -> u32 {
+        self.ensure_rng_seeded();
+        self.rng.next_u32() >> 1
+    }
+
+    pub fn rng_next_u32(&mut self) -> u32 {
+        self.ensure_rng_seeded();
+        self.rng.next_u32()
+    }
+
+    fn ensure_rng_seeded(&mut self) {
+        if self.rng.seeded {
+            return;
+        }
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        self.rng.seed(seed as u32);
+    }
 }
 
 /// Core extension providing built-in PHP functions
@@ -51,6 +146,11 @@ impl Extension for CoreExtension {
         registry.register_function(b"bin2hex", string::php_bin2hex);
         registry.register_function(b"hex2bin", string::php_hex2bin);
         registry.register_function(b"crc32", string::php_crc32);
+        registry.register_function(b"md5", string::php_md5);
+        registry.register_function(b"md5_file", string::php_md5_file);
+        registry.register_function(b"sha1", string::php_sha1);
+        registry.register_function(b"sha1_file", string::php_sha1_file);
+        registry.register_function(b"crypt", string::php_crypt);
         registry.register_function(
             b"quoted_printable_decode",
             string::php_quoted_printable_decode,
@@ -59,6 +159,7 @@ impl Extension for CoreExtension {
             b"quoted_printable_encode",
             string::php_quoted_printable_encode,
         );
+        registry.register_function(b"convert_cyr_string", string::php_convert_cyr_string);
         registry.register_function(b"convert_uuencode", string::php_convert_uuencode);
         registry.register_function(b"convert_uudecode", string::php_convert_uudecode);
         registry.register_function(b"addslashes", string::php_addslashes);
@@ -95,6 +196,7 @@ impl Extension for CoreExtension {
         registry.register_function(b"ucfirst", string::php_ucfirst);
         registry.register_function(b"lcfirst", string::php_lcfirst);
         registry.register_function(b"ucwords", string::php_ucwords);
+        registry.register_function(b"hebrev", string::php_hebrev);
         registry.register_function(b"wordwrap", string::php_wordwrap);
         registry.register_function(b"quotemeta", string::php_quotemeta);
         registry.register_function(b"nl2br", string::php_nl2br);
@@ -105,6 +207,8 @@ impl Extension for CoreExtension {
         registry.register_function(b"str_contains", string::php_str_contains);
         registry.register_function(b"str_starts_with", string::php_str_starts_with);
         registry.register_function(b"str_ends_with", string::php_str_ends_with);
+        registry.register_function(b"str_increment", string::php_str_increment);
+        registry.register_function(b"str_decrement", string::php_str_decrement);
         registry.register_function(b"htmlspecialchars", string::php_htmlspecialchars);
         registry.register_function(
             b"htmlspecialchars_decode",
@@ -121,12 +225,15 @@ impl Extension for CoreExtension {
         registry.register_function_with_by_ref(b"parse_str", string::php_parse_str, vec![1]);
         registry.register_function(b"strtolower", string::php_strtolower);
         registry.register_function(b"strtoupper", string::php_strtoupper);
+        registry.register_function(b"utf8_encode", string::php_utf8_encode);
+        registry.register_function(b"utf8_decode", string::php_utf8_decode);
         registry.register_function(b"version_compare", string::php_version_compare);
         registry.register_function(b"implode", string::php_implode);
         registry.register_function(b"join", string::php_implode);
         registry.register_function(b"explode", string::php_explode);
         registry.register_function(b"strchr", string::php_strstr);
         registry.register_function(b"sprintf", string::php_sprintf);
+        registry.register_function(b"sscanf", string::php_sscanf);
         registry.register_function(b"printf", string::php_printf);
         registry.register_function(b"vsprintf", string::php_vsprintf);
         registry.register_function(b"vprintf", string::php_vprintf);
@@ -134,12 +241,89 @@ impl Extension for CoreExtension {
         registry.register_function(b"vfprintf", string::php_vfprintf);
 
         // Array functions
+        registry.register_function(b"array", array::php_array);
+        registry.register_function(b"array_all", array::php_array_all);
+        registry.register_function(b"array_any", array::php_array_any);
+        registry.register_function(b"array_change_key_case", array::php_array_change_key_case);
+        registry.register_function(b"array_chunk", array::php_array_chunk);
+        registry.register_function(b"array_column", array::php_array_column);
+        registry.register_function(b"array_combine", array::php_array_combine);
+        registry.register_function(b"array_count_values", array::php_array_count_values);
+        registry.register_function(b"array_diff", array::php_array_diff);
+        registry.register_function(b"array_diff_assoc", array::php_array_diff_assoc);
+        registry.register_function(b"array_diff_key", array::php_array_diff_key);
+        registry.register_function(b"array_diff_uassoc", array::php_array_diff_uassoc);
+        registry.register_function(b"array_diff_ukey", array::php_array_diff_ukey);
+        registry.register_function(b"array_fill", array::php_array_fill);
+        registry.register_function(b"array_fill_keys", array::php_array_fill_keys);
+        registry.register_function(b"array_filter", array::php_array_filter);
+        registry.register_function(b"array_find", array::php_array_find);
+        registry.register_function(b"array_find_key", array::php_array_find_key);
+        registry.register_function(b"array_first", array::php_array_first);
+        registry.register_function(b"array_flip", array::php_array_flip);
+        registry.register_function(b"array_intersect", array::php_array_intersect);
+        registry.register_function(b"array_intersect_assoc", array::php_array_intersect_assoc);
+        registry.register_function(b"array_intersect_key", array::php_array_intersect_key);
+        registry.register_function(b"array_intersect_uassoc", array::php_array_intersect_uassoc);
+        registry.register_function(b"array_intersect_ukey", array::php_array_intersect_ukey);
+        registry.register_function(b"array_is_list", array::php_array_is_list);
+        registry.register_function(b"array_key_first", array::php_array_key_first);
+        registry.register_function(b"array_key_last", array::php_array_key_last);
+        registry.register_function(b"array_last", array::php_array_last);
+        registry.register_function(b"array_map", array::php_array_map);
         registry.register_function(b"array_merge", array::php_array_merge);
+        registry.register_function(b"array_merge_recursive", array::php_array_merge_recursive);
+        registry.register_function(b"array_multisort", array::php_array_multisort);
+        registry.register_function(b"array_pad", array::php_array_pad);
+        registry.register_function(b"array_pop", array::php_array_pop);
+        registry.register_function(b"array_product", array::php_array_product);
+        registry.register_function(b"array_reduce", array::php_array_reduce);
+        registry.register_function(b"array_replace", array::php_array_replace);
+        registry.register_function(b"array_replace_recursive", array::php_array_replace_recursive);
+        registry.register_function(b"array_reverse", array::php_array_reverse);
+        registry.register_function(b"array_search", array::php_array_search);
+        registry.register_function(b"array_shift", array::php_array_shift);
+        registry.register_function(b"array_slice", array::php_array_slice);
+        registry.register_function(b"array_splice", array::php_array_splice);
+        registry.register_function(b"array_sum", array::php_array_sum);
+        registry.register_function(b"array_rand", array::php_array_rand);
+        registry.register_function(b"array_udiff", array::php_array_udiff);
+        registry.register_function(b"array_udiff_assoc", array::php_array_udiff_assoc);
+        registry.register_function(b"array_udiff_uassoc", array::php_array_udiff_uassoc);
+        registry.register_function(b"array_uintersect", array::php_array_uintersect);
+        registry.register_function(b"array_uintersect_assoc", array::php_array_uintersect_assoc);
+        registry.register_function(b"array_uintersect_uassoc", array::php_array_uintersect_uassoc);
+        registry.register_function(b"array_unique", array::php_array_unique);
+        registry.register_function(b"array_walk", array::php_array_walk);
+        registry.register_function(
+            b"array_walk_recursive",
+            array::php_array_walk_recursive,
+        );
+        registry.register_function(b"arsort", array::php_arsort);
+        registry.register_function(b"asort", array::php_asort);
+        registry.register_function(b"compact", array::php_compact);
+        registry.register_function(b"extract", array::php_extract);
+        registry.register_function(b"key", array::php_key);
+        registry.register_function(b"key_exists", array::php_key_exists);
+        registry.register_function(b"krsort", array::php_krsort);
+        registry.register_function(b"natcasesort", array::php_natcasesort);
+        registry.register_function(b"natsort", array::php_natsort);
+        registry.register_function(b"pos", array::php_pos);
+        registry.register_function(b"prev", array::php_prev);
+        registry.register_function(b"range", array::php_range);
+        registry.register_function(b"rsort", array::php_rsort);
+        registry.register_function(b"shuffle", array::php_shuffle);
+        registry.register_function(b"sizeof", array::php_sizeof);
+        registry.register_function(b"sort", array::php_sort);
+        registry.register_function(b"uasort", array::php_uasort);
+        registry.register_function(b"uksort", array::php_uksort);
+        registry.register_function(b"usort", array::php_usort);
         registry.register_function(b"array_keys", array::php_array_keys);
         registry.register_function(b"array_values", array::php_array_values);
         registry.register_function(b"in_array", array::php_in_array);
         registry.register_function(b"ksort", array::php_ksort);
         registry.register_function(b"array_unshift", array::php_array_unshift);
+        registry.register_function(b"array_push", array::php_array_push);
         registry.register_function(b"current", array::php_current);
         registry.register_function(b"next", array::php_next);
         registry.register_function(b"reset", array::php_reset);
@@ -193,6 +377,50 @@ impl Extension for CoreExtension {
         registry.register_function(b"abs", math::php_abs);
         registry.register_function(b"max", math::php_max);
         registry.register_function(b"min", math::php_min);
+        registry.register_function(b"pi", math::php_pi);
+        registry.register_function(b"pow", math::php_pow);
+        registry.register_function(b"fpow", math::php_fpow);
+        registry.register_function(b"srand", math::php_srand);
+        registry.register_function(b"rand", math::php_rand);
+        registry.register_function(b"getrandmax", math::php_getrandmax);
+        registry.register_function(b"ceil", math::php_ceil);
+        registry.register_function(b"floor", math::php_floor);
+        registry.register_function(b"round", math::php_round);
+        registry.register_function(b"sin", math::php_sin);
+        registry.register_function(b"sinh", math::php_sinh);
+        registry.register_function(b"cos", math::php_cos);
+        registry.register_function(b"cosh", math::php_cosh);
+        registry.register_function(b"tan", math::php_tan);
+        registry.register_function(b"tanh", math::php_tanh);
+        registry.register_function(b"asin", math::php_asin);
+        registry.register_function(b"asinh", math::php_asinh);
+        registry.register_function(b"acos", math::php_acos);
+        registry.register_function(b"acosh", math::php_acosh);
+        registry.register_function(b"atan", math::php_atan);
+        registry.register_function(b"atanh", math::php_atanh);
+        registry.register_function(b"atan2", math::php_atan2);
+        registry.register_function(b"deg2rad", math::php_deg2rad);
+        registry.register_function(b"rad2deg", math::php_rad2deg);
+        registry.register_function(b"exp", math::php_exp);
+        registry.register_function(b"expm1", math::php_expm1);
+        registry.register_function(b"log", math::php_log);
+        registry.register_function(b"log10", math::php_log10);
+        registry.register_function(b"log1p", math::php_log1p);
+        registry.register_function(b"sqrt", math::php_sqrt);
+        registry.register_function(b"fdiv", math::php_fdiv);
+        registry.register_function(b"intdiv", math::php_intdiv);
+        registry.register_function(b"fmod", math::php_fmod);
+        registry.register_function(b"hypot", math::php_hypot);
+        registry.register_function(b"is_finite", math::php_is_finite);
+        registry.register_function(b"is_infinite", math::php_is_infinite);
+        registry.register_function(b"is_nan", math::php_is_nan);
+        registry.register_function(b"base_convert", math::php_base_convert);
+        registry.register_function(b"decbin", math::php_decbin);
+        registry.register_function(b"dechex", math::php_dechex);
+        registry.register_function(b"decoct", math::php_decoct);
+        registry.register_function(b"bindec", math::php_bindec);
+        registry.register_function(b"hexdec", math::php_hexdec);
+        registry.register_function(b"octdec", math::php_octdec);
 
         // BCMath functions
         registry.register_function(b"bcadd", bcmath::bcadd);
@@ -242,6 +470,7 @@ impl Extension for CoreExtension {
         registry.register_function(b"fputs", filesystem::php_fputs);
         registry.register_function(b"fgets", filesystem::php_fgets);
         registry.register_function(b"fgetc", filesystem::php_fgetc);
+        registry.register_function(b"stream_get_contents", filesystem::php_stream_get_contents);
         registry.register_function(b"fseek", filesystem::php_fseek);
         registry.register_function(b"ftell", filesystem::php_ftell);
         registry.register_function(b"rewind", filesystem::php_rewind);
@@ -417,6 +646,51 @@ impl Extension for CoreExtension {
             constructor: None,
         });
 
+        // Attribute class (PHP 8.0+)
+        let mut attribute_constants = HashMap::new();
+        attribute_constants.insert(
+            b"TARGET_CLASS".to_vec(),
+            (Val::Int(1), Visibility::Public),
+        );
+        attribute_constants.insert(
+            b"TARGET_METHOD".to_vec(),
+            (Val::Int(2), Visibility::Public),
+        );
+        attribute_constants.insert(
+            b"TARGET_FUNCTION".to_vec(),
+            (Val::Int(4), Visibility::Public),
+        );
+        attribute_constants.insert(
+            b"TARGET_PROPERTY".to_vec(),
+            (Val::Int(8), Visibility::Public),
+        );
+        attribute_constants.insert(
+            b"TARGET_CLASS_CONSTANT".to_vec(),
+            (Val::Int(16), Visibility::Public),
+        );
+        attribute_constants.insert(
+            b"TARGET_PARAMETER".to_vec(),
+            (Val::Int(32), Visibility::Public),
+        );
+        attribute_constants.insert(
+            b"TARGET_ALL".to_vec(),
+            (Val::Int(63), Visibility::Public),
+        );
+        attribute_constants.insert(
+            b"IS_REPEATABLE".to_vec(),
+            (Val::Int(64), Visibility::Public),
+        );
+        registry.register_class(NativeClassDef {
+            name: b"Attribute".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: HashMap::new(),
+            constants: attribute_constants,
+            constructor: None,
+        });
+
         // UnitEnum interface (PHP 8.1+)
         registry.register_class(NativeClassDef {
             name: b"UnitEnum".to_vec(),
@@ -498,6 +772,424 @@ impl Extension for CoreExtension {
             is_trait: false,
             interfaces: vec![],
             methods: HashMap::new(),
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionClass
+        let mut reflection_class_methods = HashMap::new();
+        reflection_class_methods.insert(
+            b"__construct".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_class_construct,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_class_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_class_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_class_methods.insert(
+            b"getAttributes".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_class_get_attributes,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionClass".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_class_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionAttribute
+        let mut reflection_attr_methods = HashMap::new();
+        reflection_attr_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_attribute_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_attr_methods.insert(
+            b"getArguments".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_attribute_get_arguments,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_attr_methods.insert(
+            b"newInstance".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_attribute_new_instance,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionAttribute".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_attr_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionMethod
+        let mut reflection_method_methods = HashMap::new();
+        reflection_method_methods.insert(
+            b"__construct".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_method_construct,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_method_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_method_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_method_methods.insert(
+            b"getAttributes".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_method_get_attributes,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_method_methods.insert(
+            b"getParameters".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_method_get_parameters,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_method_methods.insert(
+            b"getReturnType".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_method_get_return_type,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionMethod".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_method_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionProperty
+        let mut reflection_prop_methods = HashMap::new();
+        reflection_prop_methods.insert(
+            b"__construct".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_property_construct,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_prop_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_property_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_prop_methods.insert(
+            b"getAttributes".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_property_get_attributes,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_prop_methods.insert(
+            b"hasType".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_property_has_type,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_prop_methods.insert(
+            b"getType".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_property_get_type,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionProperty".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_prop_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionClassConstant
+        let mut reflection_const_methods = HashMap::new();
+        reflection_const_methods.insert(
+            b"__construct".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_class_const_construct,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_const_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_class_const_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_const_methods.insert(
+            b"getAttributes".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_class_const_get_attributes,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionClassConstant".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_const_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionParameter
+        let mut reflection_param_methods = HashMap::new();
+        reflection_param_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_parameter_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_param_methods.insert(
+            b"hasType".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_parameter_has_type,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_param_methods.insert(
+            b"getType".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_parameter_get_type,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_param_methods.insert(
+            b"isVariadic".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_parameter_is_variadic,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_param_methods.insert(
+            b"isPassedByReference".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_parameter_is_passed_by_reference,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionParameter".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_param_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionNamedType
+        let mut reflection_named_methods = HashMap::new();
+        reflection_named_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_named_type_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_named_methods.insert(
+            b"allowsNull".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_named_type_allows_null,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_named_methods.insert(
+            b"isBuiltin".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_named_type_is_builtin,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionNamedType".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_named_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionUnionType
+        let mut reflection_union_methods = HashMap::new();
+        reflection_union_methods.insert(
+            b"getTypes".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_union_type_get_types,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_union_methods.insert(
+            b"allowsNull".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_union_type_allows_null,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionUnionType".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_union_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionIntersectionType
+        let mut reflection_intersection_methods = HashMap::new();
+        reflection_intersection_methods.insert(
+            b"getTypes".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_intersection_type_get_types,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_intersection_methods.insert(
+            b"allowsNull".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_intersection_type_allows_null,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionIntersectionType".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_intersection_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // ReflectionFunction
+        let mut reflection_function_methods = HashMap::new();
+        reflection_function_methods.insert(
+            b"__construct".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_function_construct,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_function_methods.insert(
+            b"getName".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_function_get_name,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_function_methods.insert(
+            b"getAttributes".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_function_get_attributes,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_function_methods.insert(
+            b"getParameters".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_function_get_parameters,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        reflection_function_methods.insert(
+            b"getReturnType".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_function_get_return_type,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionFunction".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_function_methods,
             constants: HashMap::new(),
             constructor: None,
         });

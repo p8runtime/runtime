@@ -56,12 +56,10 @@ impl Extension for PthreadsExtension {
         registry.register_function(b"pthreads_volatile_get", volatile_get);
         registry.register_function(b"pthreads_volatile_set", volatile_set);
 
-        println!("[PthreadsExtension] MINIT: Registered threading functions");
         ExtensionResult::Success
     }
 
     fn module_shutdown(&self) -> ExtensionResult {
-        println!("[PthreadsExtension] MSHUTDOWN: Cleaning up");
         ExtensionResult::Success
     }
 

@@ -9,6 +9,11 @@ A PHP interpreter written in Rust. This project is currently in an experimental 
 - CLI interface (`php`)
 - FastCGI Process Manager (`php-fpm`)
 
+## Limitations
+
+- Fibers are not supported. The Gild runtime targets V8 and does not pause execution, so `Fiber::*` APIs are intentionally unavailable.
+- Magic constants are not supported yet.
+
 ## Getting Started
 
 ### Prerequisites
@@ -51,11 +56,13 @@ cargo run --bin php-fpm
 
 ## Testing
 
-Run the test suite:
+Run the Rust test suite:
 
 ```bash
 cargo test
 ```
+
+Legacy integration tests (`*.rs` files) now live under `test-old/`; the new `tests/` directory keeps the Bun-driven PHP fixtures and helpers.
 
 ## License
 

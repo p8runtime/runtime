@@ -1,12 +1,20 @@
+use crate::builtins::html_entities::HTML_ENTITIES_TABLE;
 use crate::core::value::{ArrayData, ArrayKey, Handle, Val};
+use crate::runtime::mb::convert::convert_bytes;
 use crate::vm::engine::VM;
 use crc32fast::Hasher;
+use digest::Digest;
+use md5::Md5;
+use sha1::Sha1;
 use libc;
+use regex::Regex;
 use rphonetic::{Encoder, Metaphone};
 use rust_decimal::{Decimal, RoundingStrategy};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
+use std::fs;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::str;
 use std::str::FromStr;
@@ -19,6 +27,7 @@ unsafe extern "C" {
         format: *const libc::c_char,
         ...
     ) -> libc::ssize_t;
+    fn crypt(key: *const libc::c_char, salt: *const libc::c_char) -> *mut libc::c_char;
 }
 
 pub const HTML_SPECIALCHARS: i64 = 0;
@@ -280,6 +289,173 @@ pub fn php_str_starts_with(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
     };
 
     Ok(vm.arena.alloc(Val::Bool(result)))
+}
+
+pub fn php_str_increment(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("str_increment() expects exactly 1 parameter".into());
+    }
+
+    let bytes = vm.value_to_string(args[0])?;
+    if bytes.is_empty() {
+        return Err("str_increment(): Argument #1 ($string) must be non-empty".into());
+    }
+
+    if !bytes.iter().all(|b| b.is_ascii_alphanumeric()) {
+        return Err("str_increment(): Argument #1 ($string) must be alphanumeric".into());
+    }
+
+    let mut result = bytes.clone();
+    let mut carry = true;
+
+    for idx in (0..result.len()).rev() {
+        if !carry {
+            break;
+        }
+        let ch = result[idx];
+        match ch {
+            b'0'..=b'9' => {
+                if ch == b'9' {
+                    result[idx] = b'0';
+                } else {
+                    result[idx] = ch + 1;
+                    carry = false;
+                }
+            }
+            b'a'..=b'z' => {
+                if ch == b'z' {
+                    result[idx] = b'a';
+                } else {
+                    result[idx] = ch + 1;
+                    carry = false;
+                }
+            }
+            b'A'..=b'Z' => {
+                if ch == b'Z' {
+                    result[idx] = b'A';
+                } else {
+                    result[idx] = ch + 1;
+                    carry = false;
+                }
+            }
+            _ => {
+                return Err("str_increment(): Argument #1 ($string) must be alphanumeric".into());
+            }
+        }
+    }
+
+    if carry {
+        let first = bytes[0];
+        let prefix = match first {
+            b'0'..=b'9' => b'1',
+            b'a'..=b'z' => b'a',
+            b'A'..=b'Z' => b'A',
+            _ => b'1',
+        };
+        result.insert(0, prefix);
+    }
+
+    Ok(vm.arena.alloc(Val::String(result.into())))
+}
+
+pub fn php_str_decrement(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("str_decrement() expects exactly 1 parameter".into());
+    }
+
+    let bytes = vm.value_to_string(args[0])?;
+    if bytes.is_empty() {
+        return Err("str_decrement(): Argument #1 ($string) must be non-empty".into());
+    }
+
+    if !bytes.iter().all(|b| b.is_ascii_alphanumeric()) {
+        return Err("str_decrement(): Argument #1 ($string) must be alphanumeric".into());
+    }
+
+    let is_all_digits = bytes.iter().all(|b| b.is_ascii_digit());
+    if is_all_digits {
+        if bytes[0] == b'0' {
+            return Err("str_decrement(): Argument #1 ($string) is out of decrement range".into());
+        }
+        let mut result = bytes.clone();
+        let mut borrow = true;
+        for idx in (0..result.len()).rev() {
+            if !borrow {
+                break;
+            }
+            if result[idx] == b'0' {
+                result[idx] = b'9';
+            } else {
+                result[idx] -= 1;
+                borrow = false;
+            }
+        }
+        if borrow {
+            return Err("str_decrement(): Argument #1 ($string) is out of decrement range".into());
+        }
+        while result.len() > 1 && result[0] == b'0' {
+            result.remove(0);
+        }
+        return Ok(vm.arena.alloc(Val::String(result.into())));
+    }
+
+    if bytes[0] == b'0' {
+        return Err("str_decrement(): Argument #1 ($string) is out of decrement range".into());
+    }
+
+    let mut result = bytes.clone();
+    let mut borrow = true;
+    for idx in (0..result.len()).rev() {
+        if !borrow {
+            break;
+        }
+        let ch = result[idx];
+        match ch {
+            b'0'..=b'9' => {
+                if ch == b'0' {
+                    result[idx] = b'9';
+                } else {
+                    result[idx] = ch - 1;
+                    borrow = false;
+                }
+            }
+            b'a'..=b'z' => {
+                if ch == b'a' {
+                    result[idx] = b'z';
+                } else {
+                    result[idx] = ch - 1;
+                    borrow = false;
+                }
+            }
+            b'A'..=b'Z' => {
+                if ch == b'A' {
+                    result[idx] = b'Z';
+                } else {
+                    result[idx] = ch - 1;
+                    borrow = false;
+                }
+            }
+            _ => {
+                return Err("str_decrement(): Argument #1 ($string) must be alphanumeric".into());
+            }
+        }
+    }
+
+    if borrow {
+        result.remove(0);
+    }
+
+    if result.is_empty() {
+        return Err("str_decrement(): Argument #1 ($string) is out of decrement range".into());
+    }
+
+    if bytes[0].is_ascii_digit() {
+        while result.len() > 1 && result[0] == b'0' {
+            result.remove(0);
+        }
+    }
+
+    Ok(vm.arena.alloc(Val::String(result.into())))
 }
 
 pub fn php_str_ends_with(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -691,6 +867,35 @@ pub fn php_quoted_printable_encode(vm: &mut VM, args: &[Handle]) -> Result<Handl
     Ok(vm.arena.alloc(Val::String(result.into())))
 }
 
+pub fn php_convert_cyr_string(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 3 {
+        return Err("convert_cyr_string() expects exactly 3 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let from_raw = vm.value_to_string(args[1])?;
+    let to_raw = vm.value_to_string(args[2])?;
+
+    let from_code = *from_raw
+        .first()
+        .ok_or("convert_cyr_string(): Argument #2 ($from) must not be empty")?;
+    let to_code = *to_raw
+        .first()
+        .ok_or("convert_cyr_string(): Argument #3 ($to) must not be empty")?;
+
+    let from_label = cyrillic_encoding_label(from_code)
+        .ok_or("convert_cyr_string(): Unknown encoding in argument #2 ($from)")?;
+    let to_label = cyrillic_encoding_label(to_code)
+        .ok_or("convert_cyr_string(): Unknown encoding in argument #3 ($to)")?;
+
+    if from_label.eq_ignore_ascii_case(to_label) {
+        return Ok(vm.arena.alloc(Val::String(input.into())));
+    }
+
+    let converted = convert_bytes(&input, from_label, to_label)?;
+    Ok(vm.arena.alloc(Val::String(converted.into())))
+}
+
 pub fn php_convert_uuencode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("convert_uuencode() expects exactly 1 parameter".into());
@@ -714,6 +919,39 @@ pub fn php_convert_uudecode(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
     }
 }
 
+#[cfg(unix)]
+pub fn php_crypt(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("crypt() expects 1 or 2 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let salt = if args.len() == 2 {
+        vm.value_to_string(args[1])?
+    } else {
+        Vec::new()
+    };
+
+    let input_c = CString::new(input)
+        .map_err(|_| "crypt(): Argument #1 must not contain null bytes".to_string())?;
+    let salt_c = CString::new(salt)
+        .map_err(|_| "crypt(): Argument #2 must not contain null bytes".to_string())?;
+
+    unsafe {
+        let hashed = crypt(input_c.as_ptr(), salt_c.as_ptr());
+        if hashed.is_null() {
+            return Ok(vm.arena.alloc(Val::Bool(false)));
+        }
+        let bytes = CStr::from_ptr(hashed).to_bytes().to_vec();
+        Ok(vm.arena.alloc(Val::String(bytes.into())))
+    }
+}
+
+#[cfg(not(unix))]
+pub fn php_crypt(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    Err("crypt() is not supported on this platform".into())
+}
+
 pub fn php_crc32(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("crc32() expects exactly 1 parameter".into());
@@ -724,6 +962,128 @@ pub fn php_crc32(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     hasher.update(&input);
     let checksum = hasher.finalize();
     Ok(vm.arena.alloc(Val::Int(checksum as i64)))
+}
+
+pub fn php_md5(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("md5() expects between 1 and 2 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let digest = Md5::digest(&input);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+pub fn php_md5_file(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("md5_file() expects between 1 and 2 parameters".into());
+    }
+
+    let path_bytes = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let path = bytes_to_path(&path_bytes)?;
+    let data = match fs::read(&path) {
+        Ok(data) => data,
+        Err(_) => return Ok(vm.arena.alloc(Val::Bool(false))),
+    };
+
+    let digest = Md5::digest(&data);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+pub fn php_sha1(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("sha1() expects between 1 and 2 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let digest = Sha1::digest(&input);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+pub fn php_sha1_file(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("sha1_file() expects between 1 and 2 parameters".into());
+    }
+
+    let path_bytes = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let path = bytes_to_path(&path_bytes)?;
+    let data = match fs::read(&path) {
+        Ok(data) => data,
+        Err(_) => return Ok(vm.arena.alloc(Val::Bool(false))),
+    };
+
+    let digest = Sha1::digest(&data);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+fn cyrillic_encoding_label(code: u8) -> Option<&'static str> {
+    match code.to_ascii_lowercase() {
+        b'k' => Some("koi8-r"),
+        b'w' => Some("windows-1251"),
+        b'i' => Some("iso-8859-5"),
+        b'a' => Some("ibm866"),
+        b'd' => Some("ibm866"),
+        b'm' => Some("x-mac-cyrillic"),
+        _ => None,
+    }
+}
+
+fn bytes_to_path(bytes: &[u8]) -> Result<PathBuf, String> {
+    #[cfg(unix)]
+    {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        return Ok(PathBuf::from(OsStr::from_bytes(bytes)));
+    }
+
+    #[cfg(not(unix))]
+    {
+        return String::from_utf8(bytes.to_vec())
+            .map(PathBuf::from)
+            .map_err(|_| "Invalid UTF-8 in path".to_string());
+    }
 }
 
 fn hex_upper(nibble: u8) -> u8 {
@@ -1469,6 +1829,22 @@ fn build_html_translation_table(vm: &mut VM, table: i64, flags: i64) -> Result<A
     let encode_double = flags & ENT_COMPAT == ENT_COMPAT || flags & ENT_QUOTES == ENT_QUOTES;
     let encode_single = flags & ENT_QUOTES == ENT_QUOTES;
     let mut map = ArrayData::new();
+    if table == HTML_ENTITIES {
+        for (key, value) in HTML_ENTITIES_TABLE {
+            if *key == b"\"" && !encode_double {
+                continue;
+            }
+            if *key == b"'" && !encode_single {
+                continue;
+            }
+            map.insert(
+                ArrayKey::Str(Rc::new(key.to_vec())),
+                vm.arena.alloc(Val::String(Rc::new(value.to_vec()))),
+            );
+        }
+        return Ok(map);
+    }
+
     map.insert(
         ArrayKey::Str(Rc::new(b"&".to_vec())),
         vm.arena.alloc(Val::String(Rc::new(b"&amp;".to_vec()))),
@@ -2427,6 +2803,15 @@ pub fn php_ucwords(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::String(result.into())))
 }
 
+pub fn php_hebrev(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("hebrev() expects 1 or 2 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    Ok(vm.arena.alloc(Val::String(input.into())))
+}
+
 pub fn php_wordwrap(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 4 {
         return Err("wordwrap() expects between 1 and 4 parameters".into());
@@ -2508,7 +2893,9 @@ pub fn php_strtok(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         let s = vm.value_to_string(args[0])?;
         let tok = vm.value_to_string(args[1])?;
         // Now update extension data
-        let ext_data = vm.context.get_or_init_extension_data(CoreExtensionData::default);
+        let ext_data = vm
+            .context
+            .get_or_init_extension_data(CoreExtensionData::default);
         ext_data.strtok_string = Some(s);
         ext_data.strtok_pos = 0;
         tok
@@ -2517,8 +2904,10 @@ pub fn php_strtok(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     };
 
     // Now access extension data for processing
-    let ext_data = vm.context.get_or_init_extension_data(CoreExtensionData::default);
-    
+    let ext_data = vm
+        .context
+        .get_or_init_extension_data(CoreExtensionData::default);
+
     let s_opt = &ext_data.strtok_string;
     if s_opt.is_none() {
         return Ok(vm.arena.alloc(Val::Bool(false)));
@@ -3047,6 +3436,26 @@ pub fn php_strtoupper(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::String(upper)))
 }
 
+pub fn php_utf8_encode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("utf8_encode() expects exactly 1 parameter".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let converted = convert_bytes(&input, "ISO-8859-1", "UTF-8")?;
+    Ok(vm.arena.alloc(Val::String(converted.into())))
+}
+
+pub fn php_utf8_decode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("utf8_decode() expects exactly 1 parameter".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let converted = convert_bytes(&input, "UTF-8", "ISO-8859-1")?;
+    Ok(vm.arena.alloc(Val::String(converted.into())))
+}
+
 pub fn php_sprintf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let bytes = format_sprintf_bytes(vm, args)?;
     Ok(vm.arena.alloc(Val::String(bytes.into())))
@@ -3099,6 +3508,203 @@ pub fn php_vfprintf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let bytes = format_sprintf_bytes(vm, &format_args)?;
     let str_handle = vm.arena.alloc(Val::String(bytes.into()));
     crate::builtins::filesystem::php_fwrite(vm, &[args[0], str_handle])
+}
+
+pub fn php_sscanf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 2 {
+        return Err("sscanf() expects exactly 2 parameters".into());
+    }
+
+    let input = String::from_utf8_lossy(&vm.value_to_string(args[0])?).to_string();
+    let format = String::from_utf8_lossy(&vm.value_to_string(args[1])?).to_string();
+
+    #[derive(Clone, Copy)]
+    enum ScanSpec {
+        Int,
+        UInt,
+        Hex,
+        Oct,
+        Float,
+        String,
+        Char,
+    }
+
+    let mut regex = String::from("^");
+    let mut specs = Vec::new();
+    let mut chars = format.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_whitespace() {
+            regex.push_str("\\s+");
+            while let Some(next) = chars.peek() {
+                if next.is_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '%' {
+            let mut suppress = false;
+            if matches!(chars.peek(), Some('*')) {
+                suppress = true;
+                chars.next();
+            }
+
+            let mut width = String::new();
+            while let Some(next) = chars.peek() {
+                if next.is_ascii_digit() {
+                    width.push(*next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let width = if width.is_empty() {
+                None
+            } else {
+                Some(width.parse::<usize>().unwrap_or(0))
+            };
+
+            let next = chars
+                .next()
+                .ok_or("sscanf(): Incomplete format specifier".to_string())?;
+            match next {
+                '%' => regex.push('%'),
+                'd' | 'i' => {
+                    let pattern = if let Some(w) = width {
+                        format!("-?\\d{{1,{}}}", w)
+                    } else {
+                        "-?\\d+".to_string()
+                    };
+                    push_scan_pattern(&mut regex, suppress, &pattern);
+                    if !suppress {
+                        specs.push(ScanSpec::Int);
+                    }
+                }
+                'u' => {
+                    let pattern = if let Some(w) = width {
+                        format!("\\d{{1,{}}}", w)
+                    } else {
+                        "\\d+".to_string()
+                    };
+                    push_scan_pattern(&mut regex, suppress, &pattern);
+                    if !suppress {
+                        specs.push(ScanSpec::UInt);
+                    }
+                }
+                'x' | 'X' => {
+                    let pattern = if let Some(w) = width {
+                        format!("(?:0x)?[0-9a-fA-F]{{1,{}}}", w)
+                    } else {
+                        "(?:0x)?[0-9a-fA-F]+".to_string()
+                    };
+                    push_scan_pattern(&mut regex, suppress, &pattern);
+                    if !suppress {
+                        specs.push(ScanSpec::Hex);
+                    }
+                }
+                'o' => {
+                    let pattern = if let Some(w) = width {
+                        format!("[0-7]{{1,{}}}", w)
+                    } else {
+                        "[0-7]+".to_string()
+                    };
+                    push_scan_pattern(&mut regex, suppress, &pattern);
+                    if !suppress {
+                        specs.push(ScanSpec::Oct);
+                    }
+                }
+                'f' | 'e' | 'E' | 'g' | 'G' => {
+                    let float_pattern = "-?(?:\\d+\\.?\\d*|\\d*\\.\\d+)(?:[eE][+-]?\\d+)?";
+                    push_scan_pattern(&mut regex, suppress, float_pattern);
+                    if !suppress {
+                        specs.push(ScanSpec::Float);
+                    }
+                }
+                's' => {
+                    let pattern = if let Some(w) = width {
+                        format!("\\S{{1,{}}}", w)
+                    } else {
+                        "\\S+".to_string()
+                    };
+                    push_scan_pattern(&mut regex, suppress, &pattern);
+                    if !suppress {
+                        specs.push(ScanSpec::String);
+                    }
+                }
+                'c' => {
+                    let count = width.unwrap_or(1);
+                    let pattern = format!("[\\s\\S]{{{}}}", count);
+                    push_scan_pattern(&mut regex, suppress, &pattern);
+                    if !suppress {
+                        specs.push(ScanSpec::Char);
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "sscanf(): Unsupported format specifier: %{}",
+                        next
+                    ))
+                }
+            }
+        } else {
+            regex.push_str(&regex::escape(&ch.to_string()));
+        }
+    }
+    regex.push('$');
+
+    let re = Regex::new(&regex).map_err(|e| format!("sscanf(): {}", e))?;
+    let caps = match re.captures(&input) {
+        Some(caps) => caps,
+        None => return Ok(vm.arena.alloc(Val::Null)),
+    };
+
+    let mut result = ArrayData::new();
+    for (idx, spec) in specs.iter().enumerate() {
+        let value = caps
+            .get(idx + 1)
+            .map(|m| m.as_str())
+            .unwrap_or("");
+        let handle = match spec {
+            ScanSpec::Int => vm
+                .arena
+                .alloc(Val::Int(value.parse::<i64>().unwrap_or(0))),
+            ScanSpec::UInt => vm
+                .arena
+                .alloc(Val::Int(value.parse::<u64>().unwrap_or(0) as i64)),
+            ScanSpec::Hex => {
+                let trimmed = value.trim_start_matches("0x").trim_start_matches("0X");
+                let parsed = u64::from_str_radix(trimmed, 16).unwrap_or(0);
+                vm.arena.alloc(Val::Int(parsed as i64))
+            }
+            ScanSpec::Oct => {
+                let parsed = u64::from_str_radix(value, 8).unwrap_or(0);
+                vm.arena.alloc(Val::Int(parsed as i64))
+            }
+            ScanSpec::Float => vm
+                .arena
+                .alloc(Val::Float(value.parse::<f64>().unwrap_or(0.0))),
+            ScanSpec::String | ScanSpec::Char => {
+                vm.arena.alloc(Val::String(value.as_bytes().to_vec().into()))
+            }
+        };
+        result.insert(ArrayKey::Int(idx as i64), handle);
+    }
+
+    Ok(vm.arena.alloc(Val::Array(Rc::new(result))))
+}
+
+fn push_scan_pattern(out: &mut String, suppress: bool, pattern: &str) {
+    if suppress {
+        out.push_str("(?:");
+        out.push_str(pattern);
+        out.push(')');
+    } else {
+        out.push('(');
+        out.push_str(pattern);
+        out.push(')');
+    }
 }
 
 fn format_sprintf_bytes(vm: &mut VM, args: &[Handle]) -> Result<Vec<u8>, String> {
@@ -3783,6 +4389,22 @@ pub fn php_setlocale(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
     if args.len() == 2 {
         match &vm.arena.get(args[1]).value {
+            Val::Int(i) if *i == 0 => {
+                let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
+                if ptr.is_null() {
+                    return Ok(vm.arena.alloc(Val::Bool(false)));
+                }
+                let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+                return Ok(vm.arena.alloc(Val::String(bytes.into())));
+            }
+            Val::Null => {
+                let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
+                if ptr.is_null() {
+                    return Ok(vm.arena.alloc(Val::Bool(false)));
+                }
+                let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+                return Ok(vm.arena.alloc(Val::String(bytes.into())));
+            }
             Val::Array(arr) => {
                 let entries: Vec<_> = arr.map.values().copied().collect();
                 for entry in entries {
@@ -3846,9 +4468,7 @@ pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     fn lconv_char_to_int(value: libc::c_char) -> i64 {
-        let val = value as i64;
-        let max = i8::MAX as i64;
-        if val == max { -1 } else { val }
+        value as u8 as i64
     }
 
     fn insert_str(vm: &mut VM, data: &mut ArrayData, key: &str, val: Vec<u8>) {
@@ -3858,6 +4478,23 @@ pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
     fn insert_int(vm: &mut VM, data: &mut ArrayData, key: &str, val: i64) {
         let handle = vm.arena.alloc(Val::Int(val));
+        data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
+    }
+
+    fn insert_grouping(vm: &mut VM, data: &mut ArrayData, key: &str, ptr: *const libc::c_char) {
+        let bytes = c_str_to_bytes(ptr);
+        let mut grouping = ArrayData::new();
+        let mut idx = 0i64;
+        for byte in bytes {
+            let val = byte as i64;
+            if val == 0 || val == 127 {
+                break;
+            }
+            let handle = vm.arena.alloc(Val::Int(val));
+            grouping.insert(ArrayKey::Int(idx), handle);
+            idx += 1;
+        }
+        let handle = vm.arena.alloc(Val::Array(Rc::new(grouping)));
         data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
     }
 
@@ -3896,12 +4533,6 @@ pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         &mut data,
         "mon_thousands_sep",
         c_str_to_bytes(lconv.mon_thousands_sep),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "mon_grouping",
-        c_str_to_bytes(lconv.mon_grouping),
     );
     insert_str(
         vm,
@@ -3963,6 +4594,8 @@ pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         "n_sign_posn",
         lconv_char_to_int(lconv.n_sign_posn),
     );
+    insert_grouping(vm, &mut data, "grouping", lconv.grouping);
+    insert_grouping(vm, &mut data, "mon_grouping", lconv.mon_grouping);
 
     Ok(vm.arena.alloc(Val::Array(Rc::new(data))))
 }

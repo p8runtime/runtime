@@ -70,11 +70,7 @@ impl DriverRegistry {
     /// Get a driver by name (case-insensitive)
     pub fn get(&self, name: &str) -> Option<&dyn PdoDriver> {
         let name = name.trim();
-        if name
-            .as_bytes()
-            .iter()
-            .any(|b| b.is_ascii_uppercase())
-        {
+        if name.as_bytes().iter().any(|b| b.is_ascii_uppercase()) {
             let lower = name.to_ascii_lowercase();
             self.drivers.get(&lower).map(|d| &**d)
         } else {
@@ -85,11 +81,7 @@ impl DriverRegistry {
     /// Get a driver by name (case-insensitive) as an Arc for cheap cloning.
     pub fn get_arc(&self, name: &str) -> Option<Arc<dyn PdoDriver>> {
         let name = name.trim();
-        if name
-            .as_bytes()
-            .iter()
-            .any(|b| b.is_ascii_uppercase())
-        {
+        if name.as_bytes().iter().any(|b| b.is_ascii_uppercase()) {
             let lower = name.to_ascii_lowercase();
             self.drivers.get(&lower).cloned()
         } else {

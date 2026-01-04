@@ -2,10 +2,11 @@ use crate::compiler::chunk::{CatchEntry, CodeChunk, FuncParam, ReturnType, UserF
 use crate::core::interner::Interner;
 use crate::core::value::{Symbol, Val, Visibility};
 use crate::parser::ast::{
-    AssignOp, BinaryOp, CastKind, ClassMember, Expr, IncludeKind, MagicConstKind, Stmt, StmtId,
-    Type, UnaryOp,
+    AssignOp, AttributeGroup, BinaryOp, CastKind, ClassMember, Expr, IncludeKind, MagicConstKind,
+    Stmt, StmtId, Type, UnaryOp,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
+use crate::runtime::context::{AttributeArg, AttributeInstance};
 use crate::vm::opcode::OpCode;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -200,6 +201,7 @@ impl<'src> Emitter<'src> {
                     params,
                     modifiers,
                     return_type,
+                    attributes,
                     ..
                 } => {
                     let method_name_str = self.get_text(name.span);
@@ -215,6 +217,7 @@ impl<'src> Emitter<'src> {
                         ty: Option<&'a Type<'a>>,
                         default: Option<&'a Expr<'a>>,
                         variadic: bool,
+                        attributes: &'a [AttributeGroup<'a>],
                     }
 
                     let mut param_infos = Vec::new();
@@ -225,6 +228,7 @@ impl<'src> Emitter<'src> {
                             ty: param.ty,
                             default: param.default.as_ref().map(|e| *e),
                             variadic: param.variadic,
+                            attributes: param.attributes,
                         });
                     }
 
@@ -262,6 +266,7 @@ impl<'src> Emitter<'src> {
                                 param_type,
                                 is_variadic: info.variadic,
                                 default_value,
+                                attributes: method_emitter.build_attribute_instances(info.attributes),
                             });
 
                             if let Some(default_expr) = info.default {
@@ -290,6 +295,7 @@ impl<'src> Emitter<'src> {
                         is_generator,
                         statics: Rc::new(RefCell::new(HashMap::new())),
                         return_type: ret_type,
+                        attributes: Vec::new(),
                     };
 
                     // Store in constants
@@ -304,16 +310,26 @@ impl<'src> Emitter<'src> {
                         is_static,
                         is_abstract,
                     ));
+
+                    for attr_idx in self.build_attribute_constants(attributes) {
+                        self.chunk.code.push(OpCode::AddMethodAttribute(
+                            class_sym,
+                            method_sym,
+                            attr_idx,
+                        ));
+                    }
                 }
                 ClassMember::Property {
                     entries,
                     modifiers,
                     ty,
+                    attributes,
                     ..
                 } => {
                     let visibility = self.get_visibility(modifiers);
                     let is_static = modifiers.iter().any(|t| t.kind == TokenKind::Static);
                     let is_readonly = modifiers.iter().any(|t| t.kind == TokenKind::Readonly);
+                    let attr_indices = self.build_attribute_constants(attributes);
 
                     // Extract type hint once for all properties in this declaration
                     let type_hint_opt = ty.and_then(|t| self.convert_type(t));
@@ -361,12 +377,25 @@ impl<'src> Emitter<'src> {
                                 is_readonly,
                             ));
                         }
+
+                        for &attr_idx in &attr_indices {
+                            self.chunk.code.push(OpCode::AddPropertyAttribute(
+                                class_sym,
+                                prop_sym,
+                                attr_idx,
+                                is_static,
+                            ));
+                        }
                     }
                 }
                 ClassMember::Const {
-                    consts, modifiers, ..
+                    consts,
+                    modifiers,
+                    attributes,
+                    ..
                 } => {
                     let visibility = self.get_visibility(modifiers);
+                    let attr_indices = self.build_attribute_constants(attributes);
                     for entry in *consts {
                         let const_name_str = self.get_text(entry.name.span);
                         let const_sym = self.interner.intern(const_name_str);
@@ -381,7 +410,32 @@ impl<'src> Emitter<'src> {
                             val_idx as u16,
                             visibility,
                         ));
+
+                        for &attr_idx in &attr_indices {
+                            self.chunk.code.push(OpCode::AddClassConstAttribute(
+                                class_sym,
+                                const_sym,
+                                attr_idx,
+                            ));
+                        }
                     }
+                }
+                ClassMember::Case { name, value, .. } => {
+                    let case_name_str = self.get_text(name.span);
+                    let case_sym = self.interner.intern(case_name_str);
+                    let (val_idx, has_value) = if let Some(expr) = value {
+                        let val = self.eval_constant_expr(expr);
+                        (self.add_constant(val) as u16, true)
+                    } else {
+                        (0u16, false)
+                    };
+
+                    self.chunk.code.push(OpCode::DefEnumCase(
+                        class_sym,
+                        case_sym,
+                        val_idx,
+                        has_value,
+                    ));
                 }
                 ClassMember::TraitUse { traits, .. } => {
                     for trait_name in *traits {
@@ -393,6 +447,82 @@ impl<'src> Emitter<'src> {
                 _ => {}
             }
         }
+    }
+
+    fn emit_class_attributes(&mut self, class_sym: Symbol, attributes: &[AttributeGroup]) {
+        for attr_group in attributes {
+            for attr in attr_group.attributes {
+                let attr_name = self.get_text(attr.name.span);
+                let attr_sym = self.interner.intern(attr_name);
+                let mut args = Vec::new();
+
+                for arg in attr.args {
+                    let val = self.eval_constant_expr(arg.value);
+                    let name = arg
+                        .name
+                        .map(|token| self.interner.intern(self.get_text(token.span)));
+                    args.push(AttributeArg { name, value: val });
+                }
+
+                let instance = AttributeInstance { name: attr_sym, args };
+                let const_idx = self.add_constant(Val::Resource(Rc::new(instance)));
+                self.chunk
+                    .code
+                    .push(OpCode::AddClassAttribute(class_sym, const_idx as u16));
+            }
+        }
+    }
+
+    fn build_attribute_constants(&mut self, attributes: &[AttributeGroup]) -> Vec<u16> {
+        let mut indices = Vec::new();
+        for attr_group in attributes {
+            for attr in attr_group.attributes {
+                let attr_name = self.get_text(attr.name.span);
+                let attr_sym = self.interner.intern(attr_name);
+                let mut args = Vec::new();
+
+                for arg in attr.args {
+                    let val = self.eval_constant_expr(arg.value);
+                    let name = arg
+                        .name
+                        .map(|token| self.interner.intern(self.get_text(token.span)));
+                    args.push(AttributeArg { name, value: val });
+                }
+
+                let instance = AttributeInstance { name: attr_sym, args };
+                let const_idx = self.add_constant(Val::Resource(Rc::new(instance)));
+                indices.push(const_idx as u16);
+            }
+        }
+        indices
+    }
+
+    fn build_attribute_instances(
+        &mut self,
+        attributes: &[AttributeGroup],
+    ) -> Vec<AttributeInstance> {
+        let mut instances = Vec::new();
+        for attr_group in attributes {
+            for attr in attr_group.attributes {
+                let attr_name = self.get_text(attr.name.span);
+                let attr_sym = self.interner.intern(attr_name);
+                let mut args = Vec::new();
+
+                for arg in attr.args {
+                    let val = self.eval_constant_expr(arg.value);
+                    let name = arg
+                        .name
+                        .map(|token| self.interner.intern(self.get_text(token.span)));
+                    args.push(AttributeArg { name, value: val });
+                }
+
+                instances.push(AttributeInstance {
+                    name: attr_sym,
+                    args,
+                });
+            }
+        }
+        instances
     }
 
     fn emit_stmt(&mut self, stmt: &Stmt) {
@@ -753,6 +883,7 @@ impl<'src> Emitter<'src> {
                 self.patch_jump(jump_end_idx, end_label);
             }
             Stmt::Function {
+                attributes,
                 name,
                 params,
                 body,
@@ -764,13 +895,14 @@ impl<'src> Emitter<'src> {
                 let func_sym = self.interner.intern(func_name_str);
 
                 // 1. Collect param info to avoid borrow issues
-                struct ParamInfo<'a> {
-                    name_span: crate::parser::span::Span,
-                    by_ref: bool,
-                    ty: Option<&'a Type<'a>>,
-                    default: Option<&'a Expr<'a>>,
-                    variadic: bool,
-                }
+                    struct ParamInfo<'a> {
+                        name_span: crate::parser::span::Span,
+                        by_ref: bool,
+                        ty: Option<&'a Type<'a>>,
+                        default: Option<&'a Expr<'a>>,
+                        variadic: bool,
+                        attributes: &'a [AttributeGroup<'a>],
+                    }
 
                 let mut param_infos = Vec::new();
                 for param in *params {
@@ -780,6 +912,7 @@ impl<'src> Emitter<'src> {
                         ty: param.ty,
                         default: param.default.as_ref().map(|e| *e),
                         variadic: param.variadic,
+                        attributes: param.attributes,
                     });
                 }
 
@@ -807,6 +940,7 @@ impl<'src> Emitter<'src> {
                             param_type,
                             is_variadic: info.variadic,
                             default_value,
+                            attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
                         if let Some(default_expr) = info.default {
@@ -836,6 +970,7 @@ impl<'src> Emitter<'src> {
                     is_generator,
                     statics: Rc::new(RefCell::new(HashMap::new())),
                     return_type: ret_type,
+                    attributes: self.build_attribute_instances(attributes),
                 };
 
                 let func_res = Val::Resource(Rc::new(user_func));
@@ -898,6 +1033,8 @@ impl<'src> Emitter<'src> {
                     }
                 }
 
+                self.emit_class_attributes(class_sym, attributes);
+
                 // Track class context while emitting members
                 let prev_class = self.current_class;
                 self.current_class = Some(class_sym);
@@ -941,6 +1078,42 @@ impl<'src> Emitter<'src> {
                 self.current_trait = Some(sym);
                 self.emit_members(sym, members);
                 self.current_trait = prev_trait;
+            }
+            Stmt::Enum {
+                name,
+                backed_type,
+                implements,
+                members,
+                attributes,
+                ..
+            } => {
+                let enum_name_str = self.get_text(name.span);
+                let enum_sym = self.interner.intern(enum_name_str);
+
+                let backed_flag = match backed_type {
+                    Some(Type::Simple(tok)) if tok.kind == TokenKind::TypeInt => 1,
+                    Some(Type::Simple(tok)) if tok.kind == TokenKind::TypeString => 2,
+                    _ => 0,
+                };
+
+                self.chunk.code.push(OpCode::DefEnum(enum_sym, backed_flag));
+
+                for interface in *implements {
+                    let interface_str = self.get_text(interface.span);
+                    let interface_sym = self.interner.intern(interface_str);
+                    self.chunk
+                        .code
+                        .push(OpCode::AddInterface(enum_sym, interface_sym));
+                }
+
+                self.emit_class_attributes(enum_sym, attributes);
+
+                let prev_class = self.current_class;
+                self.current_class = Some(enum_sym);
+                self.emit_members(enum_sym, members);
+                self.current_class = prev_class;
+
+                self.chunk.code.push(OpCode::FinalizeClass(enum_sym));
             }
 
             Stmt::While {
@@ -2221,6 +2394,7 @@ impl<'src> Emitter<'src> {
                     ty: Option<&'a Type<'a>>,
                     default: Option<&'a Expr<'a>>,
                     variadic: bool,
+                    attributes: &'a [AttributeGroup<'a>],
                 }
 
                 let mut param_infos = Vec::new();
@@ -2231,6 +2405,7 @@ impl<'src> Emitter<'src> {
                         ty: param.ty,
                         default: param.default.as_ref().map(|e| *e),
                         variadic: param.variadic,
+                        attributes: param.attributes,
                     });
                 }
 
@@ -2260,6 +2435,7 @@ impl<'src> Emitter<'src> {
                             param_type,
                             is_variadic: info.variadic,
                             default_value,
+                            attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
                         if let Some(default_expr) = info.default {
@@ -2307,6 +2483,7 @@ impl<'src> Emitter<'src> {
                     is_generator,
                     statics: Rc::new(RefCell::new(HashMap::new())),
                     return_type: ret_type,
+                    attributes: Vec::new(),
                 };
 
                 let func_res = Val::Resource(Rc::new(user_func));
@@ -3387,6 +3564,51 @@ impl<'src> Emitter<'src> {
                     }
 
                     Val::ConstArray(Rc::new(const_array))
+                }
+            }
+            Expr::ClassConstFetch { class, constant, .. } => {
+                let class_name = match class {
+                    Expr::Variable { name, .. } => Some(self.get_text(*name)),
+                    _ => None,
+                };
+                let const_name = match constant {
+                    Expr::Variable { name, .. } => Some(self.get_text(*name)),
+                    _ => None,
+                };
+
+                if let (Some(class_name), Some(const_name)) = (class_name, const_name) {
+                    if class_name == b"Attribute" || class_name.ends_with(b"\\Attribute") {
+                        let value = match const_name {
+                            b"TARGET_CLASS" => Some(1),
+                            b"TARGET_METHOD" => Some(2),
+                            b"TARGET_FUNCTION" => Some(4),
+                            b"TARGET_PROPERTY" => Some(8),
+                            b"TARGET_CLASS_CONSTANT" => Some(16),
+                            b"TARGET_PARAMETER" => Some(32),
+                            b"TARGET_ALL" => Some(63),
+                            b"IS_REPEATABLE" => Some(64),
+                            _ => None,
+                        };
+                        if let Some(v) = value {
+                            return Val::Int(v);
+                        }
+                    }
+                }
+
+                Val::Null
+            }
+            Expr::Binary { left, op, right, .. } => {
+                match op {
+                    BinaryOp::BitOr => {
+                        let l = self.eval_constant_expr(left);
+                        let r = self.eval_constant_expr(right);
+                        if let (Val::Int(li), Val::Int(ri)) = (l, r) {
+                            Val::Int(li | ri)
+                        } else {
+                            Val::Null
+                        }
+                    }
+                    _ => Val::Null,
                 }
             }
             _ => Val::Null,

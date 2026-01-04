@@ -52,8 +52,9 @@ use crate::compiler::chunk::{ClosureData, CodeChunk, ReturnType, UserFunc};
 use crate::core::heap::Arena;
 use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, Symbol, Val, Visibility};
 use crate::runtime::context::{
-    ClassDef, EngineContext, MethodEntry, MethodSignature, ParameterInfo, PropertyEntry,
-    RequestContext, StaticPropertyEntry, TypeHint,
+    AttributeInstance, ClassConstEntry, ClassDef, EngineContext, EnumBackedType, MethodEntry,
+    MethodSignature, NativeMethodEntry, ParameterInfo, PropertyEntry, RequestContext,
+    StaticPropertyEntry, TypeHint,
 };
 use crate::vm::frame::{
     ArgList, CallFrame, GeneratorData, GeneratorState, SubGenState, SubIterator,
@@ -353,6 +354,15 @@ pub struct VM {
 }
 
 impl VM {
+    const ATTR_TARGET_CLASS: i64 = 1;
+    const ATTR_TARGET_METHOD: i64 = 2;
+    const ATTR_TARGET_FUNCTION: i64 = 4;
+    const ATTR_TARGET_PROPERTY: i64 = 8;
+    const ATTR_TARGET_CLASS_CONSTANT: i64 = 16;
+    const ATTR_TARGET_PARAMETER: i64 = 32;
+    const ATTR_TARGET_ALL: i64 = 63;
+    const ATTR_IS_REPEATABLE: i64 = 64;
+
     pub fn new(engine_context: Arc<EngineContext>) -> Self {
         let trace_includes = std::env::var_os("PHP_VM_TRACE_INCLUDE").is_some();
         if trace_includes {
@@ -1272,12 +1282,13 @@ impl VM {
         };
 
         if let Some(native_entry) = self.find_native_method(class_name, method_name) {
-            let saved_this = self.frames.last().and_then(|f| f.this);
-            if let Some(frame) = self.frames.last_mut() {
+            let frame_idx = self.frames.len().saturating_sub(1);
+            let saved_this = self.frames.get(frame_idx).and_then(|f| f.this);
+            if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = Some(obj_handle);
             }
             let result = (native_entry.handler)(self, &[]).map_err(VmError::RuntimeError)?;
-            if let Some(frame) = self.frames.last_mut() {
+            if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = saved_this;
             }
             Ok(result)
@@ -1972,7 +1983,7 @@ impl VM {
         let found = self.walk_inheritance_chain(start_class, |def, cls| {
             def.constants
                 .get(&const_name)
-                .map(|(val, vis)| (val.clone(), *vis, cls))
+                .map(|entry| (entry.value.clone(), entry.visibility, cls))
         });
 
         if let Some((val, vis, defining_class)) = found {
@@ -2201,6 +2212,119 @@ impl VM {
         }
 
         false
+    }
+
+    fn resolve_attribute_flags(&self, attr_name: Symbol) -> Result<i64, VmError> {
+        let name_bytes = self.context.interner.lookup(attr_name).unwrap_or(b"");
+        if name_bytes == b"Attribute" || name_bytes.ends_with(b"\\Attribute") {
+            return Ok(Self::ATTR_TARGET_CLASS);
+        }
+        if name_bytes == b"AllowDynamicProperties"
+            || name_bytes.ends_with(b"\\AllowDynamicProperties")
+        {
+            return Ok(Self::ATTR_TARGET_CLASS);
+        }
+
+        let class_def = self.context.classes.get(&attr_name).ok_or_else(|| {
+            VmError::RuntimeError(format!(
+                "Attribute class \"{}\" not found",
+                String::from_utf8_lossy(name_bytes)
+            ))
+        })?;
+
+        let attr_attr = class_def.attributes.iter().find(|attr| {
+            let attr_name_bytes = self.context.interner.lookup(attr.name).unwrap_or(b"");
+            attr_name_bytes == b"Attribute" || attr_name_bytes.ends_with(b"\\Attribute")
+        });
+
+        let attr_attr = match attr_attr {
+            Some(attr) => attr,
+            None => {
+                return Err(VmError::RuntimeError(format!(
+                    "Attempting to use non-attribute class \"{}\" as attribute",
+                    String::from_utf8_lossy(name_bytes)
+                )))
+            }
+        };
+
+        if let Some(arg) = attr_attr.args.first() {
+            match arg.value {
+                Val::Int(i) => Ok(i),
+                Val::Float(f) => Ok(f as i64),
+                Val::Bool(b) => Ok(if b { 1 } else { 0 }),
+                _ => Err(VmError::RuntimeError(
+                    "Attribute flags must be integer".into(),
+                )),
+            }
+        } else {
+            Ok(Self::ATTR_TARGET_ALL)
+        }
+    }
+
+    fn validate_attribute_use(
+        &self,
+        attr: &AttributeInstance,
+        target_flag: i64,
+        existing: &[AttributeInstance],
+    ) -> Result<(), VmError> {
+        let flags = self.resolve_attribute_flags(attr.name)?;
+        let is_repeatable = (flags & Self::ATTR_IS_REPEATABLE) != 0;
+        if !is_repeatable && existing.iter().any(|entry| entry.name == attr.name) {
+            let name_bytes = self.context.interner.lookup(attr.name).unwrap_or(b"");
+            return Err(VmError::RuntimeError(format!(
+                "Attribute \"{}\" must not be repeated",
+                String::from_utf8_lossy(name_bytes)
+            )));
+        }
+
+        if (flags & target_flag) == 0 {
+            let name_bytes = self.context.interner.lookup(attr.name).unwrap_or(b"");
+            let allowed = self.format_attribute_targets(flags);
+            let target_name = self.format_attribute_target(target_flag);
+            return Err(VmError::RuntimeError(format!(
+                "Attribute \"{}\" cannot target {} (allowed targets: {})",
+                String::from_utf8_lossy(name_bytes),
+                target_name,
+                allowed
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn format_attribute_targets(&self, flags: i64) -> String {
+        let mut parts = Vec::new();
+        if (flags & Self::ATTR_TARGET_CLASS) != 0 {
+            parts.push("class");
+        }
+        if (flags & Self::ATTR_TARGET_METHOD) != 0 {
+            parts.push("method");
+        }
+        if (flags & Self::ATTR_TARGET_FUNCTION) != 0 {
+            parts.push("function");
+        }
+        if (flags & Self::ATTR_TARGET_PROPERTY) != 0 {
+            parts.push("property");
+        }
+        if (flags & Self::ATTR_TARGET_CLASS_CONSTANT) != 0 {
+            parts.push("class constant");
+        }
+        if (flags & Self::ATTR_TARGET_PARAMETER) != 0 {
+            parts.push("parameter");
+        }
+        parts.join(", ")
+    }
+
+    fn format_attribute_target(&self, flag: i64) -> &'static str {
+        match flag {
+            Self::ATTR_TARGET_CLASS => "class",
+            Self::ATTR_TARGET_METHOD => "method",
+            Self::ATTR_TARGET_FUNCTION => "function",
+            Self::ATTR_TARGET_PROPERTY => "property",
+            Self::ATTR_TARGET_CLASS_CONSTANT => "class constant",
+            Self::ATTR_TARGET_PARAMETER => "parameter",
+            _ => "target",
+        }
     }
 
     /// Check if writing a dynamic property should emit a deprecation warning
@@ -2590,8 +2714,9 @@ impl VM {
         }
 
         let popped_frame = self.pop_frame()?;
+        let gen_handle = popped_frame.generator;
 
-        if let Some(gen_handle) = popped_frame.generator {
+        if let Some(gen_handle) = gen_handle {
             let gen_val = self.arena.get(gen_handle);
             if let Val::Object(payload_handle) = &gen_val.value {
                 let payload = self.arena.get(*payload_handle);
@@ -2624,6 +2749,22 @@ impl VM {
                 ret_val
             }
         };
+
+        if let Some(gen_handle) = gen_handle {
+            let gen_val = self.arena.get(gen_handle);
+            if let Val::Object(payload_handle) = &gen_val.value {
+                let payload = self.arena.get(*payload_handle);
+                if let Val::ObjPayload(obj_data) = &payload.value {
+                    if let Some(internal) = &obj_data.internal {
+                        if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>()
+                        {
+                            let mut data = gen_data.borrow_mut();
+                            data.return_val = Some(final_ret_val);
+                        }
+                    }
+                }
+            }
+        }
 
         if self.frames.len() == target_depth {
             self.last_return_value = Some(final_ret_val);
@@ -3838,6 +3979,8 @@ impl VM {
                     static_properties: HashMap::new(),
                     abstract_methods: HashSet::new(),
                     allows_dynamic_properties: false,
+                    attributes: Vec::new(),
+                    enum_cases: Vec::new(),
                 };
                 self.context.classes.insert(name_sym, class_def);
             }
@@ -3867,6 +4010,28 @@ impl VM {
                 };
                 if let Val::Resource(rc) = val {
                     if let Ok(func) = rc.downcast::<UserFunc>() {
+                        let mut seen = Vec::new();
+                        for attr in &func.attributes {
+                            self.validate_attribute_use(
+                                attr,
+                                Self::ATTR_TARGET_FUNCTION,
+                                &seen,
+                            )?;
+                            seen.push(attr.clone());
+                        }
+
+                        for param in &func.params {
+                            let mut param_seen = Vec::new();
+                            for attr in &param.attributes {
+                                self.validate_attribute_use(
+                                    attr,
+                                    Self::ATTR_TARGET_PARAMETER,
+                                    &param_seen,
+                                )?;
+                                param_seen.push(attr.clone());
+                            }
+                        }
+
                         self.context.user_functions.insert(name_sym, func);
                     }
                 }
@@ -5957,8 +6122,84 @@ impl VM {
                     static_properties: HashMap::new(),
                     abstract_methods,
                     allows_dynamic_properties: false,
+                    attributes: Vec::new(),
+                    enum_cases: Vec::new(),
                 };
                 self.context.classes.insert(name, class_def);
+            }
+            OpCode::DefEnum(name, backed_type) => {
+                let enum_backed_type = match backed_type {
+                    1 => Some(EnumBackedType::Int),
+                    2 => Some(EnumBackedType::String),
+                    _ => None,
+                };
+
+                let class_def = ClassDef {
+                    name,
+                    parent: None,
+                    is_interface: false,
+                    is_trait: false,
+                    is_abstract: false,
+                    is_enum: true,
+                    enum_backed_type,
+                    interfaces: Vec::new(),
+                    traits: Vec::new(),
+                    methods: HashMap::new(),
+                    properties: IndexMap::new(),
+                    constants: HashMap::new(),
+                    static_properties: HashMap::new(),
+                    abstract_methods: HashSet::new(),
+                    allows_dynamic_properties: false,
+                    attributes: Vec::new(),
+                    enum_cases: Vec::new(),
+                };
+                self.context.classes.insert(name, class_def);
+
+                let unit_enum = self.context.interner.intern(b"UnitEnum");
+                if let Some(class_def) = self.context.classes.get_mut(&name) {
+                    class_def.interfaces.push(unit_enum);
+                    if enum_backed_type.is_some() {
+                        let backed_enum = self.context.interner.intern(b"BackedEnum");
+                        class_def.interfaces.push(backed_enum);
+                    }
+                }
+
+                let cases_sym = self.context.interner.intern(b"cases");
+                self.context.native_methods.insert(
+                    (name, cases_sym),
+                    NativeMethodEntry {
+                        name: cases_sym,
+                        handler: crate::builtins::class::unit_enum_cases,
+                        visibility: Visibility::Public,
+                        is_static: true,
+                        declaring_class: name,
+                    },
+                );
+
+                if enum_backed_type.is_some() {
+                    let from_sym = self.context.interner.intern(b"from");
+                    let try_from_sym = self.context.interner.intern(b"tryFrom");
+                    self.context.native_methods.insert(
+                        (name, from_sym),
+                        NativeMethodEntry {
+                            name: from_sym,
+                            handler: crate::builtins::class::backed_enum_from,
+                            visibility: Visibility::Public,
+                            is_static: true,
+                            declaring_class: name,
+                        },
+                    );
+                    self.context.native_methods.insert(
+                        (name, try_from_sym),
+                        NativeMethodEntry {
+                            name: try_from_sym,
+                            handler: crate::builtins::class::backed_enum_try_from,
+                            visibility: Visibility::Public,
+                            is_static: true,
+                            declaring_class: name,
+                        },
+                    );
+                }
             }
             OpCode::DefInterface(name) => {
                 let class_def = ClassDef {
@@ -5977,6 +6218,8 @@ impl VM {
                     static_properties: HashMap::new(),
                     abstract_methods: HashSet::new(),
                     allows_dynamic_properties: false,
+                    attributes: Vec::new(),
+                    enum_cases: Vec::new(),
                 };
                 self.context.classes.insert(name, class_def);
             }
@@ -5997,6 +6240,8 @@ impl VM {
                     static_properties: HashMap::new(),
                     abstract_methods: HashSet::new(),
                     allows_dynamic_properties: false,
+                    attributes: Vec::new(),
+                    enum_cases: Vec::new(),
                 };
                 self.context.classes.insert(name, class_def);
             }
@@ -6022,6 +6267,136 @@ impl VM {
             OpCode::AllowDynamicProperties(class_name) => {
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.allows_dynamic_properties = true;
+                }
+            }
+            OpCode::AddClassAttribute(class_name, attr_idx) => {
+                let attr_val = {
+                    let frame = self.frames.last().unwrap();
+                    frame.chunk.constants[attr_idx as usize].clone()
+                };
+
+                let attr = if let Val::Resource(rc) = attr_val {
+                    rc.downcast_ref::<AttributeInstance>().cloned()
+                } else {
+                    None
+                };
+
+                if let Some(attr) = attr {
+                    let existing = self
+                        .context
+                        .classes
+                        .get(&class_name)
+                        .map(|def| def.attributes.clone())
+                        .unwrap_or_default();
+                    self.validate_attribute_use(&attr, Self::ATTR_TARGET_CLASS, &existing)?;
+
+                    if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                        class_def.attributes.push(attr);
+                    }
+                }
+            }
+            OpCode::AddMethodAttribute(class_name, method_name, attr_idx) => {
+                let attr_val = {
+                    let frame = self.frames.last().unwrap();
+                    frame.chunk.constants[attr_idx as usize].clone()
+                };
+
+                let attr = if let Val::Resource(rc) = attr_val {
+                    rc.downcast_ref::<AttributeInstance>().cloned()
+                } else {
+                    None
+                };
+
+                let lower_key = self.intern_lowercase_symbol(method_name)?;
+                if let Some(attr) = attr {
+                    let existing = self
+                        .context
+                        .classes
+                        .get(&class_name)
+                        .and_then(|def| def.methods.get(&lower_key))
+                        .map(|entry| entry.attributes.clone())
+                        .unwrap_or_default();
+                    self.validate_attribute_use(&attr, Self::ATTR_TARGET_METHOD, &existing)?;
+
+                    if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                        if let Some(entry) = class_def.methods.get_mut(&lower_key) {
+                            entry.attributes.push(attr);
+                        }
+                    }
+                }
+            }
+            OpCode::AddPropertyAttribute(class_name, prop_name, attr_idx, is_static) => {
+                let attr_val = {
+                    let frame = self.frames.last().unwrap();
+                    frame.chunk.constants[attr_idx as usize].clone()
+                };
+
+                let attr = if let Val::Resource(rc) = attr_val {
+                    rc.downcast_ref::<AttributeInstance>().cloned()
+                } else {
+                    None
+                };
+
+                if let Some(attr) = attr {
+                    let existing = if is_static {
+                        self.context
+                            .classes
+                            .get(&class_name)
+                            .and_then(|def| def.static_properties.get(&prop_name))
+                            .map(|entry| entry.attributes.clone())
+                            .unwrap_or_default()
+                    } else {
+                        self.context
+                            .classes
+                            .get(&class_name)
+                            .and_then(|def| def.properties.get(&prop_name))
+                            .map(|entry| entry.attributes.clone())
+                            .unwrap_or_default()
+                    };
+                    self.validate_attribute_use(&attr, Self::ATTR_TARGET_PROPERTY, &existing)?;
+
+                    if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                        if is_static {
+                            if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
+                                entry.attributes.push(attr);
+                            }
+                        } else if let Some(entry) = class_def.properties.get_mut(&prop_name) {
+                            entry.attributes.push(attr);
+                        }
+                    }
+                }
+            }
+            OpCode::AddClassConstAttribute(class_name, const_name, attr_idx) => {
+                let attr_val = {
+                    let frame = self.frames.last().unwrap();
+                    frame.chunk.constants[attr_idx as usize].clone()
+                };
+
+                let attr = if let Val::Resource(rc) = attr_val {
+                    rc.downcast_ref::<AttributeInstance>().cloned()
+                } else {
+                    None
+                };
+
+                if let Some(attr) = attr {
+                    let existing = self
+                        .context
+                        .classes
+                        .get(&class_name)
+                        .and_then(|def| def.constants.get(&const_name))
+                        .map(|entry| entry.attributes.clone())
+                        .unwrap_or_default();
+                    self.validate_attribute_use(
+                        &attr,
+                        Self::ATTR_TARGET_CLASS_CONSTANT,
+                        &existing,
+                    )?;
+
+                    if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                        if let Some(entry) = class_def.constants.get_mut(&const_name) {
+                            entry.attributes.push(attr);
+                        }
+                    }
                 }
             }
             OpCode::MarkAbstract(class_name) => {
@@ -6146,6 +6521,18 @@ impl VM {
                 };
                 if let Val::Resource(rc) = val {
                     if let Ok(func) = rc.downcast::<UserFunc>() {
+                        for param in &func.params {
+                            let mut seen = Vec::new();
+                            for attr in &param.attributes {
+                                self.validate_attribute_use(
+                                    attr,
+                                    Self::ATTR_TARGET_PARAMETER,
+                                    &seen,
+                                )?;
+                                seen.push(attr.clone());
+                            }
+                        }
+
                         let lower_key = self.intern_lowercase_symbol(method_name)?;
 
                         // Build signature from UserFunc data
@@ -6162,6 +6549,7 @@ impl VM {
                                     is_reference: p.by_ref,
                                     is_variadic: p.is_variadic,
                                     default_value: p.default_value.clone(),
+                                    attributes: p.attributes.clone(),
                                 })
                                 .collect(),
                             return_type: func
@@ -6199,6 +6587,7 @@ impl VM {
                                 declaring_class: class_name,
                                 is_abstract,
                                 signature,
+                                attributes: Vec::new(),
                             };
                             class_def.methods.insert(lower_key, entry.clone());
 
@@ -6243,6 +6632,7 @@ impl VM {
                             visibility,
                             type_hint,
                             is_readonly,
+                            attributes: Vec::new(),
                         },
                     );
                 }
@@ -6253,7 +6643,100 @@ impl VM {
                     frame.chunk.constants[val_idx as usize].clone()
                 };
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
-                    class_def.constants.insert(const_name, (val, visibility));
+                    class_def.constants.insert(
+                        const_name,
+                        ClassConstEntry {
+                            value: val,
+                            visibility,
+                            attributes: Vec::new(),
+                        },
+                    );
+                }
+            }
+            OpCode::DefEnumCase(class_name, case_name, val_idx, has_value) => {
+                if let Some(class_def) = self.context.classes.get(&class_name) {
+                    if !class_def.is_enum {
+                        return Err(VmError::RuntimeError(
+                            "Enum case declared on non-enum class".into(),
+                        ));
+                    }
+                    if class_def.enum_backed_type.is_some() && !has_value {
+                        return Err(VmError::RuntimeError(
+                            "Backed enum case must define a value".into(),
+                        ));
+                    }
+                    if class_def.enum_backed_type.is_none() && has_value {
+                        return Err(VmError::RuntimeError(
+                            "Unit enum case cannot define a value".into(),
+                        ));
+                    }
+                }
+
+                let value = if has_value {
+                    let frame = self.frames.last().unwrap();
+                    Some(frame.chunk.constants[val_idx as usize].clone())
+                } else {
+                    None
+                };
+
+                if let Some(class_def) = self.context.classes.get(&class_name) {
+                    if let (Some(backed_type), Some(val)) = (class_def.enum_backed_type, &value) {
+                        let is_valid = match (backed_type, val) {
+                            (EnumBackedType::Int, Val::Int(_)) => true,
+                            (EnumBackedType::String, Val::String(_)) => true,
+                            _ => false,
+                        };
+                        if !is_valid {
+                            return Err(VmError::RuntimeError(
+                                "Backed enum case value type mismatch".into(),
+                            ));
+                        }
+                    }
+                }
+
+                let (name_handle, value_handle) = {
+                    let case_name_bytes = self.context.interner.lookup(case_name).unwrap_or(b"");
+                    let name_handle = self
+                        .arena
+                        .alloc(Val::String(case_name_bytes.to_vec().into()));
+                    let value_handle = value
+                        .as_ref()
+                        .map(|val| self.arena.alloc(val.clone()));
+                    (name_handle, value_handle)
+                };
+
+                let mut properties = IndexMap::new();
+                let name_sym = self.context.interner.intern(b"name");
+                properties.insert(name_sym, name_handle);
+
+                if let Some(value_handle) = value_handle {
+                    let value_sym = self.context.interner.intern(b"value");
+                    properties.insert(value_sym, value_handle);
+                }
+
+                let obj_data = ObjectData {
+                    class: class_name,
+                    properties,
+                    internal: None,
+                    dynamic_properties: HashSet::new(),
+                };
+                let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
+                let obj_handle = self.arena.alloc(Val::Object(payload_handle));
+
+                if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                    class_def.constants.insert(
+                        case_name,
+                        ClassConstEntry {
+                            value: Val::Object(payload_handle),
+                            visibility: Visibility::Public,
+                            attributes: Vec::new(),
+                        },
+                    );
+                    class_def.enum_cases.push(crate::runtime::context::EnumCaseDef {
+                        name: case_name,
+                        value,
+                        handle: obj_handle,
+                    });
                 }
             }
             OpCode::DefGlobalConst(name, val_idx) => {
@@ -6305,6 +6788,7 @@ impl VM {
                             value: val,
                             visibility,
                             type_hint,
+                            attributes: Vec::new(),
                         },
                     );
                 }
@@ -11566,8 +12050,9 @@ impl VM {
             let obj_handle = self.operand_stack.pop().unwrap();
 
             // Set this in current frame temporarily for native method to access
-            let saved_this = self.frames.last().and_then(|f| f.this);
-            if let Some(frame) = self.frames.last_mut() {
+            let frame_idx = self.frames.len().saturating_sub(1);
+            let saved_this = self.frames.get(frame_idx).and_then(|f| f.this);
+            if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = Some(obj_handle);
             }
 
@@ -11575,7 +12060,7 @@ impl VM {
             let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
 
             // Restore previous this
-            if let Some(frame) = self.frames.last_mut() {
+            if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = saved_this;
             }
 
@@ -11702,6 +12187,39 @@ impl VM {
         } else {
             self.resolve_class_name(class_name)?
         };
+
+        if let Some(native_entry) = self.find_native_method(resolved_class, method_name) {
+            self.check_method_visibility(
+                native_entry.declaring_class,
+                native_entry.visibility,
+                Some(method_name),
+            )?;
+
+            let args = self.collect_call_args(arg_count)?;
+
+            if is_dynamic {
+                self.operand_stack.pop(); // method name
+                self.operand_stack.pop(); // class name
+            }
+
+            let frame_idx = self.frames.len().saturating_sub(1);
+            let saved_called_scope = self.frames.get(frame_idx).and_then(|f| f.called_scope);
+            let saved_class_scope = self.frames.get(frame_idx).and_then(|f| f.class_scope);
+            if let Some(frame) = self.frames.get_mut(frame_idx) {
+                frame.called_scope = Some(resolved_class);
+                frame.class_scope = Some(native_entry.declaring_class);
+            }
+
+            let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+
+            if let Some(frame) = self.frames.get_mut(frame_idx) {
+                frame.called_scope = saved_called_scope;
+                frame.class_scope = saved_class_scope;
+            }
+
+            self.operand_stack.push(result);
+            return Ok(());
+        }
 
         let mut method_lookup = self.find_method(resolved_class, method_name);
 
@@ -12191,6 +12709,7 @@ impl VM {
                     is_reference: p.by_ref,
                     is_variadic: p.is_variadic,
                     default_value: p.default_value.clone(),
+                    attributes: p.attributes.clone(),
                 })
                 .collect(),
             return_type: parent_func
@@ -12437,6 +12956,7 @@ mod tests {
                     param_type: None,
                     is_variadic: false,
                     default_value: None,
+                    attributes: Vec::new(),
                 },
                 FuncParam {
                     name: sym_b,
@@ -12444,6 +12964,7 @@ mod tests {
                     param_type: None,
                     is_variadic: false,
                     default_value: None,
+                    attributes: Vec::new(),
                 },
             ],
             uses: Vec::new(),
@@ -12452,6 +12973,7 @@ mod tests {
             is_generator: false,
             statics: Rc::new(RefCell::new(HashMap::new())),
             return_type: None,
+            attributes: Vec::new(),
         })
     }
 

@@ -6,8 +6,10 @@ use crate::runtime::registry::ExtensionRegistry;
 use crate::runtime::resource_manager::ResourceManager;
 use crate::vm::engine::VM;
 use indexmap::IndexMap;
+use libc;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -64,6 +66,7 @@ pub struct ParameterInfo {
     pub is_reference: bool,
     pub is_variadic: bool,
     pub default_value: Option<Val>,
+    pub attributes: Vec<AttributeInstance>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +84,19 @@ pub struct MethodEntry {
     pub declaring_class: Symbol,
     pub is_abstract: bool,
     pub signature: MethodSignature,
+    pub attributes: Vec<AttributeInstance>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttributeArg {
+    pub name: Option<Symbol>,
+    pub value: Val,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttributeInstance {
+    pub name: Symbol,
+    pub args: Vec<AttributeArg>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +114,7 @@ pub struct PropertyEntry {
     pub visibility: Visibility,
     pub type_hint: Option<TypeHint>,
     pub is_readonly: bool,
+    pub attributes: Vec<AttributeInstance>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +122,14 @@ pub struct StaticPropertyEntry {
     pub value: Val,
     pub visibility: Visibility,
     pub type_hint: Option<TypeHint>,
+    pub attributes: Vec<AttributeInstance>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassConstEntry {
+    pub value: Val,
+    pub visibility: Visibility,
+    pub attributes: Vec<AttributeInstance>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,16 +145,25 @@ pub struct ClassDef {
     pub traits: Vec<Symbol>,
     pub methods: HashMap<Symbol, MethodEntry>,
     pub properties: IndexMap<Symbol, PropertyEntry>, // Instance properties with type hints
-    pub constants: HashMap<Symbol, (Val, Visibility)>,
+    pub constants: HashMap<Symbol, ClassConstEntry>,
     pub static_properties: HashMap<Symbol, StaticPropertyEntry>, // Static properties with type hints
     pub abstract_methods: HashSet<Symbol>,
     pub allows_dynamic_properties: bool, // Set by #[AllowDynamicProperties] attribute
+    pub attributes: Vec<AttributeInstance>,
+    pub enum_cases: Vec<EnumCaseDef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnumBackedType {
     Int,
     String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumCaseDef {
+    pub name: Symbol,
+    pub value: Option<Val>,
+    pub handle: Handle,
 }
 
 #[derive(Debug, Clone)]
@@ -178,16 +212,22 @@ impl EngineContext {
             .expect("Failed to register JSON extension");
 
         // Register MySQLi extension
-        use crate::runtime::mysqli_extension::MysqliExtension;
-        registry
-            .register_extension(Box::new(MysqliExtension))
-            .expect("Failed to register MySQLi extension");
+        #[cfg(feature = "mysqli")]
+        {
+            use crate::runtime::mysqli_extension::MysqliExtension;
+            registry
+                .register_extension(Box::new(MysqliExtension))
+                .expect("Failed to register MySQLi extension");
+        }
 
         // Register PDO extension
-        use crate::runtime::pdo_extension::PdoExtension;
-        registry
-            .register_extension(Box::new(PdoExtension))
-            .expect("Failed to register PDO extension");
+        #[cfg(feature = "pdo")]
+        {
+            use crate::runtime::pdo_extension::PdoExtension;
+            registry
+                .register_extension(Box::new(PdoExtension))
+                .expect("Failed to register PDO extension");
+        }
 
         // Register Zlib extension
         use crate::runtime::zlib_extension::ZlibExtension;
@@ -202,16 +242,22 @@ impl EngineContext {
             .expect("Failed to register mbstring extension");
 
         // Register Zip extension
-        use crate::runtime::zip_extension::ZipExtension;
-        registry
-            .register_extension(Box::new(ZipExtension))
-            .expect("Failed to register Zip extension");
+        #[cfg(feature = "zip")]
+        {
+            use crate::runtime::zip_extension::ZipExtension;
+            registry
+                .register_extension(Box::new(ZipExtension))
+                .expect("Failed to register Zip extension");
+        }
 
         // Register OpenSSL extension
-        use crate::runtime::openssl_extension::OpenSSLExtension;
-        registry
-            .register_extension(Box::new(OpenSSLExtension))
-            .expect("Failed to register OpenSSL extension");
+        #[cfg(feature = "openssl")]
+        {
+            use crate::runtime::openssl_extension::OpenSSLExtension;
+            registry
+                .register_extension(Box::new(OpenSSLExtension))
+                .expect("Failed to register OpenSSL extension");
+        }
 
         Self { registry }
     }
@@ -263,6 +309,16 @@ impl RequestContext {
             resource_manager: ResourceManager::new(),
         };
 
+        #[cfg(unix)]
+        {
+            // Match PHP defaults: only LC_CTYPE follows environment.
+            if let Ok(c_locale) = CString::new("") {
+                unsafe {
+                    libc::setlocale(libc::LC_CTYPE, c_locale.as_ptr());
+                }
+            }
+        }
+
         // Copy constants from extension registry in bulk
         ctx.copy_engine_constants();
 
@@ -313,7 +369,14 @@ impl RequestContext {
 
             let mut constants = HashMap::new();
             for (name, (val, visibility)) in &native_class.constants {
-                constants.insert(self.interner.intern(name), (val.clone(), *visibility));
+                constants.insert(
+                    self.interner.intern(name),
+                    ClassConstEntry {
+                        value: val.clone(),
+                        visibility: *visibility,
+                        attributes: Vec::new(),
+                    },
+                );
             }
 
             self.classes.insert(
@@ -334,6 +397,8 @@ impl RequestContext {
                     static_properties: HashMap::new(),
                     abstract_methods: HashSet::new(),
                     allows_dynamic_properties: true,
+                    attributes: Vec::new(),
+                    enum_cases: Vec::new(),
                 },
             );
 
@@ -462,6 +527,14 @@ impl RequestContext {
         self.insert_builtin_constant(b"PHP_OS", Val::String(Rc::new(b"Darwin".to_vec())));
         self.insert_builtin_constant(b"PHP_SAPI", Val::String(Rc::new(b"cli".to_vec())));
         self.insert_builtin_constant(b"PHP_EOL", Val::String(Rc::new(b"\n".to_vec())));
+        self.insert_builtin_constant(b"INF", Val::Float(f64::INFINITY));
+        self.insert_builtin_constant(b"NAN", Val::Float(f64::NAN));
+        self.insert_builtin_constant(b"M_E", Val::Float(std::f64::consts::E));
+        self.insert_builtin_constant(b"M_PI", Val::Float(std::f64::consts::PI));
+
+        // Array case constants
+        self.insert_builtin_constant(b"CASE_LOWER", Val::Int(0));
+        self.insert_builtin_constant(b"CASE_UPPER", Val::Int(1));
 
         // Path separator constants
         let dir_sep = std::path::MAIN_SEPARATOR.to_string().into_bytes();
@@ -532,14 +605,18 @@ impl EngineBuilder {
             .push(Box::new(super::date_extension::DateExtension));
         self.extensions
             .push(Box::new(super::hash_extension::HashExtension));
+        #[cfg(feature = "mysqli")]
         self.extensions
             .push(Box::new(super::mysqli_extension::MysqliExtension));
         self.extensions
             .push(Box::new(super::json_extension::JsonExtension));
+        #[cfg(feature = "openssl")]
         self.extensions
             .push(Box::new(super::openssl_extension::OpenSSLExtension));
+        #[cfg(feature = "pdo")]
         self.extensions
             .push(Box::new(super::pdo_extension::PdoExtension));
+        #[cfg(feature = "pthreads")]
         self.extensions
             .push(Box::new(super::pthreads_extension::PthreadsExtension));
         self.extensions

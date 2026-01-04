@@ -328,10 +328,8 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                 let val = vm.arena.get(*val_handle);
                 match &val.value {
                     Val::Array(_) | Val::Object(_) => {
-                        output.push_str(&String::from_utf8_lossy(b"\n"));
-                        output.push_str(&indent);
-                        output.push_str("    ");
-                        print_r_value(vm, *val_handle, depth + 1, output);
+                        print_r_value(vm, *val_handle, depth + 2, output);
+                        output.push('\n');
                     }
                     _ => {
                         print_r_value(vm, *val_handle, depth + 1, output);
@@ -366,10 +364,8 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                     let val = vm.arena.get(*val_handle);
                     match &val.value {
                         Val::Array(_) | Val::Object(_) => {
+                            print_r_value(vm, *val_handle, depth + 2, output);
                             output.push('\n');
-                            output.push_str(&indent);
-                            output.push_str("    ");
-                            print_r_value(vm, *val_handle, depth + 1, output);
                         }
                         _ => {
                             print_r_value(vm, *val_handle, depth + 1, output);

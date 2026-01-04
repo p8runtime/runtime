@@ -677,6 +677,27 @@ pub fn php_json_validate(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
     Ok(vm.arena.alloc(Val::Bool(false)))
 }
 
+// gop_* wrappers (sync) for stdlib modules
+pub fn gop_json_encode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_json_encode(vm, args)
+}
+
+pub fn gop_json_decode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_json_decode(vm, args)
+}
+
+pub fn gop_json_last_error(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_json_last_error(vm, args)
+}
+
+pub fn gop_json_last_error_msg(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_json_last_error_msg(vm, args)
+}
+
+pub fn gop_json_validate(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_json_validate(vm, args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

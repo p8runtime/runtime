@@ -2,6 +2,7 @@
 //!
 //! Maps external request sources (CLI args, FastCGI params, etc.) to RequestContext.
 
+#[cfg(feature = "fpm")]
 pub mod fpm;
 
 use crate::core::value::{ArrayData, ArrayKey, Handle, Val};

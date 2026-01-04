@@ -211,6 +211,92 @@ impl Extension for DateExtension {
                 is_static: true,
             },
         );
+        let mut datetime_constants = HashMap::new();
+        datetime_constants.insert(
+            b"ATOM".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_ATOM.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"COOKIE".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_COOKIE.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"ISO8601".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_ISO8601.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RFC822".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RFC822.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RFC850".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RFC850.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RFC1036".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RFC1036.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RFC1123".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RFC1123.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RFC7231".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RFC7231.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RFC2822".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RFC2822.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RFC3339".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RFC3339.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"RSS".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_RSS.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+        datetime_constants.insert(
+            b"W3C".to_vec(),
+            (
+                Val::String(Rc::new(datetime::DATE_W3C.as_bytes().to_vec())),
+                Visibility::Public,
+            ),
+        );
+
         registry.register_class(NativeClassDef {
             name: b"DateTime".to_vec(),
             parent: None,
@@ -218,7 +304,7 @@ impl Extension for DateExtension {
             is_trait: false,
             interfaces: vec![b"DateTimeInterface".to_vec()],
             methods: datetime_methods.clone(),
-            constants: HashMap::new(),
+            constants: datetime_constants.clone(),
             constructor: Some(datetime::php_datetime_construct),
         });
 
@@ -230,7 +316,7 @@ impl Extension for DateExtension {
             is_trait: false,
             interfaces: vec![b"DateTimeInterface".to_vec()],
             methods: datetime_methods,
-            constants: HashMap::new(),
+            constants: datetime_constants,
             constructor: Some(datetime::php_datetime_construct),
         });
 

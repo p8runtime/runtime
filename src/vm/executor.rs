@@ -150,7 +150,8 @@ pub fn execute_code_with_config(
 
     // Apply configuration - set execution timeout
     if config.timeout_ms > 0 {
-        request_context.config.max_execution_time = (config.timeout_ms as f64 / 1000.0).ceil() as i64;
+        request_context.config.max_execution_time =
+            (config.timeout_ms as f64 / 1000.0).ceil() as i64;
     } else {
         request_context.config.max_execution_time = 0; // Unlimited
     }

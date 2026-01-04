@@ -78,4 +78,5 @@ pub struct GeneratorData {
     pub auto_key: i64,
     pub sub_iter: Option<SubIterator>,
     pub sent_val: Option<Handle>,
+    pub return_val: Option<Handle>,
 }

@@ -177,6 +177,7 @@ impl VM {
                     auto_key: 0,
                     sub_iter: None,
                     sent_val: None,
+                    return_val: None,
                 };
                 let obj_data = ObjectData {
                     class: self.context.interner.intern(b"Generator"),
@@ -265,8 +266,9 @@ impl VM {
                 )?;
 
                 // Set this in current frame temporarily for native method to access
-                let saved_this = self.frames.last().and_then(|f| f.this);
-                if let Some(frame) = self.frames.last_mut() {
+                let frame_idx = self.frames.len().saturating_sub(1);
+                let saved_this = self.frames.get(frame_idx).and_then(|f| f.this);
+                if let Some(frame) = self.frames.get_mut(frame_idx) {
                     frame.this = Some(obj_handle);
                 }
 
@@ -277,7 +279,7 @@ impl VM {
                 self.builtin_call_strict = false; // Reset after call
 
                 // Restore previous this
-                if let Some(frame) = self.frames.last_mut() {
+                if let Some(frame) = self.frames.get_mut(frame_idx) {
                     frame.this = saved_this;
                 }
 
@@ -431,8 +433,9 @@ impl VM {
                 )?;
 
                 // Set this in current frame temporarily for native method to access
-                let saved_this = self.frames.last().and_then(|f| f.this);
-                if let Some(frame) = self.frames.last_mut() {
+                let frame_idx = self.frames.len().saturating_sub(1);
+                let saved_this = self.frames.get(frame_idx).and_then(|f| f.this);
+                if let Some(frame) = self.frames.get_mut(frame_idx) {
                     frame.this = Some(obj_handle);
                 }
 
@@ -440,7 +443,7 @@ impl VM {
                 let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
 
                 // Restore previous this
-                if let Some(frame) = self.frames.last_mut() {
+                if let Some(frame) = self.frames.get_mut(frame_idx) {
                     frame.this = saved_this;
                 }
 
