@@ -361,6 +361,8 @@ impl Extension for CoreExtension {
         registry.register_function(b"ini_set", variable::php_ini_set);
         registry.register_function(b"error_reporting", variable::php_error_reporting);
         registry.register_function(b"error_get_last", variable::php_error_get_last);
+        registry.register_function(b"serialize", variable::php_serialize);
+        registry.register_function(b"unserialize", variable::php_unserialize);
 
         // HTTP functions
         registry.register_function(b"header", http::php_header);

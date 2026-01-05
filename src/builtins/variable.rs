@@ -861,3 +861,458 @@ pub fn php_error_get_last(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
         Ok(vm.arena.alloc(Val::Null))
     }
 }
+
+pub fn php_serialize(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() {
+        return Err("serialize() expects exactly 1 argument, 0 given".into());
+    }
+
+    let value = args[0];
+    let serialized = serialize_value(vm, value)?;
+    Ok(vm.arena.alloc(Val::String(Rc::new(serialized))))
+}
+
+fn serialize_value(vm: &VM, handle: Handle) -> Result<Vec<u8>, String> {
+    let val = vm.arena.get(handle);
+    let mut result = Vec::new();
+
+    match &val.value {
+        Val::Null => {
+            result.extend_from_slice(b"N;");
+        }
+        Val::Bool(b) => {
+            if *b {
+                result.extend_from_slice(b"b:1;");
+            } else {
+                result.extend_from_slice(b"b:0;");
+            }
+        }
+        Val::Int(i) => {
+            result.extend_from_slice(b"i:");
+            result.extend_from_slice(i.to_string().as_bytes());
+            result.push(b';');
+        }
+        Val::Float(f) => {
+            result.extend_from_slice(b"d:");
+            // Format float like PHP does
+            let f_str = if f.is_infinite() {
+                if f.is_sign_positive() {
+                    "INF"
+                } else {
+                    "-INF"
+                }
+            } else if f.is_nan() {
+                "NAN"
+            } else {
+                // PHP uses specific formatting for floats
+                &format!("{}", f)
+            };
+            result.extend_from_slice(f_str.as_bytes());
+            result.push(b';');
+        }
+        Val::String(s) => {
+            result.extend_from_slice(b"s:");
+            result.extend_from_slice(s.len().to_string().as_bytes());
+            result.extend_from_slice(b":\"");
+            result.extend_from_slice(s);
+            result.extend_from_slice(b"\";");
+        }
+        Val::Array(arr) => {
+            result.extend_from_slice(b"a:");
+            result.extend_from_slice(arr.map.len().to_string().as_bytes());
+            result.extend_from_slice(b":{");
+            for (key, val_handle) in arr.map.iter() {
+                match key {
+                    crate::core::value::ArrayKey::Int(i) => {
+                        result.extend_from_slice(b"i:");
+                        result.extend_from_slice(i.to_string().as_bytes());
+                        result.push(b';');
+                    }
+                    crate::core::value::ArrayKey::Str(s) => {
+                        result.extend_from_slice(b"s:");
+                        result.extend_from_slice(s.len().to_string().as_bytes());
+                        result.extend_from_slice(b":\"");
+                        result.extend_from_slice(s);
+                        result.extend_from_slice(b"\";");
+                    }
+                }
+                let val_serialized = serialize_value(vm, *val_handle)?;
+                result.extend_from_slice(&val_serialized);
+            }
+            result.push(b'}');
+        }
+        Val::ConstArray(arr) => {
+            result.extend_from_slice(b"a:");
+            result.extend_from_slice(arr.len().to_string().as_bytes());
+            result.extend_from_slice(b":{");
+            for (key, val) in arr.iter() {
+                match key {
+                    crate::core::value::ConstArrayKey::Int(i) => {
+                        result.extend_from_slice(b"i:");
+                        result.extend_from_slice(i.to_string().as_bytes());
+                        result.push(b';');
+                    }
+                    crate::core::value::ConstArrayKey::Str(s) => {
+                        result.extend_from_slice(b"s:");
+                        result.extend_from_slice(s.len().to_string().as_bytes());
+                        result.extend_from_slice(b":\"");
+                        result.extend_from_slice(s);
+                        result.extend_from_slice(b"\";");
+                    }
+                }
+                // ConstArray contains Val directly, serialize it recursively
+                let val_serialized = serialize_val(vm, val)?;
+                result.extend_from_slice(&val_serialized);
+            }
+            result.push(b'}');
+        }
+        Val::Object(obj_handle) => {
+            if let Val::ObjPayload(obj_data) = &vm.arena.get(*obj_handle).value {
+                let class_name = vm
+                    .context
+                    .interner
+                    .lookup(obj_data.class)
+                    .unwrap_or(b"stdClass");
+                
+                result.extend_from_slice(b"O:");
+                result.extend_from_slice(class_name.len().to_string().as_bytes());
+                result.extend_from_slice(b":\"");
+                result.extend_from_slice(class_name);
+                result.extend_from_slice(b"\":");
+                result.extend_from_slice(obj_data.properties.len().to_string().as_bytes());
+                result.extend_from_slice(b":{");
+                
+                for (prop_name, prop_handle) in obj_data.properties.iter() {
+                    let prop_name_bytes = vm.context.interner.lookup(*prop_name).unwrap_or(b"");
+                    result.extend_from_slice(b"s:");
+                    result.extend_from_slice(prop_name_bytes.len().to_string().as_bytes());
+                    result.extend_from_slice(b":\"");
+                    result.extend_from_slice(prop_name_bytes);
+                    result.extend_from_slice(b"\";");
+                    let val_serialized = serialize_value(vm, *prop_handle)?;
+                    result.extend_from_slice(&val_serialized);
+                }
+                result.push(b'}');
+            } else {
+                return Err("Invalid object payload".into());
+            }
+        }
+        _ => {
+            return Err(format!("serialize() does not support type: {:?}", val.value));
+        }
+    }
+
+    Ok(result)
+}
+
+// Helper function to serialize Val directly (for ConstArray)
+fn serialize_val(vm: &VM, val: &Val) -> Result<Vec<u8>, String> {
+    let mut result = Vec::new();
+
+    match val {
+        Val::Null => {
+            result.extend_from_slice(b"N;");
+        }
+        Val::Bool(b) => {
+            if *b {
+                result.extend_from_slice(b"b:1;");
+            } else {
+                result.extend_from_slice(b"b:0;");
+            }
+        }
+        Val::Int(i) => {
+            result.extend_from_slice(b"i:");
+            result.extend_from_slice(i.to_string().as_bytes());
+            result.push(b';');
+        }
+        Val::Float(f) => {
+            result.extend_from_slice(b"d:");
+            let f_str = if f.is_infinite() {
+                if f.is_sign_positive() {
+                    "INF"
+                } else {
+                    "-INF"
+                }
+            } else if f.is_nan() {
+                "NAN"
+            } else {
+                &format!("{}", f)
+            };
+            result.extend_from_slice(f_str.as_bytes());
+            result.push(b';');
+        }
+        Val::String(s) => {
+            result.extend_from_slice(b"s:");
+            result.extend_from_slice(s.len().to_string().as_bytes());
+            result.extend_from_slice(b":\"");
+            result.extend_from_slice(s);
+            result.extend_from_slice(b"\";");
+        }
+        Val::ConstArray(arr) => {
+            result.extend_from_slice(b"a:");
+            result.extend_from_slice(arr.len().to_string().as_bytes());
+            result.extend_from_slice(b":{");
+            for (key, nested_val) in arr.iter() {
+                match key {
+                    crate::core::value::ConstArrayKey::Int(i) => {
+                        result.extend_from_slice(b"i:");
+                        result.extend_from_slice(i.to_string().as_bytes());
+                        result.push(b';');
+                    }
+                    crate::core::value::ConstArrayKey::Str(s) => {
+                        result.extend_from_slice(b"s:");
+                        result.extend_from_slice(s.len().to_string().as_bytes());
+                        result.extend_from_slice(b":\"");
+                        result.extend_from_slice(s);
+                        result.extend_from_slice(b"\";");
+                    }
+                }
+                let val_serialized = serialize_val(vm, nested_val)?;
+                result.extend_from_slice(&val_serialized);
+            }
+            result.push(b'}');
+        }
+        _ => {
+            return Err(format!("serialize_val() does not support type: {:?}", val));
+        }
+    }
+
+    Ok(result)
+}
+
+pub fn php_unserialize(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() {
+        return Err("unserialize() expects at least 1 argument, 0 given".into());
+    }
+
+    let data = match &vm.arena.get(args[0]).value {
+        Val::String(s) => s.clone(),
+        _ => return Err("unserialize() expects parameter 1 to be string".into()),
+    };
+
+    // Options parameter is optional (args[1]) but not implemented yet
+    let mut parser = UnserializeParser::new(&data);
+    match parser.parse(vm) {
+        Ok(handle) => Ok(handle),
+        Err(_e) => {
+            // PHP returns false on unserialize errors
+            Ok(vm.arena.alloc(Val::Bool(false)))
+        }
+    }
+}
+
+struct UnserializeParser<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> UnserializeParser<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    fn consume(&mut self) -> Option<u8> {
+        if self.pos < self.data.len() {
+            let byte = self.data[self.pos];
+            self.pos += 1;
+            Some(byte)
+        } else {
+            None
+        }
+    }
+
+    fn expect(&mut self, expected: u8) -> Result<(), String> {
+        match self.consume() {
+            Some(byte) if byte == expected => Ok(()),
+            Some(byte) => Err(format!(
+                "Expected '{}' but got '{}'",
+                expected as char, byte as char
+            )),
+            None => Err("Unexpected end of data".into()),
+        }
+    }
+
+    fn read_until(&mut self, delimiter: u8) -> Result<Vec<u8>, String> {
+        let mut result = Vec::new();
+        loop {
+            match self.consume() {
+                Some(byte) if byte == delimiter => return Ok(result),
+                Some(byte) => result.push(byte),
+                None => return Err("Unexpected end of data".into()),
+            }
+        }
+    }
+
+    fn read_int(&mut self) -> Result<i64, String> {
+        let bytes = self.read_until(b';')?;
+        let s = String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in integer")?;
+        s.parse::<i64>()
+            .map_err(|_| format!("Invalid integer: {}", s))
+    }
+
+    fn read_length(&mut self) -> Result<usize, String> {
+        let bytes = self.read_until(b':')?;
+        let s = String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in length")?;
+        s.parse::<usize>()
+            .map_err(|_| format!("Invalid length: {}", s))
+    }
+
+    fn read_float(&mut self) -> Result<f64, String> {
+        let bytes = self.read_until(b';')?;
+        let s = String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in float")?;
+        
+        // Handle special values
+        match s.as_str() {
+            "INF" => Ok(f64::INFINITY),
+            "-INF" => Ok(f64::NEG_INFINITY),
+            "NAN" => Ok(f64::NAN),
+            _ => s.parse::<f64>()
+                .map_err(|_| format!("Invalid float: {}", s)),
+        }
+    }
+
+    fn read_string(&mut self, len: usize) -> Result<Vec<u8>, String> {
+        self.expect(b'"')?;
+        if self.pos + len > self.data.len() {
+            return Err("String length exceeds data".into());
+        }
+        let result = self.data[self.pos..self.pos + len].to_vec();
+        self.pos += len;
+        self.expect(b'"')?;
+        self.expect(b';')?;
+        Ok(result)
+    }
+
+    fn read_string_no_semicolon(&mut self, len: usize) -> Result<Vec<u8>, String> {
+        self.expect(b'"')?;
+        if self.pos + len > self.data.len() {
+            return Err("String length exceeds data".into());
+        }
+        let result = self.data[self.pos..self.pos + len].to_vec();
+        self.pos += len;
+        self.expect(b'"')?;
+        Ok(result)
+    }
+
+    fn parse(&mut self, vm: &mut VM) -> Result<Handle, String> {
+        let type_char = self.consume().ok_or("Empty serialized data")?;
+        
+        match type_char {
+            b'N' => {
+                // NULL doesn't have a colon, just N;
+                self.expect(b';')?;
+                Ok(vm.arena.alloc(Val::Null))
+            }
+            _ => {
+                // All other types have a colon after the type character
+                self.expect(b':')?;
+                match type_char {
+                    b'b' => {
+                        let val = self.consume().ok_or("Missing bool value")?;
+                        self.expect(b';')?;
+                        Ok(vm.arena.alloc(Val::Bool(val == b'1')))
+                    }
+                    b'i' => {
+                        let i = self.read_int()?;
+                        Ok(vm.arena.alloc(Val::Int(i)))
+                    }
+                    b'd' => {
+                        let f = self.read_float()?;
+                        Ok(vm.arena.alloc(Val::Float(f)))
+                    }
+                    b's' => {
+                        let len = self.read_length()?;
+                        let s = self.read_string(len)?;
+                        Ok(vm.arena.alloc(Val::String(Rc::new(s))))
+                    }
+                    b'a' => {
+                        let count = self.read_length()?;
+                        self.expect(b'{')?;
+                        
+                        let mut map = crate::core::value::ArrayData::new();
+                        for _ in 0..count {
+                            // Parse key
+                            let key_type = self.consume().ok_or("Missing array key type")?;
+                            self.expect(b':')?;
+                            
+                            let key = match key_type {
+                                b'i' => {
+                                    let i = self.read_int()?;
+                                    crate::core::value::ArrayKey::Int(i)
+                                }
+                                b's' => {
+                                    let len = self.read_length()?;
+                                    let s = self.read_string(len)?;
+                                    crate::core::value::ArrayKey::Str(s.into())
+                                }
+                                _ => return Err(format!("Invalid array key type: {}", key_type as char)),
+                            };
+                            
+                            // Parse value
+                            let value = self.parse(vm)?;
+                            map.insert(key, value);
+                        }
+                        
+                        self.expect(b'}')?;
+                        Ok(vm.arena.alloc(Val::Array(map.into())))
+                    }
+                    b'O' => {
+                        let class_name_len = self.read_length()?;
+                        let class_name = self.read_string_no_semicolon(class_name_len)?;
+                        self.expect(b':')?;
+                        let class_sym = vm.context.interner.intern(&class_name);
+                        
+                        // Look up the class
+                        let class_info = vm.context.classes.get(&class_sym);
+                        if class_info.is_none() {
+                            return Err(format!(
+                                "Class '{}' not found",
+                                String::from_utf8_lossy(&class_name)
+                            ));
+                        }
+                        
+                        let prop_count = self.read_length()?;
+                        self.expect(b'{')?;
+                        
+                        // Create object
+                        let obj_payload = crate::core::value::ObjectData {
+                            class: class_sym,
+                            properties: indexmap::IndexMap::new(),
+                            internal: None,
+                            dynamic_properties: std::collections::HashSet::new(),
+                        };
+                        let obj_handle = vm.arena.alloc(Val::ObjPayload(obj_payload));
+                        let obj_ref = vm.arena.alloc(Val::Object(obj_handle));
+                        
+                        // Parse properties
+                        for _ in 0..prop_count {
+                            // Parse property name (always string)
+                            let prop_type = self.consume().ok_or("Missing property name type")?;
+                            self.expect(b':')?;
+                            
+                            if prop_type != b's' {
+                                return Err(format!("Expected string for property name, got {}", prop_type as char));
+                            }
+                            
+                            let prop_name_len = self.read_length()?;
+                            let prop_name = self.read_string(prop_name_len)?;
+                            let prop_sym = vm.context.interner.intern(&prop_name);
+                            
+                            // Parse property value
+                            let value = self.parse(vm)?;
+                            
+                            // Set property
+                            if let Val::ObjPayload(obj_data) = &mut vm.arena.get_mut(obj_handle).value {
+                                obj_data.properties.insert(prop_sym, value);
+                            }
+                        }
+                        
+                        self.expect(b'}')?;
+                        Ok(obj_ref)
+                    }
+                    _ => Err(format!("Unknown serialization type: {}", type_char as char)),
+                }
+            }
+        }
+    }
+}
