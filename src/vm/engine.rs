@@ -4066,6 +4066,7 @@ impl VM {
                     is_interface: false,
                     is_trait: false,
                     is_abstract: false,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -6209,6 +6210,7 @@ impl VM {
                     is_interface: false,
                     is_trait: false,
                     is_abstract: false,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -6305,6 +6307,7 @@ impl VM {
                     is_interface: true,
                     is_trait: false,
                     is_abstract: true,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -6327,6 +6330,7 @@ impl VM {
                     is_interface: false,
                     is_trait: true,
                     is_abstract: false,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -6522,6 +6526,11 @@ impl VM {
             OpCode::MarkAbstract(class_name) => {
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.is_abstract = true;
+                }
+            }
+            OpCode::MarkFinal(class_name) => {
+                if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                    class_def.is_final = true;
                 }
             }
             OpCode::UseTrait(class_name, trait_name) => {
