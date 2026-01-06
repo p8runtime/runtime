@@ -77,6 +77,17 @@ fn test_inheritance() {
 }
 
 #[test]
+fn test_extending_final_class_errors() {
+    run_code_expect_error(
+        r#"<?php
+        final class Base {}
+        class Child extends Base {}
+        "#,
+        "cannot extend final class Base",
+    );
+}
+
+#[test]
 fn test_method_argument_binding() {
     let val = run_code(
         r#"<?php
