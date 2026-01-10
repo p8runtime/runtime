@@ -70,6 +70,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_arch = "wasm32")]
+use std::time::{Duration};
+
+
 #[derive(Debug)]
 pub enum VmError {
     /// Stack underflow during operation
@@ -368,6 +372,10 @@ impl VM {
         if trace_includes {
             eprintln!("[php-vm] include tracing enabled");
         }
+        #[cfg(target_arch = "wasm32")]
+        let execution_start_time = SystemTime::UNIX_EPOCH;
+        #[cfg(not(target_arch = "wasm32"))]
+        let execution_start_time = SystemTime::now();
         let mut vm = Self {
             arena: Arena::new(),
             operand_stack: Stack::new(),
@@ -386,7 +394,7 @@ impl VM {
             var_handle_map: HashMap::new(),
             pending_undefined: HashMap::new(),
             suppress_undefined_notice: false,
-            execution_start_time: SystemTime::now(),
+            execution_start_time,
             executing_finally: false,
             finally_return_value: None,
             builtin_call_strict: false,
@@ -623,6 +631,9 @@ impl VM {
             script_filename.as_bytes(),
         );
 
+        #[cfg(target_arch = "wasm32")]
+        let now = Duration::from_secs(0);
+        #[cfg(not(target_arch = "wasm32"))]
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
@@ -777,6 +788,10 @@ impl VM {
         if trace_includes {
             eprintln!("[php-vm] include tracing enabled");
         }
+        #[cfg(target_arch = "wasm32")]
+        let execution_start_time = SystemTime::UNIX_EPOCH;
+        #[cfg(not(target_arch = "wasm32"))]
+        let execution_start_time = SystemTime::now();
         let mut vm = Self {
             arena: Arena::new(),
             operand_stack: Stack::new(),
@@ -795,7 +810,7 @@ impl VM {
             var_handle_map: HashMap::new(),
             pending_undefined: HashMap::new(),
             suppress_undefined_notice: false,
-            execution_start_time: SystemTime::now(),
+            execution_start_time,
             executing_finally: false,
             finally_return_value: None,
             builtin_call_strict: false,
@@ -812,9 +827,31 @@ impl VM {
         vm
     }
 
+    pub(crate) fn current_file_line(&self) -> (String, usize) {
+        if let Some(frame) = self.frames.last() {
+            let file = frame
+                .chunk
+                .file_path
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let line = if frame.ip > 0 && frame.ip <= frame.chunk.lines.len() {
+                frame.chunk.lines[frame.ip - 1]
+            } else {
+                0
+            };
+            (file, line.try_into().unwrap()) // TODO: remove this unwrap, usize vs u32 issue
+        } else {
+            ("unknown".to_string(), 0)
+        }
+    }
+
     /// Check if execution time limit has been exceeded
     /// Returns an error if the time limit is exceeded and not unlimited (0)
     fn check_execution_timeout(&self) -> Result<(), VmError> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Ok(());
+        }
         if self.context.config.max_execution_time <= 0 {
             // 0 or negative means unlimited
             return Ok(());
@@ -2243,7 +2280,7 @@ impl VM {
                 return Err(VmError::RuntimeError(format!(
                     "Attempting to use non-attribute class \"{}\" as attribute",
                     String::from_utf8_lossy(name_bytes)
-                )))
+                )));
             }
         };
 
@@ -4012,11 +4049,7 @@ impl VM {
                     if let Ok(func) = rc.downcast::<UserFunc>() {
                         let mut seen = Vec::new();
                         for attr in &func.attributes {
-                            self.validate_attribute_use(
-                                attr,
-                                Self::ATTR_TARGET_FUNCTION,
-                                &seen,
-                            )?;
+                            self.validate_attribute_use(attr, Self::ATTR_TARGET_FUNCTION, &seen)?;
                             seen.push(attr.clone());
                         }
 
@@ -4052,7 +4085,25 @@ impl VM {
                 };
 
                 let val = self.arena.get(val_handle).value.clone();
-                self.context.constants.insert(name_sym, val);
+                if self.context.constants.contains_key(&name_sym)
+                    || self
+                        .context
+                        .engine
+                        .registry
+                        .get_constant(self.context.interner.lookup(name_sym).unwrap_or(b""))
+                        .is_some()
+                {
+                    let name_bytes = self.context.interner.lookup(name_sym).unwrap_or(b"???");
+                    let name_str = String::from_utf8_lossy(name_bytes);
+                    let message = format!(
+                        "Constant {} already defined, this will be an error in PHP 9",
+                        name_str
+                    );
+                    self.report_error(ErrorLevel::Warning, &message);
+                    let _ = self.write_output(format!("Warning: {}\n", message).as_bytes());
+                } else {
+                    self.context.constants.insert(name_sym, val);
+                }
             }
             OpCode::CaseStrict => {
                 let case_val_handle = self
@@ -6699,9 +6750,7 @@ impl VM {
                     let name_handle = self
                         .arena
                         .alloc(Val::String(case_name_bytes.to_vec().into()));
-                    let value_handle = value
-                        .as_ref()
-                        .map(|val| self.arena.alloc(val.clone()));
+                    let value_handle = value.as_ref().map(|val| self.arena.alloc(val.clone()));
                     (name_handle, value_handle)
                 };
 
@@ -6732,11 +6781,13 @@ impl VM {
                             attributes: Vec::new(),
                         },
                     );
-                    class_def.enum_cases.push(crate::runtime::context::EnumCaseDef {
-                        name: case_name,
-                        value,
-                        handle: obj_handle,
-                    });
+                    class_def
+                        .enum_cases
+                        .push(crate::runtime::context::EnumCaseDef {
+                            name: case_name,
+                            value,
+                            handle: obj_handle,
+                        });
                 }
             }
             OpCode::DefGlobalConst(name, val_idx) => {
@@ -6744,7 +6795,25 @@ impl VM {
                     let frame = self.frames.last().unwrap();
                     frame.chunk.constants[val_idx as usize].clone()
                 };
-                self.context.constants.insert(name, val);
+                if self.context.constants.contains_key(&name)
+                    || self
+                        .context
+                        .engine
+                        .registry
+                        .get_constant(self.context.interner.lookup(name).unwrap_or(b""))
+                        .is_some()
+                {
+                    let name_bytes = self.context.interner.lookup(name).unwrap_or(b"???");
+                    let name_str = String::from_utf8_lossy(name_bytes);
+                    let message = format!(
+                        "Constant {} already defined, this will be an error in PHP 9",
+                        name_str
+                    );
+                    self.report_error(ErrorLevel::Warning, &message);
+                    let _ = self.write_output(format!("Warning: {}\n", message).as_bytes());
+                } else {
+                    self.context.constants.insert(name, val);
+                }
             }
             OpCode::FetchGlobalConst(name) => {
                 if let Some(val) = self.context.constants.get(&name) {

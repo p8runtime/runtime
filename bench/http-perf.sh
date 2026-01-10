@@ -4,27 +4,27 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_DIR="${ROOT_DIR}/bench"
 NODE_BIN="${NODE_BIN:-bun}"
-RUNTIMES="${RUNTIMES:-gild,nginx,apache}"
+RUNTIMES="${RUNTIMES:-php-router,nginx,apache}"
 DURATION="${DURATION:-10}"
 CONCURRENCY="${CONCURRENCY:-50}"
 WORK_MS="${WORK_MS:-8}"
 REPORT_PATH="${REPORT_PATH:-$BENCH_DIR/HTTP-REPORT.md}"
 
-PORT_GILD="${PORT_GILD:-8541}"
+PORT_PHP_ROUTER="${PORT_PHP_ROUTER:-8541}"
 PORT_NGINX="${PORT_NGINX:-8542}"
 PORT_APACHE="${PORT_APACHE:-8543}"
 
-GILD_DOC_ROOT="${BENCH_DIR}"
-GILD_BIN="${ROOT_DIR}/target/release/gild-router"
-GILD_NATIVE_BIN="${ROOT_DIR}/target/release/php"
+PHP_ROUTER_DOC_ROOT="${BENCH_DIR}"
+PHP_ROUTER_BIN="${ROOT_DIR}/target/release/php-router"
+PHP_NATIVE_BIN="${ROOT_DIR}/target/release/php"
 
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 COMPOSE_FILE="${COMPOSE_FILE:-$BENCH_DIR/docker-compose.yml}"
 
 PIDS=()
-STARTED_GILD=0
+STARTED_PHP_ROUTER=0
 STARTED_DOCKER=0
-GILD_PID=""
+PHP_ROUTER_PID=""
 
 cleanup() {
   for pid in "${PIDS[@]:-}"; do
@@ -33,8 +33,8 @@ cleanup() {
   if [[ $STARTED_DOCKER -eq 1 ]]; then
     "$DOCKER_BIN" compose -f "$COMPOSE_FILE" down >/dev/null 2>&1 || true
   fi
-  if [[ $STARTED_GILD -eq 1 && -n "${GILD_PID}" ]]; then
-    kill "$GILD_PID" >/dev/null 2>&1 || true
+  if [[ $STARTED_PHP_ROUTER -eq 1 && -n "${PHP_ROUTER_PID}" ]]; then
+    kill "$PHP_ROUTER_PID" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -81,21 +81,21 @@ port_listening() {
   return 1
 }
 
-start_gild() {
-  if port_listening "$PORT_GILD"; then
+start_php_router() {
+  if port_listening "$PORT_PHP_ROUTER"; then
     return
   fi
-  if [[ ! -x "$GILD_BIN" || ! -x "$GILD_NATIVE_BIN" ]]; then
-    echo "[perf:gild] binaries not found; building..." >&2
-    (cd "$ROOT_DIR" && cargo build --release --features router --bin gild-router --bin php)
+  if [[ ! -x "$PHP_ROUTER_BIN" || ! -x "$PHP_NATIVE_BIN" ]]; then
+    echo "[perf:php-router] binaries not found; building..." >&2
+    (cd "$ROOT_DIR" && cargo build --release --features router --bin php-router --bin php)
   fi
-  GILD_NATIVE_BIN="$GILD_NATIVE_BIN" GILD_DOC_ROOT="$GILD_DOC_ROOT" "$GILD_BIN" \
-    > "${BENCH_DIR}/gild-router.log" 2>&1 &
-  GILD_PID=$!
-  STARTED_GILD=1
+  PHP_NATIVE_BIN="$PHP_NATIVE_BIN" PHP_ROUTER_DOC_ROOT="$PHP_ROUTER_DOC_ROOT" "$PHP_ROUTER_BIN" \
+    > "${BENCH_DIR}/php-router.log" 2>&1 &
+  PHP_ROUTER_PID=$!
+  STARTED_PHP_ROUTER=1
   sleep 0.4
-  if ! kill -0 "$GILD_PID" >/dev/null 2>&1; then
-    echo "[perf:gild] failed to start. See ${BENCH_DIR}/gild-router.log" >&2
+  if ! kill -0 "$PHP_ROUTER_PID" >/dev/null 2>&1; then
+    echo "[perf:php-router] failed to start. See ${BENCH_DIR}/php-router.log" >&2
     return 1
   fi
 }
@@ -185,21 +185,21 @@ append_report_error() {
 
 write_report_header
 
-if [[ "$RUNTIMES" != *"gild"* && "$RUNTIMES" != *"nginx"* && "$RUNTIMES" != *"apache"* ]]; then
+if [[ "$RUNTIMES" != *"php-router"* && "$RUNTIMES" != *"nginx"* && "$RUNTIMES" != *"apache"* ]]; then
   echo "[perf] no runtimes selected (RUNTIMES=$RUNTIMES)" >&2
   exit 1
 fi
 
 ensure_js_runtime
 
-if [[ "$RUNTIMES" == *"gild"* ]]; then
-  start_gild
-  url="http://127.0.0.1:${PORT_GILD}/bench.php?ms=${WORK_MS}"
+if [[ "$RUNTIMES" == *"php-router"* ]]; then
+  start_php_router
+  url="http://127.0.0.1:${PORT_PHP_ROUTER}/bench.php?ms=${WORK_MS}"
   wait_for_url "$url"
-  if result="$(run_perf "gild" "$url")"; then
-    append_report_row "gild" "$result"
+  if result="$(run_perf "php-router" "$url")"; then
+    append_report_row "php-router" "$result"
   else
-    append_report_error "gild" "error"
+    append_report_error "php-router" "error"
   fi
 fi
 

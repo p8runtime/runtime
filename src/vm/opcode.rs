@@ -127,10 +127,10 @@ pub enum OpCode {
     DefMethod(Symbol, Symbol, u32, Visibility, bool, bool), // (class_name, method_name, func_idx, visibility, is_static, is_abstract)
     DefProp(Symbol, Symbol, u16, Visibility, u32, bool), // (class_name, prop_name, default_val_idx, visibility, type_hint_idx, is_readonly)
     DefClassConst(Symbol, Symbol, u16, Visibility), // (class_name, const_name, val_idx, visibility)
-    AddMethodAttribute(Symbol, Symbol, u16), // (class_name, method_name, attr_const_idx)
+    AddMethodAttribute(Symbol, Symbol, u16),        // (class_name, method_name, attr_const_idx)
     AddPropertyAttribute(Symbol, Symbol, u16, bool), // (class_name, prop_name, attr_const_idx, is_static)
-    AddClassConstAttribute(Symbol, Symbol, u16), // (class_name, const_name, attr_const_idx)
-    DefEnumCase(Symbol, Symbol, u16, bool), // (class_name, case_name, val_idx, has_value)
+    AddClassConstAttribute(Symbol, Symbol, u16),     // (class_name, const_name, attr_const_idx)
+    DefEnumCase(Symbol, Symbol, u16, bool),          // (class_name, case_name, val_idx, has_value)
     DefStaticProp(Symbol, Symbol, u16, Visibility, u32), // (class_name, prop_name, default_val_idx, visibility, type_hint_idx)
     FetchClassConst(Symbol, Symbol),                     // (class_name, const_name) -> [Val]
     FetchClassConstDynamic(Symbol),                      // [Class] -> [Val] (const_name is arg)

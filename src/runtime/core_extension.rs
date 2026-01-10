@@ -102,6 +102,9 @@ impl CoreExtensionData {
         if self.rng.seeded {
             return;
         }
+        #[cfg(target_arch = "wasm32")]
+        let seed = 0u64;
+        #[cfg(not(target_arch = "wasm32"))]
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -279,7 +282,10 @@ impl Extension for CoreExtension {
         registry.register_function(b"array_product", array::php_array_product);
         registry.register_function(b"array_reduce", array::php_array_reduce);
         registry.register_function(b"array_replace", array::php_array_replace);
-        registry.register_function(b"array_replace_recursive", array::php_array_replace_recursive);
+        registry.register_function(
+            b"array_replace_recursive",
+            array::php_array_replace_recursive,
+        );
         registry.register_function(b"array_reverse", array::php_array_reverse);
         registry.register_function(b"array_search", array::php_array_search);
         registry.register_function(b"array_shift", array::php_array_shift);
@@ -292,13 +298,13 @@ impl Extension for CoreExtension {
         registry.register_function(b"array_udiff_uassoc", array::php_array_udiff_uassoc);
         registry.register_function(b"array_uintersect", array::php_array_uintersect);
         registry.register_function(b"array_uintersect_assoc", array::php_array_uintersect_assoc);
-        registry.register_function(b"array_uintersect_uassoc", array::php_array_uintersect_uassoc);
+        registry.register_function(
+            b"array_uintersect_uassoc",
+            array::php_array_uintersect_uassoc,
+        );
         registry.register_function(b"array_unique", array::php_array_unique);
         registry.register_function(b"array_walk", array::php_array_walk);
-        registry.register_function(
-            b"array_walk_recursive",
-            array::php_array_walk_recursive,
-        );
+        registry.register_function(b"array_walk_recursive", array::php_array_walk_recursive);
         registry.register_function(b"arsort", array::php_arsort);
         registry.register_function(b"asort", array::php_asort);
         registry.register_function(b"compact", array::php_compact);
@@ -648,14 +654,8 @@ impl Extension for CoreExtension {
 
         // Attribute class (PHP 8.0+)
         let mut attribute_constants = HashMap::new();
-        attribute_constants.insert(
-            b"TARGET_CLASS".to_vec(),
-            (Val::Int(1), Visibility::Public),
-        );
-        attribute_constants.insert(
-            b"TARGET_METHOD".to_vec(),
-            (Val::Int(2), Visibility::Public),
-        );
+        attribute_constants.insert(b"TARGET_CLASS".to_vec(), (Val::Int(1), Visibility::Public));
+        attribute_constants.insert(b"TARGET_METHOD".to_vec(), (Val::Int(2), Visibility::Public));
         attribute_constants.insert(
             b"TARGET_FUNCTION".to_vec(),
             (Val::Int(4), Visibility::Public),
@@ -672,10 +672,7 @@ impl Extension for CoreExtension {
             b"TARGET_PARAMETER".to_vec(),
             (Val::Int(32), Visibility::Public),
         );
-        attribute_constants.insert(
-            b"TARGET_ALL".to_vec(),
-            (Val::Int(63), Visibility::Public),
-        );
+        attribute_constants.insert(b"TARGET_ALL".to_vec(), (Val::Int(63), Visibility::Public));
         attribute_constants.insert(
             b"IS_REPEATABLE".to_vec(),
             (Val::Int(64), Visibility::Public),
@@ -1801,6 +1798,15 @@ impl Extension for CoreExtension {
             ))]
             registry.register_constant(b"LC_MESSAGES", Val::Int(libc::LC_MESSAGES as i64));
         }
+        #[cfg(target_arch = "wasm32")]
+        {
+            registry.register_constant(b"LC_ALL", Val::Int(0));
+            registry.register_constant(b"LC_COLLATE", Val::Int(0));
+            registry.register_constant(b"LC_CTYPE", Val::Int(0));
+            registry.register_constant(b"LC_MONETARY", Val::Int(0));
+            registry.register_constant(b"LC_NUMERIC", Val::Int(0));
+            registry.register_constant(b"LC_TIME", Val::Int(0));
+        }
 
         // Register nl_langinfo constants
         #[cfg(unix)]
@@ -1852,6 +1858,10 @@ impl Extension for CoreExtension {
             registry.register_constant(b"ABMON_10", Val::Int(libc::ABMON_10 as i64));
             registry.register_constant(b"ABMON_11", Val::Int(libc::ABMON_11 as i64));
             registry.register_constant(b"ABMON_12", Val::Int(libc::ABMON_12 as i64));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            registry.register_constant(b"CODESET", Val::Int(0));
         }
 
         // Register URL constants

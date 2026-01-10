@@ -4,25 +4,25 @@ set -euo pipefail
 N=10000
 C=200
 MS=8
-GILD_URL="http://127.0.0.1:8541/bench.php"
+PHP_ROUTER_URL="http://127.0.0.1:8541/bench.php"
 NGINX_URL="http://127.0.0.1:8542/bench.php"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PHP_FPM_CONF="${SCRIPT_DIR}/php-fpm.conf"
 NGINX_CONF="${SCRIPT_DIR}/nginx.conf"
-GILD_DOC_ROOT="${SCRIPT_DIR}"
-GILD_BIN="${REPO_ROOT}/target/release/gild-router"
-GILD_NATIVE_BIN="${REPO_ROOT}/target/release/php"
+PHP_ROUTER_DOC_ROOT="${SCRIPT_DIR}"
+PHP_ROUTER_BIN="${REPO_ROOT}/target/release/php-router"
+PHP_NATIVE_BIN="${REPO_ROOT}/target/release/php"
 
 AUTO=1
-START_GILD=1
+START_PHP_ROUTER=1
 START_NGINX=1
 
-STARTED_GILD=0
+STARTED_PHP_ROUTER=0
 STARTED_PHPFPM=0
 STARTED_NGINX=0
-GILD_PID=""
+PHP_ROUTER_PID=""
 PHPFPM_PID=""
 
 while [[ $# -gt 0 ]]; do
@@ -43,24 +43,24 @@ while [[ $# -gt 0 ]]; do
       AUTO=1
       shift
       ;;
-    --start-gild)
-      START_GILD=1
+    --start-php-router)
+      START_PHP_ROUTER=1
       shift
       ;;
     --start-nginx)
       START_NGINX=1
       shift
       ;;
-    --gild-bin)
-      GILD_BIN="$2"
+    --php-router-bin)
+      PHP_ROUTER_BIN="$2"
       shift 2
       ;;
-    --gild-native-bin)
-      GILD_NATIVE_BIN="$2"
+    --php-native-bin)
+      PHP_NATIVE_BIN="$2"
       shift 2
       ;;
-    --gild)
-      GILD_URL="$2"
+    --php-router)
+      PHP_ROUTER_URL="$2"
       shift 2
       ;;
     --nginx)
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $AUTO -eq 1 ]]; then
-  START_GILD=1
+  START_PHP_ROUTER=1
   START_NGINX=1
 fi
 
@@ -88,25 +88,25 @@ port_listening() {
   return 1
 }
 
-start_gild() {
+start_php_router() {
   if port_listening 8541; then
     return
   fi
-  if [[ ! -x "$GILD_BIN" || ! -x "$GILD_NATIVE_BIN" ]]; then
-    echo "Gild binaries not found; building..." >&2
-    if ! (cd "$REPO_ROOT" && cargo build --release --features router --bin gild-router --bin php); then
-      echo "Failed to build Gild binaries. Try:" >&2
-      echo "  (cd \"$REPO_ROOT\" && cargo build --release --features router --bin gild-router --bin php)" >&2
+  if [[ ! -x "$PHP_ROUTER_BIN" || ! -x "$PHP_NATIVE_BIN" ]]; then
+    echo "php-router binaries not found; building..." >&2
+    if ! (cd "$REPO_ROOT" && cargo build --release --features router --bin php-router --bin php); then
+      echo "Failed to build php-router binaries. Try:" >&2
+      echo "  (cd \"$REPO_ROOT\" && cargo build --release --features router --bin php-router --bin php)" >&2
       return 1
     fi
   fi
-  GILD_NATIVE_BIN="$GILD_NATIVE_BIN" GILD_DOC_ROOT="$GILD_DOC_ROOT" "$GILD_BIN" \
-    > "${SCRIPT_DIR}/gild-router.log" 2>&1 &
-  GILD_PID=$!
-  STARTED_GILD=1
+  PHP_NATIVE_BIN="$PHP_NATIVE_BIN" PHP_ROUTER_DOC_ROOT="$PHP_ROUTER_DOC_ROOT" "$PHP_ROUTER_BIN" \
+    > "${SCRIPT_DIR}/php-router.log" 2>&1 &
+  PHP_ROUTER_PID=$!
+  STARTED_PHP_ROUTER=1
   sleep 0.4
-  if ! kill -0 "$GILD_PID" >/dev/null 2>&1; then
-    echo "Gild router failed to start. See ${SCRIPT_DIR}/gild-router.log" >&2
+  if ! kill -0 "$PHP_ROUTER_PID" >/dev/null 2>&1; then
+    echo "php-router failed to start. See ${SCRIPT_DIR}/php-router.log" >&2
     return 1
   fi
 }
@@ -141,13 +141,13 @@ stop_servers() {
   if [[ $STARTED_PHPFPM -eq 1 && -n "${PHPFPM_PID}" ]]; then
     kill "$PHPFPM_PID" >/dev/null 2>&1 || true
   fi
-  if [[ $STARTED_GILD -eq 1 && -n "${GILD_PID}" ]]; then
-    kill "$GILD_PID" >/dev/null 2>&1 || true
+  if [[ $STARTED_PHP_ROUTER -eq 1 && -n "${PHP_ROUTER_PID}" ]]; then
+    kill "$PHP_ROUTER_PID" >/dev/null 2>&1 || true
   fi
 }
 
-if [[ $START_GILD -eq 1 ]]; then
-  start_gild
+if [[ $START_PHP_ROUTER -eq 1 ]]; then
+  start_php_router
 fi
 
 if [[ $START_NGINX -eq 1 ]]; then
@@ -155,7 +155,7 @@ if [[ $START_NGINX -eq 1 ]]; then
   start_nginx
 fi
 
-if [[ $AUTO -eq 1 || $START_GILD -eq 1 || $START_NGINX -eq 1 ]]; then
+if [[ $AUTO -eq 1 || $START_PHP_ROUTER -eq 1 || $START_NGINX -eq 1 ]]; then
   trap stop_servers EXIT
 fi
 
@@ -198,6 +198,6 @@ run_ab() {
 }
 
 echo "ab -n ${N} -c ${C} (ms=${MS})"
-run_ab "Gild" "$GILD_URL"
+run_ab "php-router" "$PHP_ROUTER_URL"
 echo ""
 run_ab "nginx+php-fpm" "$NGINX_URL"

@@ -107,10 +107,7 @@ fn resolve_class_symbol(vm: &mut VM, arg: Handle) -> Result<crate::core::value::
     }
 }
 
-fn create_reflection_attribute(
-    vm: &mut VM,
-    attr: &AttributeInstance,
-) -> Result<Handle, String> {
+fn create_reflection_attribute(vm: &mut VM, attr: &AttributeInstance) -> Result<Handle, String> {
     let class_sym = vm.context.interner.intern(b"ReflectionAttribute");
     let data = ReflectionAttributeData {
         name: attr.name,
@@ -219,10 +216,7 @@ fn create_reflection_type(vm: &mut VM, hint: TypeHint) -> Handle {
             let data = ReflectionTypeData {
                 kind: ReflectionTypeKind::Intersection(types),
             };
-            let class_sym = vm
-                .context
-                .interner
-                .intern(b"ReflectionIntersectionType");
+            let class_sym = vm.context.interner.intern(b"ReflectionIntersectionType");
             let obj_data = ObjectData {
                 class: class_sym,
                 properties: IndexMap::new(),
@@ -265,7 +259,9 @@ pub fn reflection_class_construct(vm: &mut VM, args: &[Handle]) -> Result<Handle
         _ => return Err("ReflectionClass::__construct() expects object context".into()),
     };
 
-    let data = ReflectionClassData { class_name: class_sym };
+    let data = ReflectionClassData {
+        class_name: class_sym,
+    };
     let payload = vm.arena.get_mut(payload_handle);
     if let Val::ObjPayload(ref mut obj_data) = payload.value {
         obj_data.internal = Some(Rc::new(data));
@@ -358,10 +354,7 @@ pub fn reflection_attribute_get_name(vm: &mut VM, _args: &[Handle]) -> Result<Ha
     Err("ReflectionAttribute::getName() called on invalid reflection object".into())
 }
 
-pub fn reflection_attribute_get_arguments(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_attribute_get_arguments(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionAttribute::getArguments()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -371,9 +364,7 @@ pub fn reflection_attribute_get_arguments(
     let payload = vm.arena.get(payload_handle);
     let data = if let Val::ObjPayload(obj_data) = &payload.value {
         if let Some(internal) = &obj_data.internal {
-            internal
-                .downcast_ref::<ReflectionAttributeData>()
-                .cloned()
+            internal.downcast_ref::<ReflectionAttributeData>().cloned()
         } else {
             None
         }
@@ -402,10 +393,7 @@ pub fn reflection_attribute_get_arguments(
     Ok(vm.arena.alloc(Val::Array(Rc::new(array))))
 }
 
-pub fn reflection_attribute_new_instance(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_attribute_new_instance(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionAttribute::newInstance()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -415,9 +403,7 @@ pub fn reflection_attribute_new_instance(
     let payload = vm.arena.get(payload_handle);
     let data = if let Val::ObjPayload(obj_data) = &payload.value {
         if let Some(internal) = &obj_data.internal {
-            internal
-                .downcast_ref::<ReflectionAttributeData>()
-                .cloned()
+            internal.downcast_ref::<ReflectionAttributeData>().cloned()
         } else {
             None
         }
@@ -447,7 +433,10 @@ pub fn reflection_method_construct(vm: &mut VM, args: &[Handle]) -> Result<Handl
         _ => return Err("ReflectionMethod::__construct() expects method name string".into()),
     };
     let method_sym = vm.context.interner.intern(&method_bytes);
-    let method_lookup = vm.context.interner.intern(&method_bytes.to_ascii_lowercase());
+    let method_lookup = vm
+        .context
+        .interner
+        .intern(&method_bytes.to_ascii_lowercase());
 
     let class_def = vm
         .context
@@ -524,7 +513,9 @@ pub fn reflection_method_get_attributes(vm: &mut VM, args: &[Handle]) -> Result<
             None
         }
     }
-    .ok_or_else(|| "ReflectionMethod::getAttributes() called on invalid reflection object".to_string())?;
+    .ok_or_else(|| {
+        "ReflectionMethod::getAttributes() called on invalid reflection object".to_string()
+    })?;
 
     let class_def = vm
         .context
@@ -585,10 +576,7 @@ pub fn reflection_method_get_parameters(vm: &mut VM, _args: &[Handle]) -> Result
     Ok(vm.arena.alloc(Val::Array(Rc::new(array))))
 }
 
-pub fn reflection_method_get_return_type(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_method_get_return_type(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionMethod::getReturnType()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -694,10 +682,7 @@ pub fn reflection_property_get_name(vm: &mut VM, _args: &[Handle]) -> Result<Han
     Err("ReflectionProperty::getName() called on invalid reflection object".into())
 }
 
-pub fn reflection_property_get_attributes(
-    vm: &mut VM,
-    args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_property_get_attributes(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionProperty::getAttributes()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -726,7 +711,9 @@ pub fn reflection_property_get_attributes(
             None
         }
     }
-    .ok_or_else(|| "ReflectionProperty::getAttributes() called on invalid reflection object".to_string())?;
+    .ok_or_else(|| {
+        "ReflectionProperty::getAttributes() called on invalid reflection object".to_string()
+    })?;
 
     let class_def = vm
         .context
@@ -852,7 +839,7 @@ pub fn reflection_class_const_construct(vm: &mut VM, args: &[Handle]) -> Result<
         _ => {
             return Err(
                 "ReflectionClassConstant::__construct() expects constant name string".into(),
-            )
+            );
         }
     };
     let const_sym = vm.context.interner.intern(&const_bytes);
@@ -884,10 +871,7 @@ pub fn reflection_class_const_construct(vm: &mut VM, args: &[Handle]) -> Result<
     Ok(vm.arena.alloc(Val::Null))
 }
 
-pub fn reflection_class_const_get_name(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_class_const_get_name(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionClassConstant::getName()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -919,7 +903,9 @@ pub fn reflection_class_const_get_attributes(
         if let Val::String(s) = &vm.arena.get(*arg).value {
             Some(s.to_vec())
         } else {
-            return Err("ReflectionClassConstant::getAttributes() expects string name filter".into());
+            return Err(
+                "ReflectionClassConstant::getAttributes() expects string name filter".into(),
+            );
         }
     } else {
         None
@@ -985,9 +971,7 @@ pub fn reflection_parameter_has_type(vm: &mut VM, _args: &[Handle]) -> Result<Ha
     if let Val::ObjPayload(obj_data) = &payload.value {
         if let Some(internal) = &obj_data.internal {
             if let Some(data) = internal.downcast_ref::<ReflectionParameterData>() {
-                return Ok(vm
-                    .arena
-                    .alloc(Val::Bool(data.type_hint.is_some())));
+                return Ok(vm.arena.alloc(Val::Bool(data.type_hint.is_some())));
             }
         }
     }
@@ -1015,10 +999,7 @@ pub fn reflection_parameter_get_type(vm: &mut VM, _args: &[Handle]) -> Result<Ha
     Err("ReflectionParameter::getType() called on invalid reflection object".into())
 }
 
-pub fn reflection_parameter_is_variadic(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_parameter_is_variadic(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionParameter::isVariadic()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -1043,7 +1024,9 @@ pub fn reflection_parameter_is_passed_by_reference(
     let this_handle = get_this_handle(vm, "ReflectionParameter::isPassedByReference()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
-        _ => return Err("ReflectionParameter::isPassedByReference() expects object context".into()),
+        _ => {
+            return Err("ReflectionParameter::isPassedByReference() expects object context".into());
+        }
     };
 
     let payload = vm.arena.get(payload_handle);
@@ -1054,9 +1037,7 @@ pub fn reflection_parameter_is_passed_by_reference(
             }
         }
     }
-    Err(
-        "ReflectionParameter::isPassedByReference() called on invalid reflection object".into(),
-    )
+    Err("ReflectionParameter::isPassedByReference() called on invalid reflection object".into())
 }
 
 pub fn reflection_named_type_get_name(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
@@ -1080,10 +1061,7 @@ pub fn reflection_named_type_get_name(vm: &mut VM, _args: &[Handle]) -> Result<H
     Err("ReflectionNamedType::getName() called on invalid reflection object".into())
 }
 
-pub fn reflection_named_type_allows_null(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_named_type_allows_null(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionNamedType::allowsNull()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -1103,10 +1081,7 @@ pub fn reflection_named_type_allows_null(
     Err("ReflectionNamedType::allowsNull() called on invalid reflection object".into())
 }
 
-pub fn reflection_named_type_is_builtin(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_named_type_is_builtin(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionNamedType::isBuiltin()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -1126,10 +1101,7 @@ pub fn reflection_named_type_is_builtin(
     Err("ReflectionNamedType::isBuiltin() called on invalid reflection object".into())
 }
 
-pub fn reflection_union_type_get_types(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_union_type_get_types(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionUnionType::getTypes()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -1168,10 +1140,7 @@ pub fn reflection_union_type_get_types(
     Err("ReflectionUnionType::getTypes() called on invalid reflection object".into())
 }
 
-pub fn reflection_union_type_allows_null(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_union_type_allows_null(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionUnionType::allowsNull()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -1310,7 +1279,9 @@ pub fn reflection_function_construct(vm: &mut VM, args: &[Handle]) -> Result<Han
         _ => return Err("ReflectionFunction::__construct() expects object context".into()),
     };
 
-    let data = ReflectionFunctionData { func_name: func_sym };
+    let data = ReflectionFunctionData {
+        func_name: func_sym,
+    };
     let payload = vm.arena.get_mut(payload_handle);
     if let Val::ObjPayload(ref mut obj_data) = payload.value {
         obj_data.internal = Some(Rc::new(data));
@@ -1337,10 +1308,7 @@ pub fn reflection_function_get_name(vm: &mut VM, _args: &[Handle]) -> Result<Han
     Err("ReflectionFunction::getName() called on invalid reflection object".into())
 }
 
-pub fn reflection_function_get_attributes(
-    vm: &mut VM,
-    args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_function_get_attributes(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionFunction::getAttributes()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -1361,7 +1329,9 @@ pub fn reflection_function_get_attributes(
         let payload = vm.arena.get(payload_handle);
         if let Val::ObjPayload(obj_data) = &payload.value {
             if let Some(internal) = &obj_data.internal {
-                internal.downcast_ref::<ReflectionFunctionData>().map(|d| d.func_name)
+                internal
+                    .downcast_ref::<ReflectionFunctionData>()
+                    .map(|d| d.func_name)
             } else {
                 None
             }
@@ -1369,7 +1339,9 @@ pub fn reflection_function_get_attributes(
             None
         }
     }
-    .ok_or_else(|| "ReflectionFunction::getAttributes() called on invalid reflection object".to_string())?;
+    .ok_or_else(|| {
+        "ReflectionFunction::getAttributes() called on invalid reflection object".to_string()
+    })?;
 
     let attrs = vm
         .context
@@ -1382,10 +1354,7 @@ pub fn reflection_function_get_attributes(
     build_attribute_array(vm, &attrs, filter_name.as_deref())
 }
 
-pub fn reflection_function_get_parameters(
-    vm: &mut VM,
-    _args: &[Handle],
-) -> Result<Handle, String> {
+pub fn reflection_function_get_parameters(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = get_this_handle(vm, "ReflectionFunction::getParameters()")?;
     let payload_handle = match &vm.arena.get(this_handle).value {
         Val::Object(payload_handle) => *payload_handle,
@@ -1396,7 +1365,9 @@ pub fn reflection_function_get_parameters(
         let payload = vm.arena.get(payload_handle);
         if let Val::ObjPayload(obj_data) = &payload.value {
             if let Some(internal) = &obj_data.internal {
-                internal.downcast_ref::<ReflectionFunctionData>().map(|d| d.func_name)
+                internal
+                    .downcast_ref::<ReflectionFunctionData>()
+                    .map(|d| d.func_name)
             } else {
                 None
             }
@@ -1404,7 +1375,9 @@ pub fn reflection_function_get_parameters(
             None
         }
     }
-    .ok_or_else(|| "ReflectionFunction::getParameters() called on invalid reflection object".to_string())?;
+    .ok_or_else(|| {
+        "ReflectionFunction::getParameters() called on invalid reflection object".to_string()
+    })?;
 
     let params = vm
         .context
@@ -1445,7 +1418,9 @@ pub fn reflection_function_get_return_type(
         let payload = vm.arena.get(payload_handle);
         if let Val::ObjPayload(obj_data) = &payload.value {
             if let Some(internal) = &obj_data.internal {
-                internal.downcast_ref::<ReflectionFunctionData>().map(|d| d.func_name)
+                internal
+                    .downcast_ref::<ReflectionFunctionData>()
+                    .map(|d| d.func_name)
             } else {
                 None
             }
@@ -1453,7 +1428,9 @@ pub fn reflection_function_get_return_type(
             None
         }
     }
-    .ok_or_else(|| "ReflectionFunction::getReturnType() called on invalid reflection object".to_string())?;
+    .ok_or_else(|| {
+        "ReflectionFunction::getReturnType() called on invalid reflection object".to_string()
+    })?;
 
     let func = vm
         .context
@@ -1500,9 +1477,9 @@ fn return_type_to_type_hint(rt: &ReturnType) -> Option<TypeHint> {
                 Some(TypeHint::Intersection(hints))
             }
         }
-        ReturnType::Nullable(inner) => return_type_to_type_hint(inner).map(|hint| {
-            TypeHint::Union(vec![hint, TypeHint::Null])
-        }),
+        ReturnType::Nullable(inner) => {
+            return_type_to_type_hint(inner).map(|hint| TypeHint::Union(vec![hint, TypeHint::Null]))
+        }
         _ => None,
     }
 }

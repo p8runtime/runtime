@@ -10,9 +10,9 @@ pub fn php_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     for (idx, handle) in args.iter().enumerate() {
         map.insert(ArrayKey::Int(idx as i64), *handle);
     }
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(map).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(map).into())))
 }
 
 pub fn php_count(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -123,9 +123,9 @@ pub fn php_array_change_key_case(vm: &mut VM, args: &[Handle]) -> Result<Handle,
         map.insert(new_key, *value_handle);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(map).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(map).into())))
 }
 
 pub fn php_array_chunk(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -181,9 +181,9 @@ pub fn php_array_chunk(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         out.insert(ArrayKey::Int(chunk_index), chunk_handle);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_column(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -246,9 +246,9 @@ pub fn php_array_column(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_combine(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -279,9 +279,9 @@ pub fn php_array_combine(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
         out.insert(key, *val_handle);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_count_values(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -311,9 +311,9 @@ pub fn php_array_count_values(vm: &mut VM, args: &[Handle]) -> Result<Handle, St
         out.insert(key, vm.arena.alloc(Val::Int(count)));
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_diff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -330,12 +330,7 @@ pub fn php_array_diff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     for (i, handle) in args[1..].iter().enumerate() {
         let arr = match &vm.arena.get(*handle).value {
             Val::Array(arr) => arr,
-            _ => {
-                return Err(format!(
-                    "array_diff(): Argument #{} is not an array",
-                    i + 2
-                ))
-            }
+            _ => return Err(format!("array_diff(): Argument #{} is not an array", i + 2)),
         };
         for (_, val_handle) in arr.map.iter() {
             other_values.push(vm.arena.get(*val_handle).value.to_php_string_bytes());
@@ -350,9 +345,9 @@ pub fn php_array_diff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_diff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -387,9 +382,9 @@ pub fn php_array_diff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_diff_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -420,9 +415,9 @@ pub fn php_array_diff_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_diff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -479,9 +474,9 @@ pub fn php_array_diff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_diff_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -528,9 +523,9 @@ pub fn php_array_diff_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_fill(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -549,9 +544,9 @@ pub fn php_array_fill(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         map.insert(ArrayKey::Int(start_index + i), args[2]);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(map).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(map).into())))
 }
 
 pub fn php_array_fill_keys(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -572,9 +567,9 @@ pub fn php_array_fill_keys(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         map.insert(key, args[1]);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(map).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(map).into())))
 }
 
 pub fn php_array_filter(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -619,9 +614,9 @@ pub fn php_array_filter(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_find(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -726,9 +721,9 @@ pub fn php_array_flip(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         out.insert(key, vm.arena.alloc(val));
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_intersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -760,9 +755,9 @@ pub fn php_array_intersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_intersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -797,9 +792,9 @@ pub fn php_array_intersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle,
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_intersect_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -830,9 +825,9 @@ pub fn php_array_intersect_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, S
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_intersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -889,9 +884,9 @@ pub fn php_array_intersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_intersect_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -938,9 +933,9 @@ pub fn php_array_intersect_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, 
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_is_list(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1035,14 +1030,10 @@ pub fn php_array_map(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     for (i, handle) in args[1..].iter().enumerate() {
         let arr = match &vm.arena.get(*handle).value {
             Val::Array(arr) => arr,
-            _ => {
-                return Err(format!(
-                    "array_map(): Argument #{} is not an array",
-                    i + 2
-                ))
-            }
+            _ => return Err(format!("array_map(): Argument #{} is not an array", i + 2)),
         };
-        let entries: Vec<(ArrayKey, Handle)> = arr.map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let entries: Vec<(ArrayKey, Handle)> =
+            arr.map.iter().map(|(k, v)| (k.clone(), *v)).collect();
         if i == 0 {
             first_entries = entries.clone();
         }
@@ -1065,7 +1056,8 @@ pub fn php_array_map(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             for (i, handle) in params.iter().enumerate() {
                 row.insert(ArrayKey::Int(i as i64), *handle);
             }
-            vm.arena.alloc(Val::Array(crate::core::value::ArrayData::from(row).into()))
+            vm.arena
+                .alloc(Val::Array(crate::core::value::ArrayData::from(row).into()))
         } else {
             vm.call_callable(callback, params)
                 .map_err(|e| format!("array_map(): {}", e))?
@@ -1074,9 +1066,9 @@ pub fn php_array_map(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         out.insert(key.clone(), mapped);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_merge_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1094,7 +1086,7 @@ pub fn php_array_merge_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle,
                 return Err(format!(
                     "array_merge_recursive(): Argument #{} is not an array",
                     i + 1
-                ))
+                ));
             }
         };
 
@@ -1117,9 +1109,9 @@ pub fn php_array_merge_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle,
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_multisort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1281,7 +1273,7 @@ pub fn php_array_replace(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
                 return Err(format!(
                     "array_replace(): Argument #{} is not an array",
                     i + 1
-                ))
+                ));
             }
         };
 
@@ -1290,9 +1282,9 @@ pub fn php_array_replace(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_replace_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1308,7 +1300,7 @@ pub fn php_array_replace_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handl
                 return Err(format!(
                     "array_replace_recursive(): Argument #{} is not an array",
                     i + 1
-                ))
+                ));
             }
         };
 
@@ -1327,9 +1319,9 @@ pub fn php_array_replace_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handl
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_reverse(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1361,9 +1353,9 @@ pub fn php_array_reverse(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_search(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1485,9 +1477,9 @@ pub fn php_array_slice(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_splice(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1576,7 +1568,9 @@ pub fn php_array_rand(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     };
 
     if num < 1 || num as usize > count {
-        return Err("array_rand(): Number of elements must be between 1 and the number of elements".into());
+        return Err(
+            "array_rand(): Number of elements must be between 1 and the number of elements".into(),
+        );
     }
 
     let core = vm
@@ -1602,9 +1596,9 @@ pub fn php_array_rand(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         out.insert(ArrayKey::Int(idx as i64), handle);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_udiff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1631,10 +1625,7 @@ pub fn php_array_udiff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         let mut found = false;
         for other_handle in &other_values {
             let cmp = vm
-                .call_callable(
-                    callback,
-                    smallvec::smallvec![value_handle, *other_handle],
-                )
+                .call_callable(callback, smallvec::smallvec![value_handle, *other_handle])
                 .map_err(|e| format!("array_udiff(): {}", e))?;
             if vm.arena.get(cmp).value.to_int() == 0 {
                 found = true;
@@ -1646,9 +1637,9 @@ pub fn php_array_udiff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_udiff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1673,10 +1664,7 @@ pub fn php_array_udiff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
             };
             if let Some(other_handle) = arr.map.get(&key) {
                 let cmp = vm
-                    .call_callable(
-                        callback,
-                        smallvec::smallvec![value_handle, *other_handle],
-                    )
+                    .call_callable(callback, smallvec::smallvec![value_handle, *other_handle])
                     .map_err(|e| format!("array_udiff_assoc(): {}", e))?;
                 if vm.arena.get(cmp).value.to_int() == 0 {
                     found = true;
@@ -1689,9 +1677,9 @@ pub fn php_array_udiff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_udiff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1720,10 +1708,7 @@ pub fn php_array_udiff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, St
         for other in &other_arrays {
             for (other_key, other_handle) in other {
                 let val_cmp = vm
-                    .call_callable(
-                        value_cb,
-                        smallvec::smallvec![value_handle, *other_handle],
-                    )
+                    .call_callable(value_cb, smallvec::smallvec![value_handle, *other_handle])
                     .map_err(|e| format!("array_udiff_uassoc(): {}", e))?;
                 if vm.arena.get(val_cmp).value.to_int() != 0 {
                     continue;
@@ -1748,9 +1733,9 @@ pub fn php_array_udiff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, St
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_uintersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1777,10 +1762,7 @@ pub fn php_array_uintersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
         let mut found = false;
         for other_handle in &other_values {
             let cmp = vm
-                .call_callable(
-                    callback,
-                    smallvec::smallvec![value_handle, *other_handle],
-                )
+                .call_callable(callback, smallvec::smallvec![value_handle, *other_handle])
                 .map_err(|e| format!("array_uintersect(): {}", e))?;
             if vm.arena.get(cmp).value.to_int() == 0 {
                 found = true;
@@ -1792,9 +1774,9 @@ pub fn php_array_uintersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_uintersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1819,10 +1801,7 @@ pub fn php_array_uintersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle
             };
             if let Some(other_handle) = arr.map.get(&key) {
                 let cmp = vm
-                    .call_callable(
-                        callback,
-                        smallvec::smallvec![value_handle, *other_handle],
-                    )
+                    .call_callable(callback, smallvec::smallvec![value_handle, *other_handle])
                     .map_err(|e| format!("array_uintersect_assoc(): {}", e))?;
                 if vm.arena.get(cmp).value.to_int() == 0 {
                     found = true;
@@ -1835,9 +1814,9 @@ pub fn php_array_uintersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_uintersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1866,10 +1845,7 @@ pub fn php_array_uintersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handl
         for other in &other_arrays {
             for (other_key, other_handle) in other {
                 let val_cmp = vm
-                    .call_callable(
-                        value_cb,
-                        smallvec::smallvec![value_handle, *other_handle],
-                    )
+                    .call_callable(value_cb, smallvec::smallvec![value_handle, *other_handle])
                     .map_err(|e| format!("array_uintersect_uassoc(): {}", e))?;
                 if vm.arena.get(val_cmp).value.to_int() != 0 {
                     continue;
@@ -1894,9 +1870,9 @@ pub fn php_array_uintersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handl
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_unique(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -1920,9 +1896,9 @@ pub fn php_array_unique(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         out.insert(key.clone(), *value_handle);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_array_walk(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -2088,9 +2064,9 @@ pub fn php_compact(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_each(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -2104,10 +2080,8 @@ pub fn php_each(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         _ => return Err("each() expects parameter 1 to be array".into()),
     };
 
-    let keys_values: Vec<(ArrayKey, Handle)> = key_value
-        .iter()
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
+    let keys_values: Vec<(ArrayKey, Handle)> =
+        key_value.iter().map(|(k, v)| (k.clone(), *v)).collect();
 
     let len = keys_values.len();
     if len == 0 {
@@ -2136,9 +2110,9 @@ pub fn php_each(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         *value_handle,
     );
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 pub fn php_extract(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -2210,12 +2184,12 @@ pub fn php_krsort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     };
 
     let mut entries: Vec<_> = arr_data.map.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        entries.sort_by(|(a, _), (b, _)| match (a, b) {
-            (ArrayKey::Int(i1), ArrayKey::Int(i2)) => i2.cmp(i1),
-            (ArrayKey::Str(s1), ArrayKey::Str(s2)) => s2.cmp(s1),
-            (ArrayKey::Int(_), ArrayKey::Str(_)) => std::cmp::Ordering::Greater,
-            (ArrayKey::Str(_), ArrayKey::Int(_)) => std::cmp::Ordering::Less,
-        });
+    entries.sort_by(|(a, _), (b, _)| match (a, b) {
+        (ArrayKey::Int(i1), ArrayKey::Int(i2)) => i2.cmp(i1),
+        (ArrayKey::Str(s1), ArrayKey::Str(s2)) => s2.cmp(s1),
+        (ArrayKey::Int(_), ArrayKey::Str(_)) => std::cmp::Ordering::Greater,
+        (ArrayKey::Str(_), ArrayKey::Int(_)) => std::cmp::Ordering::Less,
+    });
 
     let sorted_map: IndexMap<_, _> = entries.into_iter().collect();
     arr_data.map = sorted_map;
@@ -2448,10 +2422,7 @@ pub fn php_uasort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     for i in 0..len {
         for j in (i + 1)..len {
             let cmp = vm
-                .call_callable(
-                    callback,
-                    smallvec::smallvec![entries[i].1, entries[j].1],
-                )
+                .call_callable(callback, smallvec::smallvec![entries[i].1, entries[j].1])
                 .map_err(|e| format!("uasort(): {}", e))?;
             if vm.arena.get(cmp).value.to_int() > 0 {
                 entries.swap(i, j);
@@ -3059,9 +3030,9 @@ fn merge_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<Ha
         _ => {
             let values = vec![left, right];
             let map = list_to_map(&values);
-            return Ok(vm.arena.alloc(Val::Array(
-                crate::core::value::ArrayData::from(map).into(),
-            )));
+            return Ok(vm
+                .arena
+                .alloc(Val::Array(crate::core::value::ArrayData::from(map).into())));
         }
     };
 
@@ -3071,9 +3042,9 @@ fn merge_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<Ha
             let mut values: Vec<Handle> = left_entries.iter().map(|(_, v)| *v).collect();
             values.push(right);
             let map = list_to_map(&values);
-            return Ok(vm.arena.alloc(Val::Array(
-                crate::core::value::ArrayData::from(map).into(),
-            )));
+            return Ok(vm
+                .arena
+                .alloc(Val::Array(crate::core::value::ArrayData::from(map).into())));
         }
     };
 
@@ -3110,9 +3081,9 @@ fn merge_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<Ha
         }
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
 
 fn replace_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<Handle, String> {
@@ -3145,7 +3116,7 @@ fn replace_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<
         out.insert(key, value_handle);
     }
 
-    Ok(vm.arena.alloc(Val::Array(
-        crate::core::value::ArrayData::from(out).into(),
-    )))
+    Ok(vm
+        .arena
+        .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }

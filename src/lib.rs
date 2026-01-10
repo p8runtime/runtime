@@ -6,3 +6,6 @@ pub mod parser;
 pub mod runtime;
 pub mod sapi;
 pub mod vm;
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_exports;

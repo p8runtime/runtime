@@ -1,6 +1,6 @@
 # Extension Tier List + Ergonomics Plan
 
-This document summarizes the extension priorities derived from framework requirements and outlines the runtime ergonomics we need to make them usable in Gild.
+This document summarizes the extension priorities derived from framework requirements and outlines the runtime ergonomics we need to make them usable in php-rs.
 
 Sources:
 - `EXTENSIONS_FRAMEWORKS.md` (Laravel, Symfony, Magento, Drupal, WordPress)
@@ -123,6 +123,6 @@ use function mysql\{ connect, query, close };
 
 ## Next Steps
 
-1) Map current Gild coverage against Tier 0/1.
+1) Map current php-rs coverage against Tier 0/1.
 2) Add failing tests for missing extension APIs.
 3) Implement `gop_*` primitives for the highest-impact extension gaps.

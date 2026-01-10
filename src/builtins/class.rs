@@ -219,8 +219,8 @@ pub fn generator_valid(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> 
         if let Some(internal) = &obj_data.internal {
             if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
                 let data = gen_data.borrow();
-                let is_valid = !matches!(data.state, GeneratorState::Finished)
-                    && data.current_val.is_some();
+                let is_valid =
+                    !matches!(data.state, GeneratorState::Finished) && data.current_val.is_some();
                 return Ok(vm.arena.alloc(Val::Bool(is_valid)));
             }
         }
@@ -386,7 +386,10 @@ pub fn unit_enum_cases(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> 
 
     let mut array = crate::core::value::ArrayData::new();
     for (idx, case_def) in class_def.enum_cases.iter().enumerate() {
-        array.insert(crate::core::value::ArrayKey::Int(idx as i64), case_def.handle);
+        array.insert(
+            crate::core::value::ArrayKey::Int(idx as i64),
+            case_def.handle,
+        );
     }
 
     Ok(vm.arena.alloc(Val::Array(array.into())))
@@ -419,9 +422,9 @@ fn resolve_backed_enum_case(
         .classes
         .get(&class_sym)
         .ok_or("BackedEnum::from(): Enum class not found")?;
-    let backed_type = class_def.enum_backed_type.ok_or(
-        "BackedEnum::from() called on non-backed enum".to_string(),
-    )?;
+    let backed_type = class_def
+        .enum_backed_type
+        .ok_or("BackedEnum::from() called on non-backed enum".to_string())?;
 
     if args.len() != 1 {
         return Err("BackedEnum::from() expects exactly 1 argument".into());

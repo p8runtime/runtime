@@ -135,7 +135,8 @@ pub fn php_fopen(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         std::str::from_utf8(&mode_bytes).map_err(|_| "Invalid mode encoding".to_string())?;
 
     let path_str = String::from_utf8_lossy(&path_bytes);
-    if path_str.eq_ignore_ascii_case("php://memory") || path_str.eq_ignore_ascii_case("php://temp") {
+    if path_str.eq_ignore_ascii_case("php://memory") || path_str.eq_ignore_ascii_case("php://temp")
+    {
         let resource = MemoryHandle {
             cursor: RefCell::new(Cursor::new(Vec::new())),
             mode: mode_str.to_string(),
@@ -729,6 +730,13 @@ pub fn php_scandir(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 /// sys_get_temp_dir() - Get directory path used for temporary files
 /// Reference: $PHP_SRC_PATH/ext/standard/file.c - PHP_FUNCTION(sys_get_temp_dir)
 pub fn php_sys_get_temp_dir(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return Ok(vm
+            .arena
+            .alloc(Val::String(Rc::new(b"/tmp".to_vec()))));
+    }
+
     let temp_dir = std::env::temp_dir();
 
     #[cfg(unix)]
@@ -1366,7 +1374,11 @@ pub fn php_stream_get_contents(vm: &mut VM, args: &[Handle]) -> Result<Handle, S
 
     let resource_rc = match &vm.arena.get(args[0]).value {
         Val::Resource(rc) => rc.clone(),
-        _ => return Err("stream_get_contents(): supplied argument is not a valid stream resource".into()),
+        _ => {
+            return Err(
+                "stream_get_contents(): supplied argument is not a valid stream resource".into(),
+            );
+        }
     };
 
     let read_all = |reader: &mut dyn Read| -> Result<Vec<u8>, String> {
@@ -1387,7 +1399,9 @@ pub fn php_stream_get_contents(vm: &mut VM, args: &[Handle]) -> Result<Handle, S
     if let Some(fh) = resource_rc.downcast_ref::<FileHandle>() {
         if let Some(off) = offset {
             if off < 0 {
-                return Err("stream_get_contents(): Offset must be greater than or equal to 0".into());
+                return Err(
+                    "stream_get_contents(): Offset must be greater than or equal to 0".into(),
+                );
             }
             fh.file
                 .borrow_mut()
@@ -1405,7 +1419,9 @@ pub fn php_stream_get_contents(vm: &mut VM, args: &[Handle]) -> Result<Handle, S
     if let Some(mh) = resource_rc.downcast_ref::<MemoryHandle>() {
         if let Some(off) = offset {
             if off < 0 {
-                return Err("stream_get_contents(): Offset must be greater than or equal to 0".into());
+                return Err(
+                    "stream_get_contents(): Offset must be greater than or equal to 0".into(),
+                );
             }
             mh.cursor
                 .borrow_mut()

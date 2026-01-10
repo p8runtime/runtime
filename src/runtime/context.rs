@@ -507,11 +507,11 @@ impl RequestContext {
     /// - Error reporting levels (E_ERROR, E_WARNING, etc.)
     fn register_builtin_constants(&mut self) {
         // PHP version constants
-        const PHP_VERSION_STR: &str = "8.2.0";
-        const PHP_VERSION_ID_VALUE: i64 = 80200;
+        const PHP_VERSION_STR: &str = "8.5.1";
+        const PHP_VERSION_ID_VALUE: i64 = 80501;
         const PHP_MAJOR: i64 = 8;
-        const PHP_MINOR: i64 = 2;
-        const PHP_RELEASE: i64 = 0;
+        const PHP_MINOR: i64 = 5;
+        const PHP_RELEASE: i64 = 1;
 
         self.insert_builtin_constant(
             b"PHP_VERSION",

@@ -4,7 +4,7 @@ require_once __DIR__ . '/../php_modules/json.php';
 
 use function json\{ encode, decode, last_error, last_error_msg };
 
-$data = ["name" => "Gild", "count" => 3];
+$data = ["name" => "php-rs", "count" => 3];
 $json = encode($data);
 $decoded = decode($json, true);
 

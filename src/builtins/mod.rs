@@ -18,9 +18,9 @@ pub mod mysqli;
 pub mod openssl;
 pub mod output_control;
 pub mod pcre;
-pub mod reflection;
 #[cfg(feature = "pdo")]
 pub mod pdo;
+pub mod reflection;
 pub mod spl;
 pub mod string;
 pub mod url;

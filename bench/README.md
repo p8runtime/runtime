@@ -1,6 +1,6 @@
-# Gild Benchmark (Local)
+# php-router Benchmark (Local)
 
-This benchmark compares the Gild router against containerized nginx+php-fpm and apache+php-fpm.
+This benchmark compares the php-router against containerized nginx+php-fpm and apache+php-fpm.
 
 ## Bench Script
 
@@ -12,21 +12,21 @@ Example:
 http://127.0.0.1:8541/bench.php?ms=8
 ```
 
-## 1) Gild Router
+## 1) php-router
 
 Build:
 
 ```
-cargo build --release --features router --bin php --bin gild-router
+cargo build --release --features router --bin php --bin php-router
 ```
 
 Run:
 
 ```
-GILD_NATIVE_BIN=target/release/php GILD_DOC_ROOT=bench target/release/gild-router
+PHP_NATIVE_BIN=target/release/php PHP_ROUTER_DOC_ROOT=bench target/release/php-router
 ```
 
-Gild listens on `http://127.0.0.1:8541`.
+php-router listens on `http://127.0.0.1:8541`.
 
 ## 2) Docker baselines (nginx + apache)
 
@@ -45,7 +45,7 @@ Run the harness (starts containers automatically):
 
 Config options:
 
-- `RUNTIMES=gild,nginx,apache`
+- `RUNTIMES=php-router,nginx,apache`
 - `DURATION=10`
 - `CONCURRENCY=50`
 - `WORK_MS=8`
@@ -54,12 +54,12 @@ Config options:
 Example:
 
 ```
-RUNTIMES=gild,nginx DURATION=15 CONCURRENCY=200 WORK_MS=8 ./bench/http-perf.sh
+RUNTIMES=php-router,nginx DURATION=15 CONCURRENCY=200 WORK_MS=8 ./bench/http-perf.sh
 ```
 
 ## Notes
 
 - Requires Docker for nginx/apache baselines.
-- Gild router logs: `bench/gild-router.log`.
+- php-router logs: `bench/php-router.log`.
 - Extension scan helper: `bench/scan-framework-extensions.py` (regenerates `EXTENSIONS_FRAMEWORKS.md`).
 - Packagist scan helper: `bench/scan-packagist-extensions.py` (regenerates `EXTENSIONS_PACKAGES.md`).

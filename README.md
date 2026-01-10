@@ -11,7 +11,7 @@ A PHP interpreter written in Rust. This project is currently in an experimental 
 
 ## Limitations
 
-- Fibers are not supported. The Gild runtime targets V8 and does not pause execution, so `Fiber::*` APIs are intentionally unavailable.
+- Fibers are not supported. The php-rs runtime targets V8 and does not pause execution, so `Fiber::*` APIs are intentionally unavailable.
 - Magic constants are not supported yet.
 
 ## Getting Started
@@ -62,7 +62,7 @@ Run the Rust test suite:
 cargo test
 ```
 
-Legacy integration tests (`*.rs` files) now live under `test-old/`; the new `tests/` directory keeps the Bun-driven PHP fixtures and helpers.
+Legacy integration tests (`*.rs` files) now live under `test-old/`; the new `tests/php/` directory keeps the Bun-driven PHP fixtures and helpers.
 
 ## License
 

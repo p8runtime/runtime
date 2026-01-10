@@ -4,12 +4,12 @@ use crate::runtime::mb::convert::convert_bytes;
 use crate::vm::engine::VM;
 use crc32fast::Hasher;
 use digest::Digest;
-use md5::Md5;
-use sha1::Sha1;
 use libc;
+use md5::Md5;
 use regex::Regex;
 use rphonetic::{Encoder, Metaphone};
 use rust_decimal::{Decimal, RoundingStrategy};
+use sha1::Sha1;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
@@ -1417,11 +1417,37 @@ pub fn php_str_shuffle(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("str_shuffle() expects exactly 1 parameter".into());
     }
-    use rand::seq::SliceRandom;
     let mut s = vm.value_to_string(args[0])?;
-    let mut rng = rand::thread_rng();
-    s.shuffle(&mut rng);
-    Ok(vm.arena.alloc(Val::String(s.into())))
+    if s.len() <= 1 {
+        return Ok(vm.arena.alloc(Val::String(s.into())));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rand::seq::SliceRandom;
+        let mut rng = rand::thread_rng();
+        s.shuffle(&mut rng);
+        return Ok(vm.arena.alloc(Val::String(s.into())));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Simple xorshift PRNG for wasm builds to avoid JS-bound RNGs.
+        let mut seed = 0x9E3779B97F4A7C15u64 ^ s.len() as u64;
+        let mut next_u32 = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed & 0xFFFF_FFFF) as u32
+        };
+        let mut i = s.len();
+        while i > 1 {
+            i -= 1;
+            let j = (next_u32() as usize) % (i + 1);
+            s.swap(i, j);
+        }
+        return Ok(vm.arena.alloc(Val::String(s.into())));
+    }
 }
 
 pub fn php_str_split(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -3641,12 +3667,7 @@ pub fn php_sscanf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
                         specs.push(ScanSpec::Char);
                     }
                 }
-                _ => {
-                    return Err(format!(
-                        "sscanf(): Unsupported format specifier: %{}",
-                        next
-                    ))
-                }
+                _ => return Err(format!("sscanf(): Unsupported format specifier: %{}", next)),
             }
         } else {
             regex.push_str(&regex::escape(&ch.to_string()));
@@ -3662,14 +3683,9 @@ pub fn php_sscanf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
     let mut result = ArrayData::new();
     for (idx, spec) in specs.iter().enumerate() {
-        let value = caps
-            .get(idx + 1)
-            .map(|m| m.as_str())
-            .unwrap_or("");
+        let value = caps.get(idx + 1).map(|m| m.as_str()).unwrap_or("");
         let handle = match spec {
-            ScanSpec::Int => vm
-                .arena
-                .alloc(Val::Int(value.parse::<i64>().unwrap_or(0))),
+            ScanSpec::Int => vm.arena.alloc(Val::Int(value.parse::<i64>().unwrap_or(0))),
             ScanSpec::UInt => vm
                 .arena
                 .alloc(Val::Int(value.parse::<u64>().unwrap_or(0) as i64)),
@@ -3685,9 +3701,9 @@ pub fn php_sscanf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             ScanSpec::Float => vm
                 .arena
                 .alloc(Val::Float(value.parse::<f64>().unwrap_or(0.0))),
-            ScanSpec::String | ScanSpec::Char => {
-                vm.arena.alloc(Val::String(value.as_bytes().to_vec().into()))
-            }
+            ScanSpec::String | ScanSpec::Char => vm
+                .arena
+                .alloc(Val::String(value.as_bytes().to_vec().into())),
         };
         result.insert(ArrayKey::Int(idx as i64), handle);
     }
@@ -4384,66 +4400,74 @@ pub fn php_setlocale(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("setlocale() expects at least 2 parameters".into());
     }
 
-    let category = vm.check_builtin_param_int(args[0], 1, "setlocale")? as libc::c_int;
-    let mut locales = Vec::new();
+    #[cfg(target_arch = "wasm32")]
+    {
+        return Ok(vm.arena.alloc(Val::String(Rc::new(b"C".to_vec()))));
+    }
 
-    if args.len() == 2 {
-        match &vm.arena.get(args[1]).value {
-            Val::Int(i) if *i == 0 => {
-                let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
-                if ptr.is_null() {
-                    return Ok(vm.arena.alloc(Val::Bool(false)));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let category = vm.check_builtin_param_int(args[0], 1, "setlocale")? as libc::c_int;
+        let mut locales = Vec::new();
+
+        if args.len() == 2 {
+            match &vm.arena.get(args[1]).value {
+                Val::Int(i) if *i == 0 => {
+                    let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
+                    if ptr.is_null() {
+                        return Ok(vm.arena.alloc(Val::Bool(false)));
+                    }
+                    let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+                    return Ok(vm.arena.alloc(Val::String(bytes.into())));
                 }
-                let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
-                return Ok(vm.arena.alloc(Val::String(bytes.into())));
-            }
-            Val::Null => {
-                let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
-                if ptr.is_null() {
-                    return Ok(vm.arena.alloc(Val::Bool(false)));
+                Val::Null => {
+                    let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
+                    if ptr.is_null() {
+                        return Ok(vm.arena.alloc(Val::Bool(false)));
+                    }
+                    let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+                    return Ok(vm.arena.alloc(Val::String(bytes.into())));
                 }
-                let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
-                return Ok(vm.arena.alloc(Val::String(bytes.into())));
-            }
-            Val::Array(arr) => {
-                let entries: Vec<_> = arr.map.values().copied().collect();
-                for entry in entries {
-                    locales.push(vm.value_to_string(entry)?);
+                Val::Array(arr) => {
+                    let entries: Vec<_> = arr.map.values().copied().collect();
+                    for entry in entries {
+                        locales.push(vm.value_to_string(entry)?);
+                    }
+                }
+                _ => {
+                    let locale = vm.check_builtin_param_string(args[1], 2, "setlocale")?;
+                    locales.push(locale);
                 }
             }
-            _ => {
-                let locale = vm.check_builtin_param_string(args[1], 2, "setlocale")?;
+        } else {
+            for (idx, handle) in args[1..].iter().enumerate() {
+                let locale = vm.check_builtin_param_string(*handle, idx + 2, "setlocale")?;
                 locales.push(locale);
             }
         }
-    } else {
-        for (idx, handle) in args[1..].iter().enumerate() {
-            let locale = vm.check_builtin_param_string(*handle, idx + 2, "setlocale")?;
-            locales.push(locale);
+
+        if locales.is_empty() {
+            return Ok(vm.arena.alloc(Val::Bool(false)));
         }
-    }
 
-    if locales.is_empty() {
-        return Ok(vm.arena.alloc(Val::Bool(false)));
-    }
-
-    let mut result_ptr = std::ptr::null_mut();
-    for locale in locales {
-        let c_locale = CString::new(locale)
-            .map_err(|_| "setlocale(): Locale string contains null byte".to_string())?;
-        let ptr = unsafe { libc::setlocale(category, c_locale.as_ptr()) };
-        if !ptr.is_null() {
-            result_ptr = ptr;
-            break;
+        let mut result_ptr = std::ptr::null_mut();
+        for locale in locales {
+            let c_locale = CString::new(locale)
+                .map_err(|_| "setlocale(): Locale string contains null byte".to_string())?;
+            let ptr = unsafe { libc::setlocale(category, c_locale.as_ptr()) };
+            if !ptr.is_null() {
+                result_ptr = ptr;
+                break;
+            }
         }
-    }
 
-    if result_ptr.is_null() {
-        return Ok(vm.arena.alloc(Val::Bool(false)));
-    }
+        if result_ptr.is_null() {
+            return Ok(vm.arena.alloc(Val::Bool(false)));
+        }
 
-    let bytes = unsafe { CStr::from_ptr(result_ptr) }.to_bytes().to_vec();
-    Ok(vm.arena.alloc(Val::String(bytes.into())))
+        let bytes = unsafe { CStr::from_ptr(result_ptr) }.to_bytes().to_vec();
+        Ok(vm.arena.alloc(Val::String(bytes.into())))
+    }
 }
 
 pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -4451,153 +4475,204 @@ pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("localeconv() expects exactly 0 parameters".into());
     }
 
-    let lconv_ptr = unsafe { libc::localeconv() };
-    if lconv_ptr.is_null() {
-        return Ok(vm.arena.alloc(Val::Array(Rc::new(ArrayData::new()))));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut data = ArrayData::new();
+        let handle = vm.arena.alloc(Val::String(Rc::new(b".".to_vec())));
+        data.insert(ArrayKey::Str(Rc::new(b"decimal_point".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"thousands_sep".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"int_curr_symbol".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"currency_symbol".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"mon_decimal_point".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"mon_thousands_sep".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"positive_sign".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"negative_sign".to_vec())), handle);
+
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"int_frac_digits".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"frac_digits".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"p_cs_precedes".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"p_sep_by_space".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"n_cs_precedes".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"n_sep_by_space".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"p_sign_posn".to_vec())), handle);
+        let handle = vm.arena.alloc(Val::Int(127));
+        data.insert(ArrayKey::Str(Rc::new(b"n_sign_posn".to_vec())), handle);
+
+        let empty_group = vm.arena.alloc(Val::Array(Rc::new(ArrayData::new())));
+        data.insert(ArrayKey::Str(Rc::new(b"grouping".to_vec())), empty_group);
+        let empty_group = vm.arena.alloc(Val::Array(Rc::new(ArrayData::new())));
+        data.insert(
+            ArrayKey::Str(Rc::new(b"mon_grouping".to_vec())),
+            empty_group,
+        );
+
+        return Ok(vm.arena.alloc(Val::Array(Rc::new(data))));
     }
 
-    let lconv = unsafe { &*lconv_ptr };
-    let mut data = ArrayData::new();
-
-    fn c_str_to_bytes(ptr: *const libc::c_char) -> Vec<u8> {
-        if ptr.is_null() {
-            Vec::new()
-        } else {
-            unsafe { CStr::from_ptr(ptr).to_bytes().to_vec() }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let lconv_ptr = unsafe { libc::localeconv() };
+        if lconv_ptr.is_null() {
+            return Ok(vm.arena.alloc(Val::Array(Rc::new(ArrayData::new()))));
         }
-    }
 
-    fn lconv_char_to_int(value: libc::c_char) -> i64 {
-        value as u8 as i64
-    }
+        let lconv = unsafe { &*lconv_ptr };
+        let mut data = ArrayData::new();
 
-    fn insert_str(vm: &mut VM, data: &mut ArrayData, key: &str, val: Vec<u8>) {
-        let handle = vm.arena.alloc(Val::String(val.into()));
-        data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
-    }
-
-    fn insert_int(vm: &mut VM, data: &mut ArrayData, key: &str, val: i64) {
-        let handle = vm.arena.alloc(Val::Int(val));
-        data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
-    }
-
-    fn insert_grouping(vm: &mut VM, data: &mut ArrayData, key: &str, ptr: *const libc::c_char) {
-        let bytes = c_str_to_bytes(ptr);
-        let mut grouping = ArrayData::new();
-        let mut idx = 0i64;
-        for byte in bytes {
-            let val = byte as i64;
-            if val == 0 || val == 127 {
-                break;
+        fn c_str_to_bytes(ptr: *const libc::c_char) -> Vec<u8> {
+            if ptr.is_null() {
+                Vec::new()
+            } else {
+                unsafe { CStr::from_ptr(ptr).to_bytes().to_vec() }
             }
-            let handle = vm.arena.alloc(Val::Int(val));
-            grouping.insert(ArrayKey::Int(idx), handle);
-            idx += 1;
         }
-        let handle = vm.arena.alloc(Val::Array(Rc::new(grouping)));
-        data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
+
+        fn lconv_char_to_int(value: libc::c_char) -> i64 {
+            value as u8 as i64
+        }
+
+        fn insert_str(vm: &mut VM, data: &mut ArrayData, key: &str, val: Vec<u8>) {
+            let handle = vm.arena.alloc(Val::String(val.into()));
+            data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
+        }
+
+        fn insert_int(vm: &mut VM, data: &mut ArrayData, key: &str, val: i64) {
+            let handle = vm.arena.alloc(Val::Int(val));
+            data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
+        }
+
+        fn insert_grouping(vm: &mut VM, data: &mut ArrayData, key: &str, ptr: *const libc::c_char) {
+            let bytes = c_str_to_bytes(ptr);
+            let mut grouping = ArrayData::new();
+            let mut idx = 0i64;
+            for byte in bytes {
+                let val = byte as i64;
+                if val == 0 || val == 127 {
+                    break;
+                }
+                let handle = vm.arena.alloc(Val::Int(val));
+                grouping.insert(ArrayKey::Int(idx), handle);
+                idx += 1;
+            }
+            let handle = vm.arena.alloc(Val::Array(Rc::new(grouping)));
+            data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
+        }
+
+        insert_str(
+            vm,
+            &mut data,
+            "decimal_point",
+            c_str_to_bytes(lconv.decimal_point),
+        );
+        insert_str(
+            vm,
+            &mut data,
+            "thousands_sep",
+            c_str_to_bytes(lconv.thousands_sep),
+        );
+        insert_str(
+            vm,
+            &mut data,
+            "int_curr_symbol",
+            c_str_to_bytes(lconv.int_curr_symbol),
+        );
+        insert_str(
+            vm,
+            &mut data,
+            "currency_symbol",
+            c_str_to_bytes(lconv.currency_symbol),
+        );
+        insert_str(
+            vm,
+            &mut data,
+            "mon_decimal_point",
+            c_str_to_bytes(lconv.mon_decimal_point),
+        );
+        insert_str(
+            vm,
+            &mut data,
+            "mon_thousands_sep",
+            c_str_to_bytes(lconv.mon_thousands_sep),
+        );
+        insert_str(
+            vm,
+            &mut data,
+            "positive_sign",
+            c_str_to_bytes(lconv.positive_sign),
+        );
+        insert_str(
+            vm,
+            &mut data,
+            "negative_sign",
+            c_str_to_bytes(lconv.negative_sign),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "int_frac_digits",
+            lconv_char_to_int(lconv.int_frac_digits),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "frac_digits",
+            lconv_char_to_int(lconv.frac_digits),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "p_cs_precedes",
+            lconv_char_to_int(lconv.p_cs_precedes),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "p_sep_by_space",
+            lconv_char_to_int(lconv.p_sep_by_space),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "n_cs_precedes",
+            lconv_char_to_int(lconv.n_cs_precedes),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "n_sep_by_space",
+            lconv_char_to_int(lconv.n_sep_by_space),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "p_sign_posn",
+            lconv_char_to_int(lconv.p_sign_posn),
+        );
+        insert_int(
+            vm,
+            &mut data,
+            "n_sign_posn",
+            lconv_char_to_int(lconv.n_sign_posn),
+        );
+        insert_grouping(vm, &mut data, "grouping", lconv.grouping);
+        insert_grouping(vm, &mut data, "mon_grouping", lconv.mon_grouping);
+
+        Ok(vm.arena.alloc(Val::Array(Rc::new(data))))
     }
-
-    insert_str(
-        vm,
-        &mut data,
-        "decimal_point",
-        c_str_to_bytes(lconv.decimal_point),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "thousands_sep",
-        c_str_to_bytes(lconv.thousands_sep),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "int_curr_symbol",
-        c_str_to_bytes(lconv.int_curr_symbol),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "currency_symbol",
-        c_str_to_bytes(lconv.currency_symbol),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "mon_decimal_point",
-        c_str_to_bytes(lconv.mon_decimal_point),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "mon_thousands_sep",
-        c_str_to_bytes(lconv.mon_thousands_sep),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "positive_sign",
-        c_str_to_bytes(lconv.positive_sign),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "negative_sign",
-        c_str_to_bytes(lconv.negative_sign),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "int_frac_digits",
-        lconv_char_to_int(lconv.int_frac_digits),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "frac_digits",
-        lconv_char_to_int(lconv.frac_digits),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "p_cs_precedes",
-        lconv_char_to_int(lconv.p_cs_precedes),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "p_sep_by_space",
-        lconv_char_to_int(lconv.p_sep_by_space),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "n_cs_precedes",
-        lconv_char_to_int(lconv.n_cs_precedes),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "n_sep_by_space",
-        lconv_char_to_int(lconv.n_sep_by_space),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "p_sign_posn",
-        lconv_char_to_int(lconv.p_sign_posn),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "n_sign_posn",
-        lconv_char_to_int(lconv.n_sign_posn),
-    );
-    insert_grouping(vm, &mut data, "grouping", lconv.grouping);
-    insert_grouping(vm, &mut data, "mon_grouping", lconv.mon_grouping);
-
-    Ok(vm.arena.alloc(Val::Array(Rc::new(data))))
 }
 
 pub fn php_nl_langinfo(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -4605,19 +4680,33 @@ pub fn php_nl_langinfo(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("nl_langinfo() expects exactly 1 parameter".into());
     }
 
-    let item = vm.check_builtin_param_int(args[0], 1, "nl_langinfo")? as libc::c_int;
-    #[cfg(unix)]
+    #[cfg(target_arch = "wasm32")]
     {
-        let ptr = unsafe { libc::nl_langinfo(item) };
-        if ptr.is_null() {
-            return Ok(vm.arena.alloc(Val::Bool(false)));
+        let item = vm.check_builtin_param_int(args[0], 1, "nl_langinfo")? as i64;
+        if item == 0 {
+            return Ok(vm
+                .arena
+                .alloc(Val::String(Rc::new(b"UTF-8".to_vec()))));
         }
-        let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
-        return Ok(vm.arena.alloc(Val::String(bytes.into())));
+        return Ok(vm.arena.alloc(Val::Bool(false)));
     }
-    #[cfg(not(unix))]
+
+    #[cfg(not(target_arch = "wasm32"))]
     {
-        Ok(vm.arena.alloc(Val::Bool(false)))
+        let item = vm.check_builtin_param_int(args[0], 1, "nl_langinfo")? as libc::c_int;
+        #[cfg(unix)]
+        {
+            let ptr = unsafe { libc::nl_langinfo(item) };
+            if ptr.is_null() {
+                return Ok(vm.arena.alloc(Val::Bool(false)));
+            }
+            let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+            return Ok(vm.arena.alloc(Val::String(bytes.into())));
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(vm.arena.alloc(Val::Bool(false)))
+        }
     }
 }
 
@@ -4629,11 +4718,25 @@ pub fn php_strcoll(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let a = vm.check_builtin_param_string(args[0], 1, "strcoll")?;
     let b = vm.check_builtin_param_string(args[1], 2, "strcoll")?;
 
-    let a_c = CString::new(a).map_err(|_| "strcoll(): Invalid string".to_string())?;
-    let b_c = CString::new(b).map_err(|_| "strcoll(): Invalid string".to_string())?;
-    let cmp = unsafe { libc::strcoll(a_c.as_ptr(), b_c.as_ptr()) };
+    #[cfg(target_arch = "wasm32")]
+    {
+        let cmp = a.cmp(&b);
+        let out = match cmp {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        };
+        return Ok(vm.arena.alloc(Val::Int(out)));
+    }
 
-    Ok(vm.arena.alloc(Val::Int(cmp as i64)))
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let a_c = CString::new(a).map_err(|_| "strcoll(): Invalid string".to_string())?;
+        let b_c = CString::new(b).map_err(|_| "strcoll(): Invalid string".to_string())?;
+        let cmp = unsafe { libc::strcoll(a_c.as_ptr(), b_c.as_ptr()) };
+
+        Ok(vm.arena.alloc(Val::Int(cmp as i64)))
+    }
 }
 
 pub fn php_number_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {

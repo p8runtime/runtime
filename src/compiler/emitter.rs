@@ -266,7 +266,8 @@ impl<'src> Emitter<'src> {
                                 param_type,
                                 is_variadic: info.variadic,
                                 default_value,
-                                attributes: method_emitter.build_attribute_instances(info.attributes),
+                                attributes: method_emitter
+                                    .build_attribute_instances(info.attributes),
                             });
 
                             if let Some(default_expr) = info.default {
@@ -312,11 +313,9 @@ impl<'src> Emitter<'src> {
                     ));
 
                     for attr_idx in self.build_attribute_constants(attributes) {
-                        self.chunk.code.push(OpCode::AddMethodAttribute(
-                            class_sym,
-                            method_sym,
-                            attr_idx,
-                        ));
+                        self.chunk
+                            .code
+                            .push(OpCode::AddMethodAttribute(class_sym, method_sym, attr_idx));
                     }
                 }
                 ClassMember::Property {
@@ -380,10 +379,7 @@ impl<'src> Emitter<'src> {
 
                         for &attr_idx in &attr_indices {
                             self.chunk.code.push(OpCode::AddPropertyAttribute(
-                                class_sym,
-                                prop_sym,
-                                attr_idx,
-                                is_static,
+                                class_sym, prop_sym, attr_idx, is_static,
                             ));
                         }
                     }
@@ -413,9 +409,7 @@ impl<'src> Emitter<'src> {
 
                         for &attr_idx in &attr_indices {
                             self.chunk.code.push(OpCode::AddClassConstAttribute(
-                                class_sym,
-                                const_sym,
-                                attr_idx,
+                                class_sym, const_sym, attr_idx,
                             ));
                         }
                     }
@@ -430,12 +424,9 @@ impl<'src> Emitter<'src> {
                         (0u16, false)
                     };
 
-                    self.chunk.code.push(OpCode::DefEnumCase(
-                        class_sym,
-                        case_sym,
-                        val_idx,
-                        has_value,
-                    ));
+                    self.chunk
+                        .code
+                        .push(OpCode::DefEnumCase(class_sym, case_sym, val_idx, has_value));
                 }
                 ClassMember::TraitUse { traits, .. } => {
                     for trait_name in *traits {
@@ -464,7 +455,10 @@ impl<'src> Emitter<'src> {
                     args.push(AttributeArg { name, value: val });
                 }
 
-                let instance = AttributeInstance { name: attr_sym, args };
+                let instance = AttributeInstance {
+                    name: attr_sym,
+                    args,
+                };
                 let const_idx = self.add_constant(Val::Resource(Rc::new(instance)));
                 self.chunk
                     .code
@@ -489,7 +483,10 @@ impl<'src> Emitter<'src> {
                     args.push(AttributeArg { name, value: val });
                 }
 
-                let instance = AttributeInstance { name: attr_sym, args };
+                let instance = AttributeInstance {
+                    name: attr_sym,
+                    args,
+                };
                 let const_idx = self.add_constant(Val::Resource(Rc::new(instance)));
                 indices.push(const_idx as u16);
             }
@@ -895,14 +892,14 @@ impl<'src> Emitter<'src> {
                 let func_sym = self.interner.intern(func_name_str);
 
                 // 1. Collect param info to avoid borrow issues
-                    struct ParamInfo<'a> {
-                        name_span: crate::parser::span::Span,
-                        by_ref: bool,
-                        ty: Option<&'a Type<'a>>,
-                        default: Option<&'a Expr<'a>>,
-                        variadic: bool,
-                        attributes: &'a [AttributeGroup<'a>],
-                    }
+                struct ParamInfo<'a> {
+                    name_span: crate::parser::span::Span,
+                    by_ref: bool,
+                    ty: Option<&'a Type<'a>>,
+                    default: Option<&'a Expr<'a>>,
+                    variadic: bool,
+                    attributes: &'a [AttributeGroup<'a>],
+                }
 
                 let mut param_infos = Vec::new();
                 for param in *params {
@@ -3566,7 +3563,9 @@ impl<'src> Emitter<'src> {
                     Val::ConstArray(Rc::new(const_array))
                 }
             }
-            Expr::ClassConstFetch { class, constant, .. } => {
+            Expr::ClassConstFetch {
+                class, constant, ..
+            } => {
                 let class_name = match class {
                     Expr::Variable { name, .. } => Some(self.get_text(*name)),
                     _ => None,
@@ -3597,20 +3596,20 @@ impl<'src> Emitter<'src> {
 
                 Val::Null
             }
-            Expr::Binary { left, op, right, .. } => {
-                match op {
-                    BinaryOp::BitOr => {
-                        let l = self.eval_constant_expr(left);
-                        let r = self.eval_constant_expr(right);
-                        if let (Val::Int(li), Val::Int(ri)) = (l, r) {
-                            Val::Int(li | ri)
-                        } else {
-                            Val::Null
-                        }
+            Expr::Binary {
+                left, op, right, ..
+            } => match op {
+                BinaryOp::BitOr => {
+                    let l = self.eval_constant_expr(left);
+                    let r = self.eval_constant_expr(right);
+                    if let (Val::Int(li), Val::Int(ri)) = (l, r) {
+                        Val::Int(li | ri)
+                    } else {
+                        Val::Null
                     }
-                    _ => Val::Null,
                 }
-            }
+                _ => Val::Null,
+            },
             _ => Val::Null,
         }
     }
