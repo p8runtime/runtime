@@ -575,3 +575,78 @@ fn test_strtotime_invalid_dayofyear() {
     let (_, output) = run_code_capture_output(code).unwrap();
     assert!(output.contains("bool(false)"));
 }
+
+// ============================================================================
+// Test cases from PHP source: ext/date/tests/strtotime-relative.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_php_source_relative_seconds() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        
+        // Relative seconds from now
+        $base = strtotime('2008-02-28 12:00:00');
+        echo date('Y-m-d H:i:s', strtotime('+86400 seconds', $base)) . \"\\n\";
+        echo date('Y-m-d H:i:s', strtotime('-86400 seconds', $base)) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "2008-02-29 12:00:00"); // +1 day
+    assert_eq!(lines[1], "2008-02-27 12:00:00"); // -1 day
+}
+
+#[test]
+fn test_strtotime_php_source_compact_formats() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        
+        // Compact time formats
+        echo date('H:i:s', strtotime('t0222')) . \"\\n\";
+        echo date('H:i:s', strtotime('022233')) . \"\\n\";
+        echo date('H:i:s', strtotime('153045')) . \"\\n\";
+        
+        // Compact date formats
+        echo date('Y-m-d', strtotime('2006167')) . \"\\n\";  // YYYYDDD
+        echo date('Y-m-d', strtotime('20060616')) . \"\\n\"; // YYYYMMDD
+        echo date('Y-m-d', strtotime('2006-167')) . \"\\n\"; // YYYY-DDD
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "02:22:00"); // t0222
+    assert_eq!(lines[1], "02:22:33"); // 022233
+    assert_eq!(lines[2], "15:30:45"); // 153045
+    assert_eq!(lines[3], "2006-06-16"); // Day 167 of 2006
+    assert_eq!(lines[4], "2006-06-16"); // 2006-06-16
+    assert_eq!(lines[5], "2006-06-16"); // 2006-167
+}
+
+#[test]
+fn test_strtotime_php_source_empty_and_invalid() {
+    let code = "<?php
+        // Empty and whitespace strings should return false
+        var_dump(strtotime(''));
+        var_dump(strtotime(' \\t\\r\\n'));
+        var_dump(strtotime('invalid'));
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    // All should be false
+    assert!(output.matches("bool(false)").count() >= 3);
+}
+
+#[test]
+fn test_strtotime_mysql_format() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        
+        // MySQL timestamp format: YYYYMMDDHHMMSS (14 digits)
+        echo date('Y-m-d H:i:s', strtotime('19970523091528')) . \"\\n\";
+        echo date('Y-m-d H:i:s', strtotime('20001231185859')) . \"\\n\";
+        echo date('Y-m-d H:i:s', strtotime('20260121143045')) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "1997-05-23 09:15:28");
+    assert_eq!(lines[1], "2000-12-31 18:58:59");
+    assert_eq!(lines[2], "2026-01-21 14:30:45");
+}

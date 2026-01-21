@@ -1577,7 +1577,7 @@ fn parse_strtotime(input: &str, base_timestamp: i64) -> Option<i64> {
     }
 
     // Absolute date/time formats
-    parse_absolute_datetime(&input)
+    parse_absolute_datetime(&input, &base_dt)
 }
 
 fn parse_special_keyword(input: &str, base_dt: &NaiveDateTime) -> Option<i64> {
@@ -1727,7 +1727,7 @@ fn parse_special_phrase(input: &str, base_dt: &NaiveDateTime) -> Option<i64> {
     None
 }
 
-fn parse_absolute_datetime(input: &str) -> Option<i64> {
+fn parse_absolute_datetime(input: &str, base_dt: &NaiveDateTime) -> Option<i64> {
     // Try various datetime formats
     
     // Strip optional 't' or 'T' prefix for time formats (gnunocolon, iso8601nocolon)
@@ -1745,7 +1745,7 @@ fn parse_absolute_datetime(input: &str) -> Option<i64> {
             time_input[2..4].parse::<u32>()
         ) {
             if hour < 24 && minute < 60 {
-                let today = Utc::now().date_naive();
+                let today = base_dt.date();
                 if let Some(time) = NaiveTime::from_hms_opt(hour, minute, 0) {
                     let dt = NaiveDateTime::new(today, time);
                     return Some(dt.and_utc().timestamp());
@@ -1763,7 +1763,7 @@ fn parse_absolute_datetime(input: &str) -> Option<i64> {
             time_input[4..6].parse::<u32>()
         ) {
             if hour < 24 && minute < 60 && second < 60 {
-                let today = Utc::now().date_naive();
+                let today = base_dt.date();
                 if let Some(time) = NaiveTime::from_hms_opt(hour, minute, second) {
                     let dt = NaiveDateTime::new(today, time);
                     return Some(dt.and_utc().timestamp());
@@ -1781,7 +1781,7 @@ fn parse_absolute_datetime(input: &str) -> Option<i64> {
                 input[2..4].parse::<u32>()
             ) {
                 if hour < 24 && minute < 60 {
-                    let today = Utc::now().date_naive();
+                    let today = base_dt.date();
                     if let Some(time) = NaiveTime::from_hms_opt(hour, minute, 0) {
                         let dt = NaiveDateTime::new(today, time);
                         return Some(dt.and_utc().timestamp());
@@ -1790,7 +1790,7 @@ fn parse_absolute_datetime(input: &str) -> Option<i64> {
                 // If HHMM validation fails (hour >= 24 or minute >= 60), try as year4
                 // This handles cases like '2560', '2461' which should be years
                 if let Ok(year) = input.parse::<i32>() {
-                    let today = Utc::now().date_naive();
+                    let today = base_dt.date();
                     let month = today.month();
                     let day = today.day();
                     if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
@@ -1808,7 +1808,7 @@ fn parse_absolute_datetime(input: &str) -> Option<i64> {
                 input[4..6].parse::<u32>()
             ) {
                 if hour < 24 && minute < 60 && second < 60 {
-                    let today = Utc::now().date_naive();
+                    let today = base_dt.date();
                     if let Some(time) = NaiveTime::from_hms_opt(hour, minute, second) {
                         let dt = NaiveDateTime::new(today, time);
                         return Some(dt.and_utc().timestamp());
@@ -1864,6 +1864,40 @@ fn parse_absolute_datetime(input: &str) -> Option<i64> {
                 }
             }
         }
+        
+        // MySQL format: YYYYMMDDHHMMSS (14 digits)
+        if input.len() == 14 && input.chars().all(|c| c.is_ascii_digit()) {
+            if let (Ok(year), Ok(month), Ok(day), Ok(hour), Ok(minute), Ok(second)) = (
+                input[..4].parse::<i32>(),
+                input[4..6].parse::<u32>(),
+                input[6..8].parse::<u32>(),
+                input[8..10].parse::<u32>(),
+                input[10..12].parse::<u32>(),
+                input[12..14].parse::<u32>()
+            ) {
+                if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+                    if let Some(time) = NaiveTime::from_hms_opt(hour, minute, second) {
+                        let dt = NaiveDateTime::new(date, time);
+                        return Some(dt.and_utc().timestamp());
+                    }
+                }
+            }
+        }
+    }
+    
+    // Time-only formats (HH:MM:SS, HH:MM) - apply to base date
+    // Try HH:MM:SS first
+    if let Ok(time) = NaiveTime::parse_from_str(input, "%H:%M:%S") {
+        let date = base_dt.date();
+        let dt = NaiveDateTime::new(date, time);
+        return Some(dt.and_utc().timestamp());
+    }
+    
+    // Try HH:MM
+    if let Ok(time) = NaiveTime::parse_from_str(input, "%H:%M") {
+        let date = base_dt.date();
+        let dt = NaiveDateTime::new(date, time);
+        return Some(dt.and_utc().timestamp());
     }
     
     // ISO 8601: 2024-01-15T14:30:00Z or 2024-01-15T14:30:00+00:00
