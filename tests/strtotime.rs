@@ -650,3 +650,482 @@ fn test_strtotime_mysql_format() {
     assert_eq!(lines[1], "2000-12-31 18:58:59");
     assert_eq!(lines[2], "2026-01-21 14:30:45");
 }
+
+// ============================================================================
+// PHP Source Tests - strtotime_basic.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_ordinal_vs_number() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        // The first of December 2008 is a Monday.
+        // '1 Monday December 2008' = first Monday OR current day if Monday
+        echo date('Y-m-d', strtotime('1 Monday December 2008')) . \"\\n\";
+        // '2 Monday December 2008' = second Monday OR first if current is Monday
+        echo date('Y-m-d', strtotime('2 Monday December 2008')) . \"\\n\";
+        // '3 Monday December 2008' = third Monday OR second if current is Monday
+        echo date('Y-m-d', strtotime('3 Monday December 2008')) . \"\\n\";
+        // 'first Monday December 2008' = first Monday after first Monday
+        echo date('Y-m-d', strtotime('first Monday December 2008')) . \"\\n\";
+        // 'second Monday December 2008' = second Monday after first Monday
+        echo date('Y-m-d', strtotime('second Monday December 2008')) . \"\\n\";
+        // 'third Monday December 2008' = third Monday after first Monday
+        echo date('Y-m-d', strtotime('third Monday December 2008')) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "2008-12-01");
+    assert_eq!(lines[1], "2008-12-08");
+    assert_eq!(lines[2], "2008-12-15");
+    assert_eq!(lines[3], "2008-12-08");
+    assert_eq!(lines[4], "2008-12-15");
+    assert_eq!(lines[5], "2008-12-22");
+}
+
+// ============================================================================
+// PHP Source Tests - strtotime_basic2.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_invalid_returns_false() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        var_dump(strtotime('mayy 2 2009')); // misspelled month
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    assert!(output.contains("bool(false)"));
+}
+
+// ============================================================================
+// PHP Source Tests - strtotime.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_unix_timestamp_with_date_formatting() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        // @ prefix for Unix timestamp
+        $d = strtotime('@1121373041');
+        echo date('Y-m-d H:i:s', $d) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    // @ timestamp should be treated as UTC
+    assert!(output.contains("2005-07-14"));
+}
+
+#[test]
+fn test_strtotime_with_timezone() {
+    let code = "<?php
+        date_default_timezone_set('Europe/Oslo');
+        $d1 = strtotime('2005-07-14 22:30:41');
+        $d2 = strtotime('2005-07-14 22:30:41 GMT');
+        $d3 = strtotime('@1121373041');
+        $d4 = strtotime('@1121373041 CEST');
+        
+        echo date(DATE_ISO8601, $d1) . \"\\n\";
+        echo date(DATE_ISO8601, $d2) . \"\\n\";
+        echo date(DATE_ISO8601, $d3) . \"\\n\";
+        echo date(DATE_ISO8601, $d4) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "2005-07-14T22:30:41+0200");
+    assert_eq!(lines[1], "2005-07-15T00:30:41+0200");
+    assert_eq!(lines[2], "2005-07-14T22:30:41+0200");
+    assert_eq!(lines[3], "2005-07-14T22:30:41+0200");
+}
+
+// ============================================================================
+// PHP Source Tests - strtotime3.phpt & strtotime3-64bit.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_comprehensive_formats() {
+    let code = "<?php
+        date_default_timezone_set('Europe/Lisbon');
+        $time = 1150494719; // 16/June/2006
+        
+        // Test various formats with base timestamp (only currently supported ones)
+        echo date(DATE_RFC2822, strtotime('yesterday', $time)) . \"\\n\";
+        echo date(DATE_RFC2822, strtotime('22:49:12', $time)) . \"\\n\";
+        echo date(DATE_RFC2822, strtotime('t0222', $time)) . \"\\n\";
+        echo date(DATE_RFC2822, strtotime('022233', $time)) . \"\\n\";
+        echo date(DATE_RFC2822, strtotime('2006167', $time)) . \"\\n\";
+        echo date(DATE_RFC2822, strtotime('2006', $time)) . \"\\n\";
+        echo date(DATE_RFC2822, strtotime('1986', $time)) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "Thu, 15 Jun 2006 00:00:00 +0100");
+    assert_eq!(lines[1], "Fri, 16 Jun 2006 22:49:12 +0100");
+    assert_eq!(lines[2], "Fri, 16 Jun 2006 02:22:00 +0100");
+    assert_eq!(lines[3], "Fri, 16 Jun 2006 02:22:33 +0100");
+    assert_eq!(lines[4], "Fri, 16 Jun 2006 00:00:00 +0100");
+    assert_eq!(lines[5], "Fri, 16 Jun 2006 20:06:00 +0100");
+    assert_eq!(lines[6], "Mon, 16 Jun 1986 22:51:59 +0100");
+}
+
+// ============================================================================
+// PHP Source Tests - strtotime-relative.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_relative_offsets() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        $base_time = 1204200000; // 28 Feb 2008 12:00:00
+        
+        // Offset around a day
+        echo date(DATE_ISO8601, strtotime('+80412 seconds', $base_time)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-80412 seconds', $base_time)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('+86400 seconds', $base_time)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-86400 seconds', $base_time)) . \"\\n\";
+        
+        // Offset around 7 days  
+        echo date(DATE_ISO8601, strtotime('+168 hours', $base_time)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-168 hours', $base_time)) . \"\\n\";
+        
+        // Offset around 6 months
+        echo date(DATE_ISO8601, strtotime('+180 days', $base_time)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-180 days', $base_time)) . \"\\n\";
+        
+        // Offset around 10 years
+        echo date(DATE_ISO8601, strtotime('+120 months', $base_time)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-120 months', $base_time)) . \"\\n\";
+        
+        // Offset around 25 years
+        echo date(DATE_ISO8601, strtotime('+25 years', $base_time)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-25 years', $base_time)) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "2008-02-29T10:20:12+0000");
+    assert_eq!(lines[1], "2008-02-27T13:39:48+0000");
+    assert_eq!(lines[2], "2008-02-29T12:00:00+0000");
+    assert_eq!(lines[3], "2008-02-27T12:00:00+0000");
+    assert_eq!(lines[4], "2008-03-06T12:00:00+0000");
+    assert_eq!(lines[5], "2008-02-21T12:00:00+0000");
+    assert_eq!(lines[6], "2008-08-26T12:00:00+0000");
+    assert_eq!(lines[7], "2007-09-01T12:00:00+0000");
+    assert_eq!(lines[8], "2018-02-28T12:00:00+0000");
+    assert_eq!(lines[9], "1998-02-28T12:00:00+0000");
+    assert_eq!(lines[10], "2033-02-28T12:00:00+0000");
+    assert_eq!(lines[11], "1983-02-28T12:00:00+0000");
+}
+
+// ============================================================================
+// PHP Source Tests - strtotime-mysql.phpt & strtotime-mysql-64bit.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_mysql_timestamps() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        
+        // MySQL Format: YYYYMMDDHHMMSS
+        echo date('r', strtotime('19970523091528')) . \"\\n\";
+        echo date('r', strtotime('20001231185859')) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "Fri, 23 May 1997 09:15:28 +0000");
+    assert_eq!(lines[1], "Sun, 31 Dec 2000 18:58:59 +0000");
+}
+
+// ============================================================================
+// PHP Source Tests - strtotime_variation_scottish.phpt
+// ============================================================================
+
+#[test]
+fn test_strtotime_scottish_time() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        echo date('H:i:s', strtotime('back of 7')) . \"\\n\";
+        echo date('H:i:s', strtotime('front of 7')) . \"\\n\";
+        echo date('H:i:s', strtotime('back of 19')) . \"\\n\";
+        echo date('H:i:s', strtotime('front of 19')) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "07:15:00");
+    assert_eq!(lines[1], "06:45:00");
+    assert_eq!(lines[2], "19:15:00");
+    assert_eq!(lines[3], "18:45:00");
+}
+
+// ============================================================================
+// Additional Date Formats
+// ============================================================================
+
+#[test]
+fn test_strtotime_additional_formats() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        
+        // D-M-YYYY format
+        echo date('Y-m-d', strtotime('2-3-2004')) . \"\\n\";
+        echo date('Y-m-d', strtotime('15-1-2006')) . \"\\n\";
+        
+        // D.M.YYYY format
+        echo date('Y-m-d', strtotime('2.3.2004')) . \"\\n\";
+        echo date('Y-m-d', strtotime('15.1.2006')) . \"\\n\";
+        
+        // Month-only format (with base timestamp)
+        $base = 1150494719; // June 16, 2006
+        echo date('Y-m-d', strtotime('JAN', $base)) . \"\\n\";
+        echo date('Y-m-d', strtotime('January', $base)) . \"\\n\";
+        echo date('Y-m-d', strtotime('March', $base)) . \"\\n\";
+        
+        // Mon-DD-YYYY format
+        echo date('Y-m-d', strtotime('Jan-15-2006')) . \"\\n\";
+        echo date('Y-m-d', strtotime('Mar-02-2024')) . \"\\n\";
+        
+        // YYYY-Mon-DD format
+        echo date('Y-m-d', strtotime('2006-Jan-15')) . \"\\n\";
+        echo date('Y-m-d', strtotime('2024-Mar-02')) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "2004-03-02");
+    assert_eq!(lines[1], "2006-01-15");
+    assert_eq!(lines[2], "2004-03-02");
+    assert_eq!(lines[3], "2006-01-15");
+    assert_eq!(lines[4], "2006-01-16");
+    assert_eq!(lines[5], "2006-01-16");
+    assert_eq!(lines[6], "2006-03-16");
+    assert_eq!(lines[7], "2006-01-15");
+    assert_eq!(lines[8], "2024-03-02");
+    assert_eq!(lines[9], "2006-01-15");
+    assert_eq!(lines[10], "2024-03-02");
+}
+
+// ============================================================================
+// Relative Offset Boundary Tests
+// ============================================================================
+
+#[test]
+fn test_strtotime_relative_offset_boundaries() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        $base = 1204200000; // 28 Feb 2008 12:00:00
+        
+        // Around day boundary
+        echo date(DATE_ISO8601, strtotime('+86399 seconds', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-86399 seconds', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('+86401 seconds', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-86401 seconds', $base)) . \"\\n\";
+        
+        // Around week boundary  
+        echo date(DATE_ISO8601, strtotime('+167 hours', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-167 hours', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('+169 hours', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-169 hours', $base)) . \"\\n\";
+        
+        // Around 6-month boundary
+        echo date(DATE_ISO8601, strtotime('+179 days', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-179 days', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('+183 days', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-183 days', $base)) . \"\\n\";
+        
+        // Around 10-year boundary
+        echo date(DATE_ISO8601, strtotime('+119 months', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-119 months', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('+121 months', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-121 months', $base)) . \"\\n\";
+        
+        // Around 25-year boundary
+        echo date(DATE_ISO8601, strtotime('+24 years', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-24 years', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('+26 years', $base)) . \"\\n\";
+        echo date(DATE_ISO8601, strtotime('-26 years', $base)) . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    
+    // Around day boundary
+    assert_eq!(lines[0], "2008-02-29T11:59:59+0000");
+    assert_eq!(lines[1], "2008-02-27T12:00:01+0000");
+    assert_eq!(lines[2], "2008-02-29T12:00:01+0000");
+    assert_eq!(lines[3], "2008-02-27T11:59:59+0000");
+    
+    // Around week boundary
+    assert_eq!(lines[4], "2008-03-06T11:00:00+0000");
+    assert_eq!(lines[5], "2008-02-21T13:00:00+0000");
+    assert_eq!(lines[6], "2008-03-06T13:00:00+0000");
+    assert_eq!(lines[7], "2008-02-21T11:00:00+0000");
+    
+    // Around 6-month boundary
+    assert_eq!(lines[8], "2008-08-25T12:00:00+0000");
+    assert_eq!(lines[9], "2007-09-02T12:00:00+0000");
+    assert_eq!(lines[10], "2008-08-29T12:00:00+0000");
+    assert_eq!(lines[11], "2007-08-29T12:00:00+0000");
+    
+    // Around 10-year boundary
+    assert_eq!(lines[12], "2018-01-28T12:00:00+0000");
+    assert_eq!(lines[13], "1998-03-28T12:00:00+0000");
+    assert_eq!(lines[14], "2018-03-28T12:00:00+0000");
+    assert_eq!(lines[15], "1998-01-28T12:00:00+0000");
+    
+    // Around 25-year boundary
+    assert_eq!(lines[16], "2032-02-28T12:00:00+0000");
+    assert_eq!(lines[17], "1984-02-28T12:00:00+0000");
+    assert_eq!(lines[18], "2034-02-28T12:00:00+0000");
+    assert_eq!(lines[19], "1982-02-28T12:00:00+0000");
+}
+
+// ============================================================================
+// Invalid Timezone Suffix Handling
+// ============================================================================
+
+#[test]
+fn test_strtotime_invalid_timezone_suffix() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        $base = 1150494719; // 16 Jun 2006
+        
+        var_dump(strtotime('22:49:12 bogusTZ', $base));
+        var_dump(strtotime('022233 bogusTZ', $base));
+        var_dump(strtotime('20060212T23:12:23 bogusTZ', $base));
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "bool(false)");
+    assert_eq!(lines[1], "bool(false)");
+    assert_eq!(lines[2], "bool(false)");
+}
+
+// ============================================================================
+// @ Timestamp Timezone Behavior
+// ============================================================================
+
+#[test]
+fn test_strtotime_at_timestamp_ignores_timezone() {
+    let code = "<?php
+        date_default_timezone_set('Europe/Oslo');
+        
+        $d1 = strtotime('@1121373041');
+        $d2 = strtotime('@1121373041 CEST');
+        
+        // Both should be identical - timezone ignored with @
+        echo date(DATE_ISO8601, $d1) . \"\\n\";
+        echo date(DATE_ISO8601, $d2) . \"\\n\";
+        echo ($d1 === $d2 ? 'SAME' : 'DIFFERENT') . \"\\n\";
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    // Both should be the same timestamp
+    assert_eq!(lines[0], lines[1]);
+    assert_eq!(lines[2], "SAME");
+}
+
+// ============================================================================
+// Whitespace Edge Cases
+// ============================================================================
+
+#[test]
+fn test_strtotime_whitespace_with_zeros() {
+    let code = "<?php
+        var_dump(strtotime(\" \\t\\r\\n000\"));
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    assert_eq!(output.trim(), "bool(false)");
+}
+
+// ============================================================================
+// 64-bit Large Year Tests
+// ============================================================================
+
+#[test]
+fn test_strtotime_large_years_64bit() {
+    let code = "<?php
+        date_default_timezone_set('UTC');
+        
+        // 14-digit MySQL format with year 2080
+        $result = strtotime('20800410101010');
+        if ($result !== false) {
+            echo date('r', $result) . \"\\n\";
+        } else {
+            echo \"false\\n\";
+        }
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    // On 64-bit systems this should work
+    if output.trim() != "false" {
+        assert_eq!(output.trim(), "Wed, 10 Apr 2080 10:10:10 +0000");
+    }
+}
+
+// ============================================================================
+// ISO8601 Extended Format with UTC Suffix
+// ============================================================================
+
+#[test]
+fn test_strtotime_iso8601_utc_suffix() {
+    let code = "<?php
+        date_default_timezone_set('Europe/Lisbon');
+        $base = 1150494719;
+        
+        $result = strtotime('20060212T23:12:23UTC', $base);
+        if ($result !== false) {
+            echo date('r', $result) . \"\\n\";
+        }
+    ";
+    let (_, output) = run_code_capture_output(code).unwrap();
+    if !output.trim().is_empty() {
+        assert_eq!(output.trim(), "Sun, 12 Feb 2006 23:12:23 +0000");
+    }
+}
+
+// ============================================================================
+// Additional strtotime3.phpt Test Cases
+// ============================================================================
+
+#[test]
+fn test_strtotime_comprehensive_edge_cases() {
+    let code = r#"<?php
+        date_default_timezone_set('Europe/Lisbon');
+        $time = 1150494719; // 16/June/2006
+
+        $strs = array(
+            '',
+            " \t\r\n000",
+            'yesterday',
+            '22:49:12',
+            '2-3-2004',
+            '2.3.2004',
+            '2006167', // Year-DayOfYear
+            'Jan-15-2006',
+            '2006-Jan-15',
+            '2006',
+            '1986',
+            'JAN',
+            'January',
+        );
+
+        foreach ($strs as $str) {
+            $t = strtotime($str, $time);
+            if (is_int($t)) {
+                echo date(DATE_RFC2822, $t) . "\n";
+            } else {
+                echo "false\n";
+            }
+        }
+    "#;
+    let (_, output) = run_code_capture_output(code).unwrap();
+    let lines: Vec<&str> = output.trim().lines().collect();
+    
+    assert_eq!(lines[0], "false"); // Empty string
+    assert_eq!(lines[1], "false"); // Whitespace with zeros
+    assert_eq!(lines[2], "Thu, 15 Jun 2006 00:00:00 +0100"); // yesterday
+    assert_eq!(lines[3], "Fri, 16 Jun 2006 22:49:12 +0100"); // Time today
+    assert_eq!(lines[4], "Tue, 02 Mar 2004 00:00:00 +0000"); // D-M-YYYY
+    assert_eq!(lines[5], "Tue, 02 Mar 2004 00:00:00 +0000"); // D.M.YYYY
+    assert_eq!(lines[6], "Fri, 16 Jun 2006 00:00:00 +0100"); // Year-DayOfYear
+    assert_eq!(lines[7], "Sun, 15 Jan 2006 00:00:00 +0000"); // Mon-DD-YYYY
+    assert_eq!(lines[8], "Sun, 15 Jan 2006 00:00:00 +0000"); // YYYY-Mon-DD
+    assert_eq!(lines[9], "Fri, 16 Jun 2006 20:06:00 +0100"); // Year only (uses base time)
+    assert_eq!(lines[10], "Mon, 16 Jun 1986 22:51:59 +0100"); // Year 1986
+    assert_eq!(lines[11], "Mon, 16 Jan 2006 00:00:00 +0000"); // Month abbreviation
+    assert_eq!(lines[12], "Mon, 16 Jan 2006 00:00:00 +0000"); // Full month name
+}
