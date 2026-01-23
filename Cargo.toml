@@ -89,6 +89,7 @@ tracing-subscriber = { version = "0.3", optional = true }
 thiserror = { version = "1.0", optional = true }
 wasmtime = { version = "27", optional = true }
 wasmtime-wasi = { version = "27", optional = true }
+walkdir = "2.4"
 
 [[bin]]
 name = "php"
@@ -109,6 +110,11 @@ required-features = ["wasm-target"]
 name = "gild-router"
 path = "src/bin/gild_router.rs"
 required-features = ["router"]
+
+[[bin]]
+name = "php-test"
+path = "src/bin/php-test.rs"
+required-features = ["cli"]
 
 [features]
 default = ["native-extensions", "cli", "fpm", "pthreads", "pcre2", "zip"]
