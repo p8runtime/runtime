@@ -21,8 +21,10 @@
 //! - Zend Encoder: $PHP_SRC_PATH/ext/json/json_encoder.c
 //! - Zend Parser: $PHP_SRC_PATH/ext/json/json_parser.y
 
-use crate::core::value::{ArrayData, ArrayKey, Handle, Val};
+use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, Val};
 use crate::vm::engine::VM;
+use indexmap::IndexMap;
+use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -67,6 +69,78 @@ impl JsonError {
             JsonError::UnsupportedType => "Type is not supported",
             JsonError::InvalidPropertyName => "The decoded property name is invalid",
             JsonError::Utf16 => "Single unpaired UTF-16 surrogate in unicode escape",
+        }
+    }
+}
+
+fn json_value_to_handle(
+    vm: &mut VM,
+    value: &JsonValue,
+    assoc: bool,
+    depth: usize,
+    max_depth: usize,
+) -> Result<Handle, JsonError> {
+    if depth >= max_depth {
+        return Err(JsonError::Depth);
+    }
+    match value {
+        JsonValue::Null => Ok(vm.arena.alloc(Val::Null)),
+        JsonValue::Bool(b) => Ok(vm.arena.alloc(Val::Bool(*b))),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(vm.arena.alloc(Val::Int(i)))
+            } else if let Some(u) = n.as_u64() {
+                if u <= i64::MAX as u64 {
+                    Ok(vm.arena.alloc(Val::Int(u as i64)))
+                } else {
+                    Ok(vm.arena.alloc(Val::Float(u as f64)))
+                }
+            } else if let Some(f) = n.as_f64() {
+                Ok(vm.arena.alloc(Val::Float(f)))
+            } else {
+                Err(JsonError::UnsupportedType)
+            }
+        }
+        JsonValue::String(s) => Ok(vm.arena.alloc(Val::String(
+            s.as_bytes().to_vec().into(),
+        ))),
+        JsonValue::Array(items) => {
+            let mut array = ArrayData::with_capacity(items.len());
+            for item in items {
+                let handle = json_value_to_handle(vm, item, assoc, depth + 1, max_depth)?;
+                array.push(handle);
+            }
+            Ok(vm.arena.alloc(Val::Array(Rc::new(array))))
+        }
+        JsonValue::Object(map) => {
+            if assoc {
+                let mut array = ArrayData::with_capacity(map.len());
+                for (key, value) in map {
+                    let handle = json_value_to_handle(vm, value, assoc, depth + 1, max_depth)?;
+                    array.insert(
+                        ArrayKey::Str(Rc::new(key.as_bytes().to_vec())),
+                        handle,
+                    );
+                }
+                Ok(vm.arena.alloc(Val::Array(Rc::new(array))))
+            } else {
+                let class = vm.context.interner.intern(b"stdClass");
+                let mut properties = IndexMap::with_capacity(map.len());
+                let mut dynamic_properties = HashSet::with_capacity(map.len());
+                for (key, value) in map {
+                    let sym = vm.context.interner.intern(key.as_bytes());
+                    let handle = json_value_to_handle(vm, value, assoc, depth + 1, max_depth)?;
+                    properties.insert(sym, handle);
+                    dynamic_properties.insert(sym);
+                }
+                let obj = ObjectData {
+                    class,
+                    properties,
+                    internal: None,
+                    dynamic_properties,
+                };
+                Ok(vm.arena.alloc(Val::ObjPayload(obj)))
+            }
         }
     }
 }
@@ -564,7 +638,7 @@ pub fn php_json_decode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     };
 
     // Parse depth
-    let _max_depth = if args.len() > 2 {
+    let max_depth = if args.len() > 2 {
         let depth_val = &vm.arena.get(args[2]).value;
         match depth_val {
             Val::Int(i) if *i > 0 => *i as usize,
@@ -586,13 +660,25 @@ pub fn php_json_decode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         JsonDecodeOptions::default()
     };
 
-    // TODO: Implement actual JSON parser
-    // For now, return a placeholder
-    let _ = (json_str, assoc);
-    vm.context
-        .get_or_init_extension_data(|| JsonExtensionData::default())
-        .last_error = JsonError::Syntax;
-    Ok(vm.arena.alloc(Val::Null))
+    let parsed: JsonValue = match serde_json::from_str(json_str) {
+        Ok(value) => value,
+        Err(_) => {
+            vm.context
+                .get_or_init_extension_data(|| JsonExtensionData::default())
+                .last_error = JsonError::Syntax;
+            return Ok(vm.arena.alloc(Val::Null));
+        }
+    };
+
+    match json_value_to_handle(vm, &parsed, assoc, 0, max_depth) {
+        Ok(handle) => Ok(handle),
+        Err(err) => {
+            vm.context
+                .get_or_init_extension_data(|| JsonExtensionData::default())
+                .last_error = err;
+            Ok(vm.arena.alloc(Val::Null))
+        }
+    }
 }
 
 /// json_last_error(): int
@@ -667,14 +753,13 @@ pub fn php_json_validate(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
         _ => return Ok(vm.arena.alloc(Val::Bool(false))),
     };
 
-    let _json_str = match std::str::from_utf8(json_bytes) {
+    let json_str = match std::str::from_utf8(json_bytes) {
         Ok(s) => s,
         Err(_) => return Ok(vm.arena.alloc(Val::Bool(false))),
     };
 
-    // TODO: Implement fast JSON validation (syntax check only, no value construction)
-    // For now, return false
-    Ok(vm.arena.alloc(Val::Bool(false)))
+    let is_valid = serde_json::from_str::<JsonValue>(json_str).is_ok();
+    Ok(vm.arena.alloc(Val::Bool(is_valid)))
 }
 
 // gop_* wrappers (sync) for stdlib modules

@@ -3120,3 +3120,311 @@ fn replace_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<
         .arena
         .alloc(Val::Array(crate::core::value::ArrayData::from(out).into())))
 }
+
+pub fn php_deka_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array(vm, args)
+}
+
+pub fn php_deka_array_all(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_all(vm, args)
+}
+
+pub fn php_deka_array_any(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_any(vm, args)
+}
+
+pub fn php_deka_array_change_key_case(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_change_key_case(vm, args)
+}
+
+pub fn php_deka_array_chunk(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_chunk(vm, args)
+}
+
+pub fn php_deka_array_column(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_column(vm, args)
+}
+
+pub fn php_deka_array_combine(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_combine(vm, args)
+}
+
+pub fn php_deka_array_count_values(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_count_values(vm, args)
+}
+
+pub fn php_deka_array_diff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_diff(vm, args)
+}
+
+pub fn php_deka_array_diff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_diff_assoc(vm, args)
+}
+
+pub fn php_deka_array_diff_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_diff_key(vm, args)
+}
+
+pub fn php_deka_array_diff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_diff_uassoc(vm, args)
+}
+
+pub fn php_deka_array_diff_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_diff_ukey(vm, args)
+}
+
+pub fn php_deka_array_fill(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_fill(vm, args)
+}
+
+pub fn php_deka_array_fill_keys(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_fill_keys(vm, args)
+}
+
+pub fn php_deka_array_filter(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_filter(vm, args)
+}
+
+pub fn php_deka_array_find(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_find(vm, args)
+}
+
+pub fn php_deka_array_find_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_find_key(vm, args)
+}
+
+pub fn php_deka_array_first(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_first(vm, args)
+}
+
+pub fn php_deka_array_flip(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_flip(vm, args)
+}
+
+pub fn php_deka_array_intersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_intersect(vm, args)
+}
+
+pub fn php_deka_array_intersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_intersect_assoc(vm, args)
+}
+
+pub fn php_deka_array_intersect_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_intersect_key(vm, args)
+}
+
+pub fn php_deka_array_intersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_intersect_uassoc(vm, args)
+}
+
+pub fn php_deka_array_intersect_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_intersect_ukey(vm, args)
+}
+
+pub fn php_deka_array_is_list(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_is_list(vm, args)
+}
+
+pub fn php_deka_array_key_first(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_key_first(vm, args)
+}
+
+pub fn php_deka_array_key_last(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_key_last(vm, args)
+}
+
+pub fn php_deka_array_last(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_last(vm, args)
+}
+
+pub fn php_deka_array_map(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_map(vm, args)
+}
+
+pub fn php_deka_array_merge(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_merge(vm, args)
+}
+
+pub fn php_deka_array_merge_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_merge_recursive(vm, args)
+}
+
+pub fn php_deka_array_multisort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_multisort(vm, args)
+}
+
+pub fn php_deka_array_pad(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_pad(vm, args)
+}
+
+pub fn php_deka_array_product(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_product(vm, args)
+}
+
+pub fn php_deka_array_reduce(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_reduce(vm, args)
+}
+
+pub fn php_deka_array_replace(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_replace(vm, args)
+}
+
+pub fn php_deka_array_replace_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_replace_recursive(vm, args)
+}
+
+pub fn php_deka_array_reverse(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_reverse(vm, args)
+}
+
+pub fn php_deka_array_search(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_search(vm, args)
+}
+
+pub fn php_deka_array_shift(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_shift(vm, args)
+}
+
+pub fn php_deka_array_slice(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_slice(vm, args)
+}
+
+pub fn php_deka_array_splice(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_splice(vm, args)
+}
+
+pub fn php_deka_array_sum(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_sum(vm, args)
+}
+
+pub fn php_deka_array_rand(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_rand(vm, args)
+}
+
+pub fn php_deka_array_udiff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_udiff(vm, args)
+}
+
+pub fn php_deka_array_udiff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_udiff_assoc(vm, args)
+}
+
+pub fn php_deka_array_udiff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_udiff_uassoc(vm, args)
+}
+
+pub fn php_deka_array_uintersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_uintersect(vm, args)
+}
+
+pub fn php_deka_array_uintersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_uintersect_assoc(vm, args)
+}
+
+pub fn php_deka_array_uintersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_uintersect_uassoc(vm, args)
+}
+
+pub fn php_deka_array_unique(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_unique(vm, args)
+}
+
+pub fn php_deka_array_walk(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_walk(vm, args)
+}
+
+pub fn php_deka_array_walk_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_array_walk_recursive(vm, args)
+}
+
+pub fn php_deka_arsort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_arsort(vm, args)
+}
+
+pub fn php_deka_asort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_asort(vm, args)
+}
+
+pub fn php_deka_compact(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_compact(vm, args)
+}
+
+pub fn php_deka_extract(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_extract(vm, args)
+}
+
+pub fn php_deka_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_key(vm, args)
+}
+
+pub fn php_deka_key_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_key_exists(vm, args)
+}
+
+pub fn php_deka_krsort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_krsort(vm, args)
+}
+
+pub fn php_deka_natcasesort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_natcasesort(vm, args)
+}
+
+pub fn php_deka_natsort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_natsort(vm, args)
+}
+
+pub fn php_deka_pos(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_pos(vm, args)
+}
+
+pub fn php_deka_prev(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_prev(vm, args)
+}
+
+pub fn php_deka_range(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_range(vm, args)
+}
+
+pub fn php_deka_rsort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_rsort(vm, args)
+}
+
+pub fn php_deka_shuffle(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_shuffle(vm, args)
+}
+
+pub fn php_deka_sort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_sort(vm, args)
+}
+
+pub fn php_deka_uasort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_uasort(vm, args)
+}
+
+pub fn php_deka_uksort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_uksort(vm, args)
+}
+
+pub fn php_deka_usort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_usort(vm, args)
+}
+
+pub fn php_deka_ksort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_ksort(vm, args)
+}
+
+pub fn php_deka_current(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_current(vm, args)
+}
+
+pub fn php_deka_next(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_next(vm, args)
+}
+
+pub fn php_deka_reset(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_reset(vm, args)
+}
+
+pub fn php_deka_end(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_end(vm, args)
+}

@@ -715,6 +715,26 @@ pub fn php_ord(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Int(val)))
 }
 
+pub fn php_deka_chr(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("__deka_chr() expects exactly 1 parameter".into());
+    }
+
+    let val = vm.arena.get(args[0]).value.to_int();
+    let b = (val % 256) as u8;
+    Ok(vm.arena.alloc(Val::String(vec![b].into())))
+}
+
+pub fn php_deka_ord(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("__deka_ord() expects exactly 1 parameter".into());
+    }
+
+    let s = vm.value_to_string(args[0])?;
+    let val = s.first().copied().unwrap_or(0) as i64;
+    Ok(vm.arena.alloc(Val::Int(val)))
+}
+
 pub fn php_bin2hex(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("bin2hex() expects exactly 1 parameter".into());
@@ -896,9 +916,48 @@ pub fn php_convert_cyr_string(vm: &mut VM, args: &[Handle]) -> Result<Handle, St
     Ok(vm.arena.alloc(Val::String(converted.into())))
 }
 
+pub fn php_deka_convert_cyr_string(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 3 {
+        return Err("__deka_convert_cyr_string() expects exactly 3 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let from_raw = vm.value_to_string(args[1])?;
+    let to_raw = vm.value_to_string(args[2])?;
+
+    let from_code = *from_raw
+        .first()
+        .ok_or("__deka_convert_cyr_string(): Argument #2 ($from) must not be empty")?;
+    let to_code = *to_raw
+        .first()
+        .ok_or("__deka_convert_cyr_string(): Argument #3 ($to) must not be empty")?;
+
+    let from_label = cyrillic_encoding_label(from_code)
+        .ok_or("__deka_convert_cyr_string(): Unknown encoding in argument #2 ($from)")?;
+    let to_label = cyrillic_encoding_label(to_code)
+        .ok_or("__deka_convert_cyr_string(): Unknown encoding in argument #3 ($to)")?;
+
+    if from_label.eq_ignore_ascii_case(to_label) {
+        return Ok(vm.arena.alloc(Val::String(input.into())));
+    }
+
+    let converted = convert_bytes(&input, from_label, to_label)?;
+    Ok(vm.arena.alloc(Val::String(converted.into())))
+}
+
 pub fn php_convert_uuencode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("convert_uuencode() expects exactly 1 parameter".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let encoded = uuencode_bytes(&input);
+    Ok(vm.arena.alloc(Val::String(encoded.into())))
+}
+
+pub fn php_deka_convert_uuencode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("__deka_convert_uuencode() expects exactly 1 parameter".into());
     }
 
     let input = vm.value_to_string(args[0])?;
@@ -947,11 +1006,56 @@ pub fn php_crypt(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 }
 
+#[cfg(unix)]
+pub fn php_deka_crypt(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("__deka_crypt() expects 1 or 2 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let salt = if args.len() == 2 {
+        vm.value_to_string(args[1])?
+    } else {
+        Vec::new()
+    };
+
+    let input_c = CString::new(input)
+        .map_err(|_| "__deka_crypt(): Argument #1 must not contain null bytes".to_string())?;
+    let salt_c = CString::new(salt)
+        .map_err(|_| "__deka_crypt(): Argument #2 must not contain null bytes".to_string())?;
+
+    unsafe {
+        let hashed = crypt(input_c.as_ptr(), salt_c.as_ptr());
+        if hashed.is_null() {
+            return Ok(vm.arena.alloc(Val::Bool(false)));
+        }
+        let bytes = CStr::from_ptr(hashed).to_bytes().to_vec();
+        Ok(vm.arena.alloc(Val::String(bytes.into())))
+    }
+}
+
 #[cfg(not(unix))]
 pub fn php_crypt(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     Err("crypt() is not supported on this platform".into())
 }
 
+#[cfg(not(unix))]
+pub fn php_deka_crypt(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    Err("__deka_crypt() is not supported on this platform".into())
+}
+
+pub fn php_deka_convert_uudecode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("__deka_convert_uudecode() expects exactly 1 parameter".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let decoded = uudecode_bytes(&input);
+    match decoded {
+        Some(bytes) => Ok(vm.arena.alloc(Val::String(bytes.into()))),
+        None => Ok(vm.arena.alloc(Val::Bool(false))),
+    }
+}
 pub fn php_crc32(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("crc32() expects exactly 1 parameter".into());
@@ -964,9 +1068,42 @@ pub fn php_crc32(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Int(checksum as i64)))
 }
 
+pub fn php_deka_crc32(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("__deka_crc32() expects exactly 1 parameter".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let mut hasher = Hasher::new();
+    hasher.update(&input);
+    let checksum = hasher.finalize();
+    Ok(vm.arena.alloc(Val::Int(checksum as i64)))
+}
+
 pub fn php_md5(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 2 {
         return Err("md5() expects between 1 and 2 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let digest = Md5::digest(&input);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+pub fn php_deka_md5(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("__deka_md5() expects between 1 and 2 parameters".into());
     }
 
     let input = vm.value_to_string(args[0])?;
@@ -1011,9 +1148,56 @@ pub fn php_md5_file(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
 }
 
+pub fn php_deka_md5_file(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("__deka_md5_file() expects between 1 and 2 parameters".into());
+    }
+
+    let path_bytes = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let path = bytes_to_path(&path_bytes)?;
+    let data = match fs::read(&path) {
+        Ok(data) => data,
+        Err(_) => return Ok(vm.arena.alloc(Val::Bool(false))),
+    };
+
+    let digest = Md5::digest(&data);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
 pub fn php_sha1(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 2 {
         return Err("sha1() expects between 1 and 2 parameters".into());
+    }
+
+    let input = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let digest = Sha1::digest(&input);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+pub fn php_deka_sha1(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("__deka_sha1() expects between 1 and 2 parameters".into());
     }
 
     let input = vm.value_to_string(args[0])?;
@@ -1056,6 +1240,216 @@ pub fn php_sha1_file(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
     let hex = hex::encode(digest);
     Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+pub fn php_deka_sha1_file(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("__deka_sha1_file() expects between 1 and 2 parameters".into());
+    }
+
+    let path_bytes = vm.value_to_string(args[0])?;
+    let binary = if args.len() == 2 {
+        vm.arena.get(args[1]).value.to_bool()
+    } else {
+        false
+    };
+
+    let path = bytes_to_path(&path_bytes)?;
+    let data = match fs::read(&path) {
+        Ok(data) => data,
+        Err(_) => return Ok(vm.arena.alloc(Val::Bool(false))),
+    };
+
+    let digest = Sha1::digest(&data);
+    if binary {
+        return Ok(vm.arena.alloc(Val::String(digest.to_vec().into())));
+    }
+    let hex = hex::encode(digest);
+    Ok(vm.arena.alloc(Val::String(hex.into_bytes().into())))
+}
+
+pub fn php_deka_metaphone(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_metaphone(vm, args)
+}
+
+pub fn php_deka_setlocale(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_setlocale(vm, args)
+}
+
+pub fn php_deka_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_localeconv(vm, args)
+}
+
+pub fn php_deka_nl_langinfo(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_nl_langinfo(vm, args)
+}
+
+pub fn php_deka_strcoll(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strcoll(vm, args)
+}
+
+pub fn php_deka_number_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_number_format(vm, args)
+}
+
+pub fn php_deka_money_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_money_format(vm, args)
+}
+
+pub fn php_deka_strcmp(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strcmp(vm, args)
+}
+
+pub fn php_deka_strcasecmp(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strcasecmp(vm, args)
+}
+
+pub fn php_deka_strncmp(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strncmp(vm, args)
+}
+
+pub fn php_deka_strncasecmp(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strncasecmp(vm, args)
+}
+
+pub fn php_deka_strnatcmp(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strnatcmp(vm, args)
+}
+
+pub fn php_deka_strnatcasecmp(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strnatcasecmp(vm, args)
+}
+
+pub fn php_deka_levenshtein(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_levenshtein(vm, args)
+}
+
+pub fn php_deka_similar_text(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_similar_text(vm, args)
+}
+
+pub fn php_deka_soundex(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_soundex(vm, args)
+}
+
+pub fn php_deka_substr_compare(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_substr_compare(vm, args)
+}
+
+pub fn php_deka_strstr(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strstr(vm, args)
+}
+
+pub fn php_deka_stristr(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_stristr(vm, args)
+}
+
+pub fn php_deka_hebrev(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_hebrev(vm, args)
+}
+
+pub fn php_deka_wordwrap(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_wordwrap(vm, args)
+}
+
+pub fn php_deka_quotemeta(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_quotemeta(vm, args)
+}
+
+pub fn php_deka_nl2br(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_nl2br(vm, args)
+}
+
+pub fn php_deka_strip_tags(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strip_tags(vm, args)
+}
+
+pub fn php_deka_strtok(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_strtok(vm, args)
+}
+
+pub fn php_deka_count_chars(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_count_chars(vm, args)
+}
+
+pub fn php_deka_str_word_count(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_str_word_count(vm, args)
+}
+
+pub fn php_deka_str_increment(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_str_increment(vm, args)
+}
+
+pub fn php_deka_str_decrement(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_str_decrement(vm, args)
+}
+
+pub fn php_deka_htmlspecialchars(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_htmlspecialchars(vm, args)
+}
+
+pub fn php_deka_htmlspecialchars_decode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_htmlspecialchars_decode(vm, args)
+}
+
+pub fn php_deka_htmlentities(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_htmlentities(vm, args)
+}
+
+pub fn php_deka_html_entity_decode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_html_entity_decode(vm, args)
+}
+
+pub fn php_deka_str_replace(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_str_replace(vm, args)
+}
+
+pub fn php_deka_str_ireplace(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_str_ireplace(vm, args)
+}
+
+pub fn php_deka_parse_str(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_parse_str(vm, args)
+}
+
+pub fn php_deka_utf8_encode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_utf8_encode(vm, args)
+}
+
+pub fn php_deka_utf8_decode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_utf8_decode(vm, args)
+}
+
+pub fn php_deka_version_compare(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_version_compare(vm, args)
+}
+
+pub fn php_deka_sprintf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_sprintf(vm, args)
+}
+
+pub fn php_deka_sscanf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_sscanf(vm, args)
+}
+
+pub fn php_deka_printf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_printf(vm, args)
+}
+
+pub fn php_deka_vsprintf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_vsprintf(vm, args)
+}
+
+pub fn php_deka_vprintf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_vprintf(vm, args)
+}
+
+pub fn php_deka_fprintf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_fprintf(vm, args)
+}
+
+pub fn php_deka_vfprintf(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    php_vfprintf(vm, args)
 }
 
 fn cyrillic_encoding_label(code: u8) -> Option<&'static str> {

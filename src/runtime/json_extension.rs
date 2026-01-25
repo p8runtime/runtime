@@ -5,12 +5,12 @@ use crate::runtime::registry::ExtensionRegistry;
 
 /// JSON extension - RFC 8259 compliant JSON encoding/decoding
 ///
-/// This extension provides PHP's core JSON functionality:
-/// - `json_encode()` - Encode PHP values to JSON
-/// - `json_decode()` - Decode JSON to PHP values
-/// - `json_last_error()` - Get last error code
-/// - `json_last_error_msg()` - Get last error message
-/// - `json_validate()` - Fast syntax validation (PHP 8.3+)
+/// This extension provides JSON ops used by the phpx layer:
+/// - `gop_json_encode()` - Encode PHP values to JSON
+/// - `gop_json_decode()` - Decode JSON to PHP values
+/// - `gop_json_last_error()` - Get last error code
+/// - `gop_json_last_error_msg()` - Get last error message
+/// - `gop_json_validate()` - Fast syntax validation (PHP 8.3+)
 ///
 /// # Constants
 ///
@@ -38,12 +38,7 @@ impl Extension for JsonExtension {
     }
 
     fn module_init(&self, registry: &mut ExtensionRegistry) -> ExtensionResult {
-        // Register JSON functions
-        registry.register_function(b"json_encode", json::php_json_encode);
-        registry.register_function(b"json_decode", json::php_json_decode);
-        registry.register_function(b"json_last_error", json::php_json_last_error);
-        registry.register_function(b"json_last_error_msg", json::php_json_last_error_msg);
-        registry.register_function(b"json_validate", json::php_json_validate);
+        // Register JSON ops for phpx
         registry.register_function(b"gop_json_encode", json::gop_json_encode);
         registry.register_function(b"gop_json_decode", json::gop_json_decode);
         registry.register_function(b"gop_json_last_error", json::gop_json_last_error);
@@ -121,29 +116,29 @@ mod tests {
             "JSON extension should be loaded"
         );
 
-        // Verify functions are registered
+        // Verify JSON ops are registered
         assert!(
-            engine.registry.get_function(b"json_encode").is_some(),
-            "json_encode should be registered"
+            engine.registry.get_function(b"gop_json_encode").is_some(),
+            "gop_json_encode should be registered"
         );
         assert!(
-            engine.registry.get_function(b"json_decode").is_some(),
-            "json_decode should be registered"
+            engine.registry.get_function(b"gop_json_decode").is_some(),
+            "gop_json_decode should be registered"
         );
         assert!(
-            engine.registry.get_function(b"json_last_error").is_some(),
-            "json_last_error should be registered"
+            engine.registry.get_function(b"gop_json_last_error").is_some(),
+            "gop_json_last_error should be registered"
         );
         assert!(
             engine
                 .registry
-                .get_function(b"json_last_error_msg")
+                .get_function(b"gop_json_last_error_msg")
                 .is_some(),
-            "json_last_error_msg should be registered"
+            "gop_json_last_error_msg should be registered"
         );
         assert!(
-            engine.registry.get_function(b"json_validate").is_some(),
-            "json_validate should be registered"
+            engine.registry.get_function(b"gop_json_validate").is_some(),
+            "gop_json_validate should be registered"
         );
     }
 

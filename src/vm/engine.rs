@@ -71,8 +71,15 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_arch = "wasm32")]
-use std::time::{Duration};
-
+use crate::wasm_exports::{php_free, WasmResult};
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "env")]
+unsafe extern "C" {
+    fn php_fs_read(path_ptr: *const u8, path_len: u32, out_ptr: *mut WasmResult) -> u32;
+    fn php_fs_exists(path_ptr: *const u8, path_len: u32) -> u32;
+}
+#[cfg(target_arch = "wasm32")]
+use std::time::Duration;
 
 #[derive(Debug)]
 pub enum VmError {
@@ -138,6 +145,34 @@ impl std::fmt::Display for VmError {
 }
 
 impl std::error::Error for VmError {}
+
+#[cfg(target_arch = "wasm32")]
+fn host_fs_exists(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    unsafe { php_fs_exists(bytes.as_ptr(), bytes.len() as u32) != 0 }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn host_fs_read(path: &str) -> Result<Vec<u8>, VmError> {
+    let bytes = path.as_bytes();
+    let mut result = WasmResult { ptr: 0, len: 0 };
+    let ok = unsafe { php_fs_read(bytes.as_ptr(), bytes.len() as u32, &mut result as *mut _) };
+    if ok == 0 {
+        return Err(VmError::RuntimeError(format!(
+            "Could not read file {}",
+            path
+        )));
+    }
+    if result.ptr == 0 || result.len == 0 {
+        return Ok(Vec::new());
+    }
+    let slice = unsafe { std::slice::from_raw_parts(result.ptr as *const u8, result.len as usize) };
+    let out = slice.to_vec();
+    unsafe {
+        php_free(result.ptr as *mut u8, result.len);
+    }
+    Ok(out)
+}
 
 /// PHP error levels matching Zend constants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,6 +384,8 @@ pub struct VM {
     pub(crate) allow_file_io: bool,
     /// Sandboxing: allow network operations
     pub(crate) allow_network: bool,
+    /// Include path: whether php_modules/autoload.php exists (cached)
+    php_modules_autoload: Option<bool>,
     /// Sandboxing: allowed function names (None = all allowed)
     pub(crate) allowed_functions: Option<std::collections::HashSet<String>>,
     /// Sandboxing: disabled function names (blacklist)
@@ -403,6 +440,7 @@ impl VM {
             memory_limit: 0,         // Unlimited by default
             allow_file_io: true,     // Allow by default
             allow_network: true,     // Allow by default
+            php_modules_autoload: None,
             allowed_functions: None, // All functions allowed by default
             disable_functions: std::collections::HashSet::new(),
             disable_classes: std::collections::HashSet::new(),
@@ -819,6 +857,7 @@ impl VM {
             memory_limit: 0,         // Unlimited by default
             allow_file_io: true,     // Allow by default
             allow_network: true,     // Allow by default
+            php_modules_autoload: None,
             allowed_functions: None, // All functions allowed by default
             disable_functions: std::collections::HashSet::new(),
             disable_classes: std::collections::HashSet::new(),
@@ -1145,7 +1184,43 @@ impl VM {
         }
     }
 
-    fn resolve_script_path(&self, raw: &str) -> Result<PathBuf, VmError> {
+    fn file_exists(&self, path: &Path) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let path_str = path.to_string_lossy();
+            return host_fs_exists(path_str.as_ref());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return path.exists();
+        }
+    }
+
+    fn read_script_bytes(&self, path: &Path, raw: &str) -> Result<Vec<u8>, VmError> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let path_str = path.to_string_lossy();
+            return host_fs_read(path_str.as_ref());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return std::fs::read(path).map_err(|e| {
+                VmError::RuntimeError(format!("Could not read file {}: {}", raw, e))
+            });
+        }
+    }
+
+    fn php_modules_autoload_enabled(&mut self) -> bool {
+        if let Some(enabled) = self.php_modules_autoload {
+            return enabled;
+        }
+        let autoload_path = PathBuf::from("php_modules").join("autoload.php");
+        let enabled = self.file_exists(&autoload_path);
+        self.php_modules_autoload = Some(enabled);
+        enabled
+    }
+
+    fn resolve_script_path(&mut self, raw: &str) -> Result<PathBuf, VmError> {
         let candidate = PathBuf::from(raw);
         if candidate.is_absolute() {
             return Ok(candidate);
@@ -1157,25 +1232,48 @@ impl VM {
                 let current_dir = Path::new(file_path).parent();
                 if let Some(dir) = current_dir {
                     let resolved = dir.join(&candidate);
-                    if resolved.exists() {
+                    if self.file_exists(&resolved) {
                         return Ok(resolved);
                     }
                 }
             }
         }
 
-        // 2. Fallback to CWD
-        let cwd = std::env::current_dir()
-            .map_err(|e| VmError::RuntimeError(format!("Failed to resolve path {}: {}", raw, e)))?;
-        Ok(cwd.join(candidate))
+        // 2. Fallback to php_modules when autoload.php exists
+        if self.php_modules_autoload_enabled() {
+            let resolved = PathBuf::from("php_modules").join(&candidate);
+            if self.file_exists(&resolved) {
+                return Ok(resolved);
+            }
+        }
+
+        // 3. Fallback to CWD
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Ok(candidate);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let cwd = std::env::current_dir().map_err(|e| {
+                VmError::RuntimeError(format!("Failed to resolve path {}: {}", raw, e))
+            })?;
+            return Ok(cwd.join(candidate));
+        }
     }
 
     #[inline]
     fn canonical_path_string(path: &Path) -> String {
-        std::fs::canonicalize(path)
-            .unwrap_or_else(|_| path.to_path_buf())
-            .to_string_lossy()
-            .into_owned()
+        #[cfg(target_arch = "wasm32")]
+        {
+            return path.to_string_lossy().into_owned();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return std::fs::canonicalize(path)
+                .unwrap_or_else(|_| path.to_path_buf())
+                .to_string_lossy()
+                .into_owned();
+        }
     }
 
     fn trigger_autoload(&mut self, class_name: Symbol) -> Result<(), VmError> {
@@ -4898,9 +4996,7 @@ impl VM {
                 };
 
                 let resolved_path = self.resolve_script_path(&filename)?;
-                let source = std::fs::read(&resolved_path).map_err(|e| {
-                    VmError::RuntimeError(format!("Could not read file {}: {}", filename, e))
-                })?;
+                let source = self.read_script_bytes(&resolved_path, &filename)?;
                 let canonical_path = Self::canonical_path_string(&resolved_path);
 
                 let arena = bumpalo::Bump::new();
@@ -7909,7 +8005,7 @@ impl VM {
                             false
                         };
 
-                        let source_res = std::fs::read(&resolved_path);
+                        let source_res = self.read_script_bytes(&resolved_path, &path_str);
                         match source_res {
                             Ok(source) => {
                                 let arena = bumpalo::Bump::new();
