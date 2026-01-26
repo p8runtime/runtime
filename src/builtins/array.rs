@@ -3353,6 +3353,31 @@ pub fn php_deka_extract(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
     php_extract(vm, args)
 }
 
+pub fn php_deka_array_cursor(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 2 {
+        return Err("__deka_array_cursor() expects exactly 2 parameters".into());
+    }
+
+    let mut action = vm.value_to_string(args[1])?;
+    for byte in action.iter_mut() {
+        if byte.is_ascii_uppercase() {
+            *byte = byte.to_ascii_lowercase();
+        }
+    }
+
+    let arr_args = [args[0]];
+    match action.as_slice() {
+        b"current" => php_current(vm, &arr_args),
+        b"pos" => php_pos(vm, &arr_args),
+        b"next" => php_next(vm, &arr_args),
+        b"prev" => php_prev(vm, &arr_args),
+        b"reset" => php_reset(vm, &arr_args),
+        b"end" => php_end(vm, &arr_args),
+        b"key" => php_key(vm, &arr_args),
+        _ => Err("__deka_array_cursor(): Unknown action".into()),
+    }
+}
+
 pub fn php_deka_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     php_key(vm, args)
 }

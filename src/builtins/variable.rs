@@ -3,6 +3,101 @@ use crate::vm::engine::{ErrorLevel, VM};
 use std::fmt::Write;
 use std::rc::Rc;
 
+pub fn php_deka_symbol_get(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("__deka_symbol_get() expects 1 or 2 parameters".into());
+    }
+
+    let name = vm
+        .value_to_string_bytes(args[0])
+        .map_err(|e| format!("__deka_symbol_get(): {}", e))?;
+    let sym = vm.context.interner.intern(&name);
+    let depth_raw = if args.len() == 2 {
+        vm.value_to_int(args[1]) as usize
+    } else {
+        0
+    };
+    if vm.frames.is_empty() {
+        return Ok(vm.arena.alloc(Val::Null));
+    }
+    let max_depth = vm.frames.len() - 1;
+    let depth = depth_raw.min(max_depth);
+    let frame_index = vm.frames.len() - 1 - depth;
+    if let Some(frame) = vm.frames.get(frame_index) {
+        if let Some(handle) = frame.locals.get(&sym).copied() {
+            return Ok(handle);
+        }
+    }
+    Ok(vm.arena.alloc(Val::Null))
+}
+
+pub fn php_deka_symbol_set(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("__deka_symbol_set() expects 2 or 3 parameters".into());
+    }
+
+    let name = vm
+        .value_to_string_bytes(args[0])
+        .map_err(|e| format!("__deka_symbol_set(): {}", e))?;
+    let sym = vm.context.interner.intern(&name);
+    let depth_raw = if args.len() == 3 {
+        vm.value_to_int(args[2]) as usize
+    } else {
+        0
+    };
+    if vm.frames.is_empty() {
+        return Ok(vm.arena.alloc(Val::Bool(false)));
+    }
+    let max_depth = vm.frames.len() - 1;
+    let depth = depth_raw.min(max_depth);
+    let frame_index = vm.frames.len() - 1 - depth;
+    let frame = vm
+        .frames
+        .get_mut(frame_index)
+        .ok_or_else(|| "__deka_symbol_set(): Invalid frame".to_string())?;
+
+    if let Some(&old_handle) = frame.locals.get(&sym) {
+        if vm.arena.get(old_handle).is_ref {
+            let new_val = vm.arena.get(args[1]).value.clone();
+            vm.arena.get_mut(old_handle).value = new_val;
+            return Ok(vm.arena.alloc(Val::Bool(true)));
+        }
+    }
+
+    let val = vm.arena.get(args[1]).value.clone();
+    let final_handle = vm.arena.alloc(val);
+    frame.locals.insert(sym, final_handle);
+    Ok(vm.arena.alloc(Val::Bool(true)))
+}
+
+pub fn php_deka_symbol_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("__deka_symbol_exists() expects 1 or 2 parameters".into());
+    }
+
+    let name = vm
+        .value_to_string_bytes(args[0])
+        .map_err(|e| format!("__deka_symbol_exists(): {}", e))?;
+    let sym = vm.context.interner.intern(&name);
+    let depth_raw = if args.len() == 2 {
+        vm.value_to_int(args[1]) as usize
+    } else {
+        0
+    };
+    if vm.frames.is_empty() {
+        return Ok(vm.arena.alloc(Val::Bool(false)));
+    }
+    let max_depth = vm.frames.len() - 1;
+    let depth = depth_raw.min(max_depth);
+    let frame_index = vm.frames.len() - 1 - depth;
+    let exists = vm
+        .frames
+        .get(frame_index)
+        .and_then(|frame| frame.locals.get(&sym))
+        .is_some();
+    Ok(vm.arena.alloc(Val::Bool(exists)))
+}
+
 pub fn php_var_dump(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let mut output = String::new();
     for arg in args {

@@ -170,18 +170,18 @@ impl Extension for CoreExtension {
             b"quoted_printable_encode",
             string::php_quoted_printable_encode,
         );
-        registry.register_function(
-            b"__deka_convert_cyr_string",
-            string::php_deka_convert_cyr_string,
-        );
-        registry.register_function(
-            b"__deka_convert_uuencode",
-            string::php_deka_convert_uuencode,
-        );
-        registry.register_function(
-            b"__deka_convert_uudecode",
-            string::php_deka_convert_uudecode,
-        );
+        // registry.register_function(
+        //     b"__deka_convert_cyr_string",
+        //     string::php_deka_convert_cyr_string,
+        // );
+        // registry.register_function(
+        //     b"__deka_convert_uuencode",
+        //     string::php_deka_convert_uuencode,
+        // );
+        // registry.register_function(
+        //     b"__deka_convert_uudecode",
+        //     string::php_deka_convert_uudecode,
+        // );
         // registry.register_function(b"convert_cyr_string", string::php_convert_cyr_string);
         // registry.register_function(b"convert_uuencode", string::php_convert_uuencode);
         // registry.register_function(b"convert_uudecode", string::php_convert_uudecode);
@@ -196,29 +196,29 @@ impl Extension for CoreExtension {
         // registry.register_function(b"chunk_split", string::php_chunk_split);
         // registry.register_function(b"str_getcsv", string::php_str_getcsv);
         // registry.register_function(b"strrev", string::php_strrev);
-        registry.register_function(b"__deka_metaphone", string::php_deka_metaphone);
-        registry.register_function(b"__deka_setlocale", string::php_deka_setlocale);
-        registry.register_function(b"__deka_localeconv", string::php_deka_localeconv);
-        registry.register_function(b"__deka_nl_langinfo", string::php_deka_nl_langinfo);
-        registry.register_function(b"__deka_strcoll", string::php_deka_strcoll);
-        registry.register_function(b"__deka_number_format", string::php_deka_number_format);
-        registry.register_function(b"__deka_money_format", string::php_deka_money_format);
-        registry.register_function(b"__deka_strcmp", string::php_deka_strcmp);
-        registry.register_function(b"__deka_strcasecmp", string::php_deka_strcasecmp);
-        registry.register_function(b"__deka_strncmp", string::php_deka_strncmp);
-        registry.register_function(b"__deka_strncasecmp", string::php_deka_strncasecmp);
-        registry.register_function(b"__deka_strnatcmp", string::php_deka_strnatcmp);
-        registry.register_function(b"__deka_strnatcasecmp", string::php_deka_strnatcasecmp);
-        registry.register_function(b"__deka_levenshtein", string::php_deka_levenshtein);
-        registry.register_function_with_by_ref(
-            b"__deka_similar_text",
-            string::php_deka_similar_text,
-            vec![2],
-        );
-        registry.register_function(b"__deka_soundex", string::php_deka_soundex);
-        registry.register_function(b"__deka_substr_compare", string::php_deka_substr_compare);
-        registry.register_function(b"__deka_strstr", string::php_deka_strstr);
-        registry.register_function(b"__deka_stristr", string::php_deka_stristr);
+        // registry.register_function(b"__deka_metaphone", string::php_deka_metaphone);
+        // registry.register_function(b"__deka_setlocale", string::php_deka_setlocale);
+        // registry.register_function(b"__deka_localeconv", string::php_deka_localeconv);
+        // registry.register_function(b"__deka_nl_langinfo", string::php_deka_nl_langinfo);
+        // registry.register_function(b"__deka_strcoll", string::php_deka_strcoll);
+        // registry.register_function(b"__deka_number_format", string::php_deka_number_format);
+        // registry.register_function(b"__deka_money_format", string::php_deka_money_format);
+        // registry.register_function(b"__deka_strcmp", string::php_deka_strcmp);
+        // registry.register_function(b"__deka_strcasecmp", string::php_deka_strcasecmp);
+        // registry.register_function(b"__deka_strncmp", string::php_deka_strncmp);
+        // registry.register_function(b"__deka_strncasecmp", string::php_deka_strncasecmp);
+        // registry.register_function(b"__deka_strnatcmp", string::php_deka_strnatcmp);
+        // registry.register_function(b"__deka_strnatcasecmp", string::php_deka_strnatcasecmp);
+        // registry.register_function(b"__deka_levenshtein", string::php_deka_levenshtein);
+        // registry.register_function_with_by_ref(
+        //     b"__deka_similar_text",
+        //     string::php_deka_similar_text,
+        //     vec![2],
+        // );
+        // registry.register_function(b"__deka_soundex", string::php_deka_soundex);
+        // registry.register_function(b"__deka_substr_compare", string::php_deka_substr_compare);
+        // registry.register_function(b"__deka_strstr", string::php_deka_strstr);
+        // registry.register_function(b"__deka_stristr", string::php_deka_stristr);
         // registry.register_function(b"metaphone", string::php_metaphone);
         // registry.register_function(b"setlocale", string::php_setlocale);
         // registry.register_function(b"localeconv", string::php_localeconv);
@@ -242,14 +242,14 @@ impl Extension for CoreExtension {
         // registry.register_function(b"ucfirst", string::php_ucfirst);
         // registry.register_function(b"lcfirst", string::php_lcfirst);
         // registry.register_function(b"ucwords", string::php_ucwords);
-        registry.register_function(b"__deka_hebrev", string::php_deka_hebrev);
-        registry.register_function(b"__deka_wordwrap", string::php_deka_wordwrap);
-        registry.register_function(b"__deka_quotemeta", string::php_deka_quotemeta);
-        registry.register_function(b"__deka_nl2br", string::php_deka_nl2br);
-        registry.register_function(b"__deka_strip_tags", string::php_deka_strip_tags);
-        registry.register_function(b"__deka_strtok", string::php_deka_strtok);
-        registry.register_function(b"__deka_count_chars", string::php_deka_count_chars);
-        registry.register_function(b"__deka_str_word_count", string::php_deka_str_word_count);
+        // registry.register_function(b"__deka_hebrev", string::php_deka_hebrev);
+        // registry.register_function(b"__deka_wordwrap", string::php_deka_wordwrap);
+        // registry.register_function(b"__deka_quotemeta", string::php_deka_quotemeta);
+        // registry.register_function(b"__deka_nl2br", string::php_deka_nl2br);
+        // registry.register_function(b"__deka_strip_tags", string::php_deka_strip_tags);
+        // registry.register_function(b"__deka_strtok", string::php_deka_strtok);
+        // registry.register_function(b"__deka_count_chars", string::php_deka_count_chars);
+        // registry.register_function(b"__deka_str_word_count", string::php_deka_str_word_count);
         // registry.register_function(b"hebrev", string::php_hebrev);
         // registry.register_function(b"wordwrap", string::php_wordwrap);
         // registry.register_function(b"quotemeta", string::php_quotemeta);
@@ -261,34 +261,34 @@ impl Extension for CoreExtension {
         // registry.register_function(b"str_contains", string::php_str_contains);
         // registry.register_function(b"str_starts_with", string::php_str_starts_with);
         // registry.register_function(b"str_ends_with", string::php_str_ends_with);
-        registry.register_function(b"__deka_str_increment", string::php_deka_str_increment);
-        registry.register_function(b"__deka_str_decrement", string::php_deka_str_decrement);
-        registry.register_function(b"__deka_htmlspecialchars", string::php_deka_htmlspecialchars);
-        registry.register_function(
-            b"__deka_htmlspecialchars_decode",
-            string::php_deka_htmlspecialchars_decode,
-        );
-        registry.register_function(b"__deka_htmlentities", string::php_deka_htmlentities);
-        registry.register_function(b"__deka_html_entity_decode", string::php_deka_html_entity_decode);
+        // registry.register_function(b"__deka_str_increment", string::php_deka_str_increment);
+        // registry.register_function(b"__deka_str_decrement", string::php_deka_str_decrement);
+        // registry.register_function(b"__deka_htmlspecialchars", string::php_deka_htmlspecialchars);
+        // registry.register_function(
+        //     b"__deka_htmlspecialchars_decode",
+        //     string::php_deka_htmlspecialchars_decode,
+        // );
+        // registry.register_function(b"__deka_htmlentities", string::php_deka_htmlentities);
+        // registry.register_function(b"__deka_html_entity_decode", string::php_deka_html_entity_decode);
         registry.register_function(
             b"get_html_translation_table",
             string::php_get_html_translation_table,
         );
-        registry.register_function_with_by_ref(
-            b"__deka_str_replace",
-            string::php_deka_str_replace,
-            vec![3],
-        );
-        registry.register_function_with_by_ref(
-            b"__deka_str_ireplace",
-            string::php_deka_str_ireplace,
-            vec![3],
-        );
-        registry.register_function_with_by_ref(
-            b"__deka_parse_str",
-            string::php_deka_parse_str,
-            vec![1],
-        );
+        // registry.register_function_with_by_ref(
+        //     b"__deka_str_replace",
+        //     string::php_deka_str_replace,
+        //     vec![3],
+        // );
+        // registry.register_function_with_by_ref(
+        //     b"__deka_str_ireplace",
+        //     string::php_deka_str_ireplace,
+        //     vec![3],
+        // );
+        // registry.register_function_with_by_ref(
+        //     b"__deka_parse_str",
+        //     string::php_deka_parse_str,
+        //     vec![1],
+        // );
         // registry.register_function(b"str_increment", string::php_str_increment);
         // registry.register_function(b"str_decrement", string::php_str_decrement);
         // registry.register_function(b"htmlspecialchars", string::php_htmlspecialchars);
@@ -300,12 +300,12 @@ impl Extension for CoreExtension {
         // registry.register_function(b"html_entity_decode", string::php_html_entity_decode);
         // registry.register_function_with_by_ref(b"str_replace", string::php_str_replace, vec![3]);
         // registry.register_function_with_by_ref(b"str_ireplace", string::php_str_ireplace, vec![3]);
-        // registry.register_function_with_by_ref(b"parse_str", string::php_parse_str, vec![1]);
+        registry.register_function_with_by_ref(b"parse_str", string::php_parse_str, vec![1]);
         // registry.register_function(b"strtolower", string::php_strtolower);
         // registry.register_function(b"strtoupper", string::php_strtoupper);
-        registry.register_function(b"__deka_utf8_encode", string::php_deka_utf8_encode);
-        registry.register_function(b"__deka_utf8_decode", string::php_deka_utf8_decode);
-        registry.register_function(b"__deka_version_compare", string::php_deka_version_compare);
+        // registry.register_function(b"__deka_utf8_encode", string::php_deka_utf8_encode);
+        // registry.register_function(b"__deka_utf8_decode", string::php_deka_utf8_decode);
+        // registry.register_function(b"__deka_version_compare", string::php_deka_version_compare);
         // registry.register_function(b"utf8_encode", string::php_utf8_encode);
         // registry.register_function(b"utf8_decode", string::php_utf8_decode);
         // registry.register_function(b"version_compare", string::php_version_compare);
@@ -313,13 +313,13 @@ impl Extension for CoreExtension {
         // registry.register_function(b"join", string::php_implode);
         // registry.register_function(b"explode", string::php_explode);
         // registry.register_function(b"strchr", string::php_strstr);
-        registry.register_function(b"__deka_sprintf", string::php_deka_sprintf);
-        registry.register_function(b"__deka_sscanf", string::php_deka_sscanf);
-        registry.register_function(b"__deka_printf", string::php_deka_printf);
-        registry.register_function(b"__deka_vsprintf", string::php_deka_vsprintf);
-        registry.register_function(b"__deka_vprintf", string::php_deka_vprintf);
-        registry.register_function(b"__deka_fprintf", string::php_deka_fprintf);
-        registry.register_function(b"__deka_vfprintf", string::php_deka_vfprintf);
+        // registry.register_function(b"__deka_sprintf", string::php_deka_sprintf);
+        // registry.register_function(b"__deka_sscanf", string::php_deka_sscanf);
+        // registry.register_function(b"__deka_printf", string::php_deka_printf);
+        // registry.register_function(b"__deka_vsprintf", string::php_deka_vsprintf);
+        // registry.register_function(b"__deka_vprintf", string::php_deka_vprintf);
+        // registry.register_function(b"__deka_fprintf", string::php_deka_fprintf);
+        // registry.register_function(b"__deka_vfprintf", string::php_deka_vfprintf);
         // registry.register_function(b"sprintf", string::php_sprintf);
         // registry.register_function(b"sscanf", string::php_sscanf);
         // registry.register_function(b"printf", string::php_printf);
@@ -329,25 +329,25 @@ impl Extension for CoreExtension {
         // registry.register_function(b"vfprintf", string::php_vfprintf);
 
         // Array functions
-        registry.register_function(b"__deka_array", array::php_deka_array);
-        registry.register_function(b"__deka_array_all", array::php_deka_array_all);
-        registry.register_function(b"__deka_array_any", array::php_deka_array_any);
-        registry.register_function(
-            b"__deka_array_change_key_case",
-            array::php_deka_array_change_key_case,
-        );
-        registry.register_function(b"__deka_array_chunk", array::php_deka_array_chunk);
-        registry.register_function(b"__deka_array_column", array::php_deka_array_column);
-        registry.register_function(b"__deka_array_combine", array::php_deka_array_combine);
-        registry.register_function(
-            b"__deka_array_count_values",
-            array::php_deka_array_count_values,
-        );
-        registry.register_function(b"__deka_array_diff", array::php_deka_array_diff);
-        registry.register_function(
-            b"__deka_array_diff_assoc",
-            array::php_deka_array_diff_assoc,
-        );
+        // registry.register_function(b"__deka_array", array::php_deka_array);
+        // registry.register_function(b"__deka_array_all", array::php_deka_array_all);
+        // registry.register_function(b"__deka_array_any", array::php_deka_array_any);
+        // registry.register_function(
+        //     b"__deka_array_change_key_case",
+        //     array::php_deka_array_change_key_case,
+        // );
+        // registry.register_function(b"__deka_array_chunk", array::php_deka_array_chunk);
+        // registry.register_function(b"__deka_array_column", array::php_deka_array_column);
+        // registry.register_function(b"__deka_array_combine", array::php_deka_array_combine);
+        // registry.register_function(
+        //     b"__deka_array_count_values",
+        //     array::php_deka_array_count_values,
+        // );
+        // registry.register_function(b"__deka_array_diff", array::php_deka_array_diff);
+        // registry.register_function(
+        //     b"__deka_array_diff_assoc",
+        //     array::php_deka_array_diff_assoc,
+        // );
         // registry.register_function(b"array", array::php_array);
         // registry.register_function(b"array_all", array::php_array_all);
         // registry.register_function(b"array_any", array::php_array_any);
@@ -358,18 +358,18 @@ impl Extension for CoreExtension {
         // registry.register_function(b"array_count_values", array::php_array_count_values);
         // registry.register_function(b"array_diff", array::php_array_diff);
         // registry.register_function(b"array_diff_assoc", array::php_array_diff_assoc);
-        registry.register_function(b"__deka_array_diff_key", array::php_deka_array_diff_key);
-        registry.register_function(
-            b"__deka_array_diff_uassoc",
-            array::php_deka_array_diff_uassoc,
-        );
-        registry.register_function(b"__deka_array_diff_ukey", array::php_deka_array_diff_ukey);
-        registry.register_function(b"__deka_array_fill", array::php_deka_array_fill);
-        registry.register_function(b"__deka_array_fill_keys", array::php_deka_array_fill_keys);
-        registry.register_function(b"__deka_array_filter", array::php_deka_array_filter);
-        registry.register_function(b"__deka_array_find", array::php_deka_array_find);
-        registry.register_function(b"__deka_array_find_key", array::php_deka_array_find_key);
-        registry.register_function(b"__deka_array_first", array::php_deka_array_first);
+        // registry.register_function(b"__deka_array_diff_key", array::php_deka_array_diff_key);
+        // registry.register_function(
+        //     b"__deka_array_diff_uassoc",
+        //     array::php_deka_array_diff_uassoc,
+        // );
+        // registry.register_function(b"__deka_array_diff_ukey", array::php_deka_array_diff_ukey);
+        // registry.register_function(b"__deka_array_fill", array::php_deka_array_fill);
+        // registry.register_function(b"__deka_array_fill_keys", array::php_deka_array_fill_keys);
+        // registry.register_function(b"__deka_array_filter", array::php_deka_array_filter);
+        // registry.register_function(b"__deka_array_find", array::php_deka_array_find);
+        // registry.register_function(b"__deka_array_find_key", array::php_deka_array_find_key);
+        // registry.register_function(b"__deka_array_first", array::php_deka_array_first);
         // registry.register_function(b"array_diff_key", array::php_array_diff_key);
         // registry.register_function(b"array_diff_uassoc", array::php_array_diff_uassoc);
         // registry.register_function(b"array_diff_ukey", array::php_array_diff_ukey);
@@ -379,27 +379,27 @@ impl Extension for CoreExtension {
         // registry.register_function(b"array_find", array::php_array_find);
         // registry.register_function(b"array_find_key", array::php_array_find_key);
         // registry.register_function(b"array_first", array::php_array_first);
-        registry.register_function(b"__deka_array_flip", array::php_deka_array_flip);
-        registry.register_function(b"__deka_array_intersect", array::php_deka_array_intersect);
-        registry.register_function(
-            b"__deka_array_intersect_assoc",
-            array::php_deka_array_intersect_assoc,
-        );
-        registry.register_function(
-            b"__deka_array_intersect_key",
-            array::php_deka_array_intersect_key,
-        );
-        registry.register_function(
-            b"__deka_array_intersect_uassoc",
-            array::php_deka_array_intersect_uassoc,
-        );
-        registry.register_function(
-            b"__deka_array_intersect_ukey",
-            array::php_deka_array_intersect_ukey,
-        );
-        registry.register_function(b"__deka_array_is_list", array::php_deka_array_is_list);
-        registry.register_function(b"__deka_array_key_first", array::php_deka_array_key_first);
-        registry.register_function(b"__deka_array_key_last", array::php_deka_array_key_last);
+        // registry.register_function(b"__deka_array_flip", array::php_deka_array_flip);
+        // registry.register_function(b"__deka_array_intersect", array::php_deka_array_intersect);
+        // registry.register_function(
+        //     b"__deka_array_intersect_assoc",
+        //     array::php_deka_array_intersect_assoc,
+        // );
+        // registry.register_function(
+        //     b"__deka_array_intersect_key",
+        //     array::php_deka_array_intersect_key,
+        // );
+        // registry.register_function(
+        //     b"__deka_array_intersect_uassoc",
+        //     array::php_deka_array_intersect_uassoc,
+        // );
+        // registry.register_function(
+        //     b"__deka_array_intersect_ukey",
+        //     array::php_deka_array_intersect_ukey,
+        // );
+        // registry.register_function(b"__deka_array_is_list", array::php_deka_array_is_list);
+        // registry.register_function(b"__deka_array_key_first", array::php_deka_array_key_first);
+        // registry.register_function(b"__deka_array_key_last", array::php_deka_array_key_last);
         // registry.register_function(b"array_flip", array::php_array_flip);
         // registry.register_function(b"array_intersect", array::php_array_intersect);
         // registry.register_function(b"array_intersect_assoc", array::php_array_intersect_assoc);
@@ -409,33 +409,33 @@ impl Extension for CoreExtension {
         // registry.register_function(b"array_is_list", array::php_array_is_list);
         // registry.register_function(b"array_key_first", array::php_array_key_first);
         // registry.register_function(b"array_key_last", array::php_array_key_last);
-        registry.register_function(b"__deka_array_last", array::php_deka_array_last);
-        registry.register_function(b"__deka_array_map", array::php_deka_array_map);
-        registry.register_function(b"__deka_array_merge", array::php_deka_array_merge);
-        registry.register_function(
-            b"__deka_array_merge_recursive",
-            array::php_deka_array_merge_recursive,
-        );
-        registry.register_function(b"__deka_array_multisort", array::php_deka_array_multisort);
-        registry.register_function(b"__deka_array_pad", array::php_deka_array_pad);
+        // registry.register_function(b"__deka_array_last", array::php_deka_array_last);
+        // registry.register_function(b"__deka_array_map", array::php_deka_array_map);
+        // registry.register_function(b"__deka_array_merge", array::php_deka_array_merge);
+        // registry.register_function(
+        //     b"__deka_array_merge_recursive",
+        //     array::php_deka_array_merge_recursive,
+        // );
+        // registry.register_function(b"__deka_array_multisort", array::php_deka_array_multisort);
+        // registry.register_function(b"__deka_array_pad", array::php_deka_array_pad);
         // registry.register_function(b"array_last", array::php_array_last);
         // registry.register_function(b"array_map", array::php_array_map);
         // registry.register_function(b"array_merge_recursive", array::php_array_merge_recursive);
         // registry.register_function(b"array_multisort", array::php_array_multisort);
         // registry.register_function(b"array_pad", array::php_array_pad);
         // registry.register_function(b"array_pop", array::php_array_pop);
-        registry.register_function(b"__deka_array_product", array::php_deka_array_product);
-        registry.register_function(b"__deka_array_reduce", array::php_deka_array_reduce);
-        registry.register_function(b"__deka_array_replace", array::php_deka_array_replace);
-        registry.register_function(
-            b"__deka_array_replace_recursive",
-            array::php_deka_array_replace_recursive,
-        );
-        registry.register_function(b"__deka_array_reverse", array::php_deka_array_reverse);
-        registry.register_function(b"__deka_array_search", array::php_deka_array_search);
-        registry.register_function(b"__deka_array_shift", array::php_deka_array_shift);
-        registry.register_function(b"__deka_array_slice", array::php_deka_array_slice);
-        registry.register_function(b"__deka_array_splice", array::php_deka_array_splice);
+        // registry.register_function(b"__deka_array_product", array::php_deka_array_product);
+        // registry.register_function(b"__deka_array_reduce", array::php_deka_array_reduce);
+        // registry.register_function(b"__deka_array_replace", array::php_deka_array_replace);
+        // registry.register_function(
+        //     b"__deka_array_replace_recursive",
+        //     array::php_deka_array_replace_recursive,
+        // );
+        // registry.register_function(b"__deka_array_reverse", array::php_deka_array_reverse);
+        // registry.register_function(b"__deka_array_search", array::php_deka_array_search);
+        // registry.register_function(b"__deka_array_shift", array::php_deka_array_shift);
+        // registry.register_function(b"__deka_array_slice", array::php_deka_array_slice);
+        // registry.register_function(b"__deka_array_splice", array::php_deka_array_splice);
         // registry.register_function(b"array_product", array::php_array_product);
         // registry.register_function(b"array_reduce", array::php_array_reduce);
         // registry.register_function(b"array_replace", array::php_array_replace);
@@ -445,55 +445,56 @@ impl Extension for CoreExtension {
         // registry.register_function(b"array_shift", array::php_array_shift);
         // registry.register_function(b"array_slice", array::php_array_slice);
         // registry.register_function(b"array_splice", array::php_array_splice);
-        registry.register_function(b"__deka_array_sum", array::php_deka_array_sum);
-        registry.register_function(b"__deka_array_rand", array::php_deka_array_rand);
-        registry.register_function(b"__deka_array_udiff", array::php_deka_array_udiff);
-        registry.register_function(
-            b"__deka_array_udiff_assoc",
-            array::php_deka_array_udiff_assoc,
-        );
-        registry.register_function(
-            b"__deka_array_udiff_uassoc",
-            array::php_deka_array_udiff_uassoc,
-        );
-        registry.register_function(b"__deka_array_uintersect", array::php_deka_array_uintersect);
-        registry.register_function(
-            b"__deka_array_uintersect_assoc",
-            array::php_deka_array_uintersect_assoc,
-        );
-        registry.register_function(
-            b"__deka_array_uintersect_uassoc",
-            array::php_deka_array_uintersect_uassoc,
-        );
-        registry.register_function(b"__deka_array_unique", array::php_deka_array_unique);
-        registry.register_function(b"__deka_array_walk", array::php_deka_array_walk);
-        registry.register_function(
-            b"__deka_array_walk_recursive",
-            array::php_deka_array_walk_recursive,
-        );
-        registry.register_function(b"__deka_arsort", array::php_deka_arsort);
-        registry.register_function(b"__deka_asort", array::php_deka_asort);
-        registry.register_function(b"__deka_compact", array::php_deka_compact);
-        registry.register_function(b"__deka_extract", array::php_deka_extract);
-        registry.register_function(b"__deka_key", array::php_deka_key);
-        registry.register_function(b"__deka_key_exists", array::php_deka_key_exists);
-        registry.register_function(b"__deka_krsort", array::php_deka_krsort);
-        registry.register_function(b"__deka_natcasesort", array::php_deka_natcasesort);
-        registry.register_function(b"__deka_natsort", array::php_deka_natsort);
-        registry.register_function(b"__deka_pos", array::php_deka_pos);
-        registry.register_function(b"__deka_prev", array::php_deka_prev);
-        registry.register_function(b"__deka_range", array::php_deka_range);
-        registry.register_function(b"__deka_rsort", array::php_deka_rsort);
-        registry.register_function(b"__deka_shuffle", array::php_deka_shuffle);
-        registry.register_function(b"__deka_sort", array::php_deka_sort);
-        registry.register_function(b"__deka_uasort", array::php_deka_uasort);
-        registry.register_function(b"__deka_uksort", array::php_deka_uksort);
-        registry.register_function(b"__deka_usort", array::php_deka_usort);
-        registry.register_function(b"__deka_ksort", array::php_deka_ksort);
-        registry.register_function(b"__deka_current", array::php_deka_current);
-        registry.register_function(b"__deka_next", array::php_deka_next);
-        registry.register_function(b"__deka_reset", array::php_deka_reset);
-        registry.register_function(b"__deka_end", array::php_deka_end);
+        // registry.register_function(b"__deka_array_sum", array::php_deka_array_sum);
+        // registry.register_function(b"__deka_array_rand", array::php_deka_array_rand);
+        // registry.register_function(b"__deka_array_udiff", array::php_deka_array_udiff);
+        // registry.register_function(
+        //     b"__deka_array_udiff_assoc",
+        //     array::php_deka_array_udiff_assoc,
+        // );
+        // registry.register_function(
+        //     b"__deka_array_udiff_uassoc",
+        //     array::php_deka_array_udiff_uassoc,
+        // );
+        // registry.register_function(b"__deka_array_uintersect", array::php_deka_array_uintersect);
+        // registry.register_function(
+        //     b"__deka_array_uintersect_assoc",
+        //     array::php_deka_array_uintersect_assoc,
+        // );
+        // registry.register_function(
+        //     b"__deka_array_uintersect_uassoc",
+        //     array::php_deka_array_uintersect_uassoc,
+        // );
+        // registry.register_function(b"__deka_array_unique", array::php_deka_array_unique);
+        // registry.register_function(b"__deka_array_walk", array::php_deka_array_walk);
+        // registry.register_function(
+        //     b"__deka_array_walk_recursive",
+        //     array::php_deka_array_walk_recursive,
+        // );
+        // registry.register_function(b"__deka_arsort", array::php_deka_arsort);
+        // registry.register_function(b"__deka_asort", array::php_deka_asort);
+        // registry.register_function(b"__deka_compact", array::php_deka_compact);
+        // registry.register_function(b"__deka_extract", array::php_deka_extract);
+        registry.register_function(b"__deka_array_cursor", array::php_deka_array_cursor);
+        // registry.register_function(b"__deka_key", array::php_deka_key);
+        // registry.register_function(b"__deka_key_exists", array::php_deka_key_exists);
+        // registry.register_function(b"__deka_krsort", array::php_deka_krsort);
+        // registry.register_function(b"__deka_natcasesort", array::php_deka_natcasesort);
+        // registry.register_function(b"__deka_natsort", array::php_deka_natsort);
+        // registry.register_function(b"__deka_pos", array::php_deka_pos);
+        // registry.register_function(b"__deka_prev", array::php_deka_prev);
+        // registry.register_function(b"__deka_range", array::php_deka_range);
+        // registry.register_function(b"__deka_rsort", array::php_deka_rsort);
+        // registry.register_function(b"__deka_shuffle", array::php_deka_shuffle);
+        // registry.register_function(b"__deka_sort", array::php_deka_sort);
+        // registry.register_function(b"__deka_uasort", array::php_deka_uasort);
+        // registry.register_function(b"__deka_uksort", array::php_deka_uksort);
+        // registry.register_function(b"__deka_usort", array::php_deka_usort);
+        // registry.register_function(b"__deka_ksort", array::php_deka_ksort);
+        // registry.register_function(b"__deka_current", array::php_deka_current);
+        // registry.register_function(b"__deka_next", array::php_deka_next);
+        // registry.register_function(b"__deka_reset", array::php_deka_reset);
+        // registry.register_function(b"__deka_end", array::php_deka_end);
         // registry.register_function(b"array_sum", array::php_array_sum);
         // registry.register_function(b"array_rand", array::php_array_rand);
         // registry.register_function(b"array_udiff", array::php_array_udiff);
@@ -538,6 +539,9 @@ impl Extension for CoreExtension {
         // registry.register_function(b"count", array::php_count);
 
         // Variable functions
+        registry.register_function(b"__deka_symbol_get", variable::php_deka_symbol_get);
+        registry.register_function(b"__deka_symbol_set", variable::php_deka_symbol_set);
+        registry.register_function(b"__deka_symbol_exists", variable::php_deka_symbol_exists);
         registry.register_function(b"var_dump", variable::php_var_dump);
         registry.register_function(b"print_r", variable::php_print_r);
         registry.register_function(b"is_string", variable::php_is_string);

@@ -2128,6 +2128,9 @@ pub fn php_parse_str(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 2 {
         return Err("parse_str() expects 1 or 2 parameters".into());
     }
+    if std::env::var("DEKA_PARSE_STR_DEBUG").is_ok() {
+        eprintln!("[deka] parse_str args={}", args.len());
+    }
     let input = vm.value_to_string(args[0])?;
     let mut root = ArrayData::new();
     for (raw_key, raw_val) in parse_query_pairs(&input) {
@@ -2144,11 +2147,24 @@ pub fn php_parse_str(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         insert_parse_str_value(vm, &mut root, &base, &segments, value_handle)?;
     }
 
-    if args.len() == 2 {
+    let has_output = args.len() == 2
+        && vm.arena.get(args[1]).is_ref
+        && vm.var_handle_map.contains_key(&args[1]);
+    if has_output {
         let out_handle = args[1];
-        if vm.arena.get(out_handle).is_ref {
-            vm.arena.get_mut(out_handle).value = Val::Array(Rc::new(root));
-        }
+        vm.arena.get_mut(out_handle).value = Val::Array(Rc::new(root.clone()));
+    }
+
+    let entries: Vec<(ArrayKey, Handle)> =
+        root.map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    for (key, value_handle) in entries {
+        let name = match key {
+            ArrayKey::Int(i) => i.to_string().into_bytes(),
+            ArrayKey::Str(s) => (*s).clone(),
+        };
+        let sym = vm.context.interner.intern(&name);
+        vm.store_variable(sym, value_handle)
+            .map_err(|e| format!("parse_str(): {}", e))?;
     }
 
     Ok(vm.arena.alloc(Val::Null))
