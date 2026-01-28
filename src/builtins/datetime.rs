@@ -1376,6 +1376,50 @@ pub fn php_microtime(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 }
 
+/// hrtime(bool $as_number = false): array|int
+/// Returns high resolution time
+/// Reference: $PHP_SRC_PATH/ext/standard/hrtime.c
+pub fn php_hrtime(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() > 1 {
+        return Err("hrtime() expects at most 1 parameter".into());
+    }
+
+    let as_number = if args.len() == 1 {
+        let val = vm.arena.get(args[0]);
+        matches!(&val.value, Val::Bool(true) | Val::Int(1))
+    } else {
+        false
+    };
+
+    // Get current time with nanosecond precision
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    
+    let secs = now.as_secs() as i64;
+    let nanos = now.subsec_nanos() as i64;
+
+    if as_number {
+        // Return total nanoseconds as integer
+        let total_nanos = secs * 1_000_000_000 + nanos;
+        Ok(vm.arena.alloc(Val::Int(total_nanos)))
+    } else {
+        // Return array [seconds, nanoseconds]
+        let mut result_arr = indexmap::IndexMap::new();
+        result_arr.insert(
+            crate::core::value::ArrayKey::Int(0),
+            vm.arena.alloc(Val::Int(secs)),
+        );
+        result_arr.insert(
+            crate::core::value::ArrayKey::Int(1),
+            vm.arena.alloc(Val::Int(nanos)),
+        );
+        Ok(vm.arena.alloc(Val::Array(
+            crate::core::value::ArrayData::from(result_arr).into(),
+        )))
+    }
+}
+
 /// mktime(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): int|false
 pub fn php_mktime(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 6 {
