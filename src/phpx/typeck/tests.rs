@@ -269,6 +269,30 @@ fn generic_array_literal_inference_enforces_constraints() {
 }
 
 #[test]
+fn generic_option_infers_from_some() {
+    let code = "<?php function takes<T>(Option<T> $x) {} takes(Option::Some(1));";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn generic_option_none_requires_type() {
+    let code = "<?php function takes<T>(Option<T> $x) {} takes(Option::None);";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn generic_result_infers_from_ok() {
+    let code = "<?php function takes<T>(Result<T, string> $x) {} takes(Result::Ok(1));";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn generic_result_infers_from_err() {
+    let code = "<?php function takes<E>(Result<int, E> $x) {} takes(Result::Err(\"no\"));";
+    assert!(check(code).is_ok());
+}
+
+#[test]
 fn class_declaration_is_rejected() {
     let code = "<?php class Foo { }";
     assert!(check(code).is_err());

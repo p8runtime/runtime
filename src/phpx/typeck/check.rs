@@ -1674,6 +1674,32 @@ impl<'a> CheckContext<'a> {
                             self.infer_type_params(arg, &actual_args[idx], inferred);
                         }
                     }
+                } else if let Type::EnumCase {
+                    enum_name,
+                    case_name,
+                    args: actual_args,
+                } = actual
+                {
+                    if base.eq_ignore_ascii_case(enum_name) {
+                        if base.eq_ignore_ascii_case("Option") && args.len() == 1 {
+                            if case_name.eq_ignore_ascii_case("Some") {
+                                if let Some(actual_inner) = actual_args.get(0) {
+                                    self.infer_type_params(&args[0], actual_inner, inferred);
+                                }
+                            }
+                        }
+                        if base.eq_ignore_ascii_case("Result") && args.len() == 2 {
+                            if case_name.eq_ignore_ascii_case("Ok") {
+                                if let Some(actual_ok) = actual_args.get(0) {
+                                    self.infer_type_params(&args[0], actual_ok, inferred);
+                                }
+                            } else if case_name.eq_ignore_ascii_case("Err") {
+                                if let Some(actual_err) = actual_args.get(1) {
+                                    self.infer_type_params(&args[1], actual_err, inferred);
+                                }
+                            }
+                        }
+                    }
                 } else if base.eq_ignore_ascii_case("array")
                     && matches!(actual, Type::Array)
                     && args.len() == 1
