@@ -942,6 +942,12 @@ impl<'src> Emitter<'src> {
                                 self.chunk.code.push(OpCode::UnsetObj);
                             }
                         }
+                        Expr::DotAccess { target, property, .. } => {
+                            self.emit_expr(target);
+                            let prop_name = self.get_text(property.span);
+                            let sym = self.interner.intern(prop_name);
+                            self.chunk.code.push(OpCode::UnsetDot(sym));
+                        }
                         Expr::ClassConstFetch {
                             class, constant, ..
                         } => {

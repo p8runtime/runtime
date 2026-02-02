@@ -120,9 +120,11 @@ pub enum OpCode {
     DefTrait(Symbol),                 // Define trait (name)
     AddInterface(Symbol, Symbol),     // (class_name, interface_name)
     UseTrait(Symbol, Symbol),         // (class_name, trait_name)
+    EmbedStruct(Symbol, Symbol),      // (class_name, embed_struct_name)
     AllowDynamicProperties(Symbol), // Mark class as allowing dynamic properties (for #[AllowDynamicProperties])
     AddClassAttribute(Symbol, u16), // (class_name, attr_const_idx)
     MarkAbstract(Symbol),           // Mark class as abstract
+    MarkStruct(Symbol),             // Mark class as struct (value semantics)
     FinalizeClass(Symbol), // Validate class after all methods are defined (interfaces, abstract methods)
     DefMethod(Symbol, Symbol, u32, Visibility, bool, bool), // (class_name, method_name, func_idx, visibility, is_static, is_abstract)
     DefProp(Symbol, Symbol, u16, Visibility, u32, bool), // (class_name, prop_name, default_val_idx, visibility, type_hint_idx, is_readonly)
@@ -131,6 +133,7 @@ pub enum OpCode {
     AddPropertyAttribute(Symbol, Symbol, u16, bool), // (class_name, prop_name, attr_const_idx, is_static)
     AddClassConstAttribute(Symbol, Symbol, u16),     // (class_name, const_name, attr_const_idx)
     DefEnumCase(Symbol, Symbol, u16, bool),          // (class_name, case_name, val_idx, has_value)
+    DefEnumCasePayload(Symbol, Symbol, u16),         // (class_name, case_name, payload_meta_idx)
     DefStaticProp(Symbol, Symbol, u16, Visibility, u32), // (class_name, prop_name, default_val_idx, visibility, type_hint_idx)
     FetchClassConst(Symbol, Symbol),                     // (class_name, const_name) -> [Val]
     FetchClassConstDynamic(Symbol),                      // [Class] -> [Val] (const_name is arg)
@@ -139,10 +142,20 @@ pub enum OpCode {
     CallStaticMethod(Symbol, Symbol, u8), // (class_name, method_name, arg_count) -> [RetVal]
     CallStaticMethodDynamic(u8),          // [ClassName, MethodName, Arg1...ArgN] -> [RetVal]
     New(Symbol, u8),                      // Create instance, call constructor with N args
+    NewStructLiteral(Symbol),             // Create struct instance without constructor
     NewDynamic(u8),     // [ClassName] -> Create instance, call constructor with N args
     FetchProp(Symbol),  // [Obj] -> [Val]
     FetchPropDynamic,   // [Obj, Name] -> [Val]
     AssignProp(Symbol), // [Obj, Val] -> [Val]
+    InitObjectMap(u32), // [] -> [ObjectMap]
+    FetchDot(Symbol),   // [ObjectMap] -> [Val]
+    AssignDot(Symbol),  // [ObjectMap, Val] -> [Val]
+    IssetDot(Symbol),   // [ObjectMap] -> [Bool]
+    UnsetDot(Symbol),   // [ObjectMap] -> []
+    PreIncDot(Symbol),  // [ObjectMap] -> [Val]
+    PreDecDot(Symbol),  // [ObjectMap] -> [Val]
+    PostIncDot(Symbol), // [ObjectMap] -> [Val]
+    PostDecDot(Symbol), // [ObjectMap] -> [Val]
     CallMethod(Symbol, u8), // [Obj, Arg1...ArgN] -> [RetVal]
     CallMethodDynamic(u8), // [Obj, MethodName, Arg1...ArgN] -> [RetVal]
     UnsetObj,

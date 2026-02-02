@@ -50,7 +50,9 @@
 
 use crate::compiler::chunk::{ClosureData, CodeChunk, ReturnType, UserFunc};
 use crate::core::heap::Arena;
-use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, Symbol, Val, Visibility};
+use crate::core::value::{
+    ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, Symbol, Val, Visibility,
+};
 use crate::runtime::context::{
     AttributeInstance, ClassConstEntry, ClassDef, EngineContext, EnumBackedType, MethodEntry,
     MethodSignature, NativeMethodEntry, ParameterInfo, PropertyEntry, RequestContext,
@@ -80,6 +82,13 @@ unsafe extern "C" {
 }
 #[cfg(target_arch = "wasm32")]
 use std::time::Duration;
+
+#[derive(Clone, Copy)]
+struct PromotedFieldTarget {
+    struct_handle: Handle,
+    struct_class: Symbol,
+    value_handle: Handle,
+}
 
 #[derive(Debug)]
 pub enum VmError {
@@ -1276,7 +1285,7 @@ impl VM {
         }
     }
 
-    fn trigger_autoload(&mut self, class_name: Symbol) -> Result<(), VmError> {
+    pub(crate) fn trigger_autoload(&mut self, class_name: Symbol) -> Result<(), VmError> {
         let callsite_strict_types = self
             .frames
             .last()
@@ -1689,6 +1698,10 @@ impl VM {
         prop_name: Symbol,
         val_handle: Handle,
     ) -> Result<(), VmError> {
+        if matches!(self.arena.get(val_handle).value, Val::Uninitialized) {
+            return Ok(());
+        }
+
         // Get property type hint from class definition
         let type_hint = self.walk_inheritance_chain(class_name, |def, _cls| {
             def.properties
@@ -1834,7 +1847,7 @@ impl VM {
             }
             TypeHint::Iterable => match &val {
                 Val::Array(_) | Val::ConstArray(_) => Ok(None),
-                Val::Object(_) => {
+                Val::Object(_) | Val::Struct(_) => {
                     if let Ok(obj_class) = self.extract_object_class(val_handle) {
                         let traversable_sym = self.context.interner.intern(b"Traversable");
                         if self.is_subclass_of(obj_class, traversable_sym) {
@@ -1849,7 +1862,7 @@ impl VM {
                 _ => Err(self.type_error_for_property(&val, hint)),
             },
             TypeHint::Class(class_sym) => {
-                if let Val::Object(_) = &val {
+                if matches!(val, Val::Object(_) | Val::Struct(_)) {
                     if let Ok(obj_class) = self.extract_object_class(val_handle) {
                         if self.is_subclass_of(obj_class, *class_sym) {
                             return Ok(None);
@@ -1932,7 +1945,7 @@ impl VM {
             Val::Float(_) => "float",
             Val::String(_) => "string",
             Val::Array(_) => "array",
-            Val::Object(_) => "object",
+            Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => "object",
             Val::Resource(_) => "resource",
             Val::ObjPayload(_) => "object",
             Val::ConstArray(_) => "array",
@@ -1951,12 +1964,12 @@ impl VM {
             TypeHint::Bool => matches!(val, Val::Bool(_)),
             TypeHint::Null => matches!(val, Val::Null),
             TypeHint::Array => matches!(val, Val::Array(_) | Val::ConstArray(_)),
-            TypeHint::Object => matches!(val, Val::Object(_)),
+            TypeHint::Object => matches!(val, Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_)),
             TypeHint::Mixed => true,
             TypeHint::Callable => self.is_callable(val_handle),
             TypeHint::Iterable => match val {
                 Val::Array(_) | Val::ConstArray(_) => true,
-                Val::Object(_) => {
+                Val::Object(_) | Val::Struct(_) => {
                     if let Ok(obj_class) = self.extract_object_class(val_handle) {
                         let traversable_sym = self.context.interner.intern(b"Traversable");
                         self.is_subclass_of(obj_class, traversable_sym)
@@ -1967,7 +1980,7 @@ impl VM {
                 _ => false,
             },
             TypeHint::Class(class_sym) => match val {
-                Val::Object(_) => {
+                Val::Object(_) | Val::Struct(_) => {
                     if let Ok(obj_class) = self.extract_object_class(val_handle) {
                         self.is_subclass_of(obj_class, *class_sym)
                     } else {
@@ -1999,8 +2012,208 @@ impl VM {
                     _ => Err(VmError::RuntimeError("Invalid object payload".into())),
                 }
             }
+            Val::Struct(obj_data) => Ok(obj_data.class),
             _ => Err(VmError::RuntimeError("Not an object".into())),
         }
+    }
+
+    #[inline]
+    fn with_object_data<R>(
+        &self,
+        obj_handle: Handle,
+        f: impl FnOnce(&ObjectData) -> R,
+    ) -> Result<R, VmError> {
+        match &self.arena.get(obj_handle).value {
+            Val::Object(payload_handle) => {
+                let payload = self.arena.get(*payload_handle);
+                match &payload.value {
+                    Val::ObjPayload(obj_data) => Ok(f(obj_data)),
+                    _ => Err(VmError::RuntimeError("Invalid object payload".into())),
+                }
+            }
+            Val::Struct(obj_data) => Ok(f(obj_data)),
+            _ => Err(VmError::RuntimeError("Not an object".into())),
+        }
+    }
+
+    #[inline]
+    fn with_object_data_mut<R>(
+        &mut self,
+        obj_handle: Handle,
+        f: impl FnOnce(&mut ObjectData) -> R,
+    ) -> Result<R, VmError> {
+        let obj_val = self.arena.get(obj_handle).value.clone();
+        match obj_val {
+            Val::Object(payload_handle) => {
+                let payload = self.arena.get_mut(payload_handle);
+                match &mut payload.value {
+                    Val::ObjPayload(obj_data) => Ok(f(obj_data)),
+                    _ => Err(VmError::RuntimeError("Invalid object payload".into())),
+                }
+            }
+            Val::Struct(_) => {
+                let obj_zval = self.arena.get_mut(obj_handle);
+                if let Val::Struct(obj_data) = &mut obj_zval.value {
+                    Ok(f(Rc::make_mut(obj_data)))
+                } else {
+                    Err(VmError::RuntimeError("Not an object".into()))
+                }
+            }
+            _ => Err(VmError::RuntimeError("Not an object".into())),
+        }
+    }
+
+    fn find_promoted_struct_field(
+        &self,
+        obj_data: &ObjectData,
+        class_def: &ClassDef,
+        prop_name: Symbol,
+    ) -> Result<Option<PromotedFieldTarget>, VmError> {
+        let mut visited = HashSet::new();
+        self.find_promoted_struct_field_inner(obj_data, class_def, prop_name, &mut visited)
+    }
+
+    fn find_promoted_struct_field_inner(
+        &self,
+        obj_data: &ObjectData,
+        class_def: &ClassDef,
+        prop_name: Symbol,
+        visited: &mut HashSet<Symbol>,
+    ) -> Result<Option<PromotedFieldTarget>, VmError> {
+        if !visited.insert(class_def.name) {
+            return Ok(None);
+        }
+
+        let mut found: Option<PromotedFieldTarget> = None;
+
+        for embed_sym in &class_def.embeds {
+            let embed_handle = match obj_data.properties.get(embed_sym) {
+                Some(handle) => *handle,
+                None => continue,
+            };
+            let embed_val = self.arena.get(embed_handle).value.clone();
+            match embed_val {
+                Val::Struct(embed_obj_rc) => {
+                    if let Some(value_handle) = embed_obj_rc.properties.get(&prop_name) {
+                        let candidate = PromotedFieldTarget {
+                            struct_handle: embed_handle,
+                            struct_class: embed_obj_rc.class,
+                            value_handle: *value_handle,
+                        };
+                        if found.is_some() {
+                            let class_str = String::from_utf8_lossy(
+                                self.context
+                                    .interner
+                                    .lookup(class_def.name)
+                                    .unwrap_or(b"???"),
+                            );
+                            let prop_str = String::from_utf8_lossy(
+                                self.context
+                                    .interner
+                                    .lookup(prop_name)
+                                    .unwrap_or(b"???"),
+                            );
+                            return Err(VmError::RuntimeError(format!(
+                                "Ambiguous promoted field {}.{}",
+                                class_str, prop_str
+                            )));
+                        }
+                        found = Some(candidate);
+                        continue;
+                    }
+
+                    if let Some(embed_def) = self.context.classes.get(&embed_obj_rc.class) {
+                        if embed_def.embeds.is_empty() {
+                            continue;
+                        }
+                        if let Some(candidate) = self.find_promoted_struct_field_inner(
+                            &embed_obj_rc,
+                            embed_def,
+                            prop_name,
+                            visited,
+                        )? {
+                            if found.is_some() {
+                                let class_str = String::from_utf8_lossy(
+                                    self.context
+                                        .interner
+                                        .lookup(class_def.name)
+                                        .unwrap_or(b"???"),
+                                );
+                                let prop_str = String::from_utf8_lossy(
+                                    self.context
+                                        .interner
+                                        .lookup(prop_name)
+                                        .unwrap_or(b"???"),
+                                );
+                                return Err(VmError::RuntimeError(format!(
+                                    "Ambiguous promoted field {}.{}",
+                                    class_str, prop_str
+                                )));
+                            }
+                            found = Some(candidate);
+                        }
+                    }
+                }
+                Val::Null | Val::Uninitialized => {}
+                _ => {}
+            }
+        }
+
+        Ok(found)
+    }
+
+    fn assign_struct_property(
+        &mut self,
+        obj_handle: Handle,
+        class_name: Symbol,
+        prop_name: Symbol,
+        val_handle: Handle,
+    ) -> Result<(), VmError> {
+        let prop_exists = self
+            .with_object_data(obj_handle, |data| data.properties.contains_key(&prop_name))?;
+
+        if !prop_exists {
+            self.check_dynamic_property_write(obj_handle, prop_name);
+        }
+
+        let prop_info = self.walk_inheritance_chain(class_name, |def, cls| {
+            def.properties
+                .get(&prop_name)
+                .map(|entry| (entry.is_readonly, cls))
+        });
+
+        if let Some((is_readonly, defining_class)) = prop_info {
+            if is_readonly {
+                if let Ok(Some(current_handle)) =
+                    self.with_object_data(obj_handle, |data| data.properties.get(&prop_name).copied())
+                {
+                    let current_val = &self.arena.get(current_handle).value;
+                    if !matches!(current_val, Val::Uninitialized) {
+                        let class_str = String::from_utf8_lossy(
+                            self.context
+                                .interner
+                                .lookup(defining_class)
+                                .unwrap_or(b"???"),
+                        );
+                        let prop_str = String::from_utf8_lossy(
+                            self.context.interner.lookup(prop_name).unwrap_or(b"???"),
+                        );
+                        return Err(VmError::RuntimeError(format!(
+                            "Cannot modify readonly property {}::${}",
+                            class_str, prop_str
+                        )));
+                    }
+                }
+            }
+        }
+
+        self.validate_property_type(class_name, prop_name, val_handle)?;
+
+        self.with_object_data_mut(obj_handle, |data| {
+            data.properties.insert(prop_name, val_handle);
+        })?;
+
+        Ok(())
     }
 
     /// Execute a user-defined method with given arguments
@@ -2106,7 +2319,19 @@ impl VM {
                 "Cannot access static:: when no called scope is active".into(),
             ));
         }
-        Ok(class_name)
+        Ok(self.resolve_class_alias(class_name))
+    }
+
+    pub(crate) fn resolve_class_alias(&self, class_name: Symbol) -> Symbol {
+        let mut current = class_name;
+        let mut seen = HashSet::new();
+        while let Some(target) = self.context.class_aliases.get(&current) {
+            if !seen.insert(current) {
+                break;
+            }
+            current = *target;
+        }
+        current
     }
 
     pub(crate) fn find_class_constant(
@@ -2469,26 +2694,16 @@ impl VM {
         obj_handle: Handle,
         prop_name: Symbol,
     ) -> bool {
-        // Get object data
-        let obj_val = self.arena.get(obj_handle);
-        let payload_handle = if let Val::Object(h) = obj_val.value {
-            h
-        } else {
-            return false; // Not an object
-        };
+        let (class_name, already_dynamic) =
+            match self.with_object_data(obj_handle, |data| {
+                (data.class, data.dynamic_properties.contains(&prop_name))
+            }) {
+                Ok(info) => info,
+                Err(_) => return false,
+            };
 
-        let payload_val = self.arena.get(payload_handle);
-        let obj_data = if let Val::ObjPayload(data) = &payload_val.value {
-            data
-        } else {
+        if already_dynamic {
             return false;
-        };
-
-        let class_name = obj_data.class;
-
-        // Check if this property is already tracked as dynamic in this instance
-        if obj_data.dynamic_properties.contains(&prop_name) {
-            return false; // Already created, no warning needed
         }
 
         // Check if this is a declared property in the class hierarchy
@@ -2531,10 +2746,9 @@ impl VM {
             );
 
             // Mark this property as dynamic in the object instance
-            let payload_val_mut = self.arena.get_mut(payload_handle);
-            if let Val::ObjPayload(ref mut data) = payload_val_mut.value {
+            let _ = self.with_object_data_mut(obj_handle, |data| {
                 data.dynamic_properties.insert(prop_name);
-            }
+            });
 
             return true; // Warning was emitted
         }
@@ -2543,15 +2757,11 @@ impl VM {
     }
 
     fn is_instance_of(&self, obj_handle: Handle, class_sym: Symbol) -> bool {
-        let obj_val = self.arena.get(obj_handle);
-        if let Val::Object(payload_handle) = obj_val.value {
-            if let Val::ObjPayload(data) = &self.arena.get(payload_handle).value {
-                let obj_class = data.class;
-                if obj_class == class_sym {
-                    return true;
-                }
-                return self.is_subclass_of(obj_class, class_sym);
+        if let Ok(obj_class) = self.with_object_data(obj_handle, |data| data.class) {
+            if obj_class == class_sym {
+                return true;
             }
+            return self.is_subclass_of(obj_class, class_sym);
         }
         false
     }
@@ -4105,9 +4315,11 @@ impl VM {
                     is_trait: false,
                     is_abstract: false,
                     is_enum: false,
+                    is_struct: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
                     traits: Vec::new(),
+                    embeds: Vec::new(),
                     methods,
                     properties: IndexMap::new(),
                     constants: HashMap::new(),
@@ -5001,7 +5213,14 @@ impl VM {
 
                 let arena = bumpalo::Bump::new();
                 let lexer = crate::parser::lexer::Lexer::new(&source);
-                let mut parser = crate::parser::parser::Parser::new(lexer, &arena);
+                let mode = match resolved_path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                {
+                    Some("phpx") => crate::parser::parser::ParserMode::Phpx,
+                    _ => crate::parser::parser::ParserMode::Php,
+                };
+                let mut parser = crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
                 let program = parser.parse_program();
 
                 if !program.errors.is_empty() {
@@ -5009,6 +5228,18 @@ impl VM {
                         "Parse errors: {:?}",
                         program.errors
                     )));
+                }
+                if mode == crate::parser::parser::ParserMode::Phpx {
+                    if let Err(errors) =
+                        crate::phpx::typeck::check_program_with_path(&program, &source, Some(&resolved_path))
+                    {
+                        let rendered =
+                            crate::phpx::typeck::format_type_errors(&errors, &source);
+                        return Err(VmError::RuntimeError(format!(
+                            "Type errors:\n{}",
+                            rendered
+                        )));
+                    }
                 }
 
                 let emitter =
@@ -5102,6 +5333,11 @@ impl VM {
 
             // Array operations - delegated to opcodes::array_ops
             OpCode::InitArray(size) => self.exec_init_array(size)?,
+            OpCode::InitObjectMap(size) => {
+                let map = ObjectMapData::with_capacity(size as usize);
+                let handle = self.arena.alloc(Val::ObjectMap(Rc::new(map)));
+                self.operand_stack.push(handle);
+            }
 
             OpCode::FetchDim => {
                 let key_handle = self
@@ -5177,28 +5413,15 @@ impl VM {
                             self.operand_stack.push(empty);
                         }
                     }
-                    Val::Object(payload_handle) => {
-                        // Check if object implements ArrayAccess
-                        let payload_val = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_val.value {
-                            let class_name = obj_data.class;
+                    Val::Object(_) | Val::Struct(_) => {
+                        let class_name =
+                            self.with_object_data(array_handle, |data| data.class)?;
 
-                            if self.implements_array_access(class_name) {
-                                // Call offsetGet method
-                                let result =
-                                    self.call_array_access_offset_get(array_handle, key_handle)?;
-                                self.operand_stack.push(result);
-                            } else {
-                                // Object doesn't implement ArrayAccess
-                                self.report_error(
-                                    ErrorLevel::Warning,
-                                    "Trying to access array offset on value of type object",
-                                );
-                                let null_handle = self.arena.alloc(Val::Null);
-                                self.operand_stack.push(null_handle);
-                            }
+                        if self.implements_array_access(class_name) {
+                            let result =
+                                self.call_array_access_offset_get(array_handle, key_handle)?;
+                            self.operand_stack.push(result);
                         } else {
-                            // Shouldn't happen, but handle it
                             self.report_error(
                                 ErrorLevel::Warning,
                                 "Trying to access array offset on value of type object",
@@ -5625,6 +5848,17 @@ impl VM {
                             self.operand_stack.push(idx_handle);
                         }
                     }
+                    Val::ObjectMap(map_rc) => {
+                        let len = map_rc.map.len();
+                        if len == 0 {
+                            self.operand_stack.pop(); // Pop map
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.ip = target as usize;
+                        } else {
+                            let idx_handle = self.arena.alloc(Val::Int(0));
+                            self.operand_stack.push(idx_handle);
+                        }
+                    }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
                         if let Val::ObjPayload(obj_data) = &payload.value {
@@ -5748,6 +5982,22 @@ impl VM {
                             frame.ip = target as usize;
                         }
                     }
+                    Val::ObjectMap(map_rc) => {
+                        let idx = match self.arena.get(idx_handle).value {
+                            Val::Int(i) => i as usize,
+                            _ => {
+                                return Err(VmError::RuntimeError(
+                                    "Iterator index must be int".into(),
+                                ));
+                            }
+                        };
+                        if idx >= map_rc.map.len() {
+                            self.operand_stack.pop(); // Pop Index
+                            self.operand_stack.pop(); // Pop Map
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.ip = target as usize;
+                        }
+                    }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
                         if let Val::ObjPayload(obj_data) = &payload.value {
@@ -5806,6 +6056,18 @@ impl VM {
                 let iterable_val = &self.arena.get(iterable_handle).value;
                 match iterable_val {
                     Val::Array(_) => {
+                        let idx = match self.arena.get(idx_handle).value {
+                            Val::Int(i) => i,
+                            _ => {
+                                return Err(VmError::RuntimeError(
+                                    "Iterator index must be int".into(),
+                                ));
+                            }
+                        };
+                        let new_idx_handle = self.arena.alloc(Val::Int(idx + 1));
+                        self.operand_stack.push(new_idx_handle);
+                    }
+                    Val::ObjectMap(_) => {
                         let idx = match self.arena.get(idx_handle).value {
                             Val::Int(i) => i,
                             _ => {
@@ -5924,6 +6186,31 @@ impl VM {
                             ));
                         }
                     }
+                    Val::ObjectMap(map_rc) => {
+                        let idx = match self.arena.get(idx_handle).value {
+                            Val::Int(i) => i as usize,
+                            _ => {
+                                return Err(VmError::RuntimeError(
+                                    "Iterator index must be int".into(),
+                                ));
+                            }
+                        };
+                        if let Some((_, val_handle)) = map_rc.map.get_index(idx) {
+                            let val_h = *val_handle;
+                            let final_handle = if self.arena.get(val_h).is_ref {
+                                let val = self.arena.get(val_h).value.clone();
+                                self.arena.alloc(val)
+                            } else {
+                                val_h
+                            };
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.locals.insert(sym, final_handle);
+                        } else {
+                            return Err(VmError::RuntimeError(
+                                "Iterator index out of bounds".into(),
+                            ));
+                        }
+                    }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
                         if let Val::ObjPayload(obj_data) = &payload.value {
@@ -5991,17 +6278,32 @@ impl VM {
                 // Check if we need to upgrade the element.
                 let (needs_upgrade, val_handle) = {
                     let array_zval = self.arena.get(array_handle);
-                    if let Val::Array(map) = &array_zval.value {
-                        if let Some((_, h)) = map.map.get_index(idx) {
-                            let is_ref = self.arena.get(*h).is_ref;
-                            (!is_ref, *h)
-                        } else {
-                            return Err(VmError::RuntimeError(
-                                "Iterator index out of bounds".into(),
-                            ));
+                    match &array_zval.value {
+                        Val::Array(map) => {
+                            if let Some((_, h)) = map.map.get_index(idx) {
+                                let is_ref = self.arena.get(*h).is_ref;
+                                (!is_ref, *h)
+                            } else {
+                                return Err(VmError::RuntimeError(
+                                    "Iterator index out of bounds".into(),
+                                ));
+                            }
                         }
-                    } else {
-                        return Err(VmError::RuntimeError("IterGetValRef expects array".into()));
+                        Val::ObjectMap(map_rc) => {
+                            if let Some((_, h)) = map_rc.map.get_index(idx) {
+                                let is_ref = self.arena.get(*h).is_ref;
+                                (!is_ref, *h)
+                            } else {
+                                return Err(VmError::RuntimeError(
+                                    "Iterator index out of bounds".into(),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(VmError::RuntimeError(
+                                "IterGetValRef expects array or object map".into(),
+                            ))
+                        }
                     }
                 };
 
@@ -6012,12 +6314,20 @@ impl VM {
                     self.arena.get_mut(new_handle).is_ref = true;
 
                     // Update array
-                    let array_zval_mut = self.arena.get_mut(array_handle);
-                    if let Val::Array(map) = &mut array_zval_mut.value {
+                let array_zval_mut = self.arena.get_mut(array_handle);
+                match &mut array_zval_mut.value {
+                    Val::Array(map) => {
                         if let Some((_, h_ref)) = Rc::make_mut(map).map.get_index_mut(idx) {
                             *h_ref = new_handle;
                         }
                     }
+                    Val::ObjectMap(map_rc) => {
+                        if let Some((_, h_ref)) = Rc::make_mut(map_rc).map.get_index_mut(idx) {
+                            *h_ref = new_handle;
+                        }
+                    }
+                    _ => {}
+                }
                     new_handle
                 } else {
                     val_handle
@@ -6054,6 +6364,20 @@ impl VM {
                             let key_handle = self.arena.alloc(key_val);
 
                             // Store in local
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.locals.insert(sym, key_handle);
+                        } else {
+                            return Err(VmError::RuntimeError(
+                                "Iterator index out of bounds".into(),
+                            ));
+                        }
+                    }
+                    Val::ObjectMap(map_rc) => {
+                        if let Some((key, _)) = map_rc.map.get_index(idx) {
+                            let key_bytes = self.context.interner.lookup(*key).unwrap_or(b"");
+                            let key_handle = self
+                                .arena
+                                .alloc(Val::String(key_bytes.to_vec().into()));
                             let frame = self.frames.last_mut().unwrap();
                             frame.locals.insert(sym, key_handle);
                         } else {
@@ -6260,9 +6584,11 @@ impl VM {
                     is_trait: false,
                     is_abstract: false,
                     is_enum: false,
+                    is_struct: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
                     traits: Vec::new(),
+                    embeds: Vec::new(),
                     methods,
                     properties: IndexMap::new(),
                     constants: HashMap::new(),
@@ -6288,9 +6614,11 @@ impl VM {
                     is_trait: false,
                     is_abstract: false,
                     is_enum: true,
+                    is_struct: false,
                     enum_backed_type,
                     interfaces: Vec::new(),
                     traits: Vec::new(),
+                    embeds: Vec::new(),
                     methods: HashMap::new(),
                     properties: IndexMap::new(),
                     constants: HashMap::new(),
@@ -6356,9 +6684,11 @@ impl VM {
                     is_trait: false,
                     is_abstract: true,
                     is_enum: false,
+                    is_struct: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
                     traits: Vec::new(),
+                    embeds: Vec::new(),
                     methods: HashMap::new(),
                     properties: IndexMap::new(),
                     constants: HashMap::new(),
@@ -6378,9 +6708,11 @@ impl VM {
                     is_trait: true,
                     is_abstract: false,
                     is_enum: false,
+                    is_struct: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
                     traits: Vec::new(),
+                    embeds: Vec::new(),
                     methods: HashMap::new(),
                     properties: IndexMap::new(),
                     constants: HashMap::new(),
@@ -6551,6 +6883,11 @@ impl VM {
                     class_def.is_abstract = true;
                 }
             }
+            OpCode::MarkStruct(class_name) => {
+                if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                    class_def.is_struct = true;
+                }
+            }
             OpCode::UseTrait(class_name, trait_name) => {
                 let trait_methods = if let Some(trait_def) = self.context.classes.get(&trait_name) {
                     if !trait_def.is_trait {
@@ -6652,6 +6989,16 @@ impl VM {
 
                         return Err(VmError::RuntimeError(conflict_msgs.join("; ")));
                     }
+                }
+            }
+            OpCode::EmbedStruct(class_name, embed_name) => {
+                if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                    if !class_def.is_struct {
+                        return Err(VmError::RuntimeError(
+                            "Struct embedding is only allowed on structs".into(),
+                        ));
+                    }
+                    class_def.embeds.push(embed_name);
                 }
             }
             OpCode::DefMethod(
@@ -6865,14 +7212,14 @@ impl VM {
                     internal: None,
                     dynamic_properties: HashSet::new(),
                 };
-                let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
-                let obj_handle = self.arena.alloc(Val::Object(payload_handle));
+                let obj_rc = Rc::new(obj_data);
+                let obj_handle = self.arena.alloc(Val::Struct(obj_rc.clone()));
 
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.constants.insert(
                         case_name,
                         ClassConstEntry {
-                            value: Val::Object(payload_handle),
+                            value: Val::Struct(obj_rc),
                             visibility: Visibility::Public,
                             attributes: Vec::new(),
                         },
@@ -6883,7 +7230,67 @@ impl VM {
                             name: case_name,
                             value,
                             handle: obj_handle,
+                            payload_params: Vec::new(),
                         });
+                }
+            }
+            OpCode::DefEnumCasePayload(class_name, case_name, payload_idx) => {
+                let payload_val = {
+                    let frame = self.frames.last().unwrap();
+                    frame.chunk.constants[payload_idx as usize].clone()
+                };
+
+                let mut params = Vec::new();
+                match payload_val {
+                    Val::ConstArray(map) => {
+                        for (_, val) in map.iter() {
+                            if let Val::String(name) = val {
+                                let sym = self.context.interner.intern(&name);
+                                params.push(sym);
+                            } else {
+                                return Err(VmError::RuntimeError(
+                                    "Enum payload names must be strings".into(),
+                                ));
+                            }
+                        }
+                    }
+                    Val::Array(map) => {
+                        for (_, handle) in map.map.iter() {
+                            let val = &self.arena.get(*handle).value;
+                            if let Val::String(name) = val {
+                                let sym = self.context.interner.intern(&name);
+                                params.push(sym);
+                            } else {
+                                return Err(VmError::RuntimeError(
+                                    "Enum payload names must be strings".into(),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(VmError::RuntimeError(
+                            "Invalid enum payload metadata".into(),
+                        ))
+                    }
+                }
+
+                if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                    if !class_def.is_enum {
+                        return Err(VmError::RuntimeError(
+                            "Enum payload declared on non-enum class".into(),
+                        ));
+                    }
+                    if let Some(case_def) = class_def
+                        .enum_cases
+                        .iter_mut()
+                        .find(|case| case.name == case_name)
+                    {
+                        case_def.payload_params = params;
+                    } else {
+                        return Err(VmError::RuntimeError(
+                            "Enum payload declared for unknown case".into(),
+                        ));
+                    }
                 }
             }
             OpCode::DefGlobalConst(name, val_idx) => {
@@ -6912,13 +7319,39 @@ impl VM {
                 }
             }
             OpCode::FetchGlobalConst(name) => {
-                if let Some(val) = self.context.constants.get(&name) {
-                    let handle = self.arena.alloc(val.clone());
+                let name_bytes = self.context.interner.lookup(name).unwrap_or(b"???");
+                let name_owned = name_bytes.to_vec();
+                let (primary, fallback) =
+                    if let Some(split_at) = name_owned.iter().position(|b| *b == 0) {
+                        (&name_owned[..split_at], &name_owned[split_at + 1..])
+                    } else {
+                        (name_owned.as_slice(), &[][..])
+                    };
+
+                let mut found = None;
+                if !primary.is_empty() {
+                    let primary_sym = self.context.interner.intern(primary);
+                    if let Some(val) = self.context.constants.get(&primary_sym) {
+                        found = Some(val.clone());
+                    } else if let Some(val) = self.context.engine.registry.get_constant(primary) {
+                        found = Some(val.clone());
+                    }
+                }
+                if found.is_none() && !fallback.is_empty() {
+                    let fallback_sym = self.context.interner.intern(fallback);
+                    if let Some(val) = self.context.constants.get(&fallback_sym) {
+                        found = Some(val.clone());
+                    } else if let Some(val) = self.context.engine.registry.get_constant(fallback) {
+                        found = Some(val.clone());
+                    }
+                }
+
+                if let Some(val) = found {
+                    let handle = self.arena.alloc(val);
                     self.operand_stack.push(handle);
                 } else {
                     // PHP 8.x: Undefined constant throws Error (not Warning)
-                    let name_bytes = self.context.interner.lookup(name).unwrap_or(b"???");
-                    let name_str = String::from_utf8_lossy(name_bytes);
+                    let name_str = String::from_utf8_lossy(primary);
                     return Err(VmError::RuntimeError(format!(
                         "Undefined constant \"{}\"",
                         name_str
@@ -7142,6 +7575,13 @@ impl VM {
                 }
 
                 if self.context.classes.contains_key(&resolved_class) {
+                    let is_struct = self
+                        .context
+                        .classes
+                        .get(&resolved_class)
+                        .map(|def| def.is_struct)
+                        .unwrap_or(false);
+
                     let properties =
                         self.collect_properties(resolved_class, PropertyCollectionMode::All);
 
@@ -7152,9 +7592,12 @@ impl VM {
                         dynamic_properties: std::collections::HashSet::new(),
                     };
 
-                    let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
-                    let obj_val = Val::Object(payload_handle);
-                    let obj_handle = self.arena.alloc(obj_val);
+                    let obj_handle = if is_struct {
+                        self.arena.alloc(Val::Struct(Rc::new(obj_data)))
+                    } else {
+                        let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
+                        self.arena.alloc(Val::Object(payload_handle))
+                    };
 
                     // Check for constructor
                     let constructor_name = self.context.interner.intern(b"__construct");
@@ -7277,6 +7720,67 @@ impl VM {
                     return Err(VmError::RuntimeError("Class not found".into()));
                 }
             }
+            OpCode::NewStructLiteral(class_name) => {
+                let resolved_class = self.resolve_class_name(class_name)?;
+
+                if !self.context.classes.contains_key(&resolved_class) {
+                    self.trigger_autoload(resolved_class)?;
+                }
+
+                let class_def = self.context.classes.get(&resolved_class).ok_or_else(|| {
+                    VmError::RuntimeError("Unknown struct".into())
+                })?;
+
+                if class_def.is_abstract && !class_def.is_interface {
+                    let class_name_str = self
+                        .context
+                        .interner
+                        .lookup(resolved_class)
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_else(|| format!("{:?}", resolved_class));
+                    return Err(VmError::RuntimeError(format!(
+                        "Cannot instantiate abstract class {}",
+                        class_name_str
+                    )));
+                }
+                if class_def.is_interface {
+                    let class_name_str = self
+                        .context
+                        .interner
+                        .lookup(resolved_class)
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_else(|| format!("{:?}", resolved_class));
+                    return Err(VmError::RuntimeError(format!(
+                        "Cannot instantiate interface {}",
+                        class_name_str
+                    )));
+                }
+                if !class_def.is_struct {
+                    let class_name_str = self
+                        .context
+                        .interner
+                        .lookup(resolved_class)
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_else(|| format!("{:?}", resolved_class));
+                    return Err(VmError::RuntimeError(format!(
+                        "Struct literal requires a struct, got {}",
+                        class_name_str
+                    )));
+                }
+
+                let properties =
+                    self.collect_properties(resolved_class, PropertyCollectionMode::All);
+
+                let obj_data = ObjectData {
+                    class: resolved_class,
+                    properties,
+                    internal: None,
+                    dynamic_properties: std::collections::HashSet::new(),
+                };
+
+                let obj_handle = self.arena.alloc(Val::Struct(Rc::new(obj_data)));
+                self.operand_stack.push(obj_handle);
+            }
             OpCode::NewDynamic(arg_count) => {
                 // Collect args first
                 let args = self.collect_call_args(arg_count)?;
@@ -7291,6 +7795,13 @@ impl VM {
                 };
 
                 if self.context.classes.contains_key(&class_name) {
+                    let is_struct = self
+                        .context
+                        .classes
+                        .get(&class_name)
+                        .map(|def| def.is_struct)
+                        .unwrap_or(false);
+
                     let properties =
                         self.collect_properties(class_name, PropertyCollectionMode::All);
 
@@ -7301,9 +7812,12 @@ impl VM {
                         dynamic_properties: std::collections::HashSet::new(),
                     };
 
-                    let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
-                    let obj_val = Val::Object(payload_handle);
-                    let obj_handle = self.arena.alloc(obj_val);
+                    let obj_handle = if is_struct {
+                        self.arena.alloc(Val::Struct(Rc::new(obj_data)))
+                    } else {
+                        let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
+                        self.arena.alloc(Val::Object(payload_handle))
+                    };
 
                     // Check for constructor
                     let constructor_name = self.context.interner.intern(b"__construct");
@@ -7380,70 +7894,67 @@ impl VM {
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-                // Extract needed data to avoid holding borrow
-                let (class_name, prop_handle_opt) = {
-                    let obj_zval = self.arena.get(obj_handle);
-                    if let Val::Object(payload_handle) = obj_zval.value {
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                            (obj_data.class, obj_data.properties.get(&prop_name).copied())
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
+                if let Val::ObjectMap(map_rc) = self.arena.get(obj_handle).value.clone() {
+                    if let Some(val_handle) = map_rc.map.get(&prop_name) {
+                        self.operand_stack.push(*val_handle);
                     } else {
-                        return Err(VmError::RuntimeError(
-                            "Attempt to fetch property on non-object".into(),
-                        ));
+                        let null = self.arena.alloc(Val::Null);
+                        self.operand_stack.push(null);
                     }
-                };
+                } else {
+                    let (class_name, prop_handle_opt) =
+                        self.with_object_data(obj_handle, |data| {
+                            (data.class, data.properties.get(&prop_name).copied())
+                        })?;
 
-                // Check visibility
-                let current_scope = self.get_current_class();
-                let visibility_check =
-                    self.check_prop_visibility(class_name, prop_name, current_scope);
+                    // Check visibility
+                    let current_scope = self.get_current_class();
+                    let visibility_check =
+                        self.check_prop_visibility(class_name, prop_name, current_scope);
 
-                let mut use_magic = false;
+                    let mut use_magic = false;
 
-                if let Some(prop_handle) = prop_handle_opt {
-                    if visibility_check.is_ok() {
-                        self.operand_stack.push(prop_handle);
+                    if let Some(prop_handle) = prop_handle_opt {
+                        if visibility_check.is_ok() {
+                            self.operand_stack.push(prop_handle);
+                        } else {
+                            use_magic = true;
+                        }
                     } else {
                         use_magic = true;
                     }
-                } else {
-                    use_magic = true;
-                }
 
-                if use_magic {
-                    let magic_get = self.context.interner.intern(b"__get");
-                    if let Some((method, _, _, defined_class)) =
-                        self.find_method(class_name, magic_get)
-                    {
-                        let prop_name_bytes = self
-                            .context
-                            .interner
-                            .lookup(prop_name)
-                            .unwrap_or(b"")
-                            .to_vec();
-                        let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
+                    if use_magic {
+                        let magic_get = self.context.interner.intern(b"__get");
+                        if let Some((method, _, _, defined_class)) =
+                            self.find_method(class_name, magic_get)
+                        {
+                            let prop_name_bytes = self
+                                .context
+                                .interner
+                                .lookup(prop_name)
+                                .unwrap_or(b"")
+                                .to_vec();
+                            let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
 
-                        let mut frame = CallFrame::new(method.chunk.clone());
-                        frame.func = Some(method.clone());
-                        frame.this = Some(obj_handle);
-                        frame.class_scope = Some(defined_class);
-                        frame.called_scope = Some(class_name);
+                            let mut frame = CallFrame::new(method.chunk.clone());
+                            frame.func = Some(method.clone());
+                            frame.this = Some(obj_handle);
+                            frame.class_scope = Some(defined_class);
+                            frame.called_scope = Some(class_name);
 
-                        if let Some(param) = method.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
+                            if let Some(param) = method.params.get(0) {
+                                frame.locals.insert(param.name, name_handle);
+                            }
+
+                            self.push_frame(frame);
+                        } else {
+                            if let Err(e) = visibility_check {
+                                return Err(e);
+                            }
+                            let null = self.arena.alloc(Val::Null);
+                            self.operand_stack.push(null);
                         }
-
-                        self.push_frame(frame);
-                    } else {
-                        if let Err(e) = visibility_check {
-                            return Err(e);
-                        }
-                        let null = self.arena.alloc(Val::Null);
-                        self.operand_stack.push(null);
                     }
                 }
             }
@@ -7463,70 +7974,109 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                // Extract needed data to avoid holding borrow
-                let (class_name, prop_handle_opt) = {
-                    let obj_zval = self.arena.get(obj_handle);
-                    if let Val::Object(payload_handle) = obj_zval.value {
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                            (obj_data.class, obj_data.properties.get(&prop_name).copied())
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
+                if let Val::ObjectMap(map_rc) = self.arena.get(obj_handle).value.clone() {
+                    if let Some(val_handle) = map_rc.map.get(&prop_name) {
+                        self.operand_stack.push(*val_handle);
                     } else {
-                        return Err(VmError::RuntimeError(
-                            "Attempt to fetch property on non-object".into(),
-                        ));
+                        let null = self.arena.alloc(Val::Null);
+                        self.operand_stack.push(null);
                     }
-                };
+                } else {
+                    let (class_name, prop_handle_opt) =
+                        self.with_object_data(obj_handle, |data| {
+                            (data.class, data.properties.get(&prop_name).copied())
+                        })?;
 
-                // Check visibility
-                let current_scope = self.get_current_class();
-                let visibility_check =
-                    self.check_prop_visibility(class_name, prop_name, current_scope);
+                    // Check visibility
+                    let current_scope = self.get_current_class();
+                    let visibility_check =
+                        self.check_prop_visibility(class_name, prop_name, current_scope);
 
-                let mut use_magic = false;
+                    let mut use_magic = false;
 
-                if let Some(prop_handle) = prop_handle_opt {
-                    if visibility_check.is_ok() {
-                        self.operand_stack.push(prop_handle);
+                    if let Some(prop_handle) = prop_handle_opt {
+                        if visibility_check.is_ok() {
+                            self.operand_stack.push(prop_handle);
+                        } else {
+                            use_magic = true;
+                        }
                     } else {
                         use_magic = true;
                     }
-                } else {
-                    use_magic = true;
+
+                    if use_magic {
+                        let magic_get = self.context.interner.intern(b"__get");
+                        if let Some((method, _, _, defined_class)) =
+                            self.find_method(class_name, magic_get)
+                        {
+                            let prop_name_bytes = self
+                                .context
+                                .interner
+                                .lookup(prop_name)
+                                .unwrap_or(b"")
+                                .to_vec();
+                            let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
+
+                            let mut frame = CallFrame::new(method.chunk.clone());
+                            frame.func = Some(method.clone());
+                            frame.this = Some(obj_handle);
+                            frame.class_scope = Some(defined_class);
+                            frame.called_scope = Some(class_name);
+
+                            if let Some(param) = method.params.get(0) {
+                                frame.locals.insert(param.name, name_handle);
+                            }
+
+                            self.push_frame(frame);
+                        } else {
+                            if let Err(e) = visibility_check {
+                                return Err(e);
+                            }
+                            let null = self.arena.alloc(Val::Null);
+                            self.operand_stack.push(null);
+                        }
+                    }
                 }
+            }
+            OpCode::FetchDot(prop_name) => {
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-                if use_magic {
-                    let magic_get = self.context.interner.intern(b"__get");
-                    if let Some((method, _, _, defined_class)) =
-                        self.find_method(class_name, magic_get)
-                    {
-                        let prop_name_bytes = self
-                            .context
-                            .interner
-                            .lookup(prop_name)
-                            .unwrap_or(b"")
-                            .to_vec();
-                        let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
-
-                        let mut frame = CallFrame::new(method.chunk.clone());
-                        frame.func = Some(method.clone());
-                        frame.this = Some(obj_handle);
-                        frame.class_scope = Some(defined_class);
-                        frame.called_scope = Some(class_name);
-
-                        if let Some(param) = method.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
+                let obj_val = self.arena.get(obj_handle).value.clone();
+                match obj_val {
+                    Val::ObjectMap(map_rc) => {
+                        if let Some(val_handle) = map_rc.map.get(&prop_name) {
+                            self.operand_stack.push(*val_handle);
+                        } else {
+                            let null = self.arena.alloc(Val::Null);
+                            self.operand_stack.push(null);
                         }
-
-                        self.push_frame(frame);
-                    } else {
-                        if let Err(e) = visibility_check {
-                            return Err(e);
+                    }
+                    Val::Struct(obj_data) => {
+                        if let Some(val_handle) = obj_data.properties.get(&prop_name) {
+                            self.operand_stack.push(*val_handle);
+                        } else if let Some(class_def) =
+                            self.context.classes.get(&obj_data.class)
+                        {
+                            if let Some(target) =
+                                self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                            {
+                                self.operand_stack.push(target.value_handle);
+                            } else {
+                                let null = self.arena.alloc(Val::Null);
+                                self.operand_stack.push(null);
+                            }
+                        } else {
+                            let null = self.arena.alloc(Val::Null);
+                            self.operand_stack.push(null);
                         }
-                        let null = self.arena.alloc(Val::Null);
-                        self.operand_stack.push(null);
+                    }
+                    _ => {
+                        return Err(VmError::RuntimeError(
+                            "Attempt to fetch dot property on non-object".into(),
+                        ));
                     }
                 }
             }
@@ -7540,93 +8090,88 @@ impl VM {
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to assign property on non-object".into(),
-                    ));
-                };
-
-                // Extract data
-                let (class_name, prop_exists) = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        (obj_data.class, obj_data.properties.contains_key(&prop_name))
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
+                if let Val::ObjectMap(_) = self.arena.get(obj_handle).value.clone() {
+                    let obj_zval = self.arena.get_mut(obj_handle);
+                    if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                        let map = Rc::make_mut(map_rc);
+                        map.map.insert(prop_name, val_handle);
                     }
-                };
+                    self.operand_stack.push(val_handle);
+                } else {
+                    let (class_name, prop_exists) =
+                        self.with_object_data(obj_handle, |data| {
+                            (data.class, data.properties.contains_key(&prop_name))
+                        })?;
 
-                let current_scope = self.get_current_class();
-                let visibility_check =
-                    self.check_prop_visibility(class_name, prop_name, current_scope);
+                    let current_scope = self.get_current_class();
+                    let visibility_check =
+                        self.check_prop_visibility(class_name, prop_name, current_scope);
 
-                let mut use_magic = false;
+                    let mut use_magic = false;
 
-                if prop_exists {
-                    if visibility_check.is_err() {
+                    if prop_exists {
+                        if visibility_check.is_err() {
+                            use_magic = true;
+                        }
+                    } else {
                         use_magic = true;
                     }
-                } else {
-                    use_magic = true;
-                }
 
-                if use_magic {
-                    let magic_set = self.context.interner.intern(b"__set");
-                    if let Some((method, _, _, defined_class)) =
-                        self.find_method(class_name, magic_set)
-                    {
-                        let prop_name_bytes = self
-                            .context
-                            .interner
-                            .lookup(prop_name)
-                            .unwrap_or(b"")
-                            .to_vec();
-                        let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
+                    if use_magic {
+                        let magic_set = self.context.interner.intern(b"__set");
+                        if let Some((method, _, _, defined_class)) =
+                            self.find_method(class_name, magic_set)
+                        {
+                            let prop_name_bytes = self
+                                .context
+                                .interner
+                                .lookup(prop_name)
+                                .unwrap_or(b"")
+                                .to_vec();
+                            let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
 
-                        let mut frame = CallFrame::new(method.chunk.clone());
-                        frame.func = Some(method.clone());
-                        frame.this = Some(obj_handle);
-                        frame.class_scope = Some(defined_class);
-                        frame.called_scope = Some(class_name);
-                        frame.discard_return = true;
+                            let mut frame = CallFrame::new(method.chunk.clone());
+                            frame.func = Some(method.clone());
+                            frame.this = Some(obj_handle);
+                            frame.class_scope = Some(defined_class);
+                            frame.called_scope = Some(class_name);
+                            frame.discard_return = true;
 
-                        if let Some(param) = method.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
-                        }
-                        if let Some(param) = method.params.get(1) {
-                            frame.locals.insert(param.name, val_handle);
-                        }
+                            if let Some(param) = method.params.get(0) {
+                                frame.locals.insert(param.name, name_handle);
+                            }
+                            if let Some(param) = method.params.get(1) {
+                                frame.locals.insert(param.name, val_handle);
+                            }
 
-                        self.operand_stack.push(val_handle);
-                        self.push_frame(frame);
-                    } else {
-                        if let Err(e) = visibility_check {
-                            return Err(e);
-                        }
+                            self.operand_stack.push(val_handle);
+                            self.push_frame(frame);
+                        } else {
+                            if let Err(e) = visibility_check {
+                                return Err(e);
+                            }
 
-                        // Check for dynamic property deprecation (PHP 8.2+)
-                        if !prop_exists {
-                            self.check_dynamic_property_write(obj_handle, prop_name);
-                        }
+                            // Check for dynamic property deprecation (PHP 8.2+)
+                            if !prop_exists {
+                                self.check_dynamic_property_write(obj_handle, prop_name);
+                            }
 
-                        // Check readonly constraint
-                        let prop_info = self.walk_inheritance_chain(class_name, |def, cls| {
-                            def.properties
-                                .get(&prop_name)
-                                .map(|entry| (entry.is_readonly, cls))
-                        });
+                            // Check readonly constraint
+                            let prop_info = self.walk_inheritance_chain(class_name, |def, cls| {
+                                def.properties
+                                    .get(&prop_name)
+                                    .map(|entry| (entry.is_readonly, cls))
+                            });
 
-                        if let Some((is_readonly, defining_class)) = prop_info {
-                            if is_readonly {
-                                // Check if already initialized in object
-                                let payload_zval = self.arena.get(payload_handle);
-                                if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                                    if let Some(current_handle) =
-                                        obj_data.properties.get(&prop_name)
+                            if let Some((is_readonly, defining_class)) = prop_info {
+                                if is_readonly {
+                                    // Check if already initialized in object
+                                    if let Ok(Some(current_handle)) =
+                                        self.with_object_data(obj_handle, |data| {
+                                            data.properties.get(&prop_name).copied()
+                                        })
                                     {
-                                        let current_val = &self.arena.get(*current_handle).value;
+                                        let current_val = &self.arena.get(current_handle).value;
                                         if !matches!(current_val, Val::Uninitialized) {
                                             let class_str = String::from_utf8_lossy(
                                                 self.context
@@ -7648,33 +8193,88 @@ impl VM {
                                     }
                                 }
                             }
+
+                            // Validate property type (check class definition for type hint)
+                            self.validate_property_type(class_name, prop_name, val_handle)?;
+
+                            self.with_object_data_mut(obj_handle, |data| {
+                                data.properties.insert(prop_name, val_handle);
+                            })?;
+                            self.operand_stack.push(val_handle);
+                        }
+                    } else {
+                        // Check for dynamic property deprecation (PHP 8.2+)
+                        if !prop_exists {
+                            self.check_dynamic_property_write(obj_handle, prop_name);
                         }
 
                         // Validate property type (check class definition for type hint)
                         self.validate_property_type(class_name, prop_name, val_handle)?;
 
-                        let payload_zval = self.arena.get_mut(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
-                            obj_data.properties.insert(prop_name, val_handle);
-                        }
+                        self.with_object_data_mut(obj_handle, |data| {
+                            data.properties.insert(prop_name, val_handle);
+                        })?;
                         self.operand_stack.push(val_handle);
                     }
-                } else {
-                    // Check for dynamic property deprecation (PHP 8.2+)
-                    if !prop_exists {
-                        self.check_dynamic_property_write(obj_handle, prop_name);
-                    }
+                }
+            }
+            OpCode::AssignDot(prop_name) => {
+                let val_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-                    // Validate property type (check class definition for type hint)
-                    self.validate_property_type(class_name, prop_name, val_handle)?;
-
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
-                        obj_data.properties.insert(prop_name, val_handle);
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
+                match self.arena.get(obj_handle).value.clone() {
+                    Val::ObjectMap(_) => {
+                        let obj_zval = self.arena.get_mut(obj_handle);
+                        if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                            let map = Rc::make_mut(map_rc);
+                            map.map.insert(prop_name, val_handle);
+                            self.operand_stack.push(val_handle);
+                        }
                     }
-                    self.operand_stack.push(val_handle);
+                    Val::Struct(obj_rc) => {
+                        let class_name = obj_rc.class;
+                        let prop_exists = obj_rc.properties.contains_key(&prop_name);
+
+                        if prop_exists {
+                            self.assign_struct_property(
+                                obj_handle,
+                                class_name,
+                                prop_name,
+                                val_handle,
+                            )?;
+                            self.operand_stack.push(val_handle);
+                            return Ok(());
+                        }
+
+                        if let Some(class_def) = self.context.classes.get(&class_name) {
+                            if let Some(target) =
+                                self.find_promoted_struct_field(&obj_rc, class_def, prop_name)?
+                            {
+                                self.assign_struct_property(
+                                    target.struct_handle,
+                                    target.struct_class,
+                                    prop_name,
+                                    val_handle,
+                                )?;
+                                self.operand_stack.push(val_handle);
+                                return Ok(());
+                            }
+                        }
+
+                        self.assign_struct_property(obj_handle, class_name, prop_name, val_handle)?;
+                        self.operand_stack.push(val_handle);
+                    }
+                    _ => {
+                        return Err(VmError::RuntimeError(
+                            "Attempt to assign dot property on non-object".into(),
+                        ));
+                    }
                 }
             }
             OpCode::CallMethod(method_name, arg_count) => {
@@ -7703,78 +8303,67 @@ impl VM {
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-                // Extract data to avoid borrow issues
-                let (class_name, should_unset) = {
-                    let obj_zval = self.arena.get(obj_handle);
-                    if let Val::Object(payload_handle) = obj_zval.value {
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                            let current_scope = self.get_current_class();
-                            if self
-                                .check_prop_visibility(obj_data.class, prop_name, current_scope)
-                                .is_ok()
-                            {
-                                if obj_data.properties.contains_key(&prop_name) {
-                                    (obj_data.class, true)
-                                } else {
-                                    (obj_data.class, false) // Not found
-                                }
-                            } else {
-                                (obj_data.class, false) // Not accessible
-                            }
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
-                    } else {
-                        return Err(VmError::RuntimeError(
-                            "Attempt to unset property on non-object".into(),
-                        ));
-                    }
-                };
-
-                if should_unset {
-                    let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                        h
-                    } else {
-                        unreachable!()
-                    };
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
-                        obj_data.properties.swap_remove(&prop_name);
+                if let Val::ObjectMap(_) = self.arena.get(obj_handle).value.clone() {
+                    let obj_zval = self.arena.get_mut(obj_handle);
+                    if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                        let map = Rc::make_mut(map_rc);
+                        map.map.shift_remove(&prop_name);
                     }
                 } else {
-                    // Property not found or not accessible. Check for __unset.
-                    let unset_magic = self.context.interner.intern(b"__unset");
-                    if let Some((magic_func, _, _, magic_class)) =
-                        self.find_method(class_name, unset_magic)
-                    {
-                        // Found __unset
-
-                        // Create method name string (prop name)
-                        let prop_name_str = self
-                            .context
-                            .interner
-                            .lookup(prop_name)
-                            .expect("Prop name should be interned")
-                            .to_vec();
-                        let name_handle = self.arena.alloc(Val::String(prop_name_str.into()));
-
-                        // Prepare frame for __unset
-                        let mut frame = CallFrame::new(magic_func.chunk.clone());
-                        frame.func = Some(magic_func.clone());
-                        frame.this = Some(obj_handle);
-                        frame.class_scope = Some(magic_class);
-                        frame.called_scope = Some(class_name);
-                        frame.discard_return = true; // Discard return value
-
-                        // Param 0: name
-                        if let Some(param) = magic_func.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
+                    let (class_name, should_unset) = self.with_object_data(obj_handle, |obj_data| {
+                        let current_scope = self.get_current_class();
+                        if self
+                            .check_prop_visibility(obj_data.class, prop_name, current_scope)
+                            .is_ok()
+                        {
+                            if obj_data.properties.contains_key(&prop_name) {
+                                (obj_data.class, true)
+                            } else {
+                                (obj_data.class, false)
+                            }
+                        } else {
+                            (obj_data.class, false)
                         }
+                    })?;
 
-                        self.push_frame(frame);
+                    if should_unset {
+                        self.with_object_data_mut(obj_handle, |obj_data| {
+                            obj_data.properties.swap_remove(&prop_name);
+                        })?;
+                    } else {
+                        // Property not found or not accessible. Check for __unset.
+                        let unset_magic = self.context.interner.intern(b"__unset");
+                        if let Some((magic_func, _, _, magic_class)) =
+                            self.find_method(class_name, unset_magic)
+                        {
+                            // Found __unset
+
+                            // Create method name string (prop name)
+                            let prop_name_str = self
+                                .context
+                                .interner
+                                .lookup(prop_name)
+                                .expect("Prop name should be interned")
+                                .to_vec();
+                            let name_handle = self.arena.alloc(Val::String(prop_name_str.into()));
+
+                            // Prepare frame for __unset
+                            let mut frame = CallFrame::new(magic_func.chunk.clone());
+                            frame.func = Some(magic_func.clone());
+                            frame.this = Some(obj_handle);
+                            frame.class_scope = Some(magic_class);
+                            frame.called_scope = Some(class_name);
+                            frame.discard_return = true; // Discard return value
+
+                            // Param 0: name
+                            if let Some(param) = magic_func.params.get(0) {
+                                frame.locals.insert(param.name, name_handle);
+                            }
+
+                            self.push_frame(frame);
+                        }
+                        // If no __unset, do nothing (standard PHP behavior)
                     }
-                    // If no __unset, do nothing (standard PHP behavior)
                 }
             }
             OpCode::UnsetStaticProp => {
@@ -7874,7 +8463,15 @@ impl VM {
 
                     let arena = bumpalo::Bump::new();
                     let lexer = crate::parser::lexer::Lexer::new(&wrapped_source);
-                    let mut parser = crate::parser::parser::Parser::new(lexer, &arena);
+                    let mode = if path_str.contains("__DEKA_PHPX_INTERNAL__") {
+                        crate::parser::parser::ParserMode::PhpxInternal
+                    } else if path_str.contains("__DEKA_PHPX__") {
+                        crate::parser::parser::ParserMode::Phpx
+                    } else {
+                        crate::parser::parser::ParserMode::Php
+                    };
+                    let mut parser =
+                        crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
                     let program = parser.parse_program();
 
                     if !program.errors.is_empty() {
@@ -8010,7 +8607,15 @@ impl VM {
                             Ok(source) => {
                                 let arena = bumpalo::Bump::new();
                                 let lexer = crate::parser::lexer::Lexer::new(&source);
-                                let mut parser = crate::parser::parser::Parser::new(lexer, &arena);
+                                let mode = match resolved_path
+                                    .extension()
+                                    .and_then(|ext| ext.to_str())
+                                {
+                                    Some("phpx") => crate::parser::parser::ParserMode::Phpx,
+                                    _ => crate::parser::parser::ParserMode::Php,
+                                };
+                                let mut parser =
+                                    crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
                                 let program = parser.parse_program();
 
                                 if !program.errors.is_empty() {
@@ -8021,6 +8626,24 @@ impl VM {
                                         "Parse errors in {}: {:?}",
                                         path_str, program.errors
                                     )));
+                                }
+                                if mode == crate::parser::parser::ParserMode::Phpx {
+                                    if let Err(errors) = crate::phpx::typeck::check_program_with_path(
+                                        &program,
+                                        &source,
+                                        Some(&resolved_path),
+                                    )
+                                    {
+                                        if inserted_once_guard {
+                                            self.context.included_files.remove(&canonical_path);
+                                        }
+                                        let rendered =
+                                            crate::phpx::typeck::format_type_errors(&errors, &source);
+                                        return Err(VmError::RuntimeError(format!(
+                                            "Type errors in {}:\n{}",
+                                            path_str, rendered
+                                        )));
+                                    }
                                 }
 
                                 let emitter = crate::compiler::emitter::Emitter::new(
@@ -8668,27 +9291,17 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let obj = &self.arena.get(obj_handle).value;
-                if let Val::Object(obj_data_handle) = obj {
-                    let sym = self.context.interner.intern(&prop_name);
+                let sym = self.context.interner.intern(&prop_name);
 
-                    // Extract class name and check property
-                    let (class_name, prop_handle_opt, has_prop) = {
-                        let payload = self.arena.get(*obj_data_handle);
-                        if let Val::ObjPayload(data) = &payload.value {
-                            (
-                                data.class,
-                                data.properties.get(&sym).copied(),
-                                data.properties.contains_key(&sym),
-                            )
-                        } else {
-                            let null = self.arena.alloc(Val::Null);
-                            self.operand_stack.push(null);
-                            return Ok(());
-                        }
-                    };
-
-                    // Check visibility
+                if let Ok((class_name, prop_handle_opt, has_prop)) =
+                    self.with_object_data(obj_handle, |data| {
+                        (
+                            data.class,
+                            data.properties.get(&sym).copied(),
+                            data.properties.contains_key(&sym),
+                        )
+                    })
+                {
                     let current_scope = self.get_current_class();
                     let visibility_ok = has_prop
                         && self
@@ -8699,7 +9312,6 @@ impl VM {
                         if visibility_ok {
                             self.operand_stack.push(val_handle);
                         } else {
-                            // Try __get for inaccessible property
                             let magic_get = self.context.interner.intern(b"__get");
                             if let Some((method, _, _, defined_class)) =
                                 self.find_method(class_name, magic_get)
@@ -8723,7 +9335,6 @@ impl VM {
                             }
                         }
                     } else {
-                        // Property doesn't exist, try __get
                         let magic_get = self.context.interner.intern(b"__get");
                         if let Some((method, _, _, defined_class)) =
                             self.find_method(class_name, magic_get)
@@ -8768,40 +9379,28 @@ impl VM {
 
                 let sym = self.context.interner.intern(&prop_name);
 
-                // 1. Check object handle (Immutable)
-                let obj_data_handle_opt = {
-                    let obj = &self.arena.get(obj_handle).value;
-                    match obj {
-                        Val::Object(h) => Some(*h),
-                        Val::Null => None,
-                        _ => {
-                            return Err(VmError::RuntimeError(
-                                "Attempt to assign property of non-object".into(),
-                            ));
-                        }
+                let obj_val = &self.arena.get(obj_handle).value;
+                match obj_val {
+                    Val::Object(_) | Val::Struct(_) => {
+                        let null_handle = self.arena.alloc(Val::Null);
+                        let val_handle = self.with_object_data_mut(obj_handle, |data| {
+                            if !data.properties.contains_key(&sym) {
+                                data.properties.insert(sym, null_handle);
+                            }
+                            *data.properties.get(&sym).unwrap()
+                        })?;
+                        self.operand_stack.push(val_handle);
                     }
-                };
-
-                if let Some(handle) = obj_data_handle_opt {
-                    // 2. Alloc new value (if needed, or just alloc null)
-                    let null_handle = self.arena.alloc(Val::Null);
-
-                    // 3. Modify payload
-                    let payload = &mut self.arena.get_mut(handle).value;
-                    if let Val::ObjPayload(data) = payload {
-                        if !data.properties.contains_key(&sym) {
-                            data.properties.insert(sym, null_handle);
-                        }
-                        let val_handle = data.properties.get(&sym).unwrap();
-                        self.operand_stack.push(*val_handle);
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
+                    Val::Null => {
+                        return Err(VmError::RuntimeError(
+                            "Creating default object from empty value not fully implemented".into(),
+                        ));
                     }
-                } else {
-                    // Auto-vivify
-                    return Err(VmError::RuntimeError(
-                        "Creating default object from empty value not fully implemented".into(),
-                    ));
+                    _ => {
+                        return Err(VmError::RuntimeError(
+                            "Attempt to assign property of non-object".into(),
+                        ));
+                    }
                 }
             }
             OpCode::FuncNumArgs => {
@@ -9149,7 +9748,7 @@ impl VM {
 
                 // Check for __isset first
                 let (val_handle_opt, should_check_isset_magic) = match container {
-                    Val::Object(obj_handle) => {
+                    Val::Object(_) | Val::Struct(_) => {
                         let prop_name = match &self.arena.get(prop_handle).value {
                             Val::String(s) => s.clone(),
                             _ => vec![].into(),
@@ -9158,18 +9757,14 @@ impl VM {
                             (None, false)
                         } else {
                             let sym = self.context.interner.intern(&prop_name);
-                            let (class_name, has_prop, prop_val_opt) = {
-                                let payload = self.arena.get(*obj_handle);
-                                if let Val::ObjPayload(data) = &payload.value {
+                            let (class_name, has_prop, prop_val_opt) =
+                                self.with_object_data(container_handle, |data| {
                                     (
                                         data.class,
                                         data.properties.contains_key(&sym),
                                         data.properties.get(&sym).cloned(),
                                     )
-                                } else {
-                                    (self.context.interner.intern(b""), false, None)
-                                }
-                            };
+                                })?;
 
                             let current_scope = self.get_current_class();
                             let visibility_ok = has_prop
@@ -9190,20 +9785,14 @@ impl VM {
 
                 let val_handle = if should_check_isset_magic {
                     // Try __isset
-                    if let Val::Object(obj_handle) = container {
+                    if matches!(container, Val::Object(_) | Val::Struct(_)) {
                         let prop_name = match &self.arena.get(prop_handle).value {
                             Val::String(s) => s.clone(),
                             _ => vec![].into(),
                         };
 
-                        let class_name = {
-                            let payload = self.arena.get(*obj_handle);
-                            if let Val::ObjPayload(data) = &payload.value {
-                                data.class
-                            } else {
-                                self.context.interner.intern(b"")
-                            }
-                        };
+                        let class_name =
+                            self.with_object_data(container_handle, |data| data.class)?;
 
                         let magic_isset = self.context.interner.intern(b"__isset");
                         let name_handle = self.arena.alloc(Val::String(prop_name.clone()));
@@ -9485,13 +10074,13 @@ impl VM {
                     Val::String(s) => self.context.interner.intern(s),
                     _ => return Err(VmError::RuntimeError("Class name must be string".into())),
                 };
+                let class_name = self.resolve_class_name(class_name)?;
 
-                let is_instance = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    if let Val::ObjPayload(data) = &self.arena.get(h).value {
-                        self.is_subclass_of(data.class, class_name)
-                    } else {
-                        false
-                    }
+                let is_instance = if let Ok(obj_class) =
+                    self.with_object_data(obj_handle, |data| data.class)
+                {
+                    let obj_class = self.resolve_class_alias(obj_class);
+                    obj_class == class_name || self.is_subclass_of(obj_class, class_name)
                 } else {
                     false
                 };
@@ -9518,28 +10107,16 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to assign property on non-object".into(),
-                    ));
-                };
-
                 // 1. Get current value (with __get support)
                 let current_val = {
-                    let (class_name, prop_handle_opt, has_prop) = {
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
+                    let (class_name, prop_handle_opt, has_prop) =
+                        self.with_object_data(obj_handle, |obj_data| {
                             (
                                 obj_data.class,
                                 obj_data.properties.get(&prop_name).copied(),
                                 obj_data.properties.contains_key(&prop_name),
                             )
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
-                    };
+                        })?;
 
                     // Check if we should use __get
                     let current_scope = self.get_current_class();
@@ -9636,12 +10213,289 @@ impl VM {
                 // 3. Set new value
                 let res_handle = self.arena.alloc(res.clone());
 
-                let payload_zval = self.arena.get_mut(payload_handle);
-                if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                self.with_object_data_mut(obj_handle, |obj_data| {
                     obj_data.properties.insert(prop_name, res_handle);
-                }
+                })?;
 
                 self.operand_stack.push(res_handle);
+            }
+            OpCode::PreIncDot(prop_name) => {
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+
+                let (current_val, struct_target) = {
+                    let obj_val = self.arena.get(obj_handle).value.clone();
+                    match obj_val {
+                        Val::ObjectMap(map_rc) => map_rc
+                            .map
+                            .get(&prop_name)
+                            .map(|h| self.arena.get(*h).value.clone())
+                            .map(|val| (val, None))
+                            .unwrap_or((Val::Null, None)),
+                        Val::Struct(obj_data) => {
+                            if let Some(handle) = obj_data.properties.get(&prop_name) {
+                                (
+                                    self.arena.get(*handle).value.clone(),
+                                    Some(obj_handle),
+                                )
+                            } else if let Some(class_def) =
+                                self.context.classes.get(&obj_data.class)
+                            {
+                                if let Some(target) =
+                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                {
+                                    (
+                                        self.arena.get(target.value_handle).value.clone(),
+                                        Some(target.struct_handle),
+                                    )
+                                } else {
+                                    (Val::Null, None)
+                                }
+                            } else {
+                                (Val::Null, None)
+                            }
+                        }
+                        _ => {
+                            return Err(VmError::RuntimeError(
+                                "Attempt to increment dot property on non-object".into(),
+                            ))
+                        }
+                    }
+                };
+
+                use crate::vm::inc_dec::increment_value;
+                let new_val = increment_value(current_val, &mut *self.error_handler)?;
+                let new_handle = self.arena.alloc(new_val.clone());
+
+                match self.arena.get(obj_handle).value.clone() {
+                    Val::ObjectMap(_) => {
+                        let obj_zval = self.arena.get_mut(obj_handle);
+                        if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                            let map = Rc::make_mut(map_rc);
+                            map.map.insert(prop_name, new_handle);
+                        }
+                    }
+                    Val::Struct(_) => {
+                        let target_handle = struct_target.unwrap_or(obj_handle);
+                        self.with_object_data_mut(target_handle, |obj_data| {
+                            obj_data.properties.insert(prop_name, new_handle);
+                        })?;
+                    }
+                    _ => {}
+                }
+
+                self.operand_stack.push(new_handle);
+            }
+            OpCode::PreDecDot(prop_name) => {
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+
+                let (current_val, struct_target) = {
+                    let obj_val = self.arena.get(obj_handle).value.clone();
+                    match obj_val {
+                        Val::ObjectMap(map_rc) => map_rc
+                            .map
+                            .get(&prop_name)
+                            .map(|h| self.arena.get(*h).value.clone())
+                            .map(|val| (val, None))
+                            .unwrap_or((Val::Null, None)),
+                        Val::Struct(obj_data) => {
+                            if let Some(handle) = obj_data.properties.get(&prop_name) {
+                                (
+                                    self.arena.get(*handle).value.clone(),
+                                    Some(obj_handle),
+                                )
+                            } else if let Some(class_def) =
+                                self.context.classes.get(&obj_data.class)
+                            {
+                                if let Some(target) =
+                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                {
+                                    (
+                                        self.arena.get(target.value_handle).value.clone(),
+                                        Some(target.struct_handle),
+                                    )
+                                } else {
+                                    (Val::Null, None)
+                                }
+                            } else {
+                                (Val::Null, None)
+                            }
+                        }
+                        _ => {
+                            return Err(VmError::RuntimeError(
+                                "Attempt to decrement dot property on non-object".into(),
+                            ))
+                        }
+                    }
+                };
+
+                use crate::vm::inc_dec::decrement_value;
+                let new_val = decrement_value(current_val, &mut *self.error_handler)?;
+                let new_handle = self.arena.alloc(new_val.clone());
+
+                match self.arena.get(obj_handle).value.clone() {
+                    Val::ObjectMap(_) => {
+                        let obj_zval = self.arena.get_mut(obj_handle);
+                        if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                            let map = Rc::make_mut(map_rc);
+                            map.map.insert(prop_name, new_handle);
+                        }
+                    }
+                    Val::Struct(_) => {
+                        let target_handle = struct_target.unwrap_or(obj_handle);
+                        self.with_object_data_mut(target_handle, |obj_data| {
+                            obj_data.properties.insert(prop_name, new_handle);
+                        })?;
+                    }
+                    _ => {}
+                }
+
+                self.operand_stack.push(new_handle);
+            }
+            OpCode::PostIncDot(prop_name) => {
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+
+                let (current_val, struct_target) = {
+                    let obj_val = self.arena.get(obj_handle).value.clone();
+                    match obj_val {
+                        Val::ObjectMap(map_rc) => map_rc
+                            .map
+                            .get(&prop_name)
+                            .map(|h| self.arena.get(*h).value.clone())
+                            .map(|val| (val, None))
+                            .unwrap_or((Val::Null, None)),
+                        Val::Struct(obj_data) => {
+                            if let Some(handle) = obj_data.properties.get(&prop_name) {
+                                (
+                                    self.arena.get(*handle).value.clone(),
+                                    Some(obj_handle),
+                                )
+                            } else if let Some(class_def) =
+                                self.context.classes.get(&obj_data.class)
+                            {
+                                if let Some(target) =
+                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                {
+                                    (
+                                        self.arena.get(target.value_handle).value.clone(),
+                                        Some(target.struct_handle),
+                                    )
+                                } else {
+                                    (Val::Null, None)
+                                }
+                            } else {
+                                (Val::Null, None)
+                            }
+                        }
+                        _ => {
+                            return Err(VmError::RuntimeError(
+                                "Attempt to increment dot property on non-object".into(),
+                            ))
+                        }
+                    }
+                };
+
+                use crate::vm::inc_dec::increment_value;
+                let new_val = increment_value(current_val.clone(), &mut *self.error_handler)?;
+                let new_handle = self.arena.alloc(new_val);
+                let old_handle = self.arena.alloc(current_val);
+
+                match self.arena.get(obj_handle).value.clone() {
+                    Val::ObjectMap(_) => {
+                        let obj_zval = self.arena.get_mut(obj_handle);
+                        if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                            let map = Rc::make_mut(map_rc);
+                            map.map.insert(prop_name, new_handle);
+                        }
+                    }
+                    Val::Struct(_) => {
+                        let target_handle = struct_target.unwrap_or(obj_handle);
+                        self.with_object_data_mut(target_handle, |obj_data| {
+                            obj_data.properties.insert(prop_name, new_handle);
+                        })?;
+                    }
+                    _ => {}
+                }
+
+                self.operand_stack.push(old_handle);
+            }
+            OpCode::PostDecDot(prop_name) => {
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+
+                let (current_val, struct_target) = {
+                    let obj_val = self.arena.get(obj_handle).value.clone();
+                    match obj_val {
+                        Val::ObjectMap(map_rc) => map_rc
+                            .map
+                            .get(&prop_name)
+                            .map(|h| self.arena.get(*h).value.clone())
+                            .map(|val| (val, None))
+                            .unwrap_or((Val::Null, None)),
+                        Val::Struct(obj_data) => {
+                            if let Some(handle) = obj_data.properties.get(&prop_name) {
+                                (
+                                    self.arena.get(*handle).value.clone(),
+                                    Some(obj_handle),
+                                )
+                            } else if let Some(class_def) =
+                                self.context.classes.get(&obj_data.class)
+                            {
+                                if let Some(target) =
+                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                {
+                                    (
+                                        self.arena.get(target.value_handle).value.clone(),
+                                        Some(target.struct_handle),
+                                    )
+                                } else {
+                                    (Val::Null, None)
+                                }
+                            } else {
+                                (Val::Null, None)
+                            }
+                        }
+                        _ => {
+                            return Err(VmError::RuntimeError(
+                                "Attempt to decrement dot property on non-object".into(),
+                            ))
+                        }
+                    }
+                };
+
+                use crate::vm::inc_dec::decrement_value;
+                let new_val = decrement_value(current_val.clone(), &mut *self.error_handler)?;
+                let new_handle = self.arena.alloc(new_val);
+                let old_handle = self.arena.alloc(current_val);
+
+                match self.arena.get(obj_handle).value.clone() {
+                    Val::ObjectMap(_) => {
+                        let obj_zval = self.arena.get_mut(obj_handle);
+                        if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                            let map = Rc::make_mut(map_rc);
+                            map.map.insert(prop_name, new_handle);
+                        }
+                    }
+                    Val::Struct(_) => {
+                        let target_handle = struct_target.unwrap_or(obj_handle);
+                        self.with_object_data_mut(target_handle, |obj_data| {
+                            obj_data.properties.insert(prop_name, new_handle);
+                        })?;
+                    }
+                    _ => {}
+                }
+
+                self.operand_stack.push(old_handle);
             }
             OpCode::PreIncObj => {
                 let prop_name_handle = self
@@ -9658,38 +10512,21 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to increment property on non-object".into(),
-                    ));
-                };
-
-                let class_name = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        obj_data.class
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
-                };
+                let class_name = self.with_object_data(obj_handle, |obj_data| obj_data.class)?;
 
                 // 1. Read current value (with __get support)
                 let current_scope = self.get_current_class();
-                let (has_prop, visibility_ok, prop_handle_opt) = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        let has = obj_data.properties.contains_key(&prop_name);
-                        let vis_ok = has
-                            && self
-                                .check_prop_visibility(class_name, prop_name, current_scope)
-                                .is_ok();
-                        (has, vis_ok, obj_data.properties.get(&prop_name).copied())
-                    } else {
-                        (false, false, None)
-                    }
-                };
+                let (has_prop, prop_handle_opt) =
+                    self.with_object_data(obj_handle, |obj_data| {
+                        (
+                            obj_data.properties.contains_key(&prop_name),
+                            obj_data.properties.get(&prop_name).copied(),
+                        )
+                    })?;
+                let visibility_ok = has_prop
+                    && self
+                        .check_prop_visibility(class_name, prop_name, current_scope)
+                        .is_ok();
 
                 let current_val = if has_prop && visibility_ok {
                     if let Some(h) = prop_handle_opt {
@@ -9727,10 +10564,9 @@ impl VM {
 
                 // 3. Write back (with __set support)
                 if has_prop && visibility_ok {
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                    self.with_object_data_mut(obj_handle, |obj_data| {
                         obj_data.properties.insert(prop_name, res_handle);
-                    }
+                    })?;
                 } else {
                     // Try __set
                     let magic_set = self.context.interner.intern(b"__set");
@@ -9752,10 +10588,9 @@ impl VM {
                         .is_none()
                     {
                         // No __set, do direct assignment
-                        let payload_zval = self.arena.get_mut(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                        self.with_object_data_mut(obj_handle, |obj_data| {
                             obj_data.properties.insert(prop_name, res_handle);
-                        }
+                        })?;
                     }
                 }
 
@@ -9776,38 +10611,21 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to decrement property on non-object".into(),
-                    ));
-                };
-
-                let class_name = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        obj_data.class
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
-                };
+                let class_name = self.with_object_data(obj_handle, |obj_data| obj_data.class)?;
 
                 // 1. Read current value (with __get support)
                 let current_scope = self.get_current_class();
-                let (has_prop, visibility_ok, prop_handle_opt) = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        let has = obj_data.properties.contains_key(&prop_name);
-                        let vis_ok = has
-                            && self
-                                .check_prop_visibility(class_name, prop_name, current_scope)
-                                .is_ok();
-                        (has, vis_ok, obj_data.properties.get(&prop_name).copied())
-                    } else {
-                        (false, false, None)
-                    }
-                };
+                let (has_prop, prop_handle_opt) =
+                    self.with_object_data(obj_handle, |obj_data| {
+                        (
+                            obj_data.properties.contains_key(&prop_name),
+                            obj_data.properties.get(&prop_name).copied(),
+                        )
+                    })?;
+                let visibility_ok = has_prop
+                    && self
+                        .check_prop_visibility(class_name, prop_name, current_scope)
+                        .is_ok();
 
                 let current_val = if has_prop && visibility_ok {
                     if let Some(h) = prop_handle_opt {
@@ -9845,10 +10663,9 @@ impl VM {
 
                 // 3. Write back (with __set support)
                 if has_prop && visibility_ok {
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                    self.with_object_data_mut(obj_handle, |obj_data| {
                         obj_data.properties.insert(prop_name, res_handle);
-                    }
+                    })?;
                 } else {
                     // Try __set
                     let magic_set = self.context.interner.intern(b"__set");
@@ -9870,10 +10687,9 @@ impl VM {
                         .is_none()
                     {
                         // No __set, do direct assignment
-                        let payload_zval = self.arena.get_mut(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                        self.with_object_data_mut(obj_handle, |obj_data| {
                             obj_data.properties.insert(prop_name, res_handle);
-                        }
+                        })?;
                     }
                 }
 
@@ -9894,38 +10710,21 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to increment property on non-object".into(),
-                    ));
-                };
-
-                let class_name = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        obj_data.class
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
-                };
+                let class_name = self.with_object_data(obj_handle, |obj_data| obj_data.class)?;
 
                 // 1. Read current value (with __get support)
                 let current_scope = self.get_current_class();
-                let (has_prop, visibility_ok, prop_handle_opt) = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        let has = obj_data.properties.contains_key(&prop_name);
-                        let vis_ok = has
-                            && self
-                                .check_prop_visibility(class_name, prop_name, current_scope)
-                                .is_ok();
-                        (has, vis_ok, obj_data.properties.get(&prop_name).copied())
-                    } else {
-                        (false, false, None)
-                    }
-                };
+                let (has_prop, prop_handle_opt) =
+                    self.with_object_data(obj_handle, |obj_data| {
+                        (
+                            obj_data.properties.contains_key(&prop_name),
+                            obj_data.properties.get(&prop_name).copied(),
+                        )
+                    })?;
+                let visibility_ok = has_prop
+                    && self
+                        .check_prop_visibility(class_name, prop_name, current_scope)
+                        .is_ok();
 
                 let current_val = if has_prop && visibility_ok {
                     if let Some(h) = prop_handle_opt {
@@ -9965,10 +10764,9 @@ impl VM {
 
                 // 3. Write back (with __set support)
                 if has_prop && visibility_ok {
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                    self.with_object_data_mut(obj_handle, |obj_data| {
                         obj_data.properties.insert(prop_name, new_val_handle);
-                    }
+                    })?;
                 } else {
                     // Try __set
                     let magic_set = self.context.interner.intern(b"__set");
@@ -9990,10 +10788,9 @@ impl VM {
                         .is_none()
                     {
                         // No __set, do direct assignment
-                        let payload_zval = self.arena.get_mut(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                        self.with_object_data_mut(obj_handle, |obj_data| {
                             obj_data.properties.insert(prop_name, new_val_handle);
-                        }
+                        })?;
                     }
                 }
 
@@ -10014,38 +10811,21 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to decrement property on non-object".into(),
-                    ));
-                };
-
-                let class_name = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        obj_data.class
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
-                };
+                let class_name = self.with_object_data(obj_handle, |obj_data| obj_data.class)?;
 
                 // 1. Read current value (with __get support)
                 let current_scope = self.get_current_class();
-                let (has_prop, visibility_ok, prop_handle_opt) = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        let has = obj_data.properties.contains_key(&prop_name);
-                        let vis_ok = has
-                            && self
-                                .check_prop_visibility(class_name, prop_name, current_scope)
-                                .is_ok();
-                        (has, vis_ok, obj_data.properties.get(&prop_name).copied())
-                    } else {
-                        (false, false, None)
-                    }
-                };
+                let (has_prop, prop_handle_opt) =
+                    self.with_object_data(obj_handle, |obj_data| {
+                        (
+                            obj_data.properties.contains_key(&prop_name),
+                            obj_data.properties.get(&prop_name).copied(),
+                        )
+                    })?;
+                let visibility_ok = has_prop
+                    && self
+                        .check_prop_visibility(class_name, prop_name, current_scope)
+                        .is_ok();
 
                 let current_val = if has_prop && visibility_ok {
                     if let Some(h) = prop_handle_opt {
@@ -10085,10 +10865,9 @@ impl VM {
 
                 // 3. Write back (with __set support)
                 if has_prop && visibility_ok {
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                    self.with_object_data_mut(obj_handle, |obj_data| {
                         obj_data.properties.insert(prop_name, new_val_handle);
-                    }
+                    })?;
                 } else {
                     // Try __set
                     let magic_set = self.context.interner.intern(b"__set");
@@ -10110,10 +10889,9 @@ impl VM {
                         .is_none()
                     {
                         // No __set, do direct assignment
-                        let payload_zval = self.arena.get_mut(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                        self.with_object_data_mut(obj_handle, |obj_data| {
                             obj_data.properties.insert(prop_name, new_val_handle);
-                        }
+                        })?;
                     }
                 }
 
@@ -10163,16 +10941,13 @@ impl VM {
                 let val = self.arena.get(obj_handle).value.clone();
 
                 match val {
-                    Val::Object(h) => {
-                        if let Val::ObjPayload(data) = &self.arena.get(h).value {
-                            let name_bytes =
-                                self.context.interner.lookup(data.class).unwrap_or(b"");
-                            let res_handle =
-                                self.arena.alloc(Val::String(name_bytes.to_vec().into()));
-                            self.operand_stack.push(res_handle);
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
+                    Val::Object(_) | Val::Struct(_) => {
+                        let class_name =
+                            self.with_object_data(obj_handle, |data| data.class)?;
+                        let name_bytes = self.context.interner.lookup(class_name).unwrap_or(b"");
+                        let res_handle =
+                            self.arena.alloc(Val::String(name_bytes.to_vec().into()));
+                        self.operand_stack.push(res_handle);
                     }
                     Val::String(s) => {
                         let res_handle = self.arena.alloc(Val::String(s));
@@ -10213,7 +10988,7 @@ impl VM {
                     Val::Float(_) => "double",
                     Val::String(_) => "string",
                     Val::Array(_) => "array",
-                    Val::Object(_) => "object",
+                    Val::Object(_) | Val::Struct(_) => "object",
                     Val::Resource(_) => "resource",
                     _ => "unknown",
                 };
@@ -10230,21 +11005,34 @@ impl VM {
 
                 let mut new_obj_data_opt = None;
                 let mut class_name_opt = None;
+                let mut is_struct = false;
 
                 {
                     let obj_val = self.arena.get(obj_handle);
-                    if let Val::Object(payload_handle) = &obj_val.value {
-                        let payload_val = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_val.value {
-                            new_obj_data_opt = Some(obj_data.clone());
-                            class_name_opt = Some(obj_data.class);
+                    match &obj_val.value {
+                        Val::Object(payload_handle) => {
+                            let payload_val = self.arena.get(*payload_handle);
+                            if let Val::ObjPayload(obj_data) = &payload_val.value {
+                                new_obj_data_opt = Some(obj_data.clone());
+                                class_name_opt = Some(obj_data.class);
+                            }
                         }
+                        Val::Struct(obj_data) => {
+                            new_obj_data_opt = Some((**obj_data).clone());
+                            class_name_opt = Some(obj_data.class);
+                            is_struct = true;
+                        }
+                        _ => {}
                     }
                 }
 
                 if let Some(new_obj_data) = new_obj_data_opt {
-                    let new_payload_handle = self.arena.alloc(Val::ObjPayload(new_obj_data));
-                    let new_obj_handle = self.arena.alloc(Val::Object(new_payload_handle));
+                    let new_obj_handle = if is_struct {
+                        self.arena.alloc(Val::Struct(Rc::new(new_obj_data)))
+                    } else {
+                        let new_payload_handle = self.arena.alloc(Val::ObjPayload(new_obj_data));
+                        self.arena.alloc(Val::Object(new_payload_handle))
+                    };
                     self.operand_stack.push(new_obj_handle);
 
                     if let Some(class_name) = class_name_opt {
@@ -10394,80 +11182,189 @@ impl VM {
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-                // Extract data to avoid borrow issues
-                let (class_name, is_set_result) = {
-                    let obj_zval = self.arena.get(obj_handle);
-                    if let Val::Object(payload_handle) = obj_zval.value {
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                            let current_scope = self.get_current_class();
-                            if self
-                                .check_prop_visibility(obj_data.class, prop_name, current_scope)
-                                .is_ok()
-                            {
-                                if let Some(val_handle) = obj_data.properties.get(&prop_name) {
-                                    (
-                                        obj_data.class,
-                                        Some(!matches!(
-                                            self.arena.get(*val_handle).value,
-                                            Val::Null
-                                        )),
-                                    )
-                                } else {
-                                    (obj_data.class, None) // Not found
-                                }
-                            } else {
-                                (obj_data.class, None) // Not accessible
-                            }
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
+                if let Val::ObjectMap(map_rc) = self.arena.get(obj_handle).value.clone() {
+                    let is_set = if let Some(val_handle) = map_rc.map.get(&prop_name) {
+                        !matches!(
+                            self.arena.get(*val_handle).value,
+                            Val::Null | Val::Uninitialized
+                        )
                     } else {
-                        return Err(VmError::RuntimeError("Isset on non-object".into()));
-                    }
-                };
-
-                if let Some(result) = is_set_result {
-                    let res_handle = self.arena.alloc(Val::Bool(result));
-                    self.operand_stack.push(res_handle);
-                } else {
-                    // Property not found or not accessible. Check for __isset.
-                    let isset_magic = self.context.interner.intern(b"__isset");
-
-                    // Create method name string (prop name)
-                    let prop_name_str = self
-                        .context
-                        .interner
-                        .lookup(prop_name)
-                        .expect("Prop name should be interned")
-                        .to_vec();
-                    let name_handle = self.arena.alloc(Val::String(prop_name_str.into()));
-
-                    // Save caller's return value to avoid corruption (similar to __toString)
-                    let saved_return_value = self.last_return_value.take();
-
-                    // Call __isset synchronously
-                    let isset_result = self.call_magic_method_sync(
-                        obj_handle,
-                        class_name,
-                        isset_magic,
-                        vec![name_handle],
-                    )?;
-
-                    // Restore caller's return value
-                    self.last_return_value = saved_return_value;
-
-                    let result = if let Some(result_handle) = isset_result {
-                        // __isset returned a value - convert to bool
-                        let result_val = &self.arena.get(result_handle).value;
-                        result_val.to_bool()
-                    } else {
-                        // No __isset method, return false
                         false
                     };
-
-                    let res_handle = self.arena.alloc(Val::Bool(result));
+                    let res_handle = self.arena.alloc(Val::Bool(is_set));
                     self.operand_stack.push(res_handle);
+                } else {
+                    // Extract data to avoid borrow issues
+                    let (class_name, is_set_result) = {
+                        let obj_zval = self.arena.get(obj_handle);
+                        if let Val::Object(payload_handle) = obj_zval.value {
+                            let payload_zval = self.arena.get(payload_handle);
+                            if let Val::ObjPayload(obj_data) = &payload_zval.value {
+                                let current_scope = self.get_current_class();
+                                if self
+                                    .check_prop_visibility(obj_data.class, prop_name, current_scope)
+                                    .is_ok()
+                                {
+                                    if let Some(val_handle) = obj_data.properties.get(&prop_name) {
+                                        (
+                                            obj_data.class,
+                                            Some(!matches!(
+                                                self.arena.get(*val_handle).value,
+                                                Val::Null
+                                            )),
+                                        )
+                                    } else {
+                                        (obj_data.class, None) // Not found
+                                    }
+                                } else {
+                                    (obj_data.class, None) // Not accessible
+                                }
+                            } else {
+                                return Err(VmError::RuntimeError("Invalid object payload".into()));
+                            }
+                        } else {
+                            return Err(VmError::RuntimeError("Isset on non-object".into()));
+                        }
+                    };
+
+                    if let Some(result) = is_set_result {
+                        let res_handle = self.arena.alloc(Val::Bool(result));
+                        self.operand_stack.push(res_handle);
+                    } else {
+                        // Property not found or not accessible. Check for __isset.
+                        let isset_magic = self.context.interner.intern(b"__isset");
+
+                        // Create method name string (prop name)
+                        let prop_name_str = self
+                            .context
+                            .interner
+                            .lookup(prop_name)
+                            .expect("Prop name should be interned")
+                            .to_vec();
+                        let name_handle = self.arena.alloc(Val::String(prop_name_str.into()));
+
+                        // Save caller's return value to avoid corruption (similar to __toString)
+                        let saved_return_value = self.last_return_value.take();
+
+                        // Call __isset synchronously
+                        let isset_result = self.call_magic_method_sync(
+                            obj_handle,
+                            class_name,
+                            isset_magic,
+                            vec![name_handle],
+                        )?;
+
+                        // Restore caller's return value
+                        self.last_return_value = saved_return_value;
+
+                        let result = if let Some(result_handle) = isset_result {
+                            // __isset returned a value - convert to bool
+                            let result_val = &self.arena.get(result_handle).value;
+                            result_val.to_bool()
+                        } else {
+                            // No __isset method, return false
+                            false
+                        };
+
+                        let res_handle = self.arena.alloc(Val::Bool(result));
+                        self.operand_stack.push(res_handle);
+                    }
+                }
+            }
+            OpCode::IssetDot(prop_name) => {
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+
+                let obj_val = self.arena.get(obj_handle).value.clone();
+                match obj_val {
+                    Val::ObjectMap(map_rc) => {
+                        let is_set = if let Some(val_handle) = map_rc.map.get(&prop_name) {
+                            !matches!(
+                                self.arena.get(*val_handle).value,
+                                Val::Null | Val::Uninitialized
+                            )
+                        } else {
+                            false
+                        };
+                        let res_handle = self.arena.alloc(Val::Bool(is_set));
+                        self.operand_stack.push(res_handle);
+                    }
+                    Val::Struct(obj_data) => {
+                        let is_set = if let Some(val_handle) = obj_data.properties.get(&prop_name)
+                        {
+                            !matches!(
+                                self.arena.get(*val_handle).value,
+                                Val::Null | Val::Uninitialized
+                            )
+                        } else if let Some(class_def) = self.context.classes.get(&obj_data.class) {
+                            if let Some(target) =
+                                self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                            {
+                                !matches!(
+                                    self.arena.get(target.value_handle).value,
+                                    Val::Null | Val::Uninitialized
+                                )
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        let res_handle = self.arena.alloc(Val::Bool(is_set));
+                        self.operand_stack.push(res_handle);
+                    }
+                    _ => {
+                        return Err(VmError::RuntimeError(
+                            "Isset on non-object-map".into(),
+                        ));
+                    }
+                }
+            }
+            OpCode::UnsetDot(prop_name) => {
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+
+                match self.arena.get(obj_handle).value.clone() {
+                    Val::ObjectMap(_) => {
+                        let obj_zval = self.arena.get_mut(obj_handle);
+                        if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                            let map = Rc::make_mut(map_rc);
+                            map.map.shift_remove(&prop_name);
+                        }
+                    }
+                    Val::Struct(obj_rc) => {
+                        let class_name = obj_rc.class;
+                        if obj_rc.properties.contains_key(&prop_name) {
+                            let uninit_handle = self.arena.alloc(Val::Uninitialized);
+                            self.assign_struct_property(
+                                obj_handle,
+                                class_name,
+                                prop_name,
+                                uninit_handle,
+                            )?;
+                        } else if let Some(class_def) = self.context.classes.get(&class_name) {
+                            if let Some(target) = self
+                                .find_promoted_struct_field(&obj_rc, class_def, prop_name)?
+                            {
+                                let uninit_handle = self.arena.alloc(Val::Uninitialized);
+                                self.assign_struct_property(
+                                    target.struct_handle,
+                                    target.struct_class,
+                                    prop_name,
+                                    uninit_handle,
+                                )?;
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(VmError::RuntimeError(
+                            "Attempt to unset dot property on non-object".into(),
+                        ));
+                    }
                 }
             }
             OpCode::IssetStaticProp(prop_name) => {
@@ -10613,23 +11510,10 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to assign property on non-object".into(),
-                    ));
-                };
-
-                // Extract data
-                let (class_name, prop_exists) = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
+                let (class_name, prop_exists) =
+                    self.with_object_data(obj_handle, |obj_data| {
                         (obj_data.class, obj_data.properties.contains_key(&prop_name))
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
-                };
+                    })?;
 
                 let current_scope = self.get_current_class();
                 let visibility_check =
@@ -10679,19 +11563,15 @@ impl VM {
                             return Err(e);
                         }
 
-                        let payload_zval = self.arena.get_mut(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                        self.with_object_data_mut(obj_handle, |obj_data| {
                             obj_data.properties.insert(prop_name, val_handle);
-                        }
+                        })?;
                         self.operand_stack.push(val_handle);
                     }
                 } else {
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                    self.with_object_data_mut(obj_handle, |obj_data| {
                         obj_data.properties.insert(prop_name, val_handle);
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
+                    })?;
                     self.operand_stack.push(val_handle);
                 }
             }
@@ -10717,20 +11597,9 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to assign property on non-object".into(),
-                    ));
-                };
-
-                let payload_zval = self.arena.get_mut(payload_handle);
-                if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                self.with_object_data_mut(obj_handle, |obj_data| {
                     obj_data.properties.insert(prop_name, ref_handle);
-                } else {
-                    return Err(VmError::RuntimeError("Invalid object payload".into()));
-                }
+                })?;
                 self.operand_stack.push(ref_handle);
             }
             OpCode::FetchClass => {
@@ -10941,12 +11810,9 @@ impl VM {
         // Reference: $PHP_SRC_PATH/Zend/zend_execute.c - ZEND_ASSIGN_DIM_SPEC
         let array_val = &self.arena.get(array_handle).value;
 
-        if let Val::Object(payload_handle) = array_val {
-            let payload = self.arena.get(*payload_handle);
-            if let Val::ObjPayload(obj_data) = &payload.value {
-                let class_name = obj_data.class;
+        if matches!(array_val, Val::Object(_) | Val::Struct(_)) {
+            if let Ok(class_name) = self.with_object_data(array_handle, |data| data.class) {
                 if self.implements_array_access(class_name) {
-                    // Call ArrayAccess::offsetSet($offset, $value)
                     self.call_array_access_offset_set(array_handle, key_handle, val_handle)?;
                     self.operand_stack.push(array_handle);
                     return Ok(());
@@ -12182,16 +13048,20 @@ impl VM {
             .peek_at(arg_count as usize + if is_dynamic { 1 } else { 0 })
             .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-        let class_name = if let Val::Object(h) = self.arena.get(obj_handle).value {
-            if let Val::ObjPayload(data) = &self.arena.get(h).value {
-                data.class
-            } else {
-                return Err(VmError::RuntimeError("Invalid object payload".into()));
+        let class_name = match &self.arena.get(obj_handle).value {
+            Val::Object(h) => {
+                if let Val::ObjPayload(data) = &self.arena.get(*h).value {
+                    data.class
+                } else {
+                    return Err(VmError::RuntimeError("Invalid object payload".into()));
+                }
             }
-        } else {
-            return Err(VmError::RuntimeError(
-                "Call to member function on non-object".into(),
-            ));
+            Val::Struct(obj_data) => obj_data.class,
+            _ => {
+                return Err(VmError::RuntimeError(
+                    "Call to member function on non-object".into(),
+                ))
+            }
         };
 
         // Check for native method first
@@ -12352,6 +13222,66 @@ impl VM {
         } else {
             self.resolve_class_name(class_name)?
         };
+
+        let enum_case_payload = self
+            .context
+            .classes
+            .get(&resolved_class)
+            .and_then(|class_def| {
+                if !class_def.is_enum {
+                    return None;
+                }
+                class_def
+                    .enum_cases
+                    .iter()
+                    .find(|case| case.name == method_name)
+                    .map(|case| (case.name, case.payload_params.clone()))
+            });
+
+        if let Some((case_name, payload_params)) = enum_case_payload {
+            if payload_params.is_empty() {
+                return Err(VmError::RuntimeError(
+                    "Enum case has no payload and cannot be called".into(),
+                ));
+            }
+
+            let args = self.collect_call_args(arg_count)?;
+            if is_dynamic {
+                self.operand_stack.pop(); // method name
+                self.operand_stack.pop(); // class name
+            }
+
+            if args.len() != payload_params.len() {
+                return Err(VmError::RuntimeError(format!(
+                    "Enum case expects {} arguments, got {}",
+                    payload_params.len(),
+                    args.len()
+                )));
+            }
+
+            let case_name_bytes = self.context.interner.lookup(case_name).unwrap_or(b"");
+            let name_handle = self
+                .arena
+                .alloc(Val::String(case_name_bytes.to_vec().into()));
+
+            let mut properties = IndexMap::new();
+            let name_sym = self.context.interner.intern(b"name");
+            properties.insert(name_sym, name_handle);
+
+            for (idx, param_sym) in payload_params.iter().enumerate() {
+                properties.insert(*param_sym, args[idx]);
+            }
+
+            let obj_data = ObjectData {
+                class: resolved_class,
+                properties,
+                internal: None,
+                dynamic_properties: HashSet::new(),
+            };
+            let obj_handle = self.arena.alloc(Val::Struct(Rc::new(obj_data)));
+            self.operand_stack.push(obj_handle);
+            return Ok(());
+        }
 
         if let Some(native_entry) = self.find_native_method(resolved_class, method_name) {
             self.check_method_visibility(
@@ -13088,8 +14018,12 @@ impl VM {
 
 mod tests {
     use super::*;
+    use crate::compiler::emitter::Emitter;
     use crate::compiler::chunk::{FuncParam, UserFunc};
-    use crate::core::value::Symbol;
+    use crate::core::value::{Symbol, Val};
+    use crate::parser::lexer::Lexer;
+    use crate::parser::parser::{Parser, ParserMode};
+    use bumpalo::Bump;
 
     fn create_vm() -> VM {
         // Use EngineBuilder to properly register core extensions
@@ -13099,6 +14033,29 @@ mod tests {
             .expect("Failed to build engine");
 
         VM::new(engine)
+    }
+
+    fn run_phpx(code: &str) -> Val {
+        let mut vm = create_vm();
+        let arena = Bump::new();
+        let lexer = Lexer::new(code.as_bytes());
+        let mut parser = Parser::new_with_mode(lexer, &arena, ParserMode::Phpx);
+        let program = parser.parse_program();
+
+        assert!(
+            program.errors.is_empty(),
+            "phpx parse errors: {:?}",
+            program.errors
+        );
+
+        let (chunk, _) = Emitter::new(code.as_bytes(), &mut vm.context.interner)
+            .compile(program.statements);
+        vm.run(Rc::new(chunk)).unwrap();
+
+        match vm.last_return_value {
+            Some(handle) => vm.arena.get(handle).value.clone(),
+            None => Val::Null,
+        }
     }
 
     fn make_add_user_func() -> Rc<UserFunc> {
@@ -13274,6 +14231,208 @@ mod tests {
         vm.run(Rc::new(chunk)).unwrap();
 
         assert!(vm.operand_stack.is_empty());
+    }
+
+    #[test]
+    fn test_phpx_object_literal_dot_access() {
+        let val = run_phpx("<?php $o = { hello: 'world' }; return $o.hello;");
+        match val {
+            Val::String(s) => assert_eq!(s.as_ref(), b"world"),
+            other => panic!("Expected string result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_literal_nested_assign() {
+        let val = run_phpx("<?php $o = { nested: { count: 1 } }; $o.nested.count += 2; return $o.nested.count;");
+        match val {
+            Val::Int(i) => assert_eq!(i, 3),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_literal_dot_unset() {
+        let val = run_phpx("<?php $o = { foo: 1 }; unset($o.foo); return $o.foo;");
+        match val {
+            Val::Null => {}
+            other => panic!("Expected null result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_literal_arrow_access() {
+        let val = run_phpx("<?php $o = { foo: 1 }; return $o->foo;");
+        match val {
+            Val::Int(i) => assert_eq!(i, 1),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_literal_arrow_assign_and_unset() {
+        let val = run_phpx("<?php $o = { }; $o->foo = 3; unset($o->foo); return $o->foo;");
+        match val {
+            Val::Null => {}
+            other => panic!("Expected null result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_literal_arrow_isset() {
+        let val = run_phpx("<?php $o = { foo: 1 }; $a = isset($o->foo) ? 1 : 0; $b = isset($o->bar) ? 1 : 0; return $a + $b;");
+        match val {
+            Val::Int(i) => assert_eq!(i, 1),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_value_semantics_strict_eq() {
+        let val = run_phpx(
+            "<?php struct Position {
+                $x: int;
+                $y: int;
+            }
+            $p1 = Position { $x: 1, $y: 2 };
+            $p2 = $p1;
+            $p2.x++;
+            $first = ($p1 === $p2);
+            $p2.x--;
+            $second = ($p1 === $p2);
+            return ($first ? 1 : 0) + ($second ? 2 : 0);",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 2),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_dot_access_cow() {
+        let val = run_phpx(
+            "<?php struct Foo {
+                $x: int;
+            }
+            $f = Foo { $x: 1 };
+            $g = $f;
+            $g.x = 5;
+            return $f.x;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 1),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_dot_unset() {
+        let val = run_phpx(
+            "<?php struct Foo {
+                $x: int;
+            }
+            $f = Foo { $x: 1 };
+            unset($f.x);
+            return $f.x;",
+        );
+        match val {
+            Val::Uninitialized => {}
+            other => panic!("Expected uninitialized result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_literal_sets_properties() {
+        let val = run_phpx(
+            "<?php struct Point {
+                $x: int;
+                $y: int;
+            }
+            $p = Point { $x: 3, $y: 4 };
+            return $p.x + $p.y;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 7),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_embed_promoted_access() {
+        let val = run_phpx(
+            "<?php struct Inner {
+                $x: int;
+            }
+            struct Outer { use Inner; }
+            $o = Outer { $Inner: Inner { $x: 5 } };
+            $o.x = 9;
+            return $o.Inner.x;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 9),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_method_this_access() {
+        let val = run_phpx(
+            "<?php struct Box {
+                $w: int;
+                public function size(): int { return $this.w; }
+            }
+            $b = Box { $w: 9 };
+            return $b->size();",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 9),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_magic_get_set() {
+        let val = run_phpx(
+            "<?php struct Magic {
+                $value: int = 0;
+                public function __set($name, $value) { if ($name === 'x') { $this.value = $value * 2; } }
+                public function __get($name) { if ($name === 'x') { return $this.value + 1; } return 0; }
+            }
+            $m = Magic { };
+            $m->x = 3;
+            return $m->x;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 7),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_struct_loose_equality() {
+        let val = run_phpx(
+            "<?php struct Pair {
+                $x: int;
+                $y: int;
+            }
+            $a = Pair { $x: 1, $y: 2 };
+            $b = Pair { $x: 1, $y: 2 };
+            return ($a == $b) ? 1 : 0;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 1),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_phpx_dot_on_class_errors() {
+        let _ = run_phpx(
+            "<?php class C { public int $x = 1; }
+            $c = new C();
+            return $c.x;",
+        );
     }
 
     #[test]
