@@ -293,6 +293,24 @@ fn generic_result_infers_from_err() {
 }
 
 #[test]
+fn struct_method_call_type_checks() {
+    let code = "<?php struct Reader { public function read(int $n): string { return \"\"; } } $r = Reader { }; $r->read(1);";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn struct_method_call_mismatch_errors() {
+    let code = "<?php struct Reader { public function read(int $n): string { return \"\"; } } $r = Reader { }; $r->read(\"no\");";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn interface_method_call_mismatch_errors() {
+    let code = "<?php interface Reader { public function read(int $n): string; } function useReader(Reader $r) { $r->read(\"no\"); }";
+    assert!(check(code).is_err());
+}
+
+#[test]
 fn class_declaration_is_rejected() {
     let code = "<?php class Foo { }";
     assert!(check(code).is_err());
