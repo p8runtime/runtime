@@ -82,6 +82,18 @@ fn jsx_assignment_is_rejected() {
 }
 
 #[test]
+fn jsx_vnode_assignable_to_object() {
+    let code = "<?php function View(): Object { return <div />; }";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn jsx_vnode_not_assignable_to_int() {
+    let code = "<?php function View(): int { return <div />; }";
+    assert!(check(code).is_err());
+}
+
+#[test]
 fn union_allows_object_shape_dot_access() {
     let code = "<?php $x = { foo: 1 }; $x = { foo: \"bar\" }; $x.foo;";
     assert!(check(code).is_ok());

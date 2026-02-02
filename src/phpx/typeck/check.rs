@@ -647,7 +647,7 @@ impl<'a> CheckContext<'a> {
                         let _ = self.check_expr(expr, env, explicit);
                     }
                 }
-                Type::Unknown
+                Type::VNode
             }
             Expr::JsxFragment { children, .. } => {
                 for child in children.iter() {
@@ -656,7 +656,7 @@ impl<'a> CheckContext<'a> {
                         let _ = self.check_expr(expr, env, explicit);
                     }
                 }
-                Type::Unknown
+                Type::VNode
             }
             Expr::StructLiteral { name, fields, span } => {
                 let raw = token_text(self.source, name.span);
@@ -3285,12 +3285,13 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
         }
         _ => {}
     }
-    match (source, target) {
-        (Type::Primitive(a), Type::Primitive(b)) => match (a, b) {
-            (PrimitiveType::Int, PrimitiveType::Float) => true,
-            _ => a == b,
-        },
+        match (source, target) {
+            (Type::Primitive(a), Type::Primitive(b)) => match (a, b) {
+                (PrimitiveType::Int, PrimitiveType::Float) => true,
+                _ => a == b,
+            },
         (Type::Array, Type::Array) => true,
+        (Type::VNode, Type::VNode) => true,
         (Type::Struct(a), Type::Struct(b)) => a == b,
         (Type::Enum(a), Type::Enum(b)) => a == b,
         (
@@ -3345,6 +3346,7 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
         | (Type::Struct(_), Type::Object)
         | (Type::Enum(_), Type::Object)
         | (Type::EnumCase { .. }, Type::Object)
+        | (Type::VNode, Type::Object)
         | (Type::Object, Type::Object)
         | (Type::Interface(_), Type::Object) => true,
         _ => false,
