@@ -1,10 +1,17 @@
-use crate::core::value::{ArrayKey, Handle, Val};
+use crate::core::value::{ArrayKey, Handle, Symbol, Val};
 use crate::runtime::context::EnumBackedType;
 use crate::vm::engine::{PropertyCollectionMode, VM};
 use crate::vm::frame::{GeneratorData, GeneratorState};
 use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+fn resolve_class_symbol(vm: &VM, name: &[u8]) -> Option<Symbol> {
+    vm.context
+        .interner
+        .find(name)
+        .map(|sym| vm.resolve_class_alias(sym))
+}
 
 //=============================================================================
 // Predefined Interface & Class Implementations
@@ -548,32 +555,57 @@ pub fn php_get_object_vars(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
     let obj_handle = args[0];
     let obj_val = vm.arena.get(obj_handle);
 
-    if let Val::Object(payload_handle) = &obj_val.value {
-        let payload = vm.arena.get(*payload_handle);
-        if let Val::ObjPayload(obj_data) = &payload.value {
-            let mut result_map = IndexMap::new();
-            let class_sym = obj_data.class;
-            let current_scope = vm.get_current_class();
+    match &obj_val.value {
+        Val::Object(payload_handle) => {
+            let payload = vm.arena.get(*payload_handle);
+            if let Val::ObjPayload(obj_data) = &payload.value {
+                let mut result_map = IndexMap::new();
+                let class_sym = obj_data.class;
+                let current_scope = vm.get_current_class();
 
-            let properties: Vec<(crate::core::value::Symbol, Handle)> =
-                obj_data.properties.iter().map(|(k, v)| (*k, *v)).collect();
+                let properties: Vec<(crate::core::value::Symbol, Handle)> =
+                    obj_data.properties.iter().map(|(k, v)| (*k, *v)).collect();
 
-            for (prop_sym, val_handle) in properties {
-                if vm
-                    .check_prop_visibility(class_sym, prop_sym, current_scope)
-                    .is_ok()
-                {
-                    let prop_name_bytes =
-                        vm.context.interner.lookup(prop_sym).unwrap_or(b"").to_vec();
-                    let key = ArrayKey::Str(Rc::new(prop_name_bytes));
-                    result_map.insert(key, val_handle);
+                for (prop_sym, val_handle) in properties {
+                    if vm
+                        .check_prop_visibility(class_sym, prop_sym, current_scope)
+                        .is_ok()
+                    {
+                        let prop_name_bytes =
+                            vm.context.interner.lookup(prop_sym).unwrap_or(b"").to_vec();
+                        let key = ArrayKey::Str(Rc::new(prop_name_bytes));
+                        result_map.insert(key, val_handle);
+                    }
                 }
-            }
 
+                return Ok(vm.arena.alloc(Val::Array(
+                    crate::core::value::ArrayData::from(result_map).into(),
+                )));
+            }
+        }
+        Val::Struct(obj_rc) => {
+            let mut result_map = IndexMap::new();
+            for (prop_sym, val_handle) in obj_rc.properties.iter() {
+                let prop_name_bytes = vm.context.interner.lookup(*prop_sym).unwrap_or(b"").to_vec();
+                let key = ArrayKey::Str(Rc::new(prop_name_bytes));
+                result_map.insert(key, *val_handle);
+            }
             return Ok(vm.arena.alloc(Val::Array(
                 crate::core::value::ArrayData::from(result_map).into(),
             )));
         }
+        Val::ObjectMap(map_rc) => {
+            let mut result_map = IndexMap::new();
+            for (prop_sym, val_handle) in map_rc.map.iter() {
+                let prop_name_bytes = vm.context.interner.lookup(*prop_sym).unwrap_or(b"").to_vec();
+                let key = ArrayKey::Str(Rc::new(prop_name_bytes));
+                result_map.insert(key, *val_handle);
+            }
+            return Ok(vm.arena.alloc(Val::Array(
+                crate::core::value::ArrayData::from(result_map).into(),
+            )));
+        }
+        _ => {}
     }
 
     Err("get_object_vars() expects parameter 1 to be object".into())
@@ -596,17 +628,34 @@ pub fn php_get_class(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let val = vm.arena.get(args[0]);
-    if let Val::Object(h) = val.value {
-        let obj_zval = vm.arena.get(h);
-        if let Val::ObjPayload(obj_data) = &obj_zval.value {
+    match &val.value {
+        Val::Object(h) => {
+            let obj_zval = vm.arena.get(*h);
+            if let Val::ObjPayload(obj_data) = &obj_zval.value {
+                let class_name = vm
+                    .context
+                    .interner
+                    .lookup(obj_data.class)
+                    .unwrap_or(b"")
+                    .to_vec();
+                return Ok(vm.arena.alloc(Val::String(class_name.into())));
+            }
+        }
+        Val::Struct(obj_rc) => {
             let class_name = vm
                 .context
                 .interner
-                .lookup(obj_data.class)
+                .lookup(obj_rc.class)
                 .unwrap_or(b"")
                 .to_vec();
             return Ok(vm.arena.alloc(Val::String(class_name.into())));
         }
+        Val::ObjectMap(_) => {
+            return Ok(vm
+                .arena
+                .alloc(Val::String(b"stdClass".to_vec().into())));
+        }
+        _ => {}
     }
 
     Err("get_class() called on non-object".into())
@@ -629,13 +678,13 @@ pub fn php_get_parent_class(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
             Val::Object(h) => {
                 let obj_zval = vm.arena.get(*h);
                 if let Val::ObjPayload(obj_data) = &obj_zval.value {
-                    obj_data.class
+                    vm.resolve_class_alias(obj_data.class)
                 } else {
                     return Ok(vm.arena.alloc(Val::Bool(false)));
                 }
             }
             Val::String(s) => {
-                if let Some(sym) = vm.context.interner.find(s) {
+                if let Some(sym) = resolve_class_symbol(vm, s) {
                     sym
                 } else {
                     return Ok(vm.arena.alloc(Val::Bool(false)));
@@ -672,13 +721,13 @@ pub fn php_is_subclass_of(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
         Val::Object(h) => {
             let obj_zval = vm.arena.get(*h);
             if let Val::ObjPayload(obj_data) = &obj_zval.value {
-                obj_data.class
+                vm.resolve_class_alias(obj_data.class)
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
             }
         }
         Val::String(s) => {
-            if let Some(sym) = vm.context.interner.find(s) {
+            if let Some(sym) = resolve_class_symbol(vm, s) {
                 sym
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
@@ -689,7 +738,7 @@ pub fn php_is_subclass_of(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
 
     let parent_sym = match &class_name_val.value {
         Val::String(s) => {
-            if let Some(sym) = vm.context.interner.find(s) {
+            if let Some(sym) = resolve_class_symbol(vm, s) {
                 sym
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
@@ -718,13 +767,13 @@ pub fn php_is_a(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         Val::Object(h) => {
             let obj_zval = vm.arena.get(*h);
             if let Val::ObjPayload(obj_data) = &obj_zval.value {
-                obj_data.class
+                vm.resolve_class_alias(obj_data.class)
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
             }
         }
         Val::String(s) => {
-            if let Some(sym) = vm.context.interner.find(s) {
+            if let Some(sym) = resolve_class_symbol(vm, s) {
                 sym
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
@@ -735,7 +784,7 @@ pub fn php_is_a(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
     let parent_sym = match &class_name_val.value {
         Val::String(s) => {
-            if let Some(sym) = vm.context.interner.find(s) {
+            if let Some(sym) = resolve_class_symbol(vm, s) {
                 sym
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
@@ -752,6 +801,59 @@ pub fn php_is_a(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Bool(result)))
 }
 
+pub fn php_class_alias(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() < 2 {
+        return Err("class_alias() expects at least 2 parameters".into());
+    }
+
+    let original = vm.check_builtin_param_string(args[0], 1, "class_alias")?;
+    let alias = vm.check_builtin_param_string(args[1], 2, "class_alias")?;
+    let autoload = if args.len() >= 3 {
+        vm.arena.get(args[2]).value.to_bool()
+    } else {
+        true
+    };
+
+    let original = if original.starts_with(b"\\") {
+        &original[1..]
+    } else {
+        &original[..]
+    };
+    let alias = if alias.starts_with(b"\\") {
+        &alias[1..]
+    } else {
+        &alias[..]
+    };
+
+    let original_sym = vm.context.interner.intern(original);
+    let alias_sym = vm.context.interner.intern(alias);
+
+    if alias_sym == original_sym {
+        return Ok(vm.arena.alloc(Val::Bool(true)));
+    }
+
+    if vm.context.classes.contains_key(&alias_sym)
+        || vm.context.class_aliases.contains_key(&alias_sym)
+    {
+        return Ok(vm.arena.alloc(Val::Bool(false)));
+    }
+
+    if !vm.context.classes.contains_key(&original_sym) {
+        if autoload {
+            let _ = vm.trigger_autoload(original_sym);
+        }
+    }
+
+    if !vm.context.classes.contains_key(&original_sym) {
+        return Ok(vm.arena.alloc(Val::Bool(false)));
+    }
+
+    let target_sym = vm.resolve_class_alias(original_sym);
+    vm.context.class_aliases.insert(alias_sym, target_sym);
+
+    Ok(vm.arena.alloc(Val::Bool(true)))
+}
+
 pub fn php_class_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() {
         return Err("class_exists() expects at least 1 parameter".into());
@@ -759,7 +861,7 @@ pub fn php_class_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
 
     let val = vm.arena.get(args[0]);
     if let Val::String(s) = &val.value {
-        if let Some(sym) = vm.context.interner.find(s) {
+        if let Some(sym) = resolve_class_symbol(vm, s) {
             if let Some(def) = vm.context.classes.get(&sym) {
                 return Ok(vm
                     .arena
@@ -778,7 +880,7 @@ pub fn php_interface_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
 
     let val = vm.arena.get(args[0]);
     if let Val::String(s) = &val.value {
-        if let Some(sym) = vm.context.interner.find(s) {
+        if let Some(sym) = resolve_class_symbol(vm, s) {
             if let Some(def) = vm.context.classes.get(&sym) {
                 return Ok(vm.arena.alloc(Val::Bool(def.is_interface)));
             }
@@ -795,7 +897,7 @@ pub fn php_trait_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
 
     let val = vm.arena.get(args[0]);
     if let Val::String(s) = &val.value {
-        if let Some(sym) = vm.context.interner.find(s) {
+        if let Some(sym) = resolve_class_symbol(vm, s) {
             if let Some(def) = vm.context.classes.get(&sym) {
                 return Ok(vm.arena.alloc(Val::Bool(def.is_trait)));
             }
@@ -817,13 +919,15 @@ pub fn php_method_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
         Val::Object(h) => {
             let obj_zval = vm.arena.get(*h);
             if let Val::ObjPayload(obj_data) = &obj_zval.value {
-                obj_data.class
+                vm.resolve_class_alias(obj_data.class)
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
             }
         }
+        Val::Struct(obj_rc) => vm.resolve_class_alias(obj_rc.class),
+        Val::ObjectMap(_) => return Ok(vm.arena.alloc(Val::Bool(false))),
         Val::String(s) => {
-            if let Some(sym) = vm.context.interner.find(s) {
+            if let Some(sym) = resolve_class_symbol(vm, s) {
                 sym
             } else {
                 return Ok(vm.arena.alloc(Val::Bool(false)));
@@ -875,12 +979,30 @@ pub fn php_property_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
                     return Ok(vm.arena.alloc(Val::Bool(true)));
                 }
                 // Check class definition
-                let exists = vm.has_property(obj_data.class, prop_sym);
+                let class_sym = vm.resolve_class_alias(obj_data.class);
+                let exists = vm.has_property(class_sym, prop_sym);
                 return Ok(vm.arena.alloc(Val::Bool(exists)));
             }
         }
+        Val::Struct(obj_rc) => {
+            if obj_rc.properties.contains_key(&prop_sym) {
+                return Ok(vm.arena.alloc(Val::Bool(true)));
+            }
+            if let Some(class_def) = vm.context.classes.get(&obj_rc.class) {
+                let exists = match vm.has_promoted_struct_field(obj_rc, class_def, prop_sym) {
+                    Ok(found) => found,
+                    Err(_) => true,
+                };
+                return Ok(vm.arena.alloc(Val::Bool(exists)));
+            }
+            return Ok(vm.arena.alloc(Val::Bool(false)));
+        }
+        Val::ObjectMap(map_rc) => {
+            let exists = map_rc.map.contains_key(&prop_sym);
+            return Ok(vm.arena.alloc(Val::Bool(exists)));
+        }
         Val::String(s) => {
-            if let Some(class_sym) = vm.context.interner.find(s) {
+            if let Some(class_sym) = resolve_class_symbol(vm, s) {
                 let exists = vm.has_property(class_sym, prop_sym);
                 return Ok(vm.arena.alloc(Val::Bool(exists)));
             }
@@ -901,7 +1023,7 @@ pub fn php_get_class_methods(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
         Val::Object(h) => {
             let obj_zval = vm.arena.get(*h);
             if let Val::ObjPayload(obj_data) = &obj_zval.value {
-                obj_data.class
+                vm.resolve_class_alias(obj_data.class)
             } else {
                 return Ok(vm
                     .arena
@@ -909,7 +1031,7 @@ pub fn php_get_class_methods(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
             }
         }
         Val::String(s) => {
-            if let Some(sym) = vm.context.interner.find(s) {
+            if let Some(sym) = resolve_class_symbol(vm, s) {
                 sym
             } else {
                 return Ok(vm.arena.alloc(Val::Null));
@@ -946,7 +1068,7 @@ pub fn php_get_class_vars(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
     let val = vm.arena.get(args[0]);
     let class_sym = match &val.value {
         Val::String(s) => {
-            if let Some(sym) = vm.context.interner.find(s) {
+            if let Some(sym) = resolve_class_symbol(vm, s) {
                 sym
             } else {
                 return Err("Class does not exist".into());

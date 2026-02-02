@@ -25,6 +25,8 @@ pub fn php_count(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         Val::Array(arr) => arr.map.len(),
         Val::Null => 0,
         Val::ConstArray(map) => map.len(),
+        Val::ObjectMap(map_rc) => map_rc.map.len(),
+        Val::Struct(obj_rc) => obj_rc.properties.len(),
         // In PHP, count() on non-array/non-Countable returns 1 (no strict mode for count)
         _ => 1,
     };

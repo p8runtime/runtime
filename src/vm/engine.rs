@@ -2073,6 +2073,17 @@ impl VM {
         self.find_promoted_struct_field_inner(obj_data, class_def, prop_name, &mut visited)
     }
 
+    pub(crate) fn has_promoted_struct_field(
+        &self,
+        obj_data: &ObjectData,
+        class_def: &ClassDef,
+        prop_name: Symbol,
+    ) -> Result<bool, VmError> {
+        Ok(self
+            .find_promoted_struct_field(obj_data, class_def, prop_name)?
+            .is_some())
+    }
+
     fn find_promoted_struct_field_inner(
         &self,
         obj_data: &ObjectData,
@@ -14294,6 +14305,28 @@ mod tests {
         );
         match val {
             Val::Int(i) => assert_eq!(i, 2),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_helpers_object_literal() {
+        let val = run_phpx(
+            "<?php $o = { foo: 1, bar: 2 }; $ok = 0; if (get_class($o) === 'stdClass') { $ok++; } if (property_exists($o, 'foo')) { $ok++; } if (!method_exists($o, 'foo')) { $ok++; } if (count($o) === 2) { $ok++; } return $ok;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 4),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_helpers_struct() {
+        let val = run_phpx(
+            "<?php struct Inner { $x: int; } struct Outer { use Inner; function hello(): int { return 1; } } $o = Outer { $Inner: Inner { $x: 1 } }; $ok = 0; if (get_class($o) === 'Outer') { $ok++; } if (property_exists($o, 'x')) { $ok++; } if (method_exists($o, 'hello')) { $ok++; } if (count($o) === 1) { $ok++; } return $ok;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 4),
             other => panic!("Expected int result, got {:?}", other),
         }
     }
