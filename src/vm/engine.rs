@@ -14332,6 +14332,28 @@ mod tests {
     }
 
     #[test]
+    fn test_phpx_object_literal_equality_strict_and_loose() {
+        let val = run_phpx(
+            "<?php $a = { foo: 1, bar: '2' }; $b = { bar: '2', foo: 1 }; $c = { foo: 1, bar: 2 }; $ok = 0; if ($a === $b) { $ok++; } if ($a == $c) { $ok += 2; } if ($a === $c) { $ok += 4; } return $ok;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 3),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phpx_object_literal_equality_missing_field() {
+        let val = run_phpx(
+            "<?php $a = { foo: 1, bar: 2 }; $b = { foo: 1 }; return ($a == $b) ? 1 : 0;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 0),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_phpx_struct_value_semantics_strict_eq() {
         let val = run_phpx(
             "<?php struct Position {

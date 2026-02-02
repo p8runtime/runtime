@@ -40,19 +40,142 @@ use crate::core::value::Val;
 use crate::vm::engine::{VM, VmError};
 
 impl VM {
+    /// Strict equality with struct value semantics
+    fn strict_equals(&mut self, a: &Val, b: &Val) -> bool {
+        match (a, b) {
+            (Val::Struct(a_data), Val::Struct(b_data)) => {
+                if a_data.class != b_data.class {
+                    return false;
+                }
+                if let Some(class_def) = self.context.classes.get(&a_data.class) {
+                    if class_def.is_enum {
+                        let name_sym = self.context.interner.intern(b"name");
+                        let Some(a_handle) = a_data.properties.get(&name_sym) else {
+                            return false;
+                        };
+                        let Some(b_handle) = b_data.properties.get(&name_sym) else {
+                            return false;
+                        };
+                        let a_val = self.arena.get(*a_handle).value.clone();
+                        let b_val = self.arena.get(*b_handle).value.clone();
+                        return self.strict_equals(&a_val, &b_val);
+                    }
+                }
+                if a_data.properties.len() != b_data.properties.len() {
+                    return false;
+                }
+                for (key, a_handle) in a_data.properties.iter() {
+                    let Some(b_handle) = b_data.properties.get(key) else {
+                        return false;
+                    };
+                    let a_val = self.arena.get(*a_handle).value.clone();
+                    let b_val = self.arena.get(*b_handle).value.clone();
+                    if !self.strict_equals(&a_val, &b_val) {
+                        return false;
+                    }
+                }
+                true
+            }
+            (Val::ObjectMap(a_map), Val::ObjectMap(b_map)) => {
+                if a_map.map.len() != b_map.map.len() {
+                    return false;
+                }
+                for (key, a_handle) in a_map.map.iter() {
+                    let Some(b_handle) = b_map.map.get(key) else {
+                        return false;
+                    };
+                    let a_val = self.arena.get(*a_handle).value.clone();
+                    let b_val = self.arena.get(*b_handle).value.clone();
+                    if !self.strict_equals(&a_val, &b_val) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => a == b,
+        }
+    }
+
+    fn loose_equals(&mut self, a: &Val, b: &Val) -> bool {
+        match (a, b) {
+            (Val::Struct(a_data), Val::Struct(b_data)) => {
+                if a_data.class != b_data.class {
+                    return false;
+                }
+                if let Some(class_def) = self.context.classes.get(&a_data.class) {
+                    if class_def.is_enum {
+                        let name_sym = self.context.interner.intern(b"name");
+                        let Some(a_handle) = a_data.properties.get(&name_sym) else {
+                            return false;
+                        };
+                        let Some(b_handle) = b_data.properties.get(&name_sym) else {
+                            return false;
+                        };
+                        let a_val = self.arena.get(*a_handle).value.clone();
+                        let b_val = self.arena.get(*b_handle).value.clone();
+                        return self.loose_equals(&a_val, &b_val);
+                    }
+                }
+                if a_data.properties.len() != b_data.properties.len() {
+                    return false;
+                }
+                for (key, a_handle) in a_data.properties.iter() {
+                    let Some(b_handle) = b_data.properties.get(key) else {
+                        return false;
+                    };
+                    let a_val = self.arena.get(*a_handle).value.clone();
+                    let b_val = self.arena.get(*b_handle).value.clone();
+                    if !self.loose_equals(&a_val, &b_val) {
+                        return false;
+                    }
+                }
+                true
+            }
+            (Val::ObjectMap(a_map), Val::ObjectMap(b_map)) => {
+                if a_map.map.len() != b_map.map.len() {
+                    return false;
+                }
+                for (key, a_handle) in a_map.map.iter() {
+                    let Some(b_handle) = b_map.map.get(key) else {
+                        return false;
+                    };
+                    let a_val = self.arena.get(*a_handle).value.clone();
+                    let b_val = self.arena.get(*b_handle).value.clone();
+                    if !self.loose_equals(&a_val, &b_val) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => php_loose_equals(a, b),
+        }
+    }
+
     /// Execute Equal operation: $result = $left == $right
     /// PHP loose equality with type juggling
     /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - is_equal_function
     #[inline]
     pub(crate) fn exec_equal(&mut self) -> Result<(), VmError> {
-        self.binary_cmp(|a, b| php_loose_equals(a, b))
+        let (a_handle, b_handle) = self.pop_binary_operands()?;
+        let a_val = self.arena.get(a_handle).value.clone();
+        let b_val = self.arena.get(b_handle).value.clone();
+        let res = self.loose_equals(&a_val, &b_val);
+        let res_handle = self.arena.alloc(Val::Bool(res));
+        self.operand_stack.push(res_handle);
+        Ok(())
     }
 
     /// Execute NotEqual operation: $result = $left != $right
     /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - is_not_equal_function
     #[inline]
     pub(crate) fn exec_not_equal(&mut self) -> Result<(), VmError> {
-        self.binary_cmp(|a, b| !php_loose_equals(a, b))
+        let (a_handle, b_handle) = self.pop_binary_operands()?;
+        let a_val = self.arena.get(a_handle).value.clone();
+        let b_val = self.arena.get(b_handle).value.clone();
+        let res = !self.loose_equals(&a_val, &b_val);
+        let res_handle = self.arena.alloc(Val::Bool(res));
+        self.operand_stack.push(res_handle);
+        Ok(())
     }
 
     /// Execute Identical operation: $result = $left === $right
@@ -60,14 +183,26 @@ impl VM {
     /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - is_identical_function
     #[inline]
     pub(crate) fn exec_identical(&mut self) -> Result<(), VmError> {
-        self.binary_cmp(|a, b| a == b) // Use Rust's PartialEq (strict)
+        let (a_handle, b_handle) = self.pop_binary_operands()?;
+        let a_val = self.arena.get(a_handle).value.clone();
+        let b_val = self.arena.get(b_handle).value.clone();
+        let res = self.strict_equals(&a_val, &b_val);
+        let res_handle = self.arena.alloc(Val::Bool(res));
+        self.operand_stack.push(res_handle);
+        Ok(())
     }
 
     /// Execute NotIdentical operation: $result = $left !== $right
     /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - is_not_identical_function
     #[inline]
     pub(crate) fn exec_not_identical(&mut self) -> Result<(), VmError> {
-        self.binary_cmp(|a, b| a != b)
+        let (a_handle, b_handle) = self.pop_binary_operands()?;
+        let a_val = self.arena.get(a_handle).value.clone();
+        let b_val = self.arena.get(b_handle).value.clone();
+        let res = !self.strict_equals(&a_val, &b_val);
+        let res_handle = self.arena.alloc(Val::Bool(res));
+        self.operand_stack.push(res_handle);
+        Ok(())
     }
 
     /// Execute LessThan operation: $result = $left < $right
@@ -125,6 +260,7 @@ fn php_loose_equals(a: &Val, b: &Val) -> bool {
         (Val::Int(x), Val::Int(y)) => x == y,
         (Val::Float(x), Val::Float(y)) => x == y,
         (Val::String(x), Val::String(y)) => x == y,
+        (Val::Struct(x), Val::Struct(y)) => x == y,
 
         // Numeric comparisons with type juggling
         (Val::Int(x), Val::Float(y)) => *x as f64 == *y,
