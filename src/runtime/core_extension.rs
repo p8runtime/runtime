@@ -1,6 +1,6 @@
 use crate::builtins::{
     array, bcmath, class, exception, exec, filesystem, function, http, math, output_control, pcre,
-    reflection, spl, string, url, variable,
+    reflection, spl, string, url, variable, wasm,
 };
 use crate::core::value::{Handle, Val, Visibility};
 use crate::runtime::context::RequestContext;
@@ -127,8 +127,8 @@ impl Extension for CoreExtension {
 
     fn module_init(&self, registry: &mut ExtensionRegistry) -> ExtensionResult {
         // String functions
-        // registry.register_function(b"strlen", string::php_strlen);
-        // registry.register_function(b"str_repeat", string::php_str_repeat);
+        registry.register_function(b"strlen", string::php_strlen);
+        registry.register_function(b"str_repeat", string::php_str_repeat);
         // registry.register_function(b"substr", string::php_substr);
         // registry.register_function(b"substr_replace", string::php_substr_replace);
         // registry.register_function(b"strpos", string::php_strpos);
@@ -536,12 +536,16 @@ impl Extension for CoreExtension {
         // registry.register_function(b"reset", array::php_reset);
         // registry.register_function(b"end", array::php_end);
         // registry.register_function(b"array_key_exists", array::php_array_key_exists);
-        // registry.register_function(b"count", array::php_count);
+        registry.register_function(b"count", array::php_count);
 
         // Variable functions
         registry.register_function(b"__deka_symbol_get", variable::php_deka_symbol_get);
         registry.register_function(b"__deka_symbol_set", variable::php_deka_symbol_set);
         registry.register_function(b"__deka_symbol_exists", variable::php_deka_symbol_exists);
+        registry.register_function(b"__deka_object_set", variable::php_deka_object_set);
+        registry.register_function(b"__phpx_object_new", variable::php_phpx_object_new);
+        registry.register_function(b"__phpx_struct_new", variable::php_phpx_struct_new);
+        registry.register_function(b"__deka_wasm_call", wasm::php_deka_wasm_call);
         registry.register_function(b"var_dump", variable::php_var_dump);
         registry.register_function(b"print_r", variable::php_print_r);
         registry.register_function(b"is_string", variable::php_is_string);
@@ -645,6 +649,7 @@ impl Extension for CoreExtension {
         registry.register_function(b"is_subclass_of", class::php_is_subclass_of);
         registry.register_function(b"is_a", class::php_is_a);
         registry.register_function(b"class_exists", class::php_class_exists);
+        registry.register_function(b"class_alias", class::php_class_alias);
         registry.register_function(b"interface_exists", class::php_interface_exists);
         registry.register_function(b"trait_exists", class::php_trait_exists);
         registry.register_function(b"method_exists", class::php_method_exists);
