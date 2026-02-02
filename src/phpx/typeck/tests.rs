@@ -257,6 +257,18 @@ fn match_expression_infers_union_for_arguments() {
 }
 
 #[test]
+fn generic_array_literal_infers_type_param() {
+    let code = "<?php function takes<T>(array<T> $xs) {} takes([1, 2, 3]);";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn generic_array_literal_inference_enforces_constraints() {
+    let code = "<?php function takes<T: int>(array<T> $xs) {} takes([1, \"no\"]);";
+    assert!(check(code).is_err());
+}
+
+#[test]
 fn class_declaration_is_rejected() {
     let code = "<?php class Foo { }";
     assert!(check(code).is_err());

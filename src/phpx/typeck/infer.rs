@@ -96,7 +96,32 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                 .cloned()
                 .unwrap_or(Type::Unknown)
         }
-        Expr::Array { .. } => Type::Array,
+        Expr::Array { items, .. } => {
+            let mut element_ty = Type::Unknown;
+            for item in *items {
+                let value_ty = infer_expr(&item.value, ctx);
+                if item.unpack {
+                    match value_ty {
+                        Type::Applied { base, args } if base.eq_ignore_ascii_case("array") => {
+                            let inner = args.get(0).cloned().unwrap_or(Type::Unknown);
+                            element_ty = merge_types(&element_ty, &inner);
+                        }
+                        Type::Array => {
+                            element_ty = merge_types(&element_ty, &Type::Unknown);
+                        }
+                        _ => {
+                            element_ty = merge_types(&element_ty, &Type::Unknown);
+                        }
+                    }
+                } else {
+                    element_ty = merge_types(&element_ty, &value_ty);
+                }
+            }
+            Type::Applied {
+                base: "array".to_string(),
+                args: vec![element_ty],
+            }
+        }
         Expr::ObjectLiteral { items, .. } => {
             let mut fields = BTreeMap::new();
             for item in *items {

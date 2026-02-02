@@ -1636,7 +1636,9 @@ impl<'a> CheckContext<'a> {
         match pattern {
             Type::TypeParam(name) => {
                 if let Some(existing) = inferred.get(name) {
-                    if !self.is_assignable(actual, existing) {
+                    if matches!(existing, Type::Unknown) {
+                        inferred.insert(name.clone(), actual.clone());
+                    } else if !self.is_assignable(actual, existing) {
                         let merged = merge_types(existing, actual);
                         inferred.insert(name.clone(), merged);
                     }
@@ -1672,6 +1674,11 @@ impl<'a> CheckContext<'a> {
                             self.infer_type_params(arg, &actual_args[idx], inferred);
                         }
                     }
+                } else if base.eq_ignore_ascii_case("array")
+                    && matches!(actual, Type::Array)
+                    && args.len() == 1
+                {
+                    self.infer_type_params(&args[0], &Type::Unknown, inferred);
                 }
             }
             _ => {}
@@ -2549,6 +2556,12 @@ impl<'a> CheckContext<'a> {
                         message: "Result<T, E> expects exactly two type arguments".to_string(),
                     });
                 }
+                if base_name.eq_ignore_ascii_case("array") && args.len() != 1 {
+                    self.errors.push(TypeError {
+                        span: self.type_span(base),
+                        message: "array<T> expects exactly one type argument".to_string(),
+                    });
+                }
                 let mut resolved_args = Vec::new();
                 for arg in args.iter() {
                     resolved_args.push(self.resolve_type_internal(arg, visiting, params));
@@ -2560,6 +2573,7 @@ impl<'a> CheckContext<'a> {
                 } else {
                     if !base_name.eq_ignore_ascii_case("Option")
                         && !base_name.eq_ignore_ascii_case("Result")
+                        && !base_name.eq_ignore_ascii_case("array")
                     {
                         self.errors.push(TypeError {
                             span: self.type_span(base),
