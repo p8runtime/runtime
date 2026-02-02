@@ -2,14 +2,16 @@ use crate::compiler::chunk::{CatchEntry, CodeChunk, FuncParam, ReturnType, UserF
 use crate::core::interner::Interner;
 use crate::core::value::{Symbol, Val, Visibility};
 use crate::parser::ast::{
-    AssignOp, AttributeGroup, BinaryOp, CastKind, ClassMember, Expr, IncludeKind, MagicConstKind,
-    Stmt, StmtId, Type, UnaryOp,
+    AssignOp, AttributeGroup, BinaryOp, CastKind, ClassKind, ClassMember, Expr, ExprId,
+    IncludeKind, JsxAttribute, JsxChild, MagicConstKind, Name, ObjectKey, Stmt, StmtId, Type,
+    UnaryOp, UseItem, UseKind,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
+use crate::parser::span::Span;
 use crate::runtime::context::{AttributeArg, AttributeInstance};
 use crate::vm::opcode::OpCode;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -89,6 +91,20 @@ struct TryFinallyInfo {
     finally_end: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NameKind {
+    Class,
+    Function,
+    Const,
+}
+
+#[derive(Clone, Default)]
+struct UseAliases {
+    classes: HashMap<Vec<u8>, Vec<u8>>,
+    functions: HashMap<Vec<u8>, Vec<u8>>,
+    consts: HashMap<Vec<u8>, Vec<u8>>,
+}
+
 pub struct Emitter<'src> {
     chunk: CodeChunk,
     source: &'src [u8],
@@ -102,6 +118,7 @@ pub struct Emitter<'src> {
     current_trait: Option<Symbol>,
     current_function: Option<Symbol>,
     current_namespace: Option<Symbol>,
+    use_aliases: UseAliases,
     // For eval(): inherit strict_types from parent scope if not explicitly declared
     inherited_strict_types: Option<bool>,
 }
@@ -120,6 +137,7 @@ impl<'src> Emitter<'src> {
             current_trait: None,
             current_function: None,
             current_namespace: None,
+            use_aliases: UseAliases::default(),
             inherited_strict_types: None,
         }
     }
@@ -193,6 +211,21 @@ impl<'src> Emitter<'src> {
     }
 
     fn emit_members(&mut self, class_sym: Symbol, members: &[ClassMember]) {
+        let mut declared_props = HashSet::new();
+        for member in members {
+            if let ClassMember::Property { entries, .. } = member {
+                for entry in *entries {
+                    let prop_name_str = self.get_text(entry.name.span);
+                    let prop_name = if prop_name_str.starts_with(b"$") {
+                        &prop_name_str[1..]
+                    } else {
+                        prop_name_str
+                    };
+                    declared_props.insert(self.interner.intern(prop_name));
+                }
+            }
+        }
+
         for member in members {
             match member {
                 ClassMember::Method {
@@ -209,6 +242,73 @@ impl<'src> Emitter<'src> {
                     let visibility = self.get_visibility(modifiers);
                     let is_static = modifiers.iter().any(|t| t.kind == TokenKind::Static);
                     let is_abstract = modifiers.iter().any(|t| t.kind == TokenKind::Abstract);
+                    let is_ctor = method_name_str.eq_ignore_ascii_case(b"__construct");
+
+                    let mut promoted_params: Vec<(
+                        Symbol,
+                        Symbol,
+                        Option<&Type>,
+                        bool,
+                        Visibility,
+                    )> =
+                        Vec::new();
+                    if is_ctor {
+                        for param in *params {
+                            let is_promoted = param.modifiers.iter().any(|t| {
+                                matches!(
+                                    t.kind,
+                                    TokenKind::Public | TokenKind::Protected | TokenKind::Private
+                                )
+                            });
+                            if !is_promoted {
+                                continue;
+                            }
+
+                            let param_name = self.get_text(param.name.span);
+                            let param_sym = if param_name.starts_with(b"$") {
+                                self.interner.intern(&param_name[1..])
+                            } else {
+                                self.interner.intern(param_name)
+                            };
+                            let prop_sym = param_sym;
+                            let prop_visibility = self.get_visibility(param.modifiers);
+                            let is_readonly =
+                                param.modifiers.iter().any(|t| t.kind == TokenKind::Readonly);
+
+                            promoted_params
+                                .push((prop_sym, param_sym, param.ty, is_readonly, prop_visibility));
+                        }
+                    }
+
+                    if is_ctor {
+                        for (prop_sym, _param_sym, ty, is_readonly, prop_visibility) in
+                            &promoted_params
+                        {
+                            if !declared_props.contains(prop_sym) {
+                                let type_hint_opt = ty.and_then(|t| self.convert_type(t));
+                                let type_hint_idx = if let Some(ref th) = type_hint_opt {
+                                    self.add_constant(Val::Resource(Rc::new(th.clone())))
+                                } else {
+                                    self.add_constant(Val::Null)
+                                };
+                                let default_idx = if type_hint_opt.is_some() || *is_readonly {
+                                    self.add_constant(Val::Uninitialized)
+                                } else {
+                                    self.add_constant(Val::Null)
+                                };
+
+                                self.chunk.code.push(OpCode::DefProp(
+                                    class_sym,
+                                    *prop_sym,
+                                    default_idx as u16,
+                                    *prop_visibility,
+                                    type_hint_idx as u32,
+                                    *is_readonly,
+                                ));
+                                declared_props.insert(*prop_sym);
+                            }
+                        }
+                    }
 
                     // 1. Collect param info
                     struct ParamInfo<'a> {
@@ -237,6 +337,7 @@ impl<'src> Emitter<'src> {
                     method_emitter.file_path = self.file_path.clone();
                     method_emitter.current_class = Some(class_sym);
                     method_emitter.current_namespace = self.current_namespace;
+                    method_emitter.use_aliases = self.use_aliases.clone();
                     method_emitter.chunk.strict_types = self.chunk.strict_types;
 
                     // Build method name after creating method_emitter to avoid borrow issues
@@ -270,16 +371,32 @@ impl<'src> Emitter<'src> {
                                     .build_attribute_instances(info.attributes),
                             });
 
-                            if let Some(default_expr) = info.default {
-                                let val = method_emitter.eval_constant_expr(default_expr);
-                                let idx = method_emitter.add_constant(val);
-                                method_emitter
-                                    .chunk
-                                    .code
-                                    .push(OpCode::RecvInit(i as u32, idx as u16));
-                            } else {
-                                method_emitter.chunk.code.push(OpCode::Recv(i as u32));
-                            }
+                        if info.variadic {
+                            method_emitter
+                                .chunk
+                                .code
+                                .push(OpCode::RecvVariadic(i as u32));
+                        } else if let Some(default_expr) = info.default {
+                            let val = method_emitter.eval_constant_expr(default_expr);
+                            let idx = method_emitter.add_constant(val);
+                            method_emitter
+                                .chunk
+                                .code
+                                .push(OpCode::RecvInit(i as u32, idx as u16));
+                        } else {
+                            method_emitter.chunk.code.push(OpCode::Recv(i as u32));
+                        }
+                        }
+                    }
+
+                    if is_ctor {
+                        for (prop_sym, param_sym, _ty, _is_readonly, _prop_visibility) in
+                            &promoted_params
+                        {
+                            method_emitter.chunk.code.push(OpCode::FetchThis);
+                            method_emitter.chunk.code.push(OpCode::LoadVar(*param_sym));
+                            method_emitter.chunk.code.push(OpCode::AssignProp(*prop_sym));
+                            method_emitter.chunk.code.push(OpCode::Pop);
                         }
                     }
 
@@ -414,7 +531,12 @@ impl<'src> Emitter<'src> {
                         }
                     }
                 }
-                ClassMember::Case { name, value, .. } => {
+                ClassMember::Case {
+                    name,
+                    value,
+                    payload,
+                    ..
+                } => {
                     let case_name_str = self.get_text(name.span);
                     let case_sym = self.interner.intern(case_name_str);
                     let (val_idx, has_value) = if let Some(expr) = value {
@@ -427,11 +549,58 @@ impl<'src> Emitter<'src> {
                     self.chunk
                         .code
                         .push(OpCode::DefEnumCase(class_sym, case_sym, val_idx, has_value));
+
+                    if let Some(payload) = payload {
+                        if !payload.is_empty() {
+                            use crate::core::value::ConstArrayKey;
+                            use indexmap::IndexMap;
+
+                            let mut const_array = IndexMap::new();
+                            for (idx, param) in payload.iter().enumerate() {
+                                let mut name = self.get_text(param.name.span);
+                                if name.starts_with(b"$") {
+                                    name = &name[1..];
+                                }
+                                let val = Val::String(name.to_vec().into());
+                                const_array.insert(ConstArrayKey::Int(idx as i64), val);
+                            }
+                            let payload_idx =
+                                self.add_constant(Val::ConstArray(Rc::new(const_array)));
+                            self.chunk.code.push(OpCode::DefEnumCasePayload(
+                                class_sym,
+                                case_sym,
+                                payload_idx as u16,
+                            ));
+                        }
+                    }
+                }
+                ClassMember::Embed { types, .. } => {
+                    for type_name in *types {
+                        let type_str = self.get_text(type_name.span);
+                        let resolved = self.resolve_ref_name_bytes(type_str, NameKind::Class);
+                        let embed_sym = self.interner.intern(&resolved);
+                        let type_hint_idx =
+                            self.add_constant(Val::Resource(Rc::new(ReturnType::Named(embed_sym))));
+                        let default_idx = self.add_constant(Val::Uninitialized);
+
+                        self.chunk.code.push(OpCode::DefProp(
+                            class_sym,
+                            embed_sym,
+                            default_idx as u16,
+                            Visibility::Public,
+                            type_hint_idx as u32,
+                            false,
+                        ));
+                        self.chunk
+                            .code
+                            .push(OpCode::EmbedStruct(class_sym, embed_sym));
+                    }
                 }
                 ClassMember::TraitUse { traits, .. } => {
                     for trait_name in *traits {
                         let trait_str = self.get_text(trait_name.span);
-                        let trait_sym = self.interner.intern(trait_str);
+                        let resolved = self.resolve_ref_name_bytes(trait_str, NameKind::Class);
+                        let trait_sym = self.interner.intern(&resolved);
                         self.chunk.code.push(OpCode::UseTrait(class_sym, trait_sym));
                     }
                 }
@@ -444,7 +613,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
-                let attr_sym = self.interner.intern(attr_name);
+                let resolved = self.resolve_ref_name_bytes(attr_name, NameKind::Class);
+                let attr_sym = self.interner.intern(&resolved);
                 let mut args = Vec::new();
 
                 for arg in attr.args {
@@ -472,7 +642,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
-                let attr_sym = self.interner.intern(attr_name);
+                let resolved = self.resolve_ref_name_bytes(attr_name, NameKind::Class);
+                let attr_sym = self.interner.intern(&resolved);
                 let mut args = Vec::new();
 
                 for arg in attr.args {
@@ -502,7 +673,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
-                let attr_sym = self.interner.intern(attr_name);
+                let resolved = self.resolve_ref_name_bytes(attr_name, NameKind::Class);
+                let attr_sym = self.interner.intern(&resolved);
                 let mut args = Vec::new();
 
                 for arg in attr.args {
@@ -552,6 +724,33 @@ impl<'src> Emitter<'src> {
                     self.emit_stmt(s);
                 }
             }
+            Stmt::Namespace { name, body, .. } => {
+                let new_ns = name.map(|n| {
+                    let raw = self.get_text(n.span);
+                    let resolved = self.normalize_namespace_decl(raw);
+                    self.interner.intern(&resolved)
+                });
+
+                if let Some(stmts) = body {
+                    let prev_ns = self.current_namespace;
+                    let prev_aliases = self.use_aliases.clone();
+                    self.current_namespace = new_ns;
+                    self.reset_use_aliases();
+                    for s in *stmts {
+                        self.emit_stmt(s);
+                    }
+                    self.current_namespace = prev_ns;
+                    self.use_aliases = prev_aliases;
+                } else {
+                    self.current_namespace = new_ns;
+                    self.reset_use_aliases();
+                }
+            }
+            Stmt::Use { uses, .. } => {
+                for item in *uses {
+                    self.register_use_item(item);
+                }
+            }
             Stmt::Echo { exprs, .. } => {
                 for expr in *exprs {
                     self.emit_expr(expr);
@@ -579,10 +778,12 @@ impl<'src> Emitter<'src> {
                 // Return type checking is now done in the Return handler
                 self.chunk.code.push(OpCode::Return);
             }
+            Stmt::TypeAlias { .. } => {}
             Stmt::Const { consts, .. } => {
                 for c in *consts {
                     let name_str = self.get_text(c.name.span);
-                    let sym = self.interner.intern(name_str);
+                    let resolved = self.resolve_decl_name_bytes(name_str);
+                    let sym = self.interner.intern(&resolved);
 
                     // Value must be constant expression.
                     // For now, we only support literals or simple expressions we can evaluate at compile time?
@@ -889,7 +1090,8 @@ impl<'src> Emitter<'src> {
                 ..
             } => {
                 let func_name_str = self.get_text(name.span);
-                let func_sym = self.interner.intern(func_name_str);
+                let resolved_name = self.resolve_decl_name_bytes(func_name_str);
+                let func_sym = self.interner.intern(&resolved_name);
 
                 // 1. Collect param info to avoid borrow issues
                 struct ParamInfo<'a> {
@@ -918,6 +1120,7 @@ impl<'src> Emitter<'src> {
                 func_emitter.file_path = self.file_path.clone();
                 func_emitter.current_function = Some(func_sym);
                 func_emitter.current_namespace = self.current_namespace;
+                func_emitter.use_aliases = self.use_aliases.clone();
                 func_emitter.chunk.strict_types = self.chunk.strict_types;
 
                 // 3. Process params using func_emitter
@@ -940,7 +1143,12 @@ impl<'src> Emitter<'src> {
                             attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
-                        if let Some(default_expr) = info.default {
+                        if info.variadic {
+                            func_emitter
+                                .chunk
+                                .code
+                                .push(OpCode::RecvVariadic(i as u32));
+                        } else if let Some(default_expr) = info.default {
                             let val = func_emitter.eval_constant_expr(default_expr);
                             let idx = func_emitter.add_constant(val);
                             func_emitter
@@ -978,6 +1186,7 @@ impl<'src> Emitter<'src> {
                     .push(OpCode::DefFunc(func_sym, const_idx as u32));
             }
             Stmt::Class {
+                kind,
                 name,
                 members,
                 extends,
@@ -987,11 +1196,13 @@ impl<'src> Emitter<'src> {
                 ..
             } => {
                 let class_name_str = self.get_text(name.span);
-                let class_sym = self.interner.intern(class_name_str);
+                let resolved_class = self.resolve_decl_name_bytes(class_name_str);
+                let class_sym = self.interner.intern(&resolved_class);
 
                 let parent_sym = if let Some(parent_name) = extends {
                     let parent_str = self.get_text(parent_name.span);
-                    Some(self.interner.intern(parent_str))
+                    let resolved_parent = self.resolve_ref_name_bytes(parent_str, NameKind::Class);
+                    Some(self.interner.intern(&resolved_parent))
                 } else {
                     None
                 };
@@ -999,6 +1210,10 @@ impl<'src> Emitter<'src> {
                 self.chunk
                     .code
                     .push(OpCode::DefClass(class_sym, parent_sym));
+
+                if *kind == ClassKind::Struct {
+                    self.chunk.code.push(OpCode::MarkStruct(class_sym));
+                }
 
                 // Check if class is abstract
                 let is_abstract = modifiers.iter().any(|m| m.kind == TokenKind::Abstract);
@@ -1008,7 +1223,9 @@ impl<'src> Emitter<'src> {
 
                 for interface in *implements {
                     let interface_str = self.get_text(interface.span);
-                    let interface_sym = self.interner.intern(interface_str);
+                    let resolved_iface =
+                        self.resolve_ref_name_bytes(interface_str, NameKind::Class);
+                    let interface_sym = self.interner.intern(&resolved_iface);
                     self.chunk
                         .code
                         .push(OpCode::AddInterface(class_sym, interface_sym));
@@ -1018,9 +1235,11 @@ impl<'src> Emitter<'src> {
                 for attr_group in *attributes {
                     for attr in attr_group.attributes {
                         let attr_name = self.get_text(attr.name.span);
+                        let resolved =
+                            self.resolve_ref_name_bytes(attr_name, NameKind::Class);
                         // Check for both fully qualified and simple name
-                        if attr_name == b"AllowDynamicProperties"
-                            || attr_name.ends_with(b"\\AllowDynamicProperties")
+                        if resolved.eq_ignore_ascii_case(b"AllowDynamicProperties")
+                            || resolved.ends_with(b"\\AllowDynamicProperties")
                         {
                             self.chunk
                                 .code
@@ -1048,13 +1267,16 @@ impl<'src> Emitter<'src> {
                 ..
             } => {
                 let name_str = self.get_text(name.span);
-                let sym = self.interner.intern(name_str);
+                let resolved_name = self.resolve_decl_name_bytes(name_str);
+                let sym = self.interner.intern(&resolved_name);
 
                 self.chunk.code.push(OpCode::DefInterface(sym));
 
                 for interface in *extends {
                     let interface_str = self.get_text(interface.span);
-                    let interface_sym = self.interner.intern(interface_str);
+                    let resolved_iface =
+                        self.resolve_ref_name_bytes(interface_str, NameKind::Class);
+                    let interface_sym = self.interner.intern(&resolved_iface);
                     self.chunk
                         .code
                         .push(OpCode::AddInterface(sym, interface_sym));
@@ -1067,7 +1289,8 @@ impl<'src> Emitter<'src> {
             }
             Stmt::Trait { name, members, .. } => {
                 let name_str = self.get_text(name.span);
-                let sym = self.interner.intern(name_str);
+                let resolved_name = self.resolve_decl_name_bytes(name_str);
+                let sym = self.interner.intern(&resolved_name);
 
                 self.chunk.code.push(OpCode::DefTrait(sym));
 
@@ -1085,7 +1308,8 @@ impl<'src> Emitter<'src> {
                 ..
             } => {
                 let enum_name_str = self.get_text(name.span);
-                let enum_sym = self.interner.intern(enum_name_str);
+                let resolved_name = self.resolve_decl_name_bytes(enum_name_str);
+                let enum_sym = self.interner.intern(&resolved_name);
 
                 let backed_flag = match backed_type {
                     Some(Type::Simple(tok)) if tok.kind == TokenKind::TypeInt => 1,
@@ -1097,7 +1321,9 @@ impl<'src> Emitter<'src> {
 
                 for interface in *implements {
                     let interface_str = self.get_text(interface.span);
-                    let interface_sym = self.interner.intern(interface_str);
+                    let resolved_iface =
+                        self.resolve_ref_name_bytes(interface_str, NameKind::Class);
+                    let interface_sym = self.interner.intern(&resolved_iface);
                     self.chunk
                         .code
                         .push(OpCode::AddInterface(enum_sym, interface_sym));
@@ -1450,7 +1676,8 @@ impl<'src> Emitter<'src> {
 
                     for ty in catch.types {
                         let type_name = self.get_text(ty.span);
-                        let type_sym = self.interner.intern(type_name);
+                        let resolved = self.resolve_ref_name_bytes(type_name, NameKind::Class);
+                        let type_sym = self.interner.intern(&resolved);
 
                         self.chunk.catch_table.push(CatchEntry {
                             start: try_start,
@@ -1762,8 +1989,10 @@ impl<'src> Emitter<'src> {
                                     self.emit_expr(right);
                                     return;
                                 } else {
+                                    let resolved =
+                                        self.resolve_ref_name_bytes(name, NameKind::Class);
                                     // Bare class name - push as string constant
-                                    Val::String(name.to_vec().into())
+                                    Val::String(resolved.into())
                                 };
                                 let const_idx = self.add_constant(class_name_str) as u16;
                                 self.chunk.code.push(OpCode::Const(const_idx));
@@ -1939,6 +2168,13 @@ impl<'src> Emitter<'src> {
                                 self.chunk.code.push(OpCode::Const(const_idx as u16));
                                 self.chunk.code.push(OpCode::PreIncObj);
                             }
+                            Expr::DotAccess { target, property, .. } => {
+                                // ++$obj.prop
+                                self.emit_expr(target);
+                                let prop_name = self.get_text(property.span);
+                                let sym = self.interner.intern(prop_name);
+                                self.chunk.code.push(OpCode::PreIncDot(sym));
+                            }
                             Expr::ClassConstFetch {
                                 class, constant, ..
                             } => {
@@ -1974,6 +2210,13 @@ impl<'src> Emitter<'src> {
                                     self.add_constant(Val::String(Rc::new(prop_name.to_vec())));
                                 self.chunk.code.push(OpCode::Const(const_idx as u16));
                                 self.chunk.code.push(OpCode::PreDecObj);
+                            }
+                            Expr::DotAccess { target, property, .. } => {
+                                // --$obj.prop
+                                self.emit_expr(target);
+                                let prop_name = self.get_text(property.span);
+                                let sym = self.interner.intern(prop_name);
+                                self.chunk.code.push(OpCode::PreDecDot(sym));
                             }
                             Expr::ClassConstFetch {
                                 class, constant, ..
@@ -2021,6 +2264,13 @@ impl<'src> Emitter<'src> {
                         self.chunk.code.push(OpCode::Const(const_idx as u16));
                         self.chunk.code.push(OpCode::PostIncObj);
                     }
+                    Expr::DotAccess { target, property, .. } => {
+                        // $obj.prop++
+                        self.emit_expr(target);
+                        let prop_name = self.get_text(property.span);
+                        let sym = self.interner.intern(prop_name);
+                        self.chunk.code.push(OpCode::PostIncDot(sym));
+                    }
                     Expr::ClassConstFetch {
                         class, constant, ..
                     } => {
@@ -2056,6 +2306,13 @@ impl<'src> Emitter<'src> {
                         let const_idx = self.add_constant(Val::String(Rc::new(prop_name.to_vec())));
                         self.chunk.code.push(OpCode::Const(const_idx as u16));
                         self.chunk.code.push(OpCode::PostDecObj);
+                    }
+                    Expr::DotAccess { target, property, .. } => {
+                        // $obj.prop--
+                        self.emit_expr(target);
+                        let prop_name = self.get_text(property.span);
+                        let sym = self.interner.intern(prop_name);
+                        self.chunk.code.push(OpCode::PostDecDot(sym));
                     }
                     Expr::ClassConstFetch {
                         class, constant, ..
@@ -2181,6 +2438,12 @@ impl<'src> Emitter<'src> {
                                     self.chunk.code.push(OpCode::Const(idx as u16));
                                 }
                             }
+                            Expr::DotAccess { target, property, .. } => {
+                                self.emit_expr(target);
+                                let name = self.get_text(property.span);
+                                let sym = self.interner.intern(name);
+                                self.chunk.code.push(OpCode::IssetDot(sym));
+                            }
                             Expr::ClassConstFetch {
                                 class, constant, ..
                             } => {
@@ -2276,6 +2539,12 @@ impl<'src> Emitter<'src> {
                             let idx = self.add_constant(Val::Bool(false));
                             self.chunk.code.push(OpCode::Const(idx as u16));
                         }
+                    }
+                    Expr::DotAccess { target, property, .. } => {
+                        self.emit_expr(target);
+                        let name = self.get_text(property.span);
+                        let sym = self.interner.intern(name);
+                        self.chunk.code.push(OpCode::IssetDot(sym));
                     }
                     Expr::ClassConstFetch {
                         class, constant, ..
@@ -2413,6 +2682,7 @@ impl<'src> Emitter<'src> {
                 func_emitter.current_class = self.current_class;
                 func_emitter.current_function = Some(closure_sym);
                 func_emitter.current_namespace = self.current_namespace;
+                func_emitter.use_aliases = self.use_aliases.clone();
                 func_emitter.chunk.strict_types = self.chunk.strict_types;
 
                 // 3. Process params
@@ -2435,7 +2705,12 @@ impl<'src> Emitter<'src> {
                             attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
-                        if let Some(default_expr) = info.default {
+                        if info.variadic {
+                            func_emitter
+                                .chunk
+                                .code
+                                .push(OpCode::RecvVariadic(i as u32));
+                        } else if let Some(default_expr) = info.default {
                             let val = func_emitter.eval_constant_expr(default_expr);
                             let idx = func_emitter.add_constant(val);
                             func_emitter
@@ -2491,24 +2766,58 @@ impl<'src> Emitter<'src> {
                     .push(OpCode::Closure(const_idx as u32, use_syms.len() as u32));
             }
             Expr::Call { func, args, .. } => {
-                match func {
-                    Expr::Variable { span, .. } => {
-                        let name = self.get_text(*span);
-                        if name.starts_with(b"$") {
+                let has_unpack = args.iter().any(|arg| arg.unpack);
+                if !has_unpack {
+                    match func {
+                        Expr::Variable { span, .. } => {
+                            let name = self.get_text(*span);
+                            if name.starts_with(b"$") {
+                                self.emit_expr(func);
+                            } else {
+                                let resolved = self.resolve_ref_name_bytes(name, NameKind::Function);
+                                let idx = self.add_constant(Val::String(resolved.into()));
+                                self.chunk.code.push(OpCode::Const(idx as u16));
+                            }
+                        }
+                        _ => self.emit_expr(func),
+                    }
+
+                    for arg in *args {
+                        self.emit_expr(&arg.value);
+                    }
+
+                    self.chunk.code.push(OpCode::Call(args.len() as u8));
+                } else {
+                    match func {
+                        Expr::Variable { span, .. } => {
+                            let name = self.get_text(*span);
+                            if name.starts_with(b"$") {
+                                self.emit_expr(func);
+                                self.chunk.code.push(OpCode::InitDynamicCall);
+                            } else {
+                                let resolved = self.resolve_ref_name_bytes(name, NameKind::Function);
+                                let idx = self.add_constant(Val::String(resolved.into()));
+                                self.chunk.code.push(OpCode::Const(idx as u16));
+                                self.chunk.code.push(OpCode::InitFcallByName);
+                            }
+                        }
+                        _ => {
                             self.emit_expr(func);
-                        } else {
-                            let idx = self.add_constant(Val::String(name.to_vec().into()));
-                            self.chunk.code.push(OpCode::Const(idx as u16));
+                            self.chunk.code.push(OpCode::InitDynamicCall);
                         }
                     }
-                    _ => self.emit_expr(func),
-                }
 
-                for arg in *args {
-                    self.emit_expr(&arg.value);
-                }
+                    for arg in *args {
+                        self.emit_expr(&arg.value);
+                        if arg.unpack {
+                            self.chunk.code.push(OpCode::SendUnpack);
+                        } else {
+                            self.chunk.code.push(OpCode::SendFuncArg);
+                        }
+                    }
 
-                self.chunk.code.push(OpCode::Call(args.len() as u8));
+                    self.chunk.code.push(OpCode::DoFcall);
+                }
             }
             Expr::Variable { span, .. } => {
                 let name = self.get_text(*span);
@@ -2518,7 +2827,8 @@ impl<'src> Emitter<'src> {
                     self.chunk.code.push(OpCode::LoadVar(sym));
                 } else {
                     // Constant fetch
-                    let sym = self.interner.intern(name);
+                    let resolved = self.resolve_ref_name_bytes(name, NameKind::Const);
+                    let sym = self.interner.intern(&resolved);
                     self.chunk.code.push(OpCode::FetchGlobalConst(sym));
                 }
             }
@@ -2544,6 +2854,88 @@ impl<'src> Emitter<'src> {
                     }
                 }
             }
+            Expr::ObjectLiteral { items, .. } => {
+                self.chunk.code.push(OpCode::InitObjectMap(items.len() as u32));
+
+                for item in *items {
+                    let key_bytes = match item.key {
+                        ObjectKey::Ident(token) => self.get_text(token.span).to_vec(),
+                        ObjectKey::String(token) => {
+                            let value = self.get_text(token.span);
+                            if value.len() >= 2 {
+                                let first = value[0];
+                                let last = value[value.len() - 1];
+                                if first == b'"' && last == b'"' {
+                                    let inner = &value[1..value.len() - 1];
+                                    unescape_string(inner)
+                                } else if first == b'\'' && last == b'\'' {
+                                    let inner = &value[1..value.len() - 1];
+                                    let mut result = Vec::new();
+                                    let mut i = 0;
+                                    while i < inner.len() {
+                                        if inner[i] == b'\\' && i + 1 < inner.len() {
+                                            if inner[i + 1] == b'\'' || inner[i + 1] == b'\\' {
+                                                result.push(inner[i + 1]);
+                                                i += 2;
+                                            } else {
+                                                result.push(inner[i]);
+                                                i += 1;
+                                            }
+                                        } else {
+                                            result.push(inner[i]);
+                                            i += 1;
+                                        }
+                                    }
+                                    result
+                                } else {
+                                    unescape_string(value)
+                                }
+                            } else if !value.is_empty() {
+                                unescape_string(value)
+                            } else {
+                                value.to_vec()
+                            }
+                        }
+                    };
+
+                    let prop_sym = self.interner.intern(&key_bytes);
+                    self.chunk.code.push(OpCode::Dup);
+                    self.emit_expr(item.value);
+                    self.chunk.code.push(OpCode::AssignDot(prop_sym));
+                    self.chunk.code.push(OpCode::Pop);
+                }
+            }
+            Expr::JsxElement {
+                name,
+                attributes,
+                children,
+                ..
+            } => {
+                self.emit_jsx_call(Some(name), attributes, children);
+            }
+            Expr::JsxFragment { children, .. } => {
+                self.emit_jsx_call(None, &[], children);
+            }
+            Expr::StructLiteral { name, fields, .. } => {
+                let name_bytes = self.get_text(name.span);
+                let resolved = self.resolve_ref_name_bytes(name_bytes, NameKind::Class);
+                let class_sym = self.interner.intern(&resolved);
+                self.chunk.code.push(OpCode::NewStructLiteral(class_sym));
+
+                for field in *fields {
+                    let field_bytes = self.get_text(field.name.span);
+                    let field_name = if field_bytes.starts_with(b"$") {
+                        &field_bytes[1..]
+                    } else {
+                        field_bytes
+                    };
+                    let prop_sym = self.interner.intern(field_name);
+                    self.chunk.code.push(OpCode::Dup);
+                    self.emit_expr(field.value);
+                    self.chunk.code.push(OpCode::AssignDot(prop_sym));
+                self.chunk.code.push(OpCode::Pop);
+            }
+            }
             Expr::ArrayDimFetch { array, dim, .. } => {
                 self.emit_expr(array);
                 if let Some(d) = dim {
@@ -2555,7 +2947,8 @@ impl<'src> Emitter<'src> {
                 if let Expr::Variable { span, .. } = class {
                     let name = self.get_text(*span);
                     if !name.starts_with(b"$") {
-                        let class_sym = self.interner.intern(name);
+                        let resolved = self.resolve_ref_name_bytes(name, NameKind::Class);
+                        let class_sym = self.interner.intern(&resolved);
 
                         for arg in *args {
                             self.emit_expr(arg.value);
@@ -2607,25 +3000,43 @@ impl<'src> Emitter<'src> {
                     self.chunk.code.push(OpCode::FetchPropDynamic);
                 }
             }
+            Expr::DotAccess { target, property, .. } => {
+                self.emit_expr(target);
+                let name = self.get_text(property.span);
+                let sym = self.interner.intern(name);
+                self.chunk.code.push(OpCode::FetchDot(sym));
+            }
             Expr::MethodCall {
                 target,
                 method,
                 args,
                 ..
             } => {
-                self.emit_expr(target);
-                if let Expr::Variable { span, .. } = method {
-                    let name = self.get_text(*span);
-                    if !name.starts_with(b"$") {
-                        for arg in *args {
-                            self.emit_expr(arg.value);
+                let has_unpack = args.iter().any(|arg| arg.unpack);
+                if !has_unpack {
+                    self.emit_expr(target);
+                    if let Expr::Variable { span, .. } = method {
+                        let name = self.get_text(*span);
+                        if !name.starts_with(b"$") {
+                            for arg in *args {
+                                self.emit_expr(arg.value);
+                            }
+                            let sym = self.interner.intern(name);
+                            self.chunk
+                                .code
+                                .push(OpCode::CallMethod(sym, args.len() as u8));
+                        } else {
+                            // Dynamic method call: $obj->$method()
+                            self.emit_expr(method);
+                            for arg in *args {
+                                self.emit_expr(arg.value);
+                            }
+                            self.chunk
+                                .code
+                                .push(OpCode::CallMethodDynamic(args.len() as u8));
                         }
-                        let sym = self.interner.intern(name);
-                        self.chunk
-                            .code
-                            .push(OpCode::CallMethod(sym, args.len() as u8));
                     } else {
-                        // Dynamic method call: $obj->$method()
+                        // Dynamic method call with expression: $obj->{$expr}()
                         self.emit_expr(method);
                         for arg in *args {
                             self.emit_expr(arg.value);
@@ -2635,14 +3046,28 @@ impl<'src> Emitter<'src> {
                             .push(OpCode::CallMethodDynamic(args.len() as u8));
                     }
                 } else {
-                    // Dynamic method call with expression: $obj->{$expr}()
-                    self.emit_expr(method);
+                    self.emit_expr(target);
+                    if let Expr::Variable { span, .. } = method {
+                        let name = self.get_text(*span);
+                        if !name.starts_with(b"$") {
+                            let idx = self.add_constant(Val::String(name.to_vec().into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        } else {
+                            self.emit_expr(method);
+                        }
+                    } else {
+                        self.emit_expr(method);
+                    }
+                    self.chunk.code.push(OpCode::InitMethodCall);
                     for arg in *args {
                         self.emit_expr(arg.value);
+                        if arg.unpack {
+                            self.chunk.code.push(OpCode::SendUnpack);
+                        } else {
+                            self.chunk.code.push(OpCode::SendFuncArg);
+                        }
                     }
-                    self.chunk
-                        .code
-                        .push(OpCode::CallMethodDynamic(args.len() as u8));
+                    self.chunk.code.push(OpCode::DoFcall);
                 }
             }
             Expr::StaticCall {
@@ -2651,57 +3076,100 @@ impl<'src> Emitter<'src> {
                 args,
                 ..
             } => {
-                let mut class_emitted = false;
-                if let Expr::Variable { span, .. } = class {
-                    let class_name = self.get_text(*span);
-                    if !class_name.starts_with(b"$") {
-                        let class_sym = self.interner.intern(class_name);
+                let has_unpack = args.iter().any(|arg| arg.unpack);
+                if !has_unpack {
+                    let mut class_emitted = false;
+                    if let Expr::Variable { span, .. } = class {
+                        let class_name = self.get_text(*span);
+                        if !class_name.starts_with(b"$") {
+                            let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                            let class_sym = self.interner.intern(&resolved);
 
-                        if let Expr::Variable {
-                            span: method_span, ..
-                        } = method
-                        {
-                            let method_name = self.get_text(*method_span);
-                            if !method_name.starts_with(b"$") {
+                            if let Expr::Variable {
+                                span: method_span, ..
+                            } = method
+                            {
+                                let method_name = self.get_text(*method_span);
+                                if !method_name.starts_with(b"$") {
+                                    for arg in *args {
+                                        self.emit_expr(arg.value);
+                                    }
+                                    let method_sym = self.interner.intern(method_name);
+                                    self.chunk.code.push(OpCode::CallStaticMethod(
+                                        class_sym,
+                                        method_sym,
+                                        args.len() as u8,
+                                    ));
+                                    class_emitted = true;
+                                }
+                            }
+
+                            if !class_emitted {
+                                // Class is static, but method is dynamic: Class::$method()
+                                let idx = self.add_constant(Val::String(resolved.into()));
+                                self.chunk.code.push(OpCode::Const(idx as u16));
+                                self.emit_expr(method);
                                 for arg in *args {
                                     self.emit_expr(arg.value);
                                 }
-                                let method_sym = self.interner.intern(method_name);
-                                self.chunk.code.push(OpCode::CallStaticMethod(
-                                    class_sym,
-                                    method_sym,
-                                    args.len() as u8,
-                                ));
+                                self.chunk
+                                    .code
+                                    .push(OpCode::CallStaticMethodDynamic(args.len() as u8));
                                 class_emitted = true;
                             }
                         }
+                    }
 
-                        if !class_emitted {
-                            // Class is static, but method is dynamic: Class::$method()
-                            let idx = self.add_constant(Val::String(class_name.to_vec().into()));
+                    if !class_emitted {
+                        // Dynamic static call: $class::$method()
+                        self.emit_expr(class);
+                        self.emit_expr(method);
+                        for arg in *args {
+                            self.emit_expr(arg.value);
+                        }
+                        self.chunk
+                            .code
+                            .push(OpCode::CallStaticMethodDynamic(args.len() as u8));
+                    }
+                } else {
+                    let mut class_pushed = false;
+                    if let Expr::Variable { span, .. } = class {
+                        let class_name = self.get_text(*span);
+                        if !class_name.starts_with(b"$") {
+                            let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                            let idx = self.add_constant(Val::String(resolved.into()));
                             self.chunk.code.push(OpCode::Const(idx as u16));
-                            self.emit_expr(method);
-                            for arg in *args {
-                                self.emit_expr(arg.value);
-                            }
-                            self.chunk
-                                .code
-                                .push(OpCode::CallStaticMethodDynamic(args.len() as u8));
-                            class_emitted = true;
+                            class_pushed = true;
                         }
                     }
-                }
+                    if !class_pushed {
+                        self.emit_expr(class);
+                    }
 
-                if !class_emitted {
-                    // Dynamic static call: $class::$method()
-                    self.emit_expr(class);
-                    self.emit_expr(method);
+                    if let Expr::Variable { span, .. } = method {
+                        let method_name = self.get_text(*span);
+                        if !method_name.starts_with(b"$") {
+                            let idx = self.add_constant(Val::String(method_name.to_vec().into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        } else {
+                            self.emit_expr(method);
+                        }
+                    } else {
+                        self.emit_expr(method);
+                    }
+
+                    self.chunk.code.push(OpCode::InitStaticMethodCall);
+
                     for arg in *args {
                         self.emit_expr(arg.value);
+                        if arg.unpack {
+                            self.chunk.code.push(OpCode::SendUnpack);
+                        } else {
+                            self.chunk.code.push(OpCode::SendFuncArg);
+                        }
                     }
-                    self.chunk
-                        .code
-                        .push(OpCode::CallStaticMethodDynamic(args.len() as u8));
+
+                    self.chunk.code.push(OpCode::DoFcall);
                 }
             }
             Expr::ClassConstFetch {
@@ -2722,12 +3190,14 @@ impl<'src> Emitter<'src> {
                     let class_name = self.get_text(*span);
                     if !class_name.starts_with(b"$") {
                         if is_class_keyword {
-                            let idx = self.add_constant(Val::String(class_name.to_vec().into()));
+                            let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                            let idx = self.add_constant(Val::String(resolved.into()));
                             self.chunk.code.push(OpCode::Const(idx as u16));
                             return;
                         }
 
-                        let class_sym = self.interner.intern(class_name);
+                        let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                        let class_sym = self.interner.intern(&resolved);
 
                         if let Expr::Variable {
                             span: const_span, ..
@@ -2808,6 +3278,13 @@ impl<'src> Emitter<'src> {
                         }
                     }
                 }
+                Expr::DotAccess { target, property, .. } => {
+                    self.emit_expr(target);
+                    self.emit_expr(expr);
+                    let name = self.get_text(property.span);
+                    let sym = self.interner.intern(name);
+                    self.chunk.code.push(OpCode::AssignDot(sym));
+                }
                 Expr::ClassConstFetch {
                     class, constant, ..
                 } => {
@@ -2815,7 +3292,8 @@ impl<'src> Emitter<'src> {
                     if let Expr::Variable { span, .. } = class {
                         let class_name = self.get_text(*span);
                         if !class_name.starts_with(b"$") {
-                            let class_sym = self.interner.intern(class_name);
+                            let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                            let class_sym = self.interner.intern(&resolved);
 
                             if let Expr::Variable {
                                 span: const_span, ..
@@ -2867,6 +3345,30 @@ impl<'src> Emitter<'src> {
                                 self.chunk.code.push(OpCode::AssignProp(sym));
                             }
                         }
+                    } else if let Expr::DotAccess { target, property, .. } = base {
+                        self.emit_expr(target);
+                        self.chunk.code.push(OpCode::Dup);
+
+                        let name = self.get_text(property.span);
+                        let sym = self.interner.intern(name);
+                        self.chunk.code.push(OpCode::FetchDot(sym));
+
+                        for key in &keys {
+                            if let Some(k) = key {
+                                self.emit_expr(k);
+                            } else {
+                                let idx = self.add_constant(Val::AppendPlaceholder);
+                                self.chunk.code.push(OpCode::Const(idx as u16));
+                            }
+                        }
+
+                        self.emit_expr(expr);
+
+                        self.chunk
+                            .code
+                            .push(OpCode::StoreNestedDim(keys.len() as u8));
+
+                        self.chunk.code.push(OpCode::AssignDot(sym));
                     } else {
                         self.emit_expr(base);
                         for key in &keys {
@@ -3165,13 +3667,65 @@ impl<'src> Emitter<'src> {
                             }
                         }
                     }
+                    Expr::DotAccess { target, property, .. } => {
+                        self.emit_expr(target);
+                        self.chunk.code.push(OpCode::Dup);
+
+                        let name = self.get_text(property.span);
+                        let sym = self.interner.intern(name);
+
+                        if let AssignOp::Coalesce = op {
+                            self.chunk.code.push(OpCode::Dup);
+                            self.chunk.code.push(OpCode::IssetDot(sym));
+                            let jump_idx = self.chunk.code.len();
+                            self.chunk.code.push(OpCode::JmpIfTrue(0));
+
+                            self.emit_expr(expr);
+                            self.chunk.code.push(OpCode::AssignDot(sym));
+
+                            let end_jump_idx = self.chunk.code.len();
+                            self.chunk.code.push(OpCode::Jmp(0));
+
+                            let label_set = self.chunk.code.len();
+                            self.chunk.code[jump_idx] = OpCode::JmpIfTrue(label_set as u32);
+                            self.chunk.code.push(OpCode::FetchDot(sym));
+
+                            let label_end = self.chunk.code.len();
+                            self.chunk.code[end_jump_idx] = OpCode::Jmp(label_end as u32);
+                            return;
+                        }
+
+                        self.chunk.code.push(OpCode::FetchDot(sym));
+
+                        self.emit_expr(expr);
+
+                        match op {
+                            AssignOp::Plus => self.chunk.code.push(OpCode::Add),
+                            AssignOp::Minus => self.chunk.code.push(OpCode::Sub),
+                            AssignOp::Mul => self.chunk.code.push(OpCode::Mul),
+                            AssignOp::Div => self.chunk.code.push(OpCode::Div),
+                            AssignOp::Mod => self.chunk.code.push(OpCode::Mod),
+                            AssignOp::Concat => self.chunk.code.push(OpCode::Concat),
+                            AssignOp::Pow => self.chunk.code.push(OpCode::Pow),
+                            AssignOp::BitAnd => self.chunk.code.push(OpCode::BitwiseAnd),
+                            AssignOp::BitOr => self.chunk.code.push(OpCode::BitwiseOr),
+                            AssignOp::BitXor => self.chunk.code.push(OpCode::BitwiseXor),
+                            AssignOp::ShiftLeft => self.chunk.code.push(OpCode::ShiftLeft),
+                            AssignOp::ShiftRight => self.chunk.code.push(OpCode::ShiftRight),
+                            _ => {}
+                        }
+
+                        self.chunk.code.push(OpCode::AssignDot(sym));
+                    }
                     Expr::ClassConstFetch {
                         class, constant, ..
                     } => {
                         if let Expr::Variable { span, .. } = class {
                             let class_name = self.get_text(*span);
                             if !class_name.starts_with(b"$") {
-                                let class_sym = self.interner.intern(class_name);
+                                let resolved =
+                                    self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                                let class_sym = self.interner.intern(&resolved);
 
                                 if let Expr::Variable {
                                     span: const_span, ..
@@ -3184,7 +3738,7 @@ impl<'src> Emitter<'src> {
 
                                         if let AssignOp::Coalesce = op {
                                             let idx = self.add_constant(Val::String(
-                                                class_name.to_vec().into(),
+                                                resolved.clone().into(),
                                             ));
                                             self.chunk.code.push(OpCode::Const(idx as u16));
                                             self.chunk.code.push(OpCode::IssetStaticProp(prop_sym));
@@ -3614,6 +4168,170 @@ impl<'src> Emitter<'src> {
         }
     }
 
+    fn emit_jsx_call(
+        &mut self,
+        name: Option<&Name<'_>>,
+        attributes: &[JsxAttribute<'_>],
+        children: &[JsxChild<'_>],
+    ) {
+        let child_count = self.jsx_child_count(children);
+        let (key_expr, prop_count) = self.jsx_prop_count(attributes, child_count);
+
+        let fn_name: &[u8] = if child_count > 1 { b"jsxs" } else { b"jsx" };
+        let resolved = self.resolve_ref_name_bytes(fn_name, NameKind::Function);
+        let fn_idx = self.add_constant(Val::String(resolved.into()));
+        self.chunk.code.push(OpCode::Const(fn_idx as u16));
+
+        self.emit_jsx_type(name);
+        self.emit_jsx_props(attributes, children, prop_count, child_count > 0);
+
+        if let Some(expr) = key_expr {
+            self.emit_expr(expr);
+            self.chunk.code.push(OpCode::Call(3));
+        } else {
+            self.chunk.code.push(OpCode::Call(2));
+        }
+    }
+
+    fn emit_jsx_type(&mut self, name: Option<&Name<'_>>) {
+        let tag_bytes = if let Some(name) = name {
+            let raw = self.get_text(name.span);
+            let trimmed = if raw.starts_with(b"\\") { &raw[1..] } else { raw };
+            let mut is_component = false;
+            if let Some(last_seg) = trimmed.split(|b| *b == b'\\').last() {
+                if let Some(first) = last_seg.first() {
+                    is_component = *first >= b'A' && *first <= b'Z';
+                }
+            }
+            if is_component {
+                let mut resolved = self.resolve_ref_name_bytes(raw, NameKind::Function);
+                if let Some(pos) = resolved.iter().position(|b| *b == 0) {
+                    resolved.truncate(pos);
+                }
+                resolved
+            } else {
+                trimmed.to_vec()
+            }
+        } else {
+            b"__fragment__".to_vec()
+        };
+        let idx = self.add_constant(Val::String(tag_bytes.into()));
+        self.chunk.code.push(OpCode::Const(idx as u16));
+    }
+
+    fn emit_jsx_props(
+        &mut self,
+        attributes: &[JsxAttribute<'_>],
+        children: &[JsxChild<'_>],
+        prop_count: usize,
+        include_children: bool,
+    ) {
+        self.chunk
+            .code
+            .push(OpCode::InitObjectMap(prop_count as u32));
+
+        for attr in attributes {
+            if self.is_jsx_key(attr) {
+                continue;
+            }
+            let name_bytes = self.get_text(attr.name.span);
+            let prop_sym = self.interner.intern(name_bytes);
+            self.chunk.code.push(OpCode::Dup);
+            if let Some(value) = attr.value {
+                self.emit_expr(value);
+            } else {
+                let idx = self.add_constant(Val::Bool(true));
+                self.chunk.code.push(OpCode::Const(idx as u16));
+            }
+            self.chunk.code.push(OpCode::AssignDot(prop_sym));
+            self.chunk.code.push(OpCode::Pop);
+        }
+
+        if include_children {
+            let child_sym = self.interner.intern(b"children");
+            self.chunk.code.push(OpCode::Dup);
+            self.emit_jsx_children_array(children);
+            self.chunk.code.push(OpCode::AssignDot(child_sym));
+            self.chunk.code.push(OpCode::Pop);
+        }
+    }
+
+    fn emit_jsx_children_array(&mut self, children: &[JsxChild<'_>]) {
+        let child_count = self.jsx_child_count(children);
+        self.chunk
+            .code
+            .push(OpCode::InitArray(child_count as u32));
+
+        for &child in children {
+            match child {
+                JsxChild::Text(span) => {
+                    if let Some(text) = self.normalize_jsx_text(span) {
+                        let idx = self.add_constant(Val::String(text.into()));
+                        self.chunk.code.push(OpCode::Const(idx as u16));
+                        self.chunk.code.push(OpCode::AppendArray);
+                    }
+                }
+                JsxChild::Expr(expr) => {
+                    self.emit_expr(expr);
+                    self.chunk.code.push(OpCode::AppendArray);
+                }
+            }
+        }
+    }
+
+    fn normalize_jsx_text(&self, span: Span) -> Option<Vec<u8>> {
+        let raw = self.get_text(span);
+        let text = String::from_utf8_lossy(raw);
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.as_bytes().to_vec())
+        }
+    }
+
+    fn jsx_child_count(&self, children: &[JsxChild<'_>]) -> usize {
+        let mut count = 0;
+        for &child in children {
+            match child {
+                JsxChild::Text(span) => {
+                    if self.normalize_jsx_text(span).is_some() {
+                        count += 1;
+                    }
+                }
+                JsxChild::Expr(_) => count += 1,
+            }
+        }
+        count
+    }
+
+    fn jsx_prop_count<'a>(
+        &self,
+        attributes: &[JsxAttribute<'a>],
+        child_count: usize,
+    ) -> (Option<ExprId<'a>>, usize) {
+        let mut key_expr = None;
+        let mut count = 0;
+        for attr in attributes {
+            if self.is_jsx_key(attr) {
+                if key_expr.is_none() {
+                    key_expr = attr.value;
+                }
+                continue;
+            }
+            count += 1;
+        }
+        if child_count > 0 {
+            count += 1;
+        }
+        (key_expr, count)
+    }
+
+    fn is_jsx_key(&self, attr: &JsxAttribute<'_>) -> bool {
+        let name_bytes = self.get_text(attr.name.span);
+        name_bytes.eq_ignore_ascii_case(b"key")
+    }
+
     fn get_text(&self, span: crate::parser::span::Span) -> &'src [u8] {
         &self.source[span.start..span.end]
     }
@@ -3635,7 +4353,8 @@ impl<'src> Emitter<'src> {
 
             // Valid static property: Class::$property (class name without $, property with $)
             if !class_name.starts_with(b"$") && prop_name.starts_with(b"$") {
-                let class_idx = self.add_constant(Val::String(Rc::new(class_name.to_vec())));
+                let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                let class_idx = self.add_constant(Val::String(Rc::new(resolved)));
                 let prop_idx = self.add_constant(Val::String(Rc::new(prop_name[1..].to_vec())));
                 self.chunk.code.push(OpCode::Const(class_idx as u16));
                 self.chunk.code.push(OpCode::Const(prop_idx as u16));
@@ -3657,6 +4376,230 @@ impl<'src> Emitter<'src> {
             }
         }
         line
+    }
+
+    fn current_namespace_bytes(&self) -> Option<&[u8]> {
+        self.current_namespace
+            .and_then(|sym| self.interner.lookup(sym))
+    }
+
+    fn normalize_alias_key(bytes: &[u8]) -> Vec<u8> {
+        bytes.iter().map(|b| b.to_ascii_lowercase()).collect()
+    }
+
+    fn split_name_bytes(name: &[u8]) -> (bool, Vec<Vec<u8>>) {
+        let mut raw = name;
+        let mut is_absolute = false;
+        if raw.starts_with(b"\\") {
+            is_absolute = true;
+            raw = &raw[1..];
+        }
+        let parts = raw
+            .split(|b| *b == b'\\')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.to_vec())
+            .collect::<Vec<_>>();
+        (is_absolute, parts)
+    }
+
+    fn join_name_parts(parts: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (idx, part) in parts.iter().enumerate() {
+            if idx > 0 {
+                out.push(b'\\');
+            }
+            out.extend_from_slice(part);
+        }
+        out
+    }
+
+    fn is_namespace_keyword(part: &[u8]) -> bool {
+        part.eq_ignore_ascii_case(b"namespace")
+    }
+
+    fn resolve_decl_name_bytes(&self, name: &[u8]) -> Vec<u8> {
+        let (is_absolute, mut parts) = Self::split_name_bytes(name);
+        if parts.is_empty() {
+            return Vec::new();
+        }
+        if is_absolute {
+            return Self::join_name_parts(&parts);
+        }
+        if Self::is_namespace_keyword(&parts[0]) {
+            parts.remove(0);
+            if let Some(ns) = self.current_namespace_bytes() {
+                if parts.is_empty() {
+                    return ns.to_vec();
+                }
+                let mut out = Vec::new();
+                if !ns.is_empty() {
+                    out.extend_from_slice(ns);
+                    out.push(b'\\');
+                }
+                out.extend_from_slice(&Self::join_name_parts(&parts));
+                return out;
+            }
+        }
+        if let Some(ns) = self.current_namespace_bytes() {
+            if ns.is_empty() {
+                return Self::join_name_parts(&parts);
+            }
+            let mut out = Vec::new();
+            out.extend_from_slice(ns);
+            out.push(b'\\');
+            out.extend_from_slice(&Self::join_name_parts(&parts));
+            return out;
+        }
+        Self::join_name_parts(&parts)
+    }
+
+    fn normalize_namespace_decl(&self, name: &[u8]) -> Vec<u8> {
+        let (_is_absolute, mut parts) = Self::split_name_bytes(name);
+        if parts.is_empty() {
+            return Vec::new();
+        }
+        if Self::is_namespace_keyword(&parts[0]) {
+            parts.remove(0);
+        }
+        Self::join_name_parts(&parts)
+    }
+
+    fn resolve_ref_name_bytes(&self, name: &[u8], kind: NameKind) -> Vec<u8> {
+        let (is_absolute, mut parts) = Self::split_name_bytes(name);
+        if parts.is_empty() {
+            return Vec::new();
+        }
+        let is_unqualified = !is_absolute
+            && parts.len() == 1
+            && !Self::is_namespace_keyword(&parts[0]);
+        if is_absolute {
+            return Self::join_name_parts(&parts);
+        }
+
+        if kind == NameKind::Class
+            && parts.len() == 1
+            && (parts[0].eq_ignore_ascii_case(b"self")
+                || parts[0].eq_ignore_ascii_case(b"parent")
+                || parts[0].eq_ignore_ascii_case(b"static"))
+        {
+            return parts[0].clone();
+        }
+
+        if Self::is_namespace_keyword(&parts[0]) {
+            parts.remove(0);
+            if let Some(ns) = self.current_namespace_bytes() {
+                if parts.is_empty() {
+                    return ns.to_vec();
+                }
+                let mut out = Vec::new();
+                if !ns.is_empty() {
+                    out.extend_from_slice(ns);
+                    out.push(b'\\');
+                }
+                out.extend_from_slice(&Self::join_name_parts(&parts));
+                return out;
+            }
+        }
+
+        let alias_key = Self::normalize_alias_key(&parts[0]);
+        let alias_target = match kind {
+            NameKind::Class => self.use_aliases.classes.get(&alias_key),
+            NameKind::Function => self.use_aliases.functions.get(&alias_key),
+            NameKind::Const => self.use_aliases.consts.get(&alias_key),
+        };
+        if let Some(target) = alias_target {
+            if parts.len() == 1 {
+                return target.clone();
+            }
+            let mut out = target.clone();
+            if !out.is_empty() {
+                out.push(b'\\');
+            }
+            let rest = Self::join_name_parts(&parts[1..]);
+            out.extend_from_slice(&rest);
+            return out;
+        }
+
+        if matches!(kind, NameKind::Function | NameKind::Const) && is_unqualified {
+            if let Some(ns) = self.current_namespace_bytes() {
+                if !ns.is_empty() {
+                    let mut out = Vec::new();
+                    out.extend_from_slice(ns);
+                    out.push(b'\\');
+                    out.extend_from_slice(&parts[0]);
+                    // Encode fallback: "<ns>\\name\0name"
+                    out.push(0);
+                    out.extend_from_slice(&parts[0]);
+                    return out;
+                }
+            }
+            return parts[0].clone();
+        }
+
+        if let Some(ns) = self.current_namespace_bytes() {
+            if ns.is_empty() {
+                return Self::join_name_parts(&parts);
+            }
+            let mut out = Vec::new();
+            out.extend_from_slice(ns);
+            out.push(b'\\');
+            out.extend_from_slice(&Self::join_name_parts(&parts));
+            return out;
+        }
+
+        Self::join_name_parts(&parts)
+    }
+
+    fn reset_use_aliases(&mut self) {
+        self.use_aliases = UseAliases::default();
+    }
+
+    fn register_use_item(&mut self, item: &UseItem) {
+        let raw_name = self.get_text(item.name.span);
+        let (is_absolute, mut parts) = Self::split_name_bytes(raw_name);
+        if parts.is_empty() {
+            return;
+        }
+
+        // Use statements are absolute by default; namespace\Foo resolves to current namespace.
+        if !is_absolute && Self::is_namespace_keyword(&parts[0]) {
+            parts.remove(0);
+            if let Some(ns) = self.current_namespace_bytes() {
+                let mut prefixed = Vec::new();
+                if !ns.is_empty() {
+                    prefixed.extend_from_slice(ns);
+                    prefixed.push(b'\\');
+                }
+                prefixed.extend_from_slice(&Self::join_name_parts(&parts));
+                parts = Self::split_name_bytes(&prefixed).1;
+            }
+        }
+
+        let target = Self::join_name_parts(&parts);
+        if target.is_empty() {
+            return;
+        }
+
+        let alias = if let Some(alias_tok) = item.alias {
+            self.get_text(alias_tok.span).to_vec()
+        } else {
+            parts.last().cloned().unwrap_or_default()
+        };
+        if alias.is_empty() {
+            return;
+        }
+        let key = Self::normalize_alias_key(&alias);
+        match item.kind {
+            UseKind::Normal => {
+                self.use_aliases.classes.insert(key, target);
+            }
+            UseKind::Function => {
+                self.use_aliases.functions.insert(key, target);
+            }
+            UseKind::Const => {
+                self.use_aliases.consts.insert(key, target);
+            }
+        }
     }
 
     /// Convert AST Type to ReturnType
@@ -3682,7 +4625,8 @@ impl<'src> Emitter<'src> {
             },
             Type::Name(name) => {
                 let name_str = self.get_text(name.span);
-                let sym = self.interner.intern(name_str);
+                let resolved = self.resolve_ref_name_bytes(name_str, NameKind::Class);
+                let sym = self.interner.intern(&resolved);
                 Some(ReturnType::Named(sym))
             }
             Type::Union(types) => {
@@ -3704,6 +4648,8 @@ impl<'src> Emitter<'src> {
             Type::Nullable(inner) => self
                 .convert_type(inner)
                 .map(|t| ReturnType::Nullable(Box::new(t))),
+            Type::ObjectShape(_) => None,
+            Type::Applied { .. } => None,
         }
     }
 }
