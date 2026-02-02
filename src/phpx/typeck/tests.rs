@@ -190,6 +190,12 @@ fn struct_embed_promotes_fields() {
 }
 
 #[test]
+fn struct_embed_dot_access_infers_type() {
+    let code = "<?php struct A { $x: int; } struct B { use A; } function takes(int $x) {} $b = B { $A: A { $x: 1 } }; takes($b.x);";
+    assert!(check(code).is_ok());
+}
+
+#[test]
 fn struct_embed_ambiguous_field_errors() {
     let code = "<?php struct A { $x: int; } struct B { $x: int; } struct C { use A, B; } $c = C { $A: A { $x: 1 }, $B: B { $x: 2 } }; $c.x;";
     assert!(check(code).is_err());
