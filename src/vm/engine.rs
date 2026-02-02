@@ -14288,6 +14288,17 @@ mod tests {
     }
 
     #[test]
+    fn test_phpx_object_literal_to_stdclass() {
+        let val = run_phpx(
+            "<?php $o = { foo: { count: 2 } }; $c = __phpx_object_to_stdclass($o); return $c->foo->count;",
+        );
+        match val {
+            Val::Int(i) => assert_eq!(i, 2),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_phpx_struct_value_semantics_strict_eq() {
         let val = run_phpx(
             "<?php struct Position {

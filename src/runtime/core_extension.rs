@@ -544,6 +544,10 @@ impl Extension for CoreExtension {
         registry.register_function(b"__deka_symbol_exists", variable::php_deka_symbol_exists);
         registry.register_function(b"__deka_object_set", variable::php_deka_object_set);
         registry.register_function(b"__phpx_object_new", variable::php_phpx_object_new);
+        registry.register_function(
+            b"__phpx_object_to_stdclass",
+            variable::php_phpx_object_to_stdclass,
+        );
         registry.register_function(b"__phpx_struct_new", variable::php_phpx_struct_new);
         registry.register_function(b"__deka_wasm_call", wasm::php_deka_wasm_call);
         registry.register_function(b"var_dump", variable::php_var_dump);

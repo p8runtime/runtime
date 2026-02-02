@@ -1,7 +1,9 @@
-use crate::core::value::{Handle, Val};
-use crate::vm::engine::{ErrorLevel, VM};
+use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, Val};
+use crate::vm::engine::{ErrorLevel, PropertyCollectionMode, VM};
 use std::fmt::Write;
 use std::rc::Rc;
+use std::collections::HashSet;
+use indexmap::IndexMap;
 
 pub fn php_deka_symbol_get(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 2 {
@@ -96,6 +98,162 @@ pub fn php_deka_symbol_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, St
         .and_then(|frame| frame.locals.get(&sym))
         .is_some();
     Ok(vm.arena.alloc(Val::Bool(exists)))
+}
+
+pub fn php_deka_object_set(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 3 {
+        return Err("__deka_object_set() expects exactly 3 parameters".into());
+    }
+
+    let key = vm
+        .value_to_string_bytes(args[1])
+        .map_err(|e| format!("__deka_object_set(): {}", e))?;
+    let sym = vm.context.interner.intern(&key);
+    let value_handle = args[2];
+
+    match vm.arena.get(args[0]).value.clone() {
+        Val::ObjectMap(_) => {
+            let obj_zval = vm.arena.get_mut(args[0]);
+            if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                let map = Rc::make_mut(map_rc);
+                map.map.insert(sym, value_handle);
+            }
+            Ok(value_handle)
+        }
+        _ => Err("__deka_object_set() expects a PHPX object literal".into()),
+    }
+}
+
+pub fn php_phpx_object_new(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if !args.is_empty() {
+        return Err("__phpx_object_new() expects no parameters".into());
+    }
+    let map = ObjectMapData::new();
+    Ok(vm.arena.alloc(Val::ObjectMap(Rc::new(map))))
+}
+
+pub fn php_phpx_struct_new(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("__phpx_struct_new() expects exactly 1 parameter".into());
+    }
+
+    let name_bytes = vm
+        .value_to_string_bytes(args[0])
+        .map_err(|e| format!("__phpx_struct_new(): {}", e))?;
+    let class_sym = vm.context.interner.intern(&name_bytes);
+    let resolved = vm
+        .resolve_class_name(class_sym)
+        .map_err(|e| format!("__phpx_struct_new(): {}", e))?;
+
+    if !vm.context.classes.contains_key(&resolved) {
+        vm.trigger_autoload(resolved)
+            .map_err(|e| format!("__phpx_struct_new(): {}", e))?;
+    }
+
+    let class_def = vm
+        .context
+        .classes
+        .get(&resolved)
+        .ok_or_else(|| "__phpx_struct_new(): Unknown struct".to_string())?;
+
+    if class_def.is_interface {
+        let class_name_str = vm
+            .context
+            .interner
+            .lookup(resolved)
+            .map(|b| String::from_utf8_lossy(b).to_string())
+            .unwrap_or_else(|| format!("{:?}", resolved));
+        return Err(format!(
+            "__phpx_struct_new(): Cannot instantiate interface {}",
+            class_name_str
+        ));
+    }
+
+    if class_def.is_abstract && !class_def.is_interface {
+        let class_name_str = vm
+            .context
+            .interner
+            .lookup(resolved)
+            .map(|b| String::from_utf8_lossy(b).to_string())
+            .unwrap_or_else(|| format!("{:?}", resolved));
+        return Err(format!(
+            "__phpx_struct_new(): Cannot instantiate abstract class {}",
+            class_name_str
+        ));
+    }
+
+    if !class_def.is_struct {
+        let class_name_str = vm
+            .context
+            .interner
+            .lookup(resolved)
+            .map(|b| String::from_utf8_lossy(b).to_string())
+            .unwrap_or_else(|| format!("{:?}", resolved));
+        return Err(format!(
+            "__phpx_struct_new(): Struct literal requires a struct, got {}",
+            class_name_str
+        ));
+    }
+
+    let properties = vm.collect_properties(resolved, PropertyCollectionMode::All);
+    let obj_data = ObjectData {
+        class: resolved,
+        properties,
+        internal: None,
+        dynamic_properties: HashSet::new(),
+    };
+
+    Ok(vm.arena.alloc(Val::Struct(Rc::new(obj_data))))
+}
+
+fn phpx_to_php_value(vm: &mut VM, handle: Handle) -> Handle {
+    match vm.arena.get(handle).value.clone() {
+        Val::ObjectMap(map_rc) => {
+            let mut props = IndexMap::new();
+            for (prop_sym, val_handle) in map_rc.map.iter() {
+                let converted = phpx_to_php_value(vm, *val_handle);
+                props.insert(*prop_sym, converted);
+            }
+            let obj_data = ObjectData {
+                class: vm.context.interner.intern(b"stdClass"),
+                properties: props,
+                internal: None,
+                dynamic_properties: HashSet::new(),
+            };
+            let payload = vm.arena.alloc(Val::ObjPayload(obj_data));
+            vm.arena.alloc(Val::Object(payload))
+        }
+        Val::Array(arr_rc) => {
+            let mut array = ArrayData::new();
+            for (key, val_handle) in arr_rc.map.iter() {
+                let converted = phpx_to_php_value(vm, *val_handle);
+                array.insert(key.clone(), converted);
+            }
+            vm.arena.alloc(Val::Array(Rc::new(array)))
+        }
+        Val::ConstArray(const_arr) => {
+            let mut array = ArrayData::new();
+            for (key, val) in const_arr.iter() {
+                let runtime_key = match key {
+                    crate::core::value::ConstArrayKey::Int(i) => ArrayKey::Int(*i),
+                    crate::core::value::ConstArrayKey::Str(s) => ArrayKey::Str(s.clone()),
+                };
+                let val_handle = vm.arena.alloc(val.clone());
+                let converted = phpx_to_php_value(vm, val_handle);
+                array.insert(runtime_key, converted);
+            }
+            vm.arena.alloc(Val::Array(Rc::new(array)))
+        }
+        _ => handle,
+    }
+}
+
+pub fn php_phpx_object_to_stdclass(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("__phpx_object_to_stdclass() expects exactly 1 parameter".into());
+    }
+
+    Ok(phpx_to_php_value(vm, args[0]))
 }
 
 pub fn php_var_dump(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -252,6 +410,60 @@ fn dump_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
             } else {
                 let _ = writeln!(output, "{}object(INVALID)", indent);
             }
+        }
+        Val::Struct(obj_data) => {
+            let class_name = vm
+                .context
+                .interner
+                .lookup(obj_data.class)
+                .unwrap_or(b"<unknown>");
+            let _ = writeln!(
+                output,
+                "{}object({})#{} ({}) {{",
+                indent,
+                String::from_utf8_lossy(class_name),
+                handle.0,
+                obj_data.properties.len()
+            );
+            for (prop_sym, prop_handle) in obj_data.properties.iter() {
+                let prop_name = vm
+                    .context
+                    .interner
+                    .lookup(*prop_sym)
+                    .unwrap_or(b"<unknown>");
+                let _ = writeln!(
+                    output,
+                    "{}  [\"{}\"]=>",
+                    indent,
+                    String::from_utf8_lossy(prop_name)
+                );
+                dump_value(vm, *prop_handle, depth + 1, output);
+            }
+            let _ = writeln!(output, "{}}}", indent);
+        }
+        Val::ObjectMap(map_rc) => {
+            let _ = writeln!(
+                output,
+                "{}object(Object)#{} ({}) {{",
+                indent,
+                handle.0,
+                map_rc.map.len()
+            );
+            for (prop_sym, prop_handle) in map_rc.map.iter() {
+                let prop_name = vm
+                    .context
+                    .interner
+                    .lookup(*prop_sym)
+                    .unwrap_or(b"<unknown>");
+                let _ = writeln!(
+                    output,
+                    "{}  [\"{}\"]=>",
+                    indent,
+                    String::from_utf8_lossy(prop_name)
+                );
+                dump_value(vm, *prop_handle, depth + 1, output);
+            }
+            let _ = writeln!(output, "{}}}", indent);
         }
         Val::ObjPayload(_) => {
             let _ = writeln!(output, "{}ObjPayload(Internal)", indent);
@@ -454,7 +666,7 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                 // Check if value is array or object to put it on new line
                 let val = vm.arena.get(*val_handle);
                 match &val.value {
-                    Val::Array(_) | Val::Object(_) => {
+                    Val::Array(_) | Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => {
                         print_r_value(vm, *val_handle, depth + 2, output);
                         output.push('\n');
                     }
@@ -490,7 +702,7 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
 
                     let val = vm.arena.get(*val_handle);
                     match &val.value {
-                        Val::Array(_) | Val::Object(_) => {
+                        Val::Array(_) | Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => {
                             print_r_value(vm, *val_handle, depth + 2, output);
                             output.push('\n');
                         }
@@ -506,6 +718,70 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
             } else {
                 // shouldn't happen
             }
+        }
+        Val::Struct(obj_data) => {
+            let class_name = vm
+                .context
+                .interner
+                .lookup(obj_data.class)
+                .unwrap_or(b"<unknown>");
+            output.push_str(&String::from_utf8_lossy(class_name));
+            output.push_str(" Object\n");
+            output.push_str(&indent);
+            output.push_str("(\n");
+
+            for (prop_sym, val_handle) in obj_data.properties.iter() {
+                output.push_str(&indent);
+                output.push_str("    ");
+                let prop_name = vm.context.interner.lookup(*prop_sym).unwrap_or(b"");
+                output.push('[');
+                output.push_str(&String::from_utf8_lossy(prop_name));
+                output.push_str("] => ");
+
+                let val = vm.arena.get(*val_handle);
+                match &val.value {
+                    Val::Array(_) | Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => {
+                        print_r_value(vm, *val_handle, depth + 2, output);
+                        output.push('\n');
+                    }
+                    _ => {
+                        print_r_value(vm, *val_handle, depth + 1, output);
+                        output.push('\n');
+                    }
+                }
+            }
+
+            output.push_str(&indent);
+            output.push_str(")\n");
+        }
+        Val::ObjectMap(map_rc) => {
+            output.push_str("Object\n");
+            output.push_str(&indent);
+            output.push_str("(\n");
+
+            for (prop_sym, val_handle) in map_rc.map.iter() {
+                output.push_str(&indent);
+                output.push_str("    ");
+                let prop_name = vm.context.interner.lookup(*prop_sym).unwrap_or(b"");
+                output.push('[');
+                output.push_str(&String::from_utf8_lossy(prop_name));
+                output.push_str("] => ");
+
+                let val = vm.arena.get(*val_handle);
+                match &val.value {
+                    Val::Array(_) | Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => {
+                        print_r_value(vm, *val_handle, depth + 2, output);
+                        output.push('\n');
+                    }
+                    _ => {
+                        print_r_value(vm, *val_handle, depth + 1, output);
+                        output.push('\n');
+                    }
+                }
+            }
+
+            output.push_str(&indent);
+            output.push_str(")\n");
         }
         _ => {
             // For other types, just output empty or their representation
@@ -526,7 +802,7 @@ pub fn php_gettype(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         Val::Float(_) => "double",
         Val::String(_) => "string",
         Val::Array(_) => "array",
-        Val::Object(_) => "object",
+        Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => "object",
         Val::ObjPayload(_) => "object",
         Val::Resource(_) => "resource",
         _ => "unknown type",
@@ -688,7 +964,7 @@ pub fn php_is_object(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("is_object() expects exactly 1 parameter".into());
     }
     let val = vm.arena.get(args[0]);
-    let is = matches!(val.value, Val::Object(_));
+    let is = matches!(val.value, Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_));
     Ok(vm.arena.alloc(Val::Bool(is)))
 }
 
