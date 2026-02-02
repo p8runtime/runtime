@@ -76,6 +76,12 @@ fn call_return_type_infers_object_shape() {
 }
 
 #[test]
+fn jsx_assignment_is_rejected() {
+    let code = "<?php $v = <div>{ $x = 1 }</div>;";
+    assert!(check(code).is_err());
+}
+
+#[test]
 fn union_allows_object_shape_dot_access() {
     let code = "<?php $x = { foo: 1 }; $x = { foo: \"bar\" }; $x.foo;";
     assert!(check(code).is_ok());

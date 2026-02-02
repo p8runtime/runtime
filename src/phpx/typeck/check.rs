@@ -2,6 +2,7 @@ use crate::parser::ast::{
     BinaryOp, ClassKind, ClassMember, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
     PropertyEntry, Stmt, Type as AstType, TypeParam,
 };
+use crate::parser::ast::visitor::{walk_expr, Visitor};
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
 use crate::phpx::typeck::infer::{
@@ -63,6 +64,39 @@ enum StructFieldResolution {
 pub struct TypeError {
     pub span: Span,
     pub message: String,
+}
+
+struct JsxExprValidator {
+    errors: Vec<TypeError>,
+}
+
+impl<'ast> Visitor<'ast> for JsxExprValidator {
+    fn visit_expr(&mut self, expr: ExprId<'ast>) {
+        match *expr {
+            Expr::Assign { span, .. }
+            | Expr::AssignRef { span, .. }
+            | Expr::AssignOp { span, .. } => {
+                self.errors.push(TypeError {
+                    span,
+                    message: "Statements not allowed in JSX expressions".to_string(),
+                });
+            }
+            Expr::Yield { span, .. } => {
+                self.errors.push(TypeError {
+                    span,
+                    message: "Statements not allowed in JSX expressions".to_string(),
+                });
+            }
+            Expr::Error { span } => {
+                self.errors.push(TypeError {
+                    span,
+                    message: "Invalid JSX expression".to_string(),
+                });
+            }
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
 }
 
 impl TypeError {
@@ -177,6 +211,12 @@ impl<'a> CheckContext<'a> {
         for stmt in program.statements.iter() {
             self.check_stmt(stmt, &mut env, &mut explicit, None);
         }
+    }
+
+    fn validate_jsx_expr(&mut self, expr: ExprId<'a>) {
+        let mut validator = JsxExprValidator { errors: Vec::new() };
+        validator.visit_expr(expr);
+        self.errors.extend(validator.errors);
     }
 
     fn check_stmt(
@@ -597,11 +637,13 @@ impl<'a> CheckContext<'a> {
             } => {
                 for attr in attributes.iter() {
                     if let Some(value) = attr.value {
+                        self.validate_jsx_expr(value);
                         let _ = self.check_expr(value, env, explicit);
                     }
                 }
                 for child in children.iter() {
                     if let JsxChild::Expr(expr) = *child {
+                        self.validate_jsx_expr(expr);
                         let _ = self.check_expr(expr, env, explicit);
                     }
                 }
@@ -610,6 +652,7 @@ impl<'a> CheckContext<'a> {
             Expr::JsxFragment { children, .. } => {
                 for child in children.iter() {
                     if let JsxChild::Expr(expr) = *child {
+                        self.validate_jsx_expr(expr);
                         let _ = self.check_expr(expr, env, explicit);
                     }
                 }
