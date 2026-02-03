@@ -31,32 +31,23 @@ impl ParseError {
             return format!("error: {}", self.message);
         };
 
-        let line_str = String::from_utf8_lossy(line_text);
-        let gutter_width = line.to_string().len();
+        let source_str = String::from_utf8_lossy(source);
+        let file_path = path.unwrap_or("unknown");
         let padding = std::cmp::min(line_text.len(), column.saturating_sub(1));
         let highlight_len = std::cmp::max(
             1,
             std::cmp::min(self.span.len(), line_text.len().saturating_sub(padding)),
         );
 
-        let mut marker = String::new();
-        marker.push_str(&" ".repeat(padding));
-        marker.push_str(&"^".repeat(highlight_len));
-
-        let location = match path {
-            Some(path) => format!("{path}:{line}:{column}"),
-            None => format!("line {line}, column {column}"),
-        };
-
-        format!(
-            "error: {}\n --> {}\n{gutter}|\n{line_no:>width$} | {line_src}\n{gutter}| {marker}",
+        deka_validation::format_validation_error(
+            &source_str,
+            file_path,
+            "Syntax Error",
+            line,
+            column,
             self.message,
-            location,
-            gutter = " ".repeat(gutter_width + 1),
-            line_no = line,
-            width = gutter_width,
-            line_src = line_str,
-            marker = marker,
+            "Check syntax near the highlighted code.",
+            highlight_len,
         )
     }
 }
@@ -66,6 +57,12 @@ pub struct Program<'ast> {
     pub statements: &'ast [StmtId<'ast>],
     pub errors: &'ast [ParseError],
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ClassKind {
+    Class,
+    Struct,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,13 +113,21 @@ pub enum Stmt<'ast> {
         attributes: &'ast [AttributeGroup<'ast>],
         name: &'ast Token,
         by_ref: bool,
+        type_params: &'ast [TypeParam<'ast>],
         params: &'ast [Param<'ast>],
         return_type: Option<&'ast Type<'ast>>,
         body: &'ast [StmtId<'ast>],
         doc_comment: Option<Span>,
         span: Span,
     },
+    TypeAlias {
+        name: &'ast Token,
+        type_params: &'ast [TypeParam<'ast>],
+        ty: &'ast Type<'ast>,
+        span: Span,
+    },
     Class {
+        kind: ClassKind,
         attributes: &'ast [AttributeGroup<'ast>],
         modifiers: &'ast [Token],
         name: &'ast Token,
@@ -297,9 +302,33 @@ pub enum Expr<'ast> {
         items: &'ast [ArrayItem<'ast>],
         span: Span,
     },
+    ObjectLiteral {
+        items: &'ast [ObjectItem<'ast>],
+        span: Span,
+    },
+    JsxElement {
+        name: Name<'ast>,
+        attributes: &'ast [JsxAttribute<'ast>],
+        children: &'ast [JsxChild<'ast>],
+        span: Span,
+    },
+    JsxFragment {
+        children: &'ast [JsxChild<'ast>],
+        span: Span,
+    },
+    StructLiteral {
+        name: Name<'ast>,
+        fields: &'ast [StructLiteralField<'ast>],
+        span: Span,
+    },
     ArrayDimFetch {
         array: ExprId<'ast>,
         dim: Option<ExprId<'ast>>, // None for $a[]
+        span: Span,
+    },
+    DotAccess {
+        target: ExprId<'ast>,
+        property: &'ast Token,
         span: Span,
     },
     PropertyFetch {
@@ -535,8 +564,13 @@ impl<'ast> Expr<'ast> {
             Expr::Unary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
             Expr::Array { span, .. } => *span,
+            Expr::ObjectLiteral { span, .. } => *span,
+            Expr::JsxElement { span, .. } => *span,
+            Expr::JsxFragment { span, .. } => *span,
+            Expr::StructLiteral { span, .. } => *span,
             Expr::ArrayDimFetch { span, .. } => *span,
             Expr::PropertyFetch { span, .. } => *span,
+            Expr::DotAccess { span, .. } => *span,
             Expr::MethodCall { span, .. } => *span,
             Expr::StaticCall { span, .. } => *span,
             Expr::ClassConstFetch { span, .. } => *span,
@@ -588,6 +622,7 @@ impl<'ast> Stmt<'ast> {
             Stmt::Foreach { span, .. } => *span,
             Stmt::Block { span, .. } => *span,
             Stmt::Function { span, .. } => *span,
+            Stmt::TypeAlias { span, .. } => *span,
             Stmt::Class { span, .. } => *span,
             Stmt::Interface { span, .. } => *span,
             Stmt::Trait { span, .. } => *span,
@@ -683,6 +718,39 @@ pub struct ArrayItem<'ast> {
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
+pub enum ObjectKey<'ast> {
+    Ident(&'ast Token),
+    String(&'ast Token),
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ObjectItem<'ast> {
+    pub key: ObjectKey<'ast>,
+    pub value: ExprId<'ast>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct JsxAttribute<'ast> {
+    pub name: &'ast Token,
+    pub value: Option<ExprId<'ast>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum JsxChild<'ast> {
+    Text(Span),
+    Expr(ExprId<'ast>),
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StructLiteralField<'ast> {
+    pub name: &'ast Token,
+    pub value: ExprId<'ast>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct PropertyEntry<'ast> {
     pub name: &'ast Token,
     pub default: Option<ExprId<'ast>>,
@@ -734,10 +802,17 @@ pub enum ClassMember<'ast> {
         doc_comment: Option<Span>,
         span: Span,
     },
+    Embed {
+        attributes: &'ast [AttributeGroup<'ast>],
+        types: &'ast [Name<'ast>],
+        doc_comment: Option<Span>,
+        span: Span,
+    },
     Case {
         attributes: &'ast [AttributeGroup<'ast>],
         name: &'ast Token,
         value: Option<ExprId<'ast>>,
+        payload: Option<&'ast [Param<'ast>]>,
         doc_comment: Option<Span>,
         span: Span,
     },
@@ -840,12 +915,32 @@ pub struct AttributeGroup<'ast> {
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
+pub struct TypeParam<'ast> {
+    pub name: &'ast Token,
+    pub constraint: Option<&'ast Type<'ast>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ObjectShapeField<'ast> {
+    pub name: &'ast Token,
+    pub optional: bool,
+    pub ty: &'ast Type<'ast>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
 pub enum Type<'ast> {
     Simple(&'ast Token),
     Name(Name<'ast>),
     Union(&'ast [Type<'ast>]),
     Intersection(&'ast [Type<'ast>]),
     Nullable(&'ast Type<'ast>),
+    ObjectShape(&'ast [ObjectShapeField<'ast>]),
+    Applied {
+        base: &'ast Type<'ast>,
+        args: &'ast [Type<'ast>],
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

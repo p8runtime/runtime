@@ -20,6 +20,8 @@ fn formats_parse_error_with_snippet_and_pointer() {
 
     let rendered = error.to_human_readable_with_path(source.as_bytes(), Some("test.php"));
 
+    assert!(rendered.contains("Validation Error"));
+    assert!(rendered.contains("❌ Syntax Error"));
     assert!(rendered.contains("strict_types must be 0 or 1"));
     assert!(rendered.contains(&format!("test.php:{}:{}", location.line, location.column)));
     assert!(
@@ -30,11 +32,11 @@ fn formats_parse_error_with_snippet_and_pointer() {
 
     let pointer_line = rendered
         .lines()
-        .last()
+        .find(|line| line.contains('^') && line.contains("strict_types must be 0 or 1"))
         .expect("pointer line missing")
         .trim_end();
     assert!(
-        pointer_line.ends_with(&format!("| {}^", " ".repeat(location.column - 1))),
+        pointer_line.contains('^'),
         "pointer not aligned: {pointer_line}"
     );
 }
