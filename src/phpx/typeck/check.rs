@@ -1,6 +1,6 @@
 use crate::parser::ast::{
     BinaryOp, ClassKind, ClassMember, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
-    PropertyEntry, Stmt, Type as AstType, TypeParam,
+    PropertyEntry, Stmt, Type as AstType, TypeParam, UnaryOp,
 };
 use crate::parser::ast::visitor::{walk_expr, Visitor};
 use crate::parser::lexer::token::TokenKind;
@@ -2653,6 +2653,9 @@ impl<'a> CheckContext<'a> {
                 matches!(op, BinaryOp::BitOr)
                     && self.is_constant_expr(left)
                     && self.is_constant_expr(right)
+            }
+            Expr::Unary { op, expr, .. } => {
+                matches!(op, UnaryOp::Plus | UnaryOp::Minus) && self.is_constant_expr(expr)
             }
             _ => false,
         }

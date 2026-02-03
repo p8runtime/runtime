@@ -40,6 +40,12 @@ fn struct_default_type_mismatch_errors() {
 }
 
 #[test]
+fn struct_default_unary_const_ok() {
+    let code = "<?php struct Point { $x: int = -1; $y: float = +1.5; }";
+    assert!(check(code).is_ok());
+}
+
+#[test]
 fn return_type_widening_allows_int_to_float() {
     let code = "<?php function f(): float { return 1; }";
     assert!(check(code).is_ok());
