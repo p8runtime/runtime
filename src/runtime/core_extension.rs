@@ -423,7 +423,7 @@ impl Extension for CoreExtension {
         // registry.register_function(b"array_merge_recursive", array::php_array_merge_recursive);
         // registry.register_function(b"array_multisort", array::php_array_multisort);
         // registry.register_function(b"array_pad", array::php_array_pad);
-        // registry.register_function(b"array_pop", array::php_array_pop);
+        registry.register_function(b"array_pop", array::php_array_pop);
         // registry.register_function(b"__deka_array_product", array::php_deka_array_product);
         // registry.register_function(b"__deka_array_reduce", array::php_deka_array_reduce);
         // registry.register_function(b"__deka_array_replace", array::php_deka_array_replace);

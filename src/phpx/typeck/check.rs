@@ -172,6 +172,7 @@ struct CheckContext<'a> {
     interfaces: HashMap<String, InterfaceInfo>,
     functions: HashMap<String, FunctionSig>,
     function_returns: HashMap<String, Type>,
+    imported: HashMap<String, String>,
     type_aliases: HashMap<String, TypeAliasInfo>,
     resolved_aliases: HashMap<String, Type>,
 }
@@ -189,6 +190,7 @@ impl<'a> CheckContext<'a> {
             interfaces: HashMap::new(),
             functions: HashMap::new(),
             function_returns: HashMap::new(),
+            imported: HashMap::new(),
             type_aliases: HashMap::new(),
             resolved_aliases: HashMap::new(),
         }
@@ -196,6 +198,7 @@ impl<'a> CheckContext<'a> {
 
     fn check_program(&mut self, program: &Program<'a>) {
         self.check_wasm_stubs();
+        self.collect_imported_names();
         self.collect_struct_names(program);
         self.collect_interface_names(program);
         self.collect_enum_names(program);
@@ -217,6 +220,135 @@ impl<'a> CheckContext<'a> {
         let mut validator = JsxExprValidator { errors: Vec::new() };
         validator.visit_expr(expr);
         self.errors.extend(validator.errors);
+    }
+
+    fn validate_jsx_element(&mut self, name: &Name<'a>, attributes: &'a [crate::parser::ast::JsxAttribute<'a>]) {
+        let raw = token_text(self.source, name.span);
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return;
+        }
+        let trimmed = raw.trim_start_matches('\\');
+        let last = trimmed.rsplit('\\').next().unwrap_or(trimmed);
+        if last.is_empty() {
+            return;
+        }
+        let mut chars = last.chars();
+        let is_component = chars.next().map(|ch| ch.is_ascii_uppercase()).unwrap_or(false);
+        let has_uppercase = last.chars().any(|ch| ch.is_ascii_uppercase());
+
+        if !is_component && has_uppercase {
+            self.errors.push(TypeError {
+                span: name.span,
+                message: format!(
+                    "JSX component '{}' must be capitalized (use <{} />)",
+                    last,
+                    capitalize_jsx_name(last)
+                ),
+            });
+            return;
+        }
+
+        if is_component && !self.is_known_component_name(last) {
+            self.errors.push(TypeError {
+                span: name.span,
+                message: format!(
+                    "Unknown component '{}'; import it or define function {}()",
+                    last, last
+                ),
+            });
+            return;
+        }
+
+        if is_component {
+            self.validate_component_props(last, attributes, name.span);
+        }
+    }
+
+    fn validate_component_props(
+        &mut self,
+        component: &str,
+        attributes: &'a [crate::parser::ast::JsxAttribute<'a>],
+        span: Span,
+    ) {
+        let mut attrs = HashSet::new();
+        for attr in attributes.iter() {
+            let name = token_text(self.source, attr.name.span);
+            attrs.insert(name);
+        }
+
+        match component {
+            "Link" => {
+                if !attrs.contains("to") {
+                    self.errors.push(TypeError {
+                        span,
+                        message: "Link requires prop 'to'".to_string(),
+                    });
+                }
+            }
+            "ContextProvider" => {
+                if !attrs.contains("ctx") {
+                    self.errors.push(TypeError {
+                        span,
+                        message: "ContextProvider requires prop 'ctx'".to_string(),
+                    });
+                }
+                if !attrs.contains("value") {
+                    self.errors.push(TypeError {
+                        span,
+                        message: "ContextProvider requires prop 'value'".to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn is_known_component_name(&self, name: &str) -> bool {
+        self.functions.contains_key(name) || self.imported.contains_key(name)
+    }
+
+    fn collect_imported_names(&mut self) {
+        let source = String::from_utf8_lossy(self.source);
+        let import_re = match Regex::new(
+            r#"(?m)^[\t \r]*import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*;?\s*$"#,
+        ) {
+            Ok(regex) => regex,
+            Err(_) => return,
+        };
+        let spec_re = match Regex::new(
+            r#"^([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$"#,
+        ) {
+            Ok(regex) => regex,
+            Err(_) => return,
+        };
+
+        for caps in import_re.captures_iter(&source) {
+            let Some(specs) = caps.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(module) = caps.get(2).map(|m| m.as_str()) else {
+                continue;
+            };
+            for spec in specs.split(',') {
+                let trimmed = spec.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let Some(spec_caps) = spec_re.captures(trimmed) else {
+                    continue;
+                };
+                let local = spec_caps
+                    .get(2)
+                    .map(|m| m.as_str())
+                    .unwrap_or_else(|| spec_caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+                if local.is_empty() {
+                    continue;
+                }
+                self.imported
+                    .insert(local.to_string(), module.to_string());
+            }
+        }
     }
 
     fn check_stmt(
@@ -631,10 +763,12 @@ impl<'a> CheckContext<'a> {
                 self.infer_expr_with_env(expr, env)
             }
             Expr::JsxElement {
+                name,
                 attributes,
                 children,
                 ..
             } => {
+                self.validate_jsx_element(&name, attributes);
                 for attr in attributes.iter() {
                     if let Some(value) = attr.value {
                         self.validate_jsx_expr(value);
@@ -3366,6 +3500,18 @@ fn token_text(source: &[u8], span: Span) -> String {
     let start = span.start;
     let end = span.end.min(source.len());
     String::from_utf8_lossy(&source[start..end]).to_string()
+}
+
+fn capitalize_jsx_name(name: &str) -> String {
+    if name.is_empty() {
+        return String::new();
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    let mut out = String::new();
+    out.push(first.to_ascii_uppercase());
+    out.push_str(chars.as_str());
+    out
 }
 
 fn parse_type_field_name(source: &[u8], span: Span) -> String {
