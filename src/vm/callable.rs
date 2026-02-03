@@ -124,7 +124,21 @@ impl VM {
         args: ArgList,
         callsite_strict_types: bool,
     ) -> Result<(), VmError> {
-        let name_bytes = self.context.interner.lookup(name).unwrap_or(b"");
+        let name_bytes = self.context.interner.lookup(name).unwrap_or(b"").to_vec();
+        if let Some(split_at) = name_bytes.iter().position(|b| *b == 0) {
+            let primary = &name_bytes[..split_at];
+            let fallback = &name_bytes[split_at + 1..];
+            if self.function_symbol_exists(primary) {
+                let sym = self.context.interner.intern(primary);
+                return self.invoke_function_symbol(sym, args, callsite_strict_types);
+            }
+            if self.function_symbol_exists(fallback) {
+                let sym = self.context.interner.intern(fallback);
+                return self.invoke_function_symbol(sym, args, callsite_strict_types);
+            }
+            let sym = self.context.interner.intern(primary);
+            return self.invoke_function_symbol(sym, args, callsite_strict_types);
+        }
         let lower_name = name_bytes.to_ascii_lowercase();
 
         // Check extension registry
@@ -198,9 +212,24 @@ impl VM {
         } else {
             Err(VmError::RuntimeError(format!(
                 "Call to undefined function: {}",
-                String::from_utf8_lossy(name_bytes)
+                String::from_utf8_lossy(&name_bytes)
             )))
         }
+    }
+
+    fn function_symbol_exists(&mut self, name_bytes: &[u8]) -> bool {
+        let lower_name: Vec<u8> = name_bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
+        if self
+            .context
+            .engine
+            .registry
+            .get_function(&lower_name)
+            .is_some()
+        {
+            return true;
+        }
+        let sym = self.context.interner.intern(name_bytes);
+        self.context.user_functions.contains_key(&sym)
     }
 
     /// Invoke a callable value (string, closure, __invoke object, array)
@@ -215,7 +244,22 @@ impl VM {
         match callable_val {
             // String callable: 'strlen'
             Val::String(s) => {
-                let sym = self.context.interner.intern(&s);
+                let bytes = s.as_slice();
+                if let Some(split_at) = bytes.iter().position(|b| *b == 0) {
+                    let primary = &bytes[..split_at];
+                    let fallback = &bytes[split_at + 1..];
+                    if self.function_symbol_exists(primary) {
+                        let sym = self.context.interner.intern(primary);
+                        return self.invoke_function_symbol(sym, args, callsite_strict_types);
+                    }
+                    if self.function_symbol_exists(fallback) {
+                        let sym = self.context.interner.intern(fallback);
+                        return self.invoke_function_symbol(sym, args, callsite_strict_types);
+                    }
+                    let sym = self.context.interner.intern(primary);
+                    return self.invoke_function_symbol(sym, args, callsite_strict_types);
+                }
+                let sym = self.context.interner.intern(bytes);
                 self.invoke_function_symbol(sym, args, callsite_strict_types)
             }
             // Object callable: closure or __invoke
