@@ -2173,7 +2173,7 @@ impl VM {
         Ok(found)
     }
 
-    fn assign_struct_property(
+    pub(crate) fn assign_struct_property(
         &mut self,
         obj_handle: Handle,
         class_name: Symbol,
@@ -8227,6 +8227,141 @@ impl VM {
                         }
 
                         // Validate property type (check class definition for type hint)
+                        self.validate_property_type(class_name, prop_name, val_handle)?;
+
+                        self.with_object_data_mut(obj_handle, |data| {
+                            data.properties.insert(prop_name, val_handle);
+                        })?;
+                        self.operand_stack.push(val_handle);
+                    }
+                }
+            }
+            OpCode::AssignPropDynamic => {
+                let val_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+                let prop_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+                let obj_handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+
+                let prop_name_bytes = self.value_to_string_bytes(prop_handle)?;
+                let prop_name = self.context.interner.intern(&prop_name_bytes);
+
+                if let Val::ObjectMap(_) = self.arena.get(obj_handle).value.clone() {
+                    let obj_zval = self.arena.get_mut(obj_handle);
+                    if let Val::ObjectMap(map_rc) = &mut obj_zval.value {
+                        let map = Rc::make_mut(map_rc);
+                        map.map.insert(prop_name, val_handle);
+                    }
+                    self.operand_stack.push(val_handle);
+                } else {
+                    let (class_name, prop_exists) =
+                        self.with_object_data(obj_handle, |data| {
+                            (data.class, data.properties.contains_key(&prop_name))
+                        })?;
+
+                    let current_scope = self.get_current_class();
+                    let visibility_check =
+                        self.check_prop_visibility(class_name, prop_name, current_scope);
+
+                    let mut use_magic = false;
+
+                    if prop_exists {
+                        if visibility_check.is_err() {
+                            use_magic = true;
+                        }
+                    } else {
+                        use_magic = true;
+                    }
+
+                    if use_magic {
+                        let magic_set = self.context.interner.intern(b"__set");
+                        if let Some((method, _, _, defined_class)) =
+                            self.find_method(class_name, magic_set)
+                        {
+                            let name_handle =
+                                self.arena.alloc(Val::String(Rc::new(prop_name_bytes)));
+
+                            let mut frame = CallFrame::new(method.chunk.clone());
+                            frame.func = Some(method.clone());
+                            frame.this = Some(obj_handle);
+                            frame.class_scope = Some(defined_class);
+                            frame.called_scope = Some(class_name);
+                            frame.discard_return = true;
+
+                            if let Some(param) = method.params.get(0) {
+                                frame.locals.insert(param.name, name_handle);
+                            }
+                            if let Some(param) = method.params.get(1) {
+                                frame.locals.insert(param.name, val_handle);
+                            }
+
+                            self.operand_stack.push(val_handle);
+                            self.push_frame(frame);
+                        } else {
+                            if let Err(e) = visibility_check {
+                                return Err(e);
+                            }
+
+                            if !prop_exists {
+                                self.check_dynamic_property_write(obj_handle, prop_name);
+                            }
+
+                            let prop_info =
+                                self.walk_inheritance_chain(class_name, |def, cls| {
+                                    def.properties
+                                        .get(&prop_name)
+                                        .map(|entry| (entry.is_readonly, cls))
+                                });
+
+                            if let Some((is_readonly, defining_class)) = prop_info {
+                                if is_readonly {
+                                    if let Ok(Some(current_handle)) =
+                                        self.with_object_data(obj_handle, |data| {
+                                            data.properties.get(&prop_name).copied()
+                                        })
+                                    {
+                                        let current_val = &self.arena.get(current_handle).value;
+                                        if !matches!(current_val, Val::Uninitialized) {
+                                            let class_str = String::from_utf8_lossy(
+                                                self.context
+                                                    .interner
+                                                    .lookup(defining_class)
+                                                    .unwrap_or(b"???"),
+                                            );
+                                            let prop_str = String::from_utf8_lossy(
+                                                self.context
+                                                    .interner
+                                                    .lookup(prop_name)
+                                                    .unwrap_or(b"???"),
+                                            );
+                                            return Err(VmError::RuntimeError(format!(
+                                                "Cannot modify readonly property {}::${}",
+                                                class_str, prop_str
+                                            )));
+                                        }
+                                    }
+                                }
+                            }
+
+                            self.validate_property_type(class_name, prop_name, val_handle)?;
+
+                            self.with_object_data_mut(obj_handle, |data| {
+                                data.properties.insert(prop_name, val_handle);
+                            })?;
+                            self.operand_stack.push(val_handle);
+                        }
+                    } else {
+                        if !prop_exists {
+                            self.check_dynamic_property_write(obj_handle, prop_name);
+                        }
+
                         self.validate_property_type(class_name, prop_name, val_handle)?;
 
                         self.with_object_data_mut(obj_handle, |data| {

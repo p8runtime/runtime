@@ -549,6 +549,7 @@ impl Extension for CoreExtension {
             variable::php_phpx_object_to_stdclass,
         );
         registry.register_function(b"__phpx_struct_new", variable::php_phpx_struct_new);
+        registry.register_function(b"__phpx_struct_set", variable::php_phpx_struct_set);
         registry.register_function(b"__deka_wasm_call", wasm::php_deka_wasm_call);
         registry.register_function(b"var_dump", variable::php_var_dump);
         registry.register_function(b"print_r", variable::php_print_r);

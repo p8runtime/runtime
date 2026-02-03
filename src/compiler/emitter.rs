@@ -3275,13 +3275,21 @@ impl<'src> Emitter<'src> {
                     target, property, ..
                 } => {
                     self.emit_expr(target);
-                    self.emit_expr(expr);
                     if let Expr::Variable { span, .. } = property {
                         let name = self.get_text(*span);
                         if !name.starts_with(b"$") {
+                            self.emit_expr(expr);
                             let sym = self.interner.intern(name);
                             self.chunk.code.push(OpCode::AssignProp(sym));
+                        } else {
+                            self.emit_expr(property);
+                            self.emit_expr(expr);
+                            self.chunk.code.push(OpCode::AssignPropDynamic);
                         }
+                    } else {
+                        self.emit_expr(property);
+                        self.emit_expr(expr);
+                        self.chunk.code.push(OpCode::AssignPropDynamic);
                     }
                 }
                 Expr::DotAccess { target, property, .. } => {

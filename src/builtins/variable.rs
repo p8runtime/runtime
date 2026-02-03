@@ -120,7 +120,13 @@ pub fn php_deka_object_set(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
             }
             Ok(value_handle)
         }
-        _ => Err("__deka_object_set() expects a PHPX object literal".into()),
+        Val::Struct(obj_data) => {
+            let class_name = obj_data.class;
+            vm.assign_struct_property(args[0], class_name, sym, value_handle)
+                .map_err(|e| format!("__deka_object_set(): {}", e))?;
+            Ok(value_handle)
+        }
+        _ => Err("__deka_object_set() expects a PHPX object literal or struct".into()),
     }
 }
 
@@ -204,6 +210,28 @@ pub fn php_phpx_struct_new(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
     };
 
     Ok(vm.arena.alloc(Val::Struct(Rc::new(obj_data))))
+}
+
+pub fn php_phpx_struct_set(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 3 {
+        return Err("__phpx_struct_set() expects exactly 3 parameters".into());
+    }
+
+    let prop_name = vm
+        .value_to_string_bytes(args[1])
+        .map_err(|e| format!("__phpx_struct_set(): {}", e))?;
+    let prop_sym = vm.context.interner.intern(&prop_name);
+    let value_handle = args[2];
+
+    match vm.arena.get(args[0]).value.clone() {
+        Val::Struct(obj_data) => {
+            let class_name = obj_data.class;
+            vm.assign_struct_property(args[0], class_name, prop_sym, value_handle)
+                .map_err(|e| format!("__phpx_struct_set(): {}", e))?;
+            Ok(value_handle)
+        }
+        _ => Err("__phpx_struct_set() expects a PHPX struct".into()),
+    }
 }
 
 fn phpx_to_php_value(vm: &mut VM, handle: Handle) -> Handle {
