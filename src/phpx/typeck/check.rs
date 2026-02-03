@@ -2648,6 +2648,12 @@ impl<'a> CheckContext<'a> {
                     .unwrap_or(true);
                 key_ok && self.is_constant_expr(item.value)
             }),
+            Expr::ObjectLiteral { items, .. } => {
+                items.iter().all(|item| self.is_constant_expr(item.value))
+            }
+            Expr::StructLiteral { fields, .. } => {
+                fields.iter().all(|field| self.is_constant_expr(field.value))
+            }
             Expr::ClassConstFetch { .. } => true,
             Expr::Binary { op, left, right, .. } => {
                 matches!(op, BinaryOp::BitOr)

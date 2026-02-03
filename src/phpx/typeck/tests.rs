@@ -46,6 +46,15 @@ fn struct_default_unary_const_ok() {
 }
 
 #[test]
+fn struct_default_allows_struct_and_object_literals() {
+    let code = "<?php
+        struct Point { $x: int = 0; $y: int = 0; }
+        struct Box { $pos: Point = Point { $x: 1, $y: 2 }; $meta: Object = { foo: 'bar' }; }
+    ";
+    assert!(check(code).is_ok());
+}
+
+#[test]
 fn return_type_widening_allows_int_to_float() {
     let code = "<?php function f(): float { return 1; }";
     assert!(check(code).is_ok());
