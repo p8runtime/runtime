@@ -5,7 +5,7 @@ use php_rs::{
     compiler::emitter::Emitter,
     core::value::{ArrayData, ArrayKey, Val},
     parser::lexer::Lexer,
-    parser::parser::Parser as PhpParser,
+    parser::parser::{Parser as PhpParser, ParserMode},
     runtime::context::{EngineBuilder, EngineContext},
     vm::engine::{VM, VmError},
 };
@@ -145,7 +145,21 @@ pub fn execute_source(
     let source_bytes = source.as_bytes();
     let arena = Bump::new();
     let lexer = Lexer::new(source_bytes);
-    let mut parser = PhpParser::new(lexer, &arena);
+    let trimmed = source.trim_start();
+    let mode = if trimmed.starts_with("/*__DEKA_PHPX_INTERNAL__*/") {
+        ParserMode::PhpxInternal
+    } else if trimmed.starts_with("/*__DEKA_PHPX__*/") {
+        ParserMode::Phpx
+    } else {
+        match file_path
+            .and_then(|path| path.extension())
+            .and_then(|ext| ext.to_str())
+        {
+            Some("phpx") => ParserMode::Phpx,
+            _ => ParserMode::Php,
+        }
+    };
+    let mut parser = PhpParser::new_with_mode(lexer, &arena, mode);
 
     let program = parser.parse_program();
 
@@ -154,6 +168,15 @@ pub fn execute_source(
             println!("{}", error.to_human_readable(source_bytes));
         }
         return Ok(());
+    }
+    if mode == ParserMode::Phpx {
+        if let Err(errors) =
+            php_rs::phpx::typeck::check_program_with_path(&program, source_bytes, file_path)
+        {
+            let rendered = php_rs::phpx::typeck::format_type_errors(&errors, source_bytes);
+            println!("{}", rendered);
+            return Ok(());
+        }
     }
 
     let mut emitter = Emitter::new(source_bytes, &mut vm.context.interner);

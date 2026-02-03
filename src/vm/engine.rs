@@ -3368,6 +3368,13 @@ impl VM {
                 frame.ip += 1;
                 op
             };
+            if std::env::var_os("PHP_VM_TRACE_OPS").is_some() {
+                if let Ok(frame) = self.current_frame() {
+                    let ip = frame.ip.saturating_sub(1);
+                    let stack_len = self.operand_stack.len();
+                    eprintln!("[php-vm] ip={} op={:?} stack={}", ip, op, stack_len);
+                }
+            }
 
             let res = self.execute_opcode(op, target_depth);
 
@@ -8467,20 +8474,40 @@ impl VM {
 
                 if include_type == 1 {
                     // Eval
-                    // PHP's eval() assumes code is in PHP mode (no <?php tag required)
-                    // Wrap the code in PHP tags for the parser
-                    let mut wrapped_source = b"<?php ".to_vec();
-                    wrapped_source.extend_from_slice(path_str.as_bytes());
-
-                    let arena = bumpalo::Bump::new();
-                    let lexer = crate::parser::lexer::Lexer::new(&wrapped_source);
-                    let mode = if path_str.contains("__DEKA_PHPX_INTERNAL__") {
+                    let trimmed = path_str.trim_start();
+                    let mode = if trimmed.starts_with("/*__DEKA_PHPX_INTERNAL__*/") {
                         crate::parser::parser::ParserMode::PhpxInternal
-                    } else if path_str.contains("__DEKA_PHPX__") {
+                    } else if trimmed.starts_with("/*__DEKA_PHPX__*/") {
                         crate::parser::parser::ParserMode::Phpx
                     } else {
                         crate::parser::parser::ParserMode::Php
                     };
+                    let mut wrapped_source = Vec::new();
+                    let mut eval_source = None;
+                    let source_bytes = if matches!(
+                        mode,
+                        crate::parser::parser::ParserMode::Phpx
+                            | crate::parser::parser::ParserMode::PhpxInternal
+                    ) {
+                        let trimmed = path_str.trim_start();
+                        if trimmed.starts_with("<?php") {
+                            let prefix_len = path_str.len() - trimmed.len();
+                            let without_tag = path_str[prefix_len + 5..].to_string();
+                            eval_source = Some(without_tag);
+                            eval_source.as_ref().unwrap().as_bytes()
+                        } else {
+                            path_str.as_bytes()
+                        }
+                    } else {
+                        // PHP's eval() assumes code is in PHP mode (no <?php tag required)
+                        // Wrap the code in PHP tags for the parser
+                        wrapped_source = b"<?php ".to_vec();
+                        wrapped_source.extend_from_slice(path_str.as_bytes());
+                        wrapped_source.as_slice()
+                    };
+
+                    let arena = bumpalo::Bump::new();
+                    let lexer = crate::parser::lexer::Lexer::new(source_bytes);
                     let mut parser =
                         crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
                     let program = parser.parse_program();
@@ -8502,7 +8529,7 @@ impl VM {
                         .unwrap_or(false);
 
                     let emitter = crate::compiler::emitter::Emitter::new(
-                        &wrapped_source,
+                        source_bytes,
                         &mut self.context.interner,
                     )
                     .with_inherited_strict_types(caller_strict);
@@ -8519,7 +8546,10 @@ impl VM {
 
                     self.push_frame(frame);
                     let depth = self.frames.len();
+                    let target_depth = depth - 1;
                     let stack_before_eval = self.operand_stack.len();
+                    let saved_last_return = self.last_return_value.take();
+                    let mut eval_return = None;
 
                     // Execute eval'd code (inline run_loop to capture locals before pop)
                     let mut eval_error = None;
@@ -8551,7 +8581,7 @@ impl VM {
                             op
                         };
 
-                        if let Err(e) = self.execute_opcode(op, depth) {
+                        if let Err(e) = self.execute_opcode(op, target_depth) {
                             eval_error = Some(e);
                             break;
                         }
@@ -8572,6 +8602,11 @@ impl VM {
                         }
                     }
 
+                    if let Some(ret) = self.last_return_value.take() {
+                        eval_return = Some(ret);
+                    }
+                    self.last_return_value = saved_last_return;
+
                     if let Some(err) = eval_error {
                         return Err(err);
                     }
@@ -8579,8 +8614,8 @@ impl VM {
                     // If eval code had an explicit return, handle_return pushed the value onto the stack.
                     // If not, we need to push NULL (PHP's eval() returns NULL when no explicit return).
                     if self.operand_stack.len() == stack_before_eval {
-                        let null_val = self.arena.alloc(Val::Null);
-                        self.operand_stack.push(null_val);
+                        let value = eval_return.unwrap_or_else(|| self.arena.alloc(Val::Null));
+                        self.operand_stack.push(value);
                     }
                 } else {
                     // File include/require (types 2, 3, 4, 5)

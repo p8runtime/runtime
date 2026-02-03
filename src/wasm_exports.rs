@@ -77,7 +77,15 @@ fn run_php_source(source: &str) -> String {
     log("php_run:start");
     let arena = Bump::new();
     let lexer = crate::parser::lexer::Lexer::new(source.as_bytes());
-    let mut parser = crate::parser::parser::Parser::new(lexer, &arena);
+    let trimmed = source.trim_start();
+    let mode = if trimmed.starts_with("/*__DEKA_PHPX_INTERNAL__*/") {
+        crate::parser::parser::ParserMode::PhpxInternal
+    } else if trimmed.starts_with("/*__DEKA_PHPX__*/") {
+        crate::parser::parser::ParserMode::Phpx
+    } else {
+        crate::parser::parser::ParserMode::Php
+    };
+    let mut parser = crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
     let program = parser.parse_program();
 
     if !program.errors.is_empty() {
