@@ -5231,12 +5231,20 @@ impl VM {
 
                 let arena = bumpalo::Bump::new();
                 let lexer = crate::parser::lexer::Lexer::new(&source);
-                let mode = match resolved_path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                {
-                    Some("phpx") => crate::parser::parser::ParserMode::Phpx,
-                    _ => crate::parser::parser::ParserMode::Php,
+                let mut start_idx = 0usize;
+                while start_idx < source.len() && source[start_idx].is_ascii_whitespace() {
+                    start_idx += 1;
+                }
+                let trimmed = &source[start_idx..];
+                let mode = if trimmed.starts_with(b"/*__DEKA_PHPX_INTERNAL__*/") {
+                    crate::parser::parser::ParserMode::PhpxInternal
+                } else if trimmed.starts_with(b"/*__DEKA_PHPX__*/") {
+                    crate::parser::parser::ParserMode::Phpx
+                } else {
+                    match resolved_path.extension().and_then(|ext| ext.to_str()) {
+                        Some("phpx") => crate::parser::parser::ParserMode::Phpx,
+                        _ => crate::parser::parser::ParserMode::Php,
+                    }
                 };
                 let mut parser = crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
                 let program = parser.parse_program();
@@ -8788,12 +8796,24 @@ impl VM {
                             Ok(source) => {
                                 let arena = bumpalo::Bump::new();
                                 let lexer = crate::parser::lexer::Lexer::new(&source);
-                                let mode = match resolved_path
-                                    .extension()
-                                    .and_then(|ext| ext.to_str())
+                                let mut start_idx = 0usize;
+                                while start_idx < source.len()
+                                    && source[start_idx].is_ascii_whitespace()
                                 {
-                                    Some("phpx") => crate::parser::parser::ParserMode::Phpx,
-                                    _ => crate::parser::parser::ParserMode::Php,
+                                    start_idx += 1;
+                                }
+                                let trimmed = &source[start_idx..];
+                                let mode = if trimmed
+                                    .starts_with(b"/*__DEKA_PHPX_INTERNAL__*/")
+                                {
+                                    crate::parser::parser::ParserMode::PhpxInternal
+                                } else if trimmed.starts_with(b"/*__DEKA_PHPX__*/") {
+                                    crate::parser::parser::ParserMode::Phpx
+                                } else {
+                                    match resolved_path.extension().and_then(|ext| ext.to_str()) {
+                                        Some("phpx") => crate::parser::parser::ParserMode::Phpx,
+                                        _ => crate::parser::parser::ParserMode::Php,
+                                    }
                                 };
                                 let mut parser =
                                     crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
