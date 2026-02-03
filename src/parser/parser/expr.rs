@@ -49,10 +49,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 unpack = true;
                 self.bump();
             } else if has_named {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Cannot use positional argument after named argument",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Cannot use positional argument after named argument"));
             }
 
             let value = self.parse_expr(0);
@@ -149,10 +146,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 uses.into_bump_slice()
             } else {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Expected ')' after closure use list",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Expected ')' after closure use list"));
                 &[]
             }
         } else {
@@ -499,10 +493,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     let current_is_elvis = self.next_token.kind == TokenKind::Colon;
 
                     if just_parsed_ternary && (!just_parsed_elvis || !current_is_elvis) {
-                        self.errors.push(ParseError {
-                                span: self.current_token.span,
-                                message: "Unparenthesized `a ? b : c ? d : e` is not supported. Use either `(a ? b : c) ? d : e` or `a ? b : (c ? d : e)`",
-                            });
+                        self.errors.push(ParseError::new(self.current_token.span, "Unparenthesized `a ? b : c ? d : e` is not supported. Use either `(a ? b : c) ? d : e` or `a ? b : (c ? d : e)`"));
                     }
 
                     self.bump();
@@ -575,10 +566,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             continue;
                         }
 
-                        self.errors.push(ParseError {
-                            span: left.span(),
-                            message: "Assignments can only happen to writable values",
-                        });
+                        self.errors.push(ParseError::new(left.span(), "Assignments can only happen to writable values"));
                     }
 
                     self.bump();
@@ -615,10 +603,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             continue;
                         }
 
-                        self.errors.push(ParseError {
-                            span: left.span(),
-                            message: "Assignments can only happen to writable values",
-                        });
+                        self.errors.push(ParseError::new(left.span(), "Assignments can only happen to writable values"));
                     }
 
                     self.bump();
@@ -997,10 +982,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.is_phpx() {
                     return self.parse_jsx_element();
                 }
-                self.errors.push(ParseError {
-                    span: token.span,
-                    message: "Unexpected '<' in expression",
-                });
+                self.errors.push(ParseError::new(token.span, "Unexpected '<' in expression"));
                 self.bump();
                 self.arena.alloc(Expr::Error { span: token.span })
             }
@@ -1262,10 +1244,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::New => {
                 if self.is_phpx() {
-                    self.errors.push(ParseError {
-                        span: token.span,
-                        message: "new is not allowed in PHPX; use struct literals instead",
-                    });
+                    self.errors.push(ParseError::new(token.span, "new is not allowed in PHPX; use struct literals instead"));
                 }
                 self.bump();
 
@@ -1302,10 +1281,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         } else {
                             modifiers.last().unwrap().span.end
                         };
-                        self.errors.push(ParseError {
-                            span: Span::new(start, end),
-                            message: "Attributes and modifiers are only allowed on anonymous classes in new expression",
-                        });
+                        self.errors.push(ParseError::new(Span::new(start, end), "Attributes and modifiers are only allowed on anonymous classes in new expression"));
                     }
 
                     let class = self.parse_expr(200); // High binding power to grab the class name
@@ -1348,10 +1324,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     && self.current_token.kind != TokenKind::Eof
                 {
                     if self.current_token.kind == TokenKind::SemiColon {
-                        self.errors.push(ParseError {
-                            span: self.current_token.span,
-                            message: "Unexpected ';'",
-                        });
+                        self.errors.push(ParseError::new(self.current_token.span, "Unexpected ';'"));
                         self.bump();
                         continue;
                     }
@@ -1701,10 +1674,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             (ObjectKey::Ident(tok), tok.span.start)
                         }
                         _ => {
-                            self.errors.push(ParseError {
-                                span: self.current_token.span,
-                                message: "Expected identifier or string literal in object literal",
-                            });
+                            self.errors.push(ParseError::new(self.current_token.span, "Expected identifier or string literal in object literal"));
                             let tok = self.arena.alloc(Token {
                                 kind: TokenKind::Error,
                                 span: self.current_token.span,
@@ -1717,10 +1687,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     if self.current_token.kind == TokenKind::Colon {
                         self.bump();
                     } else {
-                        self.errors.push(ParseError {
-                            span: self.current_token.span,
-                            message: "Expected ':' after object key",
-                        });
+                        self.errors.push(ParseError::new(self.current_token.span, "Expected ':' after object key"));
                     }
 
                     let value = self.parse_expr(0);
@@ -1759,10 +1726,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 expr
             }
             TokenKind::Error => {
-                self.errors.push(ParseError {
-                    span: token.span,
-                    message: "Unexpected token",
-                });
+                self.errors.push(ParseError::new(token.span, "Unexpected token"));
                 self.bump();
                 self.arena.alloc(Expr::Error { span: token.span })
             }
@@ -1776,10 +1740,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         | TokenKind::Eof
                 );
 
-                self.errors.push(ParseError {
-                    span: token.span,
-                    message: "Syntax error",
-                });
+                self.errors.push(ParseError::new(token.span, "Syntax error"));
 
                 if is_terminator {
                     // Do not consume terminator, let the statement parser handle it
@@ -1810,10 +1771,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 tok
             } else {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Expected field name in struct literal",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Expected field name in struct literal"));
                 let tok = self.arena.alloc(Token {
                     kind: TokenKind::Error,
                     span: self.current_token.span,
@@ -1826,10 +1784,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 || self.current_token.kind == TokenKind::Eq
             {
                 if self.current_token.kind == TokenKind::Eq {
-                    self.errors.push(ParseError {
-                        span: self.current_token.span,
-                        message: "Expected ':' after struct field name",
-                    });
+                    self.errors.push(ParseError::new(self.current_token.span, "Expected ':' after struct field name"));
                 }
                 self.bump();
                 self.parse_expr(0)
@@ -1937,10 +1892,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::OpenBrace {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "JSX spread attributes are not supported",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "JSX spread attributes are not supported"));
                 // Attempt recovery: skip until closing brace
                 self.bump();
                 let _ = self.parse_expr(0);
@@ -1951,19 +1903,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::Eof {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Unterminated JSX element",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Unterminated JSX element"));
                 return self.arena.alloc(Expr::Error {
                     span: Span::new(start, self.current_token.span.end),
                 });
             }
 
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Unexpected token in JSX attributes",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Unexpected token in JSX attributes"));
             self.bump();
         }
     }
@@ -1981,35 +1927,23 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             TokenKind::OpenBrace => {
                 self.bump(); // consume '{'
                 if self.current_token.kind == TokenKind::CloseBrace {
-                    self.errors.push(ParseError {
-                        span: self.current_token.span,
-                        message: "Empty JSX expression is not allowed",
-                    });
+                    self.errors.push(ParseError::new(self.current_token.span, "Empty JSX expression is not allowed"));
                     self.bump();
                     return None;
                 }
                 if self.jsx_starts_object_literal() {
-                    self.errors.push(ParseError {
-                        span: self.current_token.span,
-                        message: "Object literal requires double braces in JSX",
-                    });
+                    self.errors.push(ParseError::new(self.current_token.span, "Object literal requires double braces in JSX"));
                 }
                 let expr = self.parse_expr(0);
                 if self.current_token.kind == TokenKind::CloseBrace {
                     self.bump();
                 } else {
-                    self.errors.push(ParseError {
-                        span: self.current_token.span,
-                        message: "Expected '}' after JSX expression",
-                    });
+                    self.errors.push(ParseError::new(self.current_token.span, "Expected '}' after JSX expression"));
                 }
                 Some(expr)
             }
             _ => {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Expected JSX attribute value",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Expected JSX attribute value"));
                 None
             }
         }
@@ -2038,20 +1972,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         self.bump();
                         return (children.into_bump_slice(), end);
                     }
-                    self.errors.push(ParseError {
-                        span: self.current_token.span,
-                        message: "Expected '>' to close JSX fragment",
-                    });
+                    self.errors.push(ParseError::new(self.current_token.span, "Expected '>' to close JSX fragment"));
                     return (children.into_bump_slice(), self.current_token.span.end);
                 }
 
                 let close_name = self.parse_name();
                 if let Some(expected) = closing_name.as_ref() {
                     if !self.jsx_name_eq(expected, &close_name) {
-                        self.errors.push(ParseError {
-                            span: close_name.span,
-                            message: "Mismatched JSX closing tag",
-                        });
+                        self.errors.push(ParseError::new(close_name.span, "Mismatched JSX closing tag"));
                     }
                 }
 
@@ -2061,10 +1989,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     return (children.into_bump_slice(), end);
                 }
 
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Expected '>' to close JSX tag",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Expected '>' to close JSX tag"));
                 return (children.into_bump_slice(), self.current_token.span.end);
             }
 
@@ -2083,26 +2008,17 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
                 self.bump(); // consume '{'
                 if self.current_token.kind == TokenKind::CloseBrace {
-                    self.errors.push(ParseError {
-                        span: self.current_token.span,
-                        message: "Empty JSX expression is not allowed",
-                    });
+                    self.errors.push(ParseError::new(self.current_token.span, "Empty JSX expression is not allowed"));
                     self.bump();
                 } else {
                     if self.jsx_starts_object_literal() {
-                        self.errors.push(ParseError {
-                            span: self.current_token.span,
-                            message: "Object literal requires double braces in JSX",
-                        });
+                        self.errors.push(ParseError::new(self.current_token.span, "Object literal requires double braces in JSX"));
                     }
                     let expr = self.parse_expr(0);
                     if self.current_token.kind == TokenKind::CloseBrace {
                         self.bump();
                     } else {
-                        self.errors.push(ParseError {
-                            span: self.current_token.span,
-                            message: "Expected '}' after JSX expression",
-                        });
+                        self.errors.push(ParseError::new(self.current_token.span, "Expected '}' after JSX expression"));
                     }
                     children.push(JsxChild::Expr(expr));
                 }
@@ -2112,10 +2028,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::Eof {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Unterminated JSX children",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Unterminated JSX children"));
                 return (children.into_bump_slice(), self.current_token.span.end);
             }
 

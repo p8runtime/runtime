@@ -451,10 +451,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     fn validate_break_continue_level(&mut self, expr: ExprId<'ast>) {
         if let Expr::Integer { value, span } = expr {
             if value.is_empty() {
-                self.errors.push(crate::parser::ast::ParseError {
-                    span: *span,
-                    message: "break/continue level must be a positive integer",
-                });
+                self.errors.push(crate::parser::ast::ParseError::new(*span, "break/continue level must be a positive integer"));
                 return;
             }
             let mut num: usize = 0;
@@ -466,16 +463,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 num = num.saturating_mul(10).saturating_add((b - b'0') as usize);
             }
             if num == 0 {
-                self.errors.push(crate::parser::ast::ParseError {
-                    span: *span,
-                    message: "break/continue level must be a positive integer",
-                });
+                self.errors.push(crate::parser::ast::ParseError::new(*span, "break/continue level must be a positive integer"));
             }
         } else {
-            self.errors.push(crate::parser::ast::ParseError {
-                span: expr.span(),
-                message: "break/continue level must be a positive integer literal",
-            });
+            self.errors.push(crate::parser::ast::ParseError::new(expr.span(), "break/continue level must be a positive integer literal"));
         }
     }
 
@@ -488,10 +479,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
             tok
         } else {
-            self.errors.push(crate::parser::ast::ParseError {
-                span: self.current_token.span,
-                message: "Expected label after goto",
-            });
+            self.errors.push(crate::parser::ast::ParseError::new(self.current_token.span, "Expected label after goto"));
             let tok = self.arena.alloc(self.current_token);
             self.bump();
             tok
@@ -588,46 +576,28 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.token_eq_ident(key, b"strict_types") {
             // Check position: strict_types must be the first statement
             if self.seen_non_declare_stmt {
-                self.errors.push(crate::parser::ast::ParseError {
-                    span: key.span,
-                    message: "strict_types declaration must be the first statement in the file",
-                });
+                self.errors.push(crate::parser::ast::ParseError::new(key.span, "strict_types declaration must be the first statement in the file"));
             }
 
             if let Some(num) = self.int_literal_value(value) {
                 if num != 0 && num != 1 {
-                    self.errors.push(crate::parser::ast::ParseError {
-                        span: value.span(),
-                        message: "strict_types must be 0 or 1",
-                    });
+                    self.errors.push(crate::parser::ast::ParseError::new(value.span(), "strict_types must be 0 or 1"));
                 }
             } else {
-                self.errors.push(crate::parser::ast::ParseError {
-                    span: value.span(),
-                    message: "strict_types must be an integer literal",
-                });
+                self.errors.push(crate::parser::ast::ParseError::new(value.span(), "strict_types must be an integer literal"));
             }
         } else if self.token_eq_ident(key, b"ticks") {
             if let Some(num) = self.int_literal_value(value) {
                 if num == 0 {
-                    self.errors.push(crate::parser::ast::ParseError {
-                        span: value.span(),
-                        message: "ticks must be a positive integer",
-                    });
+                    self.errors.push(crate::parser::ast::ParseError::new(value.span(), "ticks must be a positive integer"));
                 }
             } else {
-                self.errors.push(crate::parser::ast::ParseError {
-                    span: value.span(),
-                    message: "ticks must be an integer literal",
-                });
+                self.errors.push(crate::parser::ast::ParseError::new(value.span(), "ticks must be an integer literal"));
             }
         } else if self.token_eq_ident(key, b"encoding") {
             match value {
                 Expr::String { .. } => {}
-                _ => self.errors.push(crate::parser::ast::ParseError {
-                    span: value.span(),
-                    message: "encoding must be a string literal",
-                }),
+                _ => self.errors.push(crate::parser::ast::ParseError::new(value.span(), "encoding must be a string literal")),
             }
         }
     }

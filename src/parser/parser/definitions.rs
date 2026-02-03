@@ -1,7 +1,8 @@
 use super::{ParseError, Parser};
 use crate::parser::ast::{
-    Arg, AttributeGroup, ClassConst, ClassMember, Expr, ExprId, Name, Param, PropertyHook,
-    PropertyHookBody, Stmt, StmtId, TraitAdaptation, TraitMethodRef, Type,
+    Arg, AttributeGroup, ClassConst, ClassKind, ClassMember, Expr, ExprId, Name, Param,
+    PropertyEntry, PropertyHook, PropertyHookBody, Stmt, StmtId, TraitAdaptation, TraitMethodRef,
+    Type, TypeParam,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::parser::span::Span;
@@ -18,6 +19,7 @@ pub(super) enum ClassMemberCtx {
     Class {
         is_abstract: bool,
         is_readonly: bool,
+        is_struct: bool,
     },
     Interface,
     Trait,
@@ -33,6 +35,16 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         modifiers: &'ast [Token],
         doc_comment: Option<Span>,
     ) -> StmtId<'ast> {
+        self.parse_class_with_kind(attributes, modifiers, doc_comment, ClassKind::Class)
+    }
+
+    pub(super) fn parse_class_with_kind(
+        &mut self,
+        attributes: &'ast [AttributeGroup<'ast>],
+        modifiers: &'ast [Token],
+        doc_comment: Option<Span>,
+        kind: ClassKind,
+    ) -> StmtId<'ast> {
         let start = if let Some(doc) = doc_comment {
             doc.start
         } else if let Some(first) = attributes.first() {
@@ -42,7 +54,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             self.current_token.span.start
         };
-        self.bump(); // Eat class
+        if self.is_phpx() && kind == ClassKind::Class {
+            self.errors.push(ParseError::new(self.current_token.span, "classes are not allowed in PHPX; use struct instead"));
+        }
+        self.bump(); // Eat class/struct
 
         let name = if matches!(
             self.current_token.kind,
@@ -65,10 +80,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             let parent = self.parse_name();
             /*
             if self.name_eq_token(&parent, name) {
-                self.errors.push(ParseError {
-                    span: parent.span,
-                    message: "class cannot extend itself",
-                });
+                self.errors.push(ParseError::new(parent.span, "class cannot extend itself"));
             }
             */
             extends = Some(parent);
@@ -87,31 +99,31 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             for (i, n) in implements.iter().enumerate() {
                 if self.name_eq_token(n, name) {
-                    self.errors.push(ParseError {
-                        span: n.span,
-                        message: "class cannot implement itself",
-                    });
+                    self.errors.push(ParseError::new(n.span, "class cannot implement itself"));
                 }
                 for prev in implements.iter().take(i) {
                     if self.name_eq(prev, n) {
-                        self.errors.push(ParseError {
-                            span: n.span,
-                            message: "duplicate interface in implements list",
-                        });
+                        self.errors.push(ParseError::new(n.span, "duplicate interface in implements list"));
                         break;
                     }
                 }
+            }
+        }
+        if self.is_phpx() && kind == ClassKind::Struct {
+            if let Some(parent) = extends.as_ref() {
+                self.errors.push(ParseError::new(parent.span, "structs cannot extend other types in PHPX"));
+            }
+            if let Some(first) = implements.first() {
+                self.errors.push(ParseError::new(first.span, "structs cannot implement interfaces in PHPX; interfaces are structural"));
             }
         }
 
         if self.current_token.kind == TokenKind::OpenBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Expected '{'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Expected '{'"));
             return self.arena.alloc(Stmt::Class {
+                kind,
                 attributes,
                 modifiers,
                 name,
@@ -135,21 +147,20 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             members.push(self.parse_class_member(ClassMemberCtx::Class {
                 is_abstract: class_is_abstract,
                 is_readonly: class_is_readonly,
+                is_struct: kind == ClassKind::Struct,
             }));
         }
 
         if self.current_token.kind == TokenKind::CloseBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Missing '}'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Missing '}'"));
         }
 
         let end = self.current_token.span.end;
 
         self.arena.alloc(Stmt::Class {
+            kind,
             attributes,
             modifiers,
             name,
@@ -173,6 +184,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             self.current_token.span.start
         };
+        if self.is_phpx() {
+            self.errors.push(ParseError::new(self.current_token.span, "anonymous classes are not allowed in PHPX"));
+        }
         self.bump(); // eat class
 
         let (ctor_args, ctor_end) = if self.current_token.kind == TokenKind::OpenParen {
@@ -202,10 +216,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             for i in 0..implements.len() {
                 for prev in implements.iter().take(i) {
                     if self.name_eq(prev, &implements[i]) {
-                        self.errors.push(ParseError {
-                            span: implements[i].span,
-                            message: "duplicate interface in implements list",
-                        });
+                        self.errors.push(ParseError::new(implements[i].span, "duplicate interface in implements list"));
                         break;
                     }
                 }
@@ -215,10 +226,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::OpenBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Expected '{'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Expected '{'"));
             let span = Span::new(start, self.current_token.span.end);
             return (
                 self.arena.alloc(Expr::AnonymousClass {
@@ -242,16 +250,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             members.push(self.parse_class_member(ClassMemberCtx::Class {
                 is_abstract: false,
                 is_readonly: false,
+                is_struct: false,
             }));
         }
 
         if self.current_token.kind == TokenKind::CloseBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Missing '}'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Missing '}'"));
         }
 
         let end = self.current_token.span.end.max(ctor_end);
@@ -311,30 +317,26 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             for (i, n) in extends.iter().enumerate() {
                 if self.name_eq_token(n, name) {
-                    self.errors.push(ParseError {
-                        span: n.span,
-                        message: "interface cannot extend itself",
-                    });
+                    self.errors.push(ParseError::new(n.span, "interface cannot extend itself"));
                 }
                 for prev in extends.iter().take(i) {
                     if self.name_eq(prev, n) {
-                        self.errors.push(ParseError {
-                            span: n.span,
-                            message: "duplicate interface in extends list",
-                        });
+                        self.errors.push(ParseError::new(n.span, "duplicate interface in extends list"));
                         break;
                     }
                 }
+            }
+        }
+        if self.is_phpx() {
+            if let Some(first) = extends.first() {
+                self.errors.push(ParseError::new(first.span, "interface inheritance is not allowed in PHPX"));
             }
         }
 
         if self.current_token.kind == TokenKind::OpenBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Expected '{'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Expected '{'"));
             return self.arena.alloc(Stmt::Interface {
                 attributes,
                 name,
@@ -356,10 +358,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::CloseBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Missing '}'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Missing '}'"));
         }
 
         let end = self.current_token.span.end;
@@ -386,6 +385,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             self.current_token.span.start
         };
+        if self.is_phpx() {
+            self.errors.push(ParseError::new(self.current_token.span, "traits are not allowed in PHPX"));
+        }
         self.bump(); // Eat trait
 
         let name = if matches!(
@@ -405,10 +407,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::OpenBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Expected '{'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Expected '{'"));
             return self.arena.alloc(Stmt::Trait {
                 attributes,
                 name,
@@ -429,10 +428,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::CloseBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Missing '}'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Missing '}'"));
         }
 
         let end = self.current_token.span.end;
@@ -492,17 +488,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             for (i, n) in implements.iter().enumerate() {
                 if self.name_eq_token(n, name) {
-                    self.errors.push(ParseError {
-                        span: n.span,
-                        message: "enum cannot implement itself",
-                    });
+                    self.errors.push(ParseError::new(n.span, "enum cannot implement itself"));
                 }
                 for prev in implements.iter().take(i) {
                     if self.name_eq(prev, n) {
-                        self.errors.push(ParseError {
-                            span: n.span,
-                            message: "duplicate interface in implements list",
-                        });
+                        self.errors.push(ParseError::new(n.span, "duplicate interface in implements list"));
                         break;
                     }
                 }
@@ -512,10 +502,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::OpenBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Expected '{'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Expected '{'"));
             return self.arena.alloc(Stmt::Enum {
                 attributes,
                 name,
@@ -540,10 +527,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::CloseBrace {
             self.bump();
         } else {
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Missing '}'",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Missing '}'"));
         }
 
         let end = self.current_token.span.end;
@@ -607,6 +591,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             };
 
+            let payload = if self.is_phpx() && self.current_token.kind == TokenKind::OpenParen {
+                Some(self.parse_parameter_list())
+            } else {
+                None
+            };
+
             let value = if self.current_token.kind == TokenKind::Eq {
                 self.bump();
                 Some(self.parse_expr(0))
@@ -615,20 +605,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             };
 
             if !matches!(ctx, ClassMemberCtx::Enum { .. }) {
-                self.errors.push(ParseError {
-                    span: name.span,
-                    message: "case not allowed here",
-                });
+                self.errors.push(ParseError::new(name.span, "case not allowed here"));
             } else if matches!(ctx, ClassMemberCtx::Enum { backed: true }) && value.is_none() {
-                self.errors.push(ParseError {
-                    span: name.span,
-                    message: "backed enum cases require a value",
-                });
+                self.errors.push(ParseError::new(name.span, "backed enum cases require a value"));
             } else if matches!(ctx, ClassMemberCtx::Enum { backed: false }) && value.is_some() {
-                self.errors.push(ParseError {
-                    span: name.span,
-                    message: "pure enum cases cannot have values",
-                });
+                self.errors.push(ParseError::new(name.span, "pure enum cases cannot have values"));
+            } else if matches!(ctx, ClassMemberCtx::Enum { backed: true }) && payload.is_some() {
+                self.errors.push(ParseError::new(name.span, "backed enum cases cannot have payloads"));
             }
 
             self.expect_semicolon();
@@ -638,12 +621,50 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 attributes,
                 name,
                 value,
+                payload,
                 doc_comment,
                 span: Span::new(start, end),
             };
         }
 
         if self.current_token.kind == TokenKind::Use {
+            if self.is_phpx() {
+                let is_struct = matches!(ctx, ClassMemberCtx::Class { is_struct: true, .. });
+                if !is_struct {
+                    self.errors.push(ParseError::new(self.current_token.span, "use is only allowed for struct composition in PHPX"));
+                }
+                self.bump();
+                let mut types = std::vec::Vec::new();
+                loop {
+                    types.push(self.parse_name());
+                    if self.current_token.kind == TokenKind::Comma {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                if self.current_token.kind == TokenKind::OpenBrace {
+                    self.errors.push(ParseError::new(self.current_token.span, "Trait adaptations are not allowed in PHPX"));
+                    self.bump();
+                    while self.current_token.kind != TokenKind::CloseBrace
+                        && self.current_token.kind != TokenKind::Eof
+                    {
+                        self.bump();
+                    }
+                    if self.current_token.kind == TokenKind::CloseBrace {
+                        self.bump();
+                    }
+                } else {
+                    self.expect_semicolon();
+                }
+                let end = self.current_token.span.end;
+                return ClassMember::Embed {
+                    attributes,
+                    types: self.arena.alloc_slice_copy(&types),
+                    doc_comment,
+                    span: Span::new(start, end),
+                };
+            }
             self.bump();
             let mut traits = std::vec::Vec::new();
             loop {
@@ -710,10 +731,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             span: Span::new(adapt_span_start, self.current_token.span.end),
                         });
                     } else {
-                        self.errors.push(ParseError {
-                            span: self.current_token.span,
-                            message: "Expected insteadof or as in trait adaptation",
-                        });
+                        self.errors.push(ParseError::new(self.current_token.span, "Expected insteadof or as in trait adaptation"));
                         // try to recover to next semicolon
                     }
 
@@ -785,17 +803,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             let has_body = has_body_flag || !body.is_empty();
             if method_is_abstract && has_body {
-                self.errors.push(ParseError {
-                    span: Span::new(start, start),
-                    message: "abstract method cannot have a body",
-                });
+                self.errors.push(ParseError::new(Span::new(start, start), "abstract method cannot have a body"));
             }
             if matches!(ctx, ClassMemberCtx::Interface) {
                 if has_body {
-                    self.errors.push(ParseError {
-                        span: Span::new(start, start),
-                        message: "interface methods cannot have a body",
-                    });
+                    self.errors.push(ParseError::new(Span::new(start, start), "interface methods cannot have a body"));
                 }
                 if modifiers.iter().any(|m| {
                     matches!(
@@ -803,39 +815,39 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         TokenKind::Protected | TokenKind::Private | TokenKind::Final
                     )
                 }) {
-                    self.errors.push(ParseError {
-                        span: Span::new(start, start),
-                        message: "invalid modifier in interface method",
-                    });
+                    self.errors.push(ParseError::new(Span::new(start, start), "invalid modifier in interface method"));
                 }
             }
             if let ClassMemberCtx::Class { is_abstract, .. } = ctx {
                 if method_is_abstract && !is_abstract {
-                    self.errors.push(ParseError {
-                        span: Span::new(start, start),
-                        message: "abstract method in non-abstract class",
-                    });
+                    self.errors.push(ParseError::new(Span::new(start, start), "abstract method in non-abstract class"));
                 }
                 if !method_is_abstract && !has_body {
-                    self.errors.push(ParseError {
-                        span: Span::new(start, start),
-                        message: "non-abstract method must have a body",
-                    });
+                    self.errors.push(ParseError::new(Span::new(start, start), "non-abstract method must have a body"));
                 }
             }
             if matches!(ctx, ClassMemberCtx::Enum { .. }) && method_is_abstract {
-                self.errors.push(ParseError {
-                    span: Span::new(start, start),
-                    message: "abstract methods not allowed in enums",
-                });
+                self.errors.push(ParseError::new(Span::new(start, start), "abstract methods not allowed in enums"));
             }
 
-            if self.token_eq_ident(name, b"__construct") {
+            let is_ctor = self.token_eq_ident(name, b"__construct");
+            let is_struct = matches!(ctx, ClassMemberCtx::Class { is_struct: true, .. });
+            if self.is_phpx() && is_struct && is_ctor {
+                self.errors.push(ParseError::new(name.span, "constructors are not allowed in PHPX structs; use struct literals"));
+            }
+            if !is_ctor {
                 for param in params.iter() {
                     if param.modifiers.is_empty() {
                         continue;
                     }
-                    let _has_visibility = param.modifiers.iter().any(|m| {
+                    self.errors.push(ParseError::new(param.span, "property promotion only allowed in constructors"));
+                }
+            } else {
+                for param in params.iter() {
+                    if param.modifiers.is_empty() {
+                        continue;
+                    }
+                    let has_visibility = param.modifiers.iter().any(|m| {
                         matches!(
                             m.kind,
                             TokenKind::Public | TokenKind::Protected | TokenKind::Private
@@ -860,33 +872,34 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         .iter()
                         .filter(|m| m.kind == TokenKind::Readonly)
                         .count();
-                    let _by_ref = param.by_ref;
 
-                    if matches!(ctx, ClassMemberCtx::Interface) {
-                        self.errors.push(ParseError {
-                            span: param.span,
-                            message: "property promotion not allowed in interfaces/traits",
-                        });
+                    if matches!(ctx, ClassMemberCtx::Interface | ClassMemberCtx::Trait) {
+                        self.errors.push(ParseError::new(param.span, "property promotion not allowed in interfaces/traits"));
                         continue;
                     }
 
                     if vis_count > 1 {
-                        self.errors.push(ParseError {
-                            span: param.span,
-                            message: "multiple visibilities in promoted parameter",
-                        });
+                        self.errors.push(ParseError::new(param.span, "multiple visibilities in promoted parameter"));
                     }
-                    // if !has_visibility {
-                    //     self.errors.push(ParseError { span: param.span, message: "promoted parameter requires visibility" });
-                    // }
-                    // if has_readonly && !has_visibility {
-                    //     self.errors.push(ParseError { span: param.span, message: "readonly promotion requires visibility" });
-                    // }
+                    if !has_visibility {
+                        let message = if has_readonly {
+                            "readonly promotion requires visibility"
+                        } else {
+                            "promoted parameter requires visibility"
+                        };
+                        self.errors.push(ParseError::new(param.span, message));
+                    }
+                    if param.by_ref {
+                        self.errors.push(ParseError::new(
+                            param.span,
+                            "promoted parameter cannot be by-reference",
+                        ));
+                    }
+                    if param.variadic {
+                        self.errors.push(ParseError::new(param.span, "promoted parameter cannot be variadic"));
+                    }
                     if has_readonly && param.ty.is_none() {
-                        self.errors.push(ParseError {
-                            span: param.span,
-                            message: "readonly promoted property requires a type",
-                        });
+                        self.errors.push(ParseError::new(param.span, "readonly promoted property requires a type"));
                     }
                     if param.ty.is_none()
                         && matches!(
@@ -897,20 +910,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             }
                         )
                     {
-                        self.errors.push(ParseError {
-                            span: param.span,
-                            message: "readonly property requires a type",
-                        });
+                        self.errors.push(ParseError::new(param.span, "readonly property requires a type"));
                     }
                     if readonly_count > 1 {
-                        self.errors.push(ParseError {
-                            span: param.span,
-                            message: "Duplicate readonly modifier",
-                        });
+                        self.errors.push(ParseError::new(param.span, "Duplicate readonly modifier"));
                     }
-                    // if by_ref {
-                    //     self.errors.push(ParseError { span: param.span, message: "promoted parameter cannot be by-reference" });
-                    // }
                 }
             }
 
@@ -945,18 +949,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             if name.parts.len() == 1 {
                                 first_name = Some(&name.parts[0]);
                             } else {
-                                self.errors.push(ParseError {
-                                    span: name.span,
-                                    message: "Class constant must be an identifier",
-                                });
+                                self.errors.push(ParseError::new(name.span, "Class constant must be an identifier"));
                                 first_name = Some(&name.parts[0]);
                             }
                         }
                         _ => {
-                            self.errors.push(ParseError {
-                                span: self.current_token.span,
-                                message: "Expected identifier",
-                            });
+                            self.errors.push(ParseError::new(self.current_token.span, "Expected identifier"));
                             first_name = Some(self.arena.alloc(Token {
                                 kind: TokenKind::Error,
                                 span: Span::default(),
@@ -1020,12 +1018,58 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
         } else {
             // Property
+            let is_struct = matches!(ctx, ClassMemberCtx::Class { is_struct: true, .. });
+            if self.is_phpx()
+                && is_struct
+                && self.current_token.kind == TokenKind::Variable
+                && self.next_token.kind == TokenKind::Colon
+            {
+                if !modifiers.is_empty() {
+                    self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "struct fields do not use visibility modifiers in PHPX"));
+                }
+
+                let name = self.arena.alloc(self.current_token);
+                self.bump(); // $field
+                self.bump(); // :
+
+                let ty = if let Some(t) = self.parse_type() {
+                    Some(self.arena.alloc(t) as &'ast Type<'ast>)
+                } else {
+                    self.errors.push(ParseError::new(self.current_token.span, "struct fields require an explicit type"));
+                    None
+                };
+
+                let default = if self.current_token.kind == TokenKind::Eq {
+                    self.bump();
+                    Some(self.parse_expr(0))
+                } else {
+                    None
+                };
+
+                self.expect_semicolon();
+
+                let entry = PropertyEntry {
+                    name,
+                    default,
+                    span: Span::new(
+                        name.span.start,
+                        default.map(|e| e.span().end).unwrap_or(name.span.end),
+                    ),
+                };
+                let end = self.current_token.span.end;
+                return ClassMember::Property {
+                    attributes,
+                    modifiers: self.arena.alloc_slice_copy(&modifiers),
+                    ty,
+                    entries: self.arena.alloc_slice_copy(&[entry]),
+                    doc_comment,
+                    span: Span::new(start, end),
+                };
+            }
+
             self.validate_modifiers(&modifiers, ModifierContext::Property);
             if matches!(ctx, ClassMemberCtx::Enum { .. }) {
-                self.errors.push(ParseError {
-                    span: Span::new(start, start),
-                    message: "enums cannot declare properties",
-                });
+                self.errors.push(ParseError::new(Span::new(start, start), "enums cannot declare properties"));
             }
             let class_is_readonly = matches!(
                 ctx,
@@ -1046,10 +1090,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 token
             } else {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Expected variable",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Expected variable"));
 
                 let is_terminator = matches!(
                     self.current_token.kind,
@@ -1069,6 +1110,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             };
 
+            if self.is_phpx() && is_struct {
+                self.errors.push(ParseError::new(name.span, "struct fields must use `$name: Type` syntax in PHPX"));
+            }
+
             let default = if self.current_token.kind == TokenKind::Eq {
                 self.bump();
                 Some(self.parse_expr(0))
@@ -1077,16 +1122,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             };
 
             if modifiers.iter().any(|m| m.kind == TokenKind::Readonly) && ty.is_none() {
-                self.errors.push(ParseError {
-                    span: Span::new(start, start),
-                    message: "readonly property requires a type",
-                });
+                self.errors.push(ParseError::new(Span::new(start, start), "readonly property requires a type"));
             }
             if class_is_readonly && ty.is_none() {
-                self.errors.push(ParseError {
-                    span: Span::new(start, start),
-                    message: "readonly property requires a type",
-                });
+                self.errors.push(ParseError::new(Span::new(start, start), "readonly property requires a type"));
             }
 
             // Property hooks
@@ -1106,17 +1145,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             } else {
                 if matches!(ctx, ClassMemberCtx::Interface) {
-                    self.errors.push(ParseError {
-                        span: Span::new(start, start),
-                        message: "interfaces cannot declare properties",
-                    });
+                    self.errors.push(ParseError::new(Span::new(start, start), "interfaces cannot declare properties"));
                 }
 
                 if modifiers.iter().any(|m| m.kind == TokenKind::Abstract) {
-                    self.errors.push(ParseError {
-                        span: modifiers.first().map(|t| t.span).unwrap_or_default(),
-                        message: "Properties cannot be declared abstract",
-                    });
+                    self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "Properties cannot be declared abstract"));
                 }
 
                 let mut entries = std::vec::Vec::new();
@@ -1189,10 +1222,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 &*t
             } else {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Expected method name",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Expected method name"));
                 let t = self.arena.alloc(Token {
                     kind: TokenKind::Error,
                     span: self.current_token.span,
@@ -1209,10 +1239,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
 
         if name.parts.len() > 1 {
-            self.errors.push(ParseError {
-                span: name.span,
-                message: "Method name cannot be qualified",
-            });
+            self.errors.push(ParseError::new(name.span, "Method name cannot be qualified"));
         }
 
         let method = if let Some(first) = name.parts.first() {
@@ -1276,10 +1303,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 t
             } else {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Expected hook name",
-                });
+                self.errors.push(ParseError::new(self.current_token.span, "Expected hook name"));
                 let t = self.arena.alloc(Token {
                     kind: TokenKind::Error,
                     span: self.current_token.span,
@@ -1315,10 +1339,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     PropertyHookBody::Expr(expr)
                 }
                 _ => {
-                    self.errors.push(ParseError {
-                        span: self.current_token.span,
-                        message: "Invalid property hook body",
-                    });
+                    self.errors.push(ParseError::new(self.current_token.span, "Invalid property hook body"));
                     PropertyHookBody::None
                 }
             };
@@ -1365,73 +1386,49 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             match m.kind {
                 TokenKind::Public => {
                     if has_public || has_protected || has_private {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Multiple visibility modifiers",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Multiple visibility modifiers"));
                     }
                     has_public = true;
                 }
                 TokenKind::Protected => {
                     if has_public || has_protected || has_private {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Multiple visibility modifiers",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Multiple visibility modifiers"));
                     }
                     has_protected = true;
                 }
                 TokenKind::Private => {
                     if has_public || has_protected || has_private {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Multiple visibility modifiers",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Multiple visibility modifiers"));
                     }
                     has_private = true;
                 }
                 TokenKind::PublicSet | TokenKind::ProtectedSet | TokenKind::PrivateSet => {
                     if has_set_visibility {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Multiple set visibility modifiers",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Multiple set visibility modifiers"));
                     }
                     has_set_visibility = true;
                 }
                 TokenKind::Abstract => {
                     if has_abstract {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate abstract modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate abstract modifier"));
                     }
                     has_abstract = true;
                 }
                 TokenKind::Final => {
                     if has_final {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate final modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate final modifier"));
                     }
                     has_final = true;
                 }
                 TokenKind::Static => {
                     if has_static {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate static modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate static modifier"));
                     }
                     has_static = true;
                 }
                 TokenKind::Readonly => {
                     if has_readonly {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate readonly modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate readonly modifier"));
                     }
                     has_readonly = true;
                 }
@@ -1440,20 +1437,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
 
         if has_abstract && has_final {
-            self.errors.push(ParseError {
-                span: modifiers.first().map(|t| t.span).unwrap_or_default(),
-                message: "abstract and final cannot be combined",
-            });
+            self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "abstract and final cannot be combined"));
         }
 
         // readonly is only valid on properties; flag when used on methods
         if matches!(ctx, ModifierContext::Method)
             && modifiers.iter().any(|m| m.kind == TokenKind::Readonly)
         {
-            self.errors.push(ParseError {
-                span: modifiers.first().map(|t| t.span).unwrap_or_default(),
-                message: "readonly not allowed on methods",
-            });
+            self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "readonly not allowed on methods"));
         }
 
         if matches!(ctx, ModifierContext::Method)
@@ -1464,10 +1455,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 )
             })
         {
-            self.errors.push(ParseError {
-                span: modifiers.first().map(|t| t.span).unwrap_or_default(),
-                message: "asymmetric visibility not allowed on methods",
-            });
+            self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "asymmetric visibility not allowed on methods"));
         }
 
         if matches!(ctx, ModifierContext::Property) {
@@ -1476,18 +1464,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 .iter()
                 .any(|m| matches!(m.kind, TokenKind::Abstract | TokenKind::Final))
             {
-                self.errors.push(ParseError {
-                    span: modifiers.first().map(|t| t.span).unwrap_or_default(),
-                    message: "abstract/final not allowed on properties",
-                });
+                self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "abstract/final not allowed on properties"));
             }
             */
             let has_static = modifiers.iter().any(|m| m.kind == TokenKind::Static);
             if has_static && modifiers.iter().any(|m| m.kind == TokenKind::Readonly) {
-                self.errors.push(ParseError {
-                    span: modifiers.first().map(|t| t.span).unwrap_or_default(),
-                    message: "readonly properties cannot be static",
-                });
+                self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "readonly properties cannot be static"));
             }
             // promotion and visibility rules will be enforced at constructor parsing time; placeholder here.
         }
@@ -1502,28 +1484,19 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             match m.kind {
                 TokenKind::Abstract => {
                     if seen_abstract {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate abstract modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate abstract modifier"));
                     }
                     seen_abstract = true;
                 }
                 TokenKind::Final => {
                     if seen_final {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate final modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate final modifier"));
                     }
                     seen_final = true;
                 }
                 TokenKind::Readonly => {
                     if seen_readonly {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate readonly modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate readonly modifier"));
                     }
                     seen_readonly = true;
                 }
@@ -1532,10 +1505,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
 
         if seen_abstract && seen_final {
-            self.errors.push(ParseError {
-                span: modifiers.first().map(|t| t.span).unwrap_or_default(),
-                message: "abstract and final cannot be combined",
-            });
+            self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "abstract and final cannot be combined"));
         }
     }
 
@@ -1547,45 +1517,27 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             match m.kind {
                 TokenKind::Public | TokenKind::Protected | TokenKind::Private => {
                     if seen_visibility.is_some() {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Multiple visibility modifiers",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Multiple visibility modifiers"));
                     }
                     if matches!(ctx, ClassMemberCtx::Interface) && m.kind != TokenKind::Public {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Interface constants must be public",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Interface constants must be public"));
                     }
                     seen_visibility = Some(m.kind);
                 }
                 TokenKind::Final => {
                     if seen_final {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Duplicate final modifier",
-                        });
+                        self.errors.push(ParseError::new(m.span, "Duplicate final modifier"));
                     }
                     seen_final = true;
                 }
                 TokenKind::Abstract => {
-                    self.errors.push(ParseError {
-                        span: m.span,
-                        message: "abstract not allowed on class constants",
-                    });
+                    self.errors.push(ParseError::new(m.span, "abstract not allowed on class constants"));
                 }
                 TokenKind::Static => {
-                    self.errors.push(ParseError {
-                        span: m.span,
-                        message: "static not allowed on class constants",
-                    });
+                    self.errors.push(ParseError::new(m.span, "static not allowed on class constants"));
                 }
                 TokenKind::Readonly => {
-                    self.errors.push(ParseError {
-                        span: m.span,
-                        message: "readonly not allowed on class constants",
-                    });
+                    self.errors.push(ParseError::new(m.span, "readonly not allowed on class constants"));
                 }
                 _ => {}
             }
@@ -1595,6 +1547,58 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     pub(super) fn token_eq_ident(&self, token: &Token, ident: &[u8]) -> bool {
         let slice = self.lexer.slice(token.span);
         slice.eq_ignore_ascii_case(ident)
+    }
+
+    pub(super) fn parse_type_params(&mut self) -> &'ast [TypeParam<'ast>] {
+        if self.current_token.kind != TokenKind::Lt {
+            return &[];
+        }
+        let start = self.current_token.span.start;
+        self.bump(); // consume '<'
+
+        let mut params = bumpalo::collections::Vec::new_in(self.arena);
+        while self.current_token.kind != TokenKind::Gt
+            && self.current_token.kind != TokenKind::Eof
+        {
+            let name_token = if self.current_token.kind == TokenKind::Identifier {
+                let token = self.arena.alloc(self.current_token);
+                self.bump();
+                token
+            } else {
+                self.errors.push(ParseError::new(self.current_token.span, "Expected type parameter name"));
+                break;
+            };
+
+            let mut constraint: Option<&'ast Type<'ast>> = None;
+            if self.current_token.kind == TokenKind::Colon {
+                self.bump();
+                if let Some(ty) = self.parse_type() {
+                    constraint = Some(self.arena.alloc(ty));
+                } else {
+                    self.errors.push(ParseError::new(self.current_token.span, "Expected type parameter constraint"));
+                }
+            }
+
+            params.push(TypeParam {
+                name: name_token,
+                constraint,
+                span: name_token.span,
+            });
+
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+                continue;
+            }
+            break;
+        }
+
+        if self.current_token.kind == TokenKind::Gt {
+            self.bump();
+        } else {
+            self.errors.push(ParseError::new(Span::new(start, self.current_token.span.end), "Expected '>' after type parameters"));
+        }
+
+        params.into_bump_slice()
     }
 
     fn name_eq(&self, a: &Name<'ast>, b: &Name<'ast>) -> bool {
@@ -1656,6 +1660,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.arena.alloc(self.current_token)
         };
 
+        let type_params = if self.is_phpx() && self.current_token.kind == TokenKind::Lt {
+            self.parse_type_params()
+        } else {
+            &[]
+        };
+
         // Params
         let params = self.parse_parameter_list();
 
@@ -1683,6 +1693,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             attributes,
             name,
             by_ref,
+            type_params,
             params,
             return_type,
             body,

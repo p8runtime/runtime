@@ -10,13 +10,47 @@ pub mod visitor;
 pub type ExprId<'ast> = &'ast Expr<'ast>;
 pub type StmtId<'ast> = &'ast Stmt<'ast>;
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub struct ParseError {
     pub span: Span,
     pub message: &'static str,
+    pub error_kind: &'static str,
+    pub help_text: &'static str,
 }
 
 impl ParseError {
+    pub fn new(span: Span, message: &'static str) -> Self {
+        Self {
+            span,
+            message,
+            error_kind: "Syntax Error",
+            help_text: "Check syntax near the highlighted code.",
+        }
+    }
+
+    pub fn with_help(span: Span, message: &'static str, help_text: &'static str) -> Self {
+        Self {
+            span,
+            message,
+            error_kind: "Syntax Error",
+            help_text,
+        }
+    }
+
+    pub fn with_kind(
+        span: Span,
+        message: &'static str,
+        error_kind: &'static str,
+        help_text: &'static str,
+    ) -> Self {
+        Self {
+            span,
+            message,
+            error_kind,
+            help_text,
+        }
+    }
+
     pub fn to_human_readable(&self, source: &[u8]) -> String {
         self.to_human_readable_with_path(source, None)
     }
@@ -42,13 +76,22 @@ impl ParseError {
         deka_validation::format_validation_error(
             &source_str,
             file_path,
-            "Syntax Error",
+            self.error_kind,
             line,
             column,
             self.message,
-            "Check syntax near the highlighted code.",
+            self.help_text,
             highlight_len,
         )
+    }
+}
+
+impl std::fmt::Debug for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParseError")
+            .field("span", &self.span)
+            .field("message", &self.message)
+            .finish()
     }
 }
 

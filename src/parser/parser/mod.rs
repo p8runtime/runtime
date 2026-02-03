@@ -31,10 +31,25 @@ pub struct Parser<'src, 'ast> {
     pub(super) current_doc_comment: Option<Span>,
     pub(super) next_doc_comment: Option<Span>,
     pub(super) seen_non_declare_stmt: bool,
+    pub(super) mode: ParserMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParserMode {
+    Php,
+    Phpx,
+    PhpxInternal,
 }
 
 impl<'src, 'ast> Parser<'src, 'ast> {
     pub fn new(lexer: Lexer<'src>, arena: &'ast Bump) -> Self {
+        Self::new_with_mode(lexer, arena, ParserMode::Php)
+    }
+
+    pub fn new_with_mode(mut lexer: Lexer<'src>, arena: &'ast Bump, mode: ParserMode) -> Self {
+        if matches!(mode, ParserMode::Phpx | ParserMode::PhpxInternal) {
+            lexer.start_in_scripting();
+        }
         let mut parser = Self {
             lexer,
             arena,
@@ -50,10 +65,19 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             current_doc_comment: None,
             next_doc_comment: None,
             seen_non_declare_stmt: false,
+            mode,
         };
         parser.bump();
         parser.bump();
         parser
+    }
+
+    pub(super) fn is_phpx(&self) -> bool {
+        matches!(self.mode, ParserMode::Phpx | ParserMode::PhpxInternal)
+    }
+
+    pub(super) fn allow_phpx_namespace(&self) -> bool {
+        self.mode == ParserMode::PhpxInternal
     }
 
     fn bump(&mut self) {
@@ -83,10 +107,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             // Implicit semicolon at EOF
         } else {
             // Error: Missing semicolon
-            self.errors.push(ParseError {
-                span: self.current_token.span,
-                message: "Missing semicolon",
-            });
+            self.errors.push(ParseError::new(self.current_token.span, "Missing semicolon"));
             // Recovery: Assume it was there and continue.
             // We do NOT bump the current token because it belongs to the next statement.
             self.sync_to_statement_end();
