@@ -285,6 +285,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             Stmt::Function {
                 attributes,
                 name,
+                type_params,
                 params,
                 return_type,
                 body,
@@ -302,6 +303,19 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write(" \"");
                 self.write(&String::from_utf8_lossy(name.text(self.source)));
                 self.write("\"");
+                if !type_params.is_empty() {
+                    self.write(" (type-params");
+                    for param in *type_params {
+                        let name = String::from_utf8_lossy(param.name.text(self.source));
+                        self.write(" ");
+                        self.write(&name);
+                        if let Some(constraint) = param.constraint {
+                            self.write(":");
+                            self.visit_type(constraint);
+                        }
+                    }
+                    self.write(")");
+                }
                 self.write(" (params");
                 for param in *params {
                     self.write(" ");
@@ -325,7 +339,29 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("))");
                 self.indent -= 1;
             }
+            Stmt::TypeAlias { name, type_params, ty, .. } => {
+                self.write("(type-alias \"");
+                self.write(&String::from_utf8_lossy(name.text(self.source)));
+                self.write("\"");
+                if !type_params.is_empty() {
+                    self.write(" (type-params");
+                    for param in *type_params {
+                        let name = String::from_utf8_lossy(param.name.text(self.source));
+                        self.write(" ");
+                        self.write(&name);
+                        if let Some(constraint) = param.constraint {
+                            self.write(":");
+                            self.visit_type(constraint);
+                        }
+                    }
+                    self.write(")");
+                }
+                self.write(" ");
+                self.visit_type(ty);
+                self.write(")");
+            }
             Stmt::Class {
+                kind,
                 attributes,
                 modifiers,
                 name,
@@ -334,7 +370,10 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 members,
                 ..
             } => {
-                self.write("(class");
+                match kind {
+                    ClassKind::Class => self.write("(class"),
+                    ClassKind::Struct => self.write("(struct"),
+                }
                 for attr in *attributes {
                     self.write(" ");
                     self.visit_attribute_group(attr);
@@ -638,6 +677,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                     BinaryOp::LogicalAnd => "and",
                     BinaryOp::LogicalOr => "or",
                     BinaryOp::LogicalXor => "xor",
+                    BinaryOp::Pipe => "|>",
                     BinaryOp::Instanceof => "instanceof",
                 });
                 self.write(" ");
@@ -764,6 +804,93 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 }
                 self.write(")");
             }
+            Expr::ObjectLiteral { items, .. } => {
+                self.write("(object");
+                for item in *items {
+                    self.write(" ");
+                    self.visit_object_item(item);
+                }
+                self.write(")");
+            }
+            Expr::JsxElement {
+                name,
+                attributes,
+                children,
+                ..
+            } => {
+                self.write("(jsx ");
+                self.write(&String::from_utf8_lossy(
+                    &self.source[name.span.start..name.span.end],
+                ));
+                for attr in *attributes {
+                    self.write(" ");
+                    self.write("(attr ");
+                    self.write(&String::from_utf8_lossy(
+                        &self.source[attr.name.span.start..attr.name.span.end],
+                    ));
+                    if let Some(value) = attr.value {
+                        self.write(" ");
+                        self.visit_expr(value);
+                    }
+                    self.write(")");
+                }
+                for child in *children {
+                    self.write(" ");
+                    match child {
+                        JsxChild::Text(span) => {
+                            self.write("(text ");
+                            self.write(&String::from_utf8_lossy(
+                                &self.source[span.start..span.end],
+                            ));
+                            self.write(")");
+                        }
+                        JsxChild::Expr(expr) => {
+                            self.write("(child ");
+                            self.visit_expr(expr);
+                            self.write(")");
+                        }
+                    }
+                }
+                self.write(")");
+            }
+            Expr::JsxFragment { children, .. } => {
+                self.write("(jsx-fragment");
+                for child in *children {
+                    self.write(" ");
+                    match child {
+                        JsxChild::Text(span) => {
+                            self.write("(text ");
+                            self.write(&String::from_utf8_lossy(
+                                &self.source[span.start..span.end],
+                            ));
+                            self.write(")");
+                        }
+                        JsxChild::Expr(expr) => {
+                            self.write("(child ");
+                            self.visit_expr(expr);
+                            self.write(")");
+                        }
+                    }
+                }
+                self.write(")");
+            }
+            Expr::StructLiteral { name, fields, .. } => {
+                self.write("(struct-literal ");
+                self.write(&String::from_utf8_lossy(
+                    &self.source[name.span.start..name.span.end],
+                ));
+                for field in *fields {
+                    self.write(" ");
+                    self.write("(field $");
+                    self.write(&String::from_utf8_lossy(
+                        &self.source[field.name.span.start + 1..field.name.span.end],
+                    ));
+                    self.write(" ");
+                    self.visit_expr(field.value);
+                    self.write(")");
+                }
+                self.write(")");
+            }
             Expr::ArrayDimFetch { array, dim, .. } => {
                 self.write("(array-dim-fetch ");
                 self.visit_expr(array);
@@ -781,6 +908,13 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("->");
                 self.visit_expr(property);
                 self.write(")");
+            }
+            Expr::DotAccess { target, property, .. } => {
+                self.write("(dot ");
+                self.visit_expr(target);
+                self.write(" \"");
+                self.write(&String::from_utf8_lossy(property.text(self.source)));
+                self.write("\")");
             }
             Expr::ClassConstFetch {
                 class, constant, ..
@@ -1241,6 +1375,31 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("?");
                 self.visit_type(t);
             }
+            Type::ObjectShape(fields) => {
+                self.write("(object-shape");
+                for field in *fields {
+                    let name = String::from_utf8_lossy(field.name.text(self.source));
+                    self.write(" (field ");
+                    if field.optional {
+                        self.write(&format!("{name}?"));
+                    } else {
+                        self.write(&name);
+                    }
+                    self.write(" ");
+                    self.visit_type(field.ty);
+                    self.write(")");
+                }
+                self.write(")");
+            }
+            Type::Applied { base, args } => {
+                self.write("(type-app ");
+                self.visit_type(base);
+                for arg in *args {
+                    self.write(" ");
+                    self.visit_type(arg);
+                }
+                self.write(")");
+            }
         }
     }
 
@@ -1367,10 +1526,27 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 }
                 self.write(")");
             }
+            ClassMember::Embed {
+                attributes,
+                types,
+                ..
+            } => {
+                self.write("(embed");
+                for attr in *attributes {
+                    self.write(" ");
+                    self.visit_attribute_group(attr);
+                }
+                for t in *types {
+                    self.write(" ");
+                    self.visit_name(t);
+                }
+                self.write(")");
+            }
             ClassMember::Case {
                 attributes,
                 name,
                 value,
+                payload,
                 ..
             } => {
                 self.write("(enum-case");
@@ -1381,6 +1557,14 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write(" \"");
                 self.write(&String::from_utf8_lossy(name.text(self.source)));
                 self.write("\"");
+                if let Some(params) = payload {
+                    self.write(" (payload");
+                    for param in *params {
+                        self.write(" ");
+                        self.visit_param(param);
+                    }
+                    self.write(")");
+                }
                 if let Some(v) = value {
                     self.write(" = ");
                     self.visit_expr(v);
@@ -1456,6 +1640,23 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
         if item.unpack {
             self.write("...");
         }
+        self.visit_expr(item.value);
+        self.write(")");
+    }
+
+    fn visit_object_item(&mut self, item: &'ast ObjectItem<'ast>) {
+        self.write("(");
+        match item.key {
+            ObjectKey::Ident(token) => {
+                self.write(&String::from_utf8_lossy(token.text(self.source)));
+            }
+            ObjectKey::String(token) => {
+                self.write("\"");
+                self.write(&String::from_utf8_lossy(token.text(self.source)));
+                self.write("\"");
+            }
+        }
+        self.write(": ");
         self.visit_expr(item.value);
         self.write(")");
     }

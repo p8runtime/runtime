@@ -472,6 +472,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 | TokenKind::AmpersandFollowedByVarOrVararg
                 | TokenKind::AmpersandNotFollowedByVarOrVararg => BinaryOp::BitAnd,
                 TokenKind::Pipe => BinaryOp::BitOr,
+                TokenKind::PipeGt => BinaryOp::Pipe,
                 TokenKind::Caret => BinaryOp::BitXor,
                 TokenKind::LogicalAnd => BinaryOp::LogicalAnd,
                 TokenKind::LogicalOr | TokenKind::Insteadof => BinaryOp::LogicalOr,
@@ -2092,6 +2093,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             | BinaryOp::NotEqEq
             | BinaryOp::Spaceship => (110, 111),
             BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => (120, 121),
+
+            BinaryOp::Pipe => (125, 126),
 
             BinaryOp::ShiftLeft | BinaryOp::ShiftRight => (130, 131),
 

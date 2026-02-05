@@ -152,6 +152,11 @@ impl<'src> Lexer<'src> {
         }
     }
 
+    pub fn start_in_scripting(&mut self) {
+        self.state_stack.clear();
+        self.state_stack.push(LexerState::Scripting);
+    }
+
     pub fn set_mode(&mut self, mode: LexerMode) {
         self.mode = mode;
     }
@@ -1540,6 +1545,9 @@ impl<'src> Iterator for Lexer<'src> {
                 if self.peek() == Some(b'|') {
                     self.advance();
                     TokenKind::PipePipe
+                } else if self.peek() == Some(b'>') {
+                    self.advance();
+                    TokenKind::PipeGt
                 } else if self.peek() == Some(b'=') {
                     self.advance();
                     TokenKind::OrEq

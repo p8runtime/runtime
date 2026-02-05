@@ -2,7 +2,7 @@ use crate::compiler::chunk::{CatchEntry, CodeChunk, FuncParam, ReturnType, UserF
 use crate::core::interner::Interner;
 use crate::core::value::{Symbol, Val, Visibility};
 use crate::parser::ast::{
-    AssignOp, AttributeGroup, BinaryOp, CastKind, ClassKind, ClassMember, Expr, ExprId,
+    Arg, AssignOp, AttributeGroup, BinaryOp, CastKind, ClassKind, ClassMember, Expr, ExprId,
     IncludeKind, JsxAttribute, JsxChild, MagicConstKind, Name, ObjectKey, Stmt, StmtId, Type,
     UnaryOp, UseItem, UseKind,
 };
@@ -121,6 +121,7 @@ pub struct Emitter<'src> {
     use_aliases: UseAliases,
     // For eval(): inherit strict_types from parent scope if not explicitly declared
     inherited_strict_types: Option<bool>,
+    pipe_tmp_counter: u32,
 }
 
 impl<'src> Emitter<'src> {
@@ -139,6 +140,7 @@ impl<'src> Emitter<'src> {
             current_namespace: None,
             use_aliases: UseAliases::default(),
             inherited_strict_types: None,
+            pipe_tmp_counter: 0,
         }
     }
 
@@ -152,6 +154,12 @@ impl<'src> Emitter<'src> {
     pub fn with_inherited_strict_types(mut self, strict: bool) -> Self {
         self.inherited_strict_types = Some(strict);
         self
+    }
+
+    fn next_pipe_temp(&mut self) -> Symbol {
+        let name = format!("__phpx_pipe_tmp_{}", self.pipe_tmp_counter);
+        self.pipe_tmp_counter += 1;
+        self.interner.intern(name.as_bytes())
     }
 
     fn get_visibility(&self, modifiers: &[Token]) -> Visibility {
@@ -578,14 +586,19 @@ impl<'src> Emitter<'src> {
                     for type_name in *types {
                         let type_str = self.get_text(type_name.span);
                         let resolved = self.resolve_ref_name_bytes(type_str, NameKind::Class);
-                        let embed_sym = self.interner.intern(&resolved);
-                        let type_hint_idx =
-                            self.add_constant(Val::Resource(Rc::new(ReturnType::Named(embed_sym))));
+                        let embed_field = type_str
+                            .rsplit(|b| *b == b'\\')
+                            .find(|part| !part.is_empty())
+                            .unwrap_or(type_str);
+                        let embed_field_sym = self.interner.intern(embed_field);
+                        let embed_class_sym = self.interner.intern(&resolved);
+                        let type_hint_idx = self
+                            .add_constant(Val::Resource(Rc::new(ReturnType::Named(embed_class_sym))));
                         let default_idx = self.add_constant(Val::Uninitialized);
 
                         self.chunk.code.push(OpCode::DefProp(
                             class_sym,
-                            embed_sym,
+                            embed_field_sym,
                             default_idx as u16,
                             Visibility::Public,
                             type_hint_idx as u32,
@@ -593,7 +606,7 @@ impl<'src> Emitter<'src> {
                         ));
                         self.chunk
                             .code
-                            .push(OpCode::EmbedStruct(class_sym, embed_sym));
+                            .push(OpCode::EmbedStruct(class_sym, embed_field_sym));
                     }
                 }
                 ClassMember::TraitUse { traits, .. } => {
@@ -1954,6 +1967,9 @@ impl<'src> Emitter<'src> {
                 left, op, right, ..
             } => {
                 match op {
+                    BinaryOp::Pipe => {
+                        self.emit_pipe_expr(left, right);
+                    }
                     BinaryOp::And | BinaryOp::LogicalAnd => {
                         self.emit_expr(left);
                         let end_jump = self.chunk.code.len();
@@ -2770,6 +2786,106 @@ impl<'src> Emitter<'src> {
                 self.chunk
                     .code
                     .push(OpCode::Closure(const_idx as u32, use_syms.len() as u32));
+            }
+            Expr::ArrowFunction {
+                params,
+                by_ref,
+                is_static,
+                return_type,
+                expr,
+                ..
+            } => {
+                struct ParamInfo<'a> {
+                    name_span: crate::parser::span::Span,
+                    by_ref: bool,
+                    ty: Option<&'a Type<'a>>,
+                    default: Option<&'a Expr<'a>>,
+                    variadic: bool,
+                    attributes: &'a [AttributeGroup<'a>],
+                }
+
+                let mut param_infos = Vec::new();
+                for param in *params {
+                    param_infos.push(ParamInfo {
+                        name_span: param.name.span,
+                        by_ref: param.by_ref,
+                        ty: param.ty,
+                        default: param.default.as_ref().map(|e| *e),
+                        variadic: param.variadic,
+                        attributes: param.attributes,
+                    });
+                }
+
+                let closure_sym = self.interner.intern(b"{closure}");
+                let mut func_emitter = Emitter::new(self.source, self.interner);
+                func_emitter.file_path = self.file_path.clone();
+                func_emitter.current_class = self.current_class;
+                func_emitter.current_function = Some(closure_sym);
+                func_emitter.current_namespace = self.current_namespace;
+                func_emitter.use_aliases = self.use_aliases.clone();
+                func_emitter.chunk.strict_types = self.chunk.strict_types;
+
+                let mut param_syms = Vec::new();
+                for (i, info) in param_infos.iter().enumerate() {
+                    let p_name = func_emitter.get_text(info.name_span);
+                    if p_name.starts_with(b"$") {
+                        let sym = func_emitter.interner.intern(&p_name[1..]);
+                        let param_type = info.ty.and_then(|ty| func_emitter.convert_type(ty));
+                        let default_value =
+                            info.default.map(|expr| func_emitter.eval_constant_expr(expr));
+
+                        param_syms.push(FuncParam {
+                            name: sym,
+                            by_ref: info.by_ref,
+                            param_type,
+                            is_variadic: info.variadic,
+                            default_value,
+                            attributes: func_emitter.build_attribute_instances(info.attributes),
+                        });
+
+                        if info.variadic {
+                            func_emitter
+                                .chunk
+                                .code
+                                .push(OpCode::RecvVariadic(i as u32));
+                        } else if let Some(default_expr) = info.default {
+                            let val = func_emitter.eval_constant_expr(default_expr);
+                            let idx = func_emitter.add_constant(val);
+                            func_emitter
+                                .chunk
+                                .code
+                                .push(OpCode::RecvInit(i as u32, idx as u16));
+                        } else {
+                            func_emitter.chunk.code.push(OpCode::Recv(i as u32));
+                        }
+                    }
+                }
+
+                func_emitter.emit_expr(expr);
+                func_emitter.chunk.code.push(OpCode::Return);
+                func_emitter.chunk.name = closure_sym;
+                func_emitter.chunk.file_path = self.file_path.clone();
+
+                let ret_type = return_type.and_then(|rt| func_emitter.convert_type(rt));
+
+                let mut func_chunk = func_emitter.chunk;
+                func_chunk.returns_ref = *by_ref;
+
+                let user_func = UserFunc {
+                    params: param_syms,
+                    uses: Vec::new(),
+                    chunk: Rc::new(func_chunk),
+                    is_static: *is_static,
+                    is_generator: false,
+                    statics: Rc::new(RefCell::new(HashMap::new())),
+                    return_type: ret_type,
+                    attributes: Vec::new(),
+                };
+
+                let func_res = Val::Resource(Rc::new(user_func));
+                let const_idx = self.add_constant(func_res);
+
+                self.chunk.code.push(OpCode::Closure(const_idx as u32, 0));
             }
             Expr::Call { func, args, .. } => {
                 let has_unpack = args.iter().any(|arg| arg.unpack);
@@ -4179,6 +4295,261 @@ impl<'src> Emitter<'src> {
                 _ => Val::Null,
             },
             _ => Val::Null,
+        }
+    }
+
+    fn emit_pipe_expr(&mut self, left: ExprId, right: ExprId) {
+        let temp_sym = self.next_pipe_temp();
+        self.emit_expr(left);
+        self.chunk.code.push(OpCode::StoreVar(temp_sym));
+
+        let emit_pipe_arg = |this: &mut Self| {
+            this.chunk.code.push(OpCode::LoadVar(temp_sym));
+        };
+
+        let emit_pipe_args_no_unpack = |this: &mut Self, args: &[Arg<'_>], has_placeholder: bool| {
+            let mut arg_count = args.len();
+            if !has_placeholder {
+                emit_pipe_arg(this);
+                arg_count += 1;
+            }
+            for arg in args {
+                if matches!(*arg.value, Expr::VariadicPlaceholder { .. }) {
+                    emit_pipe_arg(this);
+                } else {
+                    this.emit_expr(arg.value);
+                }
+            }
+            arg_count
+        };
+
+        let emit_pipe_args_unpack = |this: &mut Self, args: &[Arg<'_>], has_placeholder: bool| {
+            if !has_placeholder {
+                emit_pipe_arg(this);
+                this.chunk.code.push(OpCode::SendFuncArg);
+            }
+            for arg in args {
+                if matches!(*arg.value, Expr::VariadicPlaceholder { .. }) {
+                    emit_pipe_arg(this);
+                    this.chunk.code.push(OpCode::SendFuncArg);
+                    continue;
+                }
+                this.emit_expr(arg.value);
+                if arg.unpack {
+                    this.chunk.code.push(OpCode::SendUnpack);
+                } else {
+                    this.chunk.code.push(OpCode::SendFuncArg);
+                }
+            }
+        };
+
+        match right {
+            Expr::Call { func, args, .. } => {
+                let has_unpack = args.iter().any(|arg| arg.unpack);
+                let has_placeholder = args
+                    .iter()
+                    .any(|arg| matches!(*arg.value, Expr::VariadicPlaceholder { .. }));
+                if !has_unpack {
+                    match func {
+                        Expr::Variable { span, .. } => {
+                            let name = self.get_text(*span);
+                            if name.starts_with(b"$") {
+                                self.emit_expr(func);
+                            } else {
+                                let resolved = self.resolve_ref_name_bytes(name, NameKind::Function);
+                                let idx = self.add_constant(Val::String(resolved.into()));
+                                self.chunk.code.push(OpCode::Const(idx as u16));
+                            }
+                        }
+                        _ => self.emit_expr(func),
+                    }
+
+                    let arg_count = emit_pipe_args_no_unpack(self, args, has_placeholder);
+                    self.chunk.code.push(OpCode::Call(arg_count as u8));
+                } else {
+                    match func {
+                        Expr::Variable { span, .. } => {
+                            let name = self.get_text(*span);
+                            if name.starts_with(b"$") {
+                                self.emit_expr(func);
+                                self.chunk.code.push(OpCode::InitDynamicCall);
+                            } else {
+                                let resolved = self.resolve_ref_name_bytes(name, NameKind::Function);
+                                let idx = self.add_constant(Val::String(resolved.into()));
+                                self.chunk.code.push(OpCode::Const(idx as u16));
+                                self.chunk.code.push(OpCode::InitFcallByName);
+                            }
+                        }
+                        _ => {
+                            self.emit_expr(func);
+                            self.chunk.code.push(OpCode::InitDynamicCall);
+                        }
+                    }
+
+                    emit_pipe_args_unpack(self, args, has_placeholder);
+                    self.chunk.code.push(OpCode::DoFcall);
+                }
+            }
+            Expr::MethodCall {
+                target,
+                method,
+                args,
+                ..
+            } => {
+                let has_unpack = args.iter().any(|arg| arg.unpack);
+                let has_placeholder = args
+                    .iter()
+                    .any(|arg| matches!(*arg.value, Expr::VariadicPlaceholder { .. }));
+                if !has_unpack {
+                    self.emit_expr(target);
+                    if let Expr::Variable { span, .. } = method {
+                        let name = self.get_text(*span);
+                        if !name.starts_with(b"$") {
+                            let sym = self.interner.intern(name);
+                            let arg_count = emit_pipe_args_no_unpack(self, args, has_placeholder);
+                            self.chunk
+                                .code
+                                .push(OpCode::CallMethod(sym, arg_count as u8));
+                        } else {
+                            self.emit_expr(method);
+                            let arg_count = emit_pipe_args_no_unpack(self, args, has_placeholder);
+                            self.chunk
+                                .code
+                                .push(OpCode::CallMethodDynamic(arg_count as u8));
+                        }
+                    } else {
+                        self.emit_expr(method);
+                        let arg_count = emit_pipe_args_no_unpack(self, args, has_placeholder);
+                        self.chunk
+                            .code
+                            .push(OpCode::CallMethodDynamic(arg_count as u8));
+                    }
+                } else {
+                    self.emit_expr(target);
+                    if let Expr::Variable { span, .. } = method {
+                        let name = self.get_text(*span);
+                        if !name.starts_with(b"$") {
+                            let idx = self.add_constant(Val::String(name.to_vec().into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        } else {
+                            self.emit_expr(method);
+                        }
+                    } else {
+                        self.emit_expr(method);
+                    }
+                    self.chunk.code.push(OpCode::InitMethodCall);
+                    emit_pipe_args_unpack(self, args, has_placeholder);
+                    self.chunk.code.push(OpCode::DoFcall);
+                }
+            }
+            Expr::StaticCall {
+                class,
+                method,
+                args,
+                ..
+            } => {
+                let has_unpack = args.iter().any(|arg| arg.unpack);
+                let has_placeholder = args
+                    .iter()
+                    .any(|arg| matches!(*arg.value, Expr::VariadicPlaceholder { .. }));
+                if !has_unpack {
+                    let mut class_emitted = false;
+                    if let Expr::Variable { span, .. } = class {
+                        let class_name = self.get_text(*span);
+                        if !class_name.starts_with(b"$") {
+                            let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                            let class_sym = self.interner.intern(&resolved);
+
+                            if let Expr::Variable {
+                                span: method_span,
+                                ..
+                            } = method
+                            {
+                                let method_name = self.get_text(*method_span);
+                                if !method_name.starts_with(b"$") {
+                                    let method_sym = self.interner.intern(method_name);
+                                    let arg_count =
+                                        emit_pipe_args_no_unpack(self, args, has_placeholder);
+                                    self.chunk.code.push(OpCode::CallStaticMethod(
+                                        class_sym,
+                                        method_sym,
+                                        arg_count as u8,
+                                    ));
+                                    class_emitted = true;
+                                }
+                            }
+
+                            if !class_emitted {
+                                let idx = self.add_constant(Val::String(resolved.into()));
+                                self.chunk.code.push(OpCode::Const(idx as u16));
+                                self.emit_expr(method);
+                                let arg_count =
+                                    emit_pipe_args_no_unpack(self, args, has_placeholder);
+                                self.chunk
+                                    .code
+                                    .push(OpCode::CallStaticMethodDynamic(arg_count as u8));
+                                class_emitted = true;
+                            }
+                        }
+                    }
+
+                    if !class_emitted {
+                        self.emit_expr(class);
+                        self.emit_expr(method);
+                        let arg_count = emit_pipe_args_no_unpack(self, args, has_placeholder);
+                        self.chunk
+                            .code
+                            .push(OpCode::CallStaticMethodDynamic(arg_count as u8));
+                    }
+                } else {
+                    let mut class_pushed = false;
+                    if let Expr::Variable { span, .. } = class {
+                        let class_name = self.get_text(*span);
+                        if !class_name.starts_with(b"$") {
+                            let resolved = self.resolve_ref_name_bytes(class_name, NameKind::Class);
+                            let idx = self.add_constant(Val::String(resolved.into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                            class_pushed = true;
+                        }
+                    }
+                    if !class_pushed {
+                        self.emit_expr(class);
+                    }
+
+                    if let Expr::Variable { span, .. } = method {
+                        let method_name = self.get_text(*span);
+                        if !method_name.starts_with(b"$") {
+                            let idx = self.add_constant(Val::String(method_name.to_vec().into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        } else {
+                            self.emit_expr(method);
+                        }
+                    } else {
+                        self.emit_expr(method);
+                    }
+
+                    self.chunk.code.push(OpCode::InitStaticMethodCall);
+                    emit_pipe_args_unpack(self, args, has_placeholder);
+                    self.chunk.code.push(OpCode::DoFcall);
+                }
+            }
+            Expr::Variable { span, .. } => {
+                let name = self.get_text(*span);
+                if name.starts_with(b"$") {
+                    self.emit_expr(right);
+                } else {
+                    let resolved = self.resolve_ref_name_bytes(name, NameKind::Function);
+                    let idx = self.add_constant(Val::String(resolved.into()));
+                    self.chunk.code.push(OpCode::Const(idx as u16));
+                }
+                self.chunk.code.push(OpCode::LoadVar(temp_sym));
+                self.chunk.code.push(OpCode::Call(1));
+            }
+            _ => {
+                self.emit_expr(right);
+                self.chunk.code.push(OpCode::LoadVar(temp_sym));
+                self.chunk.code.push(OpCode::Call(1));
+            }
         }
     }
 

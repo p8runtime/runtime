@@ -204,6 +204,7 @@ pub enum TokenKind {
     AmpersandFollowedByVarOrVararg,
     AmpersandNotFollowedByVarOrVararg,
     Pipe,   // |
+    PipeGt, // |>
     Caret,  // ^
     BitNot, // ~
     Sl,     // <<
