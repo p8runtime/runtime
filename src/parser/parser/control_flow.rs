@@ -398,9 +398,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
     pub(super) fn parse_break(&mut self) -> StmtId<'ast> {
         let start = self.current_token.span.start;
+        let keyword_span = self.current_token.span;
         self.bump(); // Eat break
 
-        let level = if self.current_token.kind != TokenKind::SemiColon
+        let level = if !(self.is_phpx()
+            && self.has_line_terminator_between(keyword_span, self.current_token.span))
+            && self.current_token.kind != TokenKind::SemiColon
             && self.current_token.kind != TokenKind::CloseTag
             && self.current_token.kind != TokenKind::Eof
             && self.current_token.kind != TokenKind::CloseBrace
@@ -424,9 +427,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
     pub(super) fn parse_continue(&mut self) -> StmtId<'ast> {
         let start = self.current_token.span.start;
+        let keyword_span = self.current_token.span;
         self.bump(); // Eat continue
 
-        let level = if self.current_token.kind != TokenKind::SemiColon
+        let level = if !(self.is_phpx()
+            && self.has_line_terminator_between(keyword_span, self.current_token.span))
+            && self.current_token.kind != TokenKind::SemiColon
             && self.current_token.kind != TokenKind::CloseTag
             && self.current_token.kind != TokenKind::Eof
             && self.current_token.kind != TokenKind::CloseBrace

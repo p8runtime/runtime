@@ -13,6 +13,8 @@ mod definitions;
 mod expr;
 mod stmt;
 mod types;
+#[cfg(test)]
+mod tests;
 
 #[allow(dead_code)]
 pub trait TokenSource<'src> {
@@ -27,6 +29,7 @@ pub struct Parser<'src, 'ast> {
     pub(super) arena: &'ast Bump,
     pub(super) current_token: Token,
     pub(super) next_token: Token,
+    pub(super) prev_token: Token,
     pub(super) errors: std::vec::Vec<ParseError>,
     pub(super) current_doc_comment: Option<Span>,
     pub(super) next_doc_comment: Option<Span>,
@@ -61,6 +64,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 kind: TokenKind::Eof,
                 span: Span::default(),
             },
+            prev_token: Token {
+                kind: TokenKind::Eof,
+                span: Span::default(),
+            },
             errors: std::vec::Vec::new(),
             current_doc_comment: None,
             next_doc_comment: None,
@@ -81,6 +88,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     fn bump(&mut self) {
+        self.prev_token = self.current_token;
         self.current_token = self.next_token;
         self.current_doc_comment = self.next_doc_comment;
         self.next_doc_comment = None;
@@ -98,6 +106,21 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
     }
 
+    fn has_line_terminator_between(&self, left: Span, right: Span) -> bool {
+        if right.start <= left.end {
+            return false;
+        }
+        let slice = self.lexer.slice(Span::new(left.end, right.start));
+        slice.iter().any(|&b| b == b'\n')
+    }
+
+    fn can_insert_implicit_semicolon(&self) -> bool {
+        if !self.is_phpx() {
+            return false;
+        }
+        self.has_line_terminator_between(self.prev_token.span, self.current_token.span)
+    }
+
     fn expect_semicolon(&mut self) {
         if self.current_token.kind == TokenKind::SemiColon {
             self.bump();
@@ -105,6 +128,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             // Implicit semicolon at close tag
         } else if self.current_token.kind == TokenKind::Eof {
             // Implicit semicolon at EOF
+        } else if self.can_insert_implicit_semicolon() {
+            // Implicit semicolon at line terminator (PHPX only)
         } else {
             // Error: Missing semicolon
             self.errors.push(ParseError::new(self.current_token.span, "Missing semicolon"));

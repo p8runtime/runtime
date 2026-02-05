@@ -320,9 +320,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
     fn parse_return(&mut self) -> StmtId<'ast> {
         let start = self.current_token.span.start;
+        let keyword_span = self.current_token.span;
         self.bump();
 
-        let expr = if matches!(
+        let expr = if self.is_phpx()
+            && self.has_line_terminator_between(keyword_span, self.current_token.span)
+        {
+            None
+        } else if matches!(
             self.current_token.kind,
             TokenKind::SemiColon | TokenKind::CloseTag | TokenKind::Eof | TokenKind::CloseBrace
         ) {
