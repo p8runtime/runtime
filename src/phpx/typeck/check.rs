@@ -35,6 +35,26 @@ struct FunctionSig {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExternalTypeParamSig {
+    pub name: String,
+    pub constraint: Option<Type>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalParamSig {
+    pub ty: Option<Type>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalFunctionSig {
+    pub type_params: Vec<ExternalTypeParamSig>,
+    pub params: Vec<ExternalParamSig>,
+    pub return_type: Option<Type>,
+    pub variadic: bool,
+}
+
+#[derive(Debug, Clone)]
 struct MethodSig {
     params: Vec<ParamSig>,
     return_type: Option<Type>,
@@ -149,6 +169,22 @@ pub fn check_program_with_path(
     }
 }
 
+pub fn check_program_with_path_and_externals(
+    program: &Program,
+    source: &[u8],
+    file_path: Option<&Path>,
+    externals: &HashMap<String, ExternalFunctionSig>,
+) -> Result<(), Vec<TypeError>> {
+    let mut ctx = CheckContext::new_with_externals(source, file_path, externals);
+    ctx.check_program(program);
+
+    if ctx.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ctx.errors)
+    }
+}
+
 pub fn format_type_errors(errors: &[TypeError], source: &[u8]) -> String {
     let mut out = String::new();
     for (idx, err) in errors.iter().enumerate() {
@@ -157,6 +193,70 @@ pub fn format_type_errors(errors: &[TypeError], source: &[u8]) -> String {
         }
         out.push_str(&err.to_human_readable(source));
     }
+    out
+}
+
+pub fn external_functions_from_stub(
+    program: &Program,
+    source: &[u8],
+) -> HashMap<String, ExternalFunctionSig> {
+    let mut ctx = CheckContext::new(source, None);
+    ctx.collect_struct_names(program);
+    ctx.collect_interface_names(program);
+    ctx.collect_enum_names(program);
+    ctx.collect_type_aliases(program);
+    ctx.collect_struct_fields(program);
+    ctx.collect_interface_methods(program);
+    ctx.collect_struct_methods(program);
+    ctx.collect_enum_methods(program);
+    ctx.collect_enum_cases(program);
+
+    let mut out = HashMap::new();
+    for stmt in program.statements.iter() {
+        let Stmt::Function {
+            name,
+            type_params,
+            params,
+            return_type,
+            ..
+        } = stmt
+        else {
+            continue;
+        };
+        let (type_param_sigs, type_param_set) = ctx.collect_type_param_sigs(type_params);
+        let mut external_params = Vec::new();
+        let mut variadic = false;
+        for param in params.iter() {
+            if param.variadic {
+                variadic = true;
+            }
+            let required = param.default.is_none() && !param.variadic;
+            let ty = param
+                .ty
+                .map(|ty| ctx.resolve_type_with_params(ty, &type_param_set));
+            external_params.push(ExternalParamSig { ty, required });
+        }
+        let return_ty = return_type
+            .map(|ty| ctx.resolve_type_with_params(ty, &type_param_set));
+        let type_params = type_param_sigs
+            .iter()
+            .map(|sig| ExternalTypeParamSig {
+                name: sig.name.clone(),
+                constraint: sig.constraint.clone(),
+            })
+            .collect();
+        let fn_name = token_text(source, name.span);
+        out.insert(
+            fn_name,
+            ExternalFunctionSig {
+                type_params,
+                params: external_params,
+                return_type: return_ty,
+                variadic,
+            },
+        );
+    }
+
     out
 }
 
@@ -194,6 +294,18 @@ impl<'a> CheckContext<'a> {
             type_aliases: HashMap::new(),
             resolved_aliases: HashMap::new(),
         }
+    }
+
+    fn new_with_externals(
+        source: &'a [u8],
+        file_path: Option<&Path>,
+        externals: &HashMap<String, ExternalFunctionSig>,
+    ) -> Self {
+        let mut ctx = Self::new(source, file_path);
+        for (name, sig) in externals {
+            ctx.functions.insert(name.clone(), sig.to_internal());
+        }
+        ctx
     }
 
     fn check_program(&mut self, program: &Program<'a>) {
@@ -3214,6 +3326,31 @@ impl<'a> CheckContext<'a> {
                     message,
                 });
             }
+        }
+    }
+}
+
+impl ExternalFunctionSig {
+    fn to_internal(&self) -> FunctionSig {
+        FunctionSig {
+            type_params: self
+                .type_params
+                .iter()
+                .map(|param| TypeParamSig {
+                    name: param.name.clone(),
+                    constraint: param.constraint.clone(),
+                })
+                .collect(),
+            params: self
+                .params
+                .iter()
+                .map(|param| ParamSig {
+                    ty: param.ty.clone(),
+                    required: param.required,
+                })
+                .collect(),
+            return_type: self.return_type.clone(),
+            variadic: self.variadic,
         }
     }
 }
