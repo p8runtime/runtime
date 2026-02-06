@@ -1,4 +1,6 @@
-use crate::builtins::json::{decode_json_to_handle, encode_handle_to_json};
+#[cfg(target_arch = "wasm32")]
+use crate::builtins::json::decode_json_to_handle;
+use crate::builtins::json::encode_handle_to_json;
 use crate::core::value::{ArrayData, Handle, Val};
 use crate::vm::engine::VM;
 #[cfg(target_arch = "wasm32")]
@@ -25,6 +27,13 @@ unsafe extern "C" {
 pub fn php_deka_wasm_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() < 2 {
         return Err("__deka_wasm_call() expects at least 2 parameters".into());
+    }
+    let (caller_file, caller_line) = vm.current_file_line();
+    if !is_internal_bridge_caller_path(&caller_file) {
+        return Err(format!(
+            "__deka_wasm_call() is internal-only (caller: {}:{})",
+            caller_file, caller_line
+        ));
     }
 
     let module_bytes = vm.value_to_string(args[0])?;
@@ -98,5 +107,44 @@ pub fn php_deka_wasm_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
         let assoc = module_id.trim_matches('\0') == "__deka_db";
         decode_json_to_handle(vm, &parsed, assoc, 512)
             .map_err(|err| format!("wasm decode error: {}", err.message()))
+    }
+}
+
+fn is_internal_bridge_caller_path(file: &str) -> bool {
+    if file.is_empty() || file == "unknown" {
+        return false;
+    }
+    let mut saw_php_modules = false;
+    for seg in file.split(['/', '\\']).filter(|seg| !seg.is_empty()) {
+        if !saw_php_modules {
+            if seg == "php_modules" {
+                saw_php_modules = true;
+            }
+            continue;
+        }
+        return seg == "internals";
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_internal_bridge_caller_path;
+
+    #[test]
+    fn internal_bridge_path_allows_internal_modules() {
+        assert!(is_internal_bridge_caller_path(
+            "/app/php_modules/internals/wasm.phpx"
+        ));
+        assert!(is_internal_bridge_caller_path(
+            "C:\\repo\\php_modules\\internals\\wasm.phpx"
+        ));
+    }
+
+    #[test]
+    fn internal_bridge_path_rejects_non_internal_modules() {
+        assert!(!is_internal_bridge_caller_path("/app/index.phpx"));
+        assert!(!is_internal_bridge_caller_path("/app/php_modules/db/index.phpx"));
+        assert!(!is_internal_bridge_caller_path("unknown"));
     }
 }

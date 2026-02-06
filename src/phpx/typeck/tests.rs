@@ -1,8 +1,9 @@
 use bumpalo::Bump;
+use std::path::Path;
 
 use crate::parser::lexer::Lexer;
 use crate::parser::parser::{Parser, ParserMode};
-use crate::phpx::typeck::check_program;
+use crate::phpx::typeck::{check_program, check_program_with_path};
 
 fn check(code: &str) -> Result<(), String> {
     let arena = Bump::new();
@@ -12,6 +13,23 @@ fn check(code: &str) -> Result<(), String> {
         return Err("parse error".to_string());
     }
     check_program(&program, code.as_bytes()).map_err(|errs| {
+        let mut out = String::new();
+        for err in errs {
+            out.push_str(&err.message);
+            out.push('\n');
+        }
+        out
+    })
+}
+
+fn check_with_path(code: &str, path: &str) -> Result<(), String> {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+    if !program.errors.is_empty() {
+        return Err("parse error".to_string());
+    }
+    check_program_with_path(&program, code.as_bytes(), Some(Path::new(path))).map_err(|errs| {
         let mut out = String::new();
         for err in errs {
             out.push_str(&err.message);
@@ -76,6 +94,23 @@ fn union_inference_allows_multiple_assignments() {
 fn call_site_argument_mismatch_errors() {
     let code = "<?php function f(int $x) {} f(\"nope\");";
     assert!(check(code).is_err());
+}
+
+#[test]
+fn deka_wasm_call_forbidden_outside_internals() {
+    let code = "__deka_wasm_call('__deka_db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/index.phpx");
+    assert!(res.is_err());
+    assert!(res
+        .unwrap_err()
+        .contains("__deka_wasm_call is internal-only"));
+}
+
+#[test]
+fn deka_wasm_call_allowed_inside_internals() {
+    let code = "__deka_wasm_call('__deka_db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/php_modules/internals/wasm.phpx");
+    assert!(res.is_ok());
 }
 
 #[test]

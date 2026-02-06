@@ -2570,6 +2570,13 @@ impl<'a> CheckContext<'a> {
         if name.starts_with('$') {
             return Type::Unknown;
         }
+        if name == "__deka_wasm_call" && !self.allow_internal_bridge_call() {
+            self.errors.push(TypeError {
+                span: Span::new(span.start, span.end),
+                message: "__deka_wasm_call is internal-only; import public modules instead (for example: db, postgres, mysql, sqlite, tcp, tls, encoding/json)".to_string(),
+            });
+            return Type::Unknown;
+        }
         let Some(sig) = self.functions.get(&name) else {
             return Type::Unknown;
         };
@@ -2688,6 +2695,14 @@ impl<'a> CheckContext<'a> {
 
         let ret = sig.return_type.clone().unwrap_or(Type::Unknown);
         substitute_type(&ret, &inferred)
+    }
+
+    fn allow_internal_bridge_call(&self) -> bool {
+        let Some(path) = self.file_path.as_deref() else {
+            // Unit tests and synthetic checks may not carry a path.
+            return true;
+        };
+        path_has_php_modules_internals(path)
     }
 
     fn check_method_call_signature(
@@ -3945,4 +3960,22 @@ fn normalize_path(path: PathBuf) -> PathBuf {
         }
     }
     out
+}
+
+fn path_has_php_modules_internals(path: &Path) -> bool {
+    let mut saw_php_modules = false;
+    for component in path.components() {
+        let Component::Normal(seg) = component else {
+            continue;
+        };
+        let seg = seg.to_string_lossy();
+        if !saw_php_modules {
+            if seg == "php_modules" {
+                saw_php_modules = true;
+            }
+            continue;
+        }
+        return seg == "internals";
+    }
+    false
 }
