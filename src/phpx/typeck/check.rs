@@ -2907,6 +2907,80 @@ impl<'a> CheckContext<'a> {
                         });
                     }
                 }
+                "relation" => {
+                    if ann.args.len() != 3 {
+                        self.errors.push(TypeError {
+                            span: ann.span,
+                            message: "Annotation '@relation' requires exactly three string arguments: kind, model, foreignKey".to_string(),
+                        });
+                    } else {
+                        let normalize = |raw: &[u8]| {
+                            let s = String::from_utf8_lossy(raw).to_string();
+                            s.trim_matches('"').trim_matches('\'').to_string()
+                        };
+                        let kind = if let Expr::String { value, .. } = ann.args[0] {
+                            Some(normalize(value))
+                        } else {
+                            None
+                        };
+                        let model = if let Expr::String { value, .. } = ann.args[1] {
+                            Some(normalize(value))
+                        } else {
+                            None
+                        };
+                        let foreign_key = if let Expr::String { value, .. } = ann.args[2] {
+                            Some(normalize(value))
+                        } else {
+                            None
+                        };
+
+                        if kind.is_none() {
+                            self.errors.push(TypeError {
+                                span: ann.args[0].span(),
+                                message: "Annotation '@relation' first argument (kind) must be a string literal".to_string(),
+                            });
+                        }
+                        if model.is_none() {
+                            self.errors.push(TypeError {
+                                span: ann.args[1].span(),
+                                message: "Annotation '@relation' second argument (model) must be a string literal".to_string(),
+                            });
+                        }
+                        if foreign_key.is_none() {
+                            self.errors.push(TypeError {
+                                span: ann.args[2].span(),
+                                message: "Annotation '@relation' third argument (foreignKey) must be a string literal".to_string(),
+                            });
+                        }
+
+                        if let Some(kind) = kind {
+                            if kind != "hasMany" && kind != "belongsTo" && kind != "hasOne" {
+                                self.errors.push(TypeError {
+                                    span: ann.args[0].span(),
+                                    message: "Annotation '@relation' kind must be one of: hasMany, belongsTo, hasOne".to_string(),
+                                });
+                            }
+                            if kind == "hasMany" {
+                                let is_array = match field_type {
+                                    Some(Type::Array) => true,
+                                    Some(Type::Applied { base, .. }) => {
+                                        base.eq_ignore_ascii_case("array")
+                                    }
+                                    _ => false,
+                                };
+                                if !is_array {
+                                    self.errors.push(TypeError {
+                                        span: ann.span,
+                                        message: format!(
+                                            "Annotation '@relation(\"hasMany\", ...)' requires array field type on '{}::{}'",
+                                            struct_name, field_name
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {
                     self.errors.push(TypeError {
                         span: ann.span,

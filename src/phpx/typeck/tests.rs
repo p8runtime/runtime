@@ -114,6 +114,25 @@ fn struct_field_annotation_map_requires_string_arg() {
 }
 
 #[test]
+fn struct_field_annotation_relation_basic_ok() {
+    let code = "struct Post { $id: int @id; } struct User { $posts: array<Post> @relation(\"hasMany\", \"Post\", \"authorId\"); }";
+    let res = check(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
+fn struct_field_annotation_relation_requires_string_args() {
+    let code = "struct User { $posts: array<Post> @relation(123, \"Post\", \"authorId\"); }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn struct_field_annotation_relation_requires_hasmany_array_field() {
+    let code = "struct User { $post: Post @relation(\"hasMany\", \"Post\", \"authorId\"); }";
+    assert!(check(code).is_err());
+}
+
+#[test]
 fn return_type_widening_allows_int_to_float() {
     let code = "<?php function f(): float { return 1; }";
     assert!(check(code).is_ok());
