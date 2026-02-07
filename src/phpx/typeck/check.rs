@@ -3970,18 +3970,37 @@ fn resolve_wasm_stub(specifier: &str, file_path: &Path, modules_root: &Path) -> 
     let current_dir = file_path
         .parent()
         .ok_or_else(|| "wasm import requires a parent directory".to_string())?;
+    let is_project_alias = specifier.starts_with("@/");
     let base_dir = if specifier.starts_with('.') {
-        current_dir
+        current_dir.to_path_buf()
+    } else if is_project_alias {
+        modules_root
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| "wasm import alias '@/...' requires project root".to_string())?
+    } else {
+        modules_root.to_path_buf()
+    };
+
+    let spec_path = if let Some(rest) = specifier.strip_prefix("@/") {
+        rest
+    } else {
+        specifier
+    };
+
+    let root_path = normalize_path(base_dir.join(spec_path));
+    let allowed_root = if is_project_alias {
+        modules_root.parent().unwrap_or(modules_root)
     } else {
         modules_root
     };
-
-    let root_path = normalize_path(base_dir.join(specifier));
-    if !root_path.starts_with(modules_root) {
-        return Err(format!(
-            "wasm import must resolve inside php_modules/ ({}).",
-            specifier
-        ));
+    if !root_path.starts_with(allowed_root) {
+        let scope = if is_project_alias {
+            "project root"
+        } else {
+            "php_modules/"
+        };
+        return Err(format!("wasm import must resolve inside {} ({}).", scope, specifier));
     }
 
     let manifest_path = root_path.join("deka.json");
