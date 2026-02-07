@@ -112,7 +112,8 @@ pub fn php_deka_wasm_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
         }
 
         let module_id = String::from_utf8_lossy(&module_bytes);
-        let assoc = module_id.trim_matches('\0') == "__deka_db";
+        let module_name = module_id.trim_matches('\0');
+        let assoc = module_name.starts_with("__deka_");
         decode_json_to_handle(vm, &parsed, assoc, 512)
             .map_err(|err| format!("wasm decode error: {}", err.message()))
     }
