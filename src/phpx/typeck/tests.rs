@@ -133,6 +133,18 @@ fn struct_field_annotation_relation_requires_hasmany_array_field() {
 }
 
 #[test]
+fn struct_field_annotation_relation_model_mismatch_errors() {
+    let code = "struct Post { $id: int @id; } struct User { $posts: array<Post> @relation(\"hasMany\", \"User\", \"authorId\"); }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn struct_field_annotation_relation_belongsto_fk_missing_errors() {
+    let code = "struct User { $id: int @id; } struct Post { $author: User @relation(\"belongsTo\", \"User\", \"authorId\"); }";
+    assert!(check(code).is_err());
+}
+
+#[test]
 fn return_type_widening_allows_int_to_float() {
     let code = "<?php function f(): float { return 1; }";
     assert!(check(code).is_ok());

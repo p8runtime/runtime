@@ -2134,6 +2134,31 @@ impl<'a> CheckContext<'a> {
                 let mut embeds = Vec::new();
                 let mut embed_names = HashSet::new();
                 let mut defaults = BTreeSet::new();
+                let mut declared_fields: BTreeMap<String, Type> = BTreeMap::new();
+
+                // First pass: collect declared fields so annotation validation can
+                // validate relation metadata against sibling fields.
+                for member in members.iter() {
+                    match member {
+                        ClassMember::Property { ty, entries, .. } => {
+                            let field_type = ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown);
+                            for entry in entries.iter() {
+                                let field_name = token_text(self.source, entry.name.span);
+                                let field_name = field_name.trim_start_matches('$').to_string();
+                                declared_fields.insert(field_name, field_type.clone());
+                            }
+                        }
+                        ClassMember::PropertyHook { ty, name, .. } => {
+                            let field_name = token_text(self.source, name.span);
+                            let field_name = field_name.trim_start_matches('$').to_string();
+                            let field_type =
+                                ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown);
+                            declared_fields.insert(field_name, field_type);
+                        }
+                        _ => {}
+                    }
+                }
+
                 for member in members.iter() {
                     match member {
                         ClassMember::Property { ty, entries, .. } => {
@@ -2146,6 +2171,7 @@ impl<'a> CheckContext<'a> {
                                     &field_name,
                                     entry,
                                     field_type.as_ref(),
+                                    &declared_fields,
                                 );
                                 if embed_names.contains(&field_name) {
                                     self.errors.push(TypeError {
@@ -2840,6 +2866,7 @@ impl<'a> CheckContext<'a> {
         field_name: &str,
         entry: &PropertyEntry<'a>,
         field_type: Option<&Type>,
+        declared_fields: &BTreeMap<String, Type>,
     ) {
         let mut seen = HashSet::new();
         for ann in entry.annotations.iter() {
@@ -2960,6 +2987,20 @@ impl<'a> CheckContext<'a> {
                                     message: "Annotation '@relation' kind must be one of: hasMany, belongsTo, hasOne".to_string(),
                                 });
                             }
+                            let inferred_model = relation_model_from_field_type(field_type, &kind);
+                            if let Some(expected_model) = inferred_model {
+                                if let Some(ref model) = model {
+                                    if *model != expected_model {
+                                        self.errors.push(TypeError {
+                                            span: ann.args[1].span(),
+                                            message: format!(
+                                                "Annotation '@relation' model '{}' does not match field type model '{}'",
+                                                model, expected_model
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
                             if kind == "hasMany" {
                                 let is_array = match field_type {
                                     Some(Type::Array) => true,
@@ -2976,6 +3017,27 @@ impl<'a> CheckContext<'a> {
                                             struct_name, field_name
                                         ),
                                     });
+                                }
+                            }
+                            if kind == "belongsTo" || kind == "hasOne" {
+                                if let Some(ref fk) = foreign_key {
+                                    if fk == field_name {
+                                        self.errors.push(TypeError {
+                                            span: ann.args[2].span(),
+                                            message: format!(
+                                                "Annotation '@relation' foreignKey '{}' cannot reference relation field '{}::{}'",
+                                                fk, struct_name, field_name
+                                            ),
+                                        });
+                                    } else if !declared_fields.contains_key(fk) {
+                                        self.errors.push(TypeError {
+                                            span: ann.args[2].span(),
+                                            message: format!(
+                                                "Annotation '@relation' foreignKey '{}' was not found on struct '{}'",
+                                                fk, struct_name
+                                            ),
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -3573,6 +3635,28 @@ fn enum_backed_primitive(ty: &AstType<'_>) -> Option<PrimitiveType> {
             TokenKind::TypeString => Some(PrimitiveType::String),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+fn relation_model_from_field_type(field_type: Option<&Type>, kind: &str) -> Option<String> {
+    let field_type = field_type?;
+    if kind == "hasMany" {
+        match field_type {
+            Type::Applied { base, args } if base.eq_ignore_ascii_case("array") => {
+                if args.len() == 1 {
+                    if let Type::Struct(name) = &args[0] {
+                        return Some(name.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+        return None;
+    }
+
+    match field_type {
+        Type::Struct(name) => Some(name.clone()),
         _ => None,
     }
 }
