@@ -141,6 +141,75 @@ fn parses_struct_literal_in_phpx() {
 }
 
 #[test]
+fn parses_struct_field_annotations_in_phpx() {
+    let code = "struct User { $id: int @id @autoIncrement; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "unexpected parse errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| !matches!(***s, Stmt::Nop { .. }))
+        .expect("expected struct stmt");
+
+    match **stmt {
+        Stmt::Class { kind, members, .. } => {
+            assert_eq!(kind, ClassKind::Struct);
+            let field_member = members
+                .iter()
+                .find(|m| matches!(m, ClassMember::Property { .. }))
+                .expect("expected struct field");
+            match field_member {
+                ClassMember::Property { entries, .. } => {
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(entries[0].annotations.len(), 2);
+                }
+                _ => panic!("expected property member"),
+            }
+        }
+        other => panic!("expected struct, got {:?}", other),
+    }
+}
+
+#[test]
+fn parses_struct_field_annotation_args_in_phpx() {
+    let code = "struct User { $email: string @index(\"users_email_idx\"); }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "unexpected parse errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| !matches!(***s, Stmt::Nop { .. }))
+        .expect("expected struct stmt");
+
+    match **stmt {
+        Stmt::Class { kind, members, .. } => {
+            assert_eq!(kind, ClassKind::Struct);
+            let field_member = members
+                .iter()
+                .find(|m| matches!(m, ClassMember::Property { .. }))
+                .expect("expected struct field");
+            match field_member {
+                ClassMember::Property { entries, .. } => {
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(entries[0].annotations.len(), 1);
+                    assert_eq!(entries[0].annotations[0].args.len(), 1);
+                }
+                _ => panic!("expected property member"),
+            }
+        }
+        other => panic!("expected struct, got {:?}", other),
+    }
+}
+
+#[test]
 fn parses_jsx_element_in_phpx() {
     let code = "<?php $v = <div class=\"x\">Hello { $name }</div>;";
     let arena = Bump::new();

@@ -1,8 +1,8 @@
 use super::{ParseError, Parser};
 use crate::parser::ast::{
-    Arg, AttributeGroup, ClassConst, ClassKind, ClassMember, Expr, ExprId, Name, Param,
-    PropertyEntry, PropertyHook, PropertyHookBody, Stmt, StmtId, TraitAdaptation, TraitMethodRef,
-    Type, TypeParam,
+    Arg, AttributeGroup, ClassConst, ClassKind, ClassMember, Expr, ExprId, FieldAnnotation, Name,
+    Param, PropertyEntry, PropertyHook, PropertyHookBody, Stmt, StmtId, TraitAdaptation,
+    TraitMethodRef, Type, TypeParam,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::parser::span::Span;
@@ -1046,11 +1046,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     None
                 };
 
+                let annotations = self.parse_struct_field_annotations();
                 self.expect_semicolon();
 
                 let entry = PropertyEntry {
                     name,
                     default,
+                    annotations: self.arena.alloc_slice_copy(&annotations),
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -1156,6 +1158,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 entries.push(crate::parser::ast::PropertyEntry {
                     name,
                     default,
+                    annotations: &[],
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -1186,6 +1189,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     entries.push(crate::parser::ast::PropertyEntry {
                         name,
                         default,
+                        annotations: &[],
                         span: Span::new(
                             name.span.start,
                             default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -1370,6 +1374,62 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
         }
         hooks
+    }
+
+    fn parse_struct_field_annotations(&mut self) -> Vec<FieldAnnotation<'ast>> {
+        let mut annotations = std::vec::Vec::new();
+        while self.current_token.kind == TokenKind::At {
+            let start = self.current_token.span.start;
+            self.bump(); // eat @
+
+            let name = if self.current_token.kind == TokenKind::Identifier
+                || self.current_token.kind.is_semi_reserved()
+            {
+                let token = self.arena.alloc(self.current_token);
+                self.bump();
+                token
+            } else {
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected annotation name after '@'",
+                ));
+                break;
+            };
+
+            let mut args = std::vec::Vec::new();
+            let mut end = name.span.end;
+            if self.current_token.kind == TokenKind::OpenParen {
+                self.bump(); // eat (
+                if self.current_token.kind != TokenKind::CloseParen {
+                    loop {
+                        let arg = self.parse_expr(0);
+                        end = arg.span().end;
+                        args.push(arg);
+                        if self.current_token.kind == TokenKind::Comma {
+                            self.bump();
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                if self.current_token.kind == TokenKind::CloseParen {
+                    end = self.current_token.span.end;
+                    self.bump(); // eat )
+                } else {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected ')' after annotation arguments",
+                    ));
+                }
+            }
+
+            annotations.push(FieldAnnotation {
+                name,
+                args: self.arena.alloc_slice_copy(&args),
+                span: Span::new(start, end),
+            });
+        }
+        annotations
     }
 
     fn validate_modifiers(&mut self, modifiers: &[Token], ctx: ModifierContext) {

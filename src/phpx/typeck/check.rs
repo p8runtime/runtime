@@ -2141,6 +2141,12 @@ impl<'a> CheckContext<'a> {
                             for entry in entries.iter() {
                                 let field_name = token_text(self.source, entry.name.span);
                                 let field_name = field_name.trim_start_matches('$').to_string();
+                                self.validate_struct_field_annotations(
+                                    &class_name,
+                                    &field_name,
+                                    entry,
+                                    field_type.as_ref(),
+                                );
                                 if embed_names.contains(&field_name) {
                                     self.errors.push(TypeError {
                                         span: entry.name.span,
@@ -2570,10 +2576,15 @@ impl<'a> CheckContext<'a> {
         if name.starts_with('$') {
             return Type::Unknown;
         }
-        if name == "__deka_wasm_call" && !self.allow_internal_bridge_call() {
+        if (name == "__deka_wasm_call" || name == "__bridge" || name == "__deka_bridge")
+            && !self.allow_internal_bridge_call()
+        {
             self.errors.push(TypeError {
                 span: Span::new(span.start, span.end),
-                message: "__deka_wasm_call is internal-only; import public modules instead (for example: db, postgres, mysql, sqlite, tcp, tls, encoding/json)".to_string(),
+                message: format!(
+                    "{} is internal-only; import public modules instead (for example: db, postgres, mysql, sqlite, tcp, tls, encoding/json)",
+                    name
+                ),
             });
             return Type::Unknown;
         }
@@ -2702,7 +2713,7 @@ impl<'a> CheckContext<'a> {
             // Unit tests and synthetic checks may not carry a path.
             return true;
         };
-        path_has_php_modules_internals(path)
+        path_has_php_modules_bridge(path)
     }
 
     fn check_method_call_signature(
@@ -2821,6 +2832,105 @@ impl<'a> CheckContext<'a> {
         }
 
         sig.return_type.clone().unwrap_or(Type::Unknown)
+    }
+
+    fn validate_struct_field_annotations(
+        &mut self,
+        struct_name: &str,
+        field_name: &str,
+        entry: &PropertyEntry<'a>,
+        field_type: Option<&Type>,
+    ) {
+        let mut seen = HashSet::new();
+        for ann in entry.annotations.iter() {
+            let ann_name = token_text(self.source, ann.name.span).to_string();
+            if !seen.insert(ann_name.clone()) {
+                self.errors.push(TypeError {
+                    span: ann.span,
+                    message: format!(
+                        "Duplicate annotation '@{}' on struct field '{}::{}'",
+                        ann_name, struct_name, field_name
+                    ),
+                });
+                continue;
+            }
+
+            match ann_name.as_str() {
+                "id" | "unique" | "autoIncrement" => {
+                    if !ann.args.is_empty() {
+                        self.errors.push(TypeError {
+                            span: ann.span,
+                            message: format!(
+                                "Annotation '@{}' does not accept arguments",
+                                ann_name
+                            ),
+                        });
+                    }
+                }
+                "index" => {
+                    if ann.args.len() > 1 {
+                        self.errors.push(TypeError {
+                            span: ann.span,
+                            message: "Annotation '@index' accepts at most one argument"
+                                .to_string(),
+                        });
+                    }
+                    if ann.args.len() == 1 && !matches!(ann.args[0], Expr::String { .. }) {
+                        self.errors.push(TypeError {
+                            span: ann.args[0].span(),
+                            message:
+                                "Annotation '@index' argument must be a string literal".to_string(),
+                        });
+                    }
+                }
+                "map" => {
+                    if ann.args.len() != 1 {
+                        self.errors.push(TypeError {
+                            span: ann.span,
+                            message:
+                                "Annotation '@map' requires exactly one string argument".to_string(),
+                        });
+                    } else if !matches!(ann.args[0], Expr::String { .. }) {
+                        self.errors.push(TypeError {
+                            span: ann.args[0].span(),
+                            message: "Annotation '@map' argument must be a string literal"
+                                .to_string(),
+                        });
+                    }
+                }
+                "default" => {
+                    if ann.args.len() != 1 {
+                        self.errors.push(TypeError {
+                            span: ann.span,
+                            message:
+                                "Annotation '@default' requires exactly one argument".to_string(),
+                        });
+                    }
+                }
+                _ => {
+                    self.errors.push(TypeError {
+                        span: ann.span,
+                        message: format!(
+                            "Unknown struct field annotation '@{}' on '{}::{}'",
+                            ann_name, struct_name, field_name
+                        ),
+                    });
+                }
+            }
+
+            if ann_name == "autoIncrement" {
+                let is_int = matches!(field_type, Some(Type::Primitive(PrimitiveType::Int)));
+                if !is_int {
+                    self.errors.push(TypeError {
+                        span: ann.span,
+                        message: format!(
+                            "Annotation '@autoIncrement' requires int field type on '{}::{}'",
+                            struct_name, field_name
+                        ),
+                    });
+                }
+            }
+        }
     }
 
     fn check_struct_defaults(&mut self, members: &'a [ClassMember<'a>]) {
@@ -3962,7 +4072,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
     out
 }
 
-fn path_has_php_modules_internals(path: &Path) -> bool {
+fn path_has_php_modules_bridge(path: &Path) -> bool {
     let mut saw_php_modules = false;
     for component in path.components() {
         let Component::Normal(seg) = component else {
@@ -3975,7 +4085,7 @@ fn path_has_php_modules_internals(path: &Path) -> bool {
             }
             continue;
         }
-        return seg == "internals";
+        return seg == "core" || seg == "internals";
     }
     false
 }

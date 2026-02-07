@@ -724,6 +724,7 @@ pub enum BinaryOp {
     LogicalOr,
     LogicalXor,
     Instanceof,
+    Pipe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -797,6 +798,14 @@ pub struct StructLiteralField<'ast> {
 pub struct PropertyEntry<'ast> {
     pub name: &'ast Token,
     pub default: Option<ExprId<'ast>>,
+    pub annotations: &'ast [FieldAnnotation<'ast>],
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct FieldAnnotation<'ast> {
+    pub name: &'ast Token,
+    pub args: &'ast [ExprId<'ast>],
     pub span: Span,
 }
 

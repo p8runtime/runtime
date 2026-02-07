@@ -10,7 +10,12 @@ fn check(code: &str) -> Result<(), String> {
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
     if !program.errors.is_empty() {
-        return Err("parse error".to_string());
+        let mut out = String::new();
+        for err in program.errors {
+            out.push_str(&err.message);
+            out.push('\n');
+        }
+        return Err(out);
     }
     check_program(&program, code.as_bytes()).map_err(|errs| {
         let mut out = String::new();
@@ -27,7 +32,12 @@ fn check_with_path(code: &str, path: &str) -> Result<(), String> {
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
     if !program.errors.is_empty() {
-        return Err("parse error".to_string());
+        let mut out = String::new();
+        for err in program.errors {
+            out.push_str(&err.message);
+            out.push('\n');
+        }
+        return Err(out);
     }
     check_program_with_path(&program, code.as_bytes(), Some(Path::new(path))).map_err(|errs| {
         let mut out = String::new();
@@ -73,6 +83,37 @@ fn struct_default_allows_struct_and_object_literals() {
 }
 
 #[test]
+fn struct_field_annotations_basic_ok() {
+    let code = "struct User { $id: int @id @autoIncrement; }";
+    let res = check(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
+fn struct_field_annotation_duplicate_errors() {
+    let code = "struct User { $id: int @id @id; }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn struct_field_annotation_unknown_errors() {
+    let code = "struct User { $id: int @banana; }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn struct_field_annotation_autoincrement_requires_int() {
+    let code = "struct User { $id: string @autoIncrement; }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn struct_field_annotation_map_requires_string_arg() {
+    let code = "struct User { $name: string @map(123); }";
+    assert!(check(code).is_err());
+}
+
+#[test]
 fn return_type_widening_allows_int_to_float() {
     let code = "<?php function f(): float { return 1; }";
     assert!(check(code).is_ok());
@@ -110,6 +151,21 @@ fn deka_wasm_call_forbidden_outside_internals() {
 fn deka_wasm_call_allowed_inside_internals() {
     let code = "__deka_wasm_call('__deka_db', 'open', {})";
     let res = check_with_path(code, "/tmp/app/php_modules/internals/wasm.phpx");
+    assert!(res.is_ok());
+}
+
+#[test]
+fn bridge_forbidden_outside_core() {
+    let code = "__bridge('db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/index.phpx");
+    assert!(res.is_err());
+    assert!(res.unwrap_err().contains("__bridge is internal-only"));
+}
+
+#[test]
+fn bridge_allowed_inside_core() {
+    let code = "__bridge('db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/php_modules/core/bridge.phpx");
     assert!(res.is_ok());
 }
 
