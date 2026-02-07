@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 
-use crate::parser::ast::Stmt;
+use crate::parser::ast::{ClassKind, ClassMember, Stmt};
 use crate::parser::lexer::Lexer;
 use crate::parser::parser::{Parser, ParserMode};
 
@@ -55,5 +55,73 @@ fn phpx_return_line_terminator_ends_statement() {
             }
         }
         other => panic!("expected function stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn phpx_parses_struct_field_annotations() {
+    let code = "struct User { $id: int @id @autoIncrement; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| !matches!(***s, Stmt::Nop { .. }))
+        .expect("expected struct stmt");
+
+    match &**stmt {
+        Stmt::Class { kind, members, .. } => {
+            assert_eq!(*kind, ClassKind::Struct);
+            let field = members
+                .iter()
+                .find(|m| matches!(m, ClassMember::Property { .. }))
+                .expect("expected struct field");
+            match field {
+                ClassMember::Property { entries, .. } => {
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(entries[0].annotations.len(), 2);
+                }
+                _ => panic!("expected struct property"),
+            }
+        }
+        other => panic!("expected struct stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn phpx_parses_struct_field_annotation_args() {
+    let code = "struct User { $email: string @map(\"email_address\"); }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| !matches!(***s, Stmt::Nop { .. }))
+        .expect("expected struct stmt");
+
+    match &**stmt {
+        Stmt::Class { members, .. } => {
+            let field = members
+                .iter()
+                .find(|m| matches!(m, ClassMember::Property { .. }))
+                .expect("expected struct field");
+            match field {
+                ClassMember::Property { entries, .. } => {
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(entries[0].annotations.len(), 1);
+                    assert_eq!(entries[0].annotations[0].args.len(), 1);
+                }
+                _ => panic!("expected struct property"),
+            }
+        }
+        other => panic!("expected struct stmt, got {:?}", other),
     }
 }
