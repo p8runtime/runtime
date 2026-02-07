@@ -9753,13 +9753,14 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Variable name must be string".into())),
                 };
 
-                let frame = self
+                let local_handle = self
                     .frames
                     .last()
-                    .ok_or(VmError::RuntimeError("No active frame".into()))?;
-                let exists = frame.locals.contains_key(&name_sym);
-                let val_handle = if exists {
-                    frame.locals.get(&name_sym).cloned()
+                    .and_then(|frame| frame.locals.get(&name_sym).copied());
+                let val_handle = if local_handle.is_some() {
+                    local_handle
+                } else if self.is_superglobal(name_sym) {
+                    self.ensure_superglobal_handle(name_sym)
                 } else {
                     None
                 };
@@ -11300,8 +11301,18 @@ impl VM {
                 self.operand_stack.push(new_handle);
             }
             OpCode::IssetVar(sym) => {
-                let frame = self.frames.last().unwrap();
-                let is_set = if let Some(&handle) = frame.locals.get(&sym) {
+                let local_handle = self
+                    .frames
+                    .last()
+                    .and_then(|frame| frame.locals.get(&sym).copied());
+                let handle_opt = if local_handle.is_some() {
+                    local_handle
+                } else if self.is_superglobal(sym) {
+                    self.ensure_superglobal_handle(sym)
+                } else {
+                    None
+                };
+                let is_set = if let Some(handle) = handle_opt {
                     !matches!(self.arena.get(handle).value, Val::Null)
                 } else {
                     false
@@ -11317,8 +11328,18 @@ impl VM {
                 let name_bytes = self.convert_to_string(name_handle)?;
                 let sym = self.context.interner.intern(&name_bytes);
 
-                let frame = self.frames.last().unwrap();
-                let is_set = if let Some(&handle) = frame.locals.get(&sym) {
+                let local_handle = self
+                    .frames
+                    .last()
+                    .and_then(|frame| frame.locals.get(&sym).copied());
+                let handle_opt = if local_handle.is_some() {
+                    local_handle
+                } else if self.is_superglobal(sym) {
+                    self.ensure_superglobal_handle(sym)
+                } else {
+                    None
+                };
+                let is_set = if let Some(handle) = handle_opt {
                     !matches!(self.arena.get(handle).value, Val::Null)
                 } else {
                     false
@@ -14626,6 +14647,24 @@ mod tests {
     #[test]
     fn test_phpx_object_literal_arrow_isset() {
         let val = run_phpx("<?php $o = { foo: 1 }; $a = isset($o->foo) ? 1 : 0; $b = isset($o->bar) ? 1 : 0; return $a + $b;");
+        match val {
+            Val::Int(i) => assert_eq!(i, 1),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_isset_superglobal_cookie_array() {
+        let val = run_phpx("$_COOKIE['x'] = '1'; return isset($_COOKIE) ? 1 : 0;");
+        match val {
+            Val::Int(i) => assert_eq!(i, 1),
+            other => panic!("Expected int result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_isset_superglobal_dynamic_name() {
+        let val = run_phpx("$_COOKIE['x'] = '1'; $name = '_COOKIE'; return isset($$name) ? 1 : 0;");
         match val {
             Val::Int(i) => assert_eq!(i, 1),
             other => panic!("Expected int result, got {:?}", other),
