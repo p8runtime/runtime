@@ -42,6 +42,8 @@ pub fn increment_value(val: Val, error_handler: &mut dyn ErrorHandler) -> Result
         Val::Array(_)
         | Val::ConstArray(_)
         | Val::Object(_)
+        | Val::Struct(_)
+        | Val::ObjectMap(_)
         | Val::ObjPayload(_)
         | Val::Resource(_) => Ok(val),
 
@@ -103,6 +105,8 @@ pub fn decrement_value(val: Val, error_handler: &mut dyn ErrorHandler) -> Result
         Val::Array(_)
         | Val::ConstArray(_)
         | Val::Object(_)
+        | Val::Struct(_)
+        | Val::ObjectMap(_)
         | Val::ObjPayload(_)
         | Val::Resource(_) => Ok(val),
 

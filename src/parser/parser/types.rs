@@ -1,5 +1,5 @@
 use super::Parser;
-use crate::parser::ast::Type;
+use crate::parser::ast::{ObjectShapeField, Type};
 use crate::parser::lexer::token::TokenKind;
 
 impl<'src, 'ast> Parser<'src, 'ast> {
@@ -8,6 +8,22 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
             let ty = self.parse_type_atomic()?;
             Some(Type::Nullable(self.arena.alloc(ty)))
+        } else if self.current_token.kind == TokenKind::TypeObject
+            && self.next_token.kind == TokenKind::Lt
+        {
+            self.bump(); // consume 'object'
+            self.parse_object_shape_type()
+        } else if self.current_token.kind == TokenKind::Identifier
+            && self.next_token.kind == TokenKind::Lt
+            && self
+                .lexer
+                .slice(self.current_token.span)
+                .eq_ignore_ascii_case(b"object")
+        {
+            self.bump(); // consume 'Object'
+            self.parse_object_shape_type()
+        } else if self.is_phpx() && self.current_token.kind == TokenKind::OpenBrace {
+            self.parse_object_shape_fields()
         } else if self.current_token.kind == TokenKind::OpenParen {
             self.bump();
             let ty = self.parse_type()?;
@@ -50,6 +66,111 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             None
         }
+        .map(|ty| {
+            if self.current_token.kind == TokenKind::Lt {
+                if let Some(args) = self.parse_type_args() {
+                    return Type::Applied {
+                        base: self.arena.alloc(ty),
+                        args,
+                    };
+                }
+            }
+            ty
+        })
+    }
+
+    fn parse_object_shape_type(&mut self) -> Option<Type<'ast>> {
+        if self.current_token.kind != TokenKind::Lt {
+            return None;
+        }
+        self.bump(); // consume '<'
+        let shape = self.parse_object_shape_fields()?;
+        if self.current_token.kind == TokenKind::Gt {
+            self.bump();
+        }
+
+        Some(shape)
+    }
+
+    fn parse_object_shape_fields(&mut self) -> Option<Type<'ast>> {
+        if self.current_token.kind != TokenKind::OpenBrace {
+            return None;
+        }
+        self.bump(); // consume '{'
+
+        let mut fields = bumpalo::collections::Vec::new_in(self.arena);
+        while self.current_token.kind != TokenKind::CloseBrace
+            && self.current_token.kind != TokenKind::Eof
+        {
+            let name_token = match self.current_token.kind {
+                TokenKind::Identifier | TokenKind::StringLiteral => {
+                    let t = self.arena.alloc(self.current_token);
+                    self.bump();
+                    t
+                }
+                _ => break,
+            };
+
+            let mut optional = false;
+            if self.current_token.kind == TokenKind::Question {
+                optional = true;
+                self.bump();
+            }
+            if self.current_token.kind != TokenKind::Colon {
+                break;
+            }
+            self.bump();
+            let ty = match self.parse_type() {
+                Some(ty) => ty,
+                None => break,
+            };
+            let field = ObjectShapeField {
+                name: name_token,
+                optional,
+                ty: self.arena.alloc(ty),
+                span: name_token.span,
+            };
+            fields.push(field);
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+                continue;
+            }
+            if self.current_token.kind == TokenKind::CloseBrace {
+                break;
+            }
+        }
+
+        if self.current_token.kind == TokenKind::CloseBrace {
+            self.bump();
+        }
+
+        Some(Type::ObjectShape(fields.into_bump_slice()))
+    }
+
+    fn parse_type_args(&mut self) -> Option<&'ast [Type<'ast>]> {
+        if self.current_token.kind != TokenKind::Lt {
+            return None;
+        }
+        self.bump(); // consume '<'
+        let mut args = bumpalo::collections::Vec::new_in(self.arena);
+        while self.current_token.kind != TokenKind::Gt
+            && self.current_token.kind != TokenKind::Eof
+        {
+            if let Some(arg) = self.parse_type() {
+                args.push(arg);
+            } else {
+                break;
+            }
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+                continue;
+            }
+            break;
+        }
+        if self.current_token.kind == TokenKind::Gt {
+            self.bump();
+        }
+        Some(args.into_bump_slice())
     }
 
     fn parse_type_intersection(&mut self) -> Option<Type<'ast>> {
@@ -63,6 +184,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if !(self.next_token.kind == TokenKind::Identifier
                 || self.next_token.kind == TokenKind::Question
                 || self.next_token.kind == TokenKind::OpenParen
+                || (self.is_phpx() && self.next_token.kind == TokenKind::OpenBrace)
                 || self.next_token.kind == TokenKind::NsSeparator
                 || self.next_token.kind.is_semi_reserved())
             {
@@ -78,6 +200,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if !(self.next_token.kind == TokenKind::Identifier
                     || self.next_token.kind == TokenKind::Question
                     || self.next_token.kind == TokenKind::OpenParen
+                    || (self.is_phpx() && self.next_token.kind == TokenKind::OpenBrace)
                     || self.next_token.kind == TokenKind::NsSeparator
                     || self.next_token.kind.is_semi_reserved())
                 {

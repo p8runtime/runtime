@@ -21,6 +21,10 @@ pub trait Visitor<'ast> {
         walk_array_item(self, item);
     }
 
+    fn visit_object_item(&mut self, item: &'ast ObjectItem<'ast>) {
+        walk_object_item(self, item);
+    }
+
     fn visit_param(&mut self, param: &'ast Param<'ast>) {
         walk_param(self, param);
     }
@@ -174,17 +178,31 @@ pub fn walk_stmt<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, stmt: StmtId<
         Stmt::Block { statements, .. } => walk_statements(visitor, statements),
         Stmt::Function {
             attributes,
+            type_params,
             params,
             return_type,
             body,
             ..
         } => {
             walk_attributes(visitor, attributes);
+            for param in type_params.iter() {
+                if let Some(constraint) = param.constraint {
+                    visitor.visit_type(constraint);
+                }
+            }
             walk_params(visitor, params);
             if let Some(return_type) = return_type {
                 visitor.visit_type(return_type);
             }
             walk_statements(visitor, body);
+        }
+        Stmt::TypeAlias { type_params, ty, .. } => {
+            for param in type_params.iter() {
+                if let Some(constraint) = param.constraint {
+                    visitor.visit_type(constraint);
+                }
+            }
+            visitor.visit_type(ty);
         }
         Stmt::Class {
             attributes,
@@ -353,11 +371,47 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
                 visitor.visit_array_item(item);
             }
         }
+        Expr::ObjectLiteral { items, .. } => {
+            for item in items {
+                visitor.visit_object_item(item);
+            }
+        }
+        Expr::JsxElement {
+            attributes,
+            children,
+            ..
+        } => {
+            for attr in attributes {
+                if let Some(value) = attr.value {
+                    visitor.visit_expr(value);
+                }
+            }
+            for child in children {
+                if let JsxChild::Expr(expr) = *child {
+                    visitor.visit_expr(expr);
+                }
+            }
+        }
+        Expr::JsxFragment { children, .. } => {
+            for child in children {
+                if let JsxChild::Expr(expr) = *child {
+                    visitor.visit_expr(expr);
+                }
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for field in fields {
+                visitor.visit_expr(field.value);
+            }
+        }
         Expr::ArrayDimFetch { array, dim, .. } => {
             visitor.visit_expr(array);
             if let Some(dim) = dim {
                 visitor.visit_expr(dim);
             }
+        }
+        Expr::DotAccess { target, .. } => {
+            visitor.visit_expr(target);
         }
         Expr::PropertyFetch {
             target, property, ..
@@ -495,6 +549,13 @@ pub fn walk_array_item<'ast, V: Visitor<'ast> + ?Sized>(
     visitor.visit_expr(item.value);
 }
 
+pub fn walk_object_item<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    item: &'ast ObjectItem<'ast>,
+) {
+    visitor.visit_expr(item.value);
+}
+
 pub fn walk_param<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, param: &'ast Param<'ast>) {
     walk_attributes(visitor, param.attributes);
     if let Some(ty) = param.ty {
@@ -542,6 +603,17 @@ pub fn walk_type<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'ast Typ
         Type::Name(name) => visitor.visit_name(name),
         Type::Union(types) | Type::Intersection(types) => walk_types(visitor, types),
         Type::Nullable(inner) => visitor.visit_type(inner),
+        Type::ObjectShape(fields) => {
+            for field in fields.iter() {
+                visitor.visit_type(field.ty);
+            }
+        }
+        Type::Applied { base, args } => {
+            visitor.visit_type(base);
+            for arg in args.iter() {
+                visitor.visit_type(arg);
+            }
+        }
     }
 }
 
@@ -658,12 +730,30 @@ pub fn walk_class_member<'ast, V: Visitor<'ast> + ?Sized>(
                 visitor.visit_trait_adaptation(adaptation);
             }
         }
+        ClassMember::Embed {
+            attributes,
+            types,
+            ..
+        } => {
+            walk_attributes(visitor, attributes);
+            walk_names(visitor, types);
+        }
         ClassMember::Case {
-            attributes, value, ..
+            attributes,
+            value,
+            payload,
+            ..
         } => {
             walk_attributes(visitor, attributes);
             if let Some(value) = value {
                 visitor.visit_expr(value);
+            }
+            if let Some(params) = payload {
+                for param in params.iter() {
+                    if let Some(ty) = param.ty {
+                        visitor.visit_type(ty);
+                    }
+                }
             }
         }
     }

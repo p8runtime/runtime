@@ -140,9 +140,11 @@ pub struct ClassDef {
     pub is_trait: bool,
     pub is_abstract: bool,
     pub is_enum: bool,
+    pub is_struct: bool,
     pub enum_backed_type: Option<EnumBackedType>,
     pub interfaces: Vec<Symbol>,
     pub traits: Vec<Symbol>,
+    pub embeds: Vec<Symbol>,
     pub methods: HashMap<Symbol, MethodEntry>,
     pub properties: IndexMap<Symbol, PropertyEntry>, // Instance properties with type hints
     pub constants: HashMap<Symbol, ClassConstEntry>,
@@ -164,6 +166,7 @@ pub struct EnumCaseDef {
     pub name: Symbol,
     pub value: Option<Val>,
     pub handle: Handle,
+    pub payload_params: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +273,7 @@ pub struct RequestContext {
     pub constants: HashMap<Symbol, Val>,
     pub user_functions: HashMap<Symbol, Rc<UserFunc>>,
     pub classes: HashMap<Symbol, ClassDef>,
+    pub class_aliases: HashMap<Symbol, Symbol>,
     pub included_files: HashSet<String>,
     pub autoloaders: Vec<Handle>,
     pub interner: Interner,
@@ -297,6 +301,7 @@ impl RequestContext {
             constants: HashMap::new(),
             user_functions: HashMap::new(),
             classes: HashMap::new(),
+            class_aliases: HashMap::new(),
             included_files: HashSet::new(),
             autoloaders: Vec::new(),
             interner: Interner::new(),
@@ -388,9 +393,11 @@ impl RequestContext {
                     is_trait: native_class.is_trait,
                     is_abstract: false,
                     is_enum: false,
+                    is_struct: false,
                     enum_backed_type: None,
                     interfaces,
                     traits: Vec::new(),
+                    embeds: Vec::new(),
                     methods: HashMap::new(),
                     properties: IndexMap::new(),
                     constants,

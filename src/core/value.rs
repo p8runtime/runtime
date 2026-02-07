@@ -112,6 +112,8 @@ pub enum Val {
     String(Rc<Vec<u8>>),  // PHP strings are byte arrays (COW)
     Array(Rc<ArrayData>), // Array with cached metadata (COW)
     ConstArray(Rc<IndexMap<ConstArrayKey, Val>>), // Compile-time constant array (template for property defaults)
+    ObjectMap(Rc<ObjectMapData>), // PHPX object literal value (COW)
+    Struct(Rc<ObjectData>), // PHPX struct instance (COW value semantics)
     Object(Handle),
     ObjPayload(ObjectData),
     Resource(Rc<dyn Any>), // Changed to Rc to support Clone
@@ -129,6 +131,8 @@ impl PartialEq for Val {
             (Val::String(a), Val::String(b)) => a == b,
             (Val::Array(a), Val::Array(b)) => a == b,
             (Val::ConstArray(a), Val::ConstArray(b)) => a == b,
+            (Val::ObjectMap(a), Val::ObjectMap(b)) => a == b,
+            (Val::Struct(a), Val::Struct(b)) => a == b,
             (Val::Object(a), Val::Object(b)) => a == b,
             (Val::ObjPayload(a), Val::ObjPayload(b)) => a == b,
             (Val::Resource(a), Val::Resource(b)) => Rc::ptr_eq(a, b),
@@ -148,7 +152,8 @@ impl Val {
             Val::Float(_) => "float",
             Val::String(_) => "string",
             Val::Array(_) | Val::ConstArray(_) => "array",
-            Val::Object(_) | Val::ObjPayload(_) => "object",
+            Val::ObjectMap(_) => "object",
+            Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => "object",
             Val::Resource(_) => "resource",
             Val::AppendPlaceholder => "append_placeholder",
             Val::Uninitialized => "uninitialized",
@@ -183,7 +188,8 @@ impl Val {
             }
             Val::String(s) => s.to_vec(),
             Val::Array(_) | Val::ConstArray(_) => b"Array".to_vec(),
-            Val::Object(_) | Val::ObjPayload(_) => b"Object".to_vec(),
+            Val::ObjectMap(_) => b"Object".to_vec(),
+            Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => b"Object".to_vec(),
             Val::Resource(_) => b"Resource".to_vec(),
             Val::AppendPlaceholder | Val::Uninitialized => Vec::new(),
         }
@@ -209,7 +215,7 @@ impl Val {
             }
             Val::Array(arr) => !arr.map.is_empty(),
             Val::ConstArray(arr) => !arr.is_empty(),
-            Val::Object(_) | Val::ObjPayload(_) | Val::Resource(_) => true,
+            Val::ObjectMap(_) | Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) | Val::Resource(_) => true,
             Val::AppendPlaceholder | Val::Uninitialized => false,
         }
     }
@@ -246,7 +252,7 @@ impl Val {
                     1
                 }
             }
-            Val::Object(_) | Val::ObjPayload(_) => 1,
+            Val::ObjectMap(_) | Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => 1,
             Val::Resource(_) => 0, // Resources typically convert to their ID
             Val::AppendPlaceholder | Val::Uninitialized => 0,
         }
@@ -294,7 +300,7 @@ impl Val {
                     1.0
                 }
             }
-            Val::Object(_) | Val::ObjPayload(_) => 1.0,
+            Val::ObjectMap(_) | Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => 1.0,
             Val::Resource(_) => 0.0,
             Val::AppendPlaceholder | Val::Uninitialized => 0.0,
         }
@@ -347,6 +353,31 @@ impl PartialEq for ObjectData {
     fn eq(&self, other: &Self) -> bool {
         self.class == other.class && self.properties == other.properties
         // Ignore internal for equality for now, or check ptr_eq
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectMapData {
+    pub map: IndexMap<Symbol, Handle>,
+}
+
+impl ObjectMapData {
+    pub fn new() -> Self {
+        Self {
+            map: IndexMap::new(),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            map: IndexMap::with_capacity(capacity),
+        }
+    }
+}
+
+impl PartialEq for ObjectMapData {
+    fn eq(&self, other: &Self) -> bool {
+        self.map == other.map
     }
 }
 

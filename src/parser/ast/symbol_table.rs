@@ -8,11 +8,13 @@ pub enum SymbolKind {
     Variable,
     Function,
     Class,
+    Struct,
     Interface,
     Trait,
     Enum,
     EnumCase,
     Parameter,
+    TypeAlias,
 }
 
 #[derive(Debug, Clone)]
@@ -153,13 +155,18 @@ impl<'ast, 'src> Visitor<'ast> for SymbolVisitor<'src> {
                 self.table.exit_scope();
             }
             Stmt::Class {
+                kind,
                 name,
                 members,
                 span,
                 ..
             } => {
                 let class_name = self.get_text(name.span);
-                self.table.add_symbol(class_name, SymbolKind::Class, *span);
+                let kind = match kind {
+                    ClassKind::Class => SymbolKind::Class,
+                    ClassKind::Struct => SymbolKind::Struct,
+                };
+                self.table.add_symbol(class_name, kind, *span);
                 self.table.enter_scope();
                 for member in *members {
                     self.visit_class_member(member);
@@ -208,6 +215,11 @@ impl<'ast, 'src> Visitor<'ast> for SymbolVisitor<'src> {
                     self.visit_class_member(member);
                 }
                 self.table.exit_scope();
+            }
+            Stmt::TypeAlias { name, span, .. } => {
+                let alias_name = self.get_text(name.span);
+                self.table
+                    .add_symbol(alias_name, SymbolKind::TypeAlias, *span);
             }
             _ => walk_stmt(self, stmt),
         }

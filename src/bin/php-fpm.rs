@@ -401,8 +401,34 @@ async fn execute_php(
 
     let arena = Bump::new();
     let lexer = Lexer::new(&source);
-    let mut parser = PhpParser::new(lexer, &arena);
+    let mode = match std::path::Path::new(&fpm_req.script_filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+    {
+        Some("phpx") => php_rs::parser::parser::ParserMode::Phpx,
+        _ => php_rs::parser::parser::ParserMode::Php,
+    };
+    let mut parser = PhpParser::new_with_mode(lexer, &arena, mode);
     let program = parser.parse_program();
+
+    if !program.errors.is_empty() {
+        let mut stderr = String::new();
+        for error in program.errors {
+            stderr.push_str(&error.to_human_readable(&source));
+            stderr.push('\n');
+        }
+        return (Vec::new(), vec![], Some(500), stderr.into_bytes());
+    }
+    if mode == php_rs::parser::parser::ParserMode::Phpx {
+        if let Err(errors) = php_rs::phpx::typeck::check_program_with_path(
+            &program,
+            &source,
+            Some(std::path::Path::new(&fpm_req.script_filename)),
+        ) {
+            let rendered = php_rs::phpx::typeck::format_type_errors(&errors, &source);
+            return (Vec::new(), vec![], Some(500), rendered.into_bytes());
+        }
+    }
 
     let output_buffer = Arc::new(Mutex::new(Vec::new()));
     let error_buffer = Arc::new(Mutex::new(Vec::new()));

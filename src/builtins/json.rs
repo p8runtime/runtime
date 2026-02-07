@@ -21,7 +21,7 @@
 //! - Zend Encoder: $PHP_SRC_PATH/ext/json/json_encoder.c
 //! - Zend Parser: $PHP_SRC_PATH/ext/json/json_parser.y
 
-use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, Val};
+use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, Val};
 use crate::vm::engine::VM;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
@@ -145,6 +145,21 @@ fn json_value_to_handle(
     }
 }
 
+pub(crate) fn decode_json_to_handle(
+    vm: &mut VM,
+    value: &JsonValue,
+    assoc: bool,
+    max_depth: usize,
+) -> Result<Handle, JsonError> {
+    json_value_to_handle(vm, value, assoc, 0, max_depth)
+}
+
+pub(crate) fn encode_handle_to_json(vm: &mut VM, handle: Handle) -> Result<String, JsonError> {
+    let options = JsonEncodeOptions::default();
+    let mut ctx = EncodeContext::new(vm, options, 512);
+    ctx.encode_value(handle)
+}
+
 impl Default for JsonError {
     fn default() -> Self {
         JsonError::None
@@ -246,7 +261,7 @@ impl<'a> EncodeContext<'a> {
 
         // Check for circular references on composite types
         match val {
-            Val::Array(_) | Val::Object(_) => {
+            Val::Array(_) | Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => {
                 if !self.visited.insert(handle) {
                     return Err(JsonError::Recursion);
                 }
@@ -260,7 +275,7 @@ impl<'a> EncodeContext<'a> {
 
         // Remove from visited set after processing
         match val {
-            Val::Array(_) | Val::Object(_) => {
+            Val::Array(_) | Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => {
                 self.visited.remove(&handle);
             }
             _ => {}
@@ -280,6 +295,8 @@ impl<'a> EncodeContext<'a> {
             Val::String(s) => self.encode_string(s),
             Val::Array(arr) => self.encode_array(arr),
             Val::Object(payload_handle) => self.encode_object(*payload_handle),
+            Val::ObjectMap(map_rc) => self.encode_object_map(map_rc),
+            Val::Struct(obj_data) => self.encode_struct(obj_data),
             Val::Resource(_) => Err(JsonError::UnsupportedType),
             Val::ObjPayload(_) => {
                 // Should not be called directly on payload
@@ -471,6 +488,106 @@ impl<'a> EncodeContext<'a> {
         let mut first = true;
         for (prop_sym, prop_handle) in obj_data.properties.iter() {
             // Get property name
+            let prop_name = self
+                .vm
+                .context
+                .interner
+                .lookup(*prop_sym)
+                .ok_or(JsonError::InvalidPropertyName)?;
+            let prop_str =
+                std::str::from_utf8(prop_name).map_err(|_| JsonError::InvalidPropertyName)?;
+
+            if !first {
+                result.push(',');
+            }
+            first = false;
+
+            if self.options.pretty_print {
+                result.push('\n');
+                result.push_str(&"    ".repeat(self.indent_level));
+            }
+
+            result.push('"');
+            result.push_str(prop_str);
+            result.push('"');
+            result.push(':');
+
+            if self.options.pretty_print {
+                result.push(' ');
+            }
+
+            result.push_str(&self.encode_value(*prop_handle)?);
+        }
+
+        if self.options.pretty_print && !obj_data.properties.is_empty() {
+            self.indent_level -= 1;
+            result.push('\n');
+            result.push_str(&"    ".repeat(self.indent_level));
+        }
+
+        result.push('}');
+        Ok(result)
+    }
+
+    fn encode_object_map(&mut self, map_rc: &Rc<ObjectMapData>) -> Result<String, JsonError> {
+        let mut result = String::from("{");
+
+        if self.options.pretty_print && !map_rc.map.is_empty() {
+            self.indent_level += 1;
+        }
+
+        let mut first = true;
+        for (prop_sym, prop_handle) in map_rc.map.iter() {
+            let prop_name = self
+                .vm
+                .context
+                .interner
+                .lookup(*prop_sym)
+                .ok_or(JsonError::InvalidPropertyName)?;
+            let prop_str =
+                std::str::from_utf8(prop_name).map_err(|_| JsonError::InvalidPropertyName)?;
+
+            if !first {
+                result.push(',');
+            }
+            first = false;
+
+            if self.options.pretty_print {
+                result.push('\n');
+                result.push_str(&"    ".repeat(self.indent_level));
+            }
+
+            result.push('"');
+            result.push_str(prop_str);
+            result.push('"');
+            result.push(':');
+
+            if self.options.pretty_print {
+                result.push(' ');
+            }
+
+            result.push_str(&self.encode_value(*prop_handle)?);
+        }
+
+        if self.options.pretty_print && !map_rc.map.is_empty() {
+            self.indent_level -= 1;
+            result.push('\n');
+            result.push_str(&"    ".repeat(self.indent_level));
+        }
+
+        result.push('}');
+        Ok(result)
+    }
+
+    fn encode_struct(&mut self, obj_data: &ObjectData) -> Result<String, JsonError> {
+        let mut result = String::from("{");
+
+        if self.options.pretty_print && !obj_data.properties.is_empty() {
+            self.indent_level += 1;
+        }
+
+        let mut first = true;
+        for (prop_sym, prop_handle) in obj_data.properties.iter() {
             let prop_name = self
                 .vm
                 .context

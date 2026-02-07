@@ -94,7 +94,7 @@ impl VM {
             Val::Float(_) => "float",
             Val::String(_) => "string",
             Val::Array(_) | Val::ConstArray(_) => "array",
-            Val::Object(_) => "object",
+            Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => "object",
             Val::ObjPayload(_) => "object",
             Val::Resource(_) => "resource",
             Val::AppendPlaceholder => "unknown",

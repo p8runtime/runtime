@@ -20,6 +20,7 @@
 
 use crate::compiler::emitter::Emitter;
 use crate::core::value::Val;
+use crate::parser::parser::ParserMode;
 use crate::runtime::context::RequestContext;
 use crate::vm::engine::{CapturingErrorHandler, CapturingOutputWriter, ErrorLevel, VM, VmError};
 use std::cell::RefCell;
@@ -69,6 +70,8 @@ pub struct ExecutionConfig {
     pub disable_functions: std::collections::HashSet<String>,
     /// Sandboxing: disabled class names (like PHP's disable_classes ini)
     pub disable_classes: std::collections::HashSet<String>,
+    /// Parser mode (Php vs Phpx)
+    pub parser_mode: ParserMode,
 }
 
 impl Default for ExecutionConfig {
@@ -85,6 +88,7 @@ impl Default for ExecutionConfig {
             allowed_functions: None, // All functions allowed by default
             disable_functions: std::collections::HashSet::new(), // No functions disabled by default
             disable_classes: std::collections::HashSet::new(), // No classes disabled by default
+            parser_mode: ParserMode::Php,
         }
     }
 }
@@ -130,7 +134,8 @@ pub fn execute_code_with_config(
     // Parse the code
     let arena = bumpalo::Bump::new();
     let lexer = crate::parser::lexer::Lexer::new(source.as_bytes());
-    let mut parser = crate::parser::parser::Parser::new(lexer, &arena);
+    let mut parser =
+        crate::parser::parser::Parser::new_with_mode(lexer, &arena, config.parser_mode);
     let program = parser.parse_program();
 
     // Check for parse errors
@@ -139,6 +144,17 @@ pub fn execute_code_with_config(
             "Parse errors: {:?}",
             program.errors
         )));
+    }
+    if config.parser_mode == ParserMode::Phpx {
+        if let Err(errors) =
+            crate::phpx::typeck::check_program_with_path(&program, source.as_bytes(), None)
+        {
+            let rendered = crate::phpx::typeck::format_type_errors(&errors, source.as_bytes());
+            return Err(VmError::RuntimeError(format!(
+                "Type errors:\n{}",
+                rendered
+            )));
+        }
     }
 
     // Create execution context

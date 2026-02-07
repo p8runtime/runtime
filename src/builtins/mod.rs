@@ -25,6 +25,7 @@ pub mod spl;
 pub mod string;
 pub mod url;
 pub mod variable;
+pub mod wasm;
 #[cfg(feature = "zip")]
 pub mod zip;
 pub mod zlib;

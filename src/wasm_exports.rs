@@ -167,12 +167,21 @@ fn run_php_source(source: &str) -> String {
     log("php_run:vm_done");
     let stdout = String::from_utf8_lossy(&captured_stdout.borrow()).into_owned();
     let stderr = String::from_utf8_lossy(&captured_stderr.borrow()).into_owned();
+    let headers: Vec<String> = vm
+        .context
+        .headers
+        .iter()
+        .map(|entry| String::from_utf8_lossy(&entry.line).into_owned())
+        .collect();
+    let status = vm.context.http_status.unwrap_or(0);
 
     match result {
         Ok(()) => json!({
             "ok": true,
             "stdout": stdout,
             "stderr": stderr,
+            "headers": headers,
+            "status": status,
             "error": "",
         })
         .to_string(),
@@ -180,6 +189,8 @@ fn run_php_source(source: &str) -> String {
             "ok": false,
             "stdout": stdout,
             "stderr": stderr,
+            "headers": headers,
+            "status": status,
             "error": format!("{:?}", err),
         })
         .to_string(),

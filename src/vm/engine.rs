@@ -326,6 +326,16 @@ pub struct PendingCall {
     pub this_handle: Option<Handle>,
 }
 
+#[derive(Clone)]
+struct EmbeddedMethodTarget {
+    obj_handle: Handle,
+    func: Rc<UserFunc>,
+    visibility: Visibility,
+    is_static: bool,
+    defining_class: Symbol,
+    called_scope: Symbol,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum PropertyCollectionMode {
     All,
@@ -2184,7 +2194,15 @@ impl VM {
             .with_object_data(obj_handle, |data| data.properties.contains_key(&prop_name))?;
 
         if !prop_exists {
-            self.check_dynamic_property_write(obj_handle, prop_name);
+            let is_struct = self
+                .context
+                .classes
+                .get(&class_name)
+                .map(|def| def.is_struct)
+                .unwrap_or(false);
+            if !is_struct {
+                self.check_dynamic_property_write(obj_handle, prop_name);
+            }
         }
 
         let prop_info = self.walk_inheritance_chain(class_name, |def, cls| {
@@ -2713,6 +2731,12 @@ impl VM {
                 Err(_) => return false,
             };
 
+        if let Some(def) = self.context.classes.get(&class_name) {
+            if def.is_struct {
+                return false;
+            }
+        }
+
         if already_dynamic {
             return false;
         }
@@ -2723,7 +2747,7 @@ impl VM {
 
         while let Some(name) = current {
             if let Some(def) = self.context.classes.get(&name) {
-                if def.properties.contains_key(&prop_name) {
+                if def.properties.contains_key(&prop_name) || def.embeds.contains(&prop_name) {
                     is_declared = true;
                     break;
                 }
@@ -7023,6 +7047,18 @@ impl VM {
                         return Err(VmError::RuntimeError(
                             "Struct embedding is only allowed on structs".into(),
                         ));
+                    }
+                    if !class_def.properties.contains_key(&embed_name) {
+                        class_def.properties.insert(
+                            embed_name,
+                            PropertyEntry {
+                                default_value: Val::Uninitialized,
+                                visibility: Visibility::Public,
+                                type_hint: None,
+                                is_readonly: false,
+                                attributes: Vec::new(),
+                            },
+                        );
                     }
                     class_def.embeds.push(embed_name);
                 }
@@ -13339,6 +13375,33 @@ impl VM {
 
                 self.push_frame(frame);
             } else {
+                if let Some(target) = self.find_embedded_method_target(obj_handle, method_name)? {
+                    self.check_method_visibility(
+                        target.defining_class,
+                        target.visibility,
+                        Some(method_name),
+                    )?;
+
+                    let args = self.collect_call_args(arg_count)?;
+
+                    if is_dynamic {
+                        self.operand_stack.pop();
+                    }
+                    let _ = self.operand_stack.pop().unwrap();
+
+                    let mut frame = CallFrame::new(target.func.chunk.clone());
+                    frame.func = Some(target.func.clone());
+                    if !target.is_static {
+                        frame.this = Some(target.obj_handle);
+                    }
+                    frame.class_scope = Some(target.defining_class);
+                    frame.called_scope = Some(target.called_scope);
+                    frame.args = args;
+
+                    self.push_frame(frame);
+                    return Ok(());
+                }
+
                 // Method not found. Check for __call.
                 let call_magic = self.context.interner.intern(b"__call");
                 if let Some((magic_func, _, _, magic_class)) =
@@ -13409,6 +13472,87 @@ impl VM {
             }
         }
         Ok(())
+    }
+
+    fn find_embedded_method_target(
+        &self,
+        obj_handle: Handle,
+        method_name: Symbol,
+    ) -> Result<Option<EmbeddedMethodTarget>, VmError> {
+        let obj_data = match &self.arena.get(obj_handle).value {
+            Val::Struct(obj_data) => obj_data,
+            _ => return Ok(None),
+        };
+        let class_def = match self.context.classes.get(&obj_data.class) {
+            Some(def) => def,
+            None => return Ok(None),
+        };
+        if class_def.embeds.is_empty() {
+            return Ok(None);
+        }
+
+        let mut found: Option<EmbeddedMethodTarget> = None;
+        let mut found_class: Option<Symbol> = None;
+
+        for embed_sym in &class_def.embeds {
+            let embed_handle = match obj_data.properties.get(embed_sym) {
+                Some(handle) => *handle,
+                None => continue,
+            };
+            let embed_obj = match &self.arena.get(embed_handle).value {
+                Val::Struct(embed_obj) => embed_obj,
+                Val::Null | Val::Uninitialized => continue,
+                _ => continue,
+            };
+
+            if let Some((func, visibility, is_static, defining_class)) =
+                self.find_method(embed_obj.class, method_name)
+            {
+                if let Some(prev_class) = found_class {
+                    let owner = self
+                        .context
+                        .interner
+                        .lookup(obj_data.class)
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_else(|| "<struct>".to_string());
+                    let method = self
+                        .context
+                        .interner
+                        .lookup(method_name)
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_else(|| "<method>".to_string());
+                    let first = self
+                        .context
+                        .interner
+                        .lookup(prev_class)
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_else(|| "<embed>".to_string());
+                    let second = self
+                        .context
+                        .interner
+                        .lookup(embed_obj.class)
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_else(|| "<embed>".to_string());
+
+                    return Err(VmError::RuntimeError(format!(
+                        "Ambiguous embedded method {}::{} (found in {} and {})",
+                        owner, method, first, second
+                    )));
+                }
+
+                found = Some(EmbeddedMethodTarget {
+                    obj_handle: embed_handle,
+                    func,
+                    visibility,
+                    is_static,
+                    defining_class,
+                    called_scope: embed_obj.class,
+                });
+                found_class = Some(embed_obj.class);
+            }
+        }
+
+        Ok(found)
     }
 
     fn exec_call_static_method(

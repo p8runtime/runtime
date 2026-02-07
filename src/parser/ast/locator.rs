@@ -20,6 +20,7 @@ impl<'ast> AstNode<'ast> {
                 ClassMember::Method { span, .. } => *span,
                 ClassMember::Const { span, .. } => *span,
                 ClassMember::TraitUse { span, .. } => *span,
+                ClassMember::Embed { span, .. } => *span,
                 ClassMember::Case { span, .. } => *span,
             },
         }
@@ -70,6 +71,7 @@ impl<'ast> Visitor<'ast> for Locator<'ast> {
             ClassMember::Method { span, .. } => *span,
             ClassMember::Const { span, .. } => *span,
             ClassMember::TraitUse { span, .. } => *span,
+            ClassMember::Embed { span, .. } => *span,
             ClassMember::Case { span, .. } => *span,
         };
 

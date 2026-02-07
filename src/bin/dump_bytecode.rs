@@ -19,7 +19,17 @@ fn main() -> anyhow::Result<()> {
 
     let arena = Bump::new();
     let lexer = Lexer::new(source_bytes);
-    let mut parser = PhpParser::new(lexer, &arena);
+    let mode = if source.contains("__DEKA_PHPX_INTERNAL__") {
+        php_rs::parser::parser::ParserMode::PhpxInternal
+    } else if source.contains("__DEKA_PHPX__") {
+        php_rs::parser::parser::ParserMode::Phpx
+    } else {
+        match cli.file.extension().and_then(|ext| ext.to_str()) {
+            Some("phpx") => php_rs::parser::parser::ParserMode::Phpx,
+            _ => php_rs::parser::parser::ParserMode::Php,
+        }
+    };
+    let mut parser = PhpParser::new_with_mode(lexer, &arena, mode);
 
     let program = parser.parse_program();
 
@@ -28,6 +38,17 @@ fn main() -> anyhow::Result<()> {
             println!("{}", error.to_human_readable(source_bytes));
         }
         return Ok(());
+    }
+    if mode == php_rs::parser::parser::ParserMode::Phpx {
+        if let Err(errors) = php_rs::phpx::typeck::check_program_with_path(
+            &program,
+            source_bytes,
+            Some(cli.file.as_path()),
+        ) {
+            let rendered = php_rs::phpx::typeck::format_type_errors(&errors, source_bytes);
+            println!("{}", rendered);
+            return Ok(());
+        }
     }
 
     let mut interner = Interner::new();
