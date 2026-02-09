@@ -231,6 +231,18 @@ fn jsx_vnode_not_assignable_to_int() {
 }
 
 #[test]
+fn jsx_component_requires_typed_props_param() {
+    let code = "<?php function FullName($name) { return $name; } $v = <FullName name=\"Bob\" />;";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn jsx_component_typed_props_param_is_allowed() {
+    let code = "<?php struct FullNameProps { $name: string; } function FullName(FullNameProps $props): string { return $props.name; } $v = <FullName name=\"Bob\" />;";
+    assert!(check(code).is_ok());
+}
+
+#[test]
 fn union_allows_object_shape_dot_access() {
     let code = "<?php $x = { foo: 1 }; $x = { foo: \"bar\" }; $x.foo;";
     assert!(check(code).is_ok());
@@ -511,4 +523,10 @@ fn class_const_on_unknown_class_is_rejected() {
 fn class_type_annotation_is_rejected() {
     let code = "<?php function f(Exception $e) {}";
     assert!(check(code).is_err());
+}
+
+#[test]
+fn destructured_assignment_bindings_follow_source_shape() {
+    let code = "$obj = { count: 3 }; echo (({ count: $count } = $obj).count); $count + 1;";
+    assert!(check(code).is_ok());
 }

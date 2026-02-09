@@ -777,7 +777,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             let return_type = self.parse_return_type();
 
             let mut has_body_flag = false;
-            let body = if self.current_token.kind == TokenKind::OpenBrace {
+            let raw_body = if self.current_token.kind == TokenKind::OpenBrace {
                 has_body_flag = true;
                 let body_stmt = self.parse_block();
                 match body_stmt {
@@ -787,6 +787,22 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             } else {
                 self.expect_semicolon();
                 &[] as &'ast [StmtId<'ast>]
+            };
+            let prologue = self.take_param_destructure_prologue();
+            if !prologue.is_empty() && raw_body.is_empty() {
+                self.errors.push(ParseError::with_help(
+                    name.span,
+                    "Parameter destructuring requires a method body",
+                    "Provide a method body or remove destructuring from parameters.",
+                ));
+            }
+            let body = if prologue.is_empty() || raw_body.is_empty() {
+                raw_body
+            } else {
+                let mut merged = std::vec::Vec::with_capacity(prologue.len() + raw_body.len());
+                merged.extend_from_slice(prologue);
+                merged.extend_from_slice(raw_body);
+                self.arena.alloc_slice_copy(&merged)
             };
 
             let end = if body.is_empty() {
@@ -1742,9 +1758,18 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
         // Body
         let body_stmt = self.parse_stmt(); // Should be a block
-        let body: &'ast [StmtId<'ast>] = match body_stmt {
+        let raw_body: &'ast [StmtId<'ast>] = match body_stmt {
             Stmt::Block { statements, .. } => statements,
             _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],
+        };
+        let prologue = self.take_param_destructure_prologue();
+        let body = if prologue.is_empty() {
+            raw_body
+        } else {
+            let mut merged = std::vec::Vec::with_capacity(prologue.len() + raw_body.len());
+            merged.extend_from_slice(prologue);
+            merged.extend_from_slice(raw_body);
+            self.arena.alloc_slice_copy(&merged)
         };
 
         let end = self.current_token.span.end;
@@ -1783,12 +1808,18 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
         }
 
-        // Type hint?
-        let ty = if let Some(t) = self.parse_type() {
-            Some(self.arena.alloc(t) as &'ast Type<'ast>)
-        } else {
-            None
-        };
+        let mut ty = None;
+        let mut old_style_phpx_type = false;
+        let mut pattern: Option<ExprId<'ast>> = None;
+
+        if !self.is_phpx() {
+            // PHP mode keeps classic syntax: Type $name
+            ty = if let Some(t) = self.parse_type() {
+                Some(self.arena.alloc(t) as &'ast Type<'ast>)
+            } else {
+                None
+            };
+        }
 
         let by_ref = if matches!(
             self.current_token.kind,
@@ -1807,66 +1838,117 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             false
         };
 
-        if self.current_token.kind == TokenKind::Variable {
+        // PHPX mode prefers: $name: Type
+        // Recovery path: if legacy `Type $name` is used, accept for now but emit a syntax error.
+        if self.is_phpx()
+            && self.current_token.kind != TokenKind::Variable
+            && !matches!(
+                self.current_token.kind,
+                TokenKind::OpenBrace | TokenKind::OpenBracket | TokenKind::List
+            )
+        {
+            if let Some(t) = self.parse_type() {
+                ty = Some(self.arena.alloc(t) as &'ast Type<'ast>);
+                old_style_phpx_type = true;
+            }
+        }
+
+        let param_name = if self.current_token.kind == TokenKind::Variable {
             let param_name = self.arena.alloc(self.current_token);
             self.bump();
-
-            let default = if self.current_token.kind == TokenKind::Eq {
-                self.bump();
-                Some(self.parse_expr(0))
-            } else {
-                None
-            };
-
-            let hooks = if !modifiers.is_empty() && self.current_token.kind == TokenKind::OpenBrace
-            {
-                Some(self.arena.alloc_slice_copy(&self.parse_property_hooks())
-                    as &'ast [PropertyHook<'ast>])
-            } else {
-                None
-            };
-
-            let end = if let Some(hooks) = hooks {
-                if let Some(last) = hooks.last() {
-                    last.span.end
+            param_name
+        } else if self.is_phpx()
+            && matches!(
+                self.current_token.kind,
+                TokenKind::OpenBrace | TokenKind::OpenBracket | TokenKind::List
+            )
+        {
+            pattern = self.parse_phpx_param_pattern();
+            if let Some(pattern_expr) = pattern {
+                if let Some(binding) = self.pattern_last_binding(pattern_expr) {
+                    binding
                 } else {
-                    self.current_token.span.start
+                    self.errors.push(ParseError::with_help(
+                        pattern_expr.span(),
+                        "Destructuring parameters require at least one variable binding",
+                        "Use a pattern like '{ name: $name }' or '[ $first, $second ]'.",
+                    ));
+                    self.arena.alloc(Token {
+                        kind: TokenKind::Error,
+                        span: pattern_expr.span(),
+                    })
                 }
-            } else if let Some(expr) = default {
-                expr.span().end
             } else {
-                param_name.span.end
-            };
-
-            Param {
-                attributes,
-                modifiers: self.arena.alloc_slice_copy(&modifiers),
-                name: param_name,
-                ty,
-                default,
-                by_ref,
-                variadic,
-                hooks,
-                span: Span::new(start, end),
+                self.arena.alloc(Token {
+                    kind: TokenKind::Error,
+                    span: Span::new(start, self.current_token.span.end),
+                })
             }
         } else {
-            // Error
             let span = Span::new(start, self.current_token.span.end);
             self.bump();
-            Param {
-                attributes,
-                modifiers: self.arena.alloc_slice_copy(&modifiers),
-                name: self.arena.alloc(Token {
-                    kind: TokenKind::Error,
-                    span,
-                }),
-                ty: None,
-                default: None,
-                by_ref,
-                variadic,
-                hooks: None,
+            self.arena.alloc(Token {
+                kind: TokenKind::Error,
                 span,
+            })
+        };
+
+        if self.is_phpx() && self.current_token.kind == TokenKind::Colon {
+            self.bump();
+            if let Some(t) = self.parse_type() {
+                ty = Some(self.arena.alloc(t) as &'ast Type<'ast>);
             }
+        }
+
+        if old_style_phpx_type {
+            self.errors.push(ParseError::with_help(
+                param_name.span,
+                "PHPX function parameters must use '$name: Type' syntax",
+                "Rewrite parameter as '$name: Type' (for example, '$props: NameProps').",
+            ));
+        }
+
+        if let Some(pattern_expr) = pattern {
+            self.push_param_pattern_prologue(pattern_expr, param_name);
+        }
+
+        let default = if self.current_token.kind == TokenKind::Eq {
+            self.bump();
+            Some(self.parse_expr(0))
+        } else {
+            None
+        };
+
+        let hooks = if !modifiers.is_empty() && self.current_token.kind == TokenKind::OpenBrace {
+            Some(
+                self.arena.alloc_slice_copy(&self.parse_property_hooks()) as &'ast [PropertyHook<'ast>]
+            )
+        } else {
+            None
+        };
+
+        let end = if let Some(hooks) = hooks {
+            if let Some(last) = hooks.last() {
+                last.span.end
+            } else {
+                self.current_token.span.start
+            }
+        } else if let Some(expr) = default {
+            expr.span().end
+        } else {
+            param_name.span.end
+        };
+
+        Param {
+            attributes,
+            modifiers: self.arena.alloc_slice_copy(&modifiers),
+            name: param_name,
+            ty,
+            default,
+            by_ref,
+            variadic,
+            hooks,
+            span: Span::new(start, end),
         }
     }
 }

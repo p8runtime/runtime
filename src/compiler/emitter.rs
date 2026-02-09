@@ -3556,6 +3556,12 @@ impl<'src> Emitter<'src> {
                     // Leave the original array on the stack as the assignment result
                     // (statement-level Pop will remove it if needed)
                 }
+                Expr::ObjectLiteral { .. } => {
+                    self.emit_expr(expr);
+                    self.chunk.code.push(OpCode::Dup);
+                    self.emit_destructure_pattern_from_stack(var);
+                    // Keep original RHS on stack as assignment result.
+                }
                 _ => {}
             },
             Expr::AssignRef { var, expr, .. } => {
@@ -4154,6 +4160,89 @@ impl<'src> Emitter<'src> {
         }
         keys.reverse();
         (expr, keys)
+    }
+
+    fn pattern_key_bytes(&self, key: ObjectKey) -> Vec<u8> {
+        match key {
+            ObjectKey::Ident(token) => {
+                let raw = self.get_text(token.span);
+                if raw.first() == Some(&b'$') {
+                    raw[1..].to_vec()
+                } else {
+                    raw.to_vec()
+                }
+            }
+            ObjectKey::String(token) => {
+                let raw = self.get_text(token.span);
+                if raw.len() >= 2
+                    && ((raw[0] == b'"' && raw[raw.len() - 1] == b'"')
+                        || (raw[0] == b'\'' && raw[raw.len() - 1] == b'\''))
+                {
+                    raw[1..raw.len() - 1].to_vec()
+                } else {
+                    raw.to_vec()
+                }
+            }
+        }
+    }
+
+    fn emit_destructure_pattern_from_stack(&mut self, pattern: &Expr) {
+        match pattern {
+            Expr::Variable { span, .. } => {
+                let name = self.get_text(*span);
+                if name.starts_with(b"$") {
+                    let sym = self.interner.intern(&name[1..]);
+                    self.chunk.code.push(OpCode::StoreVar(sym));
+                } else {
+                    self.chunk.code.push(OpCode::Pop);
+                }
+            }
+            Expr::Assign {
+                var,
+                expr: default_expr,
+                ..
+            } => {
+                // Stack: [source]
+                self.chunk.code.push(OpCode::Dup);
+                let jump_idx = self.chunk.code.len();
+                self.chunk.code.push(OpCode::Coalesce(0));
+                self.chunk.code.push(OpCode::Pop);
+                self.emit_expr(default_expr);
+                let jump_target = self.chunk.code.len();
+                self.chunk.code[jump_idx] = OpCode::Coalesce(jump_target as u32);
+                self.emit_destructure_pattern_from_stack(var);
+            }
+            Expr::Array { items, .. } => {
+                for (idx, item) in items.iter().enumerate() {
+                    if matches!(item.value, Expr::Error { .. }) {
+                        continue;
+                    }
+                    self.chunk.code.push(OpCode::Dup);
+                    if let Some(key_expr) = item.key {
+                        self.emit_expr(key_expr);
+                    } else {
+                        let idx_const = self.add_constant(Val::Int(idx as i64));
+                        self.chunk.code.push(OpCode::Const(idx_const as u16));
+                    }
+                    self.chunk.code.push(OpCode::FetchDim);
+                    self.emit_destructure_pattern_from_stack(item.value);
+                }
+                self.chunk.code.push(OpCode::Pop);
+            }
+            Expr::ObjectLiteral { items, .. } => {
+                for item in *items {
+                    self.chunk.code.push(OpCode::Dup);
+                    let key_bytes = self.pattern_key_bytes(item.key);
+                    let key_sym = self.interner.intern(&key_bytes);
+                    self.chunk.code.push(OpCode::FetchDot(key_sym));
+                    self.emit_destructure_pattern_from_stack(item.value);
+                }
+                self.chunk.code.push(OpCode::Pop);
+            }
+            _ => {
+                self.chunk.code.push(OpCode::Pop);
+            }
+        }
     }
 
     fn add_constant(&mut self, val: Val) -> usize {

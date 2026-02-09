@@ -264,11 +264,33 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             value_var = self.parse_expr(0);
         }
 
+        if self.is_phpx()
+            && matches!(
+                value_var,
+                Expr::ObjectLiteral { .. } | Expr::Array { .. } | Expr::Assign { .. }
+            )
+        {
+            self.param_destructure_prologue.clear();
+            if let Some(carrier) = self.pattern_last_binding(value_var) {
+                self.push_param_pattern_prologue(value_var, carrier);
+                value_var = self.arena.alloc(Expr::Variable {
+                    name: carrier.span,
+                    span: carrier.span,
+                });
+            } else {
+                self.errors.push(crate::parser::ast::ParseError::with_help(
+                    value_var.span(),
+                    "Foreach destructuring requires at least one variable binding",
+                    "Use a foreach pattern like '{ id: $id }' or '[ $a, $b ]'.",
+                ));
+            }
+        }
+
         if self.current_token.kind == TokenKind::CloseParen {
             self.bump();
         }
 
-        let body = if self.current_token.kind == TokenKind::Colon {
+        let raw_body = if self.current_token.kind == TokenKind::Colon {
             self.bump();
             let mut stmts = bumpalo::collections::Vec::new_in(self.arena);
             while self.current_token.kind != TokenKind::EndForeach
@@ -287,6 +309,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 Stmt::Block { statements, .. } => *statements,
                 _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],
             }
+        };
+        let prologue = self.take_param_destructure_prologue();
+        let body = if prologue.is_empty() {
+            raw_body
+        } else {
+            let mut merged = std::vec::Vec::with_capacity(prologue.len() + raw_body.len());
+            merged.extend_from_slice(prologue);
+            merged.extend_from_slice(raw_body);
+            self.arena.alloc_slice_copy(&merged)
         };
 
         let end = self.current_token.span.end;

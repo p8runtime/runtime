@@ -82,6 +82,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     pub(crate) fn parse_parameter_list(&mut self) -> &'ast [Param<'ast>] {
+        self.param_destructure_prologue.clear();
         if self.current_token.kind == TokenKind::OpenParen {
             self.bump();
         }
@@ -98,6 +99,278 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
         }
         params.into_bump_slice()
+    }
+
+    pub(super) fn parse_phpx_param_pattern(&mut self) -> Option<ExprId<'ast>> {
+        match self.current_token.kind {
+            TokenKind::OpenBracket | TokenKind::List => Some(self.parse_expr(0)),
+            TokenKind::OpenBrace => Some(self.parse_phpx_object_pattern()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn pattern_last_binding(&self, pattern: ExprId<'ast>) -> Option<&'ast Token> {
+        match pattern {
+            Expr::Variable { span, .. } => Some(self.arena.alloc(Token {
+                kind: TokenKind::Variable,
+                span: *span,
+            })),
+            Expr::Assign { var, .. } => self.pattern_last_binding(var),
+            Expr::Array { items, .. } => {
+                let mut out = None;
+                for item in items.iter() {
+                    if let Some(found) = self.pattern_last_binding(item.value) {
+                        out = Some(found);
+                    }
+                }
+                out
+            }
+            Expr::ObjectLiteral { items, .. } => {
+                let mut out = None;
+                for item in items.iter() {
+                    if let Some(found) = self.pattern_last_binding(item.value) {
+                        out = Some(found);
+                    }
+                }
+                out
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn push_param_pattern_prologue(
+        &mut self,
+        pattern: ExprId<'ast>,
+        source_var: &'ast Token,
+    ) {
+        let source_expr = self.arena.alloc(Expr::Variable {
+            name: source_var.span,
+            span: source_var.span,
+        });
+        self.push_pattern_binding(pattern, source_expr, source_var.span);
+    }
+
+    fn push_pattern_binding(
+        &mut self,
+        pattern: ExprId<'ast>,
+        source_expr: ExprId<'ast>,
+        fallback_span: Span,
+    ) {
+        match pattern {
+            Expr::Variable { .. } => {
+                self.push_binding_assign(pattern, source_expr, fallback_span);
+            }
+            Expr::Assign { var, expr: default, .. } => {
+                let rhs = self.arena.alloc(Expr::Binary {
+                    left: source_expr,
+                    op: BinaryOp::Coalesce,
+                    right: default,
+                    span: Span::new(source_expr.span().start, default.span().end),
+                });
+                self.push_pattern_binding(var, rhs, fallback_span);
+            }
+            Expr::Array { items, span } => {
+                for (idx, item) in items.iter().enumerate() {
+                    if matches!(item.value, Expr::Error { .. }) {
+                        continue;
+                    }
+                    let dim_expr = if let Some(key) = item.key {
+                        key
+                    } else {
+                        let idx_bytes = idx.to_string();
+                        let idx_value = self.arena.alloc_slice_copy(idx_bytes.as_bytes());
+                        self.arena.alloc(Expr::Integer {
+                            value: idx_value,
+                            span: *span,
+                        })
+                    };
+                    let access = self.arena.alloc(Expr::ArrayDimFetch {
+                        array: source_expr,
+                        dim: Some(dim_expr),
+                        span: Span::new(source_expr.span().start, dim_expr.span().end),
+                    });
+                    self.push_pattern_binding(item.value, access, *span);
+                }
+            }
+            Expr::ObjectLiteral { items, span } => {
+                for item in items.iter() {
+                    let access = match item.key {
+                        ObjectKey::Ident(token) => self.arena.alloc(Expr::DotAccess {
+                            target: source_expr,
+                            property: token,
+                            span: Span::new(source_expr.span().start, token.span.end),
+                        }),
+                        ObjectKey::String(token) => {
+                            let raw = self.lexer.slice(token.span);
+                            let value = if raw.len() >= 2
+                                && ((raw[0] == b'"' && raw[raw.len() - 1] == b'"')
+                                    || (raw[0] == b'\'' && raw[raw.len() - 1] == b'\''))
+                            {
+                                &raw[1..raw.len() - 1]
+                            } else {
+                                raw
+                            };
+                            let key_expr = self.arena.alloc(Expr::String {
+                                value: self.arena.alloc_slice_copy(value),
+                                span: token.span,
+                            });
+                            self.arena.alloc(Expr::PropertyFetch {
+                                target: source_expr,
+                                property: key_expr,
+                                span: Span::new(source_expr.span().start, token.span.end),
+                            })
+                        }
+                    };
+                    self.push_pattern_binding(item.value, access, *span);
+                }
+            }
+            _ => {
+                self.errors.push(ParseError::with_help(
+                    fallback_span,
+                    "Unsupported destructuring pattern",
+                    "Use variable, array, or object patterns in PHPX destructuring.",
+                ));
+            }
+        }
+    }
+
+    fn push_binding_assign(
+        &mut self,
+        target: ExprId<'ast>,
+        rhs: ExprId<'ast>,
+        fallback_span: Span,
+    ) {
+        let span = Span::new(target.span().start, rhs.span().end);
+        let assign = self.arena.alloc(Expr::Assign {
+            var: target,
+            expr: rhs,
+            span,
+        });
+        self.param_destructure_prologue
+            .push(self.arena.alloc(Stmt::Expression { expr: assign, span }));
+        if !matches!(target, Expr::Variable { .. }) {
+            self.errors.push(ParseError::with_help(
+                fallback_span,
+                "Destructuring target must resolve to variables",
+                "Use variable bindings inside the destructuring pattern.",
+            ));
+        }
+    }
+
+    fn parse_phpx_object_pattern(&mut self) -> ExprId<'ast> {
+        let start = self.current_token.span.start;
+        self.bump(); // consume {
+        let mut items = bumpalo::collections::Vec::new_in(self.arena);
+        while self.current_token.kind != TokenKind::CloseBrace
+            && self.current_token.kind != TokenKind::Eof
+        {
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+                continue;
+            }
+
+            let item_start = self.current_token.span.start;
+
+            if self.current_token.kind == TokenKind::Variable {
+                // Shorthand: { $name } -> { name: $name }
+                let value_tok = self.arena.alloc(self.current_token);
+                self.bump();
+                let key = ObjectKey::Ident(value_tok);
+                let mut value = self.arena.alloc(Expr::Variable {
+                    name: value_tok.span,
+                    span: value_tok.span,
+                });
+                if self.current_token.kind == TokenKind::Eq {
+                    self.bump();
+                    let default = self.parse_expr(0);
+                    value = self.arena.alloc(Expr::Assign {
+                        var: value,
+                        expr: default,
+                        span: Span::new(item_start, default.span().end),
+                    });
+                }
+                let span = Span::new(item_start, value.span().end);
+                items.push(ObjectItem { key, value, span });
+            } else {
+                let (key, _) = match self.current_token.kind {
+                    TokenKind::Identifier => {
+                        let tok = self.arena.alloc(self.current_token);
+                        self.bump();
+                        (ObjectKey::Ident(tok), tok.span.start)
+                    }
+                    TokenKind::StringLiteral => {
+                        let tok = self.arena.alloc(self.current_token);
+                        self.bump();
+                        (ObjectKey::String(tok), tok.span.start)
+                    }
+                    _ if self.current_token.kind.is_semi_reserved() => {
+                        let tok = self.arena.alloc(self.current_token);
+                        self.bump();
+                        (ObjectKey::Ident(tok), tok.span.start)
+                    }
+                    _ => {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected key or variable in object pattern",
+                        ));
+                        let tok = self.arena.alloc(Token {
+                            kind: TokenKind::Error,
+                            span: self.current_token.span,
+                        });
+                        self.bump();
+                        (ObjectKey::Ident(tok), tok.span.start)
+                    }
+                };
+
+                if self.current_token.kind == TokenKind::Colon {
+                    self.bump();
+                } else {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected ':' after object pattern key",
+                    ));
+                }
+
+                let mut value = if matches!(
+                    self.current_token.kind,
+                    TokenKind::OpenBrace | TokenKind::OpenBracket | TokenKind::List
+                ) {
+                    self.parse_phpx_param_pattern().unwrap_or_else(|| self.parse_expr(0))
+                } else {
+                    self.parse_expr(0)
+                };
+
+                if self.current_token.kind == TokenKind::Eq {
+                    self.bump();
+                    let default = self.parse_expr(0);
+                    value = self.arena.alloc(Expr::Assign {
+                        var: value,
+                        expr: default,
+                        span: Span::new(item_start, default.span().end),
+                    });
+                }
+
+                let span = Span::new(item_start, value.span().end);
+                items.push(ObjectItem { key, value, span });
+            }
+
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+            }
+        }
+
+        let end = if self.current_token.kind == TokenKind::CloseBrace {
+            let end = self.current_token.span.end;
+            self.bump();
+            end
+        } else {
+            self.current_token.span.end
+        };
+
+        self.arena.alloc(Expr::ObjectLiteral {
+            items: items.into_bump_slice(),
+            span: Span::new(start, end),
+        })
     }
 
     pub(crate) fn parse_use_list(&mut self) -> &'ast [ClosureUse<'ast>] {
@@ -195,9 +468,18 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let return_type = self.parse_return_type();
 
         let body_stmt = self.parse_block();
-        let body: &'ast [StmtId<'ast>] = match body_stmt {
+        let raw_body: &'ast [StmtId<'ast>] = match body_stmt {
             Stmt::Block { statements, .. } => statements,
             _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],
+        };
+        let prologue = self.take_param_destructure_prologue();
+        let body = if prologue.is_empty() {
+            raw_body
+        } else {
+            let mut merged = std::vec::Vec::with_capacity(prologue.len() + raw_body.len());
+            merged.extend_from_slice(prologue);
+            merged.extend_from_slice(raw_body);
+            self.arena.alloc_slice_copy(&merged)
         };
 
         let end = self.current_token.span.end;
@@ -236,6 +518,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::DoubleArrow {
             self.bump();
         }
+        let prologue = self.take_param_destructure_prologue();
+        if !prologue.is_empty() {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Arrow functions do not support parameter destructuring yet",
+                "Use a closure with a block body for destructuring parameters.",
+            ));
+        }
         let expr = self.parse_expr(0);
 
         let end = expr.span().end;
@@ -269,6 +559,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     if let Expr::Error { .. } = item.value {
                         continue;
                     }
+                    if !self.is_assignable(item.value) {
+                        return false;
+                    }
+                }
+                true
+            }
+            Expr::ObjectLiteral { items, .. } => {
+                for item in items.iter() {
                     if !self.is_assignable(item.value) {
                         return false;
                     }

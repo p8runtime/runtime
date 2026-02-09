@@ -1,6 +1,6 @@
 use crate::parser::ast::{
     BinaryOp, ClassKind, ClassMember, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
-    PropertyEntry, Stmt, Type as AstType, TypeParam, UnaryOp,
+    PropertyEntry, Stmt, StmtId, Type as AstType, TypeParam, UnaryOp,
 };
 use crate::parser::ast::visitor::{walk_expr, Visitor};
 use crate::parser::lexer::token::TokenKind;
@@ -383,6 +383,8 @@ impl<'a> CheckContext<'a> {
         attributes: &'a [crate::parser::ast::JsxAttribute<'a>],
         span: Span,
     ) {
+        self.validate_component_signature(component, span);
+
         let mut attrs = HashSet::new();
         for attr in attributes.iter() {
             let name = token_text(self.source, attr.name.span);
@@ -413,6 +415,61 @@ impl<'a> CheckContext<'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn validate_component_signature(&mut self, component: &str, span: Span) {
+        let Some(sig) = self.functions.get(component).cloned() else {
+            return;
+        };
+
+        if sig.variadic || sig.params.len() != 1 {
+            self.errors.push(TypeError {
+                span,
+                message: format!(
+                    "JSX component '{}' must accept exactly one typed props parameter",
+                    component
+                ),
+            });
+            return;
+        }
+
+        let Some(props_ty) = sig.params.first().and_then(|param| param.ty.clone()) else {
+            self.errors.push(TypeError {
+                span,
+                message: format!(
+                    "JSX component '{}' props parameter must be typed (use struct or Object<{{...}}>)",
+                    component
+                ),
+            });
+            return;
+        };
+
+        if !self.is_component_props_type(&props_ty) {
+            self.errors.push(TypeError {
+                span,
+                message: format!(
+                    "JSX component '{}' props type must be struct or object shape, got {}",
+                    component, props_ty
+                ),
+            });
+        }
+    }
+
+    fn is_component_props_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Struct(_) | Type::Object | Type::ObjectShape(_) => true,
+            Type::Applied { base, args } => {
+                if base == "Object" {
+                    return true;
+                }
+                if (base == "Option" || base == "Result") && !args.is_empty() {
+                    return self.is_component_props_type(&args[0]);
+                }
+                false
+            }
+            Type::Union(types) => !types.is_empty() && types.iter().all(|inner| self.is_component_props_type(inner)),
+            _ => false,
         }
     }
 
@@ -624,10 +681,15 @@ impl<'a> CheckContext<'a> {
                     self.collect_type_param_sigs(type_params);
                 let mut fn_env: HashMap<String, Type> = HashMap::new();
                 let mut fn_explicit: HashSet<String> = HashSet::new();
+                let destructured_params =
+                    self.detect_destructured_param_carriers(params, body);
                 for param in params.iter() {
+                    let param_name = token_text(self.source, param.name.span);
+                    let param_name = param_name.trim_start_matches('$').to_string();
+                    if destructured_params.contains(&param_name) {
+                        continue;
+                    }
                     if let Some(ty) = param.ty {
-                        let param_name = token_text(self.source, param.name.span);
-                        let param_name = param_name.trim_start_matches('$').to_string();
                         let resolved = self.resolve_type_with_params(ty, &type_param_set);
                         fn_env.insert(param_name.clone(), resolved);
                         fn_explicit.insert(param_name);
@@ -675,6 +737,96 @@ impl<'a> CheckContext<'a> {
         }
     }
 
+    fn detect_destructured_param_carriers(
+        &self,
+        params: &[crate::parser::ast::Param<'a>],
+        body: &[StmtId<'a>],
+    ) -> HashSet<String> {
+        let param_names: HashSet<String> = params
+            .iter()
+            .map(|param| token_text(self.source, param.name.span).trim_start_matches('$').to_string())
+            .collect();
+        let mut out = HashSet::new();
+        for stmt in body.iter().take(24) {
+            let Stmt::Expression { expr, .. } = &**stmt else {
+                continue;
+            };
+            let Expr::Assign { var, expr, .. } = *expr else {
+                continue;
+            };
+            let Expr::Variable { span, .. } = *var else {
+                continue;
+            };
+            let name = token_text(self.source, *span).trim_start_matches('$').to_string();
+            if !param_names.contains(&name) {
+                continue;
+            }
+            if self.expr_contains_named_var(expr, &name) {
+                out.insert(name);
+            }
+        }
+        out
+    }
+
+    fn expr_contains_named_var(&self, expr: ExprId<'a>, name: &str) -> bool {
+        match *expr {
+            Expr::Variable { span, .. } => {
+                token_text(self.source, span).trim_start_matches('$') == name
+            }
+            Expr::Binary { left, right, .. } => {
+                self.expr_contains_named_var(left, name)
+                    || self.expr_contains_named_var(right, name)
+            }
+            Expr::ArrayDimFetch { array, dim, .. } => {
+                self.expr_contains_named_var(array, name)
+                    || dim
+                        .map(|dim| self.expr_contains_named_var(dim, name))
+                        .unwrap_or(false)
+            }
+            Expr::PropertyFetch {
+                target, property, ..
+            } => {
+                self.expr_contains_named_var(target, name)
+                    || self.expr_contains_named_var(property, name)
+            }
+            Expr::DotAccess { target, .. } => self.expr_contains_named_var(target, name),
+            Expr::Assign { var, expr, .. } => {
+                self.expr_contains_named_var(var, name)
+                    || self.expr_contains_named_var(expr, name)
+            }
+            Expr::ObjectLiteral { items, .. } => items
+                .iter()
+                .any(|item| self.expr_contains_named_var(item.value, name)),
+            Expr::Array { items, .. } => items
+                .iter()
+                .any(|item| self.expr_contains_named_var(item.value, name)),
+            _ => false,
+        }
+    }
+
+    fn is_self_destructure_assignment_expr(&self, expr: ExprId<'a>, name: &str) -> bool {
+        match *expr {
+            Expr::PropertyFetch { target, .. } | Expr::ArrayDimFetch { array: target, .. } => {
+                self.expr_is_named_var(target, name)
+            }
+            Expr::Binary {
+                left,
+                op: BinaryOp::Coalesce,
+                ..
+            } => self.is_self_destructure_assignment_expr(left, name),
+            _ => false,
+        }
+    }
+
+    fn expr_is_named_var(&self, expr: ExprId<'a>, name: &str) -> bool {
+        match *expr {
+            Expr::Variable { span, .. } => {
+                token_text(self.source, span).trim_start_matches('$') == name
+            }
+            _ => false,
+        }
+    }
+
     fn check_expr(
         &mut self,
         expr: ExprId<'a>,
@@ -685,6 +837,14 @@ impl<'a> CheckContext<'a> {
             Expr::Null { .. } => Type::Primitive(PrimitiveType::Null),
             Expr::Assign { var, expr, .. } | Expr::AssignRef { var, expr, .. } => {
                 let rhs_ty = self.check_expr(expr, env, explicit);
+                if let Expr::Variable { span, .. } = *var {
+                    let name = token_text(self.source, span)
+                        .trim_start_matches('$')
+                        .to_string();
+                    if self.is_self_destructure_assignment_expr(expr, &name) {
+                        explicit.remove(&name);
+                    }
+                }
                 self.assign_to_target(var, &rhs_ty, env, explicit);
                 rhs_ty
             }
@@ -2071,7 +2231,94 @@ impl<'a> CheckContext<'a> {
             } => {
                 self.check_dot_access(target, property, span, env);
             }
+            Expr::Assign { var, expr, .. } => {
+                let default_ty = self.check_expr(expr, env, explicit);
+                let merged = merge_types(value_ty, &default_ty);
+                self.assign_to_target(var, &merged, env, explicit);
+            }
+            Expr::Array { items, .. } => {
+                for (idx, item) in items.iter().enumerate() {
+                    if matches!(item.value, Expr::Error { .. }) {
+                        continue;
+                    }
+                    let key_name = item
+                        .key
+                        .and_then(|key| self.pattern_key_name_from_expr(key))
+                        .unwrap_or_else(|| idx.to_string());
+                    let field_ty = self.field_type_for_pattern_key(value_ty, &key_name);
+                    self.assign_to_target(item.value, &field_ty, env, explicit);
+                }
+            }
+            Expr::ObjectLiteral { items, .. } => {
+                for item in items.iter() {
+                    let key_name = self.pattern_key_name(item.key);
+                    let field_ty = self.field_type_for_pattern_key(value_ty, &key_name);
+                    self.assign_to_target(item.value, &field_ty, env, explicit);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn pattern_key_name(&self, key: ObjectKey<'a>) -> String {
+        match key {
+            ObjectKey::Ident(token) => {
+                let raw = token_text(self.source, token.span);
+                raw.trim_start_matches('$').to_string()
+            }
+            ObjectKey::String(token) => {
+                let raw = token_text(self.source, token.span);
+                raw.trim_matches('"').trim_matches('\'').to_string()
+            }
+        }
+    }
+
+    fn pattern_key_name_from_expr(&self, expr: ExprId<'a>) -> Option<String> {
+        match *expr {
+            Expr::String { value, .. } => {
+                let raw = std::str::from_utf8(value).ok()?;
+                Some(raw.trim_matches('"').trim_matches('\'').to_string())
+            }
+            Expr::Integer { value, .. } => std::str::from_utf8(value).ok().map(|s| s.to_string()),
+            _ => None,
+        }
+    }
+
+    fn field_type_for_pattern_key(&self, source_ty: &Type, key: &str) -> Type {
+        match source_ty {
+            Type::ObjectShape(fields) => fields
+                .get(key)
+                .map(|field| field.ty.clone())
+                .unwrap_or(Type::Unknown),
+            Type::Struct(name) => self
+                .structs
+                .get(name)
+                .and_then(|info| info.fields.get(key).cloned())
+                .unwrap_or(Type::Unknown),
+            Type::Applied { base, args } => {
+                if base.eq_ignore_ascii_case("array") {
+                    args.first().cloned().unwrap_or(Type::Unknown)
+                } else {
+                    Type::Unknown
+                }
+            }
+            Type::Union(types) => {
+                let mut parts = Vec::new();
+                for ty in types {
+                    let resolved = self.field_type_for_pattern_key(ty, key);
+                    if !matches!(resolved, Type::Unknown) {
+                        parts.push(resolved);
+                    }
+                }
+                if parts.is_empty() {
+                    Type::Unknown
+                } else if parts.len() == 1 {
+                    parts[0].clone()
+                } else {
+                    Type::Union(parts)
+                }
+            }
+            _ => Type::Unknown,
         }
     }
 

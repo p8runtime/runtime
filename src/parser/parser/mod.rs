@@ -1,4 +1,4 @@
-use crate::parser::ast::{Name, ParseError, Program};
+use crate::parser::ast::{Name, ParseError, Program, StmtId};
 use crate::parser::lexer::{
     Lexer, LexerMode,
     token::{Token, TokenKind},
@@ -35,6 +35,7 @@ pub struct Parser<'src, 'ast> {
     pub(super) next_doc_comment: Option<Span>,
     pub(super) seen_non_declare_stmt: bool,
     pub(super) mode: ParserMode,
+    pub(super) param_destructure_prologue: std::vec::Vec<StmtId<'ast>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +74,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             next_doc_comment: None,
             seen_non_declare_stmt: false,
             mode,
+            param_destructure_prologue: std::vec::Vec::new(),
         };
         parser.bump();
         parser.bump();
@@ -85,6 +87,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
     pub(super) fn allow_phpx_namespace(&self) -> bool {
         self.mode == ParserMode::PhpxInternal
+    }
+
+    pub(super) fn take_param_destructure_prologue(&mut self) -> &'ast [StmtId<'ast>] {
+        let prologue = std::mem::take(&mut self.param_destructure_prologue);
+        self.arena.alloc_slice_copy(&prologue)
     }
 
     fn bump(&mut self) {
