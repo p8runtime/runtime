@@ -246,3 +246,93 @@ fn phpx_parses_object_assignment_destructuring() {
         program.errors
     );
 }
+
+#[test]
+fn phpx_parses_object_destructuring_fixture_shape() {
+    let code = r#"
+$pkg = { id: 42, meta: { slug: "hello" } }
+({ id: $id, meta: { slug: $slug } } = $pkg)
+
+function fullName({ first: $first, last: $last = "Smith" }: Object<{ first: string, last?: string }>) {
+  return $first . " " . $last
+}
+
+echo fullName({ first: "Sam" })
+
+$rows = [
+  { name: "A", count: 1 },
+  { name: "B", count: 2 },
+]
+
+foreach ($rows as { name: $name, count: $count }) {
+  echo $name . ":" . $count
+}
+"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn phpx_parses_variable_assignment_from_object_literal() {
+    let code = "$a = { foo: \"bar\" }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| !matches!(***s, Stmt::Nop { .. }))
+        .expect("expected statement");
+
+    match &**stmt {
+        Stmt::Expression { expr, .. } => match **expr {
+            crate::parser::ast::Expr::Assign { var, expr: rhs, .. } => {
+                assert!(
+                    matches!(*var, crate::parser::ast::Expr::Variable { .. }),
+                    "expected variable assignment target"
+                );
+                assert!(
+                    matches!(*rhs, crate::parser::ast::Expr::ObjectLiteral { .. }),
+                    "expected object literal rhs"
+                );
+            }
+            ref other => panic!("expected assignment expression, got {:?}", other),
+        },
+        other => panic!("expected expression statement, got {:?}", other),
+    }
+}
+
+#[test]
+fn phpx_inserts_asi_before_newline_open_paren() {
+    let code = "$a = { foo: \"bar\" }\n({ foo: $x } = $a)\n";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
+
+    let expr_stmt_count = program
+        .statements
+        .iter()
+        .filter(|stmt| matches!(***stmt, Stmt::Expression { .. }))
+        .count();
+    assert_eq!(expr_stmt_count, 2, "expected two expression statements");
+}

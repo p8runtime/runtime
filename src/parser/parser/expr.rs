@@ -721,6 +721,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let mut just_parsed_elvis = false;
 
         loop {
+            // PHPX ASI guard: a line break before `(` should terminate the expression
+            // instead of continuing as a call chain on the next line.
+            if self.is_phpx()
+                && self.current_token.kind == TokenKind::OpenParen
+                && self.has_line_terminator_between(self.prev_token.span, self.current_token.span)
+            {
+                break;
+            }
+
             if self.current_token.kind == TokenKind::Dot && self.is_phpx() {
                 let dot_span = self.current_token.span;
                 let next = self.next_token;
