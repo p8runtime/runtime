@@ -7,7 +7,19 @@ use php_rs::runtime::context::EngineBuilder;
 use php_rs::vm::engine::{VM, VmError};
 use std::rc::Rc;
 
+fn normalize_phpx_snippet(code: &str) -> &str {
+    let trimmed = code.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("<?php") {
+        return rest;
+    }
+    if let Some(rest) = trimmed.strip_prefix("<?") {
+        return rest;
+    }
+    code
+}
+
 fn run_phpx(code: &str) -> Result<(VM, Handle), VmError> {
+    let code = normalize_phpx_snippet(code);
     let engine = EngineBuilder::new()
         .with_core_extensions()
         .build()
@@ -53,7 +65,7 @@ fn val_to_string(vm: &VM, handle: Handle) -> String {
 #[test]
 fn enum_payload_constructs_value() {
     let code = r#"<?php
-        enum Msg { case Text(string $body); }
+        enum Msg { case Text($body: string); }
         $m = Msg::Text("hi");
         return $m->body;
     "#;
@@ -64,7 +76,7 @@ fn enum_payload_constructs_value() {
 #[test]
 fn enum_payload_has_name() {
     let code = r#"<?php
-        enum Msg { case Text(string $body); }
+        enum Msg { case Text($body: string); }
         return Msg::Text("hi")->name;
     "#;
     let (vm, handle) = run_phpx(code).expect("vm run");
@@ -74,7 +86,7 @@ fn enum_payload_has_name() {
 #[test]
 fn enum_equality_is_case_based() {
     let code = r#"<?php
-        enum Msg { case Text(string $body); }
+        enum Msg { case Text($body: string); }
         return Msg::Text("a") === Msg::Text("b");
     "#;
     let (vm, handle) = run_phpx(code).expect("vm run");
@@ -84,7 +96,7 @@ fn enum_equality_is_case_based() {
 #[test]
 fn enum_payload_arity_mismatch_errors() {
     let code = r#"<?php
-        enum Msg { case Text(string $body); }
+        enum Msg { case Text($body: string); }
         return Msg::Text();
     "#;
     let res = run_phpx(code);
@@ -119,7 +131,7 @@ fn enum_payload_on_unit_case_errors() {
 #[test]
 fn enum_cases_returns_descriptors() {
     let code = r#"<?php
-        enum Msg { case Text(string $body); }
+        enum Msg { case Text($body: string); }
         $cases = Msg::cases();
         return $cases[0]->name;
     "#;
@@ -130,7 +142,7 @@ fn enum_cases_returns_descriptors() {
 #[test]
 fn enum_case_descriptor_equals_payload_value() {
     let code = r#"<?php
-        enum Msg { case Text(string $body); }
+        enum Msg { case Text($body: string); }
         $case = Msg::cases()[0];
         return $case === Msg::Text("hi");
     "#;

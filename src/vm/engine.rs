@@ -12754,6 +12754,9 @@ impl VM {
                 }
             }
             ReturnType::Named(class_sym) => {
+                if self.is_phpx_shape_interface(*class_sym) {
+                    return Ok(self.value_matches_interface_shape(val_handle, *class_sym));
+                }
                 // Check if value is instance of the named class
                 match val {
                     Val::Object(_) => Ok(self.is_instance_of(val_handle, *class_sym)),
@@ -13075,6 +13078,45 @@ impl VM {
                 names.join("&")
             }
             ReturnType::Nullable(inner) => format!("?{}", self.return_type_name(inner)),
+        }
+    }
+
+    /// A PHPX "shape interface" is represented as an interface with declared properties.
+    /// Native PHP interfaces cannot declare properties, so this does not affect normal PHP behavior.
+    fn is_phpx_shape_interface(&self, interface_sym: Symbol) -> bool {
+        self.context
+            .classes
+            .get(&interface_sym)
+            .map(|def| def.is_interface && !def.properties.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Structural runtime check used by PHPX shape interfaces.
+    /// Accept object literals, structs, and objects if required fields exist.
+    fn value_matches_interface_shape(&self, val_handle: Handle, interface_sym: Symbol) -> bool {
+        let Some(interface_def) = self.context.classes.get(&interface_sym) else {
+            return false;
+        };
+        let required: Vec<Symbol> = interface_def.properties.keys().copied().collect();
+        if required.is_empty() {
+            return false;
+        }
+
+        match &self.arena.get(val_handle).value {
+            Val::Object(payload_handle) => {
+                if let Val::ObjPayload(obj_data) = &self.arena.get(*payload_handle).value {
+                    required
+                        .iter()
+                        .all(|prop| obj_data.properties.contains_key(prop))
+                } else {
+                    false
+                }
+            }
+            Val::Struct(obj_data) => required
+                .iter()
+                .all(|prop| obj_data.properties.contains_key(prop)),
+            Val::ObjectMap(map_data) => required.iter().all(|prop| map_data.map.contains_key(prop)),
+            _ => false,
         }
     }
 
@@ -14401,7 +14443,19 @@ mod tests {
         VM::new(engine)
     }
 
+    fn normalize_phpx_snippet(code: &str) -> &str {
+        let trimmed = code.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("<?php") {
+            return rest;
+        }
+        if let Some(rest) = trimmed.strip_prefix("<?") {
+            return rest;
+        }
+        code
+    }
+
     fn run_phpx(code: &str) -> Val {
+        let code = normalize_phpx_snippet(code);
         let mut vm = create_vm();
         let arena = Bump::new();
         let lexer = Lexer::new(code.as_bytes());

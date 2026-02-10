@@ -5,7 +5,19 @@ use crate::parser::lexer::Lexer;
 use crate::parser::parser::{Parser, ParserMode};
 use crate::phpx::typeck::{check_program, check_program_with_path};
 
+fn normalize_phpx_snippet(code: &str) -> &str {
+    let trimmed = code.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("<?php") {
+        return rest;
+    }
+    if let Some(rest) = trimmed.strip_prefix("<?") {
+        return rest;
+    }
+    code
+}
+
 fn check(code: &str) -> Result<(), String> {
+    let code = normalize_phpx_snippet(code);
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
@@ -28,6 +40,7 @@ fn check(code: &str) -> Result<(), String> {
 }
 
 fn check_with_path(code: &str, path: &str) -> Result<(), String> {
+    let code = normalize_phpx_snippet(code);
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
@@ -238,8 +251,74 @@ fn jsx_component_requires_typed_props_param() {
 
 #[test]
 fn jsx_component_typed_props_param_is_allowed() {
-    let code = "<?php struct FullNameProps { $name: string; } function FullName(FullNameProps $props): string { return $props.name; } $v = <FullName name=\"Bob\" />;";
+    let code = "interface FullNameProps { $name: string; } function FullName($props: FullNameProps): string { return $props.name; } $v = <FullName name='Bob' />;";
     assert!(check(code).is_ok());
+}
+
+#[test]
+fn jsx_component_unknown_prop_suggests_expected_name() {
+    let code = "interface FullNameProps { $name: string; } function FullName($props: FullNameProps): string { return $props.name; } $v = <FullName nam='Bob' />;";
+    let err = check(code).expect_err("expected unknown prop to fail");
+    assert!(
+        err.contains("Unknown prop 'nam'") && err.contains("did you mean 'name'"),
+        "expected prop suggestion, got: {}",
+        err
+    );
+}
+
+#[test]
+fn jsx_component_missing_required_prop_errors() {
+    let code = "interface FullNameProps { $name: string; } function FullName($props: FullNameProps): string { return $props.name; } $v = <FullName />;";
+    let err = check(code).expect_err("expected missing required prop to fail");
+    assert!(
+        err.contains("Missing required prop 'name'"),
+        "expected required prop error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn jsx_component_missing_required_prop_errors_when_nested() {
+    let code = "interface FullNameProps { $name: string; } function FullName($props: FullNameProps): string { return $props.name; } $v = <div><FullName /></div>;";
+    let err = check(code).expect_err("expected nested missing required prop to fail");
+    assert!(
+        err.contains("Missing required prop 'name'"),
+        "expected required prop error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn jsx_component_struct_props_is_rejected_with_guidance() {
+    let code = "struct FullNameProps { $name: string; } function FullName($props: FullNameProps): string { return $props.name; } $v = <FullName name='Bob' />;";
+    let err = check(code).expect_err("expected struct props to be rejected");
+    assert!(
+        err.contains("cannot be a struct") && err.contains("use interface"),
+        "expected guidance in error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn destructured_param_struct_type_is_rejected_with_guidance() {
+    let code = "struct NameProps { $name: string; } function FullName({ $name }: NameProps): string { return $name; }";
+    let err = check(code).expect_err("expected destructured struct param to be rejected");
+    assert!(
+        err.contains("Destructured parameter") && err.contains("use interface"),
+        "expected guidance in error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn unknown_variable_suggests_nearby_name() {
+    let code = "function fullName($name: string): string { return $nam; }";
+    let err = check(code).expect_err("expected unknown variable diagnostic");
+    assert!(
+        err.contains("Unknown variable '$nam'") && err.contains("did you mean '$name'"),
+        "expected variable suggestion, got: {}",
+        err
+    );
 }
 
 #[test]
@@ -250,13 +329,13 @@ fn union_allows_object_shape_dot_access() {
 
 #[test]
 fn object_shape_optional_fields_allow_missing() {
-    let code = "<?php function f(Object<{ foo?: int }> $x) {} f({}); f({ foo: 1 });";
+    let code = "<?php function f($x: Object<{ foo?: int }>) {} f({}); f({ foo: 1 });";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn object_shape_excess_property_errors() {
-    let code = "<?php function f(Object<{ foo: int }> $x) {} f({ foo: 1, bar: 2 });";
+    let code = "<?php function f($x: Object<{ foo: int }>) {} f({ foo: 1, bar: 2 });";
     assert!(check(code).is_err());
 }
 
@@ -274,79 +353,99 @@ fn null_literal_is_rejected() {
 
 #[test]
 fn nullable_type_annotation_is_rejected() {
-    let code = "<?php function f(?int $x) {}";
+    let code = "<?php function f($x: ?int) {}";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn option_allows_none_argument() {
-    let code = "<?php function f(Option<int> $x) {} f(Option::None);";
+    let code = "<?php function f($x: Option<int>) {} f(Option::None);";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn option_allows_none_assignment_to_param() {
-    let code = "<?php function f(Option<int> $x) { $x = Option::None; }";
+    let code = "<?php function f($x: Option<int>) { $x = Option::None; }";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn option_some_argument_type_checks() {
-    let code = "<?php function f(Option<int> $x) {} f(Option::Some(1));";
+    let code = "<?php function f($x: Option<int>) {} f(Option::Some(1));";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn result_ok_err_argument_type_checks() {
-    let code = "<?php function f(Result<int, string> $r) {} f(Result::Ok(1)); f(Result::Err(\"no\"));";
+    let code = "<?php function f($r: Result<int, string>) {} f(Result::Ok(1)); f(Result::Err(\"no\"));";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn null_argument_to_non_option_errors() {
-    let code = "<?php function f(int $x) {} f(null);";
+    let code = "<?php function f($x: int) {} f(null);";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn type_alias_object_shape_enforced() {
-    let code = "<?php type Person = Object<{ foo: int }>; function f(Person $p) {} f({ foo: 1 }); f({ bar: 2 });";
+    let code = "<?php type Person = Object<{ foo: int }>; function f($p: Person) {} f({ foo: 1 }); f({ bar: 2 });";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn type_alias_sugar_object_shape_ok() {
-    let code = "<?php type Person = { foo: int, bar?: string }; function f(Person $p) {} f({ foo: 1 });";
+    let code = "<?php type Person = { foo: int, bar?: string }; function f($p: Person) {} f({ foo: 1 });";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn generic_type_alias_infers_type_param() {
-    let code = "<?php type Box<T> = { value: T }; function unbox<T>(Box<T> $b): T { return $b.value; } $x = unbox({ value: 1 });";
+    let code = "<?php type Box<T> = { value: T }; function unbox<T>($b: Box<T>): T { return $b.value; } $x = unbox({ value: 1 });";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn generic_type_param_constraint_enforced() {
-    let code = "<?php function f<T: int>(T $x) {} f(\"nope\");";
+    let code = "<?php function f<T: int>($x: T) {} f(\"nope\");";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn interface_accepts_struct_with_matching_methods() {
-    let code = "<?php interface Reader { public function read(int $n): string; } struct File { public function read(int $n): string { return \"\"; } } function useReader(Reader $r) {} useReader(File { });";
+    let code = "<?php interface Reader { public function read($n: int): string; } struct File { public function read($n: int): string { return \"\"; } } function useReader($r: Reader) {} useReader(File { });";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn interface_rejects_struct_missing_method() {
-    let code = "<?php interface Reader { public function read(int $n): string; } struct Bad { } function useReader(Reader $r) {} useReader(Bad { });";
+    let code = "<?php interface Reader { public function read($n: int): string; } struct Bad { } function useReader($r: Reader) {} useReader(Bad { });";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn interface_constraint_enforced_for_type_param() {
-    let code = "<?php interface Reader { public function read(int $n): string; } struct File { public function read(int $n): string { return \"\"; } } struct Bad { } function useReader<T: Reader>(T $r) {} useReader(File { }); useReader(Bad { });";
+    let code = "<?php interface Reader { public function read($n: int): string; } struct File { public function read($n: int): string { return \"\"; } } struct Bad { } function useReader<T: Reader>($r: T) {} useReader(File { }); useReader(Bad { });";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn interface_shape_accepts_object_literal() {
+    let code = "interface NameProps { $name: string; } function fullName($props: NameProps): string { return $props.name; } fullName({ name: \"Bob\" });";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn interface_shape_accepts_destructured_param_binding() {
+    let code = "interface NameProps { $name: string; } function FullName({ $name }: NameProps): string { return $name; } FullName({ name: 'Bob' });";
+    if let Err(err) = check(code) {
+        panic!("expected destructured interface param to type-check, got:\n{}", err);
+    }
+}
+
+#[test]
+fn interface_shape_rejects_missing_required_field() {
+    let code = "interface NameProps { $name: string; } function fullName($props: NameProps): string { return $props.name; } fullName({});";
     assert!(check(code).is_err());
 }
 
@@ -358,7 +457,7 @@ fn struct_embed_promotes_fields() {
 
 #[test]
 fn struct_embed_dot_access_infers_type() {
-    let code = "<?php struct A { $x: int; } struct B { use A; } function takes(int $x) {} $b = B { $A: A { $x: 1 } }; takes($b.x);";
+    let code = "<?php struct A { $x: int; } struct B { use A; } function takes($x: int) {} $b = B { $A: A { $x: 1 } }; takes($b.x);";
     assert!(check(code).is_ok());
 }
 
@@ -370,43 +469,43 @@ fn struct_embed_ambiguous_field_errors() {
 
 #[test]
 fn enum_payload_call_type_checks() {
-    let code = "<?php enum Msg { case Text(string $body); } $m = Msg::Text(\"hi\");";
+    let code = "<?php enum Msg { case Text($body: string); } $m = Msg::Text(\"hi\");";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn enum_payload_call_mismatch_errors() {
-    let code = "<?php enum Msg { case Text(string $body); } $m = Msg::Text(123);";
+    let code = "<?php enum Msg { case Text($body: string); } $m = Msg::Text(123);";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn enum_match_exhaustive_ok() {
-    let code = "<?php enum Color { case Red; case Blue; } function f(Color $c): int { return match ($c) { Color::Red => 1, Color::Blue => 2 }; }";
+    let code = "<?php enum Color { case Red; case Blue; } function f($c: Color): int { return match ($c) { Color::Red => 1, Color::Blue => 2 }; }";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn enum_match_missing_case_errors() {
-    let code = "<?php enum Color { case Red; case Blue; } function f(Color $c): int { return match ($c) { Color::Red => 1 }; }";
+    let code = "<?php enum Color { case Red; case Blue; } function f($c: Color): int { return match ($c) { Color::Red => 1 }; }";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn enum_match_arm_narrows_payload_fields() {
-    let code = "<?php enum Msg { case Text(string $body); case Ping; } function f(Msg $m): string { return match ($m) { Msg::Text => $m.body, Msg::Ping => \"ok\" }; }";
+    let code = "<?php enum Msg { case Text($body: string); case Ping; } function f($m: Msg): string { return match ($m) { Msg::Text => $m.body, Msg::Ping => \"ok\" }; }";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn enum_match_arm_rejects_invalid_payload_field() {
-    let code = "<?php enum Msg { case Text(string $body); case Ping; } function f(Msg $m): string { return match ($m) { Msg::Text => \"ok\", Msg::Ping => $m.body }; }";
+    let code = "<?php enum Msg { case Text($body: string); case Ping; } function f($m: Msg): string { return match ($m) { Msg::Text => \"ok\", Msg::Ping => $m.body }; }";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn enum_payload_assignment_allows_dot_access() {
-    let code = "<?php enum Msg { case Text(string $body); } $m = Msg::Text(\"hi\"); $m.body;";
+    let code = "<?php enum Msg { case Text($body: string); } $m = Msg::Text(\"hi\"); $m.body;";
     assert!(check(code).is_ok());
 }
 
@@ -418,68 +517,68 @@ fn null_comparison_is_rejected() {
 
 #[test]
 fn enum_match_narrows_across_multiple_enums() {
-    let code = "<?php enum A { case One(string $body); } enum B { case Two(string $body); } function f(A|B $x): string { return match ($x) { A::One, B::Two => $x.body }; }";
+    let code = "<?php enum A { case One($body: string); } enum B { case Two($body: string); } function f($x: A|B): string { return match ($x) { A::One, B::Two => $x.body }; }";
     let result = check(code);
     assert!(result.is_ok(), "{}", result.unwrap_err());
 }
 
 #[test]
 fn match_expression_infers_union_for_arguments() {
-    let code = "<?php function takesInt(int $x) {} $flag = true; takesInt(match ($flag) { true => 1, false => \"no\" });";
+    let code = "<?php function takesInt($x: int) {} $flag = true; takesInt(match ($flag) { true => 1, false => \"no\" });";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn generic_array_literal_infers_type_param() {
-    let code = "<?php function takes<T>(array<T> $xs) {} takes([1, 2, 3]);";
+    let code = "<?php function takes<T>($xs: array<T>) {} takes([1, 2, 3]);";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn generic_array_literal_inference_enforces_constraints() {
-    let code = "<?php function takes<T: int>(array<T> $xs) {} takes([1, \"no\"]);";
+    let code = "<?php function takes<T: int>($xs: array<T>) {} takes([1, \"no\"]);";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn generic_option_infers_from_some() {
-    let code = "<?php function takes<T>(Option<T> $x) {} takes(Option::Some(1));";
+    let code = "<?php function takes<T>($x: Option<T>) {} takes(Option::Some(1));";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn generic_option_none_requires_type() {
-    let code = "<?php function takes<T>(Option<T> $x) {} takes(Option::None);";
+    let code = "<?php function takes<T>($x: Option<T>) {} takes(Option::None);";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn generic_result_infers_from_ok() {
-    let code = "<?php function takes<T>(Result<T, string> $x) {} takes(Result::Ok(1));";
+    let code = "<?php function takes<T>($x: Result<T, string>) {} takes(Result::Ok(1));";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn generic_result_infers_from_err() {
-    let code = "<?php function takes<E>(Result<int, E> $x) {} takes(Result::Err(\"no\"));";
+    let code = "<?php function takes<E>($x: Result<int, E>) {} takes(Result::Err(\"no\"));";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn struct_method_call_type_checks() {
-    let code = "<?php struct Reader { public function read(int $n): string { return \"\"; } } $r = Reader { }; $r->read(1);";
+    let code = "<?php struct Reader { public function read($n: int): string { return \"\"; } } $r = Reader { }; $r->read(1);";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn struct_method_call_mismatch_errors() {
-    let code = "<?php struct Reader { public function read(int $n): string { return \"\"; } } $r = Reader { }; $r->read(\"no\");";
+    let code = "<?php struct Reader { public function read($n: int): string { return \"\"; } } $r = Reader { }; $r->read(\"no\");";
     assert!(check(code).is_err());
 }
 
 #[test]
 fn interface_method_call_mismatch_errors() {
-    let code = "<?php interface Reader { public function read(int $n): string; } function useReader(Reader $r) { $r->read(\"no\"); }";
+    let code = "<?php interface Reader { public function read($n: int): string; } function useReader($r: Reader) { $r->read(\"no\"); }";
     assert!(check(code).is_err());
 }
 
@@ -527,6 +626,6 @@ fn class_type_annotation_is_rejected() {
 
 #[test]
 fn destructured_assignment_bindings_follow_source_shape() {
-    let code = "$obj = { count: 3 }; echo (({ count: $count } = $obj).count); $count + 1;";
+    let code = "$obj = { count: 3 }; ({ count: $count } = $obj); $count + 1;";
     assert!(check(code).is_ok());
 }
