@@ -155,6 +155,7 @@ pub enum Stmt<'ast> {
     Function {
         attributes: &'ast [AttributeGroup<'ast>],
         name: &'ast Token,
+        is_async: bool,
         by_ref: bool,
         type_params: &'ast [TypeParam<'ast>],
         params: &'ast [Param<'ast>],
@@ -500,6 +501,10 @@ pub enum Expr<'ast> {
         expr: ExprId<'ast>,
         span: Span,
     },
+    Await {
+        expr: ExprId<'ast>,
+        span: Span,
+    },
     Die {
         expr: Option<ExprId<'ast>>,
         span: Span,
@@ -510,6 +515,7 @@ pub enum Expr<'ast> {
     },
     Closure {
         attributes: &'ast [AttributeGroup<'ast>],
+        is_async: bool,
         is_static: bool,
         by_ref: bool,
         params: &'ast [Param<'ast>],
@@ -520,6 +526,7 @@ pub enum Expr<'ast> {
     },
     ArrowFunction {
         attributes: &'ast [AttributeGroup<'ast>],
+        is_async: bool,
         is_static: bool,
         by_ref: bool,
         params: &'ast [Param<'ast>],
@@ -638,6 +645,7 @@ impl<'ast> Expr<'ast> {
             Expr::Empty { span, .. } => *span,
             Expr::Isset { span, .. } => *span,
             Expr::Eval { span, .. } => *span,
+            Expr::Await { span, .. } => *span,
             Expr::Die { span, .. } => *span,
             Expr::Exit { span, .. } => *span,
             Expr::Closure { span, .. } => *span,

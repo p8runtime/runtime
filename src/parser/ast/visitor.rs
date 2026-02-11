@@ -437,6 +437,7 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
             walk_exprs(visitor, parts);
         }
         Expr::Include { expr, .. } => visitor.visit_expr(expr),
+        Expr::Await { expr, .. } => visitor.visit_expr(expr),
         Expr::Ternary {
             condition,
             if_true,

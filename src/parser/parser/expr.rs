@@ -195,14 +195,26 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             Expr::ObjectLiteral { items, span } => {
                 for item in items.iter() {
                     let access = match item.key {
-                        ObjectKey::Ident(token) => self.arena.alloc(Expr::DotAccess {
-                            target: source_expr,
-                            property: token,
-                            span: Span::new(source_expr.span().start, token.span.end),
-                        }),
+                        ObjectKey::Ident(token) => {
+                            let raw = self.lexer.slice(token.span);
+                            let normalized = if raw.starts_with(b"$") && raw.len() > 1 {
+                                &raw[1..]
+                            } else {
+                                raw
+                            };
+                            let key_expr = self.arena.alloc(Expr::String {
+                                value: self.arena.alloc_slice_copy(normalized),
+                                span: token.span,
+                            });
+                            self.arena.alloc(Expr::PropertyFetch {
+                                target: source_expr,
+                                property: key_expr,
+                                span: Span::new(source_expr.span().start, token.span.end),
+                            })
+                        }
                         ObjectKey::String(token) => {
                             let raw = self.lexer.slice(token.span);
-                            let value = if raw.len() >= 2
+                            let mut value = if raw.len() >= 2
                                 && ((raw[0] == b'"' && raw[raw.len() - 1] == b'"')
                                     || (raw[0] == b'\'' && raw[raw.len() - 1] == b'\''))
                             {
@@ -210,6 +222,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             } else {
                                 raw
                             };
+                            if value.starts_with(b"$") && value.len() > 1 {
+                                value = &value[1..];
+                            }
                             let key_expr = self.arena.alloc(Expr::String {
                                 value: self.arena.alloc_slice_copy(value),
                                 span: token.span,
@@ -443,6 +458,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     pub(super) fn parse_closure_expr(
         &mut self,
         attributes: &'ast [AttributeGroup<'ast>],
+        is_async: bool,
         is_static: bool,
         start: usize,
     ) -> ExprId<'ast> {
@@ -485,6 +501,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let end = self.current_token.span.end;
         self.arena.alloc(Expr::Closure {
             attributes,
+            is_async,
             is_static,
             by_ref,
             params,
@@ -498,6 +515,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     pub(super) fn parse_arrow_function(
         &mut self,
         attributes: &'ast [AttributeGroup<'ast>],
+        is_async: bool,
         is_static: bool,
         start: usize,
     ) -> ExprId<'ast> {
@@ -531,6 +549,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let end = expr.span().end;
         self.arena.alloc(Expr::ArrowFunction {
             attributes,
+            is_async,
             is_static,
             by_ref,
             params,
@@ -1510,7 +1529,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     token.span.start
                 };
                 self.bump();
-                self.parse_closure_expr(attributes, false, start)
+                self.parse_closure_expr(attributes, false, false, start)
             }
             TokenKind::Fn => {
                 let start = if let Some(first) = attributes.first() {
@@ -1519,7 +1538,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     token.span.start
                 };
                 self.bump();
-                self.parse_arrow_function(attributes, false, start)
+                self.parse_arrow_function(attributes, false, false, start)
             }
             TokenKind::Static => {
                 let start = if let Some(first) = attributes.first() {
@@ -1531,11 +1550,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 match self.current_token.kind {
                     TokenKind::Function => {
                         self.bump();
-                        self.parse_closure_expr(attributes, true, start)
+                        self.parse_closure_expr(attributes, false, true, start)
                     }
                     TokenKind::Fn => {
                         self.bump();
-                        self.parse_arrow_function(attributes, true, start)
+                        self.parse_arrow_function(attributes, false, true, start)
                     }
                     TokenKind::DoubleColon => {
                         // static scope resolution (e.g., static::CONST)
@@ -1549,6 +1568,43 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         span: token.span,
                     }),
                 }
+            }
+            TokenKind::Identifier
+                if self.is_phpx()
+                    && self.token_eq_ident(&token, b"await") =>
+            {
+                self.bump();
+                let awaited = self.parse_expr(180);
+                let span = Span::new(token.span.start, awaited.span().end);
+                self.arena.alloc(Expr::Await { expr: awaited, span })
+            }
+            TokenKind::Identifier
+                if self.is_phpx()
+                    && self.token_eq_ident(&token, b"async")
+                    && self.next_token.kind == TokenKind::Function =>
+            {
+                let start = if let Some(first) = attributes.first() {
+                    first.span.start
+                } else {
+                    token.span.start
+                };
+                self.bump(); // async
+                self.bump(); // function
+                self.parse_closure_expr(attributes, true, false, start)
+            }
+            TokenKind::Identifier
+                if self.is_phpx()
+                    && self.token_eq_ident(&token, b"async")
+                    && self.next_token.kind == TokenKind::Fn =>
+            {
+                let start = if let Some(first) = attributes.first() {
+                    first.span.start
+                } else {
+                    token.span.start
+                };
+                self.bump(); // async
+                self.bump(); // fn
+                self.parse_arrow_function(attributes, true, false, start)
             }
             TokenKind::New => {
                 if self.is_phpx() {

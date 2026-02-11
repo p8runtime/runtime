@@ -322,6 +322,46 @@ fn unknown_variable_suggests_nearby_name() {
 }
 
 #[test]
+fn await_in_non_async_function_errors() {
+    let code = "function load($p: Promise<int>): int { return await $p; }";
+    let err = check(code).expect_err("expected await in non-async function to fail");
+    assert!(
+        err.contains("await is only allowed in async functions"),
+        "expected async-context error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn await_unwraps_promise_in_async_function() {
+    let code = "async function load($p: Promise<int>): Promise<int> { return await $p; }";
+    let res = check(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
+fn await_non_promise_errors() {
+    let code = "async function load($x: int): Promise<int> { return await $x; }";
+    let err = check(code).expect_err("expected await non-promise to fail");
+    assert!(
+        err.contains("await expects Promise<T>"),
+        "expected promise type error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn async_function_requires_promise_return_type() {
+    let code = "async function load($p: Promise<int>): int { return await $p; }";
+    let err = check(code).expect_err("expected async return type enforcement");
+    assert!(
+        err.contains("Async function must declare Promise<T> return type"),
+        "expected Promise<T> return error, got: {}",
+        err
+    );
+}
+
+#[test]
 fn union_allows_object_shape_dot_access() {
     let code = "<?php $x = { foo: 1 }; $x = { foo: \"bar\" }; $x.foo;";
     assert!(check(code).is_ok());

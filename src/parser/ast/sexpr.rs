@@ -285,6 +285,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             Stmt::Function {
                 attributes,
                 name,
+                is_async,
                 type_params,
                 params,
                 return_type,
@@ -299,6 +300,9 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 }
                 if *by_ref {
                     self.write(" &");
+                }
+                if *is_async {
+                    self.write(" async");
                 }
                 self.write(" \"");
                 self.write(&String::from_utf8_lossy(name.text(self.source)));
@@ -973,6 +977,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             }
             Expr::Closure {
                 attributes,
+                is_async,
                 is_static,
                 by_ref,
                 params,
@@ -985,6 +990,9 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 for attr in *attributes {
                     self.write(" ");
                     self.visit_attribute_group(attr);
+                }
+                if *is_async {
+                    self.write(" async");
                 }
                 if *is_static {
                     self.write(" static");
@@ -1025,6 +1033,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             }
             Expr::ArrowFunction {
                 attributes,
+                is_async,
                 is_static,
                 by_ref,
                 params,
@@ -1036,6 +1045,9 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 for attr in *attributes {
                     self.write(" ");
                     self.visit_attribute_group(attr);
+                }
+                if *is_async {
+                    self.write(" async");
                 }
                 if *is_static {
                     self.write(" static");
@@ -1060,6 +1072,11 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             }
             Expr::Empty { expr, .. } => {
                 self.write("(empty ");
+                self.visit_expr(expr);
+                self.write(")");
+            }
+            Expr::Await { expr, .. } => {
+                self.write("(await ");
                 self.visit_expr(expr);
                 self.write(")");
             }

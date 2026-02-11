@@ -64,6 +64,7 @@ struct MethodSig {
 #[derive(Debug, Clone)]
 struct InterfaceInfo {
     methods: HashMap<String, MethodSig>,
+    fields: BTreeMap<String, ObjectField>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,11 +271,14 @@ struct CheckContext<'a> {
     enums: HashMap<String, EnumInfo>,
     enum_methods: HashMap<String, HashMap<String, MethodSig>>,
     interfaces: HashMap<String, InterfaceInfo>,
+    interface_shapes: HashMap<String, BTreeMap<String, ObjectField>>,
     functions: HashMap<String, FunctionSig>,
     function_returns: HashMap<String, Type>,
     imported: HashMap<String, String>,
     type_aliases: HashMap<String, TypeAliasInfo>,
     resolved_aliases: HashMap<String, Type>,
+    fn_depth: usize,
+    async_depth: usize,
 }
 
 impl<'a> CheckContext<'a> {
@@ -288,11 +292,14 @@ impl<'a> CheckContext<'a> {
             enums: HashMap::new(),
             enum_methods: HashMap::new(),
             interfaces: HashMap::new(),
+            interface_shapes: HashMap::new(),
             functions: HashMap::new(),
             function_returns: HashMap::new(),
             imported: HashMap::new(),
             type_aliases: HashMap::new(),
             resolved_aliases: HashMap::new(),
+            fn_depth: 0,
+            async_depth: 0,
         }
     }
 
@@ -386,9 +393,11 @@ impl<'a> CheckContext<'a> {
         self.validate_component_signature(component, span);
 
         let mut attrs = HashSet::new();
+        let mut attr_spans: HashMap<String, Span> = HashMap::new();
         for attr in attributes.iter() {
             let name = token_text(self.source, attr.name.span);
-            attrs.insert(name);
+            attrs.insert(name.clone());
+            attr_spans.insert(name, attr.name.span);
         }
 
         match component {
@@ -416,6 +425,50 @@ impl<'a> CheckContext<'a> {
             }
             _ => {}
         }
+
+        let Some(sig) = self.functions.get(component).cloned() else {
+            return;
+        };
+        let Some(props_ty) = sig.params.first().and_then(|param| param.ty.clone()) else {
+            return;
+        };
+        if matches!(props_ty, Type::Struct(_)) || !self.is_component_props_type(&props_ty) {
+            return;
+        }
+        let Some(expected_fields) = self.component_props_fields(&props_ty) else {
+            return;
+        };
+
+        for (attr_name, attr_span) in attr_spans.iter() {
+            if expected_fields.contains_key(attr_name) {
+                continue;
+            }
+            let suggestion = nearest_name(attr_name, expected_fields.keys().map(|k| k.as_str()));
+            let mut message = format!(
+                "Unknown prop '{}' for component '{}'",
+                attr_name, component
+            );
+            if let Some(suggested) = suggestion {
+                message.push_str(&format!("; did you mean '{}'?", suggested));
+            }
+            self.errors.push(TypeError {
+                span: *attr_span,
+                message,
+            });
+        }
+
+        for (field_name, field) in expected_fields.iter() {
+            if field.optional || attrs.contains(field_name) {
+                continue;
+            }
+            self.errors.push(TypeError {
+                span,
+                message: format!(
+                    "Missing required prop '{}' for component '{}'",
+                    field_name, component
+                ),
+            });
+        }
     }
 
     fn validate_component_signature(&mut self, component: &str, span: Span) {
@@ -438,18 +491,29 @@ impl<'a> CheckContext<'a> {
             self.errors.push(TypeError {
                 span,
                 message: format!(
-                    "JSX component '{}' props parameter must be typed (use struct or Object<{{...}}>)",
+                    "JSX component '{}' props parameter must be typed (use interface or Object<{{...}}>)",
                     component
                 ),
             });
             return;
         };
 
+        if let Type::Struct(name) = &props_ty {
+            self.errors.push(TypeError {
+                span,
+                message: format!(
+                    "JSX component '{}' props type '{}' cannot be a struct; use interface '{}' or Object<{{...}}>",
+                    component, name, name
+                ),
+            });
+            return;
+        }
+
         if !self.is_component_props_type(&props_ty) {
             self.errors.push(TypeError {
                 span,
                 message: format!(
-                    "JSX component '{}' props type must be struct or object shape, got {}",
+                    "JSX component '{}' props type must be interface or object shape, got {}",
                     component, props_ty
                 ),
             });
@@ -458,7 +522,7 @@ impl<'a> CheckContext<'a> {
 
     fn is_component_props_type(&self, ty: &Type) -> bool {
         match ty {
-            Type::Struct(_) | Type::Object | Type::ObjectShape(_) => true,
+            Type::Interface(_) | Type::Object | Type::ObjectShape(_) => true,
             Type::Applied { base, args } => {
                 if base == "Object" {
                     return true;
@@ -470,6 +534,45 @@ impl<'a> CheckContext<'a> {
             }
             Type::Union(types) => !types.is_empty() && types.iter().all(|inner| self.is_component_props_type(inner)),
             _ => false,
+        }
+    }
+
+    fn component_props_fields(&self, ty: &Type) -> Option<BTreeMap<String, ObjectField>> {
+        match ty {
+            Type::Interface(name) => self.interfaces.get(name).map(|info| info.fields.clone()),
+            Type::ObjectShape(fields) => Some(fields.clone()),
+            Type::Applied { base, args } if base == "Object" => args.first().and_then(|arg| {
+                if let Type::ObjectShape(fields) = arg {
+                    Some(fields.clone())
+                } else {
+                    None
+                }
+            }),
+            Type::Union(types) => {
+                let mut merged: BTreeMap<String, ObjectField> = BTreeMap::new();
+                for inner in types {
+                    let Some(fields) = self.component_props_fields(inner) else {
+                        continue;
+                    };
+                    for (name, field) in fields {
+                        match merged.get_mut(&name) {
+                            Some(existing) => {
+                                existing.ty = merge_types(&existing.ty, &field.ty);
+                                existing.optional = existing.optional || field.optional;
+                            }
+                            None => {
+                                merged.insert(name, field);
+                            }
+                        }
+                    }
+                }
+                if merged.is_empty() {
+                    None
+                } else {
+                    Some(merged)
+                }
+            }
+            _ => None,
         }
     }
 
@@ -671,6 +774,7 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Stmt::Function {
+                is_async,
                 type_params,
                 params,
                 return_type: fn_return,
@@ -687,6 +791,28 @@ impl<'a> CheckContext<'a> {
                     let param_name = token_text(self.source, param.name.span);
                     let param_name = param_name.trim_start_matches('$').to_string();
                     if destructured_params.contains(&param_name) {
+                        if let Some(ty) = param.ty {
+                            let resolved = self.resolve_type_with_params(ty, &type_param_set);
+                            if let Type::Struct(ref name) = resolved {
+                                self.errors.push(TypeError {
+                                    span: param.span,
+                                    message: format!(
+                                        "Destructured parameter '${}' cannot use struct type '{}'; use interface '{}' or Object<{{...}}>",
+                                        param_name, name, name
+                                    ),
+                                });
+                            }
+                            // Keep the original carrier variable in scope so lowered
+                            // destructuring assignments (e.g. $name = $name.name) type-check.
+                            let binding_ty = self.field_type_for_pattern_key(&resolved, &param_name);
+                            let binding_ty = if matches!(binding_ty, Type::Unknown) {
+                                resolved
+                            } else {
+                                binding_ty
+                            };
+                            fn_env.insert(param_name.clone(), binding_ty);
+                            fn_explicit.insert(param_name.clone());
+                        }
                         continue;
                     }
                     if let Some(ty) = param.ty {
@@ -712,14 +838,44 @@ impl<'a> CheckContext<'a> {
                 }
                 let expected_return =
                     fn_return.map(|ty| self.resolve_type_with_params(ty, &type_param_set));
+                let body_return = if *is_async {
+                    match expected_return.as_ref() {
+                        Some(Type::Applied { base, args })
+                            if base.eq_ignore_ascii_case("Promise") =>
+                        {
+                            Some(args.first().cloned().unwrap_or(Type::Unknown))
+                        }
+                        Some(other) => {
+                            self.errors.push(TypeError {
+                                span: stmt.span(),
+                                message: format!(
+                                    "Async function must declare Promise<T> return type, got {}",
+                                    other
+                                ),
+                            });
+                            Some(Type::Unknown)
+                        }
+                        None => None,
+                    }
+                } else {
+                    expected_return.clone()
+                };
+                self.fn_depth += 1;
+                if *is_async {
+                    self.async_depth += 1;
+                }
                 for stmt in body.iter() {
                     self.check_stmt(
                         stmt,
                         &mut fn_env,
                         &mut fn_explicit,
-                        expected_return.as_ref(),
+                        body_return.as_ref(),
                     );
                 }
+                if *is_async {
+                    self.async_depth = self.async_depth.saturating_sub(1);
+                }
+                self.fn_depth = self.fn_depth.saturating_sub(1);
 
                 let _ = type_param_sigs;
             }
@@ -754,15 +910,28 @@ impl<'a> CheckContext<'a> {
             let Expr::Assign { var, expr, .. } = *expr else {
                 continue;
             };
-            let Expr::Variable { span, .. } = *var else {
-                continue;
-            };
-            let name = token_text(self.source, *span).trim_start_matches('$').to_string();
-            if !param_names.contains(&name) {
+            if let Expr::Variable { span, .. } = *var {
+                let name = token_text(self.source, *span)
+                    .trim_start_matches('$')
+                    .to_string();
+                if !param_names.contains(&name) {
+                    continue;
+                }
+                if self.expr_contains_named_var(expr, &name) {
+                    out.insert(name);
+                }
                 continue;
             }
-            if self.expr_contains_named_var(expr, &name) {
-                out.insert(name);
+            if let Expr::Variable { span, .. } = *expr {
+                let name = token_text(self.source, *span)
+                    .trim_start_matches('$')
+                    .to_string();
+                if !param_names.contains(&name) {
+                    continue;
+                }
+                if matches!(*var, Expr::ObjectLiteral { .. } | Expr::Array { .. }) {
+                    out.insert(name);
+                }
             }
         }
         out
@@ -834,6 +1003,26 @@ impl<'a> CheckContext<'a> {
         explicit: &mut HashSet<String>,
     ) -> Type {
         match *expr {
+            Expr::Variable { span, .. } => {
+                let raw = token_text(self.source, span);
+                if !raw.starts_with('$') {
+                    return self.infer_expr_with_env(expr, env);
+                }
+                let name = raw.trim_start_matches('$');
+                if is_builtin_variable(name) {
+                    return Type::Unknown;
+                }
+                if let Some(found) = env.get(name) {
+                    return found.clone();
+                }
+                let suggestion = nearest_name(name, env.keys().map(|k| k.as_str()));
+                let mut message = format!("Unknown variable '${}'", name);
+                if let Some(suggested) = suggestion {
+                    message.push_str(&format!("; did you mean '${}'?", suggested));
+                }
+                self.errors.push(TypeError { span, message });
+                Type::Unknown
+            }
             Expr::Null { .. } => Type::Primitive(PrimitiveType::Null),
             Expr::Assign { var, expr, .. } | Expr::AssignRef { var, expr, .. } => {
                 let rhs_ty = self.check_expr(expr, env, explicit);
@@ -1192,6 +1381,28 @@ impl<'a> CheckContext<'a> {
                 let _ = self.check_expr(expr, env, explicit);
                 Type::Unknown
             }
+            Expr::Await { expr, span } => {
+                if self.fn_depth > 0 && self.async_depth == 0 {
+                    self.errors.push(TypeError {
+                        span,
+                        message: "await is only allowed in async functions (or at top-level in PHPX modules)".to_string(),
+                    });
+                }
+                let awaited_ty = self.check_expr(expr, env, explicit);
+                match awaited_ty {
+                    Type::Applied { base, args } if base.eq_ignore_ascii_case("Promise") => {
+                        args.first().cloned().unwrap_or(Type::Unknown)
+                    }
+                    Type::Unknown => Type::Unknown,
+                    other => {
+                        self.errors.push(TypeError {
+                            span,
+                            message: format!("await expects Promise<T>, got {}", other),
+                        });
+                        Type::Unknown
+                    }
+                }
+            }
             Expr::Include { expr, .. }
             | Expr::Print { expr, .. }
             | Expr::Clone { expr, .. }
@@ -1235,6 +1446,7 @@ impl<'a> CheckContext<'a> {
             source: self.source,
             vars: env,
             structs: &self.structs,
+            interfaces: &self.interface_shapes,
             functions: &self.function_returns,
             enums: &self.enums,
         };
@@ -1798,6 +2010,17 @@ impl<'a> CheckContext<'a> {
                     }
                 }
             }
+            Type::Interface(name) => {
+                let Some(info) = self.interfaces.get(&name) else {
+                    return;
+                };
+                if !info.fields.contains_key(&prop_name) {
+                    self.errors.push(TypeError {
+                        span,
+                        message: format!("Unknown interface field '{}::{}'", name, prop_name),
+                    });
+                }
+            }
             Type::Enum(name) => {
                 if !self.enum_allows_field(&name, &prop_name) {
                     self.errors.push(TypeError {
@@ -1866,6 +2089,15 @@ impl<'a> CheckContext<'a> {
                                 StructFieldResolution::Ambiguous => {
                                     invalid = true;
                                 }
+                            }
+                        }
+                        Type::Interface(name) => {
+                            any_ok = true;
+                            let Some(info) = self.interfaces.get(name) else {
+                                continue;
+                            };
+                            if !info.fields.contains_key(&prop_name) {
+                                missing = true;
                             }
                         }
                         Type::Enum(name) => {
@@ -2295,6 +2527,12 @@ impl<'a> CheckContext<'a> {
                 .get(name)
                 .and_then(|info| info.fields.get(key).cloned())
                 .unwrap_or(Type::Unknown),
+            Type::Interface(name) => self
+                .interfaces
+                .get(name)
+                .and_then(|info| info.fields.get(key))
+                .map(|field| field.ty.clone())
+                .unwrap_or(Type::Unknown),
             Type::Applied { base, args } => {
                 if base.eq_ignore_ascii_case("array") {
                     args.first().cloned().unwrap_or(Type::Unknown)
@@ -2345,10 +2583,12 @@ impl<'a> CheckContext<'a> {
             if let Stmt::Interface { name, .. } = stmt {
                 let iface_name = token_text(self.source, name.span);
                 self.interfaces
-                    .entry(iface_name)
+                    .entry(iface_name.clone())
                     .or_insert_with(|| InterfaceInfo {
                         methods: HashMap::new(),
+                        fields: BTreeMap::new(),
                     });
+                self.interface_shapes.entry(iface_name).or_default();
             }
         }
     }
@@ -2522,25 +2762,55 @@ impl<'a> CheckContext<'a> {
             };
             let iface_name = token_text(self.source, name.span);
             let mut methods = HashMap::new();
+            let mut fields = BTreeMap::new();
             for member in members.iter() {
-                if let ClassMember::Method {
-                    name: method_name,
-                    params,
-                    return_type,
-                    ..
-                } = member
-                {
-                    let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
-                    methods.insert(method_name, sig);
+                match member {
+                    ClassMember::Method {
+                        name: method_name,
+                        params,
+                        return_type,
+                        ..
+                    } => {
+                        let method_name = token_text(self.source, method_name.span);
+                        let sig = self.method_signature(params, *return_type);
+                        methods.insert(method_name, sig);
+                    }
+                    ClassMember::Property { ty, entries, .. } => {
+                        let field_ty = ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown);
+                        for entry in entries.iter() {
+                            let field_name = token_text(self.source, entry.name.span);
+                            let field_name = field_name.trim_start_matches('$').to_string();
+                            fields.insert(
+                                field_name,
+                                ObjectField {
+                                    ty: field_ty.clone(),
+                                    optional: false,
+                                },
+                            );
+                        }
+                    }
+                    ClassMember::PropertyHook { ty, name, .. } => {
+                        let field_name = token_text(self.source, name.span);
+                        let field_name = field_name.trim_start_matches('$').to_string();
+                        fields.insert(
+                            field_name,
+                            ObjectField {
+                                ty: ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown),
+                                optional: false,
+                            },
+                        );
+                    }
+                    _ => {}
                 }
             }
             self.interfaces.insert(
-                iface_name,
+                iface_name.clone(),
                 InterfaceInfo {
                     methods,
+                    fields: fields.clone(),
                 },
             );
+            self.interface_shapes.insert(iface_name, fields);
         }
     }
 
@@ -3524,6 +3794,12 @@ impl<'a> CheckContext<'a> {
                         message: "array<T> expects exactly one type argument".to_string(),
                     });
                 }
+                if base_name.eq_ignore_ascii_case("Promise") && args.len() != 1 {
+                    self.errors.push(TypeError {
+                        span: self.type_span(base),
+                        message: "Promise<T> expects exactly one type argument".to_string(),
+                    });
+                }
                 let mut resolved_args = Vec::new();
                 for arg in args.iter() {
                     resolved_args.push(self.resolve_type_internal(arg, visiting, params));
@@ -3536,6 +3812,7 @@ impl<'a> CheckContext<'a> {
                     if !base_name.eq_ignore_ascii_case("Option")
                         && !base_name.eq_ignore_ascii_case("Result")
                         && !base_name.eq_ignore_ascii_case("array")
+                        && !base_name.eq_ignore_ascii_case("Promise")
                     {
                         self.errors.push(TypeError {
                             span: self.type_span(base),
@@ -3991,6 +4268,7 @@ impl<'a> CheckContext<'a> {
             Type::Enum(name) => self.enum_satisfies_interface(name, info),
             Type::EnumCase { enum_name, .. } => self.enum_satisfies_interface(enum_name, info),
             Type::Interface(name) => name.eq_ignore_ascii_case(iface),
+            Type::ObjectShape(fields) => self.object_shape_satisfies_interface(fields, info),
             _ => false,
         }
     }
@@ -4073,6 +4351,28 @@ impl<'a> CheckContext<'a> {
                 .cloned()
                 .unwrap_or(Type::Mixed);
             if !self.is_assignable(&actual_ret, expected_ret) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn object_shape_satisfies_interface(
+        &self,
+        fields: &BTreeMap<String, ObjectField>,
+        iface: &InterfaceInfo,
+    ) -> bool {
+        for (field_name, expected_field) in iface.fields.iter() {
+            let Some(actual_field) = fields.get(field_name) else {
+                if expected_field.optional {
+                    continue;
+                }
+                return false;
+            };
+            if actual_field.optional && !expected_field.optional {
+                return false;
+            }
+            if !self.is_assignable(&actual_field.ty, &expected_field.ty) {
                 return false;
             }
         }
@@ -4179,6 +4479,67 @@ fn capitalize_jsx_name(name: &str) -> String {
     out.push(first.to_ascii_uppercase());
     out.push_str(chars.as_str());
     out
+}
+
+fn is_builtin_variable(name: &str) -> bool {
+    matches!(
+        name,
+        "GLOBALS"
+            | "_SERVER"
+            | "_GET"
+            | "_POST"
+            | "_FILES"
+            | "_COOKIE"
+            | "_SESSION"
+            | "_REQUEST"
+            | "_ENV"
+            | "this"
+    )
+}
+
+fn nearest_name<'a, I>(needle: &str, candidates: I) -> Option<&'a str>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut best: Option<(&'a str, usize)> = None;
+    for candidate in candidates {
+        let dist = levenshtein(needle, candidate);
+        if dist > 2 {
+            continue;
+        }
+        match best {
+            Some((_, best_dist)) if dist >= best_dist => {}
+            _ => best = Some((candidate, dist)),
+        }
+    }
+    best.map(|(name, _)| name)
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    if a.is_empty() {
+        return b.chars().count();
+    }
+    if b.is_empty() {
+        return a.chars().count();
+    }
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut curr = vec![0usize; b_chars.len() + 1];
+    for (i, ca) in a.chars().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b_chars.iter().enumerate() {
+            let cost = if ca == *cb { 0 } else { 1 };
+            let del = prev[j + 1] + 1;
+            let ins = curr[j] + 1;
+            let sub = prev[j] + cost;
+            curr[j + 1] = del.min(ins).min(sub);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b_chars.len()]
 }
 
 fn parse_type_field_name(source: &[u8], span: Span) -> String {

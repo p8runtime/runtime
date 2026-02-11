@@ -2666,6 +2666,11 @@ impl<'src> Emitter<'src> {
                     self.chunk.code.push(OpCode::GetSentValue);
                 }
             }
+            Expr::Await { expr, .. } => {
+                // Async lowering will be wired to the host event loop in a later pass.
+                // For now, keep runtime behavior equivalent to evaluating the inner value.
+                self.emit_expr(expr);
+            }
             Expr::Closure {
                 params,
                 uses,

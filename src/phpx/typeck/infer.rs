@@ -32,6 +32,7 @@ pub struct InferContext<'a> {
     pub source: &'a [u8],
     pub vars: &'a HashMap<String, Type>,
     pub structs: &'a HashMap<String, StructInfo>,
+    pub interfaces: &'a HashMap<String, BTreeMap<String, ObjectField>>,
     pub functions: &'a HashMap<String, Type>,
     pub enums: &'a HashMap<String, EnumInfo>,
 }
@@ -163,6 +164,12 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                     .unwrap_or(Type::Unknown),
                 Type::Struct(name) => resolve_struct_field_type(&name, &prop_name, ctx)
                     .unwrap_or(Type::Unknown),
+                Type::Interface(name) => ctx
+                    .interfaces
+                    .get(&name)
+                    .and_then(|fields| fields.get(&prop_name))
+                    .map(|field| field.ty.clone())
+                    .unwrap_or(Type::Unknown),
                 Type::Enum(name) => {
                     if name.eq_ignore_ascii_case("Option")
                         || name.eq_ignore_ascii_case("Result")
@@ -228,6 +235,15 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                 }
             }
             Type::Unknown
+        }
+        Expr::Await { expr, .. } => {
+            let awaited = infer_expr(expr, ctx);
+            match awaited {
+                Type::Applied { base, args } if base.eq_ignore_ascii_case("Promise") => {
+                    args.first().cloned().unwrap_or(Type::Unknown)
+                }
+                _ => Type::Unknown,
+            }
         }
         Expr::Binary { op, left, right, .. } => {
             if *op == BinaryOp::Coalesce {

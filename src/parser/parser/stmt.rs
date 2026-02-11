@@ -77,8 +77,16 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         ClassKind::Struct,
                     );
                 }
+                if self.is_phpx()
+                    && self.current_token.kind == TokenKind::Identifier
+                    && self.token_eq_ident(&self.current_token, b"async")
+                    && self.next_token.kind == TokenKind::Function
+                {
+                    self.bump(); // async
+                    return self.parse_function(attributes, doc_comment, true);
+                }
                 match self.current_token.kind {
-                    TokenKind::Function => self.parse_function(attributes, doc_comment),
+                    TokenKind::Function => self.parse_function(attributes, doc_comment, false),
                     TokenKind::Class => self.parse_class(attributes, &[], doc_comment),
                     TokenKind::Interface => self.parse_interface(attributes, doc_comment),
                     TokenKind::Trait => self.parse_trait(attributes, doc_comment),
@@ -120,6 +128,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         span: self.current_token.span,
                     }),
                 }
+            }
+            TokenKind::Identifier
+                if self.is_phpx()
+                    && self.token_eq_ident(&self.current_token, b"async")
+                    && self.next_token.kind == TokenKind::Function =>
+            {
+                self.bump(); // async
+                self.parse_function(&[], doc_comment, true)
             }
             TokenKind::Final | TokenKind::Abstract | TokenKind::Readonly => {
                 let mut modifiers = std::vec::Vec::new();
@@ -180,7 +196,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             TokenKind::Do => self.parse_do_while(),
             TokenKind::For => self.parse_for(),
             TokenKind::Foreach => self.parse_foreach(),
-            TokenKind::Function => self.parse_function(&[], doc_comment),
+            TokenKind::Function => self.parse_function(&[], doc_comment, false),
             TokenKind::Class => self.parse_class(&[], &[], doc_comment),
             TokenKind::Interface => self.parse_interface(&[], doc_comment),
             TokenKind::Trait => self.parse_trait(&[], doc_comment),

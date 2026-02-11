@@ -1035,13 +1035,21 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             // Property
             let is_struct = matches!(ctx, ClassMemberCtx::Class { is_struct: true, .. });
+            let is_phpx_interface = self.is_phpx() && matches!(ctx, ClassMemberCtx::Interface);
             if self.is_phpx()
-                && is_struct
+                && (is_struct || is_phpx_interface)
                 && self.current_token.kind == TokenKind::Variable
                 && self.next_token.kind == TokenKind::Colon
             {
                 if !modifiers.is_empty() {
-                    self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "struct fields do not use visibility modifiers in PHPX"));
+                    self.errors.push(ParseError::new(
+                        modifiers.first().map(|t| t.span).unwrap_or_default(),
+                        if is_struct {
+                            "struct fields do not use visibility modifiers in PHPX"
+                        } else {
+                            "interface fields do not use visibility modifiers in PHPX"
+                        },
+                    ));
                 }
 
                 let name = self.arena.alloc(self.current_token);
@@ -1129,7 +1137,16 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             };
 
             if self.is_phpx() && is_struct {
-                self.errors.push(ParseError::new(name.span, "struct fields must use `$name: Type` syntax in PHPX"));
+                self.errors.push(ParseError::new(
+                    name.span,
+                    "struct fields must use `$name: Type` syntax in PHPX",
+                ));
+            }
+            if is_phpx_interface {
+                self.errors.push(ParseError::new(
+                    name.span,
+                    "interface fields must use `$name: Type` syntax in PHPX",
+                ));
             }
 
             let default = if self.current_token.kind == TokenKind::Eq {
@@ -1148,6 +1165,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
             // Property hooks
             if self.current_token.kind == TokenKind::OpenBrace {
+                if is_phpx_interface {
+                    self.errors.push(ParseError::new(
+                        Span::new(start, start),
+                        "interface fields cannot declare property hooks in PHPX",
+                    ));
+                }
                 let hooks = self.parse_property_hooks();
                 // self.expect_semicolon(); // Hooks do not require semicolon
                 let end = self.current_token.span.end;
@@ -1162,10 +1185,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     span: Span::new(start, end),
                 }
             } else {
-                if matches!(ctx, ClassMemberCtx::Interface) {
+                if matches!(ctx, ClassMemberCtx::Interface) && !self.is_phpx() {
                     self.errors.push(ParseError::new(Span::new(start, start), "interfaces cannot declare properties"));
                 }
-
                 if modifiers.iter().any(|m| m.kind == TokenKind::Abstract) {
                     self.errors.push(ParseError::new(modifiers.first().map(|t| t.span).unwrap_or_default(), "Properties cannot be declared abstract"));
                 }
@@ -1211,6 +1233,17 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             default.map(|e| e.span().end).unwrap_or(name.span.end),
                         ),
                     });
+                }
+
+                if is_phpx_interface {
+                    for entry in entries.iter() {
+                        if entry.default.is_some() {
+                            self.errors.push(ParseError::new(
+                                entry.span,
+                                "interface fields cannot have default values in PHPX",
+                            ));
+                        }
+                    }
                 }
 
                 self.expect_semicolon();
@@ -1701,6 +1734,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         &mut self,
         attributes: &'ast [AttributeGroup<'ast>],
         doc_comment: Option<Span>,
+        is_async: bool,
     ) -> StmtId<'ast> {
         let start = if let Some(doc) = doc_comment {
             doc.start
@@ -1777,6 +1811,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         self.arena.alloc(Stmt::Function {
             attributes,
             name,
+            is_async,
             by_ref,
             type_params,
             params,
@@ -1900,7 +1935,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
         }
 
-        if old_style_phpx_type {
+        // Keep legacy `Type $name` syntax available for internal std modules while
+        // enforcing `$name: Type` in user PHPX files.
+        if old_style_phpx_type && !self.allow_phpx_namespace() {
             self.errors.push(ParseError::with_help(
                 param_name.span,
                 "PHPX function parameters must use '$name: Type' syntax",

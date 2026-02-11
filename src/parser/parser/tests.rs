@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 
-use crate::parser::ast::{ClassKind, ClassMember, Stmt};
+use crate::parser::ast::{ClassKind, ClassMember, Expr, Stmt};
 use crate::parser::lexer::Lexer;
 use crate::parser::parser::{Parser, ParserMode};
 
@@ -199,6 +199,132 @@ fn phpx_parses_param_object_destructuring_with_defaults() {
         }
         other => panic!("expected function stmt, got {:?}", other),
     }
+}
+
+#[test]
+fn phpx_param_object_destructure_shorthand_uses_identifier_key() {
+    let code = "interface NameProps { $name: string; } function FullName({ $name }: NameProps): string { return $name; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
+
+    let func_stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Function { .. }))
+        .expect("expected function statement");
+
+    match &**func_stmt {
+        Stmt::Function { body, .. } => {
+            let first_expr_stmt = body
+                .iter()
+                .find_map(|stmt| match &**stmt {
+                    Stmt::Expression { expr, .. } => Some(*expr),
+                    _ => None,
+                })
+                .expect("expected lowered destructuring assignment");
+
+            match first_expr_stmt {
+                Expr::Assign { expr, .. } => match expr {
+                    Expr::PropertyFetch { property, .. } => match property {
+                        Expr::String { value, .. } => {
+                            assert_eq!(&value[..], b"name");
+                        }
+                        other => panic!("expected string key expression, got {:?}", other),
+                    },
+                    other => panic!("expected property fetch rhs, got {:?}", other),
+                },
+                other => panic!("expected assignment expression, got {:?}", other),
+            }
+        }
+        other => panic!("expected function stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn phpx_parses_interface_shape_fields() {
+    let code = "interface NameProps { $name: string; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
+
+    let iface_stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Interface { .. }))
+        .expect("expected interface statement");
+
+    match &**iface_stmt {
+        Stmt::Interface { members, .. } => {
+            assert!(
+                members.iter().any(|m| matches!(m, ClassMember::Property { .. })),
+                "expected interface property member"
+            );
+        }
+        other => panic!("expected interface stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn phpx_parses_async_function_and_await() {
+    let code = "async function load($p: Promise<int>): Promise<int> {\n  return await $p\n}\n$v = await load($p)\n";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
+
+    let func_stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Function { .. }))
+        .expect("expected function statement");
+    match &**func_stmt {
+        Stmt::Function { is_async, body, .. } => {
+            assert!(*is_async, "expected async function");
+            let return_stmt = body
+                .iter()
+                .find(|stmt| matches!(***stmt, Stmt::Return { .. }))
+                .expect("expected return in function body");
+            match &**return_stmt {
+                Stmt::Return { expr: Some(expr), .. } => {
+                    assert!(matches!(**expr, Expr::Await { .. }), "expected await in return");
+                }
+                other => panic!("expected return with await expr, got {:?}", other),
+            }
+        }
+        other => panic!("expected function stmt, got {:?}", other),
+    }
+
+    let has_tla_await = program.statements.iter().any(|stmt| {
+        matches!(
+            **stmt,
+            Stmt::Expression {
+                expr: Expr::Assign {
+                    expr: Expr::Await { .. },
+                    ..
+                },
+                ..
+            }
+        )
+    });
+    assert!(has_tla_await, "expected top-level await assignment");
 }
 
 #[test]
