@@ -999,6 +999,15 @@ pub fn php_is_object(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Bool(is)))
 }
 
+pub fn php_is_promise(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("is_promise() expects exactly 1 parameter".into());
+    }
+    let val = vm.arena.get(args[0]);
+    let is = matches!(val.value, Val::Promise(_));
+    Ok(vm.arena.alloc(Val::Bool(is)))
+}
+
 pub fn php_is_float(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("is_float() expects exactly 1 parameter".into());

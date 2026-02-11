@@ -562,6 +562,7 @@ impl Extension for CoreExtension {
         registry.register_function(b"is_bool", variable::php_is_bool);
         registry.register_function(b"is_null", variable::php_is_null);
         registry.register_function(b"is_object", variable::php_is_object);
+        registry.register_function(b"is_promise", variable::php_is_promise);
         registry.register_function(b"is_float", variable::php_is_float);
         registry.register_function(b"is_numeric", variable::php_is_numeric);
         registry.register_function(b"is_scalar", variable::php_is_scalar);
