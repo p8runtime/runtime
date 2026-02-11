@@ -1,7 +1,7 @@
 #[cfg(target_arch = "wasm32")]
 use crate::builtins::json::decode_json_to_handle;
 use crate::builtins::json::encode_handle_to_json;
-use crate::core::value::{ArrayData, Handle, Val};
+use crate::core::value::{ArrayData, Handle, PromiseData, PromiseState, Val};
 use crate::vm::engine::VM;
 #[cfg(target_arch = "wasm32")]
 use serde_json::Value as JsonValue;
@@ -119,6 +119,14 @@ pub fn php_deka_wasm_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
     }
 }
 
+/// __deka_wasm_call_async(string $moduleId, string $export, ...$args): Promise<mixed>
+pub fn php_deka_wasm_call_async(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let value = php_deka_wasm_call(vm, args)?;
+    Ok(vm.arena.alloc(Val::Promise(Rc::new(PromiseData {
+        state: PromiseState::Resolved(value),
+    }))))
+}
+
 /// __bridge(string $kind, string $action, mixed $payload = {}): mixed
 pub fn php_bridge_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() < 2 {
@@ -199,27 +207,45 @@ pub fn php_bridge_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 }
 
+/// __bridge_async(string $kind, string $action, mixed $payload = {}): Promise<mixed>
+pub fn php_bridge_call_async(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let value = php_bridge_call(vm, args)?;
+    Ok(vm.arena.alloc(Val::Promise(Rc::new(PromiseData {
+        state: PromiseState::Resolved(value),
+    }))))
+}
+
 fn is_internal_bridge_caller_path(file: &str) -> bool {
     if file.is_empty() || file == "unknown" {
         return false;
     }
-    let mut saw_php_modules = false;
-    for seg in file.split(['/', '\\']).filter(|seg| !seg.is_empty()) {
-        if !saw_php_modules {
-            if seg == "php_modules" {
-                saw_php_modules = true;
-            }
-            continue;
-        }
-        if seg == "internals" {
-            return true;
-        }
-        if seg == "core" {
-            return true;
-        }
+    let segments: Vec<&str> = file
+        .split(['/', '\\'])
+        .filter(|seg| !seg.is_empty())
+        .collect();
+    let Some(modules_idx) = segments.iter().position(|seg| *seg == "php_modules") else {
+        return false;
+    };
+
+    // Allow both source modules and compiled cache paths:
+    // - php_modules/core/*
+    // - php_modules/internals/*
+    // - php_modules/.cache/phpx/core/*
+    // - php_modules/.cache/phpx/internals/*
+    let mut idx = modules_idx + 1;
+    if idx >= segments.len() {
         return false;
     }
-    false
+    if segments[idx] == ".cache" {
+        idx += 1;
+        if idx < segments.len() && segments[idx] == "phpx" {
+            idx += 1;
+        }
+    }
+    if idx >= segments.len() {
+        return false;
+    }
+    matches!(segments[idx], "core" | "internals")
 }
 
 #[cfg(test)]
@@ -233,6 +259,12 @@ mod tests {
         ));
         assert!(is_internal_bridge_caller_path(
             "/app/php_modules/core/bridge.phpx"
+        ));
+        assert!(is_internal_bridge_caller_path(
+            "/app/php_modules/.cache/phpx/core/bridge.php"
+        ));
+        assert!(is_internal_bridge_caller_path(
+            "/app/php_modules/.cache/phpx/internals/wasm.php"
         ));
         assert!(is_internal_bridge_caller_path(
             "C:\\repo\\php_modules\\internals\\wasm.phpx"

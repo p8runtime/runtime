@@ -3119,7 +3119,11 @@ impl<'a> CheckContext<'a> {
         if name.starts_with('$') {
             return Type::Unknown;
         }
-        if (name == "__deka_wasm_call" || name == "__bridge" || name == "__deka_bridge")
+        if (name == "__deka_wasm_call"
+            || name == "__deka_wasm_call_async"
+            || name == "__bridge"
+            || name == "__bridge_async"
+            || name == "__deka_bridge")
             && !self.allow_internal_bridge_call()
         {
             self.errors.push(TypeError {

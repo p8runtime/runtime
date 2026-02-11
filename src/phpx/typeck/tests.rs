@@ -192,8 +192,25 @@ fn deka_wasm_call_forbidden_outside_internals() {
 }
 
 #[test]
+fn deka_wasm_call_async_forbidden_outside_internals() {
+    let code = "__deka_wasm_call_async('__deka_db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/index.phpx");
+    assert!(res.is_err());
+    assert!(res
+        .unwrap_err()
+        .contains("__deka_wasm_call_async is internal-only"));
+}
+
+#[test]
 fn deka_wasm_call_allowed_inside_internals() {
     let code = "__deka_wasm_call('__deka_db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/php_modules/internals/wasm.phpx");
+    assert!(res.is_ok());
+}
+
+#[test]
+fn deka_wasm_call_async_allowed_inside_internals() {
+    let code = "__deka_wasm_call_async('__deka_db', 'open', {})";
     let res = check_with_path(code, "/tmp/app/php_modules/internals/wasm.phpx");
     assert!(res.is_ok());
 }
@@ -207,8 +224,23 @@ fn bridge_forbidden_outside_core() {
 }
 
 #[test]
+fn bridge_async_forbidden_outside_core() {
+    let code = "__bridge_async('db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/index.phpx");
+    assert!(res.is_err());
+    assert!(res.unwrap_err().contains("__bridge_async is internal-only"));
+}
+
+#[test]
 fn bridge_allowed_inside_core() {
     let code = "__bridge('db', 'open', {})";
+    let res = check_with_path(code, "/tmp/app/php_modules/core/bridge.phpx");
+    assert!(res.is_ok());
+}
+
+#[test]
+fn bridge_async_allowed_inside_core() {
+    let code = "__bridge_async('db', 'open', {})";
     let res = check_with_path(code, "/tmp/app/php_modules/core/bridge.phpx");
     assert!(res.is_ok());
 }
@@ -359,6 +391,13 @@ fn async_function_requires_promise_return_type() {
         "expected Promise<T> return error, got: {}",
         err
     );
+}
+
+#[test]
+fn await_promise_result_flows_into_result_typed_param() {
+    let code = "function consume($r: Result<int, string>): int { return 1; }\nasync function load($p: Promise<Result<int, string>>): Promise<int> {\n  $r = await $p;\n  consume($r);\n  return 1;\n}";
+    let res = check(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
 
 #[test]
