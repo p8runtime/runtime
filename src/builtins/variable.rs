@@ -499,6 +499,9 @@ fn dump_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
         Val::Resource(_) => {
             let _ = writeln!(output, "{}resource", indent);
         }
+        Val::Promise(_) => {
+            let _ = writeln!(output, "{}promise", indent);
+        }
         Val::AppendPlaceholder => {
             let _ = writeln!(output, "{}AppendPlaceholder", indent);
         }

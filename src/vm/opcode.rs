@@ -66,6 +66,7 @@ pub enum OpCode {
 
     // Functions
     Call(u8), // Call function with N args
+    Await,    // Await Promise value on stack
     Return,
     DefFunc(Symbol, u32), // (name, func_idx) -> Define global function
     Recv(u32),

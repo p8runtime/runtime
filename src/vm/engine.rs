@@ -51,7 +51,8 @@
 use crate::compiler::chunk::{ClosureData, CodeChunk, ReturnType, UserFunc};
 use crate::core::heap::Arena;
 use crate::core::value::{
-    ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, Symbol, Val, Visibility,
+    ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, PromiseData, PromiseState, Symbol,
+    Val, Visibility,
 };
 use crate::runtime::context::{
     AttributeInstance, ClassConstEntry, ClassDef, EngineContext, EnumBackedType, MethodEntry,
@@ -1957,6 +1958,7 @@ impl VM {
             Val::Array(_) => "array",
             Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => "object",
             Val::Resource(_) => "resource",
+            Val::Promise(_) => "promise",
             Val::ObjPayload(_) => "object",
             Val::ConstArray(_) => "array",
             Val::AppendPlaceholder => "unknown",
@@ -3113,9 +3115,14 @@ impl VM {
         }
 
         let returns_ref = force_by_ref || popped_frame.chunk.returns_ref;
+        let is_async_func = popped_frame
+            .func
+            .as_ref()
+            .map(|func| func.is_async)
+            .unwrap_or(false);
 
         // Handle return by reference
-        let final_ret_val = if returns_ref {
+        let mut final_ret_val = if returns_ref {
             if !self.arena.get(ret_val).is_ref {
                 self.arena.get_mut(ret_val).is_ref = true;
             }
@@ -3129,6 +3136,13 @@ impl VM {
                 ret_val
             }
         };
+
+        if is_async_func {
+            let promise = PromiseData {
+                state: PromiseState::Resolved(final_ret_val),
+            };
+            final_ret_val = self.arena.alloc(Val::Promise(Rc::new(promise)));
+        }
 
         if let Some(gen_handle) = gen_handle {
             let gen_val = self.arena.get(gen_handle);
@@ -4585,6 +4599,35 @@ impl VM {
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
                 self.invoke_callable_value(func_handle, args, callsite_strict_types)?;
+            }
+            OpCode::Await => {
+                let handle = self
+                    .operand_stack
+                    .pop()
+                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+                let awaited = match self.arena.get(handle).value.clone() {
+                    Val::Promise(promise) => match &promise.state {
+                        PromiseState::Resolved(value) => *value,
+                        PromiseState::Rejected(msg) => {
+                            return Err(VmError::RuntimeError(format!(
+                                "await rejected promise: {}",
+                                String::from_utf8_lossy(msg)
+                            )));
+                        }
+                        PromiseState::Pending => {
+                            return Err(VmError::RuntimeError(
+                                "await encountered pending promise; async suspension is not available in this execution path yet".into(),
+                            ));
+                        }
+                    },
+                    other => {
+                        return Err(VmError::RuntimeError(format!(
+                            "await expects promise at runtime, got {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                self.operand_stack.push(awaited);
             }
 
             OpCode::Return => self.handle_return(false, target_depth)?,
@@ -14512,6 +14555,7 @@ mod tests {
             uses: Vec::new(),
             chunk: Rc::new(func_chunk),
             is_static: false,
+            is_async: false,
             is_generator: false,
             statics: Rc::new(RefCell::new(HashMap::new())),
             return_type: None,

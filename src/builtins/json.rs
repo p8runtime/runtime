@@ -297,6 +297,7 @@ impl<'a> EncodeContext<'a> {
             Val::Object(payload_handle) => self.encode_object(*payload_handle),
             Val::ObjectMap(map_rc) => self.encode_object_map(map_rc),
             Val::Struct(obj_data) => self.encode_struct(obj_data),
+            Val::Promise(_) => Err(JsonError::UnsupportedType),
             Val::Resource(_) => Err(JsonError::UnsupportedType),
             Val::ObjPayload(_) => {
                 // Should not be called directly on payload

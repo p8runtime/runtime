@@ -11,6 +11,7 @@ pub struct UserFunc {
     pub params: Vec<FuncParam>,
     pub uses: Vec<Symbol>,
     pub chunk: Rc<CodeChunk>,
+    pub is_async: bool,
     pub is_static: bool,
     pub is_generator: bool,
     pub statics: Rc<RefCell<HashMap<Symbol, Handle>>>,

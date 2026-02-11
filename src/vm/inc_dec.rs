@@ -45,6 +45,7 @@ pub fn increment_value(val: Val, error_handler: &mut dyn ErrorHandler) -> Result
         | Val::Struct(_)
         | Val::ObjectMap(_)
         | Val::ObjPayload(_)
+        | Val::Promise(_)
         | Val::Resource(_) => Ok(val),
 
         Val::AppendPlaceholder => Err(VmError::RuntimeError(
@@ -108,6 +109,7 @@ pub fn decrement_value(val: Val, error_handler: &mut dyn ErrorHandler) -> Result
         | Val::Struct(_)
         | Val::ObjectMap(_)
         | Val::ObjPayload(_)
+        | Val::Promise(_)
         | Val::Resource(_) => Ok(val),
 
         Val::AppendPlaceholder => Err(VmError::RuntimeError(

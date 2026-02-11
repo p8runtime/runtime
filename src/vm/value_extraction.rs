@@ -97,6 +97,7 @@ impl VM {
             Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_) => "object",
             Val::ObjPayload(_) => "object",
             Val::Resource(_) => "resource",
+            Val::Promise(_) => "promise",
             Val::AppendPlaceholder => "unknown",
             Val::Uninitialized => "uninitialized",
         }

@@ -417,6 +417,7 @@ impl<'src> Emitter<'src> {
                         params: param_syms,
                         uses: Vec::new(),
                         chunk: Rc::new(method_chunk),
+                        is_async: false,
                         is_static,
                         is_generator,
                         statics: Rc::new(RefCell::new(HashMap::new())),
@@ -1102,6 +1103,7 @@ impl<'src> Emitter<'src> {
             Stmt::Function {
                 attributes,
                 name,
+                is_async,
                 params,
                 body,
                 by_ref,
@@ -1190,6 +1192,7 @@ impl<'src> Emitter<'src> {
                     params: param_syms,
                     uses: Vec::new(),
                     chunk: Rc::new(func_chunk),
+                    is_async: *is_async,
                     is_static: false,
                     is_generator,
                     statics: Rc::new(RefCell::new(HashMap::new())),
@@ -2667,11 +2670,11 @@ impl<'src> Emitter<'src> {
                 }
             }
             Expr::Await { expr, .. } => {
-                // Async lowering will be wired to the host event loop in a later pass.
-                // For now, keep runtime behavior equivalent to evaluating the inner value.
                 self.emit_expr(expr);
+                self.chunk.code.push(OpCode::Await);
             }
             Expr::Closure {
+                is_async,
                 params,
                 uses,
                 body,
@@ -2778,6 +2781,7 @@ impl<'src> Emitter<'src> {
                     params: param_syms,
                     uses: use_syms.clone(),
                     chunk: Rc::new(func_chunk),
+                    is_async: *is_async,
                     is_static: *is_static,
                     is_generator,
                     statics: Rc::new(RefCell::new(HashMap::new())),
@@ -2793,6 +2797,7 @@ impl<'src> Emitter<'src> {
                     .push(OpCode::Closure(const_idx as u32, use_syms.len() as u32));
             }
             Expr::ArrowFunction {
+                is_async,
                 params,
                 by_ref,
                 is_static,
@@ -2880,6 +2885,7 @@ impl<'src> Emitter<'src> {
                     params: param_syms,
                     uses: Vec::new(),
                     chunk: Rc::new(func_chunk),
+                    is_async: *is_async,
                     is_static: *is_static,
                     is_generator: false,
                     statics: Rc::new(RefCell::new(HashMap::new())),

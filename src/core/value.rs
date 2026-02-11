@@ -116,6 +116,7 @@ pub enum Val {
     Struct(Rc<ObjectData>), // PHPX struct instance (COW value semantics)
     Object(Handle),
     ObjPayload(ObjectData),
+    Promise(Rc<PromiseData>), // PHPX promise value
     Resource(Rc<dyn Any>), // Changed to Rc to support Clone
     AppendPlaceholder,     // Internal use for $a[]
     Uninitialized,
@@ -135,6 +136,7 @@ impl PartialEq for Val {
             (Val::Struct(a), Val::Struct(b)) => a == b,
             (Val::Object(a), Val::Object(b)) => a == b,
             (Val::ObjPayload(a), Val::ObjPayload(b)) => a == b,
+            (Val::Promise(a), Val::Promise(b)) => a == b,
             (Val::Resource(a), Val::Resource(b)) => Rc::ptr_eq(a, b),
             (Val::AppendPlaceholder, Val::AppendPlaceholder) => true,
             (Val::Uninitialized, Val::Uninitialized) => true,
@@ -154,6 +156,7 @@ impl Val {
             Val::Array(_) | Val::ConstArray(_) => "array",
             Val::ObjectMap(_) => "object",
             Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => "object",
+            Val::Promise(_) => "promise",
             Val::Resource(_) => "resource",
             Val::AppendPlaceholder => "append_placeholder",
             Val::Uninitialized => "uninitialized",
@@ -190,6 +193,7 @@ impl Val {
             Val::Array(_) | Val::ConstArray(_) => b"Array".to_vec(),
             Val::ObjectMap(_) => b"Object".to_vec(),
             Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => b"Object".to_vec(),
+            Val::Promise(_) => b"Promise".to_vec(),
             Val::Resource(_) => b"Resource".to_vec(),
             Val::AppendPlaceholder | Val::Uninitialized => Vec::new(),
         }
@@ -216,6 +220,7 @@ impl Val {
             Val::Array(arr) => !arr.map.is_empty(),
             Val::ConstArray(arr) => !arr.is_empty(),
             Val::ObjectMap(_) | Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) | Val::Resource(_) => true,
+            Val::Promise(_) => true,
             Val::AppendPlaceholder | Val::Uninitialized => false,
         }
     }
@@ -253,6 +258,7 @@ impl Val {
                 }
             }
             Val::ObjectMap(_) | Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => 1,
+            Val::Promise(_) => 1,
             Val::Resource(_) => 0, // Resources typically convert to their ID
             Val::AppendPlaceholder | Val::Uninitialized => 0,
         }
@@ -301,6 +307,7 @@ impl Val {
                 }
             }
             Val::ObjectMap(_) | Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) => 1.0,
+            Val::Promise(_) => 1.0,
             Val::Resource(_) => 0.0,
             Val::AppendPlaceholder | Val::Uninitialized => 0.0,
         }
@@ -347,6 +354,18 @@ pub struct ObjectData {
     pub properties: IndexMap<Symbol, Handle>,
     pub internal: Option<Rc<dyn Any>>, // For internal classes like Closure
     pub dynamic_properties: HashSet<Symbol>, // Track which properties are dynamic (created at runtime)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PromiseState {
+    Pending,
+    Resolved(Handle),
+    Rejected(Rc<Vec<u8>>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromiseData {
+    pub state: PromiseState,
 }
 
 impl PartialEq for ObjectData {
