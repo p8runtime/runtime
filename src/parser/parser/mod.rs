@@ -36,6 +36,8 @@ pub struct Parser<'src, 'ast> {
     pub(super) seen_non_declare_stmt: bool,
     pub(super) mode: ParserMode,
     pub(super) param_destructure_prologue: std::vec::Vec<StmtId<'ast>>,
+    pub(super) fn_depth: usize,
+    pub(super) async_fn_depth: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +77,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             seen_non_declare_stmt: false,
             mode,
             param_destructure_prologue: std::vec::Vec::new(),
+            fn_depth: 0,
+            async_fn_depth: 0,
         };
         parser.bump();
         parser.bump();
@@ -92,6 +96,23 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     pub(super) fn take_param_destructure_prologue(&mut self) -> &'ast [StmtId<'ast>] {
         let prologue = std::mem::take(&mut self.param_destructure_prologue);
         self.arena.alloc_slice_copy(&prologue)
+    }
+
+    pub(super) fn with_function_context<T>(
+        &mut self,
+        is_async: bool,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.fn_depth += 1;
+        if is_async {
+            self.async_fn_depth += 1;
+        }
+        let out = f(self);
+        if is_async {
+            self.async_fn_depth = self.async_fn_depth.saturating_sub(1);
+        }
+        self.fn_depth = self.fn_depth.saturating_sub(1);
+        out
     }
 
     fn bump(&mut self) {

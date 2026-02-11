@@ -1791,7 +1791,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
 
         // Body
-        let body_stmt = self.parse_stmt(); // Should be a block
+        let body_stmt = self.with_function_context(is_async, |parser| parser.parse_stmt()); // Should be a block
         let raw_body: &'ast [StmtId<'ast>] = match body_stmt {
             Stmt::Block { statements, .. } => statements,
             _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],

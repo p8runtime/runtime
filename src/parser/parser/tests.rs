@@ -328,6 +328,40 @@ fn phpx_parses_async_function_and_await() {
 }
 
 #[test]
+fn php_mode_rejects_await_syntax() {
+    let code = "<?php await $value;";
+    let arena = Bump::new();
+    let mut parser = Parser::new(Lexer::new(code.as_bytes()), &arena);
+    let program = parser.parse_program();
+
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|err| err.message.contains("await is only available in PHPX mode")),
+        "expected php mode await error, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn phpx_non_async_function_rejects_await() {
+    let code = "function load($p: Promise<int>): Promise<int> { return await $p; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|err| err.message.contains("await is only allowed in async functions")),
+        "expected non-async await error, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
 fn phpx_parses_foreach_object_destructuring() {
     let code = "foreach ($rows as { id: $id, name: $name }) { echo $id; }";
     let arena = Bump::new();

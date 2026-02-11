@@ -483,7 +483,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let uses = self.parse_use_list();
         let return_type = self.parse_return_type();
 
-        let body_stmt = self.parse_block();
+        let body_stmt = self.with_function_context(is_async, |parser| parser.parse_block());
         let raw_body: &'ast [StmtId<'ast>] = match body_stmt {
             Stmt::Block { statements, .. } => statements,
             _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],
@@ -544,7 +544,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 "Use a closure with a block body for destructuring parameters.",
             ));
         }
-        let expr = self.parse_expr(0);
+        let expr = self.with_function_context(is_async, |parser| parser.parse_expr(0));
 
         let end = expr.span().end;
         self.arena.alloc(Expr::ArrowFunction {
@@ -1569,10 +1569,20 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     }),
                 }
             }
-            TokenKind::Identifier
-                if self.is_phpx()
-                    && self.token_eq_ident(&token, b"await") =>
-            {
+            TokenKind::Identifier if self.token_eq_ident(&token, b"await") => {
+                if !self.is_phpx() {
+                    self.errors.push(ParseError::with_help(
+                        token.span,
+                        "await is only available in PHPX mode",
+                        "Use a .phpx file for async/await support.",
+                    ));
+                } else if self.fn_depth > 0 && self.async_fn_depth == 0 {
+                    self.errors.push(ParseError::with_help(
+                        token.span,
+                        "await is only allowed in async functions",
+                        "Mark the function as async or move await to module top level.",
+                    ));
+                }
                 self.bump();
                 let awaited = self.parse_expr(180);
                 let span = Span::new(token.span.start, awaited.span().end);
