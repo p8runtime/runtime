@@ -2,6 +2,7 @@
 use crate::builtins::json::decode_json_to_handle;
 use crate::builtins::json::encode_handle_to_json;
 use crate::core::value::{ArrayData, Handle, PromiseData, PromiseState, Val};
+use crate::runtime::context::{HostCapability, PhpConfig};
 use crate::vm::engine::VM;
 #[cfg(target_arch = "wasm32")]
 use serde_json::Value as JsonValue;
@@ -46,6 +47,19 @@ pub fn php_deka_wasm_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
 
     let module_bytes = vm.value_to_string(args[0])?;
     let export_bytes = vm.value_to_string(args[1])?;
+    if !vm
+        .context
+        .config
+        .host_capabilities
+        .allows(HostCapability::WasmImports)
+    {
+        return Err(capability_denied_message(
+            vm,
+            HostCapability::WasmImports,
+            "wasm",
+            "call",
+        ));
+    }
 
     let mut arg_array = ArrayData::with_capacity(args.len().saturating_sub(2));
     for handle in args.iter().skip(2) {
@@ -142,6 +156,13 @@ pub fn php_bridge_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
     let kind_bytes = vm.value_to_string(args[0])?;
     let action_bytes = vm.value_to_string(args[1])?;
+    let kind = String::from_utf8_lossy(&kind_bytes).to_string();
+    let action = String::from_utf8_lossy(&action_bytes).to_string();
+    if let Some(cap) = PhpConfig::capability_for_bridge_kind(&kind) {
+        if !vm.context.config.host_capabilities.allows(cap) {
+            return Err(capability_denied_message(vm, cap, &kind, &action));
+        }
+    }
     let payload_handle = if args.len() >= 3 {
         args[2]
     } else {
@@ -246,6 +267,16 @@ fn is_internal_bridge_caller_path(file: &str) -> bool {
         return false;
     }
     matches!(segments[idx], "core" | "internals")
+}
+
+fn capability_denied_message(vm: &VM, cap: HostCapability, kind: &str, action: &str) -> String {
+    format!(
+        "CapabilityError(host={}, capability={}, kind={}, action={}): operation is not available in this host profile",
+        vm.context.config.host_profile.as_str(),
+        cap.as_str(),
+        kind,
+        action
+    )
 }
 
 #[cfg(test)]

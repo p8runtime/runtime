@@ -16,6 +16,109 @@ use std::sync::Arc;
 
 pub type NativeHandler = fn(&mut VM, args: &[Handle]) -> Result<Handle, String>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostProfile {
+    Server,
+    Wosix,
+}
+
+impl HostProfile {
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "wosix" => Self::Wosix,
+            _ => Self::Server,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Wosix => "wosix",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostCapability {
+    Fs,
+    Net,
+    ProcessEnv,
+    ClockRandom,
+    Db,
+    WasmImports,
+}
+
+impl HostCapability {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fs => "fs",
+            Self::Net => "net",
+            Self::ProcessEnv => "process_env",
+            Self::ClockRandom => "clock_random",
+            Self::Db => "db",
+            Self::WasmImports => "wasm_imports",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HostCapabilities {
+    pub fs: bool,
+    pub net: bool,
+    pub process_env: bool,
+    pub clock_random: bool,
+    pub db: bool,
+    pub wasm_imports: bool,
+}
+
+impl HostCapabilities {
+    pub fn for_profile(profile: HostProfile) -> Self {
+        match profile {
+            HostProfile::Server => Self {
+                fs: true,
+                net: true,
+                process_env: true,
+                clock_random: true,
+                db: true,
+                wasm_imports: true,
+            },
+            HostProfile::Wosix => Self {
+                fs: true,
+                net: true,
+                process_env: false,
+                clock_random: true,
+                db: false,
+                wasm_imports: true,
+            },
+        }
+    }
+
+    pub fn allows(&self, cap: HostCapability) -> bool {
+        match cap {
+            HostCapability::Fs => self.fs,
+            HostCapability::Net => self.net,
+            HostCapability::ProcessEnv => self.process_env,
+            HostCapability::ClockRandom => self.clock_random,
+            HostCapability::Db => self.db,
+            HostCapability::WasmImports => self.wasm_imports,
+        }
+    }
+
+    fn apply_disable_list(&mut self, disable_csv: &str) {
+        for raw in disable_csv.split(',') {
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "fs" => self.fs = false,
+                "net" => self.net = false,
+                "process" | "process_env" | "env" => self.process_env = false,
+                "clock" | "random" | "clock_random" => self.clock_random = false,
+                "db" => self.db = false,
+                "wasm" | "wasm_imports" => self.wasm_imports = false,
+                _ => {}
+            }
+        }
+    }
+}
+
 /// PHP configuration settings
 #[derive(Debug, Clone)]
 pub struct PhpConfig {
@@ -27,15 +130,43 @@ pub struct PhpConfig {
     pub timezone: String,
     /// Working directory for script execution
     pub working_dir: Option<PathBuf>,
+    /// Runtime host profile (`server` or `wosix`)
+    pub host_profile: HostProfile,
+    /// Capability matrix derived from the host profile
+    pub host_capabilities: HostCapabilities,
 }
 
 impl Default for PhpConfig {
     fn default() -> Self {
+        let host_profile = std::env::var("DEKA_HOST_PROFILE")
+            .ok()
+            .map(|value| HostProfile::parse(&value))
+            .unwrap_or(HostProfile::Server);
+        let mut host_capabilities = HostCapabilities::for_profile(host_profile);
+        if let Ok(disable_csv) = std::env::var("DEKA_HOST_DISABLE_CAPS") {
+            host_capabilities.apply_disable_list(&disable_csv);
+        }
         Self {
             error_reporting: 32767, // E_ALL
             max_execution_time: 30,
             timezone: "UTC".to_string(),
             working_dir: None,
+            host_profile,
+            host_capabilities,
+        }
+    }
+}
+
+impl PhpConfig {
+    pub fn capability_for_bridge_kind(kind: &str) -> Option<HostCapability> {
+        match kind.trim().to_ascii_lowercase().as_str() {
+            "fs" => Some(HostCapability::Fs),
+            "net" | "tcp" | "tls" => Some(HostCapability::Net),
+            "process" | "env" => Some(HostCapability::ProcessEnv),
+            "clock" | "random" => Some(HostCapability::ClockRandom),
+            "db" | "postgres" | "mysql" | "sqlite" => Some(HostCapability::Db),
+            "wasm" | "component" => Some(HostCapability::WasmImports),
+            _ => None,
         }
     }
 }
@@ -496,6 +627,44 @@ impl RequestContext {
             .or_insert_with(|| Box::new(init()))
             .downcast_mut::<T>()
             .expect("TypeId mismatch in extension_data")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostCapability, HostCapabilities, HostProfile, PhpConfig};
+
+    #[test]
+    fn host_profile_parse_defaults_to_server() {
+        assert_eq!(HostProfile::parse("server"), HostProfile::Server);
+        assert_eq!(HostProfile::parse("wosix"), HostProfile::Wosix);
+        assert_eq!(HostProfile::parse("unknown"), HostProfile::Server);
+    }
+
+    #[test]
+    fn host_capabilities_for_wosix_limits_db_and_env() {
+        let caps = HostCapabilities::for_profile(HostProfile::Wosix);
+        assert!(caps.allows(HostCapability::Fs));
+        assert!(caps.allows(HostCapability::Net));
+        assert!(!caps.allows(HostCapability::Db));
+        assert!(!caps.allows(HostCapability::ProcessEnv));
+    }
+
+    #[test]
+    fn bridge_kind_maps_to_capability() {
+        assert_eq!(
+            PhpConfig::capability_for_bridge_kind("db"),
+            Some(HostCapability::Db)
+        );
+        assert_eq!(
+            PhpConfig::capability_for_bridge_kind("tls"),
+            Some(HostCapability::Net)
+        );
+        assert_eq!(
+            PhpConfig::capability_for_bridge_kind("env"),
+            Some(HostCapability::ProcessEnv)
+        );
+        assert_eq!(PhpConfig::capability_for_bridge_kind("unknown"), None);
     }
 }
 
