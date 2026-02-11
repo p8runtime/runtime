@@ -5,7 +5,7 @@ use php_rs::{
     compiler::emitter::Emitter,
     core::value::{ArrayData, ArrayKey, Val},
     parser::lexer::Lexer,
-    parser::parser::{Parser as PhpParser, ParserMode},
+    parser::parser::{detect_parser_mode, Parser as PhpParser, ParserMode},
     runtime::context::{EngineBuilder, EngineContext},
     vm::engine::{VM, VmError},
 };
@@ -145,20 +145,7 @@ pub fn execute_source(
     let source_bytes = source.as_bytes();
     let arena = Bump::new();
     let lexer = Lexer::new(source_bytes);
-    let trimmed = source.trim_start();
-    let mode = if trimmed.starts_with("/*__DEKA_PHPX_INTERNAL__*/") {
-        ParserMode::PhpxInternal
-    } else if trimmed.starts_with("/*__DEKA_PHPX__*/") {
-        ParserMode::Phpx
-    } else {
-        match file_path
-            .and_then(|path| path.extension())
-            .and_then(|ext| ext.to_str())
-        {
-            Some("phpx") => ParserMode::Phpx,
-            _ => ParserMode::Php,
-        }
-    };
+    let mode = detect_parser_mode(source_bytes, file_path);
     let mut parser = PhpParser::new_with_mode(lexer, &arena, mode);
 
     let program = parser.parse_program();

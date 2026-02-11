@@ -1,9 +1,11 @@
 use bumpalo::Bump;
 use clap::Parser;
 use php_rs::compiler::emitter::Emitter;
+use php_rs::compiler::chunk::UserFunc;
 use php_rs::core::interner::Interner;
+use php_rs::core::value::Val;
 use php_rs::parser::lexer::Lexer;
-use php_rs::parser::parser::Parser as PhpParser;
+use php_rs::parser::parser::{detect_parser_mode, Parser as PhpParser};
 use std::fs;
 use std::path::PathBuf;
 
@@ -19,16 +21,7 @@ fn main() -> anyhow::Result<()> {
 
     let arena = Bump::new();
     let lexer = Lexer::new(source_bytes);
-    let mode = if source.contains("__DEKA_PHPX_INTERNAL__") {
-        php_rs::parser::parser::ParserMode::PhpxInternal
-    } else if source.contains("__DEKA_PHPX__") {
-        php_rs::parser::parser::ParserMode::Phpx
-    } else {
-        match cli.file.extension().and_then(|ext| ext.to_str()) {
-            Some("phpx") => php_rs::parser::parser::ParserMode::Phpx,
-            _ => php_rs::parser::parser::ParserMode::Php,
-        }
-    };
+    let mode = detect_parser_mode(source_bytes, Some(cli.file.as_path()));
     let mut parser = PhpParser::new_with_mode(lexer, &arena, mode);
 
     let program = parser.parse_program();
@@ -63,6 +56,26 @@ fn main() -> anyhow::Result<()> {
     println!("\n=== Constants ===");
     for (i, val) in chunk.constants.iter().enumerate() {
         println!("{}: {:?}", i, val);
+        if let Val::Resource(any) = val {
+            if let Some(func) = any.as_ref().downcast_ref::<UserFunc>() {
+                println!("  -> user func params: {}", func.params.len());
+                for (p_i, p) in func.params.iter().enumerate() {
+                    println!(
+                        "     param[{}]: name={:?} by_ref={} variadic={}",
+                        p_i, p.name, p.by_ref, p.is_variadic
+                    );
+                }
+                for (op_i, op) in func.chunk.code.iter().enumerate() {
+                    println!("     {:4}: {:?}", op_i, op);
+                }
+                if !func.chunk.constants.is_empty() {
+                    println!("     constants:");
+                    for (k, v) in func.chunk.constants.iter().enumerate() {
+                        println!("       [{}] {:?}", k, v);
+                    }
+                }
+            }
+        }
     }
 
     println!("\n=== Catch Table ===");
@@ -77,6 +90,17 @@ fn main() -> anyhow::Result<()> {
             entry.finally_target,
             entry.finally_end
         );
+    }
+
+    println!("\n=== Symbols ===");
+    let mut i = 0u32;
+    loop {
+        let sym = php_rs::core::value::Symbol(i);
+        let Some(bytes) = interner.lookup(sym) else {
+            break;
+        };
+        println!("{}: {}", i, String::from_utf8_lossy(bytes));
+        i += 1;
     }
 
     Ok(())

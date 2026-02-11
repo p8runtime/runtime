@@ -4,6 +4,7 @@ use crate::parser::lexer::{
     token::{Token, TokenKind},
 };
 use bumpalo::Bump;
+use std::path::Path;
 
 use crate::parser::span::Span;
 
@@ -45,6 +46,35 @@ pub enum ParserMode {
     Php,
     Phpx,
     PhpxInternal,
+}
+
+pub fn detect_parser_mode(source: &[u8], file_path: Option<&Path>) -> ParserMode {
+    let mut start_idx = 0usize;
+    while start_idx < source.len() && source[start_idx].is_ascii_whitespace() {
+        start_idx += 1;
+    }
+    let trimmed = &source[start_idx..];
+    if trimmed.starts_with(b"/*__DEKA_PHPX_INTERNAL__*/") {
+        return ParserMode::PhpxInternal;
+    }
+    if trimmed.starts_with(b"/*__DEKA_PHPX__*/") {
+        return ParserMode::Phpx;
+    }
+
+    if let Some(path) = file_path {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("phpx") {
+            return ParserMode::Phpx;
+        }
+        // Cached PHPX modules are emitted as .php files under php_modules/.cache/phpx.
+        // They contain generated namespace/wrapper code and must run in internal PHPX mode.
+        if path.extension().and_then(|ext| ext.to_str()) == Some("php")
+            && path.to_string_lossy().replace('\\', "/").contains("/.cache/phpx/")
+        {
+            return ParserMode::PhpxInternal;
+        }
+    }
+
+    ParserMode::Php
 }
 
 impl<'src, 'ast> Parser<'src, 'ast> {

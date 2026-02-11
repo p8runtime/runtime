@@ -8,7 +8,7 @@ use clap::Parser;
 use php_rs::compiler::emitter::Emitter;
 use php_rs::fcgi;
 use php_rs::parser::lexer::Lexer;
-use php_rs::parser::parser::Parser as PhpParser;
+use php_rs::parser::parser::{detect_parser_mode, Parser as PhpParser};
 use php_rs::runtime::context::EngineContext;
 use php_rs::sapi::fpm::FpmRequest;
 use php_rs::vm::engine::VM;
@@ -401,13 +401,8 @@ async fn execute_php(
 
     let arena = Bump::new();
     let lexer = Lexer::new(&source);
-    let mode = match std::path::Path::new(&fpm_req.script_filename)
-        .extension()
-        .and_then(|ext| ext.to_str())
-    {
-        Some("phpx") => php_rs::parser::parser::ParserMode::Phpx,
-        _ => php_rs::parser::parser::ParserMode::Php,
-    };
+    let script_path = std::path::Path::new(&fpm_req.script_filename);
+    let mode = detect_parser_mode(&source, Some(script_path));
     let mut parser = PhpParser::new_with_mode(lexer, &arena, mode);
     let program = parser.parse_program();
 

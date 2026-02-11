@@ -1,8 +1,17 @@
 use bumpalo::Bump;
+use std::path::Path;
 
 use crate::parser::ast::{ClassKind, ClassMember, Expr, Stmt};
 use crate::parser::lexer::Lexer;
-use crate::parser::parser::{Parser, ParserMode};
+use crate::parser::parser::{detect_parser_mode, Parser, ParserMode};
+
+#[test]
+fn detect_mode_treats_phpx_cache_php_as_internal() {
+    let source = b"namespace deka_module_test;\nfunction x() { return 1; }\n";
+    let path = Path::new("/tmp/php_modules/.cache/phpx/core/bridge.php");
+    let mode = detect_parser_mode(source, Some(path));
+    assert_eq!(mode, ParserMode::PhpxInternal);
+}
 
 #[test]
 fn phpx_allows_automatic_semicolons() {
