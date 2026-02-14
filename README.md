@@ -1,71 +1,26 @@
 # php-rs
 
-A PHP interpreter written in Rust. This project is currently in an experimental state.
+Core PHP/PHPX runtime crate used by the Deka MVP workspace.
 
-## Features
+## Scope in MVP
 
-- Core PHP language support
-- Standard library extensions (BCMath, JSON, MySQLi, PDO, OpenSSL, Zip, Zlib, etc.)
-- CLI interface (`php`)
-- FastCGI Process Manager (`php-fpm`)
+- Provides parser, VM, builtins, runtime context, and PHPX-facing internals.
+- Consumed by workspace crates like `modules_php` and `cli`.
+- Maintained as a runtime library first.
 
-## Limitations
+## Build
 
-- Fibers are not supported. The php-rs runtime targets V8 and does not pause execution, so `Fiber::*` APIs are intentionally unavailable.
-- Magic constants are not supported yet.
-
-## Getting Started
-
-### Prerequisites
-
-- Rust (latest stable release)
-
-### Building
-
-Clone the repository and build using Cargo:
-
-```bash
-git clone https://github.com/wudi/php-rs.git
-cd php-rs
-cargo build --release
-```
-
-### Usage
-
-#### CLI
-
-Run a PHP script:
-
-```bash
-cargo run --bin php -- script.php
-```
-
-Interactive shell:
-
-```bash
-cargo run --bin php
-```
-
-#### FPM
-
-Start the PHP-FPM server:
-
-```bash
-cargo run --bin php-fpm
+```sh
+cargo build --release -p php-rs
 ```
 
 ## Testing
 
-Run the Rust test suite:
-
-```bash
-cargo test
+```sh
+cargo test -p php-rs --release
 ```
 
-Legacy integration tests (`*.rs` files) now live under `test-old/`; the new `tests/php/` directory keeps the Bun-driven PHP fixtures and helpers.
+## Notes
 
-## License
-
-This project is licensed under the MIT License.
-
-Created by AI
+- Legacy benchmark and old integration payloads were removed from this crate to keep MVP focused.
+- Default builds do not emit legacy CLI/FPM binaries.

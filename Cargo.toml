@@ -16,8 +16,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 indexmap = "2.0"
 bumpalo = { version = "3.12", features = ["collections"] }
-clap = { version = "4.5", features = ["derive"], optional = true }
-rustyline = { version = "14.0", optional = true }
 smallvec = "1.13"
 anyhow = "1.0"
 tempfile = "3.23.0"
@@ -77,71 +75,26 @@ num-integer = "0.1"
 rust_decimal = "1.39.0"
 rust_decimal_macros = "1.39.0"
  
-
-# Signal handling for php-fpm
-ctrlc = { version = "3.4", optional = true }
-tokio = { version = "1.48.0", features = ["full"], optional = true }
-tokio-fastcgi = { version = "1.3.0", optional = true }
-multipart = { version = "0.18", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 memchr = "2.7"
-axum = { version = "0.7", optional = true }
-tower-http = { version = "0.5", optional = true, features = ["cors"] }
-tracing = { version = "0.1", optional = true }
-tracing-subscriber = { version = "0.3", optional = true }
-thiserror = { version = "1.0", optional = true }
-wasmtime = { version = "27", optional = true }
-wasmtime-wasi = { version = "27", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rand = "0.8.5"
-
-[[bin]]
-name = "php"
-path = "src/bin/php.rs"
-required-features = ["cli"]
-
-[[bin]]
-name = "php-fpm"
-path = "src/bin/php-fpm.rs"
-required-features = ["fpm"]
-
-[[bin]]
-name = "dump_bytecode"
-path = "src/bin/dump_bytecode.rs"
-required-features = ["cli"]
 
 [[bin]]
 name = "php-wasm"
 path = "src/bin/php_wasm.rs"
 required-features = ["wasm-target"]
 
-[[bin]]
-name = "php-router"
-path = "src/bin/php_router.rs"
-required-features = ["router"]
-
 [features]
 default = ["native-extensions", "pthreads", "pcre2", "zip"]
 native-extensions = ["mysqli", "pdo", "openssl"]
-cli = ["dep:clap", "dep:rustyline"]
-fpm = ["dep:tokio", "dep:tokio-fastcgi", "dep:multipart", "dep:ctrlc"]
 mysqli = ["dep:mysql"]
 pdo = ["dep:rusqlite", "dep:postgres", "dep:oracle", "dep:mysql"]
 openssl = ["dep:openssl"]
 pthreads = []
 zip = ["dep:zip"]
 wasm-target = []
-router = [
-    "dep:axum",
-    "dep:tower-http",
-    "dep:tokio",
-    "dep:tracing",
-    "dep:tracing-subscriber",
-    "dep:thiserror",
-    "dep:wasmtime",
-    "dep:wasmtime-wasi"
-]
 
 [dev-dependencies]
 serde_json = "1.0"

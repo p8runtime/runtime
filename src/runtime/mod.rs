@@ -20,5 +20,3 @@ pub mod resource_manager;
 pub mod zip_extension;
 pub mod zlib_extension;
 
-#[cfg(test)]
-pub mod example_extension;

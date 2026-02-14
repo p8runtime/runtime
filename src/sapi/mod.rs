@@ -1,9 +1,6 @@
 //! SAPI (Server API) adapters for different execution modes.
 //!
-//! Maps external request sources (CLI args, FastCGI params, etc.) to RequestContext.
-
-#[cfg(feature = "fpm")]
-pub mod fpm;
+//! Maps external request sources (CLI args, env, request maps) to RequestContext.
 
 use crate::core::value::{ArrayData, ArrayKey, Handle, Val};
 use crate::vm::engine::VM;
@@ -14,14 +11,12 @@ use std::rc::Rc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SapiMode {
     Cli,
-    FpmFcgi,
 }
 
 impl SapiMode {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Cli => "cli",
-            Self::FpmFcgi => "fpm-fcgi",
         }
     }
 }
