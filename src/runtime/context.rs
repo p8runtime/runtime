@@ -19,13 +19,13 @@ pub type NativeHandler = fn(&mut VM, args: &[Handle]) -> Result<Handle, String>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostProfile {
     Server,
-    Wosix,
+    Adwa,
 }
 
 impl HostProfile {
     pub fn parse(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
-            "wosix" => Self::Wosix,
+            "adwa" => Self::Adwa,
             _ => Self::Server,
         }
     }
@@ -33,7 +33,7 @@ impl HostProfile {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Server => "server",
-            Self::Wosix => "wosix",
+            Self::Adwa => "adwa",
         }
     }
 }
@@ -82,7 +82,7 @@ impl HostCapabilities {
                 db: true,
                 wasm_imports: true,
             },
-            HostProfile::Wosix => Self {
+            HostProfile::Adwa => Self {
                 fs: true,
                 net: true,
                 process_env: false,
@@ -130,7 +130,7 @@ pub struct PhpConfig {
     pub timezone: String,
     /// Working directory for script execution
     pub working_dir: Option<PathBuf>,
-    /// Runtime host profile (`server` or `wosix`)
+    /// Runtime host profile (`server` or `adwa`)
     pub host_profile: HostProfile,
     /// Capability matrix derived from the host profile
     pub host_capabilities: HostCapabilities,
@@ -637,13 +637,13 @@ mod tests {
     #[test]
     fn host_profile_parse_defaults_to_server() {
         assert_eq!(HostProfile::parse("server"), HostProfile::Server);
-        assert_eq!(HostProfile::parse("wosix"), HostProfile::Wosix);
+        assert_eq!(HostProfile::parse("adwa"), HostProfile::Adwa);
         assert_eq!(HostProfile::parse("unknown"), HostProfile::Server);
     }
 
     #[test]
-    fn host_capabilities_for_wosix_limits_db_and_env() {
-        let caps = HostCapabilities::for_profile(HostProfile::Wosix);
+    fn host_capabilities_for_adwa_limits_db_and_env() {
+        let caps = HostCapabilities::for_profile(HostProfile::Adwa);
         assert!(caps.allows(HostCapability::Fs));
         assert!(caps.allows(HostCapability::Net));
         assert!(!caps.allows(HostCapability::Db));
