@@ -1944,6 +1944,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 "Rewrite parameter as '$name: Type' (for example, '$props: NameProps').",
             ));
         }
+        if self.is_phpx() && !self.allow_phpx_namespace() && ty.is_none() {
+            self.errors.push(ParseError::with_help(
+                param_name.span,
+                "PHPX function parameters require explicit type annotations",
+                "Add ': Type' after the parameter name (for example, '$name: string').",
+            ));
+        }
 
         if let Some(pattern_expr) = pattern {
             self.push_param_pattern_prologue(pattern_expr, param_name);

@@ -167,6 +167,27 @@ fn phpx_rejects_legacy_typed_parameters() {
 }
 
 #[test]
+fn phpx_rejects_missing_parameter_type() {
+    let code = "function Name($props) { return $props; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        !program.errors.is_empty(),
+        "expected parser error for missing parameter type"
+    );
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|err| err.message.contains("require explicit type annotations")),
+        "expected explicit missing-type error, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
 fn php_mode_still_allows_legacy_typed_parameters() {
     let code = "<?php function Name(array $props): string { return 'ok'; }";
     let arena = Bump::new();
