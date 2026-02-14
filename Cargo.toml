@@ -1,4 +1,5 @@
 [package]
+autobins = false
 name = "php-rs"
 version = "0.1.0"
 edition = "2024"
@@ -106,6 +107,11 @@ path = "src/bin/php-fpm.rs"
 required-features = ["fpm"]
 
 [[bin]]
+name = "dump_bytecode"
+path = "src/bin/dump_bytecode.rs"
+required-features = ["cli"]
+
+[[bin]]
 name = "php-wasm"
 path = "src/bin/php_wasm.rs"
 required-features = ["wasm-target"]
@@ -116,7 +122,7 @@ path = "src/bin/php_router.rs"
 required-features = ["router"]
 
 [features]
-default = ["native-extensions", "cli", "fpm", "pthreads", "pcre2", "zip"]
+default = ["native-extensions", "pthreads", "pcre2", "zip"]
 native-extensions = ["mysqli", "pdo", "openssl"]
 cli = ["dep:clap", "dep:rustyline"]
 fpm = ["dep:tokio", "dep:tokio-fastcgi", "dep:multipart", "dep:ctrlc"]
