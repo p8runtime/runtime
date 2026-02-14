@@ -71,7 +71,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::UNIX_EPOCH;
 
 #[cfg(target_arch = "wasm32")]
 use crate::wasm_exports::{php_free, WasmResult};
@@ -178,9 +180,7 @@ fn host_fs_read(path: &str) -> Result<Vec<u8>, VmError> {
     }
     let slice = unsafe { std::slice::from_raw_parts(result.ptr as *const u8, result.len as usize) };
     let out = slice.to_vec();
-    unsafe {
-        php_free(result.ptr as *mut u8, result.len);
-    }
+    php_free(result.ptr as *mut u8, result.len);
     Ok(out)
 }
 
@@ -909,33 +909,36 @@ impl VM {
     fn check_execution_timeout(&self) -> Result<(), VmError> {
         #[cfg(target_arch = "wasm32")]
         {
-            return Ok(());
+            Ok(())
         }
-        if self.context.config.max_execution_time <= 0 {
-            // 0 or negative means unlimited
-            return Ok(());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.context.config.max_execution_time <= 0 {
+                // 0 or negative means unlimited
+                return Ok(());
+            }
+
+            let elapsed = self
+                .execution_start_time
+                .elapsed()
+                .map_err(|e| VmError::RuntimeError(format!("Time error: {}", e)))?;
+
+            let elapsed_secs = elapsed.as_secs() as i64;
+
+            if elapsed_secs >= self.context.config.max_execution_time {
+                return Err(VmError::RuntimeError(format!(
+                    "Maximum execution time of {} second{} exceeded",
+                    self.context.config.max_execution_time,
+                    if self.context.config.max_execution_time == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                )));
+            }
+
+            Ok(())
         }
-
-        let elapsed = self
-            .execution_start_time
-            .elapsed()
-            .map_err(|e| VmError::RuntimeError(format!("Time error: {}", e)))?;
-
-        let elapsed_secs = elapsed.as_secs() as i64;
-
-        if elapsed_secs >= self.context.config.max_execution_time {
-            return Err(VmError::RuntimeError(format!(
-                "Maximum execution time of {} second{} exceeded",
-                self.context.config.max_execution_time,
-                if self.context.config.max_execution_time == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            )));
-        }
-
-        Ok(())
     }
 
     /// Get approximate memory usage in bytes
@@ -1216,7 +1219,7 @@ impl VM {
         }
     }
 
-    fn read_script_bytes(&self, path: &Path, raw: &str) -> Result<Vec<u8>, VmError> {
+    fn read_script_bytes(&self, path: &Path, _raw: &str) -> Result<Vec<u8>, VmError> {
         #[cfg(target_arch = "wasm32")]
         {
             let path_str = path.to_string_lossy();
@@ -1225,7 +1228,7 @@ impl VM {
         #[cfg(not(target_arch = "wasm32"))]
         {
             return std::fs::read(path).map_err(|e| {
-                VmError::RuntimeError(format!("Could not read file {}: {}", raw, e))
+                VmError::RuntimeError(format!("Could not read file {}: {}", _raw, e))
             });
         }
     }
@@ -8691,9 +8694,7 @@ impl VM {
                     } else {
                         crate::parser::parser::ParserMode::Php
                     };
-                    let mut wrapped_source = Vec::new();
-                    let mut eval_source = None;
-                    let source_bytes = if matches!(
+                    let source_holder: std::borrow::Cow<[u8]> = if matches!(
                         mode,
                         crate::parser::parser::ParserMode::Phpx
                             | crate::parser::parser::ParserMode::PhpxInternal
@@ -8702,18 +8703,18 @@ impl VM {
                         if trimmed.starts_with("<?php") {
                             let prefix_len = path_str.len() - trimmed.len();
                             let without_tag = path_str[prefix_len + 5..].to_string();
-                            eval_source = Some(without_tag);
-                            eval_source.as_ref().unwrap().as_bytes()
+                            std::borrow::Cow::Owned(without_tag.into_bytes())
                         } else {
-                            path_str.as_bytes()
+                            std::borrow::Cow::Borrowed(path_str.as_bytes())
                         }
                     } else {
                         // PHP's eval() assumes code is in PHP mode (no <?php tag required)
                         // Wrap the code in PHP tags for the parser
-                        wrapped_source = b"<?php ".to_vec();
+                        let mut wrapped_source = b"<?php ".to_vec();
                         wrapped_source.extend_from_slice(path_str.as_bytes());
-                        wrapped_source.as_slice()
+                        std::borrow::Cow::Owned(wrapped_source)
                     };
+                    let source_bytes = source_holder.as_ref();
 
                     let arena = bumpalo::Bump::new();
                     let lexer = crate::parser::lexer::Lexer::new(source_bytes);

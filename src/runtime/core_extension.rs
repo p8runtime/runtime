@@ -7,7 +7,6 @@ use crate::runtime::context::RequestContext;
 use crate::runtime::extension::{Extension, ExtensionInfo, ExtensionResult};
 use crate::runtime::registry::{ExtensionRegistry, NativeClassDef, NativeMethodEntry};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Core extension runtime state
 #[derive(Debug, Default)]
@@ -105,8 +104,8 @@ impl CoreExtensionData {
         #[cfg(target_arch = "wasm32")]
         let seed = 0u64;
         #[cfg(not(target_arch = "wasm32"))]
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
         self.rng.seed(seed as u32);

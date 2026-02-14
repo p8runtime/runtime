@@ -6,9 +6,11 @@ use crate::runtime::registry::ExtensionRegistry;
 use crate::runtime::resource_manager::ResourceManager;
 use crate::vm::engine::VM;
 use indexmap::IndexMap;
+#[cfg(unix)]
 use libc;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+#[cfg(unix)]
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::rc::Rc;

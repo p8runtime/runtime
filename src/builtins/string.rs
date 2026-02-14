@@ -4,6 +4,7 @@ use crate::runtime::mb::convert::convert_bytes;
 use crate::vm::engine::VM;
 use crc32fast::Hasher;
 use digest::Digest;
+#[cfg(unix)]
 use libc;
 use md5::Md5;
 use regex::Regex;
@@ -12,6 +13,7 @@ use rust_decimal::{Decimal, RoundingStrategy};
 use sha1::Sha1;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+#[cfg(unix)]
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::path::PathBuf;
@@ -5223,12 +5225,12 @@ pub fn php_money_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         return Err("money_format() expects exactly 2 parameters".into());
     }
 
-    let format = vm.check_builtin_param_string(args[0], 1, "money_format")?;
-    let value = number_format_float(vm, args[1], 2)?;
+    let _format = vm.check_builtin_param_string(args[0], 1, "money_format")?;
+    let _value = number_format_float(vm, args[1], 2)?;
 
     #[cfg(unix)]
     {
-        let c_format = CString::new(format)
+        let c_format = CString::new(_format)
             .map_err(|_| "money_format(): Format string contains null byte".to_string())?;
         let mut buf_len = 128usize;
         loop {
@@ -5238,7 +5240,7 @@ pub fn php_money_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
                     buffer.as_mut_ptr() as *mut libc::c_char,
                     buffer.len(),
                     c_format.as_ptr(),
-                    value as libc::c_double,
+                    _value as libc::c_double,
                 )
             };
             if written < 0 {

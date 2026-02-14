@@ -1518,8 +1518,6 @@ impl<'a> CheckContext<'a> {
                     params: vec![EnumParamInfo {
                         name: "value".to_string(),
                         ty: None,
-                        required: true,
-                        variadic: false,
                     }],
                 });
             }
@@ -1533,8 +1531,6 @@ impl<'a> CheckContext<'a> {
                     params: vec![EnumParamInfo {
                         name: "value".to_string(),
                         ty: None,
-                        required: true,
-                        variadic: false,
                     }],
                 });
             }
@@ -1543,8 +1539,6 @@ impl<'a> CheckContext<'a> {
                     params: vec![EnumParamInfo {
                         name: "error".to_string(),
                         ty: None,
-                        required: true,
-                        variadic: false,
                     }],
                 });
             }
@@ -1907,27 +1901,6 @@ impl<'a> CheckContext<'a> {
                 name
             ),
         });
-    }
-
-    fn struct_name_from_expr(&self, expr: ExprId<'a>) -> Option<String> {
-        match *expr {
-            Expr::Variable { span, .. } => {
-                let name = token_text(self.source, span);
-                if name.starts_with('$') {
-                    None
-                } else {
-                    Some(name)
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn is_struct_new_target(&self, expr: ExprId<'a>) -> bool {
-        let Some(name) = self.struct_name_from_expr(expr) else {
-            return false;
-        };
-        self.structs.contains_key(&name)
     }
 
     fn remove_null_from_var(&self, name: &str, env: &mut HashMap<String, Type>) {
@@ -2933,12 +2906,9 @@ impl<'a> CheckContext<'a> {
                             });
                         }
                         let ty = param.ty.map(|ty| self.resolve_type(ty));
-                        let required = param.default.is_none() && !param.variadic;
                         params.push(EnumParamInfo {
                             name,
                             ty,
-                            required,
-                            variadic: param.variadic,
                         });
                     }
                 }

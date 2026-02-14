@@ -145,6 +145,7 @@ fn json_value_to_handle(
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn decode_json_to_handle(
     vm: &mut VM,
     value: &JsonValue,

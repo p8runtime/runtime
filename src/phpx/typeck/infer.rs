@@ -13,8 +13,6 @@ pub struct StructInfo {
 pub struct EnumParamInfo {
     pub name: String,
     pub ty: Option<Type>,
-    pub required: bool,
-    pub variadic: bool,
 }
 
 #[derive(Debug, Clone)]

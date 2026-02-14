@@ -732,25 +732,28 @@ pub fn php_scandir(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 pub fn php_sys_get_temp_dir(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     #[cfg(target_arch = "wasm32")]
     {
-        return Ok(vm
+        Ok(vm
             .arena
-            .alloc(Val::String(Rc::new(b"/tmp".to_vec()))));
+            .alloc(Val::String(Rc::new(b"/tmp".to_vec()))))
     }
 
-    let temp_dir = std::env::temp_dir();
-
-    #[cfg(unix)]
+    #[cfg(not(target_arch = "wasm32"))]
     {
-        use std::os::unix::ffi::OsStrExt;
-        Ok(vm.arena.alloc(Val::String(Rc::new(
-            temp_dir.as_os_str().as_bytes().to_vec(),
-        ))))
-    }
+        let temp_dir = std::env::temp_dir();
 
-    #[cfg(not(unix))]
-    {
-        let path_str = temp_dir.to_string_lossy().into_owned();
-        Ok(vm.arena.alloc(Val::String(Rc::new(path_str.into_bytes()))))
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            Ok(vm.arena.alloc(Val::String(Rc::new(
+                temp_dir.as_os_str().as_bytes().to_vec(),
+            ))))
+        }
+
+        #[cfg(not(unix))]
+        {
+            let path_str = temp_dir.to_string_lossy().into_owned();
+            Ok(vm.arena.alloc(Val::String(Rc::new(path_str.into_bytes()))))
+        }
     }
 }
 
@@ -1586,12 +1589,12 @@ pub fn php_fileowner(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let path_bytes = handle_to_path(vm, args[0])?;
-    let path = bytes_to_path(&path_bytes)?;
+    let _path = bytes_to_path(&path_bytes)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let metadata = fs::metadata(&path)
+        let metadata = fs::metadata(&_path)
             .map_err(|e| format!("fileowner({}): {}", String::from_utf8_lossy(&path_bytes), e))?;
 
         let uid = metadata.uid();
@@ -1613,12 +1616,12 @@ pub fn php_filegroup(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let path_bytes = handle_to_path(vm, args[0])?;
-    let path = bytes_to_path(&path_bytes)?;
+    let _path = bytes_to_path(&path_bytes)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let metadata = fs::metadata(&path)
+        let metadata = fs::metadata(&_path)
             .map_err(|e| format!("filegroup({}): {}", String::from_utf8_lossy(&path_bytes), e))?;
 
         let gid = metadata.gid();
