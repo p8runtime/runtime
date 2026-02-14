@@ -30,43 +30,16 @@ rphonetic = "3.0.4"
 serde_json = "1.0"
 deka-validation = { path = "../../../deka-validation" }
 
-# Hash extension dependencies
+# Builtin crypto/hash dependencies used by string/url helpers
 md-5 = "0.10"
-md2 = "0.10"
-md4 = "0.10"
 sha1 = "0.10"
-sha2 = "0.10"
-sha3 = "0.10"
-whirlpool = "0.10"
-ripemd = "0.1"
-tiger = "0.2"
-xxhash-rust = { version = "0.8", features = ["xxh32", "xxh64", "xxh3"] }
 crc32fast = "1.3"
-adler32 = "1.2"
 digest = "0.10"
 hex = "0.4"
-subtle = "2.5"
-hmac = "0.12"
-pbkdf2 = "0.12"
-hkdf = "0.12"
-
-# MySQLi extension dependencies
-mysql = { version = "24.0", optional = true }
-
-# PDO extension dependencies
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
-postgres = { version = "0.19", optional = true }
-oracle = { version = "0.6", optional = true }
+base64 = "0.21"
 
 # Zlib extension dependencies
 flate2 = "1.0"
-
-# Zip extension dependencies
-zip = { version = "2.2.2", optional = true }
-
-# OpenSSL extension dependencies
-openssl = { version = "0.10.75", optional = true }
-base64 = "0.21"
 
 # BCMath extension dependencies
 num-bigint = "0.4"
@@ -87,13 +60,8 @@ path = "src/bin/php_wasm.rs"
 required-features = ["wasm-target"]
 
 [features]
-default = ["native-extensions", "pthreads", "pcre2", "zip"]
-native-extensions = ["mysqli", "pdo", "openssl"]
-mysqli = ["dep:mysql"]
-pdo = ["dep:rusqlite", "dep:postgres", "dep:oracle", "dep:mysql"]
-openssl = ["dep:openssl"]
+default = ["pthreads", "pcre2"]
 pthreads = []
-zip = ["dep:zip"]
 wasm-target = []
 
 [dev-dependencies]

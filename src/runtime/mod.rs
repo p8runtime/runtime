@@ -2,21 +2,12 @@ pub mod context;
 pub mod core_extension;
 pub mod date_extension;
 pub mod extension;
-pub mod hash_extension;
 pub mod json_extension;
 pub mod mb;
 pub mod mb_extension;
-#[cfg(feature = "mysqli")]
-pub mod mysqli_extension;
-#[cfg(feature = "openssl")]
-pub mod openssl_extension;
-#[cfg(feature = "pdo")]
-pub mod pdo_extension;
 #[cfg(feature = "pthreads")]
 pub mod pthreads_extension;
 pub mod registry;
 pub mod resource_manager;
-#[cfg(feature = "zip")]
-pub mod zip_extension;
 pub mod zlib_extension;
 

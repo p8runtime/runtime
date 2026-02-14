@@ -335,11 +335,6 @@ impl EngineContext {
             .register_extension(Box::new(DateExtension))
             .expect("Failed to register Date extension");
 
-        // Register Hash extension
-        use crate::runtime::hash_extension::HashExtension;
-        registry
-            .register_extension(Box::new(HashExtension))
-            .expect("Failed to register Hash extension");
 
         // Register JSON extension
         use crate::runtime::json_extension::JsonExtension;
@@ -347,23 +342,7 @@ impl EngineContext {
             .register_extension(Box::new(JsonExtension))
             .expect("Failed to register JSON extension");
 
-        // Register MySQLi extension
-        #[cfg(feature = "mysqli")]
-        {
-            use crate::runtime::mysqli_extension::MysqliExtension;
-            registry
-                .register_extension(Box::new(MysqliExtension))
-                .expect("Failed to register MySQLi extension");
-        }
 
-        // Register PDO extension
-        #[cfg(feature = "pdo")]
-        {
-            use crate::runtime::pdo_extension::PdoExtension;
-            registry
-                .register_extension(Box::new(PdoExtension))
-                .expect("Failed to register PDO extension");
-        }
 
         // Register Zlib extension
         use crate::runtime::zlib_extension::ZlibExtension;
@@ -377,23 +356,7 @@ impl EngineContext {
             .register_extension(Box::new(MbStringExtension))
             .expect("Failed to register mbstring extension");
 
-        // Register Zip extension
-        #[cfg(feature = "zip")]
-        {
-            use crate::runtime::zip_extension::ZipExtension;
-            registry
-                .register_extension(Box::new(ZipExtension))
-                .expect("Failed to register Zip extension");
-        }
 
-        // Register OpenSSL extension
-        #[cfg(feature = "openssl")]
-        {
-            use crate::runtime::openssl_extension::OpenSSLExtension;
-            registry
-                .register_extension(Box::new(OpenSSLExtension))
-                .expect("Failed to register OpenSSL extension");
-        }
 
         Self { registry }
     }
@@ -781,19 +744,12 @@ impl EngineBuilder {
             .push(Box::new(super::core_extension::CoreExtension));
         self.extensions
             .push(Box::new(super::date_extension::DateExtension));
-        self.extensions
-            .push(Box::new(super::hash_extension::HashExtension));
-        #[cfg(feature = "mysqli")]
-        self.extensions
-            .push(Box::new(super::mysqli_extension::MysqliExtension));
+
+
         self.extensions
             .push(Box::new(super::json_extension::JsonExtension));
-        #[cfg(feature = "openssl")]
-        self.extensions
-            .push(Box::new(super::openssl_extension::OpenSSLExtension));
-        #[cfg(feature = "pdo")]
-        self.extensions
-            .push(Box::new(super::pdo_extension::PdoExtension));
+
+
         #[cfg(feature = "pthreads")]
         self.extensions
             .push(Box::new(super::pthreads_extension::PthreadsExtension));
