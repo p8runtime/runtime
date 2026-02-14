@@ -395,7 +395,7 @@ fn async_function_requires_promise_return_type() {
 
 #[test]
 fn await_promise_result_flows_into_result_typed_param() {
-    let code = "function consume($r: Result<int, string>): int { return 1; }\nasync function load($p: Promise<Result<int, string>>): Promise<int> {\n  $r = await $p;\n  consume($r);\n  return 1;\n}";
+    let code = "type LoadResult = Result<int, string>;\nfunction consume($r: LoadResult): int { return 1; }\nasync function load($p: Promise<LoadResult>): Promise<int> {\n  $r = await $p;\n  consume($r);\n  return 1;\n}";
     let res = check(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -706,5 +706,23 @@ fn class_type_annotation_is_rejected() {
 #[test]
 fn destructured_assignment_bindings_follow_source_shape() {
     let code = "$obj = { count: 3 }; ({ count: $count } = $obj); $count + 1;";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn foreach_binds_key_and_value_variables() {
+    let code = "function sum($items: array): int { $total = 0; foreach ($items as $idx => $item) { $total = $total + $idx + $item; } return $total; }";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn arrow_function_params_are_in_scope() {
+    let code = "$f = fn($x: int): int => $x + 1;";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn closure_params_are_in_scope() {
+    let code = "$f = function($x: int): int { return $x + 1; };";
     assert!(check(code).is_ok());
 }

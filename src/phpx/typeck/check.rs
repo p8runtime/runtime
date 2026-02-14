@@ -758,10 +758,35 @@ impl<'a> CheckContext<'a> {
                     self.check_stmt(stmt, &mut loop_env, &mut loop_explicit, return_type);
                 }
             }
-            Stmt::Foreach { expr, body, .. } => {
+            Stmt::Foreach {
+                expr,
+                key_var,
+                value_var,
+                body,
+                ..
+            } => {
                 let _ = self.check_expr(expr, env, explicit);
                 let mut loop_env = env.clone();
                 let mut loop_explicit = explicit.clone();
+
+                if let Expr::Variable { name, .. } = *value_var {
+                    let value_name = token_text(self.source, *name)
+                        .trim_start_matches('$')
+                        .to_string();
+                    loop_env.insert(value_name.clone(), Type::Unknown);
+                    loop_explicit.insert(value_name);
+                }
+
+                if let Some(key_expr) = key_var {
+                    if let Expr::Variable { name, .. } = *key_expr {
+                        let key_name = token_text(self.source, *name)
+                            .trim_start_matches('$')
+                            .to_string();
+                        loop_env.insert(key_name.clone(), Type::Unknown);
+                        loop_explicit.insert(key_name);
+                    }
+                }
+
                 for stmt in body.iter() {
                     self.check_stmt(stmt, &mut loop_env, &mut loop_explicit, return_type);
                 }
@@ -1369,16 +1394,42 @@ impl<'a> CheckContext<'a> {
                 });
                 Type::Unknown
             }
-            Expr::Closure { body, .. } => {
+            Expr::Closure { params, body, .. } => {
                 let mut inner_env = env.clone();
                 let mut inner_explicit = explicit.clone();
+                for param in params.iter() {
+                    let param_name = token_text(self.source, param.name.span)
+                        .trim_start_matches('$')
+                        .to_string();
+                    let param_ty = if let Some(ty) = param.ty {
+                        self.resolve_type(ty)
+                    } else {
+                        Type::Unknown
+                    };
+                    inner_env.insert(param_name.clone(), param_ty);
+                    inner_explicit.insert(param_name);
+                }
                 for stmt in body.iter() {
                     self.check_stmt(stmt, &mut inner_env, &mut inner_explicit, None);
                 }
                 Type::Unknown
             }
-            Expr::ArrowFunction { expr, .. } => {
-                let _ = self.check_expr(expr, env, explicit);
+            Expr::ArrowFunction { params, expr, .. } => {
+                let mut inner_env = env.clone();
+                let mut inner_explicit = explicit.clone();
+                for param in params.iter() {
+                    let param_name = token_text(self.source, param.name.span)
+                        .trim_start_matches('$')
+                        .to_string();
+                    let param_ty = if let Some(ty) = param.ty {
+                        self.resolve_type(ty)
+                    } else {
+                        Type::Unknown
+                    };
+                    inner_env.insert(param_name.clone(), param_ty);
+                    inner_explicit.insert(param_name);
+                }
+                let _ = self.check_expr(expr, &mut inner_env, &mut inner_explicit);
                 Type::Unknown
             }
             Expr::Await { expr, span } => {
