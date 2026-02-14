@@ -1141,6 +1141,10 @@ impl<'src> Lexer<'src> {
     pub fn input_slice(&self, span: Span) -> &'src [u8] {
         &self.input[span.start..span.end]
     }
+
+    pub fn input_len(&self) -> usize {
+        self.input.len()
+    }
 }
 
 impl<'src> Iterator for Lexer<'src> {

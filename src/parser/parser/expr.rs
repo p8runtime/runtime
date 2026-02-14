@@ -2419,7 +2419,20 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if end <= start {
             return;
         }
-        let span = Span::new(start, end);
+
+        // Lexer tokenization skips spaces/tabs between tokens; include that
+        // boundary whitespace so inline JSX text spacing is preserved.
+        let mut actual_end = end;
+        while actual_end < self.lexer.input_len() {
+            let byte = self.lexer.input_slice(Span::new(actual_end, actual_end + 1))[0];
+            if byte == b' ' || byte == b'\t' {
+                actual_end += 1;
+                continue;
+            }
+            break;
+        }
+
+        let span = Span::new(start, actual_end);
         let raw = self.lexer.input_slice(span);
         if raw.iter().all(|b| b.is_ascii_whitespace()) {
             return;

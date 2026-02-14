@@ -4766,12 +4766,17 @@ impl<'src> Emitter<'src> {
 
     fn normalize_jsx_text(&self, span: Span) -> Option<Vec<u8>> {
         let raw = self.get_text(span);
-        let text = String::from_utf8_lossy(raw);
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            None
+        if raw.iter().all(|b| b.is_ascii_whitespace()) {
+            // Drop formatting whitespace that includes a line break.
+            // Keep single-line whitespace between inline nodes as one space.
+            if raw.iter().any(|b| *b == b'\n' || *b == b'\r') {
+                None
+            } else {
+                Some(vec![b' '])
+            }
         } else {
-            Some(trimmed.as_bytes().to_vec())
+            // Preserve significant inline spacing, e.g. "Hello " before <Component />.
+            Some(raw.to_vec())
         }
     }
 
