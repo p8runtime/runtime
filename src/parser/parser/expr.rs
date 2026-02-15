@@ -2246,8 +2246,28 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if self.current_token.kind == TokenKind::Identifier
                 || self.current_token.kind.is_semi_reserved()
             {
-                let attr_name = self.arena.alloc(self.current_token);
+                let attr_start = self.current_token.span.start;
+                let mut attr_end = self.current_token.span.end;
                 self.bump();
+
+                if self.current_token.kind == TokenKind::Colon {
+                    let colon_span = self.current_token.span;
+                    self.bump();
+                    if self.current_token.kind == TokenKind::Identifier
+                        || self.current_token.kind.is_semi_reserved()
+                    {
+                        attr_end = self.current_token.span.end;
+                        self.bump();
+                    } else {
+                        self.errors.push(ParseError::new(colon_span, "Expected identifier after ':' in JSX attribute"));
+                    }
+                }
+
+                let attr_name = self.arena.alloc(Token {
+                    kind: TokenKind::Identifier,
+                    span: Span::new(attr_start, attr_end),
+                });
+
                 let mut value = None;
                 let mut end = attr_name.span.end;
                 if self.current_token.kind == TokenKind::Eq {
@@ -2329,6 +2349,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     ) -> (&'ast [JsxChild<'ast>], usize) {
         let mut children = bumpalo::collections::Vec::new_in(self.arena);
         let mut text_start = self.current_token.span.start;
+        let raw_text_mode = closing_name
+            .as_ref()
+            .map(|name| self.jsx_is_raw_text_element(name))
+            .unwrap_or(false);
 
         loop {
             if self.current_token.kind == TokenKind::Lt
@@ -2368,6 +2392,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::Lt {
+                if raw_text_mode {
+                    self.bump();
+                    continue;
+                }
                 let end = self.current_token.span.start;
                 self.push_jsx_text(text_start, end, &mut children);
                 let child = self.parse_jsx_element();
@@ -2377,6 +2405,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::OpenBrace {
+                if raw_text_mode {
+                    self.bump();
+                    continue;
+                }
                 let end = self.current_token.span.start;
                 self.push_jsx_text(text_start, end, &mut children);
 
@@ -2449,6 +2481,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 .slice(x.span)
                 .eq_ignore_ascii_case(self.lexer.slice(y.span))
         })
+    }
+
+    fn jsx_is_raw_text_element(&self, name: &Name<'ast>) -> bool {
+        if name.parts.len() != 1 {
+            return false;
+        }
+        let ident = self.lexer.slice(name.parts[0].span);
+        ident.eq_ignore_ascii_case(b"style") || ident.eq_ignore_ascii_case(b"script")
     }
 
     fn jsx_starts_object_literal(&self) -> bool {

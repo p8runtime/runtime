@@ -526,3 +526,44 @@ fn phpx_inserts_asi_before_newline_open_paren() {
         .count();
     assert_eq!(expr_stmt_count, 2, "expected two expression statements");
 }
+
+#[test]
+fn phpx_parses_jsx_namespaced_client_directive_attributes() {
+    let code = r#"
+function IdleCard($props: object) {
+  return <section>Idle</section>
+}
+
+function App($props: object) {
+  return <div id="app">
+    <IdleCard client:idle={true} />
+  </div>
+}
+"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn phpx_internal_parses_jsx_namespaced_client_directive_attributes() {
+    let code = r#"
+function App($props: object) {
+  return <div id="app">
+    <IdleCard client:idle={true} />
+  </div>
+}
+"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::PhpxInternal);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "unexpected parser errors: {:?}", program.errors);
+}
+

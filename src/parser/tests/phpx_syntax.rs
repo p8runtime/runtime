@@ -236,6 +236,17 @@ fn parses_jsx_element_in_phpx() {
     }
 }
 
+
+#[test]
+fn parses_jsx_namespaced_attribute_in_phpx() {
+    let code = "<?php $v = <Card client:idle={true} />;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "unexpected parse errors: {:?}", program.errors);
+}
+
 #[test]
 fn jsx_object_literal_requires_double_braces() {
     let code = "<?php $v = <Component config={ foo: 'bar' } />;";
