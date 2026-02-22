@@ -549,8 +549,6 @@ impl Extension for CoreExtension {
         );
         registry.register_function(b"__phpx_struct_new", variable::php_phpx_struct_new);
         registry.register_function(b"__phpx_struct_set", variable::php_phpx_struct_set);
-        registry.register_function(b"__deka_wasm_call", wasm::php_deka_wasm_call);
-        registry.register_function(b"__deka_wasm_call_async", wasm::php_deka_wasm_call_async);
         registry.register_function(b"__bridge", wasm::php_bridge_call);
         registry.register_function(b"__bridge_async", wasm::php_bridge_call_async);
         registry.register_function(b"var_dump", variable::php_var_dump);
