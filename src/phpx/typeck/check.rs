@@ -281,6 +281,7 @@ struct CheckContext<'a> {
     resolved_aliases: HashMap<String, Type>,
     fn_depth: usize,
     async_depth: usize,
+    strict_null: bool,
 }
 
 impl<'a> CheckContext<'a> {
@@ -302,6 +303,12 @@ impl<'a> CheckContext<'a> {
             resolved_aliases: HashMap::new(),
             fn_depth: 0,
             async_depth: 0,
+            strict_null: std::env::var("PHPX_STRICT_NULL")
+                .map(|value| {
+                    let value = value.trim().to_ascii_lowercase();
+                    value == "1" || value == "true" || value == "yes" || value == "on"
+                })
+                .unwrap_or(false),
         }
     }
 
@@ -478,6 +485,16 @@ impl<'a> CheckContext<'a> {
     }
 
     fn validate_component_signature(&mut self, component: &str, span: Span) {
+        let strict = std::env::var("PHPX_STRICT_JSX_TYPES")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                value == "1" || value == "true" || value == "yes" || value == "on"
+            })
+            .unwrap_or(false);
+        if !strict {
+            return;
+        }
+
         let Some(sig) = self.functions.get(component).cloned() else {
             return;
         };
@@ -648,7 +665,7 @@ impl<'a> CheckContext<'a> {
                         .unwrap_or_else(|| Type::Primitive(PrimitiveType::Null));
                     if let Some(expr) = expr {
                         if let Expr::Null { span: null_span } = *expr {
-                            if !self.type_allows_null(expected) {
+                            if self.strict_null && !self.type_allows_null(expected) {
                                 self.errors.push(TypeError {
                                     span: *null_span,
                                     message: "Null is not allowed in PHPX; use Option<T> instead"
@@ -656,7 +673,7 @@ impl<'a> CheckContext<'a> {
                                 });
                             }
                         }
-                    } else if !self.type_allows_null(expected) {
+                    } else if self.strict_null && !self.type_allows_null(expected) {
                         self.errors.push(TypeError {
                             span: *span,
                             message: "Null is not allowed in PHPX; use Option<T> instead"
@@ -682,7 +699,7 @@ impl<'a> CheckContext<'a> {
                         });
                     }
                 }
-                if return_type.is_none() {
+                if self.strict_null && return_type.is_none() {
                     if let Some(expr) = expr {
                         if let Expr::Null { span: null_span } = *expr {
                             self.errors.push(TypeError {
@@ -695,11 +712,13 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Stmt::Expression { expr, .. } => {
-                if let Expr::Null { span } = *expr {
+                if self.strict_null {
+                    if let Expr::Null { span } = *expr {
                     self.errors.push(TypeError {
                         span: *span,
                         message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
                     });
+                }
                 }
                 let _ = self.check_expr(expr, env, explicit);
             }
@@ -2425,7 +2444,7 @@ impl<'a> CheckContext<'a> {
                 let is_null = matches!(value_ty, Type::Primitive(PrimitiveType::Null));
                 if let Some(existing) = env.get(&name) {
                     if explicit.contains(&name) {
-                        if is_null && !self.type_allows_null(existing) {
+                        if self.strict_null && is_null && !self.type_allows_null(existing) {
                             self.errors.push(TypeError {
                                 span,
                                 message: "Null is not allowed in PHPX; use Option<T> instead"
@@ -2442,7 +2461,7 @@ impl<'a> CheckContext<'a> {
                             });
                         }
                     } else {
-                        if is_null {
+                        if self.strict_null && is_null {
                             self.errors.push(TypeError {
                                 span,
                                 message: "Null is not allowed in PHPX; use Option<T> instead"
@@ -2453,7 +2472,7 @@ impl<'a> CheckContext<'a> {
                         env.insert(name.clone(), merged);
                     }
                 } else {
-                    if is_null {
+                    if self.strict_null && is_null {
                         self.errors.push(TypeError {
                             span,
                             message: "Null is not allowed in PHPX; use Option<T> instead"
@@ -3230,6 +3249,7 @@ impl<'a> CheckContext<'a> {
             if let Some(param_ty) = param_ty {
                 let expected = substitute_type(param_ty, &inferred);
                 if matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
+                    && self.strict_null
                     && !self.type_allows_null(&expected)
                 {
                     self.errors.push(TypeError {
@@ -3251,7 +3271,9 @@ impl<'a> CheckContext<'a> {
                         ),
                     });
                 }
-            } else if matches!(actuals[idx], Type::Primitive(PrimitiveType::Null)) {
+            } else if self.strict_null
+                && matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
+            {
                 self.errors.push(TypeError {
                     span: args[idx].span,
                     message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
@@ -3357,6 +3379,7 @@ impl<'a> CheckContext<'a> {
             };
             if let Some(param_ty) = param_ty {
                 if matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
+                    && self.strict_null
                     && !self.type_allows_null(param_ty)
                 {
                     self.errors.push(TypeError {
@@ -3378,7 +3401,9 @@ impl<'a> CheckContext<'a> {
                         ),
                     });
                 }
-            } else if matches!(actuals[idx], Type::Primitive(PrimitiveType::Null)) {
+            } else if self.strict_null
+                && matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
+            {
                 self.errors.push(TypeError {
                     span: args[idx].span,
                     message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
