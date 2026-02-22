@@ -2149,16 +2149,14 @@ pub fn php_parse_str(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         insert_parse_str_value(vm, &mut root, &base, &segments, value_handle)?;
     }
 
-    let has_output = args.len() == 2
-        && vm.arena.get(args[1]).is_ref
-        && vm.var_handle_map.contains_key(&args[1]);
+    let has_output =
+        args.len() == 2 && vm.arena.get(args[1]).is_ref && vm.var_handle_map.contains_key(&args[1]);
     if has_output {
         let out_handle = args[1];
         vm.arena.get_mut(out_handle).value = Val::Array(Rc::new(root.clone()));
     }
 
-    let entries: Vec<(ArrayKey, Handle)> =
-        root.map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    let entries: Vec<(ArrayKey, Handle)> = root.map.iter().map(|(k, v)| (k.clone(), *v)).collect();
     for (key, value_handle) in entries {
         let name = match key {
             ArrayKey::Int(i) => i.to_string().into_bytes(),
@@ -4902,9 +4900,15 @@ pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
         data.insert(ArrayKey::Str(Rc::new(b"currency_symbol".to_vec())), handle);
         let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
-        data.insert(ArrayKey::Str(Rc::new(b"mon_decimal_point".to_vec())), handle);
+        data.insert(
+            ArrayKey::Str(Rc::new(b"mon_decimal_point".to_vec())),
+            handle,
+        );
         let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
-        data.insert(ArrayKey::Str(Rc::new(b"mon_thousands_sep".to_vec())), handle);
+        data.insert(
+            ArrayKey::Str(Rc::new(b"mon_thousands_sep".to_vec())),
+            handle,
+        );
         let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
         data.insert(ArrayKey::Str(Rc::new(b"positive_sign".to_vec())), handle);
         let handle = vm.arena.alloc(Val::String(Rc::new(Vec::new())));
@@ -5099,9 +5103,7 @@ pub fn php_nl_langinfo(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     {
         let item = vm.check_builtin_param_int(args[0], 1, "nl_langinfo")? as i64;
         if item == 0 {
-            return Ok(vm
-                .arena
-                .alloc(Val::String(Rc::new(b"UTF-8".to_vec()))));
+            return Ok(vm.arena.alloc(Val::String(Rc::new(b"UTF-8".to_vec()))));
         }
         return Ok(vm.arena.alloc(Val::Bool(false)));
     }

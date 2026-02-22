@@ -732,9 +732,7 @@ pub fn php_scandir(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 pub fn php_sys_get_temp_dir(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     #[cfg(target_arch = "wasm32")]
     {
-        Ok(vm
-            .arena
-            .alloc(Val::String(Rc::new(b"/tmp".to_vec()))))
+        Ok(vm.arena.alloc(Val::String(Rc::new(b"/tmp".to_vec()))))
     }
 
     #[cfg(not(target_arch = "wasm32"))]

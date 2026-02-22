@@ -586,7 +586,12 @@ pub fn php_get_object_vars(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         Val::Struct(obj_rc) => {
             let mut result_map = IndexMap::new();
             for (prop_sym, val_handle) in obj_rc.properties.iter() {
-                let prop_name_bytes = vm.context.interner.lookup(*prop_sym).unwrap_or(b"").to_vec();
+                let prop_name_bytes = vm
+                    .context
+                    .interner
+                    .lookup(*prop_sym)
+                    .unwrap_or(b"")
+                    .to_vec();
                 let key = ArrayKey::Str(Rc::new(prop_name_bytes));
                 result_map.insert(key, *val_handle);
             }
@@ -597,7 +602,12 @@ pub fn php_get_object_vars(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         Val::ObjectMap(map_rc) => {
             let mut result_map = IndexMap::new();
             for (prop_sym, val_handle) in map_rc.map.iter() {
-                let prop_name_bytes = vm.context.interner.lookup(*prop_sym).unwrap_or(b"").to_vec();
+                let prop_name_bytes = vm
+                    .context
+                    .interner
+                    .lookup(*prop_sym)
+                    .unwrap_or(b"")
+                    .to_vec();
                 let key = ArrayKey::Str(Rc::new(prop_name_bytes));
                 result_map.insert(key, *val_handle);
             }
@@ -651,9 +661,7 @@ pub fn php_get_class(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             return Ok(vm.arena.alloc(Val::String(class_name.into())));
         }
         Val::ObjectMap(_) => {
-            return Ok(vm
-                .arena
-                .alloc(Val::String(b"stdClass".to_vec().into())));
+            return Ok(vm.arena.alloc(Val::String(b"stdClass".to_vec().into())));
         }
         _ => {}
     }

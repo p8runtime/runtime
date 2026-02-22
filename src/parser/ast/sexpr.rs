@@ -343,7 +343,12 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("))");
                 self.indent -= 1;
             }
-            Stmt::TypeAlias { name, type_params, ty, .. } => {
+            Stmt::TypeAlias {
+                name,
+                type_params,
+                ty,
+                ..
+            } => {
                 self.write("(type-alias \"");
                 self.write(&String::from_utf8_lossy(name.text(self.source)));
                 self.write("\"");
@@ -913,7 +918,9 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.visit_expr(property);
                 self.write(")");
             }
-            Expr::DotAccess { target, property, .. } => {
+            Expr::DotAccess {
+                target, property, ..
+            } => {
                 self.write("(dot ");
                 self.visit_expr(target);
                 self.write(" \"");
@@ -1544,9 +1551,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write(")");
             }
             ClassMember::Embed {
-                attributes,
-                types,
-                ..
+                attributes, types, ..
             } => {
                 self.write("(embed");
                 for attr in *attributes {

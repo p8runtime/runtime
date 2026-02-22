@@ -9,7 +9,7 @@ use serde_json::Value as JsonValue;
 use std::rc::Rc;
 
 #[cfg(target_arch = "wasm32")]
-use crate::wasm_exports::{php_free, WasmResult};
+use crate::wasm_exports::{WasmResult, php_free};
 
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
@@ -113,15 +113,12 @@ pub fn php_deka_wasm_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
             return Ok(vm.arena.alloc(Val::Null));
         }
 
-        let json_str = std::str::from_utf8(&data)
-            .map_err(|_| "wasm result invalid utf-8".to_string())?;
+        let json_str =
+            std::str::from_utf8(&data).map_err(|_| "wasm result invalid utf-8".to_string())?;
         let parsed: JsonValue = serde_json::from_str(json_str)
             .map_err(|err| format!("wasm result invalid json: {}", err))?;
 
-        if let Some(err) = parsed
-            .get("__deka_error")
-            .and_then(|value| value.as_str())
-        {
+        if let Some(err) = parsed.get("__deka_error").and_then(|value| value.as_str()) {
             return Err(format!("wasm error: {}", err));
         }
 
@@ -214,8 +211,8 @@ pub fn php_bridge_call(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             return Ok(vm.arena.alloc(Val::Null));
         }
 
-        let json_str = std::str::from_utf8(&data)
-            .map_err(|_| "bridge result invalid utf-8".to_string())?;
+        let json_str =
+            std::str::from_utf8(&data).map_err(|_| "bridge result invalid utf-8".to_string())?;
         let parsed: JsonValue = serde_json::from_str(json_str)
             .map_err(|err| format!("bridge result invalid json: {}", err))?;
 
@@ -305,7 +302,9 @@ mod tests {
     #[test]
     fn internal_bridge_path_rejects_non_internal_modules() {
         assert!(!is_internal_bridge_caller_path("/app/index.phpx"));
-        assert!(!is_internal_bridge_caller_path("/app/php_modules/db/index.phpx"));
+        assert!(!is_internal_bridge_caller_path(
+            "/app/php_modules/db/index.phpx"
+        ));
         assert!(!is_internal_bridge_caller_path("unknown"));
     }
 }

@@ -335,14 +335,11 @@ impl EngineContext {
             .register_extension(Box::new(DateExtension))
             .expect("Failed to register Date extension");
 
-
         // Register JSON extension
         use crate::runtime::json_extension::JsonExtension;
         registry
             .register_extension(Box::new(JsonExtension))
             .expect("Failed to register JSON extension");
-
-
 
         // Register Zlib extension
         use crate::runtime::zlib_extension::ZlibExtension;
@@ -355,8 +352,6 @@ impl EngineContext {
         registry
             .register_extension(Box::new(MbStringExtension))
             .expect("Failed to register mbstring extension");
-
-
 
         Self { registry }
     }
@@ -597,7 +592,7 @@ impl RequestContext {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostCapability, HostCapabilities, HostProfile, PhpConfig};
+    use super::{HostCapabilities, HostCapability, HostProfile, PhpConfig};
 
     #[test]
     fn host_profile_parse_defaults_to_server() {
@@ -745,10 +740,8 @@ impl EngineBuilder {
         self.extensions
             .push(Box::new(super::date_extension::DateExtension));
 
-
         self.extensions
             .push(Box::new(super::json_extension::JsonExtension));
-
 
         #[cfg(feature = "pthreads")]
         self.extensions

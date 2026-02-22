@@ -51,8 +51,8 @@
 use crate::compiler::chunk::{ClosureData, CodeChunk, ReturnType, UserFunc};
 use crate::core::heap::Arena;
 use crate::core::value::{
-    ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, PromiseData, PromiseState, Symbol,
-    Val, Visibility,
+    ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, PromiseData, PromiseState, Symbol, Val,
+    Visibility,
 };
 use crate::runtime::context::{
     AttributeInstance, ClassConstEntry, ClassDef, EngineContext, EnumBackedType, MethodEntry,
@@ -76,7 +76,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 #[cfg(target_arch = "wasm32")]
-use crate::wasm_exports::{php_free, WasmResult};
+use crate::wasm_exports::{WasmResult, php_free};
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
@@ -457,9 +457,9 @@ impl VM {
             builtin_call_strict: false,
             opcodes_executed: 0,
             function_calls: 0,
-            memory_limit: 0,         // Unlimited by default
-            allow_file_io: true,     // Allow by default
-            allow_network: true,     // Allow by default
+            memory_limit: 0,     // Unlimited by default
+            allow_file_io: true, // Allow by default
+            allow_network: true, // Allow by default
             php_modules_autoload: None,
             allowed_functions: None, // All functions allowed by default
             disable_functions: std::collections::HashSet::new(),
@@ -874,9 +874,9 @@ impl VM {
             builtin_call_strict: false,
             opcodes_executed: 0,
             function_calls: 0,
-            memory_limit: 0,         // Unlimited by default
-            allow_file_io: true,     // Allow by default
-            allow_network: true,     // Allow by default
+            memory_limit: 0,     // Unlimited by default
+            allow_file_io: true, // Allow by default
+            allow_network: true, // Allow by default
             php_modules_autoload: None,
             allowed_functions: None, // All functions allowed by default
             disable_functions: std::collections::HashSet::new(),
@@ -2134,10 +2134,7 @@ impl VM {
                                     .unwrap_or(b"???"),
                             );
                             let prop_str = String::from_utf8_lossy(
-                                self.context
-                                    .interner
-                                    .lookup(prop_name)
-                                    .unwrap_or(b"???"),
+                                self.context.interner.lookup(prop_name).unwrap_or(b"???"),
                             );
                             return Err(VmError::RuntimeError(format!(
                                 "Ambiguous promoted field {}.{}",
@@ -2166,10 +2163,7 @@ impl VM {
                                         .unwrap_or(b"???"),
                                 );
                                 let prop_str = String::from_utf8_lossy(
-                                    self.context
-                                        .interner
-                                        .lookup(prop_name)
-                                        .unwrap_or(b"???"),
+                                    self.context.interner.lookup(prop_name).unwrap_or(b"???"),
                                 );
                                 return Err(VmError::RuntimeError(format!(
                                     "Ambiguous promoted field {}.{}",
@@ -2195,8 +2189,8 @@ impl VM {
         prop_name: Symbol,
         val_handle: Handle,
     ) -> Result<(), VmError> {
-        let prop_exists = self
-            .with_object_data(obj_handle, |data| data.properties.contains_key(&prop_name))?;
+        let prop_exists =
+            self.with_object_data(obj_handle, |data| data.properties.contains_key(&prop_name))?;
 
         if !prop_exists {
             let is_struct = self
@@ -2218,8 +2212,8 @@ impl VM {
 
         if let Some((is_readonly, defining_class)) = prop_info {
             if is_readonly {
-                if let Ok(Some(current_handle)) =
-                    self.with_object_data(obj_handle, |data| data.properties.get(&prop_name).copied())
+                if let Ok(Some(current_handle)) = self
+                    .with_object_data(obj_handle, |data| data.properties.get(&prop_name).copied())
                 {
                     let current_val = &self.arena.get(current_handle).value;
                     if !matches!(current_val, Val::Uninitialized) {
@@ -2728,13 +2722,12 @@ impl VM {
         obj_handle: Handle,
         prop_name: Symbol,
     ) -> bool {
-        let (class_name, already_dynamic) =
-            match self.with_object_data(obj_handle, |data| {
-                (data.class, data.dynamic_properties.contains(&prop_name))
-            }) {
-                Ok(info) => info,
-                Err(_) => return false,
-            };
+        let (class_name, already_dynamic) = match self.with_object_data(obj_handle, |data| {
+            (data.class, data.dynamic_properties.contains(&prop_name))
+        }) {
+            Ok(info) => info,
+            Err(_) => return false,
+        };
 
         if let Some(def) = self.context.classes.get(&class_name) {
             if def.is_struct {
@@ -5301,8 +5294,10 @@ impl VM {
 
                 let arena = bumpalo::Bump::new();
                 let lexer = crate::parser::lexer::Lexer::new(&source);
-                let mode =
-                    crate::parser::parser::detect_parser_mode(&source, Some(resolved_path.as_path()));
+                let mode = crate::parser::parser::detect_parser_mode(
+                    &source,
+                    Some(resolved_path.as_path()),
+                );
                 let mut parser = crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
                 let program = parser.parse_program();
 
@@ -5313,15 +5308,13 @@ impl VM {
                     )));
                 }
                 if mode == crate::parser::parser::ParserMode::Phpx {
-                    if let Err(errors) =
-                        crate::phpx::typeck::check_program_with_path(&program, &source, Some(&resolved_path))
-                    {
-                        let rendered =
-                            crate::phpx::typeck::format_type_errors(&errors, &source);
-                        return Err(VmError::RuntimeError(format!(
-                            "Type errors:\n{}",
-                            rendered
-                        )));
+                    if let Err(errors) = crate::phpx::typeck::check_program_with_path(
+                        &program,
+                        &source,
+                        Some(&resolved_path),
+                    ) {
+                        let rendered = crate::phpx::typeck::format_type_errors(&errors, &source);
+                        return Err(VmError::RuntimeError(format!("Type errors:\n{}", rendered)));
                     }
                 }
 
@@ -5497,8 +5490,7 @@ impl VM {
                         }
                     }
                     Val::Object(_) | Val::Struct(_) => {
-                        let class_name =
-                            self.with_object_data(array_handle, |data| data.class)?;
+                        let class_name = self.with_object_data(array_handle, |data| data.class)?;
 
                         if self.implements_array_access(class_name) {
                             let result =
@@ -6385,7 +6377,7 @@ impl VM {
                         _ => {
                             return Err(VmError::RuntimeError(
                                 "IterGetValRef expects array or object map".into(),
-                            ))
+                            ));
                         }
                     }
                 };
@@ -6397,20 +6389,20 @@ impl VM {
                     self.arena.get_mut(new_handle).is_ref = true;
 
                     // Update array
-                let array_zval_mut = self.arena.get_mut(array_handle);
-                match &mut array_zval_mut.value {
-                    Val::Array(map) => {
-                        if let Some((_, h_ref)) = Rc::make_mut(map).map.get_index_mut(idx) {
-                            *h_ref = new_handle;
+                    let array_zval_mut = self.arena.get_mut(array_handle);
+                    match &mut array_zval_mut.value {
+                        Val::Array(map) => {
+                            if let Some((_, h_ref)) = Rc::make_mut(map).map.get_index_mut(idx) {
+                                *h_ref = new_handle;
+                            }
                         }
-                    }
-                    Val::ObjectMap(map_rc) => {
-                        if let Some((_, h_ref)) = Rc::make_mut(map_rc).map.get_index_mut(idx) {
-                            *h_ref = new_handle;
+                        Val::ObjectMap(map_rc) => {
+                            if let Some((_, h_ref)) = Rc::make_mut(map_rc).map.get_index_mut(idx) {
+                                *h_ref = new_handle;
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                }
                     new_handle
                 } else {
                     val_handle
@@ -6458,9 +6450,8 @@ impl VM {
                     Val::ObjectMap(map_rc) => {
                         if let Some((key, _)) = map_rc.map.get_index(idx) {
                             let key_bytes = self.context.interner.lookup(*key).unwrap_or(b"");
-                            let key_handle = self
-                                .arena
-                                .alloc(Val::String(key_bytes.to_vec().into()));
+                            let key_handle =
+                                self.arena.alloc(Val::String(key_bytes.to_vec().into()));
                             let frame = self.frames.last_mut().unwrap();
                             frame.locals.insert(sym, key_handle);
                         } else {
@@ -7365,7 +7356,7 @@ impl VM {
                     _ => {
                         return Err(VmError::RuntimeError(
                             "Invalid enum payload metadata".into(),
-                        ))
+                        ));
                     }
                 }
 
@@ -7822,9 +7813,11 @@ impl VM {
                     self.trigger_autoload(resolved_class)?;
                 }
 
-                let class_def = self.context.classes.get(&resolved_class).ok_or_else(|| {
-                    VmError::RuntimeError("Unknown struct".into())
-                })?;
+                let class_def = self
+                    .context
+                    .classes
+                    .get(&resolved_class)
+                    .ok_or_else(|| VmError::RuntimeError("Unknown struct".into()))?;
 
                 if class_def.is_abstract && !class_def.is_interface {
                     let class_name_str = self
@@ -7997,8 +7990,8 @@ impl VM {
                         self.operand_stack.push(null);
                     }
                 } else {
-                    let (class_name, prop_handle_opt) =
-                        self.with_object_data(obj_handle, |data| {
+                    let (class_name, prop_handle_opt) = self
+                        .with_object_data(obj_handle, |data| {
                             (data.class, data.properties.get(&prop_name).copied())
                         })?;
 
@@ -8077,8 +8070,8 @@ impl VM {
                         self.operand_stack.push(null);
                     }
                 } else {
-                    let (class_name, prop_handle_opt) =
-                        self.with_object_data(obj_handle, |data| {
+                    let (class_name, prop_handle_opt) = self
+                        .with_object_data(obj_handle, |data| {
                             (data.class, data.properties.get(&prop_name).copied())
                         })?;
 
@@ -8152,9 +8145,7 @@ impl VM {
                     Val::Struct(obj_data) => {
                         if let Some(val_handle) = obj_data.properties.get(&prop_name) {
                             self.operand_stack.push(*val_handle);
-                        } else if let Some(class_def) =
-                            self.context.classes.get(&obj_data.class)
-                        {
+                        } else if let Some(class_def) = self.context.classes.get(&obj_data.class) {
                             if let Some(target) =
                                 self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
                             {
@@ -8193,10 +8184,9 @@ impl VM {
                     }
                     self.operand_stack.push(val_handle);
                 } else {
-                    let (class_name, prop_exists) =
-                        self.with_object_data(obj_handle, |data| {
-                            (data.class, data.properties.contains_key(&prop_name))
-                        })?;
+                    let (class_name, prop_exists) = self.with_object_data(obj_handle, |data| {
+                        (data.class, data.properties.contains_key(&prop_name))
+                    })?;
 
                     let current_scope = self.get_current_class();
                     let visibility_check =
@@ -8261,8 +8251,8 @@ impl VM {
                             if let Some((is_readonly, defining_class)) = prop_info {
                                 if is_readonly {
                                     // Check if already initialized in object
-                                    if let Ok(Some(current_handle)) =
-                                        self.with_object_data(obj_handle, |data| {
+                                    if let Ok(Some(current_handle)) = self
+                                        .with_object_data(obj_handle, |data| {
                                             data.properties.get(&prop_name).copied()
                                         })
                                     {
@@ -8338,10 +8328,9 @@ impl VM {
                     }
                     self.operand_stack.push(val_handle);
                 } else {
-                    let (class_name, prop_exists) =
-                        self.with_object_data(obj_handle, |data| {
-                            (data.class, data.properties.contains_key(&prop_name))
-                        })?;
+                    let (class_name, prop_exists) = self.with_object_data(obj_handle, |data| {
+                        (data.class, data.properties.contains_key(&prop_name))
+                    })?;
 
                     let current_scope = self.get_current_class();
                     let visibility_check =
@@ -8390,17 +8379,16 @@ impl VM {
                                 self.check_dynamic_property_write(obj_handle, prop_name);
                             }
 
-                            let prop_info =
-                                self.walk_inheritance_chain(class_name, |def, cls| {
-                                    def.properties
-                                        .get(&prop_name)
-                                        .map(|entry| (entry.is_readonly, cls))
-                                });
+                            let prop_info = self.walk_inheritance_chain(class_name, |def, cls| {
+                                def.properties
+                                    .get(&prop_name)
+                                    .map(|entry| (entry.is_readonly, cls))
+                            });
 
                             if let Some((is_readonly, defining_class)) = prop_info {
                                 if is_readonly {
-                                    if let Ok(Some(current_handle)) =
-                                        self.with_object_data(obj_handle, |data| {
+                                    if let Ok(Some(current_handle)) = self
+                                        .with_object_data(obj_handle, |data| {
                                             data.properties.get(&prop_name).copied()
                                         })
                                     {
@@ -8473,10 +8461,7 @@ impl VM {
 
                         if prop_exists {
                             self.assign_struct_property(
-                                obj_handle,
-                                class_name,
-                                prop_name,
-                                val_handle,
+                                obj_handle, class_name, prop_name, val_handle,
                             )?;
                             self.operand_stack.push(val_handle);
                             return Ok(());
@@ -8540,21 +8525,22 @@ impl VM {
                         map.map.shift_remove(&prop_name);
                     }
                 } else {
-                    let (class_name, should_unset) = self.with_object_data(obj_handle, |obj_data| {
-                        let current_scope = self.get_current_class();
-                        if self
-                            .check_prop_visibility(obj_data.class, prop_name, current_scope)
-                            .is_ok()
-                        {
-                            if obj_data.properties.contains_key(&prop_name) {
-                                (obj_data.class, true)
+                    let (class_name, should_unset) =
+                        self.with_object_data(obj_handle, |obj_data| {
+                            let current_scope = self.get_current_class();
+                            if self
+                                .check_prop_visibility(obj_data.class, prop_name, current_scope)
+                                .is_ok()
+                            {
+                                if obj_data.properties.contains_key(&prop_name) {
+                                    (obj_data.class, true)
+                                } else {
+                                    (obj_data.class, false)
+                                }
                             } else {
                                 (obj_data.class, false)
                             }
-                        } else {
-                            (obj_data.class, false)
-                        }
-                    })?;
+                        })?;
 
                     if should_unset {
                         self.with_object_data_mut(obj_handle, |obj_data| {
@@ -8867,8 +8853,9 @@ impl VM {
                                     &source,
                                     Some(resolved_path.as_path()),
                                 );
-                                let mut parser =
-                                    crate::parser::parser::Parser::new_with_mode(lexer, &arena, mode);
+                                let mut parser = crate::parser::parser::Parser::new_with_mode(
+                                    lexer, &arena, mode,
+                                );
                                 let program = parser.parse_program();
 
                                 if !program.errors.is_empty() {
@@ -8881,17 +8868,19 @@ impl VM {
                                     )));
                                 }
                                 if mode == crate::parser::parser::ParserMode::Phpx {
-                                    if let Err(errors) = crate::phpx::typeck::check_program_with_path(
-                                        &program,
-                                        &source,
-                                        Some(&resolved_path),
-                                    )
+                                    if let Err(errors) =
+                                        crate::phpx::typeck::check_program_with_path(
+                                            &program,
+                                            &source,
+                                            Some(&resolved_path),
+                                        )
                                     {
                                         if inserted_once_guard {
                                             self.context.included_files.remove(&canonical_path);
                                         }
-                                        let rendered =
-                                            crate::phpx::typeck::format_type_errors(&errors, &source);
+                                        let rendered = crate::phpx::typeck::format_type_errors(
+                                            &errors, &source,
+                                        );
                                         return Err(VmError::RuntimeError(format!(
                                             "Type errors in {}:\n{}",
                                             path_str, rendered
@@ -10330,14 +10319,13 @@ impl VM {
                 };
                 let class_name = self.resolve_class_name(class_name)?;
 
-                let is_instance = if let Ok(obj_class) =
-                    self.with_object_data(obj_handle, |data| data.class)
-                {
-                    let obj_class = self.resolve_class_alias(obj_class);
-                    obj_class == class_name || self.is_subclass_of(obj_class, class_name)
-                } else {
-                    false
-                };
+                let is_instance =
+                    if let Ok(obj_class) = self.with_object_data(obj_handle, |data| data.class) {
+                        let obj_class = self.resolve_class_alias(obj_class);
+                        obj_class == class_name || self.is_subclass_of(obj_class, class_name)
+                    } else {
+                        false
+                    };
 
                 let res_handle = self.arena.alloc(Val::Bool(is_instance));
                 self.operand_stack.push(res_handle);
@@ -10490,15 +10478,12 @@ impl VM {
                             .unwrap_or((Val::Null, None)),
                         Val::Struct(obj_data) => {
                             if let Some(handle) = obj_data.properties.get(&prop_name) {
-                                (
-                                    self.arena.get(*handle).value.clone(),
-                                    Some(obj_handle),
-                                )
+                                (self.arena.get(*handle).value.clone(), Some(obj_handle))
                             } else if let Some(class_def) =
                                 self.context.classes.get(&obj_data.class)
                             {
-                                if let Some(target) =
-                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                if let Some(target) = self
+                                    .find_promoted_struct_field(&obj_data, class_def, prop_name)?
                                 {
                                     (
                                         self.arena.get(target.value_handle).value.clone(),
@@ -10514,7 +10499,7 @@ impl VM {
                         _ => {
                             return Err(VmError::RuntimeError(
                                 "Attempt to increment dot property on non-object".into(),
-                            ))
+                            ));
                         }
                     }
                 };
@@ -10559,15 +10544,12 @@ impl VM {
                             .unwrap_or((Val::Null, None)),
                         Val::Struct(obj_data) => {
                             if let Some(handle) = obj_data.properties.get(&prop_name) {
-                                (
-                                    self.arena.get(*handle).value.clone(),
-                                    Some(obj_handle),
-                                )
+                                (self.arena.get(*handle).value.clone(), Some(obj_handle))
                             } else if let Some(class_def) =
                                 self.context.classes.get(&obj_data.class)
                             {
-                                if let Some(target) =
-                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                if let Some(target) = self
+                                    .find_promoted_struct_field(&obj_data, class_def, prop_name)?
                                 {
                                     (
                                         self.arena.get(target.value_handle).value.clone(),
@@ -10583,7 +10565,7 @@ impl VM {
                         _ => {
                             return Err(VmError::RuntimeError(
                                 "Attempt to decrement dot property on non-object".into(),
-                            ))
+                            ));
                         }
                     }
                 };
@@ -10628,15 +10610,12 @@ impl VM {
                             .unwrap_or((Val::Null, None)),
                         Val::Struct(obj_data) => {
                             if let Some(handle) = obj_data.properties.get(&prop_name) {
-                                (
-                                    self.arena.get(*handle).value.clone(),
-                                    Some(obj_handle),
-                                )
+                                (self.arena.get(*handle).value.clone(), Some(obj_handle))
                             } else if let Some(class_def) =
                                 self.context.classes.get(&obj_data.class)
                             {
-                                if let Some(target) =
-                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                if let Some(target) = self
+                                    .find_promoted_struct_field(&obj_data, class_def, prop_name)?
                                 {
                                     (
                                         self.arena.get(target.value_handle).value.clone(),
@@ -10652,7 +10631,7 @@ impl VM {
                         _ => {
                             return Err(VmError::RuntimeError(
                                 "Attempt to increment dot property on non-object".into(),
-                            ))
+                            ));
                         }
                     }
                 };
@@ -10698,15 +10677,12 @@ impl VM {
                             .unwrap_or((Val::Null, None)),
                         Val::Struct(obj_data) => {
                             if let Some(handle) = obj_data.properties.get(&prop_name) {
-                                (
-                                    self.arena.get(*handle).value.clone(),
-                                    Some(obj_handle),
-                                )
+                                (self.arena.get(*handle).value.clone(), Some(obj_handle))
                             } else if let Some(class_def) =
                                 self.context.classes.get(&obj_data.class)
                             {
-                                if let Some(target) =
-                                    self.find_promoted_struct_field(&obj_data, class_def, prop_name)?
+                                if let Some(target) = self
+                                    .find_promoted_struct_field(&obj_data, class_def, prop_name)?
                                 {
                                     (
                                         self.arena.get(target.value_handle).value.clone(),
@@ -10722,7 +10698,7 @@ impl VM {
                         _ => {
                             return Err(VmError::RuntimeError(
                                 "Attempt to decrement dot property on non-object".into(),
-                            ))
+                            ));
                         }
                     }
                 };
@@ -11196,11 +11172,9 @@ impl VM {
 
                 match val {
                     Val::Object(_) | Val::Struct(_) => {
-                        let class_name =
-                            self.with_object_data(obj_handle, |data| data.class)?;
+                        let class_name = self.with_object_data(obj_handle, |data| data.class)?;
                         let name_bytes = self.context.interner.lookup(class_name).unwrap_or(b"");
-                        let res_handle =
-                            self.arena.alloc(Val::String(name_bytes.to_vec().into()));
+                        let res_handle = self.arena.alloc(Val::String(name_bytes.to_vec().into()));
                         self.operand_stack.push(res_handle);
                     }
                     Val::String(s) => {
@@ -11566,8 +11540,7 @@ impl VM {
                         self.operand_stack.push(res_handle);
                     }
                     Val::Struct(obj_data) => {
-                        let is_set = if let Some(val_handle) = obj_data.properties.get(&prop_name)
-                        {
+                        let is_set = if let Some(val_handle) = obj_data.properties.get(&prop_name) {
                             !matches!(
                                 self.arena.get(*val_handle).value,
                                 Val::Null | Val::Uninitialized
@@ -11590,9 +11563,7 @@ impl VM {
                         self.operand_stack.push(res_handle);
                     }
                     _ => {
-                        return Err(VmError::RuntimeError(
-                            "Isset on non-object-map".into(),
-                        ));
+                        return Err(VmError::RuntimeError("Isset on non-object-map".into()));
                     }
                 }
             }
@@ -11621,8 +11592,8 @@ impl VM {
                                 uninit_handle,
                             )?;
                         } else if let Some(class_def) = self.context.classes.get(&class_name) {
-                            if let Some(target) = self
-                                .find_promoted_struct_field(&obj_rc, class_def, prop_name)?
+                            if let Some(target) =
+                                self.find_promoted_struct_field(&obj_rc, class_def, prop_name)?
                             {
                                 let uninit_handle = self.arena.alloc(Val::Uninitialized);
                                 self.assign_struct_property(
@@ -11784,10 +11755,9 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let (class_name, prop_exists) =
-                    self.with_object_data(obj_handle, |obj_data| {
-                        (obj_data.class, obj_data.properties.contains_key(&prop_name))
-                    })?;
+                let (class_name, prop_exists) = self.with_object_data(obj_handle, |obj_data| {
+                    (obj_data.class, obj_data.properties.contains_key(&prop_name))
+                })?;
 
                 let current_scope = self.get_current_class();
                 let visibility_check =
@@ -13376,7 +13346,7 @@ impl VM {
             _ => {
                 return Err(VmError::RuntimeError(
                     "Call to member function on non-object".into(),
-                ))
+                ));
             }
         };
 
@@ -14442,8 +14412,8 @@ impl VM {
 
 mod tests {
     use super::*;
-    use crate::compiler::emitter::Emitter;
     use crate::compiler::chunk::{FuncParam, UserFunc};
+    use crate::compiler::emitter::Emitter;
     use crate::core::value::{Symbol, Val};
     use crate::parser::lexer::Lexer;
     use crate::parser::parser::{Parser, ParserMode};
@@ -14484,8 +14454,8 @@ mod tests {
             program.errors
         );
 
-        let (chunk, _) = Emitter::new(code.as_bytes(), &mut vm.context.interner)
-            .compile(program.statements);
+        let (chunk, _) =
+            Emitter::new(code.as_bytes(), &mut vm.context.interner).compile(program.statements);
         vm.run(Rc::new(chunk)).unwrap();
 
         match vm.last_return_value {
@@ -14681,7 +14651,9 @@ mod tests {
 
     #[test]
     fn test_phpx_object_literal_nested_assign() {
-        let val = run_phpx("<?php $o = { nested: { count: 1 } }; $o.nested.count += 2; return $o.nested.count;");
+        let val = run_phpx(
+            "<?php $o = { nested: { count: 1 } }; $o.nested.count += 2; return $o.nested.count;",
+        );
         match val {
             Val::Int(i) => assert_eq!(i, 3),
             other => panic!("Expected int result, got {:?}", other),
@@ -14717,7 +14689,9 @@ mod tests {
 
     #[test]
     fn test_phpx_object_literal_arrow_isset() {
-        let val = run_phpx("<?php $o = { foo: 1 }; $a = isset($o->foo) ? 1 : 0; $b = isset($o->bar) ? 1 : 0; return $a + $b;");
+        let val = run_phpx(
+            "<?php $o = { foo: 1 }; $a = isset($o->foo) ? 1 : 0; $b = isset($o->bar) ? 1 : 0; return $a + $b;",
+        );
         match val {
             Val::Int(i) => assert_eq!(i, 1),
             other => panic!("Expected int result, got {:?}", other),
@@ -14788,9 +14762,8 @@ mod tests {
 
     #[test]
     fn test_phpx_object_literal_equality_missing_field() {
-        let val = run_phpx(
-            "<?php $a = { foo: 1, bar: 2 }; $b = { foo: 1 }; return ($a == $b) ? 1 : 0;",
-        );
+        let val =
+            run_phpx("<?php $a = { foo: 1, bar: 2 }; $b = { foo: 1 }; return ($a == $b) ? 1 : 0;");
         match val {
             Val::Int(i) => assert_eq!(i, 0),
             other => panic!("Expected int result, got {:?}", other),

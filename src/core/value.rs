@@ -112,13 +112,13 @@ pub enum Val {
     String(Rc<Vec<u8>>),  // PHP strings are byte arrays (COW)
     Array(Rc<ArrayData>), // Array with cached metadata (COW)
     ConstArray(Rc<IndexMap<ConstArrayKey, Val>>), // Compile-time constant array (template for property defaults)
-    ObjectMap(Rc<ObjectMapData>), // PHPX object literal value (COW)
-    Struct(Rc<ObjectData>), // PHPX struct instance (COW value semantics)
+    ObjectMap(Rc<ObjectMapData>),                 // PHPX object literal value (COW)
+    Struct(Rc<ObjectData>),                       // PHPX struct instance (COW value semantics)
     Object(Handle),
     ObjPayload(ObjectData),
     Promise(Rc<PromiseData>), // PHPX promise value
-    Resource(Rc<dyn Any>), // Changed to Rc to support Clone
-    AppendPlaceholder,     // Internal use for $a[]
+    Resource(Rc<dyn Any>),    // Changed to Rc to support Clone
+    AppendPlaceholder,        // Internal use for $a[]
     Uninitialized,
 }
 
@@ -219,7 +219,11 @@ impl Val {
             }
             Val::Array(arr) => !arr.map.is_empty(),
             Val::ConstArray(arr) => !arr.is_empty(),
-            Val::ObjectMap(_) | Val::Struct(_) | Val::Object(_) | Val::ObjPayload(_) | Val::Resource(_) => true,
+            Val::ObjectMap(_)
+            | Val::Struct(_)
+            | Val::Object(_)
+            | Val::ObjPayload(_)
+            | Val::Resource(_) => true,
             Val::Promise(_) => true,
             Val::AppendPlaceholder | Val::Uninitialized => false,
         }

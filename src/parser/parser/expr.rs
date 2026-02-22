@@ -2,7 +2,7 @@ use super::Parser;
 use crate::parser::ast::{
     Arg, ArrayItem, AssignOp, AttributeGroup, BinaryOp, CastKind, ClosureUse, Expr, ExprId,
     IncludeKind, JsxAttribute, JsxChild, MagicConstKind, MatchArm, Name, ObjectItem, ObjectKey,
-    Param, ParseError, StructLiteralField, Stmt, StmtId, Type, UnaryOp,
+    Param, ParseError, Stmt, StmtId, StructLiteralField, Type, UnaryOp,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::parser::span::Span;
@@ -49,7 +49,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 unpack = true;
                 self.bump();
             } else if has_named {
-                self.errors.push(ParseError::new(self.current_token.span, "Cannot use positional argument after named argument"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Cannot use positional argument after named argument",
+                ));
             }
 
             let value = self.parse_expr(0);
@@ -160,7 +163,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             Expr::Variable { .. } => {
                 self.push_binding_assign(pattern, source_expr, fallback_span);
             }
-            Expr::Assign { var, expr: default, .. } => {
+            Expr::Assign {
+                var, expr: default, ..
+            } => {
                 let rhs = self.arena.alloc(Expr::Binary {
                     left: source_expr,
                     op: BinaryOp::Coalesce,
@@ -350,7 +355,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     self.current_token.kind,
                     TokenKind::OpenBrace | TokenKind::OpenBracket | TokenKind::List
                 ) {
-                    self.parse_phpx_param_pattern().unwrap_or_else(|| self.parse_expr(0))
+                    self.parse_phpx_param_pattern()
+                        .unwrap_or_else(|| self.parse_expr(0))
                 } else {
                     self.parse_expr(0)
                 };
@@ -434,7 +440,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 uses.into_bump_slice()
             } else {
-                self.errors.push(ParseError::new(self.current_token.span, "Expected ')' after closure use list"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected ')' after closure use list",
+                ));
                 &[]
             }
         } else {
@@ -753,12 +762,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 let dot_span = self.current_token.span;
                 let next = self.next_token;
                 let left_span = left.span();
-                let tight =
-                    left_span.end == dot_span.start && dot_span.end == next.span.start;
+                let tight = left_span.end == dot_span.start && dot_span.end == next.span.start;
 
-                if tight
-                    && (next.kind == TokenKind::Identifier || next.kind.is_semi_reserved())
-                {
+                if tight && (next.kind == TokenKind::Identifier || next.kind.is_semi_reserved()) {
                     let l_bp = 210;
                     if l_bp < min_bp {
                         break;
@@ -893,7 +899,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             continue;
                         }
 
-                        self.errors.push(ParseError::new(left.span(), "Assignments can only happen to writable values"));
+                        self.errors.push(ParseError::new(
+                            left.span(),
+                            "Assignments can only happen to writable values",
+                        ));
                     }
 
                     self.bump();
@@ -930,7 +939,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             continue;
                         }
 
-                        self.errors.push(ParseError::new(left.span(), "Assignments can only happen to writable values"));
+                        self.errors.push(ParseError::new(
+                            left.span(),
+                            "Assignments can only happen to writable values",
+                        ));
                     }
 
                     self.bump();
@@ -1309,7 +1321,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.is_phpx() {
                     return self.parse_jsx_element();
                 }
-                self.errors.push(ParseError::new(token.span, "Unexpected '<' in expression"));
+                self.errors
+                    .push(ParseError::new(token.span, "Unexpected '<' in expression"));
                 self.bump();
                 self.arena.alloc(Expr::Error { span: token.span })
             }
@@ -1586,7 +1599,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 let awaited = self.parse_expr(180);
                 let span = Span::new(token.span.start, awaited.span().end);
-                self.arena.alloc(Expr::Await { expr: awaited, span })
+                self.arena.alloc(Expr::Await {
+                    expr: awaited,
+                    span,
+                })
             }
             TokenKind::Identifier
                 if self.is_phpx()
@@ -1618,7 +1634,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::New => {
                 if self.is_phpx() {
-                    self.errors.push(ParseError::new(token.span, "new is not allowed in PHPX; use struct literals instead"));
+                    self.errors.push(ParseError::new(
+                        token.span,
+                        "new is not allowed in PHPX; use struct literals instead",
+                    ));
                 }
                 self.bump();
 
@@ -1698,7 +1717,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     && self.current_token.kind != TokenKind::Eof
                 {
                     if self.current_token.kind == TokenKind::SemiColon {
-                        self.errors.push(ParseError::new(self.current_token.span, "Unexpected ';'"));
+                        self.errors
+                            .push(ParseError::new(self.current_token.span, "Unexpected ';'"));
                         self.bump();
                         continue;
                     }
@@ -2048,7 +2068,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             (ObjectKey::Ident(tok), tok.span.start)
                         }
                         _ => {
-                            self.errors.push(ParseError::new(self.current_token.span, "Expected identifier or string literal in object literal"));
+                            self.errors.push(ParseError::new(
+                                self.current_token.span,
+                                "Expected identifier or string literal in object literal",
+                            ));
                             let tok = self.arena.alloc(Token {
                                 kind: TokenKind::Error,
                                 span: self.current_token.span,
@@ -2061,7 +2084,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     if self.current_token.kind == TokenKind::Colon {
                         self.bump();
                     } else {
-                        self.errors.push(ParseError::new(self.current_token.span, "Expected ':' after object key"));
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected ':' after object key",
+                        ));
                     }
 
                     let value = self.parse_expr(0);
@@ -2100,7 +2126,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 expr
             }
             TokenKind::Error => {
-                self.errors.push(ParseError::new(token.span, "Unexpected token"));
+                self.errors
+                    .push(ParseError::new(token.span, "Unexpected token"));
                 self.bump();
                 self.arena.alloc(Expr::Error { span: token.span })
             }
@@ -2114,7 +2141,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         | TokenKind::Eof
                 );
 
-                self.errors.push(ParseError::new(token.span, "Syntax error"));
+                self.errors
+                    .push(ParseError::new(token.span, "Syntax error"));
 
                 if is_terminator {
                     // Do not consume terminator, let the statement parser handle it
@@ -2145,7 +2173,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 tok
             } else {
-                self.errors.push(ParseError::new(self.current_token.span, "Expected field name in struct literal"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected field name in struct literal",
+                ));
                 let tok = self.arena.alloc(Token {
                     kind: TokenKind::Error,
                     span: self.current_token.span,
@@ -2158,7 +2189,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 || self.current_token.kind == TokenKind::Eq
             {
                 if self.current_token.kind == TokenKind::Eq {
-                    self.errors.push(ParseError::new(self.current_token.span, "Expected ':' after struct field name"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected ':' after struct field name",
+                    ));
                 }
                 self.bump();
                 self.parse_expr(0)
@@ -2218,8 +2252,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let mut attributes = bumpalo::collections::Vec::new_in(self.arena);
 
         loop {
-            if self.current_token.kind == TokenKind::Slash
-                && self.next_token.kind == TokenKind::Gt
+            if self.current_token.kind == TokenKind::Slash && self.next_token.kind == TokenKind::Gt
             {
                 let end = self.next_token.span.end;
                 self.bump(); // consume '/'
@@ -2259,7 +2292,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         attr_end = self.current_token.span.end;
                         self.bump();
                     } else {
-                        self.errors.push(ParseError::new(colon_span, "Expected identifier after ':' in JSX attribute"));
+                        self.errors.push(ParseError::new(
+                            colon_span,
+                            "Expected identifier after ':' in JSX attribute",
+                        ));
                     }
                 }
 
@@ -2286,7 +2322,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::OpenBrace {
-                self.errors.push(ParseError::new(self.current_token.span, "JSX spread attributes are not supported"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "JSX spread attributes are not supported",
+                ));
                 // Attempt recovery: skip until closing brace
                 self.bump();
                 let _ = self.parse_expr(0);
@@ -2297,13 +2336,19 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::Eof {
-                self.errors.push(ParseError::new(self.current_token.span, "Unterminated JSX element"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Unterminated JSX element",
+                ));
                 return self.arena.alloc(Expr::Error {
                     span: Span::new(start, self.current_token.span.end),
                 });
             }
 
-            self.errors.push(ParseError::new(self.current_token.span, "Unexpected token in JSX attributes"));
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Unexpected token in JSX attributes",
+            ));
             self.bump();
         }
     }
@@ -2321,23 +2366,35 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             TokenKind::OpenBrace => {
                 self.bump(); // consume '{'
                 if self.current_token.kind == TokenKind::CloseBrace {
-                    self.errors.push(ParseError::new(self.current_token.span, "Empty JSX expression is not allowed"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Empty JSX expression is not allowed",
+                    ));
                     self.bump();
                     return None;
                 }
                 if self.jsx_starts_object_literal() {
-                    self.errors.push(ParseError::new(self.current_token.span, "Object literal requires double braces in JSX"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Object literal requires double braces in JSX",
+                    ));
                 }
                 let expr = self.parse_expr(0);
                 if self.current_token.kind == TokenKind::CloseBrace {
                     self.bump();
                 } else {
-                    self.errors.push(ParseError::new(self.current_token.span, "Expected '}' after JSX expression"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected '}' after JSX expression",
+                    ));
                 }
                 Some(expr)
             }
             _ => {
-                self.errors.push(ParseError::new(self.current_token.span, "Expected JSX attribute value"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected JSX attribute value",
+                ));
                 None
             }
         }
@@ -2355,8 +2412,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             .unwrap_or(false);
 
         loop {
-            if self.current_token.kind == TokenKind::Lt
-                && self.next_token.kind == TokenKind::Slash
+            if self.current_token.kind == TokenKind::Lt && self.next_token.kind == TokenKind::Slash
             {
                 let end = self.current_token.span.start;
                 self.push_jsx_text(text_start, end, &mut children);
@@ -2370,14 +2426,20 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         self.bump();
                         return (children.into_bump_slice(), end);
                     }
-                    self.errors.push(ParseError::new(self.current_token.span, "Expected '>' to close JSX fragment"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected '>' to close JSX fragment",
+                    ));
                     return (children.into_bump_slice(), self.current_token.span.end);
                 }
 
                 let close_name = self.parse_name();
                 if let Some(expected) = closing_name.as_ref() {
                     if !self.jsx_name_eq(expected, &close_name) {
-                        self.errors.push(ParseError::new(close_name.span, "Mismatched JSX closing tag"));
+                        self.errors.push(ParseError::new(
+                            close_name.span,
+                            "Mismatched JSX closing tag",
+                        ));
                     }
                 }
 
@@ -2387,7 +2449,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     return (children.into_bump_slice(), end);
                 }
 
-                self.errors.push(ParseError::new(self.current_token.span, "Expected '>' to close JSX tag"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected '>' to close JSX tag",
+                ));
                 return (children.into_bump_slice(), self.current_token.span.end);
             }
 
@@ -2414,17 +2479,26 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
                 self.bump(); // consume '{'
                 if self.current_token.kind == TokenKind::CloseBrace {
-                    self.errors.push(ParseError::new(self.current_token.span, "Empty JSX expression is not allowed"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Empty JSX expression is not allowed",
+                    ));
                     self.bump();
                 } else {
                     if self.jsx_starts_object_literal() {
-                        self.errors.push(ParseError::new(self.current_token.span, "Object literal requires double braces in JSX"));
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Object literal requires double braces in JSX",
+                        ));
                     }
                     let expr = self.parse_expr(0);
                     if self.current_token.kind == TokenKind::CloseBrace {
                         self.bump();
                     } else {
-                        self.errors.push(ParseError::new(self.current_token.span, "Expected '}' after JSX expression"));
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected '}' after JSX expression",
+                        ));
                     }
                     children.push(JsxChild::Expr(expr));
                 }
@@ -2434,7 +2508,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::Eof {
-                self.errors.push(ParseError::new(self.current_token.span, "Unterminated JSX children"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Unterminated JSX children",
+                ));
                 return (children.into_bump_slice(), self.current_token.span.end);
             }
 
@@ -2456,7 +2533,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         // boundary whitespace so inline JSX text spacing is preserved.
         let mut actual_end = end;
         while actual_end < self.lexer.input_len() {
-            let byte = self.lexer.input_slice(Span::new(actual_end, actual_end + 1))[0];
+            let byte = self
+                .lexer
+                .input_slice(Span::new(actual_end, actual_end + 1))[0];
             if byte == b' ' || byte == b'\t' {
                 actual_end += 1;
                 continue;

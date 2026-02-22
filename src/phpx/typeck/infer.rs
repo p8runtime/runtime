@@ -1,5 +1,5 @@
 use crate::parser::ast::{BinaryOp, Expr, ObjectKey};
-use crate::phpx::typeck::types::{merge_types, ObjectField, PrimitiveType, Type};
+use crate::phpx::typeck::types::{ObjectField, PrimitiveType, Type, merge_types};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -38,11 +38,7 @@ pub struct InferContext<'a> {
 fn resolve_struct_field_type(name: &str, field: &str, ctx: &InferContext) -> Option<Type> {
     let mut visited = HashSet::new();
     let (ty, ambiguous) = resolve_struct_field_type_inner(name, field, ctx, &mut visited);
-    if ambiguous {
-        None
-    } else {
-        ty
-    }
+    if ambiguous { None } else { ty }
 }
 
 fn resolve_struct_field_type_inner(
@@ -90,10 +86,7 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
         Expr::Variable { span, .. } => {
             let name = token_text(ctx.source, *span);
             let name = name.strip_prefix('$').unwrap_or(&name);
-            ctx.vars
-                .get(name)
-                .cloned()
-                .unwrap_or(Type::Unknown)
+            ctx.vars.get(name).cloned().unwrap_or(Type::Unknown)
         }
         Expr::Array { items, .. } => {
             let mut element_ty = Type::Unknown;
@@ -146,7 +139,9 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             }
         }
         Expr::JsxElement { .. } | Expr::JsxFragment { .. } => Type::Unknown,
-        Expr::DotAccess { target, property, .. } => {
+        Expr::DotAccess {
+            target, property, ..
+        } => {
             let target_ty = infer_expr(target, ctx);
             let prop_name = token_text(ctx.source, property.span);
             match target_ty {
@@ -160,8 +155,9 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                         }
                     })
                     .unwrap_or(Type::Unknown),
-                Type::Struct(name) => resolve_struct_field_type(&name, &prop_name, ctx)
-                    .unwrap_or(Type::Unknown),
+                Type::Struct(name) => {
+                    resolve_struct_field_type(&name, &prop_name, ctx).unwrap_or(Type::Unknown)
+                }
                 Type::Interface(name) => ctx
                     .interfaces
                     .get(&name)
@@ -169,9 +165,7 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                     .map(|field| field.ty.clone())
                     .unwrap_or(Type::Unknown),
                 Type::Enum(name) => {
-                    if name.eq_ignore_ascii_case("Option")
-                        || name.eq_ignore_ascii_case("Result")
-                    {
+                    if name.eq_ignore_ascii_case("Option") || name.eq_ignore_ascii_case("Result") {
                         if prop_name == "name" {
                             Type::Primitive(PrimitiveType::String)
                         } else {
@@ -209,8 +203,7 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                     }
                 }
                 Type::Applied { base, args: _ } => {
-                    if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result")
-                    {
+                    if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") {
                         if prop_name == "name" {
                             Type::Primitive(PrimitiveType::String)
                         } else {
@@ -243,7 +236,9 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                 _ => Type::Unknown,
             }
         }
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             if *op == BinaryOp::Coalesce {
                 let left_ty = infer_expr(left, ctx);
                 let right_ty = infer_expr(right, ctx);
@@ -273,21 +268,19 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             }
             out
         }
-        Expr::Assign { expr: rhs, .. } | Expr::AssignRef { expr: rhs, .. } => {
-            infer_expr(rhs, ctx)
-        }
+        Expr::Assign { expr: rhs, .. } | Expr::AssignRef { expr: rhs, .. } => infer_expr(rhs, ctx),
         Expr::New { .. } => Type::Unknown,
-        Expr::ClassConstFetch { class, constant, .. } => {
-            if let (Some(class_name), Some(case_name)) =
-                (extract_ident(class, ctx.source), extract_ident(constant, ctx.source))
-            {
+        Expr::ClassConstFetch {
+            class, constant, ..
+        } => {
+            if let (Some(class_name), Some(case_name)) = (
+                extract_ident(class, ctx.source),
+                extract_ident(constant, ctx.source),
+            ) {
                 if class_name.eq_ignore_ascii_case("Option")
                     || class_name.eq_ignore_ascii_case("Result")
                 {
-                    if matches!(
-                        case_name.as_str(),
-                        "Some" | "None" | "Ok" | "Err"
-                    ) {
+                    if matches!(case_name.as_str(), "Some" | "None" | "Ok" | "Err") {
                         return Type::EnumCase {
                             enum_name: if class_name.eq_ignore_ascii_case("Option") {
                                 "Option".to_string()
@@ -307,14 +300,11 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             }
             Type::Unknown
         }
-        Expr::StaticCall {
-            class,
-            method,
-            ..
-        } => {
-            if let (Some(class_name), Some(case_name)) =
-                (extract_ident(class, ctx.source), extract_ident(method, ctx.source))
-            {
+        Expr::StaticCall { class, method, .. } => {
+            if let (Some(class_name), Some(case_name)) = (
+                extract_ident(class, ctx.source),
+                extract_ident(method, ctx.source),
+            ) {
                 if class_name.eq_ignore_ascii_case("Option") {
                     if case_name.eq_ignore_ascii_case("Some") {
                         let arg_ty = match &expr {

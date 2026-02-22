@@ -1,14 +1,14 @@
+use crate::parser::ast::visitor::{Visitor, walk_expr};
 use crate::parser::ast::{
     BinaryOp, ClassKind, ClassMember, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
     PropertyEntry, Stmt, StmtId, Type as AstType, TypeParam, UnaryOp,
 };
-use crate::parser::ast::visitor::{walk_expr, Visitor};
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
 use crate::phpx::typeck::infer::{
-    infer_expr, EnumCaseInfo, EnumInfo, EnumParamInfo, InferContext, StructInfo,
+    EnumCaseInfo, EnumInfo, EnumParamInfo, InferContext, StructInfo, infer_expr,
 };
-use crate::phpx::typeck::types::{merge_types, ObjectField, PrimitiveType, Type};
+use crate::phpx::typeck::types::{ObjectField, PrimitiveType, Type, merge_types};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -130,7 +130,10 @@ impl TypeError {
         let padding = std::cmp::min(info.line_text.len(), info.column.saturating_sub(1));
         let highlight_len = std::cmp::max(
             1,
-            std::cmp::min(self.span.len(), info.line_text.len().saturating_sub(padding)),
+            std::cmp::min(
+                self.span.len(),
+                info.line_text.len().saturating_sub(padding),
+            ),
         );
 
         let mut marker = String::new();
@@ -237,8 +240,7 @@ pub fn external_functions_from_stub(
                 .map(|ty| ctx.resolve_type_with_params(ty, &type_param_set));
             external_params.push(ExternalParamSig { ty, required });
         }
-        let return_ty = return_type
-            .map(|ty| ctx.resolve_type_with_params(ty, &type_param_set));
+        let return_ty = return_type.map(|ty| ctx.resolve_type_with_params(ty, &type_param_set));
         let type_params = type_param_sigs
             .iter()
             .map(|sig| ExternalTypeParamSig {
@@ -341,7 +343,11 @@ impl<'a> CheckContext<'a> {
         self.errors.extend(validator.errors);
     }
 
-    fn validate_jsx_element(&mut self, name: &Name<'a>, attributes: &'a [crate::parser::ast::JsxAttribute<'a>]) {
+    fn validate_jsx_element(
+        &mut self,
+        name: &Name<'a>,
+        attributes: &'a [crate::parser::ast::JsxAttribute<'a>],
+    ) {
         let raw = token_text(self.source, name.span);
         let raw = raw.trim();
         if raw.is_empty() {
@@ -353,7 +359,10 @@ impl<'a> CheckContext<'a> {
             return;
         }
         let mut chars = last.chars();
-        let is_component = chars.next().map(|ch| ch.is_ascii_uppercase()).unwrap_or(false);
+        let is_component = chars
+            .next()
+            .map(|ch| ch.is_ascii_uppercase())
+            .unwrap_or(false);
         let has_uppercase = last.chars().any(|ch| ch.is_ascii_uppercase());
 
         if !is_component && has_uppercase {
@@ -444,10 +453,7 @@ impl<'a> CheckContext<'a> {
                 continue;
             }
             let suggestion = nearest_name(attr_name, expected_fields.keys().map(|k| k.as_str()));
-            let mut message = format!(
-                "Unknown prop '{}' for component '{}'",
-                attr_name, component
-            );
+            let mut message = format!("Unknown prop '{}' for component '{}'", attr_name, component);
             if let Some(suggested) = suggestion {
                 message.push_str(&format!("; did you mean '{}'?", suggested));
             }
@@ -532,7 +538,12 @@ impl<'a> CheckContext<'a> {
                 }
                 false
             }
-            Type::Union(types) => !types.is_empty() && types.iter().all(|inner| self.is_component_props_type(inner)),
+            Type::Union(types) => {
+                !types.is_empty()
+                    && types
+                        .iter()
+                        .all(|inner| self.is_component_props_type(inner))
+            }
             _ => false,
         }
     }
@@ -617,8 +628,7 @@ impl<'a> CheckContext<'a> {
                 if local.is_empty() {
                     continue;
                 }
-                self.imported
-                    .insert(local.to_string(), module.to_string());
+                self.imported.insert(local.to_string(), module.to_string());
             }
         }
     }
@@ -654,13 +664,12 @@ impl<'a> CheckContext<'a> {
                         });
                     }
                     if let Some(expr) = expr {
-                        if let Expr::ObjectLiteral { items, span: obj_span } = *expr {
-                            self.check_object_literal_against_type(
-                                items,
-                                expected,
-                                *obj_span,
-                                env,
-                            );
+                        if let Expr::ObjectLiteral {
+                            items,
+                            span: obj_span,
+                        } = *expr
+                        {
+                            self.check_object_literal_against_type(items, expected, *obj_span, env);
                         }
                     }
                     if !self.is_assignable(&actual, expected) {
@@ -714,7 +723,9 @@ impl<'a> CheckContext<'a> {
                     }
                 }
             }
-            Stmt::While { condition, body, .. } => {
+            Stmt::While {
+                condition, body, ..
+            } => {
                 let _ = self.check_expr(condition, env, explicit);
                 let mut loop_env = self.narrow_env_for_condition(condition, env, true);
                 let mut loop_explicit = explicit.clone();
@@ -806,12 +817,10 @@ impl<'a> CheckContext<'a> {
                 body,
                 ..
             } => {
-                let (type_param_sigs, type_param_set) =
-                    self.collect_type_param_sigs(type_params);
+                let (type_param_sigs, type_param_set) = self.collect_type_param_sigs(type_params);
                 let mut fn_env: HashMap<String, Type> = HashMap::new();
                 let mut fn_explicit: HashSet<String> = HashSet::new();
-                let destructured_params =
-                    self.detect_destructured_param_carriers(params, body);
+                let destructured_params = self.detect_destructured_param_carriers(params, body);
                 for param in params.iter() {
                     let param_name = token_text(self.source, param.name.span);
                     let param_name = param_name.trim_start_matches('$').to_string();
@@ -829,7 +838,8 @@ impl<'a> CheckContext<'a> {
                             }
                             // Keep the original carrier variable in scope so lowered
                             // destructuring assignments (e.g. $name = $name.name) type-check.
-                            let binding_ty = self.field_type_for_pattern_key(&resolved, &param_name);
+                            let binding_ty =
+                                self.field_type_for_pattern_key(&resolved, &param_name);
                             let binding_ty = if matches!(binding_ty, Type::Unknown) {
                                 resolved
                             } else {
@@ -890,12 +900,7 @@ impl<'a> CheckContext<'a> {
                     self.async_depth += 1;
                 }
                 for stmt in body.iter() {
-                    self.check_stmt(
-                        stmt,
-                        &mut fn_env,
-                        &mut fn_explicit,
-                        body_return.as_ref(),
-                    );
+                    self.check_stmt(stmt, &mut fn_env, &mut fn_explicit, body_return.as_ref());
                 }
                 if *is_async {
                     self.async_depth = self.async_depth.saturating_sub(1);
@@ -904,11 +909,7 @@ impl<'a> CheckContext<'a> {
 
                 let _ = type_param_sigs;
             }
-            Stmt::Class {
-                kind,
-                members,
-                ..
-            } => {
+            Stmt::Class { kind, members, .. } => {
                 if *kind == ClassKind::Struct {
                     self.check_struct_defaults(members);
                 }
@@ -925,7 +926,11 @@ impl<'a> CheckContext<'a> {
     ) -> HashSet<String> {
         let param_names: HashSet<String> = params
             .iter()
-            .map(|param| token_text(self.source, param.name.span).trim_start_matches('$').to_string())
+            .map(|param| {
+                token_text(self.source, param.name.span)
+                    .trim_start_matches('$')
+                    .to_string()
+            })
             .collect();
         let mut out = HashSet::new();
         for stmt in body.iter().take(24) {
@@ -985,8 +990,7 @@ impl<'a> CheckContext<'a> {
             }
             Expr::DotAccess { target, .. } => self.expr_contains_named_var(target, name),
             Expr::Assign { var, expr, .. } => {
-                self.expr_contains_named_var(var, name)
-                    || self.expr_contains_named_var(expr, name)
+                self.expr_contains_named_var(var, name) || self.expr_contains_named_var(expr, name)
             }
             Expr::ObjectLiteral { items, .. } => items
                 .iter()
@@ -1084,9 +1088,8 @@ impl<'a> CheckContext<'a> {
                 if self.is_null_comparison(op, left, right) && !self.allow_null_comparisons() {
                     self.errors.push(TypeError {
                         span,
-                        message:
-                            "Null comparisons are not allowed in PHPX; use isset() instead"
-                                .to_string(),
+                        message: "Null comparisons are not allowed in PHPX; use isset() instead"
+                            .to_string(),
                     });
                 }
                 let _ = self.check_expr(left, env, explicit);
@@ -1152,14 +1155,7 @@ impl<'a> CheckContext<'a> {
                 if let Some((enum_name, case_name, case_info)) =
                     self.enum_case_lookup(class, method)
                 {
-                    self.check_enum_case_call(
-                        &enum_name,
-                        &case_name,
-                        &case_info,
-                        args,
-                        span,
-                        env,
-                    );
+                    self.check_enum_case_call(&enum_name, &case_name, &case_info, args, span, env);
                     if enum_name.eq_ignore_ascii_case("Option") {
                         let arg_ty = args
                             .get(0)
@@ -1228,8 +1224,7 @@ impl<'a> CheckContext<'a> {
                 self.check_static_class_ref(class, span);
                 Type::Unknown
             }
-            Expr::PropertyFetch { target, .. }
-            | Expr::NullsafePropertyFetch { target, .. } => {
+            Expr::PropertyFetch { target, .. } | Expr::NullsafePropertyFetch { target, .. } => {
                 let _ = self.check_expr(target, env, explicit);
                 Type::Unknown
             }
@@ -1369,7 +1364,9 @@ impl<'a> CheckContext<'a> {
                 let _ = self.check_expr(if_false, env, explicit);
                 Type::Unknown
             }
-            Expr::Match { condition, arms, .. } => {
+            Expr::Match {
+                condition, arms, ..
+            } => {
                 let cond_ty = self.check_expr(condition, env, explicit);
                 let mut match_ty = Type::Unknown;
                 for arm in arms.iter() {
@@ -1551,10 +1548,11 @@ impl<'a> CheckContext<'a> {
 
     fn enum_case_from_expr(&self, expr: ExprId<'a>) -> Option<(String, String)> {
         match *expr {
-            Expr::ClassConstFetch { class, constant, .. } => {
-                self.enum_case_lookup(class, constant)
-                    .map(|(enum_name, case_name, _)| (enum_name, case_name))
-            }
+            Expr::ClassConstFetch {
+                class, constant, ..
+            } => self
+                .enum_case_lookup(class, constant)
+                .map(|(enum_name, case_name, _)| (enum_name, case_name)),
             Expr::StaticCall { class, method, .. } => self
                 .enum_case_lookup(class, method)
                 .map(|(enum_name, case_name, _)| (enum_name, case_name)),
@@ -1667,7 +1665,11 @@ impl<'a> CheckContext<'a> {
             let arg = &args[idx];
             let actual = self.infer_expr_with_env(arg.value, env);
             if let Some(expected) = &param.ty {
-                if let Expr::ObjectLiteral { items, span: obj_span } = *arg.value {
+                if let Expr::ObjectLiteral {
+                    items,
+                    span: obj_span,
+                } = *arg.value
+                {
                     self.check_object_literal_against_type(items, expected, obj_span, env);
                 }
                 if !self.is_assignable(&actual, expected) {
@@ -1692,8 +1694,7 @@ impl<'a> CheckContext<'a> {
             Type::Enum(name) => Some((vec![name.clone()], false)),
             Type::EnumCase { enum_name, .. } => Some((vec![enum_name.clone()], false)),
             Type::Applied { base, .. }
-                if base.eq_ignore_ascii_case("Option")
-                    || base.eq_ignore_ascii_case("Result") =>
+                if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") =>
             {
                 let name = if base.eq_ignore_ascii_case("Option") {
                     "Option".to_string()
@@ -1880,7 +1881,9 @@ impl<'a> CheckContext<'a> {
         truthy: bool,
     ) {
         match *condition {
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 if let Some(var_name) = self.null_compare_var(left, right) {
                     match op {
                         BinaryOp::EqEqEq | BinaryOp::EqEq => {
@@ -1947,10 +1950,7 @@ impl<'a> CheckContext<'a> {
         }
         self.errors.push(TypeError {
             span,
-            message: format!(
-                "Unknown type '{}' in PHPX; classes are not allowed",
-                name
-            ),
+            message: format!("Unknown type '{}' in PHPX; classes are not allowed", name),
         });
     }
 
@@ -1973,7 +1973,11 @@ impl<'a> CheckContext<'a> {
     fn is_null_comparison(&self, op: BinaryOp, left: ExprId<'a>, right: ExprId<'a>) -> bool {
         matches!(
             op,
-            BinaryOp::EqEqEq | BinaryOp::EqEq | BinaryOp::NotEqEq | BinaryOp::NotEq | BinaryOp::Spaceship
+            BinaryOp::EqEqEq
+                | BinaryOp::EqEq
+                | BinaryOp::NotEqEq
+                | BinaryOp::NotEq
+                | BinaryOp::Spaceship
         ) && (matches!(*left, Expr::Null { .. }) || matches!(*right, Expr::Null { .. }))
     }
 
@@ -2001,10 +2005,7 @@ impl<'a> CheckContext<'a> {
                 if !fields.contains_key(&prop_name) {
                     self.errors.push(TypeError {
                         span,
-                        message: format!(
-                            "Unknown object field '{}'",
-                            prop_name
-                        ),
+                        message: format!("Unknown object field '{}'", prop_name),
                     });
                 }
             }
@@ -2017,19 +2018,13 @@ impl<'a> CheckContext<'a> {
                     StructFieldResolution::Ambiguous => {
                         self.errors.push(TypeError {
                             span,
-                            message: format!(
-                                "Ambiguous promoted field '{}::{}'",
-                                name, prop_name
-                            ),
+                            message: format!("Ambiguous promoted field '{}::{}'", name, prop_name),
                         });
                     }
                     StructFieldResolution::Missing => {
                         self.errors.push(TypeError {
                             span,
-                            message: format!(
-                                "Unknown struct field '{}::{}'",
-                                name, prop_name
-                            ),
+                            message: format!("Unknown struct field '{}::{}'", name, prop_name),
                         });
                     }
                 }
@@ -2049,10 +2044,7 @@ impl<'a> CheckContext<'a> {
                 if !self.enum_allows_field(&name, &prop_name) {
                     self.errors.push(TypeError {
                         span,
-                        message: format!(
-                            "Unknown enum field '{}::{}'",
-                            name, prop_name
-                        ),
+                        message: format!("Unknown enum field '{}::{}'", name, prop_name),
                     });
                 }
             }
@@ -2072,16 +2064,12 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Type::Applied { base, .. }
-                if base.eq_ignore_ascii_case("Option")
-                    || base.eq_ignore_ascii_case("Result") =>
+                if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") =>
             {
                 if prop_name != "name" {
                     self.errors.push(TypeError {
                         span,
-                        message: format!(
-                            "Unknown enum field '{}::{}'",
-                            base, prop_name
-                        ),
+                        message: format!("Unknown enum field '{}::{}'", base, prop_name),
                     });
                 }
             }
@@ -2160,10 +2148,7 @@ impl<'a> CheckContext<'a> {
                 if invalid || (any_ok && missing) {
                     self.errors.push(TypeError {
                         span,
-                        message: format!(
-                            "Unknown object field '{}' for union type",
-                            prop_name
-                        ),
+                        message: format!("Unknown object field '{}' for union type", prop_name),
                     });
                 }
             }
@@ -2323,9 +2308,7 @@ impl<'a> CheckContext<'a> {
                     span: item.span,
                     message: format!(
                         "Object field '{}' has type {}, expected {}",
-                        key,
-                        actual,
-                        expected_field.ty
+                        key, actual, expected_field.ty
                     ),
                 });
             }
@@ -2636,7 +2619,13 @@ impl<'a> CheckContext<'a> {
 
     fn collect_struct_fields(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
-            if let Stmt::Class { kind, name, members, .. } = stmt {
+            if let Stmt::Class {
+                kind,
+                name,
+                members,
+                ..
+            } = stmt
+            {
                 if *kind != ClassKind::Struct {
                     continue;
                 }
@@ -2652,7 +2641,8 @@ impl<'a> CheckContext<'a> {
                 for member in members.iter() {
                     match member {
                         ClassMember::Property { ty, entries, .. } => {
-                            let field_type = ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown);
+                            let field_type =
+                                ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown);
                             for entry in entries.iter() {
                                 let field_name = token_text(self.source, entry.name.span);
                                 let field_name = field_name.trim_start_matches('$').to_string();
@@ -2702,7 +2692,9 @@ impl<'a> CheckContext<'a> {
                                 }
                             }
                         }
-                        ClassMember::PropertyHook { ty, name, default, .. } => {
+                        ClassMember::PropertyHook {
+                            ty, name, default, ..
+                        } => {
                             let field_name = token_text(self.source, name.span);
                             let field_name = field_name.trim_start_matches('$').to_string();
                             if embed_names.contains(&field_name) {
@@ -2845,7 +2837,8 @@ impl<'a> CheckContext<'a> {
                 name,
                 members,
                 ..
-            } = stmt else {
+            } = stmt
+            else {
                 continue;
             };
             if *kind != ClassKind::Struct {
@@ -2940,9 +2933,8 @@ impl<'a> CheckContext<'a> {
                         if param.default.is_some() {
                             self.errors.push(TypeError {
                                 span: param.span,
-                                message:
-                                    "Enum case payload parameters cannot have default values"
-                                        .to_string(),
+                                message: "Enum case payload parameters cannot have default values"
+                                    .to_string(),
                             });
                         }
                         let name = token_text(self.source, param.name.span);
@@ -2957,10 +2949,7 @@ impl<'a> CheckContext<'a> {
                             });
                         }
                         let ty = param.ty.map(|ty| self.resolve_type(ty));
-                        params.push(EnumParamInfo {
-                            name,
-                            ty,
-                        });
+                        params.push(EnumParamInfo { name, ty });
                     }
                 }
                 cases.insert(case_name, EnumCaseInfo { params });
@@ -3012,8 +3001,7 @@ impl<'a> CheckContext<'a> {
             } = stmt
             {
                 let fn_name = token_text(self.source, name.span);
-                let (type_param_sigs, type_param_set) =
-                    self.collect_type_param_sigs(type_params);
+                let (type_param_sigs, type_param_set) = self.collect_type_param_sigs(type_params);
                 let mut param_sigs = Vec::new();
                 let mut variadic = false;
                 for param in params.iter() {
@@ -3440,15 +3428,14 @@ impl<'a> CheckContext<'a> {
                     if ann.args.len() > 1 {
                         self.errors.push(TypeError {
                             span: ann.span,
-                            message: "Annotation '@index' accepts at most one argument"
-                                .to_string(),
+                            message: "Annotation '@index' accepts at most one argument".to_string(),
                         });
                     }
                     if ann.args.len() == 1 && !matches!(ann.args[0], Expr::String { .. }) {
                         self.errors.push(TypeError {
                             span: ann.args[0].span(),
-                            message:
-                                "Annotation '@index' argument must be a string literal".to_string(),
+                            message: "Annotation '@index' argument must be a string literal"
+                                .to_string(),
                         });
                     }
                 }
@@ -3456,8 +3443,8 @@ impl<'a> CheckContext<'a> {
                     if ann.args.len() != 1 {
                         self.errors.push(TypeError {
                             span: ann.span,
-                            message:
-                                "Annotation '@map' requires exactly one string argument".to_string(),
+                            message: "Annotation '@map' requires exactly one string argument"
+                                .to_string(),
                         });
                     } else if !matches!(ann.args[0], Expr::String { .. }) {
                         self.errors.push(TypeError {
@@ -3471,8 +3458,8 @@ impl<'a> CheckContext<'a> {
                     if ann.args.len() != 1 {
                         self.errors.push(TypeError {
                             span: ann.span,
-                            message:
-                                "Annotation '@default' requires exactly one argument".to_string(),
+                            message: "Annotation '@default' requires exactly one argument"
+                                .to_string(),
                         });
                     }
                 }
@@ -3620,15 +3607,16 @@ impl<'a> CheckContext<'a> {
                         self.check_property_default(entry, expected.as_ref());
                     }
                 }
-                ClassMember::PropertyHook { ty, name, default, .. } => {
+                ClassMember::PropertyHook {
+                    ty, name, default, ..
+                } => {
                     if let Some(expected) = ty.map(|ty| self.resolve_type(ty)) {
                         if let Some(default) = default {
                             if !self.is_constant_expr(default) {
                                 self.errors.push(TypeError {
                                     span: member_span(member),
-                                    message:
-                                        "Struct field defaults must be constant expressions"
-                                            .to_string(),
+                                    message: "Struct field defaults must be constant expressions"
+                                        .to_string(),
                                 });
                             }
                             let actual = self.infer_expr_with_env(*default, &HashMap::new());
@@ -3650,11 +3638,7 @@ impl<'a> CheckContext<'a> {
         }
     }
 
-    fn check_property_default(
-        &mut self,
-        entry: &PropertyEntry<'a>,
-        expected: Option<&Type>,
-    ) {
+    fn check_property_default(&mut self, entry: &PropertyEntry<'a>, expected: Option<&Type>) {
         let Some(expected) = expected else {
             return;
         };
@@ -3700,11 +3684,13 @@ impl<'a> CheckContext<'a> {
             Expr::ObjectLiteral { items, .. } => {
                 items.iter().all(|item| self.is_constant_expr(item.value))
             }
-            Expr::StructLiteral { fields, .. } => {
-                fields.iter().all(|field| self.is_constant_expr(field.value))
-            }
+            Expr::StructLiteral { fields, .. } => fields
+                .iter()
+                .all(|field| self.is_constant_expr(field.value)),
             Expr::ClassConstFetch { .. } => true,
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 matches!(op, BinaryOp::BitOr)
                     && self.is_constant_expr(left)
                     && self.is_constant_expr(right)
@@ -3862,16 +3848,13 @@ impl<'a> CheckContext<'a> {
         match ty {
             AstType::Simple(token) => token.span,
             AstType::Name(name) => name.parts.first().map(|p| p.span).unwrap_or_default(),
-            AstType::Union(types)
-            | AstType::Intersection(types) => types
-                .first()
-                .map(|t| self.type_span(t))
-                .unwrap_or_default(),
+            AstType::Union(types) | AstType::Intersection(types) => {
+                types.first().map(|t| self.type_span(t)).unwrap_or_default()
+            }
             AstType::Nullable(inner) => self.type_span(inner),
-            AstType::ObjectShape(fields) => fields
-                .first()
-                .map(|field| field.span)
-                .unwrap_or_default(),
+            AstType::ObjectShape(fields) => {
+                fields.first().map(|field| field.span).unwrap_or_default()
+            }
             AstType::Applied { base, .. } => self.type_span(base),
         }
     }
@@ -3971,10 +3954,7 @@ impl<'a> CheckContext<'a> {
         if !self.is_known_named_type(&out, params) {
             self.errors.push(TypeError {
                 span: name.span,
-                message: format!(
-                    "Unknown type '{}' in PHPX; classes are not allowed",
-                    out
-                ),
+                message: format!("Unknown type '{}' in PHPX; classes are not allowed", out),
             });
             return Type::Unknown;
         }
@@ -4005,7 +3985,8 @@ impl<'a> CheckContext<'a> {
         }
         let resolved = info.ty.clone();
         visiting.remove(name);
-        self.resolved_aliases.insert(name.to_string(), resolved.clone());
+        self.resolved_aliases
+            .insert(name.to_string(), resolved.clone());
         Some(resolved)
     }
 
@@ -4354,27 +4335,15 @@ impl<'a> CheckContext<'a> {
                 }
             };
 
-            let expected_ty = expected_param
-                .ty
-                .as_ref()
-                .cloned()
-                .unwrap_or(Type::Mixed);
-            let actual_ty = actual_param
-                .ty
-                .as_ref()
-                .cloned()
-                .unwrap_or(Type::Mixed);
+            let expected_ty = expected_param.ty.as_ref().cloned().unwrap_or(Type::Mixed);
+            let actual_ty = actual_param.ty.as_ref().cloned().unwrap_or(Type::Mixed);
             if !self.is_assignable(&expected_ty, &actual_ty) {
                 return false;
             }
         }
 
         if let Some(expected_ret) = expected.return_type.as_ref() {
-            let actual_ret = actual
-                .return_type
-                .as_ref()
-                .cloned()
-                .unwrap_or(Type::Mixed);
+            let actual_ret = actual.return_type.as_ref().cloned().unwrap_or(Type::Mixed);
             if !self.is_assignable(&actual_ret, expected_ret) {
                 return false;
             }
@@ -4414,25 +4383,20 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
     }
     match source {
         Type::Union(options) => {
-            return options
-                .iter()
-                .all(|opt| is_assignable_base(opt, target));
+            return options.iter().all(|opt| is_assignable_base(opt, target));
         }
         _ => {}
     }
-        match (source, target) {
-            (Type::Primitive(a), Type::Primitive(b)) => match (a, b) {
-                (PrimitiveType::Int, PrimitiveType::Float) => true,
-                _ => a == b,
-            },
+    match (source, target) {
+        (Type::Primitive(a), Type::Primitive(b)) => match (a, b) {
+            (PrimitiveType::Int, PrimitiveType::Float) => true,
+            _ => a == b,
+        },
         (Type::Array, Type::Array) => true,
         (Type::VNode, Type::VNode) => true,
         (Type::Struct(a), Type::Struct(b)) => a == b,
         (Type::Enum(a), Type::Enum(b)) => a == b,
-        (
-            Type::EnumCase { enum_name, .. },
-            Type::Enum(target_name),
-        ) => enum_name == target_name,
+        (Type::EnumCase { enum_name, .. }, Type::Enum(target_name)) => enum_name == target_name,
         (
             Type::EnumCase {
                 enum_name: a_enum,
@@ -4446,8 +4410,9 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
             },
         ) => a_enum == b_enum && a_case == b_case,
         (Type::ObjectShape(fields), Type::ObjectShape(expected)) => {
-            expected.iter().all(|(name, expected_field)| {
-                match fields.get(name) {
+            expected
+                .iter()
+                .all(|(name, expected_field)| match fields.get(name) {
                     Some(actual_field) => {
                         if actual_field.optional && !expected_field.optional {
                             return false;
@@ -4455,8 +4420,7 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
                         is_assignable_base(&actual_field.ty, &expected_field.ty)
                     }
                     None => expected_field.optional,
-                }
-            })
+                })
         }
         (
             Type::Applied {
@@ -4757,7 +4721,11 @@ fn unescape_string_key(value: &str, double_quoted: bool) -> String {
     out
 }
 
-fn resolve_wasm_stub(specifier: &str, file_path: &Path, modules_root: &Path) -> Result<PathBuf, String> {
+fn resolve_wasm_stub(
+    specifier: &str,
+    file_path: &Path,
+    modules_root: &Path,
+) -> Result<PathBuf, String> {
     let current_dir = file_path
         .parent()
         .ok_or_else(|| "wasm import requires a parent directory".to_string())?;
@@ -4791,7 +4759,10 @@ fn resolve_wasm_stub(specifier: &str, file_path: &Path, modules_root: &Path) -> 
         } else {
             "php_modules/"
         };
-        return Err(format!("wasm import must resolve inside {} ({}).", scope, specifier));
+        return Err(format!(
+            "wasm import must resolve inside {} ({}).",
+            scope, specifier
+        ));
     }
 
     let manifest_path = root_path.join("deka.json");

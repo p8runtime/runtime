@@ -145,10 +145,10 @@ pub enum OpCode {
     New(Symbol, u8),                      // Create instance, call constructor with N args
     NewStructLiteral(Symbol),             // Create struct instance without constructor
     NewDynamic(u8),     // [ClassName] -> Create instance, call constructor with N args
-    FetchProp(Symbol),       // [Obj] -> [Val]
-    FetchPropDynamic,        // [Obj, Name] -> [Val]
-    AssignProp(Symbol),      // [Obj, Val] -> [Val]
-    AssignPropDynamic,       // [Obj, Name, Val] -> [Val]
+    FetchProp(Symbol),  // [Obj] -> [Val]
+    FetchPropDynamic,   // [Obj, Name] -> [Val]
+    AssignProp(Symbol), // [Obj, Val] -> [Val]
+    AssignPropDynamic,  // [Obj, Name, Val] -> [Val]
     InitObjectMap(u32), // [] -> [ObjectMap]
     FetchDot(Symbol),   // [ObjectMap] -> [Val]
     AssignDot(Symbol),  // [ObjectMap, Val] -> [Val]

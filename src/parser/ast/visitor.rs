@@ -196,7 +196,9 @@ pub fn walk_stmt<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, stmt: StmtId<
             }
             walk_statements(visitor, body);
         }
-        Stmt::TypeAlias { type_params, ty, .. } => {
+        Stmt::TypeAlias {
+            type_params, ty, ..
+        } => {
             for param in type_params.iter() {
                 if let Some(constraint) = param.constraint {
                     visitor.visit_type(constraint);
@@ -732,9 +734,7 @@ pub fn walk_class_member<'ast, V: Visitor<'ast> + ?Sized>(
             }
         }
         ClassMember::Embed {
-            attributes,
-            types,
-            ..
+            attributes, types, ..
         } => {
             walk_attributes(visitor, attributes);
             walk_names(visitor, types);

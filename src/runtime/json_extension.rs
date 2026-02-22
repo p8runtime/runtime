@@ -126,7 +126,10 @@ mod tests {
             "gop_json_decode should be registered"
         );
         assert!(
-            engine.registry.get_function(b"gop_json_last_error").is_some(),
+            engine
+                .registry
+                .get_function(b"gop_json_last_error")
+                .is_some(),
             "gop_json_last_error should be registered"
         );
         assert!(

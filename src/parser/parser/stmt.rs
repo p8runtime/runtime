@@ -167,7 +167,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::HaltCompiler => {
                 if !top_level {
-                    self.errors.push(ParseError::new(self.current_token.span, "__halt_compiler() can only be used from the outermost scope"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "__halt_compiler() can only be used from the outermost scope",
+                    ));
                 }
                 let start = self.current_token.span.start;
                 self.bump();
@@ -175,12 +178,18 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.current_token.kind == TokenKind::OpenParen {
                     self.bump();
                 } else {
-                    self.errors.push(ParseError::new(self.current_token.span, "Expected '(' after __halt_compiler"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected '(' after __halt_compiler",
+                    ));
                 }
                 if self.current_token.kind == TokenKind::CloseParen {
                     self.bump();
                 } else {
-                    self.errors.push(ParseError::new(self.current_token.span, "Expected ')' after __halt_compiler("));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected ')' after __halt_compiler(",
+                    ));
                 }
                 self.expect_semicolon();
 
@@ -203,7 +212,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             TokenKind::Enum => self.parse_enum(&[], doc_comment),
             TokenKind::Namespace => {
                 if self.is_phpx() && !self.allow_phpx_namespace() {
-                    self.errors.push(ParseError::new(self.current_token.span, "namespace is not allowed in PHPX; use import instead"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "namespace is not allowed in PHPX; use import instead",
+                    ));
                 }
                 if !top_level {
                     self.errors.push(ParseError::new(self.current_token.span, "Namespace declaration statement has to be the very first statement or after any declare call in the script"));
@@ -212,29 +224,44 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Use => {
                 if self.is_phpx() && !self.allow_phpx_namespace() {
-                    self.errors.push(ParseError::new(self.current_token.span, "use is not allowed in PHPX; use import instead"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "use is not allowed in PHPX; use import instead",
+                    ));
                 }
                 if !top_level {
-                    self.errors.push(ParseError::new(self.current_token.span, "Use declarations are only allowed at the top level"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Use declarations are only allowed at the top level",
+                    ));
                 }
                 self.parse_use()
             }
             TokenKind::Switch => self.parse_switch(),
             TokenKind::Try => {
                 if self.is_phpx() {
-                    self.errors.push(ParseError::new(self.current_token.span, "try/catch is not allowed in PHPX; use Result/Option instead"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "try/catch is not allowed in PHPX; use Result/Option instead",
+                    ));
                 }
                 self.parse_try()
             }
             TokenKind::Throw => {
                 if self.is_phpx() {
-                    self.errors.push(ParseError::new(self.current_token.span, "throw is not allowed in PHPX; use Result/Option instead"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "throw is not allowed in PHPX; use Result/Option instead",
+                    ));
                 }
                 self.parse_throw()
             }
             TokenKind::Const => {
                 if !top_level {
-                    self.errors.push(ParseError::new(self.current_token.span, "Const declarations are only allowed at the top level"));
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Const declarations are only allowed at the top level",
+                    ));
                 }
                 self.parse_const_stmt(&[], doc_comment)
             }
@@ -270,7 +297,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.arena.alloc(Stmt::Nop { span })
             }
             TokenKind::CloseBrace => {
-                self.errors.push(ParseError::new(self.current_token.span, "Unexpected '}'"));
+                self.errors
+                    .push(ParseError::new(self.current_token.span, "Unexpected '}'"));
                 let span = self.current_token.span;
                 self.bump();
                 self.arena.alloc(Stmt::Error { span })
@@ -367,7 +395,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         self.bump(); // Eat 'type'
 
         if !top_level {
-            self.errors.push(ParseError::new(self.current_token.span, "type aliases are only allowed at the top level"));
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "type aliases are only allowed at the top level",
+            ));
         }
 
         let name_token = if self.current_token.kind == TokenKind::Identifier {
@@ -375,7 +406,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
             t
         } else {
-            self.errors.push(ParseError::new(self.current_token.span, "Expected type alias name"));
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected type alias name",
+            ));
             self.sync_to_statement_end();
             return self.arena.alloc(Stmt::Error {
                 span: Span::new(start, self.current_token.span.end),
@@ -389,7 +423,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
 
         if self.current_token.kind != TokenKind::Eq {
-            self.errors.push(ParseError::new(self.current_token.span, "Expected '=' in type alias"));
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected '=' in type alias",
+            ));
             self.sync_to_statement_end();
             return self.arena.alloc(Stmt::Error {
                 span: Span::new(start, self.current_token.span.end),
@@ -400,7 +437,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let ty = match self.parse_type() {
             Some(ty) => ty,
             None => {
-                self.errors.push(ParseError::new(self.current_token.span, "Expected type expression in alias"));
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected type expression in alias",
+                ));
                 self.sync_to_statement_end();
                 return self.arena.alloc(Stmt::Error {
                     span: Span::new(start, self.current_token.span.end),
@@ -425,7 +465,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::OpenBrace {
             self.bump(); // Eat {
         } else {
-            self.errors.push(crate::parser::ast::ParseError::new(self.current_token.span, "Expected '{'"));
+            self.errors.push(crate::parser::ast::ParseError::new(
+                self.current_token.span,
+                "Expected '{'",
+            ));
             return self.arena.alloc(Stmt::Error {
                 span: self.current_token.span,
             });
@@ -441,7 +484,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::CloseBrace {
             self.bump();
         } else {
-            self.errors.push(crate::parser::ast::ParseError::new(self.current_token.span, "Missing '}'"));
+            self.errors.push(crate::parser::ast::ParseError::new(
+                self.current_token.span,
+                "Missing '}'",
+            ));
         }
 
         let end = self.current_token.span.end;
@@ -476,7 +522,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if self.current_token.kind == TokenKind::CloseBrace {
                 self.bump();
             } else {
-                self.errors.push(crate::parser::ast::ParseError::new(self.current_token.span, "Missing '}'"));
+                self.errors.push(crate::parser::ast::ParseError::new(
+                    self.current_token.span,
+                    "Missing '}'",
+                ));
             }
             Some(statements.into_bump_slice() as &'ast [StmtId<'ast>])
         } else {
@@ -586,7 +635,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.current_token.kind == TokenKind::CloseBrace {
                     self.bump();
                 } else {
-                    self.errors.push(crate::parser::ast::ParseError::new(self.current_token.span, "Missing '}'"));
+                    self.errors.push(crate::parser::ast::ParseError::new(
+                        self.current_token.span,
+                        "Missing '}'",
+                    ));
                 }
             } else {
                 let alias = if self.current_token.kind == TokenKind::As {
@@ -747,7 +799,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 tok
             } else {
-                self.errors.push(crate::parser::ast::ParseError::new(self.current_token.span, "Expected identifier"));
+                self.errors.push(crate::parser::ast::ParseError::new(
+                    self.current_token.span,
+                    "Expected identifier",
+                ));
                 self.arena.alloc(Token {
                     kind: TokenKind::Error,
                     span: self.current_token.span,
@@ -757,7 +812,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if self.current_token.kind == TokenKind::Eq {
                 self.bump();
             } else {
-                self.errors.push(crate::parser::ast::ParseError::new(self.current_token.span, "Expected '='"));
+                self.errors.push(crate::parser::ast::ParseError::new(
+                    self.current_token.span,
+                    "Expected '='",
+                ));
             }
             let value = self.parse_expr(0);
             let span = Span::new(name.span.start, value.span().end);

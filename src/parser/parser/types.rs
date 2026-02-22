@@ -153,8 +153,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
         self.bump(); // consume '<'
         let mut args = bumpalo::collections::Vec::new_in(self.arena);
-        while self.current_token.kind != TokenKind::Gt
-            && self.current_token.kind != TokenKind::Eof
+        while self.current_token.kind != TokenKind::Gt && self.current_token.kind != TokenKind::Eof
         {
             if let Some(arg) = self.parse_type() {
                 args.push(arg);

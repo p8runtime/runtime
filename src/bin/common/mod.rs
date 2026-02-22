@@ -5,7 +5,7 @@ use php_rs::{
     compiler::emitter::Emitter,
     core::value::{ArrayData, ArrayKey, Val},
     parser::lexer::Lexer,
-    parser::parser::{detect_parser_mode, Parser as PhpParser, ParserMode},
+    parser::parser::{Parser as PhpParser, ParserMode, detect_parser_mode},
     runtime::context::{EngineBuilder, EngineContext},
     vm::engine::{VM, VmError},
 };

@@ -1,9 +1,9 @@
 use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, ObjectMapData, Val};
 use crate::vm::engine::{ErrorLevel, PropertyCollectionMode, VM};
+use indexmap::IndexMap;
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::rc::Rc;
-use std::collections::HashSet;
-use indexmap::IndexMap;
 
 pub fn php_deka_symbol_get(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 2 {
@@ -313,12 +313,7 @@ pub fn php_var_dump(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
                         let class_name = String::from_utf8_lossy(
                             vm.context.interner.lookup(class).unwrap_or(b""),
                         );
-                        let _ = writeln!(
-                            output,
-                            "object({}) ({}) {{",
-                            class_name,
-                            arr.map.len()
-                        );
+                        let _ = writeln!(output, "object({}) ({}) {{", class_name, arr.map.len());
                         for (key, val_handle) in arr.map.iter() {
                             match key {
                                 crate::core::value::ArrayKey::Int(i) => {
@@ -391,12 +386,8 @@ fn dump_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                         let _ = writeln!(output, "{}  [{}]=>", indent, i);
                     }
                     crate::core::value::ArrayKey::Str(s) => {
-                        let _ = writeln!(
-                            output,
-                            "{}  [\"{}\"]=>",
-                            indent,
-                            String::from_utf8_lossy(s)
-                        );
+                        let _ =
+                            writeln!(output, "{}  [\"{}\"]=>", indent, String::from_utf8_lossy(s));
                     }
                 }
                 dump_value(vm, *val_handle, depth + 1, output);
@@ -995,7 +986,10 @@ pub fn php_is_object(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("is_object() expects exactly 1 parameter".into());
     }
     let val = vm.arena.get(args[0]);
-    let is = matches!(val.value, Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_));
+    let is = matches!(
+        val.value,
+        Val::Object(_) | Val::ObjectMap(_) | Val::Struct(_)
+    );
     Ok(vm.arena.alloc(Val::Bool(is)))
 }
 

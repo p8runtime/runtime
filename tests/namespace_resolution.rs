@@ -37,7 +37,13 @@ fn run_php(code: &str) -> Result<(VM, Handle), VmError> {
 fn val_to_int(vm: &VM, handle: Handle) -> i64 {
     match &vm.arena.get(handle).value {
         Val::Int(i) => *i,
-        Val::Bool(b) => if *b { 1 } else { 0 },
+        Val::Bool(b) => {
+            if *b {
+                1
+            } else {
+                0
+            }
+        }
         other => panic!("expected int, got {:?}", other),
     }
 }

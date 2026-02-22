@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::parser::ast::{ClassKind, ClassMember, Expr, Stmt};
 use crate::parser::lexer::Lexer;
-use crate::parser::parser::{detect_parser_mode, Parser, ParserMode};
+use crate::parser::parser::{Parser, ParserMode, detect_parser_mode};
 
 #[test]
 fn detect_mode_treats_phpx_cache_php_as_internal() {
@@ -20,7 +20,11 @@ fn phpx_allows_automatic_semicolons() {
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
 
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
 }
 
 #[test]
@@ -40,7 +44,11 @@ fn phpx_return_line_terminator_ends_statement() {
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
 
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
 
     let func_stmt = program
         .statements
@@ -53,7 +61,9 @@ fn phpx_return_line_terminator_ends_statement() {
             let mut stmts = body.iter().filter(|s| !matches!(***s, Stmt::Nop { .. }));
             let ret_stmt = stmts.next().expect("expected return stmt");
             match &**ret_stmt {
-                Stmt::Return { expr, .. } => assert!(expr.is_none(), "expected return without expr"),
+                Stmt::Return { expr, .. } => {
+                    assert!(expr.is_none(), "expected return without expr")
+                }
                 other => panic!("expected return stmt, got {:?}", other),
             }
 
@@ -74,7 +84,11 @@ fn phpx_parses_struct_field_annotations() {
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
 
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
 
     let stmt = program
         .statements
@@ -108,7 +122,11 @@ fn phpx_parses_struct_field_annotation_args() {
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
 
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
 
     let stmt = program
         .statements
@@ -142,7 +160,11 @@ fn phpx_parses_colon_typed_parameters() {
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
 
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
 }
 
 #[test]
@@ -299,7 +321,9 @@ fn phpx_parses_interface_shape_fields() {
     match &**iface_stmt {
         Stmt::Interface { members, .. } => {
             assert!(
-                members.iter().any(|m| matches!(m, ClassMember::Property { .. })),
+                members
+                    .iter()
+                    .any(|m| matches!(m, ClassMember::Property { .. })),
                 "expected interface property member"
             );
         }
@@ -333,8 +357,13 @@ fn phpx_parses_async_function_and_await() {
                 .find(|stmt| matches!(***stmt, Stmt::Return { .. }))
                 .expect("expected return in function body");
             match &**return_stmt {
-                Stmt::Return { expr: Some(expr), .. } => {
-                    assert!(matches!(**expr, Expr::Await { .. }), "expected await in return");
+                Stmt::Return {
+                    expr: Some(expr), ..
+                } => {
+                    assert!(
+                        matches!(**expr, Expr::Await { .. }),
+                        "expected await in return"
+                    );
                 }
                 other => panic!("expected return with await expr, got {:?}", other),
             }
@@ -382,10 +411,9 @@ fn phpx_non_async_function_rejects_await() {
     let program = parser.parse_program();
 
     assert!(
-        program
-            .errors
-            .iter()
-            .any(|err| err.message.contains("await is only allowed in async functions")),
+        program.errors.iter().any(|err| err
+            .message
+            .contains("await is only allowed in async functions")),
         "expected non-async await error, got: {:?}",
         program.errors
     );
@@ -561,9 +589,16 @@ function App($props: object) {
 }
 "#;
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::PhpxInternal);
+    let mut parser = Parser::new_with_mode(
+        Lexer::new(code.as_bytes()),
+        &arena,
+        ParserMode::PhpxInternal,
+    );
     let program = parser.parse_program();
 
-    assert!(program.errors.is_empty(), "unexpected parser errors: {:?}", program.errors);
+    assert!(
+        program.errors.is_empty(),
+        "unexpected parser errors: {:?}",
+        program.errors
+    );
 }
-

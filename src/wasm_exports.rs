@@ -121,10 +121,8 @@ fn run_php_source(source: &str) -> String {
     log("php_run:emit");
     let mut request_context = RequestContext::new(engine);
     if let Some(sapi_mode) = extract_php_sapi_marker(source) {
-        request_context.insert_builtin_constant(
-            b"PHP_SAPI",
-            Val::String(Rc::new(sapi_mode.into_bytes())),
-        );
+        request_context
+            .insert_builtin_constant(b"PHP_SAPI", Val::String(Rc::new(sapi_mode.into_bytes())));
     }
     let emitter = Emitter::new(source.as_bytes(), &mut request_context.interner);
     let (chunk, _) = emitter.compile(&program.statements);
@@ -211,9 +209,5 @@ fn extract_php_sapi_marker(source: &str) -> Option<String> {
         .chars()
         .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
         .collect();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }

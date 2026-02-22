@@ -13,9 +13,9 @@ mod control_flow;
 mod definitions;
 mod expr;
 mod stmt;
-mod types;
 #[cfg(test)]
 mod tests;
+mod types;
 
 #[allow(dead_code)]
 pub trait TokenSource<'src> {
@@ -68,7 +68,10 @@ pub fn detect_parser_mode(source: &[u8], file_path: Option<&Path>) -> ParserMode
         // Cached PHPX modules are emitted as .php files under php_modules/.cache/phpx.
         // They contain generated namespace/wrapper code and must run in internal PHPX mode.
         if path.extension().and_then(|ext| ext.to_str()) == Some("php")
-            && path.to_string_lossy().replace('\\', "/").contains("/.cache/phpx/")
+            && path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .contains("/.cache/phpx/")
         {
             return ParserMode::PhpxInternal;
         }
@@ -190,7 +193,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             // Implicit semicolon at line terminator (PHPX only)
         } else {
             // Error: Missing semicolon
-            self.errors.push(ParseError::new(self.current_token.span, "Missing semicolon"));
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Missing semicolon",
+            ));
             // Recovery: Assume it was there and continue.
             // We do NOT bump the current token because it belongs to the next statement.
             self.sync_to_statement_end();

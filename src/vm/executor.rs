@@ -150,10 +150,7 @@ pub fn execute_code_with_config(
             crate::phpx::typeck::check_program_with_path(&program, source.as_bytes(), None)
         {
             let rendered = crate::phpx::typeck::format_type_errors(&errors, source.as_bytes());
-            return Err(VmError::RuntimeError(format!(
-                "Type errors:\n{}",
-                rendered
-            )));
+            return Err(VmError::RuntimeError(format!("Type errors:\n{}", rendered)));
         }
     }
 

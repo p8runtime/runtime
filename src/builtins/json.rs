@@ -101,9 +101,7 @@ fn json_value_to_handle(
                 Err(JsonError::UnsupportedType)
             }
         }
-        JsonValue::String(s) => Ok(vm.arena.alloc(Val::String(
-            s.as_bytes().to_vec().into(),
-        ))),
+        JsonValue::String(s) => Ok(vm.arena.alloc(Val::String(s.as_bytes().to_vec().into()))),
         JsonValue::Array(items) => {
             let mut array = ArrayData::with_capacity(items.len());
             for item in items {
@@ -117,10 +115,7 @@ fn json_value_to_handle(
                 let mut array = ArrayData::with_capacity(map.len());
                 for (key, value) in map {
                     let handle = json_value_to_handle(vm, value, assoc, depth + 1, max_depth)?;
-                    array.insert(
-                        ArrayKey::Str(Rc::new(key.as_bytes().to_vec())),
-                        handle,
-                    );
+                    array.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
                 }
                 Ok(vm.arena.alloc(Val::Array(Rc::new(array))))
             } else {

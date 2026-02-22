@@ -186,9 +186,10 @@ fn deka_wasm_call_forbidden_outside_internals() {
     let code = "__deka_wasm_call('__deka_db', 'open', {})";
     let res = check_with_path(code, "/tmp/app/index.phpx");
     assert!(res.is_err());
-    assert!(res
-        .unwrap_err()
-        .contains("__deka_wasm_call is internal-only"));
+    assert!(
+        res.unwrap_err()
+            .contains("__deka_wasm_call is internal-only")
+    );
 }
 
 #[test]
@@ -196,9 +197,10 @@ fn deka_wasm_call_async_forbidden_outside_internals() {
     let code = "__deka_wasm_call_async('__deka_db', 'open', {})";
     let res = check_with_path(code, "/tmp/app/index.phpx");
     assert!(res.is_err());
-    assert!(res
-        .unwrap_err()
-        .contains("__deka_wasm_call_async is internal-only"));
+    assert!(
+        res.unwrap_err()
+            .contains("__deka_wasm_call_async is internal-only")
+    );
 }
 
 #[test]
@@ -456,7 +458,8 @@ fn option_some_argument_type_checks() {
 
 #[test]
 fn result_ok_err_argument_type_checks() {
-    let code = "<?php function f($r: Result<int, string>) {} f(Result::Ok(1)); f(Result::Err(\"no\"));";
+    let code =
+        "<?php function f($r: Result<int, string>) {} f(Result::Ok(1)); f(Result::Err(\"no\"));";
     assert!(check(code).is_ok());
 }
 
@@ -474,7 +477,8 @@ fn type_alias_object_shape_enforced() {
 
 #[test]
 fn type_alias_sugar_object_shape_ok() {
-    let code = "<?php type Person = { foo: int, bar?: string }; function f($p: Person) {} f({ foo: 1 });";
+    let code =
+        "<?php type Person = { foo: int, bar?: string }; function f($p: Person) {} f({ foo: 1 });";
     assert!(check(code).is_ok());
 }
 
@@ -518,7 +522,10 @@ fn interface_shape_accepts_object_literal() {
 fn interface_shape_accepts_destructured_param_binding() {
     let code = "interface NameProps { $name: string; } function FullName({ $name }: NameProps): string { return $name; } FullName({ name: 'Bob' });";
     if let Err(err) = check(code) {
-        panic!("expected destructured interface param to type-check, got:\n{}", err);
+        panic!(
+            "expected destructured interface param to type-check, got:\n{}",
+            err
+        );
     }
 }
 

@@ -29,7 +29,10 @@ pub enum Type {
     },
     Union(Vec<Type>),
     TypeParam(String),
-    Applied { base: String, args: Vec<Type> },
+    Applied {
+        base: String,
+        args: Vec<Type>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
