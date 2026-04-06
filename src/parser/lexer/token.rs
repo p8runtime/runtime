@@ -95,6 +95,8 @@ pub enum TokenKind {
     EndDeclare,
     Match,
     Fn,
+    Cql,   // cql <name> = <cypher> ;
+    Query, // query <name> = <cypher> ; (alias for cql)
     HaltCompiler, // __halt_compiler
     Attribute,    // #[
 

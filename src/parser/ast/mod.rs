@@ -552,9 +552,28 @@ pub enum Expr<'ast> {
     VariadicPlaceholder {
         span: Span,
     },
+    /// A prepared Cypher query literal.
+    /// `cql recs = MATCH (n:Node) RETURN n;`
+    /// Produces a query value with the raw Cypher text and extracted $param references.
+    Cql {
+        name: &'ast Token,
+        /// Raw Cypher source text (everything between `=` and `;`)
+        cypher: Span,
+        /// $variable references found in the Cypher body, resolved against PHPX scope
+        params: &'ast [CqlParam<'ast>],
+        span: Span,
+    },
     Error {
         span: Span,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct CqlParam<'ast> {
+    /// The parameter name (without $), e.g. "customer_id"
+    pub name: &'ast [u8],
+    /// Span of the $param reference within the Cypher body
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -655,6 +674,7 @@ impl<'ast> Expr<'ast> {
             Expr::NullsafePropertyFetch { span, .. } => *span,
             Expr::NullsafeMethodCall { span, .. } => *span,
             Expr::VariadicPlaceholder { span } => *span,
+            Expr::Cql { span, .. } => *span,
             Expr::Error { span } => *span,
             Expr::IndirectVariable { span, .. } => *span,
         }

@@ -1,7 +1,7 @@
 use super::{LexerMode, Parser, Token};
 use crate::parser::ast::{
-    AttributeGroup, Catch, ClassConst, ClassKind, ParseError, StaticVar, Stmt, StmtId, UseItem,
-    UseKind,
+    AttributeGroup, Catch, ClassConst, ClassKind, CqlParam, ParseError, StaticVar, Stmt, StmtId,
+    UseItem, UseKind,
 };
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
@@ -61,6 +61,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             && self.token_eq_ident(&self.current_token, b"type")
         {
             return self.parse_type_alias(top_level);
+        }
+
+        if self.is_phpx()
+            && matches!(
+                self.current_token.kind,
+                TokenKind::Cql | TokenKind::Query
+            )
+        {
+            return self.parse_cql_stmt();
         }
 
         match self.current_token.kind {
@@ -933,6 +942,83 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
         self.arena.alloc(Stmt::Unset {
             vars: self.arena.alloc_slice_copy(&vars),
+            span: Span::new(start, end),
+        })
+    }
+
+    /// Parse `cql <name> = <cypher body> ;` or `query <name> = <cypher body> ;`
+    ///
+    /// The Cypher body is captured as raw text (a Span) — everything between `=` and `;`.
+    /// $variable references within the body are extracted as CqlParam entries.
+    fn parse_cql_stmt(&mut self) -> StmtId<'ast> {
+        let start = self.current_token.span.start;
+        self.bump(); // consume `cql` or `query`
+
+        // Expect an identifier for the binding name
+        if self.current_token.kind != TokenKind::Identifier {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected a name after cql/query",
+                "cql requires a binding name, e.g. `cql results = MATCH (n) RETURN n;`",
+            ));
+            let span = Span::new(start, self.current_token.span.end);
+            return self.arena.alloc(Stmt::Error { span });
+        }
+        let name = self.arena.alloc(self.current_token);
+        self.bump(); // consume name
+
+        // Expect `=`
+        if self.current_token.kind != TokenKind::Eq {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected '=' after cql binding name",
+                "cql requires an assignment, e.g. `cql results = MATCH (n) RETURN n;`",
+            ));
+            let span = Span::new(start, self.current_token.span.end);
+            return self.arena.alloc(Stmt::Error { span });
+        }
+        self.bump(); // consume `=`
+
+        // Capture everything until `;` as the raw Cypher body
+        let cypher_start = self.current_token.span.start;
+        let mut params = Vec::new();
+
+        // Scan forward, collecting tokens until semicolon or EOF
+        while self.current_token.kind != TokenKind::SemiColon
+            && self.current_token.kind != TokenKind::Eof
+        {
+            // Collect $param references
+            if self.current_token.kind == TokenKind::Variable {
+                let var_span = self.current_token.span;
+                // Variable span includes the $, param name is everything after it
+                let param_name_span = Span::new(var_span.start + 1, var_span.end);
+                let param_name = self.lexer.slice(param_name_span);
+                let param_name = self.arena.alloc_slice_copy(param_name);
+                params.push(CqlParam {
+                    name: param_name,
+                    span: var_span,
+                });
+            }
+            self.bump();
+        }
+
+        let cypher_end = self.current_token.span.start; // up to the semicolon
+        let cypher = Span::new(cypher_start, cypher_end);
+
+        self.expect_semicolon();
+
+        let end = self.current_token.span.end;
+        let params = self.arena.alloc_slice_copy(&params);
+
+        let expr = self.arena.alloc(crate::parser::ast::Expr::Cql {
+            name,
+            cypher,
+            params,
+            span: Span::new(start, end),
+        });
+
+        self.arena.alloc(Stmt::Expression {
+            expr,
             span: Span::new(start, end),
         })
     }

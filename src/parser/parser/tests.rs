@@ -602,3 +602,121 @@ function App($props: object) {
         program.errors
     );
 }
+
+#[test]
+fn cql_parses_simple_query() {
+    let code = "cql results = MATCH (n:Person) RETURN n;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "cql parse errors: {:?}",
+        program.errors
+    );
+
+    let stmts: Vec<_> = program
+        .statements
+        .iter()
+        .filter(|s| !matches!(***s, Stmt::Nop { .. }))
+        .collect();
+    assert_eq!(stmts.len(), 1);
+
+    match **stmts[0] {
+        Stmt::Expression { expr, .. } => match expr {
+            Expr::Cql {
+                name,
+                cypher,
+                params,
+                ..
+            } => {
+                let name_text = &code.as_bytes()[name.span.start..name.span.end];
+                assert_eq!(name_text, b"results");
+
+                let cypher_text = &code.as_bytes()[cypher.start..cypher.end];
+                assert!(cypher_text.starts_with(b"MATCH"));
+
+                assert!(params.is_empty());
+            }
+            _ => panic!("expected Expr::Cql, got {:?}", expr),
+        },
+        _ => panic!("expected Stmt::Expression"),
+    }
+}
+
+#[test]
+fn cql_extracts_dollar_params() {
+    let code = "cql recs = MATCH (c:Customer) WHERE c.id = $customer_id AND c.age > $min_age RETURN c;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "cql parse errors: {:?}",
+        program.errors
+    );
+
+    let stmts: Vec<_> = program
+        .statements
+        .iter()
+        .filter(|s| !matches!(***s, Stmt::Nop { .. }))
+        .collect();
+
+    match **stmts[0] {
+        Stmt::Expression { expr, .. } => match expr {
+            Expr::Cql { params, .. } => {
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].name, b"customer_id");
+                assert_eq!(params[1].name, b"min_age");
+            }
+            _ => panic!("expected Expr::Cql"),
+        },
+        _ => panic!("expected Stmt::Expression"),
+    }
+}
+
+#[test]
+fn query_keyword_works_as_alias() {
+    let code = "query items = MATCH (p:Product) RETURN p.name;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "query parse errors: {:?}",
+        program.errors
+    );
+
+    let stmts: Vec<_> = program
+        .statements
+        .iter()
+        .filter(|s| !matches!(***s, Stmt::Nop { .. }))
+        .collect();
+
+    match **stmts[0] {
+        Stmt::Expression { expr, .. } => match expr {
+            Expr::Cql { name, .. } => {
+                let name_text = &code.as_bytes()[name.span.start..name.span.end];
+                assert_eq!(name_text, b"items");
+            }
+            _ => panic!("expected Expr::Cql"),
+        },
+        _ => panic!("expected Stmt::Expression"),
+    }
+}
+
+#[test]
+fn cql_error_on_missing_name() {
+    let code = "cql = MATCH (n) RETURN n;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        !program.errors.is_empty(),
+        "expected an error for missing cql binding name"
+    );
+}

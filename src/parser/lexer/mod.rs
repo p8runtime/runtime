@@ -114,6 +114,8 @@ fn keyword_lookup(text: &[u8]) -> TokenKind {
         b"void" => TokenKind::TypeVoid,
         b"object" => TokenKind::TypeObject,
         b"match" => TokenKind::Match,
+        b"cql" => TokenKind::Cql,
+        b"query" => TokenKind::Query,
         b"list" => TokenKind::List,
         b"include" => TokenKind::Include,
         b"include_once" => TokenKind::IncludeOnce,
