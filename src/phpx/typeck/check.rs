@@ -712,6 +712,11 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Stmt::Expression { expr, .. } => {
+                // Register cql bindings as variables in scope
+                if let Expr::Cql { name, .. } = *expr {
+                    let binding = token_text(self.source, name.span);
+                    env.insert(binding, Type::Unknown);
+                }
                 if self.strict_null {
                     if let Expr::Null { span } = *expr {
                     self.errors.push(TypeError {

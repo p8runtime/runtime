@@ -63,11 +63,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_type_alias(top_level);
         }
 
+        // `cql` is a true keyword; `query` is context-sensitive (identifier unless followed by name + =)
         if self.is_phpx()
-            && matches!(
-                self.current_token.kind,
-                TokenKind::Cql | TokenKind::Query
-            )
+            && (self.current_token.kind == TokenKind::Cql
+                || (self.current_token.kind == TokenKind::Identifier
+                    && self.token_eq_ident(&self.current_token, b"query")))
+            && self.next_token.kind == TokenKind::Identifier
         {
             return self.parse_cql_stmt();
         }

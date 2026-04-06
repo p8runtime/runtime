@@ -95,8 +95,9 @@ pub enum TokenKind {
     EndDeclare,
     Match,
     Fn,
-    Cql,   // cql <name> = <cypher> ;
-    Query, // query <name> = <cypher> ; (alias for cql)
+    Cql, // cql <name> = <cypher> ;
+    // `query` is context-sensitive — handled as Identifier by the lexer,
+    // recognized by the parser when followed by <name> = <cypher> ;
     HaltCompiler, // __halt_compiler
     Attribute,    // #[
 

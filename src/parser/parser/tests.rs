@@ -720,3 +720,61 @@ fn cql_error_on_missing_name() {
         "expected an error for missing cql binding name"
     );
 }
+
+#[test]
+fn query_as_function_call_not_keyword() {
+    // `query(...)` should parse as a function call, not a cql statement
+    let code = "query($handle, $cypher);";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "query() should parse as function call, got errors: {:?}",
+        program.errors
+    );
+
+    let stmts: Vec<_> = program
+        .statements
+        .iter()
+        .filter(|s| !matches!(***s, Stmt::Nop { .. }))
+        .collect();
+    assert_eq!(stmts.len(), 1);
+
+    // Should be a function call expression, not Expr::Cql
+    match **stmts[0] {
+        Stmt::Expression { expr, .. } => {
+            assert!(
+                !matches!(expr, Expr::Cql { .. }),
+                "query() should NOT be parsed as Expr::Cql"
+            );
+            assert!(
+                matches!(expr, Expr::Call { .. }),
+                "query() should be parsed as a function call"
+            );
+        }
+        _ => panic!("expected Stmt::Expression"),
+    }
+}
+
+#[test]
+fn cql_binding_is_accessible_as_variable() {
+    // After `cql results = ...`, $results should be a valid variable
+    let code = r#"
+function test() {
+    $id = 42;
+    cql results = MATCH (n) WHERE n.id = $id RETURN n;
+    $x = $results;
+}
+"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "parse errors: {:?}",
+        program.errors
+    );
+}
