@@ -878,6 +878,9 @@ impl<'a> CheckContext<'a> {
                         let resolved = self.resolve_type_with_params(ty, &type_param_set);
                         fn_env.insert(param_name.clone(), resolved);
                         fn_explicit.insert(param_name);
+                    } else {
+                        // Untyped params are still valid variables in scope
+                        fn_env.insert(param_name.clone(), Type::Unknown);
                     }
                     if let Some(default) = param.default {
                         if let Some(ty) = param.ty {
