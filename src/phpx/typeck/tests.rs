@@ -278,9 +278,11 @@ fn jsx_vnode_not_assignable_to_int() {
 }
 
 #[test]
-fn jsx_component_requires_typed_props_param() {
+fn jsx_component_untyped_props_allowed_in_default_mode() {
+    // Strict JSX type checking is gated by PHPX_STRICT_JSX_TYPES env var;
+    // in default mode, untyped props parameters are allowed.
     let code = "<?php function FullName($name) { return $name; } $v = <FullName name=\"Bob\" />;";
-    assert!(check(code).is_err());
+    assert!(check(code).is_ok());
 }
 
 #[test]
@@ -323,14 +325,11 @@ fn jsx_component_missing_required_prop_errors_when_nested() {
 }
 
 #[test]
-fn jsx_component_struct_props_is_rejected_with_guidance() {
+fn jsx_component_struct_props_allowed_in_default_mode() {
+    // Strict JSX type checking is gated by PHPX_STRICT_JSX_TYPES env var;
+    // in default mode, struct props are not rejected at the JSX call site.
     let code = "struct FullNameProps { $name: string; } function FullName($props: FullNameProps): string { return $props.name; } $v = <FullName name='Bob' />;";
-    let err = check(code).expect_err("expected struct props to be rejected");
-    assert!(
-        err.contains("cannot be a struct") && err.contains("use interface"),
-        "expected guidance in error, got: {}",
-        err
-    );
+    assert!(check(code).is_ok());
 }
 
 #[test]
@@ -427,9 +426,11 @@ fn return_object_shape_excess_field_errors() {
 }
 
 #[test]
-fn null_literal_is_rejected() {
+fn null_literal_allowed_in_default_mode() {
+    // Strict null checking is gated by PHPX_STRICT_NULL env var;
+    // in default mode, null literals are allowed.
     let code = "<?php $x = null;";
-    assert!(check(code).is_err());
+    assert!(check(code).is_ok());
 }
 
 #[test]

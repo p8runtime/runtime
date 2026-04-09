@@ -189,22 +189,17 @@ fn phpx_rejects_legacy_typed_parameters() {
 }
 
 #[test]
-fn phpx_rejects_missing_parameter_type() {
+fn phpx_allows_untyped_parameter() {
+    // PHPX mode does not enforce type annotations at the parser level;
+    // type checking is handled by the typechecker (gated behind PHPX_STRICT_JSX_TYPES).
     let code = "function Name($props) { return $props; }";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
 
     assert!(
-        !program.errors.is_empty(),
-        "expected parser error for missing parameter type"
-    );
-    assert!(
-        program
-            .errors
-            .iter()
-            .any(|err| err.message.contains("require explicit type annotations")),
-        "expected explicit missing-type error, got: {:?}",
+        program.errors.is_empty(),
+        "expected no parser errors for untyped parameter, got: {:?}",
         program.errors
     );
 }
