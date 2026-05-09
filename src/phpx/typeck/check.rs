@@ -4713,6 +4713,10 @@ fn object_key_name(key: ObjectKey, source: &[u8]) -> String {
     }
 }
 
+// Keep in sync with `decode_string_key` in
+// runtime/crates/phpx_js/src/lib.rs and runtime/crates/phpx_lsp/src/lib.rs.
+// All three strip the matching quote pair and decode the same escape set on
+// ObjectKey::String tokens.
 fn parse_string_key(raw: &str) -> String {
     if raw.len() >= 2 {
         let bytes = raw.as_bytes();
