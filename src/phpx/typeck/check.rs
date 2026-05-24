@@ -719,11 +719,12 @@ impl<'a> CheckContext<'a> {
                 }
                 if self.strict_null {
                     if let Expr::Null { span } = *expr {
-                    self.errors.push(TypeError {
-                        span: *span,
-                        message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
-                    });
-                }
+                        self.errors.push(TypeError {
+                            span: *span,
+                            message: "Null is not allowed in PHPX; use Option<T> instead"
+                                .to_string(),
+                        });
+                    }
                 }
                 let _ = self.check_expr(expr, env, explicit);
             }

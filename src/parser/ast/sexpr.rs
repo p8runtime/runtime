@@ -1286,7 +1286,12 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("))");
             }
             Expr::VariadicPlaceholder { .. } => self.write("(...)"),
-            Expr::Cql { name, cypher, params, .. } => {
+            Expr::Cql {
+                name,
+                cypher,
+                params,
+                ..
+            } => {
                 let name_text = String::from_utf8_lossy(name.text(self.source));
                 let cypher_text = String::from_utf8_lossy(cypher.as_str(self.source));
                 self.write(&format!("(cql {} \"{}\"", name_text, cypher_text.trim()));

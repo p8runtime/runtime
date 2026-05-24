@@ -642,7 +642,8 @@ fn cql_parses_simple_query() {
 
 #[test]
 fn cql_extracts_dollar_params() {
-    let code = "cql recs = MATCH (c:Customer) WHERE c.id = $customer_id AND c.age > $min_age RETURN c;";
+    let code =
+        "cql recs = MATCH (c:Customer) WHERE c.id = $customer_id AND c.age > $min_age RETURN c;";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
