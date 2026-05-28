@@ -75,6 +75,26 @@ struct TypeAliasInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeckProgramSummary {
+    pub structs: HashMap<String, StructInfo>,
+    pub enums: HashMap<String, EnumInfo>,
+    pub functions: HashMap<String, TypeckFunctionInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeckFunctionInfo {
+    pub params: Vec<TypeckParamInfo>,
+    pub return_type: Option<Type>,
+    pub variadic: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeckParamInfo {
+    pub ty: Option<Type>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone)]
 enum StructFieldResolution {
     Found(Type),
     Missing,
@@ -187,6 +207,47 @@ pub fn check_program_with_path_and_externals(
     } else {
         Err(ctx.errors)
     }
+}
+
+pub fn summarize_program_with_path(
+    program: &Program,
+    source: &[u8],
+    file_path: Option<&Path>,
+) -> Result<TypeckProgramSummary, Vec<TypeError>> {
+    let mut ctx = CheckContext::new(source, file_path);
+    ctx.check_program(program);
+
+    if !ctx.errors.is_empty() {
+        return Err(ctx.errors);
+    }
+
+    let functions = ctx
+        .functions
+        .into_iter()
+        .map(|(name, sig)| {
+            (
+                name,
+                TypeckFunctionInfo {
+                    params: sig
+                        .params
+                        .into_iter()
+                        .map(|param| TypeckParamInfo {
+                            ty: param.ty,
+                            required: param.required,
+                        })
+                        .collect(),
+                    return_type: sig.return_type,
+                    variadic: sig.variadic,
+                },
+            )
+        })
+        .collect();
+
+    Ok(TypeckProgramSummary {
+        structs: ctx.structs,
+        enums: ctx.enums,
+        functions,
+    })
 }
 
 pub fn format_type_errors(errors: &[TypeError], source: &[u8]) -> String {
