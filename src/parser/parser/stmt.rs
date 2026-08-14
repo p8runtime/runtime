@@ -854,10 +854,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 tok
             } else {
-                self.errors.push(crate::parser::ast::ParseError::new(
-                    self.current_token.span,
-                    "Expected identifier",
-                ));
+                self.errors.push(if self.is_ds() {
+                    ParseError::with_help(
+                        self.current_token.span,
+                        "DekaScript const declarations require bare identifiers",
+                        "Write `const name = value;`, not `const $name = value;`.",
+                    )
+                } else {
+                    ParseError::new(self.current_token.span, "Expected identifier")
+                });
                 self.arena.alloc(Token {
                     kind: TokenKind::Error,
                     span: self.current_token.span,

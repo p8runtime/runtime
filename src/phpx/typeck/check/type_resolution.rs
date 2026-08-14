@@ -310,6 +310,7 @@ impl<'a> CheckContext<'a> {
         }
         if name.eq_ignore_ascii_case("int")
             || name.eq_ignore_ascii_case("integer")
+            || name.eq_ignore_ascii_case("number")
             || name.eq_ignore_ascii_case("float")
             || name.eq_ignore_ascii_case("double")
             || name.eq_ignore_ascii_case("bool")

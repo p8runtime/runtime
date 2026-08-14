@@ -406,6 +406,14 @@ impl<'src> Lexer<'src> {
             });
         }
 
+        if c == b'.' {
+            self.advance();
+            return Some(Token {
+                kind: TokenKind::Dot,
+                span: Span::new(start, self.cursor),
+            });
+        }
+
         if c == b'}' {
             self.advance();
             self.state_stack.pop();

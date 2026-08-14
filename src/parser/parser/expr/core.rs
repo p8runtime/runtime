@@ -28,7 +28,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 let left_span = left.span();
                 let tight = left_span.end == dot_span.start && dot_span.end == next.span.start;
 
-                if tight && (next.kind == TokenKind::Identifier || next.kind.is_semi_reserved()) {
+                if tight
+                    && (next.kind == TokenKind::Identifier
+                        || next.kind == TokenKind::StringVarname
+                        || next.kind.is_semi_reserved())
+                {
                     let l_bp = 210;
                     if l_bp < min_bp {
                         break;
