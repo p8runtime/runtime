@@ -28,7 +28,7 @@ libc = "0.2"
 num-format = "0.4"
 rphonetic = "3.0.4"
 serde_json = "1.0"
-deka-validation = { path = "../deka-validation" }
+deka-validation = { path = "../deka-validation", default-features = false }
 
 # Builtin crypto/hash dependencies used by string/url helpers
 md-5 = "0.10"
