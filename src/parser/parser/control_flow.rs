@@ -4,6 +4,73 @@ use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
 
 impl<'src, 'ast> Parser<'src, 'ast> {
+    /// Parse TypeScript-familiar `for (const item of items) { ... }`.
+    /// The generic AST represents it as a foreach so downstream consumers do
+    /// not need a PHP-compatibility branch.
+    pub(super) fn parse_ds_for_of(&mut self) -> StmtId<'ast> {
+        let start = self.current_token.span.start;
+        self.bump(); // for
+        if self.current_token.kind == TokenKind::OpenParen {
+            self.bump();
+        }
+        if self.current_token.kind == TokenKind::Const
+            || (self.current_token.kind == TokenKind::Identifier
+                && self.token_eq_ident(&self.current_token, b"let"))
+        {
+            self.bump();
+        } else {
+            self.errors.push(crate::parser::ast::ParseError::with_help(
+                self.current_token.span,
+                "DekaScript for-of requires `const` or `let`",
+                "Write `for (const item of items) { ... }`.",
+            ));
+        }
+        let binding = if self.current_token.kind == TokenKind::Identifier {
+            let token = self.current_token;
+            self.bump();
+            self.arena.alloc(Expr::Variable {
+                name: token.span,
+                span: token.span,
+            })
+        } else {
+            self.errors.push(crate::parser::ast::ParseError::new(
+                self.current_token.span,
+                "Expected DekaScript for-of binding",
+            ));
+            self.arena.alloc(Expr::Error {
+                span: self.current_token.span,
+            })
+        };
+        if !(self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"of"))
+        {
+            self.errors.push(crate::parser::ast::ParseError::with_help(
+                self.current_token.span,
+                "Expected `of` in DekaScript for-of loop",
+                "Write `for (const item of items) { ... }`.",
+            ));
+        } else {
+            self.bump();
+        }
+        let expr = self.parse_expr(0);
+        if self.current_token.kind == TokenKind::CloseParen {
+            self.bump();
+        }
+        let body_stmt = self.parse_stmt();
+        let body = match body_stmt {
+            Stmt::Block { statements, .. } => *statements,
+            _ => self.arena.alloc_slice_copy(&[body_stmt]),
+        };
+        let end = self.current_token.span.end;
+        self.arena.alloc(Stmt::Foreach {
+            expr,
+            key_var: None,
+            value_var: binding,
+            body,
+            span: Span::new(start, end),
+        })
+    }
+
     pub(super) fn parse_if(&mut self) -> StmtId<'ast> {
         let start = self.current_token.span.start;
         self.bump(); // Eat if

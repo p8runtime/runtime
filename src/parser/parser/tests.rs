@@ -15,7 +15,10 @@ fn detect_mode_treats_phpx_cache_php_as_internal() {
 
 #[test]
 fn detect_mode_treats_ds_extension_as_dekascript() {
-    assert_eq!(detect_parser_mode(b"const answer = 42;", Some(Path::new("lesson.ds"))), ParserMode::Ds);
+    assert_eq!(
+        detect_parser_mode(b"const answer = 42;", Some(Path::new("lesson.ds"))),
+        ParserMode::Ds
+    );
 }
 
 #[test]
@@ -23,15 +26,44 @@ fn ds_parses_bare_typed_parameters_and_const() {
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(b"const answer = 42; function add(left: number, right: number): number { return left + right; }"), &arena, ParserMode::Ds);
     let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
 }
 
 #[test]
 fn ds_rejects_php_sigil_parameters_with_actionable_diagnostic() {
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(b"function add($value: number): number { return $value; }"), &arena, ParserMode::Ds);
+    let mut parser = Parser::new_with_mode(
+        Lexer::new(b"function add($value: number): number { return $value; }"),
+        &arena,
+        ParserMode::Ds,
+    );
     let program = parser.parse_program();
-    assert!(program.errors.iter().any(|error| error.message == "DekaScript parameters use bare identifiers"));
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|error| error.message == "DekaScript parameters use bare identifiers")
+    );
+}
+
+#[test]
+fn ds_parses_let_and_for_of_without_php_foreach() {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(
+        Lexer::new(b"let total = 0; for (const item of items) { total += item; }"),
+        &arena,
+        ParserMode::Ds,
+    );
+    let program = parser.parse_program();
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
 }
 
 #[test]
