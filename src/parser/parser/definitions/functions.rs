@@ -50,6 +50,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             token
         };
 
+        if self.is_ds() && self.lexer.slice(name.span) == b"array" {
+            self.ds_array_callable_declared = true;
+        }
+
         let type_params = if self.is_phpx() && self.current_token.kind == TokenKind::Lt {
             self.parse_type_params()
         } else {

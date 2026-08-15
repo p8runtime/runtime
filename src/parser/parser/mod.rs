@@ -39,6 +39,8 @@ pub struct Parser<'src, 'ast> {
     pub(super) param_destructure_prologue: std::vec::Vec<StmtId<'ast>>,
     pub(super) fn_depth: usize,
     pub(super) async_fn_depth: usize,
+    /// A declared DekaScript `array` function may be called despite PHP's keyword token.
+    pub(super) ds_array_callable_declared: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +119,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             param_destructure_prologue: std::vec::Vec::new(),
             fn_depth: 0,
             async_fn_depth: 0,
+            ds_array_callable_declared: false,
         };
         parser.bump();
         parser.bump();
