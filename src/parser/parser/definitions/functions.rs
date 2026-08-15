@@ -153,6 +153,25 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             false
         };
 
+        if self.is_ds() {
+            let param_name = if self.current_token.kind == TokenKind::Identifier {
+                let token = self.arena.alloc(self.current_token); self.bump(); token
+            } else {
+                self.errors.push(ParseError::with_help(self.current_token.span, "DekaScript parameters use bare identifiers", "Write `name: Type`, not `$name: Type`."));
+                let token = self.arena.alloc(self.current_token); self.bump(); token
+            };
+            if self.current_token.kind != TokenKind::Colon {
+                self.errors.push(ParseError::with_help(self.current_token.span, "DekaScript parameters require a type annotation", "Write `name: Type` (for example, `count: number`)."));
+            } else {
+                self.bump();
+                ty = self.parse_type().map(|t| self.arena.alloc(t) as &'ast Type<'ast>);
+                if ty.is_none() { self.errors.push(ParseError::new(self.current_token.span, "Expected parameter type after ':'")); }
+            }
+            let default = if self.current_token.kind == TokenKind::Eq { self.bump(); Some(self.parse_expr(0)) } else { None };
+            let end = default.map_or(param_name.span.end, |expr| expr.span().end);
+            return Param { attributes, modifiers: self.arena.alloc_slice_copy(&modifiers), name: param_name, ty, default, by_ref, variadic, hooks: None, span: Span::new(start, end) };
+        }
+
         // PHPX mode prefers: $name: Type
         // Recovery path: if legacy `Type $name` is used, accept for now but emit a syntax error.
         if self.is_phpx()

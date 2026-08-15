@@ -46,6 +46,8 @@ pub enum ParserMode {
     Php,
     Phpx,
     PhpxInternal,
+    /// DekaScript uses the Deka AST and semantic rules with a TypeScript-familiar surface syntax.
+    Ds,
 }
 
 pub fn detect_parser_mode(source: &[u8], file_path: Option<&Path>) -> ParserMode {
@@ -64,6 +66,9 @@ pub fn detect_parser_mode(source: &[u8], file_path: Option<&Path>) -> ParserMode
     if let Some(path) = file_path {
         if path.extension().and_then(|ext| ext.to_str()) == Some("phpx") {
             return ParserMode::Phpx;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("ds") {
+            return ParserMode::Ds;
         }
         // Cached PHPX modules are emitted as .php files under php_modules/.cache/phpx.
         // They contain generated namespace/wrapper code and must run in internal PHPX mode.
@@ -86,7 +91,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     pub fn new_with_mode(mut lexer: Lexer<'src>, arena: &'ast Bump, mode: ParserMode) -> Self {
-        if matches!(mode, ParserMode::Phpx | ParserMode::PhpxInternal) {
+        if matches!(mode, ParserMode::Phpx | ParserMode::PhpxInternal | ParserMode::Ds) {
             lexer.start_in_scripting();
         }
         let mut parser = Self {
@@ -119,8 +124,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     pub(super) fn is_phpx(&self) -> bool {
-        matches!(self.mode, ParserMode::Phpx | ParserMode::PhpxInternal)
+        matches!(self.mode, ParserMode::Phpx | ParserMode::PhpxInternal | ParserMode::Ds)
     }
+
+    pub(super) fn is_ds(&self) -> bool { self.mode == ParserMode::Ds }
 
     pub(super) fn allow_phpx_namespace(&self) -> bool {
         self.mode == ParserMode::PhpxInternal

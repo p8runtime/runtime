@@ -219,6 +219,7 @@ pub(in crate::phpx::typeck::check) fn is_builtin_type_name(name: &str) -> bool {
         name.to_ascii_lowercase().as_str(),
         "int"
             | "integer"
+            | "number"
             | "float"
             | "double"
             | "bool"

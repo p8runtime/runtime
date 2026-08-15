@@ -14,6 +14,27 @@ fn detect_mode_treats_phpx_cache_php_as_internal() {
 }
 
 #[test]
+fn detect_mode_treats_ds_extension_as_dekascript() {
+    assert_eq!(detect_parser_mode(b"const answer = 42;", Some(Path::new("lesson.ds"))), ParserMode::Ds);
+}
+
+#[test]
+fn ds_parses_bare_typed_parameters_and_const() {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(b"const answer = 42; function add(left: number, right: number): number { return left + right; }"), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+}
+
+#[test]
+fn ds_rejects_php_sigil_parameters_with_actionable_diagnostic() {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(b"function add($value: number): number { return $value; }"), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.iter().any(|error| error.message == "DekaScript parameters use bare identifiers"));
+}
+
+#[test]
 fn phpx_allows_automatic_semicolons() {
     let code = "$a = 1\n$b = 2\necho $a\n";
     let arena = Bump::new();

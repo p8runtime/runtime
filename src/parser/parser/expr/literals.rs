@@ -681,7 +681,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let span = Span::new(start, end);
         let parts = parts.into_bump_slice();
 
-        if end_token == TokenKind::Backtick {
+        if end_token == TokenKind::Backtick && !self.is_ds() {
             self.arena.alloc(Expr::ShellExec { parts, span })
         } else {
             self.arena.alloc(Expr::InterpolatedString { parts, span })

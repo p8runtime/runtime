@@ -191,7 +191,7 @@ impl<'a> CheckContext<'a> {
     ) -> Type {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
-            "int" | "integer" => Type::Primitive(PrimitiveType::Int),
+            "int" | "integer" | "number" => Type::Primitive(PrimitiveType::Int),
             "float" | "double" => Type::Primitive(PrimitiveType::Float),
             "bool" | "boolean" => Type::Primitive(PrimitiveType::Bool),
             "string" => Type::Primitive(PrimitiveType::String),
