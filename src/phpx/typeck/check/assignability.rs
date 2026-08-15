@@ -204,6 +204,13 @@ impl<'a> CheckContext<'a> {
 }
 
 fn is_assignable_base(source: &Type, target: &Type) -> bool {
+    if matches!(target, Type::Unknown | Type::Mixed)
+        || matches!(source, Type::Unknown | Type::Mixed)
+        || matches!(target, Type::TypeParam(_))
+        || matches!(source, Type::TypeParam(_))
+    {
+        return true;
+    }
     match target {
         Type::Union(options) => {
             return options.iter().any(|opt| is_assignable_base(source, opt));
