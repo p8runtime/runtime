@@ -13,7 +13,7 @@ impl<'a> CheckContext<'a> {
         for ann in entry.annotations.iter() {
             let ann_name = token_text(self.source, ann.name.span).to_string();
             if !seen.insert(ann_name.clone()) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: ann.span,
                     message: format!(
                         "Duplicate annotation '@{}' on struct field '{}::{}'",
@@ -26,7 +26,7 @@ impl<'a> CheckContext<'a> {
             match ann_name.as_str() {
                 "id" | "unique" | "autoIncrement" => {
                     if !ann.args.is_empty() {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: ann.span,
                             message: format!(
                                 "Annotation '@{}' does not accept arguments",
@@ -37,13 +37,13 @@ impl<'a> CheckContext<'a> {
                 }
                 "index" => {
                     if ann.args.len() > 1 {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: ann.span,
                             message: "Annotation '@index' accepts at most one argument".to_string(),
                         });
                     }
                     if ann.args.len() == 1 && !matches!(ann.args[0], Expr::String { .. }) {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: ann.args[0].span(),
                             message: "Annotation '@index' argument must be a string literal"
                                 .to_string(),
@@ -52,13 +52,13 @@ impl<'a> CheckContext<'a> {
                 }
                 "map" => {
                     if ann.args.len() != 1 {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: ann.span,
                             message: "Annotation '@map' requires exactly one string argument"
                                 .to_string(),
                         });
                     } else if !matches!(ann.args[0], Expr::String { .. }) {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: ann.args[0].span(),
                             message: "Annotation '@map' argument must be a string literal"
                                 .to_string(),
@@ -67,7 +67,7 @@ impl<'a> CheckContext<'a> {
                 }
                 "default" => {
                     if ann.args.len() != 1 {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: ann.span,
                             message: "Annotation '@default' requires exactly one argument"
                                 .to_string(),
@@ -76,7 +76,7 @@ impl<'a> CheckContext<'a> {
                 }
                 "relation" => {
                     if ann.args.len() != 3 {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: ann.span,
                             message: "Annotation '@relation' requires exactly three string arguments: kind, model, foreignKey".to_string(),
                         });
@@ -102,19 +102,19 @@ impl<'a> CheckContext<'a> {
                         };
 
                         if kind.is_none() {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: ann.args[0].span(),
                                 message: "Annotation '@relation' first argument (kind) must be a string literal".to_string(),
                             });
                         }
                         if model.is_none() {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: ann.args[1].span(),
                                 message: "Annotation '@relation' second argument (model) must be a string literal".to_string(),
                             });
                         }
                         if foreign_key.is_none() {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: ann.args[2].span(),
                                 message: "Annotation '@relation' third argument (foreignKey) must be a string literal".to_string(),
                             });
@@ -122,7 +122,7 @@ impl<'a> CheckContext<'a> {
 
                         if let Some(kind) = kind {
                             if kind != "hasMany" && kind != "belongsTo" && kind != "hasOne" {
-                                self.errors.push(TypeError {
+                                self.errors.push(TypeError { severity: Severity::Error,
                                     span: ann.args[0].span(),
                                     message: "Annotation '@relation' kind must be one of: hasMany, belongsTo, hasOne".to_string(),
                                 });
@@ -131,7 +131,7 @@ impl<'a> CheckContext<'a> {
                             if let Some(expected_model) = inferred_model {
                                 if let Some(ref model) = model {
                                     if *model != expected_model {
-                                        self.errors.push(TypeError {
+                                        self.errors.push(TypeError { severity: Severity::Error,
                                             span: ann.args[1].span(),
                                             message: format!(
                                                 "Annotation '@relation' model '{}' does not match field type model '{}'",
@@ -150,7 +150,7 @@ impl<'a> CheckContext<'a> {
                                     _ => false,
                                 };
                                 if !is_array {
-                                    self.errors.push(TypeError {
+                                    self.errors.push(TypeError { severity: Severity::Error,
                                         span: ann.span,
                                         message: format!(
                                             "Annotation '@relation(\"hasMany\", ...)' requires array field type on '{}::{}'",
@@ -162,7 +162,7 @@ impl<'a> CheckContext<'a> {
                             if kind == "belongsTo" || kind == "hasOne" {
                                 if let Some(ref fk) = foreign_key {
                                     if fk == field_name {
-                                        self.errors.push(TypeError {
+                                        self.errors.push(TypeError { severity: Severity::Error,
                                             span: ann.args[2].span(),
                                             message: format!(
                                                 "Annotation '@relation' foreignKey '{}' cannot reference relation field '{}::{}'",
@@ -170,7 +170,7 @@ impl<'a> CheckContext<'a> {
                                             ),
                                         });
                                     } else if !declared_fields.contains_key(fk) {
-                                        self.errors.push(TypeError {
+                                        self.errors.push(TypeError { severity: Severity::Error,
                                             span: ann.args[2].span(),
                                             message: format!(
                                                 "Annotation '@relation' foreignKey '{}' was not found on struct '{}'",
@@ -184,7 +184,7 @@ impl<'a> CheckContext<'a> {
                     }
                 }
                 _ => {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: ann.span,
                         message: format!(
                             "Unknown struct field annotation '@{}' on '{}::{}'",
@@ -197,7 +197,7 @@ impl<'a> CheckContext<'a> {
             if ann_name == "autoIncrement" {
                 let is_int = matches!(field_type, Some(Type::Primitive(PrimitiveType::Int)));
                 if !is_int {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: ann.span,
                         message: format!(
                             "Annotation '@autoIncrement' requires int field type on '{}::{}'",
@@ -227,7 +227,7 @@ impl<'a> CheckContext<'a> {
                     if let Some(expected) = ty.map(|ty| self.resolve_type(ty)) {
                         if let Some(default) = default {
                             if !self.is_constant_expr(default) {
-                                self.errors.push(TypeError {
+                                self.errors.push(TypeError { severity: Severity::Error,
                                     span: member_span(member),
                                     message: "Struct field defaults must be constant expressions"
                                         .to_string(),
@@ -236,7 +236,7 @@ impl<'a> CheckContext<'a> {
                             let actual = self.infer_expr_with_env(*default, &HashMap::new());
                             if !self.is_assignable(&actual, &expected) {
                                 let prop_name = token_text(self.source, name.span);
-                                self.errors.push(TypeError {
+                                self.errors.push(TypeError { severity: Severity::Error,
                                     span: member_span(member),
                                     message: format!(
                                         "Default value for {} has type {}, expected {}",
@@ -264,7 +264,7 @@ impl<'a> CheckContext<'a> {
             return;
         };
         if !self.is_constant_expr(default) {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: entry.span,
                 message: "Struct field defaults must be constant expressions".to_string(),
             });
@@ -272,7 +272,7 @@ impl<'a> CheckContext<'a> {
         let actual = self.infer_expr_with_env(default, &HashMap::new());
         if !self.is_assignable(&actual, expected) {
             let name = token_text(self.source, entry.name.span);
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: entry.span,
                 message: format!(
                     "Default value for {} has type {}, expected {}",

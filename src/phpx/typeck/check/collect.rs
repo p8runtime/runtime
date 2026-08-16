@@ -112,7 +112,7 @@ impl<'a> CheckContext<'a> {
                                     &declared_fields,
                                 );
                                 if embed_names.contains(&field_name) {
-                                    self.errors.push(TypeError {
+                                    self.errors.push(TypeError { severity: Severity::Error,
                                         span: entry.name.span,
                                         message: format!(
                                             "Struct '{}' already embeds '{}'",
@@ -135,7 +135,7 @@ impl<'a> CheckContext<'a> {
                             let field_name = token_text(self.source, name.span);
                             let field_name = field_name.trim_start_matches('$').to_string();
                             if embed_names.contains(&field_name) {
-                                self.errors.push(TypeError {
+                                self.errors.push(TypeError { severity: Severity::Error,
                                     span: name.span,
                                     message: format!(
                                         "Struct '{}' already embeds '{}'",
@@ -154,14 +154,14 @@ impl<'a> CheckContext<'a> {
                             for embed in types.iter() {
                                 let embed_name = token_text(self.source, embed.span);
                                 if embed_name == class_name {
-                                    self.errors.push(TypeError {
+                                    self.errors.push(TypeError { severity: Severity::Error,
                                         span: embed.span,
                                         message: "Struct cannot embed itself".to_string(),
                                     });
                                     continue;
                                 }
                                 if !self.structs.contains_key(&embed_name) {
-                                    self.errors.push(TypeError {
+                                    self.errors.push(TypeError { severity: Severity::Error,
                                         span: embed.span,
                                         message: format!(
                                             "Unknown embedded struct '{}'",
@@ -173,7 +173,7 @@ impl<'a> CheckContext<'a> {
                                 if fields.contains_key(&embed_name)
                                     || embed_names.contains(&embed_name)
                                 {
-                                    self.errors.push(TypeError {
+                                    self.errors.push(TypeError { severity: Severity::Error,
                                         span: embed.span,
                                         message: format!(
                                             "Duplicate embedded struct '{}'",
@@ -346,7 +346,7 @@ impl<'a> CheckContext<'a> {
                 };
                 let case_name = token_text(self.source, case_name.span);
                 if cases.contains_key(&case_name) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: *span,
                         message: format!("Duplicate enum case '{}::{}'", enum_name, case_name),
                     });
@@ -357,21 +357,21 @@ impl<'a> CheckContext<'a> {
                     let mut seen_params = HashSet::new();
                     for param in payload.iter() {
                         if param.by_ref {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: param.span,
                                 message: "Enum case payload parameters cannot be by-reference"
                                     .to_string(),
                             });
                         }
                         if param.variadic {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: param.span,
                                 message: "Enum case payload parameters cannot be variadic"
                                     .to_string(),
                             });
                         }
                         if param.default.is_some() {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: param.span,
                                 message: "Enum case payload parameters cannot have default values"
                                     .to_string(),
@@ -380,7 +380,7 @@ impl<'a> CheckContext<'a> {
                         let name = token_text(self.source, param.name.span);
                         let name = name.trim_start_matches('$').to_string();
                         if !seen_params.insert(name.clone()) {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: param.span,
                                 message: format!(
                                     "Duplicate payload field '{}' on enum case {}::{}",
@@ -441,6 +441,7 @@ impl<'a> CheckContext<'a> {
             } = stmt
             {
                 let fn_name = token_text(self.source, name.span);
+                self.check_poc_severity_warning(&fn_name, name.span);
                 let (type_param_sigs, type_param_set) = self.collect_type_param_sigs(type_params);
                 let mut param_sigs = Vec::new();
                 let mut variadic = false;
@@ -482,28 +483,28 @@ impl<'a> CheckContext<'a> {
             };
             let alias_name = token_text(self.source, name.span);
             if is_builtin_type_name(&alias_name) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: *span,
                     message: format!("Type alias '{}' shadows a builtin type", alias_name),
                 });
                 continue;
             }
             if self.structs.contains_key(&alias_name) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: *span,
                     message: format!("Type alias '{}' conflicts with struct name", alias_name),
                 });
                 continue;
             }
             if self.enums.contains_key(&alias_name) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: *span,
                     message: format!("Type alias '{}' conflicts with enum name", alias_name),
                 });
                 continue;
             }
             if self.type_aliases.contains_key(&alias_name) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: *span,
                     message: format!("Duplicate type alias '{}'", alias_name),
                 });
@@ -534,7 +535,7 @@ impl<'a> CheckContext<'a> {
         for param in params.iter() {
             let name = token_text(self.source, param.name.span);
             if !seen.insert(name.clone()) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: param.span,
                     message: format!("Duplicate type parameter '{}'", name),
                 });
@@ -575,7 +576,7 @@ impl<'a> CheckContext<'a> {
             || name == "__deka_bridge")
             && !self.allow_internal_bridge_call()
         {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: Span::new(span.start, span.end),
                 message: format!(
                     "{} is internal-only; import public modules instead (for example: db, postgres, mysql, sqlite, tcp, tls, encoding/json)",
@@ -591,7 +592,7 @@ impl<'a> CheckContext<'a> {
 
         let required = sig.params.iter().filter(|p| p.required).count();
         if args.len() < required {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: Span::new(span.start, span.end),
                 message: format!(
                     "Missing arguments for {}(): expected at least {}, got {}",
@@ -628,7 +629,7 @@ impl<'a> CheckContext<'a> {
 
             for param in sig.type_params.iter() {
                 if !inferred.contains_key(&param.name) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: Span::new(span.start, span.end),
                         message: format!(
                             "Unable to infer type parameter '{}' for {}()",
@@ -644,7 +645,7 @@ impl<'a> CheckContext<'a> {
                 };
                 if let Some(constraint) = &param.constraint {
                     if !self.is_assignable(inferred_ty, constraint) {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: Span::new(span.start, span.end),
                             message: format!(
                                 "Type argument for '{}' does not satisfy constraint {}",
@@ -673,7 +674,7 @@ impl<'a> CheckContext<'a> {
                     && self.strict_null
                     && !self.type_allows_null(&expected)
                 {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: args[idx].span,
                         message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
                     });
@@ -682,7 +683,7 @@ impl<'a> CheckContext<'a> {
                     self.check_object_literal_against_type(items, &expected, span, env);
                 }
                 if !self.is_assignable(&actuals[idx], &expected) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: args[idx].span,
                         message: format!(
                             "Argument {} type mismatch: expected {}, got {}",
@@ -695,7 +696,7 @@ impl<'a> CheckContext<'a> {
             } else if self.strict_null
                 && matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
             {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: args[idx].span,
                     message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
                 });

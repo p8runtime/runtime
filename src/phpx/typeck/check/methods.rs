@@ -55,7 +55,7 @@ impl<'a> CheckContext<'a> {
 
         let Some(sig) = sig else {
             if let Some(owner) = owner_label {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span,
                     message: format!("Unknown method '{}' on {}", method_name, owner),
                 });
@@ -65,7 +65,7 @@ impl<'a> CheckContext<'a> {
 
         let required = sig.params.iter().filter(|p| p.required).count();
         if args.len() < required {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "Missing arguments for {}(): expected at least {}, got {}",
@@ -97,7 +97,7 @@ impl<'a> CheckContext<'a> {
                     && self.strict_null
                     && !self.type_allows_null(param_ty)
                 {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: args[idx].span,
                         message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
                     });
@@ -106,7 +106,7 @@ impl<'a> CheckContext<'a> {
                     self.check_object_literal_against_type(items, param_ty, span, env);
                 }
                 if !self.is_assignable(&actuals[idx], param_ty) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: args[idx].span,
                         message: format!(
                             "Argument {} type mismatch: expected {}, got {}",
@@ -119,7 +119,7 @@ impl<'a> CheckContext<'a> {
             } else if self.strict_null
                 && matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
             {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: args[idx].span,
                     message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
                 });

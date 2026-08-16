@@ -25,7 +25,7 @@ impl<'a> CheckContext<'a> {
         match ty {
             AstType::Simple(token) => {
                 if token.kind == TokenKind::TypeNull {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: token.span,
                         message: "Null types are not allowed in PHPX; use Option<T> instead"
                             .to_string(),
@@ -36,7 +36,7 @@ impl<'a> CheckContext<'a> {
             AstType::Name(name) => self.resolve_name_type(name, visiting, params),
             AstType::Union(types) => {
                 if let Some(span) = self.find_null_type_span(types) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: "Nullable unions are not allowed in PHPX; use Option<T> instead"
                             .to_string(),
@@ -62,7 +62,7 @@ impl<'a> CheckContext<'a> {
                 }
             }
             AstType::Nullable(inner) => {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: self.type_span(inner),
                     message: "Nullable types are not allowed in PHPX; use Option<T> instead"
                         .to_string(),
@@ -91,25 +91,25 @@ impl<'a> CheckContext<'a> {
                     None => return Type::Unknown,
                 };
                 if base_name.eq_ignore_ascii_case("Option") && args.len() != 1 {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: self.type_span(base),
                         message: "Option<T> expects exactly one type argument".to_string(),
                     });
                 }
                 if base_name.eq_ignore_ascii_case("Result") && args.len() != 2 {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: self.type_span(base),
                         message: "Result<T, E> expects exactly two type arguments".to_string(),
                     });
                 }
                 if base_name.eq_ignore_ascii_case("array") && args.len() != 1 {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: self.type_span(base),
                         message: "array<T> expects exactly one type argument".to_string(),
                     });
                 }
                 if base_name.eq_ignore_ascii_case("Promise") && args.len() != 1 {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: self.type_span(base),
                         message: "Promise<T> expects exactly one type argument".to_string(),
                     });
@@ -128,7 +128,7 @@ impl<'a> CheckContext<'a> {
                         && !base_name.eq_ignore_ascii_case("array")
                         && !base_name.eq_ignore_ascii_case("Promise")
                     {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: self.type_span(base),
                             message: format!(
                                 "Unknown generic type '{}' in PHPX; classes are not allowed",
@@ -205,13 +205,13 @@ impl<'a> CheckContext<'a> {
                 } else if let Some(alias) = self.resolve_alias(&name, visiting) {
                     alias
                 } else if name.eq_ignore_ascii_case("Option") {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: Span::new(0, 0),
                         message: "Option<T> requires a type argument".to_string(),
                     });
                     Type::Unknown
                 } else if name.eq_ignore_ascii_case("Result") {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: Span::new(0, 0),
                         message: "Result<T, E> requires type arguments".to_string(),
                     });
@@ -244,21 +244,21 @@ impl<'a> CheckContext<'a> {
             out.push_str(text.trim_matches('\\'));
         }
         if out.eq_ignore_ascii_case("Option") {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: name.span,
                 message: "Option<T> requires a type argument".to_string(),
             });
             return Type::Unknown;
         }
         if out.eq_ignore_ascii_case("Result") {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: name.span,
                 message: "Result<T, E> requires type arguments".to_string(),
             });
             return Type::Unknown;
         }
         if !self.is_known_named_type(&out, params) {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: name.span,
                 message: format!("Unknown type '{}' in PHPX; classes are not allowed", out),
             });
@@ -280,14 +280,14 @@ impl<'a> CheckContext<'a> {
             None => return None,
         };
         if !info.params.is_empty() {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: info.span,
                 message: format!("Type alias '{}' requires type arguments", name),
             });
             return Some(Type::Unknown);
         }
         if !visiting.insert(name.to_string()) {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: info.span,
                 message: format!("Recursive type alias '{}'", name),
             });
@@ -339,7 +339,7 @@ impl<'a> CheckContext<'a> {
     ) -> Option<Type> {
         let info = self.type_aliases.get(name)?;
         if info.params.len() != args.len() {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: info.span,
                 message: format!(
                     "Type alias '{}' expects {} type arguments, got {}",
@@ -351,7 +351,7 @@ impl<'a> CheckContext<'a> {
             return Some(Type::Unknown);
         }
         if !visiting.insert(name.to_string()) {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: info.span,
                 message: format!("Recursive type alias '{}'", name),
             });
@@ -362,7 +362,7 @@ impl<'a> CheckContext<'a> {
             let arg = args[idx].clone();
             if let Some(constraint) = &param.constraint {
                 if !self.is_assignable(&arg, constraint) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: info.span,
                         message: format!(
                             "Type argument {} for '{}' does not satisfy constraint {}",
@@ -430,7 +430,7 @@ impl<'a> CheckContext<'a> {
             };
 
             if let Err(message) = resolve_wasm_stub(spec, file_path, &modules_root) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: Span::new(matched.start(), matched.end()),
                     message,
                 });

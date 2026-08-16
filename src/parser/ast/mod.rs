@@ -10,12 +10,43 @@ pub mod visitor;
 pub type ExprId<'ast> = &'ast Expr<'ast>;
 pub type StmtId<'ast> = &'ast Stmt<'ast>;
 
+/// Severity of a compiler diagnostic.
+///
+/// Kept intentionally to two variants (no Hint/Info tier): nothing in the
+/// compiler needs a finer grain today, and the project's stated preference
+/// is to add complexity only when something requires it (see deka#59).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Severity {
+    /// Hard failure. A program with at least one `Error` diagnostic did not
+    /// pass the check.
+    Error,
+    /// Worth surfacing, but the program still checks out. A program with
+    /// only `Warning` diagnostics is a successful check.
+    Warning,
+}
+
+impl Severity {
+    pub fn is_error(&self) -> bool {
+        matches!(self, Severity::Error)
+    }
+
+    /// Lowercase label used by the `deka-validation` renderer to pick
+    /// icon/color ("error" -> red, "warning" -> yellow).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Serialize)]
 pub struct ParseError {
     pub span: Span,
     pub message: &'static str,
     pub error_kind: &'static str,
     pub help_text: &'static str,
+    pub severity: Severity,
 }
 
 impl ParseError {
@@ -25,6 +56,7 @@ impl ParseError {
             message,
             error_kind: "Syntax Error",
             help_text: "Check syntax near the highlighted code.",
+            severity: Severity::Error,
         }
     }
 
@@ -34,6 +66,7 @@ impl ParseError {
             message,
             error_kind: "Syntax Error",
             help_text,
+            severity: Severity::Error,
         }
     }
 
@@ -48,6 +81,26 @@ impl ParseError {
             message,
             error_kind,
             help_text,
+            severity: Severity::Error,
+        }
+    }
+
+    /// Construct a warning-severity diagnostic. Not yet used by any real
+    /// parser rule -- reserved for the future struct/enum-field and
+    /// arrow-function spelling migrations (deka#59).
+    #[allow(dead_code)]
+    pub fn warning_with_kind(
+        span: Span,
+        message: &'static str,
+        error_kind: &'static str,
+        help_text: &'static str,
+    ) -> Self {
+        Self {
+            span,
+            message,
+            error_kind,
+            help_text,
+            severity: Severity::Warning,
         }
     }
 
@@ -73,7 +126,7 @@ impl ParseError {
             std::cmp::min(self.span.len(), line_text.len().saturating_sub(padding)),
         );
 
-        deka_validation::format_validation_error(
+        deka_validation::format_validation_error_extended(
             &source_str,
             file_path,
             self.error_kind,
@@ -82,6 +135,8 @@ impl ParseError {
             self.message,
             self.help_text,
             highlight_len,
+            self.severity.label(),
+            None,
         )
     }
 }
