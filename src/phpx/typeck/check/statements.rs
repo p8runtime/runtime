@@ -294,7 +294,211 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Stmt::TypeAlias { .. } => {}
+            Stmt::Impl {
+                trait_name,
+                target,
+                members,
+                span,
+                ..
+            } => {
+                // Resolve every provided method's signature exactly once,
+                // regardless of whether this is an inherent or trait impl.
+                // This is what makes the declared param/return types get
+                // validated at all -- resolve_type/resolve_name_type push
+                // errors as a side effect of being called. Before this,
+                // inherent impls (trait_name: None) skipped this block
+                // entirely and a completely invented type name in an
+                // inherent impl's signature typechecked clean.
+                let target_key = token_text(self.source, target.parts[0].span);
+
+                // RFD 19: validate self.field accesses against the target's
+                // actual fields, struct targets only for v1 (enums use a
+                // different field-payload model not covered here). Narrow
+                // slice of the much bigger "method bodies aren't checked at
+                // all" gap -- see SelfFieldValidator's doc comment.
+                if let Some(struct_info) = self.structs.get(&target_key).cloned() {
+                    let known_fields: std::collections::BTreeSet<String> =
+                        struct_info.fields.keys().cloned().collect();
+                    for member in members.iter() {
+                        if let ClassMember::Method { params, body, .. } = member {
+                            let has_self = params.iter().any(|p| {
+                                token_text(self.source, p.name.span) == "self"
+                            });
+                            if !has_self {
+                                continue;
+                            }
+                            let mut validator = SelfFieldValidator {
+                                source: self.source,
+                                known_fields: known_fields.clone(),
+                                errors: Vec::new(),
+                            };
+                            for stmt in body.iter() {
+                                validator.visit_stmt(*stmt);
+                            }
+                            self.errors.extend(validator.errors);
+                        }
+                    }
+                }
+
+                let provided: HashMap<String, MethodSig> = members
+                    .iter()
+                    .filter_map(|m| match m {
+                        ClassMember::Method {
+                            name,
+                            params,
+                            return_type,
+                            ..
+                        } => Some((
+                            token_text(self.source, name.span),
+                            self.method_signature(params, *return_type),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+
+                // RFD 19 conformance check, two parts: (1) every
+                // non-default trait method must be present, (2) every
+                // provided method's actual signature must match what the
+                // trait declared. Exact equality, not variance -- traits
+                // have no generics yet, so this is the correct scope for
+                // now (see RFD 19 design notes on "prefer simplicity").
+                if let Some(trait_ref) = trait_name {
+                    let trait_key = token_text(self.source, trait_ref.parts[0].span);
+                    if let Some(info) = self.traits.get(&trait_key).cloned() {
+
+                        let mut missing: Vec<&str> = info
+                            .methods
+                            .iter()
+                            .filter(|(name, (_, has_default))| {
+                                !has_default && !provided.contains_key(name.as_str())
+                            })
+                            .map(|(name, _)| name.as_str())
+                            .collect();
+                        missing.sort();
+                        if !missing.is_empty() {
+                            self.errors.push(TypeError {
+                                span: *span,
+                                message: format!(
+                                    "{target_key} does not implement all methods required by {trait_key}: missing {}",
+                                    missing.join(", ")
+                                ),
+                                severity: Severity::Error,
+                            });
+                        }
+
+                        let mut mismatched: Vec<String> = info
+                            .methods
+                            .iter()
+                            .filter_map(|(name, (required_sig, _))| {
+                                let provided_sig = provided.get(name)?;
+                                (provided_sig != required_sig).then(|| name.clone())
+                            })
+                            .collect();
+                        mismatched.sort();
+                        for name in mismatched {
+                            self.errors.push(TypeError {
+                                span: *span,
+                                message: format!(
+                                    "{target_key}.{name} does not match the signature {trait_key} requires"
+                                ),
+                                severity: Severity::Error,
+                            });
+                        }
+                    }
+
+                    // Record for the cross-trait conflict pass (RFD 19),
+                    // which runs after every statement has been seen -- an
+                    // impl appearing earlier in the file may need to know
+                    // about a sibling impl for the same target that only
+                    // appears later.
+                    let provided_names: HashSet<String> = members
+                        .iter()
+                        .filter_map(|m| match m {
+                            ClassMember::Method { name, .. } => {
+                                Some(token_text(self.source, name.span))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    self.impls.entry(target_key).or_default().push(ImplRecord {
+                        trait_name: trait_key,
+                        provided: provided_names,
+                        span: *span,
+                    });
+                }
+            }
             _ => {}
+        }
+    }
+
+    // RFD 19 multi-trait default-method conflict rule. Java's rule, not
+    // Rust's: forced to resolve at the impl site rather than deferred to an
+    // ambiguous call site, because Rust's alternative needs qualified
+    // trait-method call syntax as a second feature just to make the escape
+    // hatch reachable. Two cases, both errors:
+    //   1. Two implemented traits declare the same method name with
+    //      DIFFERENT signatures -- always an error. No single method body
+    //      can have two different signatures at once, regardless of who
+    //      writes it or whether either side is a default.
+    //   2. Same signature, BOTH traits provide a default body, and NEITHER
+    //      impl block for this target explicitly provides an override --
+    //      ambiguous, must be resolved by an explicit override.
+    // Not an error: only one side is default (satisfying the abstract one
+    // satisfies both); both sides abstract (this repo's existing
+    // missing-method check already requires each to be provided per block,
+    // which is Rust's real behaviour too -- a trait requirement cannot be
+    // satisfied by an inherent or sibling-trait method, only by that impl
+    // block itself); or at least one impl block for this target already
+    // provides the method explicitly.
+    pub(in crate::phpx::typeck::check) fn check_trait_conflicts(&mut self) {
+        for (target_key, impls) in self.impls.clone() {
+            if impls.len() < 2 {
+                continue;
+            }
+            let mut seen: HashMap<String, (String, MethodSig)> = HashMap::new();
+            let any_provides = |method: &str| impls.iter().any(|r| r.provided.contains(method));
+            for record in &impls {
+                let Some(trait_info) = self.traits.get(&record.trait_name).cloned() else {
+                    continue;
+                };
+                for (method_name, (sig, has_default)) in &trait_info.methods {
+                    match seen.get(method_name) {
+                        None => {
+                            seen.insert(method_name.clone(), (record.trait_name.clone(), sig.clone()));
+                        }
+                        Some((other_trait, other_sig)) => {
+                            if other_trait == &record.trait_name {
+                                continue; // same trait seen twice isn't a cross-trait conflict
+                            }
+                            if other_sig != sig {
+                                self.errors.push(TypeError {
+                                    span: record.span,
+                                    message: format!(
+                                        "{target_key}.{method_name} is required by both {other_trait} and {} with incompatible signatures",
+                                        record.trait_name
+                                    ),
+                                    severity: Severity::Error,
+                                });
+                            } else if *has_default && !any_provides(method_name) {
+                                // both sides equal signature; only ambiguous
+                                // if this trait's copy is also a default AND
+                                // nothing on the type provides an override.
+                                // (the has_default on the FIRST-seen trait's
+                                // copy was already implied by reaching here
+                                // without an earlier missing-method error.)
+                                self.errors.push(TypeError {
+                                    span: record.span,
+                                    message: format!(
+                                        "{target_key}.{method_name} has a default implementation in both {other_trait} and {}; provide an explicit override to resolve the ambiguity",
+                                        record.trait_name
+                                    ),
+                                    severity: Severity::Error,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -414,5 +618,55 @@ impl<'a> CheckContext<'a> {
             }
             _ => false,
         }
+    }
+}
+
+impl<'ast> Visitor<'ast> for SelfFieldValidator<'_> {
+    fn visit_expr(&mut self, expr: ExprId<'ast>) {
+        // A `self.method(...)` call parses as `Expr::Call { func: DotAccess {
+        // target: self, property: method }, args }` in DekaScript -- the `.`
+        // operator (parser/expr/core.rs) has no dedicated method-call parse
+        // branch the way PHP's `->` does, so it always builds a bare
+        // DotAccess first and lets the surrounding postfix-call parsing wrap
+        // it in Expr::Call. Without this arm, every legitimate
+        // `self.someMethod()` call gets misdiagnosed as an unknown field
+        // access (found live: `self.double()` in a sibling method rejected
+        // as "self.double does not refer to a declared field", a real
+        // regression from the first cut of this validator). Method-name
+        // resolution is a separate, larger, not-yet-built gap (the
+        // "method-call checking does not fire at all for struct instances"
+        // finding elsewhere in this file's history) -- deliberately not
+        // attempting it here, just not misfiring the field check on a call
+        // target. Arguments still get validated normally.
+        if let Expr::Call { func, args, .. } = *expr {
+            let is_self_method_call = matches!(
+                *func,
+                Expr::DotAccess { target, .. }
+                    if token_text(self.source, target.span()) == "self"
+            );
+            if !is_self_method_call {
+                self.visit_expr(func);
+            }
+            for arg in args.iter() {
+                self.visit_arg(arg);
+            }
+            return;
+        }
+        if let Expr::DotAccess { target, property, span } = *expr {
+            let target_text = token_text(self.source, target.span());
+            if target_text == "self" {
+                let field_name = token_text(self.source, property.span);
+                if !self.known_fields.contains(&field_name) {
+                    self.errors.push(TypeError {
+                        span,
+                        message: format!(
+                            "self.{field_name} does not refer to a declared field"
+                        ),
+                        severity: Severity::Error,
+                    });
+                }
+            }
+        }
+        walk_expr(self, expr);
     }
 }

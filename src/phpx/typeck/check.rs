@@ -41,6 +41,6 @@ pub use model::{
 pub(in crate::phpx::typeck::check) use context::CheckContext;
 pub(in crate::phpx::typeck::check) use helpers::*;
 pub(in crate::phpx::typeck::check) use model::{
-    FunctionSig, InterfaceInfo, JsxExprValidator, MethodSig, ParamSig, StructFieldResolution,
-    TypeAliasInfo, TypeParamSig,
+    FunctionSig, ImplRecord, InterfaceInfo, JsxExprValidator, MethodSig, ParamSig,
+    SelfFieldValidator, StructFieldResolution, TraitInfo, TypeAliasInfo, TypeParamSig,
 };

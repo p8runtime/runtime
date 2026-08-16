@@ -396,7 +396,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             self.current_token.span.start
         };
-        if self.is_phpx() {
+        // DekaScript traits are a distinct feature from PHP horizontal-reuse
+        // traits (RFD 19) -- reject only in legacy PHPX, not in .ds.
+        if self.is_phpx() && !self.is_ds() {
             self.errors.push(ParseError::new(
                 self.current_token.span,
                 "traits are not allowed in PHPX",
@@ -452,6 +454,65 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         self.arena.alloc(Stmt::Trait {
             attributes,
             name,
+            members: self.arena.alloc_slice_copy(&members),
+            doc_comment,
+            span: Span::new(start, end),
+        })
+    }
+
+    // DekaScript `impl Type { }` / `impl Trait for Type { }` (RFD 19).
+    // Reached only from .ds mode via a contextual `impl` identifier check in
+    // stmt.rs (mirroring the existing `struct`/`type` contextual-keyword
+    // pattern) -- `impl` is not a reserved token, so it can never collide
+    // with an identifier of that name anywhere else in the language.
+    pub(in crate::parser::parser) fn parse_impl(&mut self, doc_comment: Option<Span>) -> StmtId<'ast> {
+        let start = self.current_token.span.start;
+        self.bump(); // eat 'impl'
+
+        let first = self.parse_name();
+
+        let (trait_name, target) = if self.current_token.kind == TokenKind::For {
+            self.bump(); // eat 'for'
+            let target = self.parse_name();
+            (Some(first), target)
+        } else {
+            (None, first)
+        };
+
+        if self.current_token.kind == TokenKind::OpenBrace {
+            self.bump();
+        } else {
+            self.errors
+                .push(ParseError::new(self.current_token.span, "Expected '{'"));
+            return self.arena.alloc(Stmt::Impl {
+                trait_name,
+                target,
+                members: &[],
+                doc_comment,
+                span: Span::new(start, self.current_token.span.end),
+            });
+        }
+
+        let mut members = std::vec::Vec::new();
+        while self.current_token.kind != TokenKind::CloseBrace
+            && self.current_token.kind != TokenKind::Eof
+            && self.current_token.kind != TokenKind::CloseTag
+        {
+            members.push(self.parse_class_member(ClassMemberCtx::Impl));
+        }
+
+        if self.current_token.kind == TokenKind::CloseBrace {
+            self.bump();
+        } else {
+            self.errors
+                .push(ParseError::new(self.current_token.span, "Missing '}'"));
+        }
+
+        let end = self.current_token.span.end;
+
+        self.arena.alloc(Stmt::Impl {
+            trait_name,
+            target,
             members: self.arena.alloc_slice_copy(&members),
             doc_comment,
             span: Span::new(start, end),

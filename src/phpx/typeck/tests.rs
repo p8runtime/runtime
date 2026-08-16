@@ -41,6 +41,33 @@ fn check(code: &str) -> Result<(), String> {
         })
 }
 
+// DekaScript-mode variant for RFD 19 (traits/impl) and any other .ds-only
+// feature. `check` above hardcodes ParserMode::Phpx, so it cannot reach
+// `impl`, DS-flavored `trait`, or the bare-method-signature grammar.
+fn check_ds(code: &str) -> Result<(), String> {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    if !program.errors.is_empty() {
+        let mut out = String::new();
+        for err in program.errors {
+            out.push_str(&err.message);
+            out.push('\n');
+        }
+        return Err(out);
+    }
+    check_program(&program, code.as_bytes())
+        .map(|_warnings| ())
+        .map_err(|errs| {
+            let mut out = String::new();
+            for err in errs {
+                out.push_str(&err.message);
+                out.push('\n');
+            }
+            out
+        })
+}
+
 fn check_with_path(code: &str, path: &str) -> Result<(), String> {
     let code = normalize_phpx_snippet(code);
     let arena = Bump::new();
@@ -776,6 +803,276 @@ fn distinct_type_params_are_not_interchangeable() {
         check(code).is_err(),
         "A and B are distinct type parameters and must not be assignable to each other"
     );
+}
+
+// --- RFD 19: traits + impl -------------------------------------------------
+
+#[test]
+fn ds_trait_declaration_abstract_only() {
+    let code = "trait Greeter {\n  greet(): string\n}";
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_trait_declaration_with_default_body() {
+    let code = r#"trait Greeter { greet(): string { return "hi"; } }"#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_inherent_impl_ok() {
+    let code = "struct Point { $x: int; }\n\nimpl Point { norm(): int { return 1; } }";
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_trait_impl_satisfying_all_methods_ok() {
+    let code = r#"
+        trait Greeter {
+          greet(): string
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { greet(): string { return "hi"; } }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_trait_impl_missing_required_method_errors() {
+    // This is the exact bug found and fixed live: before the conformance
+    // check existed, this silently passed.
+    let code = r#"
+        trait Greeter {
+          greet(): string
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "expected missing-method impl to be rejected");
+    assert!(
+        result.unwrap_err().contains("greet"),
+        "error should name the missing method"
+    );
+}
+
+#[test]
+fn ds_trait_impl_default_method_not_required() {
+    // A method with a default body in the trait is optional to override.
+    let code = r#"
+        trait Greeter {
+            greet(): string { return "default"; }
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_trait_impl_wrong_signature_errors() {
+    let code = r#"
+        trait Greeter {
+          greet(): string
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { greet(): int { return 1; } }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "expected mismatched return type to be rejected");
+    assert!(
+        result.unwrap_err().contains("greet"),
+        "error should name the mismatched method"
+    );
+}
+
+#[test]
+fn ds_generic_function_trait_bound_resolves() {
+    // The exact shape RFD 16's flagship example needs:
+    // export function drain<R: Reader>(reader: R): ... { reader.read() }
+    // Bound SYNTAX resolving is what this test covers. Enforcement (does a
+    // concrete type argument actually implement the bound trait at a call
+    // site) is a separate, larger gap, not covered here or built yet --
+    // deliberately not claimed.
+    // No `export` here: the real pipeline strips/masks the export
+    // keyword via preprocess_source (modules_php) before parsing; check_ds
+    // is a php-rs-only test helper and can't depend on modules_php to
+    // replicate that step. Verified bare `function` exercises the exact
+    // same bound-resolution path through the real CLI.
+    let code = r#"
+        trait Reader {
+          read(self: Self): int
+        }
+        function drain<R: Reader>(reader: R): int {
+          return reader.read();
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_inherent_impl_invalid_param_type_errors() {
+    // Before this, inherent impls (no trait) skipped all signature
+    // resolution entirely -- a made-up type name typechecked clean.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point { bad(self: Self, weird: TotallyNotARealType): int { return 1; } }
+    "#;
+    assert!(
+        check_ds(code).is_err(),
+        "an invalid parameter type in an inherent impl must be rejected"
+    );
+}
+
+#[test]
+fn ds_impl_method_unknown_self_field_errors() {
+    // self.field accesses inside an impl method body are checked against
+    // the target struct's actual declared fields (v1 scope: struct
+    // targets only). Before the fix, self.field was parsed as
+    // Expr::DotAccess (not Expr::PropertyFetch, which the first version
+    // of this validator matched on) so the check silently never fired.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point { bad(self: Self): int { return self.totallyBogusFieldName; } }
+    "#;
+    let result = check_ds(code);
+    assert!(
+        result.is_err(),
+        "an unknown self.field access in an impl method must be rejected"
+    );
+    assert!(
+        result.unwrap_err().contains("totallyBogusFieldName"),
+        "error should name the unknown field"
+    );
+}
+
+#[test]
+fn ds_impl_method_known_self_field_ok() {
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point { getX(self: Self): int { return self.x; } }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_impl_method_calling_sibling_method_via_self_ok() {
+    // Regression test for a real bug found live: self.method() calls parse
+    // as Expr::Call { func: DotAccess { target: self, property: method },
+    // .. } in DekaScript (the `.` operator has no dedicated method-call
+    // parse branch, unlike PHP's `->`). The first cut of
+    // SelfFieldValidator didn't know about this shape and rejected every
+    // self.method() call as an unknown field access -- e.g. a `double()`
+    // method calling a sibling `quad()` method via `self.quad()` inside the
+    // same impl block was incorrectly flagged as
+    // "self.quad does not refer to a declared field". Fixed by special-
+    // casing Expr::Call so a DotAccess used as a call target is never
+    // treated as a field read.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point {
+          double(self: Self): int { return self.x * 2; }
+          quad(self: Self): int { return self.double() * 2; }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_impl_method_call_as_argument_to_another_self_method_call_ok() {
+    // Deeper probe of the same fix: a self.method() call nested as an
+    // ARGUMENT to another self.method() call (not just sequential sibling
+    // calls). Confirms visit_arg's default walk still reaches nested
+    // Expr::Call nodes and re-enters the special-cased handling correctly
+    // rather than only working one level deep.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point {
+          double(self: Self): int { return self.x * 2; }
+          addTo(self: Self, n: int): int { return n + self.double(); }
+          sumBoth(self: Self): int { return self.addTo(self.double()); }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_impl_method_bogus_field_alongside_valid_method_call_errors() {
+    // Confirms the Expr::Call special-case doesn't over-suppress: a
+    // genuinely unknown field used alongside a valid method call in the
+    // same expression must still be rejected -- proves args are still
+    // walked and validated normally, not accidentally skipped wholesale.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point {
+          double(self: Self): int { return self.x * 2; }
+          bad(self: Self): int { return self.double() + self.totallyBogusFieldName; }
+        }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "expected the bogus field to still be rejected");
+    assert!(
+        result.unwrap_err().contains("totallyBogusFieldName"),
+        "error should name the bogus field"
+    );
+}
+
+#[test]
+fn ds_trait_conflict_incompatible_signatures_errors() {
+    let code = r#"
+        trait A {
+          greet(): string
+        }
+        trait B {
+          greet(): int
+        }
+        struct Bot { $name: string; }
+        impl A for Bot { greet(): string { return "hi"; } }
+        impl B for Bot { greet(): int { return 1; } }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "incompatible cross-trait signatures must be rejected");
+    assert!(result.unwrap_err().contains("incompatible"));
+}
+
+#[test]
+fn ds_trait_conflict_shared_default_without_override_errors() {
+    let code = r#"
+        trait A {
+          greet(): string { return "a"; }
+        }
+        trait B {
+          greet(): string { return "b"; }
+        }
+        struct Bot { $name: string; }
+        impl A for Bot { }
+        impl B for Bot { }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "an unresolved shared default must be rejected");
+    assert!(result.unwrap_err().contains("ambiguity"));
+}
+
+#[test]
+fn ds_trait_conflict_resolved_by_explicit_override_ok() {
+    let code = r#"
+        trait A {
+          greet(): string { return "a"; }
+        }
+        trait B {
+          greet(): string { return "b"; }
+        }
+        struct Bot { $name: string; }
+        impl A for Bot { greet(): string { return "resolved"; } }
+        impl B for Bot { }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_legacy_php_trait_still_rejected_outside_ds() {
+    let code = "<?php trait Foo { public function bar() {} }";
+    assert!(check(code).is_err(), "PHP horizontal-reuse traits must stay rejected in PHPX");
 }
 
 #[test]
