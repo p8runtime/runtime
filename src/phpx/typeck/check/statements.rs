@@ -619,6 +619,35 @@ impl<'a> CheckContext<'a> {
 
 impl<'ast> Visitor<'ast> for SelfFieldValidator<'_> {
     fn visit_expr(&mut self, expr: ExprId<'ast>) {
+        // A `self.method(...)` call parses as `Expr::Call { func: DotAccess {
+        // target: self, property: method }, args }` in DekaScript -- the `.`
+        // operator (parser/expr/core.rs) has no dedicated method-call parse
+        // branch the way PHP's `->` does, so it always builds a bare
+        // DotAccess first and lets the surrounding postfix-call parsing wrap
+        // it in Expr::Call. Without this arm, every legitimate
+        // `self.someMethod()` call gets misdiagnosed as an unknown field
+        // access (found live: `self.double()` in a sibling method rejected
+        // as "self.double does not refer to a declared field", a real
+        // regression from the first cut of this validator). Method-name
+        // resolution is a separate, larger, not-yet-built gap (the
+        // "method-call checking does not fire at all for struct instances"
+        // finding elsewhere in this file's history) -- deliberately not
+        // attempting it here, just not misfiring the field check on a call
+        // target. Arguments still get validated normally.
+        if let Expr::Call { func, args, .. } = *expr {
+            let is_self_method_call = matches!(
+                *func,
+                Expr::DotAccess { target, .. }
+                    if token_text(self.source, target.span()) == "self"
+            );
+            if !is_self_method_call {
+                self.visit_expr(func);
+            }
+            for arg in args.iter() {
+                self.visit_arg(arg);
+            }
+            return;
+        }
         if let Expr::DotAccess { target, property, span } = *expr {
             let target_text = token_text(self.source, target.span());
             if target_text == "self" {

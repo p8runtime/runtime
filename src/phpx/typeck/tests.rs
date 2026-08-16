@@ -950,6 +950,29 @@ fn ds_impl_method_known_self_field_ok() {
 }
 
 #[test]
+fn ds_impl_method_calling_sibling_method_via_self_ok() {
+    // Regression test for a real bug found live: self.method() calls parse
+    // as Expr::Call { func: DotAccess { target: self, property: method },
+    // .. } in DekaScript (the `.` operator has no dedicated method-call
+    // parse branch, unlike PHP's `->`). The first cut of
+    // SelfFieldValidator didn't know about this shape and rejected every
+    // self.method() call as an unknown field access -- e.g. a `double()`
+    // method calling a sibling `quad()` method via `self.quad()` inside the
+    // same impl block was incorrectly flagged as
+    // "self.quad does not refer to a declared field". Fixed by special-
+    // casing Expr::Call so a DotAccess used as a call target is never
+    // treated as a field read.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point {
+          double(self: Self): int { return self.x * 2; }
+          quad(self: Self): int { return self.double() * 2; }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
 fn ds_trait_conflict_incompatible_signatures_errors() {
     let code = r#"
         trait A {
