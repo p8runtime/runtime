@@ -1075,6 +1075,30 @@ fn ds_legacy_php_trait_still_rejected_outside_ds() {
     assert!(check(code).is_err(), "PHP horizontal-reuse traits must stay rejected in PHPX");
 }
 
+#[test]
+fn bytes_type_in_param_and_return_is_ok() {
+    let code = "function encode($input: bytes): bytes { return $input; }";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn bytes_type_rejects_string_assignment() {
+    let code = "function f(): bytes { return 'hello'; }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn bytes_type_accepts_bytes_variable() {
+    let code = "function f($b: bytes): bytes { return $b; }";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn bytes_type_in_struct_field_is_ok() {
+    let code = "struct Packet { $payload: bytes; }";
+    assert!(check(code).is_ok());
+}
+
 // --- Diagnostic severity mechanism (deka#59) -------------------------------
 //
 // check_program's Result discriminant is the severity signal: Ok(diagnostics)

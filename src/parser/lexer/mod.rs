@@ -36,6 +36,7 @@ fn keyword_lookup(text: &[u8]) -> TokenKind {
         b"int" => TokenKind::TypeInt,
         b"float" => TokenKind::TypeFloat,
         b"string" => TokenKind::TypeString,
+        b"bytes" => TokenKind::TypeBytes,
         b"mixed" => TokenKind::TypeMixed,
         b"never" => TokenKind::TypeNever,
         b"null" => TokenKind::TypeNull,

@@ -117,6 +117,7 @@ pub enum TokenKind {
     TypeInt,
     TypeFloat,
     TypeString,
+    TypeBytes,
     TypeObject,
     TypeVoid,
     TypeIterable,
@@ -261,6 +262,7 @@ impl TokenKind {
                 | TokenKind::TypeFloat
                 | TokenKind::TypeBool
                 | TokenKind::TypeString
+                | TokenKind::TypeBytes
                 | TokenKind::TypeVoid
                 | TokenKind::TypeNever
                 | TokenKind::TypeNull
