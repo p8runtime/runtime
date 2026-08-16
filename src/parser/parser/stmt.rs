@@ -70,6 +70,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_type_alias(top_level);
         }
 
+        // DekaScript `impl` (RFD 19) -- .ds only, contextual identifier like
+        // `struct`/`type` above, never a reserved token.
+        if self.is_ds()
+            && self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"impl")
+        {
+            return self.parse_impl(doc_comment);
+        }
+
         // `cql` is a true keyword; `query` is context-sensitive (identifier unless followed by name + =)
         if self.is_phpx()
             && (self.current_token.kind == TokenKind::Cql

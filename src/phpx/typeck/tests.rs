@@ -39,6 +39,31 @@ fn check(code: &str) -> Result<(), String> {
     })
 }
 
+// DekaScript-mode variant for RFD 19 (traits/impl) and any other .ds-only
+// feature. `check` above hardcodes ParserMode::Phpx, so it cannot reach
+// `impl`, DS-flavored `trait`, or the bare-method-signature grammar.
+fn check_ds(code: &str) -> Result<(), String> {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    if !program.errors.is_empty() {
+        let mut out = String::new();
+        for err in program.errors {
+            out.push_str(&err.message);
+            out.push('\n');
+        }
+        return Err(out);
+    }
+    check_program(&program, code.as_bytes()).map_err(|errs| {
+        let mut out = String::new();
+        for err in errs {
+            out.push_str(&err.message);
+            out.push('\n');
+        }
+        out
+    })
+}
+
 fn check_with_path(code: &str, path: &str) -> Result<(), String> {
     let code = normalize_phpx_snippet(code);
     let arena = Bump::new();
@@ -772,4 +797,74 @@ fn distinct_type_params_are_not_interchangeable() {
         check(code).is_err(),
         "A and B are distinct type parameters and must not be assignable to each other"
     );
+}
+
+// --- RFD 19: traits + impl -------------------------------------------------
+
+#[test]
+fn ds_trait_declaration_abstract_only() {
+    let code = "trait Greeter {\n  greet(): string\n}";
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_trait_declaration_with_default_body() {
+    let code = r#"trait Greeter { greet(): string { return "hi"; } }"#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_inherent_impl_ok() {
+    let code = "struct Point { $x: int; }\n\nimpl Point { norm(): int { return 1; } }";
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_trait_impl_satisfying_all_methods_ok() {
+    let code = r#"
+        trait Greeter {
+          greet(): string
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { greet(): string { return "hi"; } }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_trait_impl_missing_required_method_errors() {
+    // This is the exact bug found and fixed live: before the conformance
+    // check existed, this silently passed.
+    let code = r#"
+        trait Greeter {
+          greet(): string
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "expected missing-method impl to be rejected");
+    assert!(
+        result.unwrap_err().contains("greet"),
+        "error should name the missing method"
+    );
+}
+
+#[test]
+fn ds_trait_impl_default_method_not_required() {
+    // A method with a default body in the trait is optional to override.
+    let code = r#"
+        trait Greeter {
+            greet(): string { return "default"; }
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_legacy_php_trait_still_rejected_outside_ds() {
+    let code = "<?php trait Foo { public function bar() {} }";
+    assert!(check(code).is_err(), "PHP horizontal-reuse traits must stay rejected in PHPX");
 }

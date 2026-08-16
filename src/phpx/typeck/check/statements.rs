@@ -294,6 +294,53 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Stmt::TypeAlias { .. } => {}
+            Stmt::Impl {
+                trait_name,
+                target,
+                members,
+                span,
+                ..
+            } => {
+                // RFD 19 conformance check: every non-default method the
+                // trait declares must be provided somewhere in this impl
+                // block. Signature compatibility is intentionally not yet
+                // checked here (method presence is the load-bearing gap that
+                // was silently accepted before this) -- narrower than the
+                // full rule, real progress over the status quo.
+                if let Some(trait_ref) = trait_name {
+                    let trait_key = token_text(self.source, trait_ref.parts[0].span);
+                    let target_key = token_text(self.source, target.parts[0].span);
+                    if let Some(info) = self.traits.get(&trait_key).cloned() {
+                        let provided: HashSet<String> = members
+                            .iter()
+                            .filter_map(|m| match m {
+                                ClassMember::Method { name, .. } => {
+                                    Some(token_text(self.source, name.span))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let mut missing: Vec<&str> = info
+                            .methods
+                            .iter()
+                            .filter(|(name, (_, has_default))| {
+                                !has_default && !provided.contains(name.as_str())
+                            })
+                            .map(|(name, _)| name.as_str())
+                            .collect();
+                        missing.sort();
+                        if !missing.is_empty() {
+                            self.errors.push(TypeError {
+                                span: *span,
+                                message: format!(
+                                    "{target_key} does not implement all methods required by {trait_key}: missing {}",
+                                    missing.join(", ")
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }

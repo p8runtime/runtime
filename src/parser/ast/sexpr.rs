@@ -480,6 +480,35 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("))");
                 self.indent -= 1;
             }
+            Stmt::Impl {
+                trait_name,
+                target,
+                members,
+                ..
+            } => {
+                self.write("(impl \"");
+                if let Some(t) = trait_name {
+                    for part in t.parts {
+                        self.write(&String::from_utf8_lossy(part.text(self.source)));
+                    }
+                    self.write("\" for \"");
+                }
+                for part in target.parts {
+                    self.write(&String::from_utf8_lossy(part.text(self.source)));
+                }
+                self.write("\"");
+                self.indent += 1;
+                self.newline();
+                self.write("(members");
+                self.indent += 1;
+                for member in *members {
+                    self.newline();
+                    self.visit_class_member(member);
+                }
+                self.indent -= 1;
+                self.write("))");
+                self.indent -= 1;
+            }
             Stmt::Enum {
                 attributes,
                 name,

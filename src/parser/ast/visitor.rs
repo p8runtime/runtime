@@ -238,6 +238,18 @@ pub fn walk_stmt<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, stmt: StmtId<
             walk_attributes(visitor, attributes);
             walk_class_members(visitor, members);
         }
+        Stmt::Impl {
+            trait_name,
+            target,
+            members,
+            ..
+        } => {
+            if let Some(t) = trait_name {
+                visitor.visit_name(&t);
+            }
+            visitor.visit_name(&target);
+            walk_class_members(visitor, members);
+        }
         Stmt::Enum {
             attributes,
             backed_type,

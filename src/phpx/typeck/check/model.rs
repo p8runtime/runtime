@@ -53,6 +53,14 @@ pub(in crate::phpx::typeck::check) struct InterfaceInfo {
     pub(in crate::phpx::typeck::check) fields: BTreeMap<String, ObjectField>,
 }
 
+// DekaScript trait (RFD 19). `has_default = true` means the trait supplies a
+// body, so `impl` need not provide it; `false` means an implementing type
+// MUST provide it, checked at the `impl` site (RFD 19's conformance rule).
+#[derive(Debug, Clone)]
+pub(in crate::phpx::typeck::check) struct TraitInfo {
+    pub(in crate::phpx::typeck::check) methods: HashMap<String, (MethodSig, bool)>,
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::phpx::typeck::check) struct TypeAliasInfo {
     pub(in crate::phpx::typeck::check) params: Vec<TypeParamSig>,

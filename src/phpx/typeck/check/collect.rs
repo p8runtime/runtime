@@ -270,6 +270,39 @@ impl<'a> CheckContext<'a> {
         }
     }
 
+    // DekaScript trait method collection (RFD 19). Mirrors
+    // collect_interface_methods above; the difference is tracking whether
+    // each method has a default body (`!member_body.is_empty()`), which is
+    // what conformance checking at `impl` needs to know is optional.
+    pub(in crate::phpx::typeck::check) fn collect_trait_methods(
+        &mut self,
+        program: &Program<'a>,
+    ) {
+        for stmt in program.statements.iter() {
+            let Stmt::Trait { name, members, .. } = stmt else {
+                continue;
+            };
+            let trait_name = token_text(self.source, name.span);
+            let mut methods = HashMap::new();
+            for member in members.iter() {
+                if let ClassMember::Method {
+                    name: method_name,
+                    params,
+                    return_type,
+                    body,
+                    ..
+                } = member
+                {
+                    let method_name = token_text(self.source, method_name.span);
+                    let sig = self.method_signature(params, *return_type);
+                    let has_default = !body.is_empty();
+                    methods.insert(method_name, (sig, has_default));
+                }
+            }
+            self.traits.insert(trait_name, TraitInfo { methods });
+        }
+    }
+
     pub(in crate::phpx::typeck::check) fn collect_struct_methods(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
             let Stmt::Class {

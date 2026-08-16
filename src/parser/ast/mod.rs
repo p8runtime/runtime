@@ -196,6 +196,17 @@ pub enum Stmt<'ast> {
         doc_comment: Option<Span>,
         span: Span,
     },
+    // DekaScript `impl Type { }` / `impl Trait for Type { }` (RFD 19).
+    // `trait_name: None` is an inherent impl (plain methods on `target`,
+    // replacing the old globalThis.__phpxStructMethods registry);
+    // `Some(name)` implements that trait for `target`.
+    Impl {
+        trait_name: Option<Name<'ast>>,
+        target: Name<'ast>,
+        members: &'ast [ClassMember<'ast>],
+        doc_comment: Option<Span>,
+        span: Span,
+    },
     Enum {
         attributes: &'ast [AttributeGroup<'ast>],
         name: &'ast Token,
@@ -697,6 +708,7 @@ impl<'ast> Stmt<'ast> {
             Stmt::Class { span, .. } => *span,
             Stmt::Interface { span, .. } => *span,
             Stmt::Trait { span, .. } => *span,
+            Stmt::Impl { span, .. } => *span,
             Stmt::Enum { span, .. } => *span,
             Stmt::Namespace { span, .. } => *span,
             Stmt::Use { span, .. } => *span,
