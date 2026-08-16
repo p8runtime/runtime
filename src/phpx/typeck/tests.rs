@@ -881,6 +881,30 @@ fn ds_trait_impl_wrong_signature_errors() {
 }
 
 #[test]
+fn ds_generic_function_trait_bound_resolves() {
+    // The exact shape RFD 16's flagship example needs:
+    // export function drain<R: Reader>(reader: R): ... { reader.read() }
+    // Bound SYNTAX resolving is what this test covers. Enforcement (does a
+    // concrete type argument actually implement the bound trait at a call
+    // site) is a separate, larger gap, not covered here or built yet --
+    // deliberately not claimed.
+    // No `export` here: the real pipeline strips/masks the export
+    // keyword via preprocess_source (modules_php) before parsing; check_ds
+    // is a php-rs-only test helper and can't depend on modules_php to
+    // replicate that step. Verified bare `function` exercises the exact
+    // same bound-resolution path through the real CLI.
+    let code = r#"
+        trait Reader {
+          read(self: Self): int
+        }
+        function drain<R: Reader>(reader: R): int {
+          return reader.read();
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
 fn ds_inherent_impl_invalid_param_type_errors() {
     // Before this, inherent impls (no trait) skipped all signature
     // resolution entirely -- a made-up type name typechecked clean.
