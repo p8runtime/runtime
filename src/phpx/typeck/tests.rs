@@ -881,6 +881,58 @@ fn ds_trait_impl_wrong_signature_errors() {
 }
 
 #[test]
+fn ds_trait_conflict_incompatible_signatures_errors() {
+    let code = r#"
+        trait A {
+          greet(): string
+        }
+        trait B {
+          greet(): int
+        }
+        struct Bot { $name: string; }
+        impl A for Bot { greet(): string { return "hi"; } }
+        impl B for Bot { greet(): int { return 1; } }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "incompatible cross-trait signatures must be rejected");
+    assert!(result.unwrap_err().contains("incompatible"));
+}
+
+#[test]
+fn ds_trait_conflict_shared_default_without_override_errors() {
+    let code = r#"
+        trait A {
+          greet(): string { return "a"; }
+        }
+        trait B {
+          greet(): string { return "b"; }
+        }
+        struct Bot { $name: string; }
+        impl A for Bot { }
+        impl B for Bot { }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "an unresolved shared default must be rejected");
+    assert!(result.unwrap_err().contains("ambiguity"));
+}
+
+#[test]
+fn ds_trait_conflict_resolved_by_explicit_override_ok() {
+    let code = r#"
+        trait A {
+          greet(): string { return "a"; }
+        }
+        trait B {
+          greet(): string { return "b"; }
+        }
+        struct Bot { $name: string; }
+        impl A for Bot { greet(): string { return "resolved"; } }
+        impl B for Bot { }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
 fn ds_legacy_php_trait_still_rejected_outside_ds() {
     let code = "<?php trait Foo { public function bar() {} }";
     assert!(check(code).is_err(), "PHP horizontal-reuse traits must stay rejected in PHPX");

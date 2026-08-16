@@ -364,9 +364,98 @@ impl<'a> CheckContext<'a> {
                             });
                         }
                     }
+
+                    // Record for the cross-trait conflict pass (RFD 19),
+                    // which runs after every statement has been seen -- an
+                    // impl appearing earlier in the file may need to know
+                    // about a sibling impl for the same target that only
+                    // appears later.
+                    let provided_names: HashSet<String> = members
+                        .iter()
+                        .filter_map(|m| match m {
+                            ClassMember::Method { name, .. } => {
+                                Some(token_text(self.source, name.span))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    self.impls.entry(target_key).or_default().push(ImplRecord {
+                        trait_name: trait_key,
+                        provided: provided_names,
+                        span: *span,
+                    });
                 }
             }
             _ => {}
+        }
+    }
+
+    // RFD 19 multi-trait default-method conflict rule. Java's rule, not
+    // Rust's: forced to resolve at the impl site rather than deferred to an
+    // ambiguous call site, because Rust's alternative needs qualified
+    // trait-method call syntax as a second feature just to make the escape
+    // hatch reachable. Two cases, both errors:
+    //   1. Two implemented traits declare the same method name with
+    //      DIFFERENT signatures -- always an error. No single method body
+    //      can have two different signatures at once, regardless of who
+    //      writes it or whether either side is a default.
+    //   2. Same signature, BOTH traits provide a default body, and NEITHER
+    //      impl block for this target explicitly provides an override --
+    //      ambiguous, must be resolved by an explicit override.
+    // Not an error: only one side is default (satisfying the abstract one
+    // satisfies both); both sides abstract (this repo's existing
+    // missing-method check already requires each to be provided per block,
+    // which is Rust's real behaviour too -- a trait requirement cannot be
+    // satisfied by an inherent or sibling-trait method, only by that impl
+    // block itself); or at least one impl block for this target already
+    // provides the method explicitly.
+    pub(in crate::phpx::typeck::check) fn check_trait_conflicts(&mut self) {
+        for (target_key, impls) in self.impls.clone() {
+            if impls.len() < 2 {
+                continue;
+            }
+            let mut seen: HashMap<String, (String, MethodSig)> = HashMap::new();
+            let any_provides = |method: &str| impls.iter().any(|r| r.provided.contains(method));
+            for record in &impls {
+                let Some(trait_info) = self.traits.get(&record.trait_name).cloned() else {
+                    continue;
+                };
+                for (method_name, (sig, has_default)) in &trait_info.methods {
+                    match seen.get(method_name) {
+                        None => {
+                            seen.insert(method_name.clone(), (record.trait_name.clone(), sig.clone()));
+                        }
+                        Some((other_trait, other_sig)) => {
+                            if other_trait == &record.trait_name {
+                                continue; // same trait seen twice isn't a cross-trait conflict
+                            }
+                            if other_sig != sig {
+                                self.errors.push(TypeError {
+                                    span: record.span,
+                                    message: format!(
+                                        "{target_key}.{method_name} is required by both {other_trait} and {} with incompatible signatures",
+                                        record.trait_name
+                                    ),
+                                });
+                            } else if *has_default && !any_provides(method_name) {
+                                // both sides equal signature; only ambiguous
+                                // if this trait's copy is also a default AND
+                                // nothing on the type provides an override.
+                                // (the has_default on the FIRST-seen trait's
+                                // copy was already implied by reaching here
+                                // without an earlier missing-method error.)
+                                self.errors.push(TypeError {
+                                    span: record.span,
+                                    message: format!(
+                                        "{target_key}.{method_name} has a default implementation in both {other_trait} and {}; provide an explicit override to resolve the ambiguity",
+                                        record.trait_name
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

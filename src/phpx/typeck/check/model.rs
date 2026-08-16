@@ -61,6 +61,17 @@ pub(in crate::phpx::typeck::check) struct TraitInfo {
     pub(in crate::phpx::typeck::check) methods: HashMap<String, (MethodSig, bool)>,
 }
 
+// One `impl Trait for Type` block, recorded for the multi-trait conflict
+// check (RFD 19) -- run once after all statements are seen, since an impl
+// earlier in the file may need to know about a sibling impl for the same
+// target that appears later.
+#[derive(Debug, Clone)]
+pub(in crate::phpx::typeck::check) struct ImplRecord {
+    pub(in crate::phpx::typeck::check) trait_name: String,
+    pub(in crate::phpx::typeck::check) provided: HashSet<String>,
+    pub(in crate::phpx::typeck::check) span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::phpx::typeck::check) struct TypeAliasInfo {
     pub(in crate::phpx::typeck::check) params: Vec<TypeParamSig>,
