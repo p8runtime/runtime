@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(in crate::phpx::typeck::check) struct ParamSig {
     pub(in crate::phpx::typeck::check) ty: Option<Type>,
     pub(in crate::phpx::typeck::check) required: bool,
@@ -40,7 +40,7 @@ pub struct ExternalFunctionSig {
     pub variadic: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(in crate::phpx::typeck::check) struct MethodSig {
     pub(in crate::phpx::typeck::check) params: Vec<ParamSig>,
     pub(in crate::phpx::typeck::check) return_type: Option<Type>,

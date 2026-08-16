@@ -864,6 +864,23 @@ fn ds_trait_impl_default_method_not_required() {
 }
 
 #[test]
+fn ds_trait_impl_wrong_signature_errors() {
+    let code = r#"
+        trait Greeter {
+          greet(): string
+        }
+        struct Bot { $name: string; }
+        impl Greeter for Bot { greet(): int { return 1; } }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "expected mismatched return type to be rejected");
+    assert!(
+        result.unwrap_err().contains("greet"),
+        "error should name the mismatched method"
+    );
+}
+
+#[test]
 fn ds_legacy_php_trait_still_rejected_outside_ds() {
     let code = "<?php trait Foo { public function bar() {} }";
     assert!(check(code).is_err(), "PHP horizontal-reuse traits must stay rejected in PHPX");

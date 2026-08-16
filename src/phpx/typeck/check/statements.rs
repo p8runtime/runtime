@@ -301,30 +301,37 @@ impl<'a> CheckContext<'a> {
                 span,
                 ..
             } => {
-                // RFD 19 conformance check: every non-default method the
-                // trait declares must be provided somewhere in this impl
-                // block. Signature compatibility is intentionally not yet
-                // checked here (method presence is the load-bearing gap that
-                // was silently accepted before this) -- narrower than the
-                // full rule, real progress over the status quo.
+                // RFD 19 conformance check, two parts: (1) every
+                // non-default trait method must be present, (2) every
+                // provided method's actual signature must match what the
+                // trait declared. Exact equality, not variance -- traits
+                // have no generics yet, so this is the correct scope for
+                // now (see RFD 19 design notes on "prefer simplicity").
                 if let Some(trait_ref) = trait_name {
                     let trait_key = token_text(self.source, trait_ref.parts[0].span);
                     let target_key = token_text(self.source, target.parts[0].span);
                     if let Some(info) = self.traits.get(&trait_key).cloned() {
-                        let provided: HashSet<String> = members
+                        let provided: HashMap<String, MethodSig> = members
                             .iter()
                             .filter_map(|m| match m {
-                                ClassMember::Method { name, .. } => {
-                                    Some(token_text(self.source, name.span))
-                                }
+                                ClassMember::Method {
+                                    name,
+                                    params,
+                                    return_type,
+                                    ..
+                                } => Some((
+                                    token_text(self.source, name.span),
+                                    self.method_signature(params, *return_type),
+                                )),
                                 _ => None,
                             })
                             .collect();
+
                         let mut missing: Vec<&str> = info
                             .methods
                             .iter()
                             .filter(|(name, (_, has_default))| {
-                                !has_default && !provided.contains(name.as_str())
+                                !has_default && !provided.contains_key(name.as_str())
                             })
                             .map(|(name, _)| name.as_str())
                             .collect();
@@ -335,6 +342,24 @@ impl<'a> CheckContext<'a> {
                                 message: format!(
                                     "{target_key} does not implement all methods required by {trait_key}: missing {}",
                                     missing.join(", ")
+                                ),
+                            });
+                        }
+
+                        let mut mismatched: Vec<String> = info
+                            .methods
+                            .iter()
+                            .filter_map(|(name, (required_sig, _))| {
+                                let provided_sig = provided.get(name)?;
+                                (provided_sig != required_sig).then(|| name.clone())
+                            })
+                            .collect();
+                        mismatched.sort();
+                        for name in mismatched {
+                            self.errors.push(TypeError {
+                                span: *span,
+                                message: format!(
+                                    "{target_key}.{name} does not match the signature {trait_key} requires"
                                 ),
                             });
                         }
