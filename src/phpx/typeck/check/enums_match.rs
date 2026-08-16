@@ -170,7 +170,7 @@ impl<'a> CheckContext<'a> {
         env: &HashMap<String, Type>,
     ) {
         if case_info.params.is_empty() {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "Enum case {}::{} has no payload; use {}::{} without calling it",
@@ -181,7 +181,7 @@ impl<'a> CheckContext<'a> {
         }
 
         if args.len() != case_info.params.len() {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "Enum case {}::{} expects {} arguments, got {}",
@@ -206,7 +206,7 @@ impl<'a> CheckContext<'a> {
                     self.check_object_literal_against_type(items, expected, obj_span, env);
                 }
                 if !self.is_assignable(&actual, expected) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: arg.span,
                         message: format!(
                             "Enum case {}::{} argument {} has type {}, expected {}",
@@ -300,7 +300,7 @@ impl<'a> CheckContext<'a> {
                     if let Some(entry) = covered.get_mut(&enum_name) {
                         entry.insert(case_name);
                     } else {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: arm.span,
                             message: format!(
                                 "Match arm uses enum case '{}::{}' that is not part of this match",
@@ -329,7 +329,7 @@ impl<'a> CheckContext<'a> {
             };
             for case_name in case_names.iter() {
                 if !seen.contains(case_name) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: arms.last().map(|arm| arm.span).unwrap_or_default(),
                         message: format!(
                             "Match on {} is not exhaustive; missing case {}::{}",
@@ -342,7 +342,7 @@ impl<'a> CheckContext<'a> {
         }
 
         if allows_null && !null_covered {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: arms.last().map(|arm| arm.span).unwrap_or_default(),
                 message: "Match on nullable enum is not exhaustive; missing null arm".to_string(),
             });
@@ -486,7 +486,7 @@ impl<'a> CheckContext<'a> {
         span: Span,
     ) {
         let Some(name) = self.extract_static_ident(class) else {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: "Dynamic class references are not allowed in PHPX".to_string(),
             });
@@ -495,7 +495,7 @@ impl<'a> CheckContext<'a> {
         if self.structs.contains_key(&name) || self.enums.contains_key(&name) {
             return;
         }
-        self.errors.push(TypeError {
+        self.errors.push(TypeError { severity: Severity::Error,
             span,
             message: format!("Unknown type '{}' in PHPX; classes are not allowed", name),
         });

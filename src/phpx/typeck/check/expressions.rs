@@ -25,7 +25,7 @@ impl<'a> CheckContext<'a> {
                 if let Some(suggested) = suggestion {
                     message.push_str(&format!("; did you mean '${}'?", suggested));
                 }
-                self.errors.push(TypeError { span, message });
+                self.errors.push(TypeError { severity: Severity::Error, span, message });
                 Type::Unknown
             }
             Expr::Null { .. } => Type::Primitive(PrimitiveType::Null),
@@ -62,7 +62,7 @@ impl<'a> CheckContext<'a> {
                 span,
             } => {
                 if self.is_null_comparison(op, left, right) && !self.allow_null_comparisons() {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: "Null comparisons are not allowed in PHPX; use isset() instead"
                             .to_string(),
@@ -88,7 +88,7 @@ impl<'a> CheckContext<'a> {
                 for arg in args.iter() {
                     let _ = self.check_expr(arg.value, env, explicit);
                 }
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span,
                     message: "new is not allowed in PHPX; use struct literals".to_string(),
                 });
@@ -255,7 +255,7 @@ impl<'a> CheckContext<'a> {
                 let info = if let Some(info) = self.structs.get(&struct_name) {
                     info.clone()
                 } else {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span: span,
                         message: format!("Unknown struct '{}'", struct_name),
                     });
@@ -268,7 +268,7 @@ impl<'a> CheckContext<'a> {
                     let field_name = field_name.trim_start_matches('$').to_string();
 
                     if !seen.insert(field_name.clone()) {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: field.span,
                             message: format!(
                                 "Duplicate field '{}' in struct literal '{}'",
@@ -280,7 +280,7 @@ impl<'a> CheckContext<'a> {
 
                     let expected = info.fields.get(&field_name);
                     if expected.is_none() {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: field.span,
                             message: format!(
                                 "Unknown field '{}' in struct literal '{}'",
@@ -292,7 +292,7 @@ impl<'a> CheckContext<'a> {
                     let actual = self.check_expr(field.value, env, explicit);
                     if let Some(expected) = expected {
                         if !self.is_assignable(&actual, expected) {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: field.span,
                                 message: format!(
                                     "Field '{}' expects {}, got {}",
@@ -308,7 +308,7 @@ impl<'a> CheckContext<'a> {
                         continue;
                     }
                     if !seen.contains(field) {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: span,
                             message: format!(
                                 "Missing field '{}' in struct literal '{}'",
@@ -361,7 +361,7 @@ impl<'a> CheckContext<'a> {
                 match_ty
             }
             Expr::AnonymousClass { span, .. } => {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span,
                     message: "Anonymous classes are not allowed in PHPX".to_string(),
                 });
@@ -407,7 +407,7 @@ impl<'a> CheckContext<'a> {
             }
             Expr::Await { expr, span } => {
                 if self.fn_depth > 0 && self.async_depth == 0 {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: "await is only allowed in async functions (or at top-level in PHPX modules)".to_string(),
                     });
@@ -419,7 +419,7 @@ impl<'a> CheckContext<'a> {
                     }
                     Type::Unknown => Type::Unknown,
                     other => {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span,
                             message: format!("await expects Promise<T>, got {}", other),
                         });
@@ -477,7 +477,7 @@ impl<'a> CheckContext<'a> {
         match target_ty {
             Type::ObjectShape(fields) => {
                 if !fields.contains_key(&prop_name) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!("Unknown object field '{}'", prop_name),
                     });
@@ -490,13 +490,13 @@ impl<'a> CheckContext<'a> {
                 match self.resolve_struct_field(&name, &prop_name) {
                     StructFieldResolution::Found(_) => {}
                     StructFieldResolution::Ambiguous => {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span,
                             message: format!("Ambiguous promoted field '{}::{}'", name, prop_name),
                         });
                     }
                     StructFieldResolution::Missing => {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span,
                             message: format!("Unknown struct field '{}::{}'", name, prop_name),
                         });
@@ -508,7 +508,7 @@ impl<'a> CheckContext<'a> {
                     return;
                 };
                 if !info.fields.contains_key(&prop_name) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!("Unknown interface field '{}::{}'", name, prop_name),
                     });
@@ -516,7 +516,7 @@ impl<'a> CheckContext<'a> {
             }
             Type::Enum(name) => {
                 if !self.enum_allows_field(&name, &prop_name) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!("Unknown enum field '{}::{}'", name, prop_name),
                     });
@@ -528,7 +528,7 @@ impl<'a> CheckContext<'a> {
                 ..
             } => {
                 if !self.enum_case_allows_field(&enum_name, &case_name, &prop_name) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!(
                             "Unknown enum field '{}::{}::{}'",
@@ -541,7 +541,7 @@ impl<'a> CheckContext<'a> {
                 if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") =>
             {
                 if prop_name != "name" {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!("Unknown enum field '{}::{}'", base, prop_name),
                     });
@@ -620,7 +620,7 @@ impl<'a> CheckContext<'a> {
                     }
                 }
                 if invalid || (any_ok && missing) {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!("Unknown object field '{}' for union type", prop_name),
                     });
@@ -783,7 +783,7 @@ impl<'a> CheckContext<'a> {
             let key = object_key_name(item.key, self.source);
             seen.insert(key.clone());
             let Some(expected_field) = expected.get(&key) else {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: item.span,
                     message: format!("Unknown object field '{}' in object literal", key),
                 });
@@ -791,7 +791,7 @@ impl<'a> CheckContext<'a> {
             };
             let actual = self.infer_expr_with_env(item.value, env);
             if !self.is_assignable(&actual, &expected_field.ty) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span: item.span,
                     message: format!(
                         "Object field '{}' has type {}, expected {}",
@@ -806,7 +806,7 @@ impl<'a> CheckContext<'a> {
                 continue;
             }
             if !seen.contains(name) {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span,
                     message: format!("Missing required object field '{}'", name),
                 });
@@ -913,14 +913,14 @@ impl<'a> CheckContext<'a> {
                 if let Some(existing) = env.get(&name) {
                     if explicit.contains(&name) {
                         if self.strict_null && is_null && !self.type_allows_null(existing) {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span,
                                 message: "Null is not allowed in PHPX; use Option<T> instead"
                                     .to_string(),
                             });
                         }
                         if !self.is_assignable(value_ty, existing) {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span,
                                 message: format!(
                                     "Type mismatch: expected {}, got {}",
@@ -930,7 +930,7 @@ impl<'a> CheckContext<'a> {
                         }
                     } else {
                         if self.strict_null && is_null {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span,
                                 message: "Null is not allowed in PHPX; use Option<T> instead"
                                     .to_string(),
@@ -941,7 +941,7 @@ impl<'a> CheckContext<'a> {
                     }
                 } else {
                     if self.strict_null && is_null {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span,
                             message: "Null is not allowed in PHPX; use Option<T> instead"
                                 .to_string(),

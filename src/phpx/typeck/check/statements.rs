@@ -17,7 +17,7 @@ impl<'a> CheckContext<'a> {
                     if let Some(expr) = expr {
                         if let Expr::Null { span: null_span } = *expr {
                             if self.strict_null && !self.type_allows_null(expected) {
-                                self.errors.push(TypeError {
+                                self.errors.push(TypeError { severity: Severity::Error,
                                     span: *null_span,
                                     message: "Null is not allowed in PHPX; use Option<T> instead"
                                         .to_string(),
@@ -25,7 +25,7 @@ impl<'a> CheckContext<'a> {
                             }
                         }
                     } else if self.strict_null && !self.type_allows_null(expected) {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: *span,
                             message: "Null is not allowed in PHPX; use Option<T> instead"
                                 .to_string(),
@@ -41,7 +41,7 @@ impl<'a> CheckContext<'a> {
                         }
                     }
                     if !self.is_assignable(&actual, expected) {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: *span,
                             message: format!(
                                 "Return type mismatch: expected {}, got {}",
@@ -53,7 +53,7 @@ impl<'a> CheckContext<'a> {
                 if self.strict_null && return_type.is_none() {
                     if let Some(expr) = expr {
                         if let Expr::Null { span: null_span } = *expr {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: *null_span,
                                 message: "Null is not allowed in PHPX; use Option<T> instead"
                                     .to_string(),
@@ -70,7 +70,7 @@ impl<'a> CheckContext<'a> {
                 }
                 if self.strict_null {
                     if let Expr::Null { span } = *expr {
-                        self.errors.push(TypeError {
+                        self.errors.push(TypeError { severity: Severity::Error,
                             span: *span,
                             message: "Null is not allowed in PHPX; use Option<T> instead"
                                 .to_string(),
@@ -204,7 +204,7 @@ impl<'a> CheckContext<'a> {
                         if let Some(ty) = param.ty {
                             let resolved = self.resolve_type_with_params(ty, &type_param_set);
                             if let Type::Struct(ref name) = resolved {
-                                self.errors.push(TypeError {
+                                self.errors.push(TypeError { severity: Severity::Error,
                                     span: param.span,
                                     message: format!(
                                         "Destructured parameter '${}' cannot use struct type '{}'; use interface '{}' or Object<{{...}}>",
@@ -239,7 +239,7 @@ impl<'a> CheckContext<'a> {
                             let expected = self.resolve_type_with_params(ty, &type_param_set);
                             let actual = self.check_expr(default, env, explicit);
                             if !self.is_assignable(&actual, &expected) {
-                                self.errors.push(TypeError {
+                                self.errors.push(TypeError { severity: Severity::Error,
                                     span: param.span,
                                     message: format!(
                                         "Default parameter type mismatch: expected {}, got {}",
@@ -260,7 +260,7 @@ impl<'a> CheckContext<'a> {
                             Some(args.first().cloned().unwrap_or(Type::Unknown))
                         }
                         Some(other) => {
-                            self.errors.push(TypeError {
+                            self.errors.push(TypeError { severity: Severity::Error,
                                 span: stmt.span(),
                                 message: format!(
                                     "Async function must declare Promise<T> return type, got {}",
@@ -382,6 +382,7 @@ impl<'a> CheckContext<'a> {
                                     "{target_key} does not implement all methods required by {trait_key}: missing {}",
                                     missing.join(", ")
                                 ),
+                                severity: Severity::Error,
                             });
                         }
 
@@ -400,6 +401,7 @@ impl<'a> CheckContext<'a> {
                                 message: format!(
                                     "{target_key}.{name} does not match the signature {trait_key} requires"
                                 ),
+                                severity: Severity::Error,
                             });
                         }
                     }
@@ -475,6 +477,7 @@ impl<'a> CheckContext<'a> {
                                         "{target_key}.{method_name} is required by both {other_trait} and {} with incompatible signatures",
                                         record.trait_name
                                     ),
+                                    severity: Severity::Error,
                                 });
                             } else if *has_default && !any_provides(method_name) {
                                 // both sides equal signature; only ambiguous
@@ -489,6 +492,7 @@ impl<'a> CheckContext<'a> {
                                         "{target_key}.{method_name} has a default implementation in both {other_trait} and {}; provide an explicit override to resolve the ambiguity",
                                         record.trait_name
                                     ),
+                                    severity: Severity::Error,
                                 });
                             }
                         }
@@ -658,6 +662,7 @@ impl<'ast> Visitor<'ast> for SelfFieldValidator<'_> {
                         message: format!(
                             "self.{field_name} does not refer to a declared field"
                         ),
+                        severity: Severity::Error,
                     });
                 }
             }
