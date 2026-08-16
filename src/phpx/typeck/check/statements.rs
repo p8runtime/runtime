@@ -301,6 +301,31 @@ impl<'a> CheckContext<'a> {
                 span,
                 ..
             } => {
+                // Resolve every provided method's signature exactly once,
+                // regardless of whether this is an inherent or trait impl.
+                // This is what makes the declared param/return types get
+                // validated at all -- resolve_type/resolve_name_type push
+                // errors as a side effect of being called. Before this,
+                // inherent impls (trait_name: None) skipped this block
+                // entirely and a completely invented type name in an
+                // inherent impl's signature typechecked clean.
+                let target_key = token_text(self.source, target.parts[0].span);
+                let provided: HashMap<String, MethodSig> = members
+                    .iter()
+                    .filter_map(|m| match m {
+                        ClassMember::Method {
+                            name,
+                            params,
+                            return_type,
+                            ..
+                        } => Some((
+                            token_text(self.source, name.span),
+                            self.method_signature(params, *return_type),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+
                 // RFD 19 conformance check, two parts: (1) every
                 // non-default trait method must be present, (2) every
                 // provided method's actual signature must match what the
@@ -309,23 +334,7 @@ impl<'a> CheckContext<'a> {
                 // now (see RFD 19 design notes on "prefer simplicity").
                 if let Some(trait_ref) = trait_name {
                     let trait_key = token_text(self.source, trait_ref.parts[0].span);
-                    let target_key = token_text(self.source, target.parts[0].span);
                     if let Some(info) = self.traits.get(&trait_key).cloned() {
-                        let provided: HashMap<String, MethodSig> = members
-                            .iter()
-                            .filter_map(|m| match m {
-                                ClassMember::Method {
-                                    name,
-                                    params,
-                                    return_type,
-                                    ..
-                                } => Some((
-                                    token_text(self.source, name.span),
-                                    self.method_signature(params, *return_type),
-                                )),
-                                _ => None,
-                            })
-                            .collect();
 
                         let mut missing: Vec<&str> = info
                             .methods

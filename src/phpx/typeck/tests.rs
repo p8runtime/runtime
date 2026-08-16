@@ -881,6 +881,20 @@ fn ds_trait_impl_wrong_signature_errors() {
 }
 
 #[test]
+fn ds_inherent_impl_invalid_param_type_errors() {
+    // Before this, inherent impls (no trait) skipped all signature
+    // resolution entirely -- a made-up type name typechecked clean.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point { bad(self: Self, weird: TotallyNotARealType): int { return 1; } }
+    "#;
+    assert!(
+        check_ds(code).is_err(),
+        "an invalid parameter type in an inherent impl must be rejected"
+    );
+}
+
+#[test]
 fn ds_trait_conflict_incompatible_signatures_errors() {
     let code = r#"
         trait A {
