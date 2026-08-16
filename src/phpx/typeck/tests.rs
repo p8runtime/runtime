@@ -973,6 +973,45 @@ fn ds_impl_method_calling_sibling_method_via_self_ok() {
 }
 
 #[test]
+fn ds_impl_method_call_as_argument_to_another_self_method_call_ok() {
+    // Deeper probe of the same fix: a self.method() call nested as an
+    // ARGUMENT to another self.method() call (not just sequential sibling
+    // calls). Confirms visit_arg's default walk still reaches nested
+    // Expr::Call nodes and re-enters the special-cased handling correctly
+    // rather than only working one level deep.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point {
+          double(self: Self): int { return self.x * 2; }
+          addTo(self: Self, n: int): int { return n + self.double(); }
+          sumBoth(self: Self): int { return self.addTo(self.double()); }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
+fn ds_impl_method_bogus_field_alongside_valid_method_call_errors() {
+    // Confirms the Expr::Call special-case doesn't over-suppress: a
+    // genuinely unknown field used alongside a valid method call in the
+    // same expression must still be rejected -- proves args are still
+    // walked and validated normally, not accidentally skipped wholesale.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point {
+          double(self: Self): int { return self.x * 2; }
+          bad(self: Self): int { return self.double() + self.totallyBogusFieldName; }
+        }
+    "#;
+    let result = check_ds(code);
+    assert!(result.is_err(), "expected the bogus field to still be rejected");
+    assert!(
+        result.unwrap_err().contains("totallyBogusFieldName"),
+        "error should name the bogus field"
+    );
+}
+
+#[test]
 fn ds_trait_conflict_incompatible_signatures_errors() {
     let code = r#"
         trait A {
