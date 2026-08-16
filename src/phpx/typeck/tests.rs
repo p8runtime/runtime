@@ -734,3 +734,27 @@ fn closure_params_are_in_scope() {
     let code = "$f = function($x: int): int { return $x + 1; };";
     assert!(check(code).is_ok());
 }
+
+#[test]
+fn bytes_type_in_param_and_return_is_ok() {
+    let code = "function encode($input: bytes): bytes { return $input; }";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn bytes_type_rejects_string_assignment() {
+    let code = "function f(): bytes { return 'hello'; }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn bytes_type_accepts_bytes_variable() {
+    let code = "function f($b: bytes): bytes { return $b; }";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn bytes_type_in_struct_field_is_ok() {
+    let code = "struct Packet { $payload: bytes; }";
+    assert!(check(code).is_ok());
+}

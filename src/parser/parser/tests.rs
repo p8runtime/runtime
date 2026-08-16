@@ -827,3 +827,57 @@ function test() {
         program.errors
     );
 }
+
+#[test]
+fn phpx_parses_bytes_type_in_param_and_return() {
+    let code = "function encode($input: bytes): bytes { return $input; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "parse errors: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn phpx_parses_bytes_type_in_struct_field() {
+    let code = "struct Packet { $payload: bytes; $len: int; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "parse errors: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn phpx_parses_bytes_union_type() {
+    let code = "function maybe_bytes(): bytes|string { return ''; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "parse errors: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn lexer_recognizes_bytes_as_type_keyword() {
+    use crate::parser::lexer::token::TokenKind;
+    let code = "<?php bytes";
+    let mut lexer = Lexer::new(code.as_bytes());
+    lexer.start_in_scripting();
+    // Skip the open tag token if the lexer emits it.
+    let token = lexer.find(|t| t.kind == TokenKind::TypeBytes).expect("expected TypeBytes token");
+    assert_eq!(token.kind, TokenKind::TypeBytes);
+    assert_eq!(&code.as_bytes()[token.span.start..token.span.end], b"bytes");
+}
