@@ -195,6 +195,7 @@ impl<'a> CheckContext<'a> {
             "float" | "double" => Type::Primitive(PrimitiveType::Float),
             "bool" | "boolean" => Type::Primitive(PrimitiveType::Bool),
             "string" => Type::Primitive(PrimitiveType::String),
+            "bytes" => Type::Primitive(PrimitiveType::Bytes),
             "null" => Type::Primitive(PrimitiveType::Null),
             "array" => Type::Array,
             "object" => Type::Object,
@@ -316,6 +317,7 @@ impl<'a> CheckContext<'a> {
             || name.eq_ignore_ascii_case("bool")
             || name.eq_ignore_ascii_case("boolean")
             || name.eq_ignore_ascii_case("string")
+            || name.eq_ignore_ascii_case("bytes")
             || name.eq_ignore_ascii_case("null")
             || name.eq_ignore_ascii_case("array")
             || name.eq_ignore_ascii_case("object")

@@ -37,6 +37,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 | TokenKind::Static
                 | TokenKind::TypeInt
                 | TokenKind::TypeString
+                | TokenKind::TypeBytes
                 | TokenKind::TypeBool
                 | TokenKind::TypeFloat
                 | TokenKind::TypeVoid

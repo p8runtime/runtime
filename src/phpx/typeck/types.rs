@@ -7,6 +7,7 @@ pub enum PrimitiveType {
     Float,
     Bool,
     String,
+    Bytes,
     Null,
 }
 
@@ -51,6 +52,7 @@ impl Type {
                 PrimitiveType::Float => "float".to_string(),
                 PrimitiveType::Bool => "bool".to_string(),
                 PrimitiveType::String => "string".to_string(),
+                PrimitiveType::Bytes => "bytes".to_string(),
                 PrimitiveType::Null => "null".to_string(),
             },
             Type::Array => "array".to_string(),

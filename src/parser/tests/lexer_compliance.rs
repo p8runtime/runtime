@@ -192,6 +192,7 @@ fn map_kind_to_php(kind: TokenKind, _text: &str) -> &'static str {
         TokenKind::TypeInt => "T_STRING",
         TokenKind::TypeFloat => "T_STRING",
         TokenKind::TypeString => "T_STRING",
+        TokenKind::TypeBytes => "T_STRING",
         TokenKind::TypeObject => "T_STRING",
         TokenKind::TypeCallable => "T_CALLABLE",
         TokenKind::TypeIterable => "T_ITERABLE", // PHP 7.1+
