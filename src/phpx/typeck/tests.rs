@@ -919,6 +919,37 @@ fn ds_inherent_impl_invalid_param_type_errors() {
 }
 
 #[test]
+fn ds_impl_method_unknown_self_field_errors() {
+    // self.field accesses inside an impl method body are checked against
+    // the target struct's actual declared fields (v1 scope: struct
+    // targets only). Before the fix, self.field was parsed as
+    // Expr::DotAccess (not Expr::PropertyFetch, which the first version
+    // of this validator matched on) so the check silently never fired.
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point { bad(self: Self): int { return self.totallyBogusFieldName; } }
+    "#;
+    let result = check_ds(code);
+    assert!(
+        result.is_err(),
+        "an unknown self.field access in an impl method must be rejected"
+    );
+    assert!(
+        result.unwrap_err().contains("totallyBogusFieldName"),
+        "error should name the unknown field"
+    );
+}
+
+#[test]
+fn ds_impl_method_known_self_field_ok() {
+    let code = r#"
+        struct Point { $x: int; }
+        impl Point { getX(self: Self): int { return self.x; } }
+    "#;
+    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+}
+
+#[test]
 fn ds_trait_conflict_incompatible_signatures_errors() {
     let code = r#"
         trait A {

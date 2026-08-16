@@ -115,3 +115,17 @@ pub struct TypeError {
 pub(in crate::phpx::typeck::check) struct JsxExprValidator {
     pub(in crate::phpx::typeck::check) errors: Vec<TypeError>,
 }
+
+// RFD 19: validates `self.field` accesses inside an impl-block method body
+// against the target struct's actually-declared fields. Deliberately
+// narrow -- NOT full method-body statement/expression checking (that gap
+// is real and much bigger, confirmed by reading Stmt::Function's full
+// treatment: param binding, destructuring, defaults, async/Promise
+// unwrapping, all before its own check_stmt walk -- out of scope tonight).
+// This only catches the common, high-value case: a typo'd or invented
+// field name reached through `self.`.
+pub(in crate::phpx::typeck::check) struct SelfFieldValidator<'a> {
+    pub(in crate::phpx::typeck::check) source: &'a [u8],
+    pub(in crate::phpx::typeck::check) known_fields: std::collections::BTreeSet<String>,
+    pub(in crate::phpx::typeck::check) errors: Vec<TypeError>,
+}

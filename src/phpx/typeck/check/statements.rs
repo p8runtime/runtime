@@ -310,6 +310,36 @@ impl<'a> CheckContext<'a> {
                 // entirely and a completely invented type name in an
                 // inherent impl's signature typechecked clean.
                 let target_key = token_text(self.source, target.parts[0].span);
+
+                // RFD 19: validate self.field accesses against the target's
+                // actual fields, struct targets only for v1 (enums use a
+                // different field-payload model not covered here). Narrow
+                // slice of the much bigger "method bodies aren't checked at
+                // all" gap -- see SelfFieldValidator's doc comment.
+                if let Some(struct_info) = self.structs.get(&target_key).cloned() {
+                    let known_fields: std::collections::BTreeSet<String> =
+                        struct_info.fields.keys().cloned().collect();
+                    for member in members.iter() {
+                        if let ClassMember::Method { params, body, .. } = member {
+                            let has_self = params.iter().any(|p| {
+                                token_text(self.source, p.name.span) == "self"
+                            });
+                            if !has_self {
+                                continue;
+                            }
+                            let mut validator = SelfFieldValidator {
+                                source: self.source,
+                                known_fields: known_fields.clone(),
+                                errors: Vec::new(),
+                            };
+                            for stmt in body.iter() {
+                                validator.visit_stmt(*stmt);
+                            }
+                            self.errors.extend(validator.errors);
+                        }
+                    }
+                }
+
                 let provided: HashMap<String, MethodSig> = members
                     .iter()
                     .filter_map(|m| match m {
@@ -584,5 +614,25 @@ impl<'a> CheckContext<'a> {
             }
             _ => false,
         }
+    }
+}
+
+impl<'ast> Visitor<'ast> for SelfFieldValidator<'_> {
+    fn visit_expr(&mut self, expr: ExprId<'ast>) {
+        if let Expr::DotAccess { target, property, span } = *expr {
+            let target_text = token_text(self.source, target.span());
+            if target_text == "self" {
+                let field_name = token_text(self.source, property.span);
+                if !self.known_fields.contains(&field_name) {
+                    self.errors.push(TypeError {
+                        span,
+                        message: format!(
+                            "self.{field_name} does not refer to a declared field"
+                        ),
+                    });
+                }
+            }
+        }
+        walk_expr(self, expr);
     }
 }
