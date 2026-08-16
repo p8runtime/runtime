@@ -735,6 +735,45 @@ fn closure_params_are_in_scope() {
     assert!(check(code).is_ok());
 }
 
+// --- Generic type-parameter assignability (issue #46) ---------------------
+// Before the fix, `is_assignable_base` returned true whenever either side was
+// a TypeParam, which switched off generic checking entirely: `T` accepted
+// anything and anything accepted `T`. Nothing exercised those arms, so the
+// hole was invisible. These tests are the missing coverage.
+
+#[test]
+fn generic_identity_is_assignable() {
+    let code = "<?php function id<T>($v: T): T { return $v; }";
+    assert!(check(code).is_ok(), "T should be assignable to T");
+}
+
+#[test]
+fn generic_param_to_concrete_return_errors() {
+    let code = "<?php function bad<T>($v: T): int { return $v; }";
+    assert!(
+        check(code).is_err(),
+        "an unconstrained T must not satisfy a concrete int return type"
+    );
+}
+
+#[test]
+fn concrete_to_generic_param_return_errors() {
+    let code = "<?php function bad<T>($v: int): T { return $v; }";
+    assert!(
+        check(code).is_err(),
+        "int must not satisfy an unconstrained T return type"
+    );
+}
+
+#[test]
+fn distinct_type_params_are_not_interchangeable() {
+    let code = "<?php function bad<A, B>($v: A): B { return $v; }";
+    assert!(
+        check(code).is_err(),
+        "A and B are distinct type parameters and must not be assignable to each other"
+    );
+}
+
 #[test]
 fn bytes_type_in_param_and_return_is_ok() {
     let code = "function encode($input: bytes): bytes { return $input; }";

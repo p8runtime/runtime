@@ -1255,6 +1255,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Array => {
                 if self.is_ds() {
+                    if self.ds_array_callable_declared {
+                        self.bump();
+                        return self.arena.alloc(Expr::Variable {
+                            name: token.span,
+                            span: token.span,
+                        });
+                    }
                     self.errors.push(ParseError::with_help(
                         token.span,
                         "PHP array() is not part of DekaScript",

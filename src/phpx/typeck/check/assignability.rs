@@ -11,9 +11,6 @@ impl<'a> CheckContext<'a> {
         {
             return true;
         }
-        if matches!(target, Type::TypeParam(_)) || matches!(source, Type::TypeParam(_)) {
-            return true;
-        }
         match target {
             Type::Union(options) => {
                 return options.iter().any(|opt| self.is_assignable(source, opt));
@@ -206,8 +203,6 @@ impl<'a> CheckContext<'a> {
 fn is_assignable_base(source: &Type, target: &Type) -> bool {
     if matches!(target, Type::Unknown | Type::Mixed)
         || matches!(source, Type::Unknown | Type::Mixed)
-        || matches!(target, Type::TypeParam(_))
-        || matches!(source, Type::TypeParam(_))
     {
         return true;
     }
@@ -224,6 +219,7 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
         _ => {}
     }
     match (source, target) {
+        (Type::TypeParam(a), Type::TypeParam(b)) => a == b,
         (Type::Primitive(a), Type::Primitive(b)) => match (a, b) {
             (PrimitiveType::Int, PrimitiveType::Float) => true,
             _ => a == b,
