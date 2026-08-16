@@ -199,6 +199,15 @@ impl<'a> CheckContext<'a> {
             "array" => Type::Array,
             "object" => Type::Object,
             "mixed" => Type::Mixed,
+            // RFD 19: `Self` in an impl-block method signature (e.g.
+            // `self: Self`). Decided but never wired in until now. Resolves
+            // to Unknown rather than the precise target type -- honest v1:
+            // method bodies aren't expression-checked for identifier
+            // validity at all yet (a separate, pre-existing gap, not this
+            // one), so full target-substitution would be false precision.
+            // Both sides of a trait/impl signature-equality comparison
+            // still agree trivially since they both resolve the same way.
+            "self" => Type::Unknown,
             _ => {
                 if params.contains(&name) {
                     Type::TypeParam(name)
@@ -255,6 +264,14 @@ impl<'a> CheckContext<'a> {
                 span: name.span,
                 message: "Result<T, E> requires type arguments".to_string(),
             });
+            return Type::Unknown;
+        }
+        // RFD 19: `Self` in an impl-block method signature. Real usage
+        // parses as AstType::Name (capitalized, type-name-shaped), not
+        // AstType::Simple, so it must be gated here before the
+        // is_known_named_type check, not only in resolve_named_type (kept
+        // there too, harmless, in case some other path reaches it directly).
+        if out == "Self" {
             return Type::Unknown;
         }
         if !self.is_known_named_type(&out, params) {
