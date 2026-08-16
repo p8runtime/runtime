@@ -29,14 +29,16 @@ fn check(code: &str) -> Result<(), String> {
         }
         return Err(out);
     }
-    check_program(&program, code.as_bytes()).map_err(|errs| {
-        let mut out = String::new();
-        for err in errs {
-            out.push_str(&err.message);
-            out.push('\n');
-        }
-        out
-    })
+    check_program(&program, code.as_bytes())
+        .map(|_warnings| ())
+        .map_err(|errs| {
+            let mut out = String::new();
+            for err in errs {
+                out.push_str(&err.message);
+                out.push('\n');
+            }
+            out
+        })
 }
 
 fn check_with_path(code: &str, path: &str) -> Result<(), String> {
@@ -52,14 +54,16 @@ fn check_with_path(code: &str, path: &str) -> Result<(), String> {
         }
         return Err(out);
     }
-    check_program_with_path(&program, code.as_bytes(), Some(Path::new(path))).map_err(|errs| {
-        let mut out = String::new();
-        for err in errs {
-            out.push_str(&err.message);
-            out.push('\n');
-        }
-        out
-    })
+    check_program_with_path(&program, code.as_bytes(), Some(Path::new(path)))
+        .map(|_warnings| ())
+        .map_err(|errs| {
+            let mut out = String::new();
+            for err in errs {
+                out.push_str(&err.message);
+                out.push('\n');
+            }
+            out
+        })
 }
 
 #[test]
@@ -796,4 +800,77 @@ fn bytes_type_accepts_bytes_variable() {
 fn bytes_type_in_struct_field_is_ok() {
     let code = "struct Packet { $payload: bytes; }";
     assert!(check(code).is_ok());
+}
+
+// --- Diagnostic severity mechanism (deka#59) -------------------------------
+//
+// check_program's Result discriminant is the severity signal: Ok(diagnostics)
+// means the program checked out (diagnostics, if any, are all Warning-level);
+// Err(diagnostics) means at least one Error-level diagnostic is present. The
+// `__deka_poc_warn__` sentinel function name is a synthetic, test-only
+// trigger (see check/poc_warning.rs) that proves a Warning diagnostic flows
+// through without failing the check -- it is not a real language rule.
+
+#[test]
+fn poc_warning_only_program_checks_out_successfully() {
+    let code = normalize_phpx_snippet("<?php function __deka_poc_warn__() {}");
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "program should parse cleanly");
+
+    let result = check_program(&program, code.as_bytes());
+    let diagnostics = match result {
+        Ok(diagnostics) => diagnostics,
+        Err(diagnostics) => panic!(
+            "a warnings-only program must be Ok, not Err: {:?}",
+            diagnostics
+                .iter()
+                .map(|d| &d.message)
+                .collect::<Vec<_>>()
+        ),
+    };
+
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "expected exactly the one PoC warning, got {:?}",
+        diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert_eq!(diagnostics[0].severity, crate::parser::ast::Severity::Warning);
+    assert!(
+        diagnostics[0].message.contains("__deka_poc_warn__"),
+        "unexpected warning message: {}",
+        diagnostics[0].message
+    );
+    assert!(diagnostics[0].message.contains("deka#59"));
+
+    // The rendered form must be visually distinguishable ("type warning",
+    // never "type error") from a hard failure.
+    let rendered = diagnostics[0].to_human_readable(code.as_bytes());
+    assert!(rendered.starts_with("type warning:"), "got: {rendered}");
+}
+
+#[test]
+fn real_type_error_still_fails_exactly_as_before() {
+    // Same shape of program as the pre-existing
+    // `generic_param_to_concrete_return_errors` regression test above --
+    // confirms the severity mechanism did not soften real errors into
+    // warnings, and that check_program still returns Err for them.
+    let code = normalize_phpx_snippet("<?php function bad<T>($v: T): int { return $v; }");
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "program should parse cleanly");
+
+    let result = check_program(&program, code.as_bytes());
+    let diagnostics = match result {
+        Err(diagnostics) => diagnostics,
+        Ok(_) => panic!("an unconstrained T must not satisfy a concrete int return type"),
+    };
+
+    assert!(
+        diagnostics.iter().any(|d| d.severity == crate::parser::ast::Severity::Error),
+        "Err(..) must contain at least one Error-severity diagnostic"
+    );
 }

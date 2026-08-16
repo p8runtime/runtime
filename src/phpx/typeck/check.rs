@@ -1,7 +1,7 @@
 use crate::parser::ast::visitor::{Visitor, walk_expr};
 use crate::parser::ast::{
     BinaryOp, ClassKind, ClassMember, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
-    PropertyEntry, Stmt, StmtId, Type as AstType, TypeParam, UnaryOp,
+    PropertyEntry, Severity, Stmt, StmtId, Type as AstType, TypeParam, UnaryOp,
 };
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
@@ -24,6 +24,7 @@ mod helpers;
 mod jsx;
 mod methods;
 mod model;
+mod poc_warning;
 mod statements;
 mod structs;
 mod type_resolution;

@@ -2,8 +2,12 @@ use super::*;
 
 impl TypeError {
     pub fn to_human_readable(&self, source: &[u8]) -> String {
+        let label = match self.severity {
+            Severity::Error => "type error",
+            Severity::Warning => "type warning",
+        };
         let Some(info) = self.span.line_info(source) else {
-            return format!("type error: {}", self.message);
+            return format!("{}: {}", label, self.message);
         };
         let line_str = String::from_utf8_lossy(info.line_text);
         let gutter_width = info.line.to_string().len();
@@ -21,10 +25,11 @@ impl TypeError {
         marker.push_str(&"^".repeat(highlight_len));
 
         format!(
-            "type error: {}\n --> line {}, column {}\n{gutter}|\n{line_no:>width$} | {line_src}\n{gutter}| {marker}",
+            "{label}: {}\n --> line {}, column {}\n{gutter}|\n{line_no:>width$} | {line_src}\n{gutter}| {marker}",
             self.message,
             info.line,
             info.column,
+            label = label,
             gutter = " ".repeat(gutter_width + 1),
             line_no = info.line,
             width = gutter_width,
@@ -34,7 +39,21 @@ impl TypeError {
     }
 }
 
-pub fn check_program(program: &Program, source: &[u8]) -> Result<(), Vec<TypeError>> {
+/// Check a program's types.
+///
+/// The `Result` discriminant is the caller-visible severity signal (deka#59):
+/// `Ok(diagnostics)` means the program checks out -- `diagnostics` may still
+/// be non-empty, but everything in it is `Severity::Warning`. `Err(diagnostics)`
+/// means at least one `Severity::Error` diagnostic is present; `diagnostics`
+/// in that case may contain a mix of errors and warnings, since a caller who
+/// already has to walk the list to render errors can render any accompanying
+/// warnings from the same pass instead of re-running the check.
+///
+/// This mirrors the existing `Result<(), Vec<TypeError>>` shape (same `Err`
+/// payload, same call pattern for the overwhelming majority of callers that
+/// only match on `Err`) while adding exactly the one bit of information the
+/// old `Ok(())` couldn't carry: "did we produce non-fatal diagnostics too?"
+pub fn check_program(program: &Program, source: &[u8]) -> Result<Vec<TypeError>, Vec<TypeError>> {
     check_program_with_path(program, source, None)
 }
 
@@ -42,14 +61,14 @@ pub fn check_program_with_path(
     program: &Program,
     source: &[u8],
     file_path: Option<&Path>,
-) -> Result<(), Vec<TypeError>> {
+) -> Result<Vec<TypeError>, Vec<TypeError>> {
     let mut ctx = CheckContext::new(source, file_path);
     ctx.check_program(program);
 
-    if ctx.errors.is_empty() {
-        Ok(())
-    } else {
+    if ctx.errors.iter().any(TypeError::is_error) {
         Err(ctx.errors)
+    } else {
+        Ok(ctx.errors)
     }
 }
 
@@ -58,14 +77,14 @@ pub fn check_program_with_path_and_externals(
     source: &[u8],
     file_path: Option<&Path>,
     externals: &HashMap<String, ExternalFunctionSig>,
-) -> Result<(), Vec<TypeError>> {
+) -> Result<Vec<TypeError>, Vec<TypeError>> {
     let mut ctx = CheckContext::new_with_externals(source, file_path, externals);
     ctx.check_program(program);
 
-    if ctx.errors.is_empty() {
-        Ok(())
-    } else {
+    if ctx.errors.iter().any(TypeError::is_error) {
         Err(ctx.errors)
+    } else {
+        Ok(ctx.errors)
     }
 }
 

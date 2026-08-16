@@ -6,19 +6,19 @@ impl<'ast> Visitor<'ast> for JsxExprValidator {
             Expr::Assign { span, .. }
             | Expr::AssignRef { span, .. }
             | Expr::AssignOp { span, .. } => {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span,
                     message: "Statements not allowed in JSX expressions".to_string(),
                 });
             }
             Expr::Yield { span, .. } => {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span,
                     message: "Statements not allowed in JSX expressions".to_string(),
                 });
             }
             Expr::Error { span } => {
-                self.errors.push(TypeError {
+                self.errors.push(TypeError { severity: Severity::Error,
                     span,
                     message: "Invalid JSX expression".to_string(),
                 });
@@ -59,7 +59,7 @@ impl<'a> CheckContext<'a> {
         let has_uppercase = last.chars().any(|ch| ch.is_ascii_uppercase());
 
         if !is_component && has_uppercase {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: name.span,
                 message: format!(
                     "JSX component '{}' must be capitalized (use <{} />)",
@@ -71,7 +71,7 @@ impl<'a> CheckContext<'a> {
         }
 
         if is_component && !self.is_known_component_name(last) {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: name.span,
                 message: format!(
                     "Unknown component '{}'; import it or define function {}()",
@@ -105,7 +105,7 @@ impl<'a> CheckContext<'a> {
         match component {
             "Link" => {
                 if !attrs.contains("to") {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: "Link requires prop 'to'".to_string(),
                     });
@@ -113,13 +113,13 @@ impl<'a> CheckContext<'a> {
             }
             "ContextProvider" => {
                 if !attrs.contains("ctx") {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: "ContextProvider requires prop 'ctx'".to_string(),
                     });
                 }
                 if !attrs.contains("value") {
-                    self.errors.push(TypeError {
+                    self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: "ContextProvider requires prop 'value'".to_string(),
                     });
@@ -150,7 +150,7 @@ impl<'a> CheckContext<'a> {
             if let Some(suggested) = suggestion {
                 message.push_str(&format!("; did you mean '{}'?", suggested));
             }
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span: *attr_span,
                 message,
             });
@@ -160,7 +160,7 @@ impl<'a> CheckContext<'a> {
             if field.optional || attrs.contains(field_name) {
                 continue;
             }
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "Missing required prop '{}' for component '{}'",
@@ -190,7 +190,7 @@ impl<'a> CheckContext<'a> {
         };
 
         if sig.variadic || sig.params.len() != 1 {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "JSX component '{}' must accept exactly one typed props parameter",
@@ -201,7 +201,7 @@ impl<'a> CheckContext<'a> {
         }
 
         let Some(props_ty) = sig.params.first().and_then(|param| param.ty.clone()) else {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "JSX component '{}' props parameter must be typed (use interface or Object<{{...}}>)",
@@ -212,7 +212,7 @@ impl<'a> CheckContext<'a> {
         };
 
         if let Type::Struct(name) = &props_ty {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "JSX component '{}' props type '{}' cannot be a struct; use interface '{}' or Object<{{...}}>",
@@ -223,7 +223,7 @@ impl<'a> CheckContext<'a> {
         }
 
         if !self.is_component_props_type(&props_ty) {
-            self.errors.push(TypeError {
+            self.errors.push(TypeError { severity: Severity::Error,
                 span,
                 message: format!(
                     "JSX component '{}' props type must be interface or object shape, got {}",
