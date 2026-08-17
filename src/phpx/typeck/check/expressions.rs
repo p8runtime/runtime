@@ -62,9 +62,10 @@ impl<'a> CheckContext<'a> {
                 span,
             } => {
                 if self.is_null_comparison(op, left, right) && !self.allow_null_comparisons() {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span,
-                        message: "Null comparisons are not allowed in PHPX; use isset() instead"
+                        message: "Null comparisons are not allowed; use isset() instead"
                             .to_string(),
                     });
                 }
