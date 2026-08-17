@@ -95,6 +95,7 @@ pub enum TokenKind {
     EndDeclare,
     Match,
     Fn,
+    Unsafe,
     Cql, // cql <name> = <cypher> ;
     // `query` is context-sensitive — handled as Identifier by the lexer,
     // recognized by the parser when followed by <name> = <cypher> ;
@@ -317,6 +318,7 @@ impl TokenKind {
                 | TokenKind::EndDeclare
                 | TokenKind::Match
                 | TokenKind::Fn
+                | TokenKind::Unsafe
                 | TokenKind::Const
                 | TokenKind::Use
                 | TokenKind::Public

@@ -360,6 +360,18 @@ impl<'a> CheckContext<'a> {
                 self.check_match_exhaustive(&cond_ty, arms, env);
                 match_ty
             }
+            Expr::Unsafe {
+                body, catch, finally, ..
+            } => {
+                let body_ty = self.check_expr(body, env, explicit);
+                if let Some(catch) = catch {
+                    let _ = self.check_expr(catch.body, env, explicit);
+                }
+                if let Some(finally) = finally {
+                    let _ = self.check_expr(finally, env, explicit);
+                }
+                body_ty
+            }
             Expr::AnonymousClass { span, .. } => {
                 self.errors.push(TypeError { severity: Severity::Error,
                     span,
