@@ -127,6 +127,26 @@ fn struct_default_allows_struct_and_object_literals() {
 }
 
 #[test]
+fn ds_bare_struct_field_names_typecheck() {
+    // dekaruntime/deka#93: DekaScript structs use bare identifiers.
+    let code = "struct Point { x: int; y: int } function f(): int { return Point { x: 3, y: 4 }.x; }";
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
+fn ds_bare_struct_field_missing_field_errors() {
+    let code = "struct Point { x: int; y: int } function f(): Point { return Point { x: 3 }; }";
+    assert!(check_ds(code).is_err());
+}
+
+#[test]
+fn ds_bare_struct_field_wrong_type_errors() {
+    let code = "struct Point { x: int; y: int } function f(): Point { return Point { x: \"nope\", y: 4 }; }";
+    assert!(check_ds(code).is_err());
+}
+
+#[test]
 fn struct_field_annotations_basic_ok() {
     let code = "struct User { $id: int @id @autoIncrement; }";
     let res = check(code);

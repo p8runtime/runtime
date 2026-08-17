@@ -207,6 +207,89 @@ fn phpx_parses_struct_field_annotation_args() {
 }
 
 #[test]
+fn ds_parses_struct_with_bare_field_names() {
+    let code = "struct Point { x: int; y: int }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| !matches!(***s, Stmt::Nop { .. }))
+        .expect("expected struct stmt");
+
+    match &**stmt {
+        Stmt::Class { kind, members, .. } => {
+            assert_eq!(*kind, ClassKind::Struct);
+            let fields: Vec<_> = members
+                .iter()
+                .filter(|m| matches!(m, ClassMember::Property { .. }))
+                .collect();
+            assert_eq!(fields.len(), 2, "expected two struct fields");
+        }
+        other => panic!("expected struct stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn ds_parses_struct_literal_with_bare_field_names() {
+    let code = "struct Point { x: int; y: int } const p = Point { x: 3, y: 4 };";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn ds_still_accepts_dollar_sigil_in_structs_for_back_compat() {
+    // dekaruntime/deka#93: migration window — `$x` syntax continues to parse
+    // while DekaScript transitions to bare identifiers.
+    let code = "struct Point { $x: int; $y: int } const p = Point { $x: 3, $y: 4 };";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn phpx_still_requires_dollar_sigil_in_struct_fields() {
+    let code = "struct Point { x: int }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(
+        !program.errors.is_empty(),
+        "expected parser error for bare struct field in PHPX"
+    );
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|err| err.message.contains("struct fields must use `$name: Type` syntax")),
+        "expected PHPX sigil error, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
 fn phpx_parses_colon_typed_parameters() {
     let code = "function Name($props: Object<{ name: string }>): string { return $props.name; }";
     let arena = Bump::new();
