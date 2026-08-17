@@ -186,7 +186,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     fn can_insert_implicit_semicolon(&self) -> bool {
-        if !self.is_phpx() {
+        // DekaScript uses JavaScript-style automatic semicolon insertion (ASI)
+        // at line terminators, just like PHPX. This lets trait/impl method
+        // bodies omit trailing semicolons on the last statement, which is the
+        // idiomatic style for DS source.
+        if !(self.is_phpx() || self.is_ds()) {
             return false;
         }
         self.has_line_terminator_between(self.prev_token.span, self.current_token.span)
@@ -199,8 +203,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             // Implicit semicolon at close tag
         } else if self.current_token.kind == TokenKind::Eof {
             // Implicit semicolon at EOF
+        } else if self.current_token.kind == TokenKind::CloseBrace && self.is_ds() {
+            // DekaScript allows omitting the trailing semicolon before a
+            // closing brace (e.g. the last statement in a block, or an
+            // abstract method signature at the end of a trait body).
         } else if self.can_insert_implicit_semicolon() {
-            // Implicit semicolon at line terminator (PHPX only)
+            // Implicit semicolon at line terminator (PHPX / DekaScript)
         } else {
             // Error: Missing semicolon
             self.errors.push(ParseError::new(

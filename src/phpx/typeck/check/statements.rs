@@ -311,22 +311,17 @@ impl<'a> CheckContext<'a> {
                 // inherent impl's signature typechecked clean.
                 let target_key = token_text(self.source, target.parts[0].span);
 
-                // RFD 19: validate self.field accesses against the target's
-                // actual fields, struct targets only for v1 (enums use a
-                // different field-payload model not covered here). Narrow
-                // slice of the much bigger "method bodies aren't checked at
-                // all" gap -- see SelfFieldValidator's doc comment.
+                // RFD 19: validate `self.field` / `this.field` accesses
+                // inside an impl-block method body against the target struct's
+                // actual fields. The receiver can be spelled either `self`
+                // (explicit `self: Self` parameter) or `this` (implicit
+                // receiver, the DekaScript convention shown in the tour); both
+                // refer to the same target instance.
                 if let Some(struct_info) = self.structs.get(&target_key).cloned() {
                     let known_fields: std::collections::BTreeSet<String> =
                         struct_info.fields.keys().cloned().collect();
                     for member in members.iter() {
-                        if let ClassMember::Method { params, body, .. } = member {
-                            let has_self = params.iter().any(|p| {
-                                token_text(self.source, p.name.span) == "self"
-                            });
-                            if !has_self {
-                                continue;
-                            }
+                        if let ClassMember::Method { body, .. } = member {
                             let mut validator = SelfFieldValidator {
                                 source: self.source,
                                 known_fields: known_fields.clone(),
@@ -425,6 +420,36 @@ impl<'a> CheckContext<'a> {
                         provided: provided_names,
                         span: *span,
                     });
+                }
+            }
+            Stmt::Static { vars, .. } => {
+                // DekaScript `let` is represented as Stmt::Static. Bind the
+                // initializer type into the current environment so subsequent
+                // references (including struct method calls) can resolve.
+                for var in vars.iter() {
+                    if let Expr::Variable { span, .. } = *var.var {
+                        let name = token_text(self.source, span)
+                            .trim_start_matches('$')
+                            .to_string();
+                        if let Some(default) = var.default {
+                            let ty = self.infer_expr_with_env(default, env);
+                            env.insert(name.clone(), ty);
+                        } else {
+                            env.insert(name.clone(), Type::Unknown);
+                        }
+                    }
+                }
+            }
+            Stmt::Const { consts, .. } => {
+                // DekaScript `const` is also used at module scope; treat it
+                // like an immutable binding for type-resolution purposes.
+                for c in consts.iter() {
+                    let name = token_text(self.source, c.name.span)
+                        .trim_start_matches('$')
+                        .to_string();
+                    let ty = self.infer_expr_with_env(c.value, env);
+                    env.insert(name.clone(), ty);
+                    explicit.insert(name);
                 }
             }
             _ => {}
@@ -623,28 +648,22 @@ impl<'a> CheckContext<'a> {
 
 impl<'ast> Visitor<'ast> for SelfFieldValidator<'_> {
     fn visit_expr(&mut self, expr: ExprId<'ast>) {
-        // A `self.method(...)` call parses as `Expr::Call { func: DotAccess {
-        // target: self, property: method }, args }` in DekaScript -- the `.`
-        // operator (parser/expr/core.rs) has no dedicated method-call parse
-        // branch the way PHP's `->` does, so it always builds a bare
-        // DotAccess first and lets the surrounding postfix-call parsing wrap
-        // it in Expr::Call. Without this arm, every legitimate
-        // `self.someMethod()` call gets misdiagnosed as an unknown field
-        // access (found live: `self.double()` in a sibling method rejected
-        // as "self.double does not refer to a declared field", a real
-        // regression from the first cut of this validator). Method-name
-        // resolution is a separate, larger, not-yet-built gap (the
-        // "method-call checking does not fire at all for struct instances"
-        // finding elsewhere in this file's history) -- deliberately not
-        // attempting it here, just not misfiring the field check on a call
-        // target. Arguments still get validated normally.
+        // A `self.method(...)` / `this.method(...)` call parses as
+        // `Expr::Call { func: DotAccess { target: self/this, property: method },
+        // args }` in DekaScript -- the `.` operator has no dedicated
+        // method-call parse branch the way PHP's `->` does. Without this arm,
+        // every legitimate receiver method call gets misdiagnosed as an
+        // unknown field access.
         if let Expr::Call { func, args, .. } = *expr {
-            let is_self_method_call = matches!(
+            let is_receiver_method_call = matches!(
                 *func,
                 Expr::DotAccess { target, .. }
-                    if token_text(self.source, target.span()) == "self"
+                    if matches!(
+                        token_text(self.source, target.span()).as_str(),
+                        "self" | "this"
+                    )
             );
-            if !is_self_method_call {
+            if !is_receiver_method_call {
                 self.visit_expr(func);
             }
             for arg in args.iter() {
@@ -654,13 +673,13 @@ impl<'ast> Visitor<'ast> for SelfFieldValidator<'_> {
         }
         if let Expr::DotAccess { target, property, span } = *expr {
             let target_text = token_text(self.source, target.span());
-            if target_text == "self" {
+            if matches!(target_text.as_str(), "self" | "this") {
                 let field_name = token_text(self.source, property.span);
                 if !self.known_fields.contains(&field_name) {
                     self.errors.push(TypeError {
                         span,
                         message: format!(
-                            "self.{field_name} does not refer to a declared field"
+                            "{target_text}.{field_name} does not refer to a declared field"
                         ),
                         severity: Severity::Error,
                     });

@@ -20,34 +20,44 @@ impl<'a> CheckContext<'a> {
         let Some(method_name) = self.extract_static_ident(method) else {
             return Type::Unknown;
         };
+        self.check_method_call_signature_by_name(target_ty, &method_name, args, env, span)
+    }
 
+    pub(in crate::phpx::typeck::check) fn check_method_call_signature_by_name(
+        &mut self,
+        target_ty: &Type,
+        method_name: &str,
+        args: &'a [crate::parser::ast::Arg<'a>],
+        env: &HashMap<String, Type>,
+        span: Span,
+    ) -> Type {
         let (owner_label, sig) = match target_ty {
             Type::Struct(name) => (
                 Some(format!("struct {}", name)),
                 self.struct_methods
                     .get(name)
-                    .and_then(|methods| methods.get(&method_name))
+                    .and_then(|methods| methods.get(method_name))
                     .cloned(),
             ),
             Type::Interface(name) => (
                 Some(format!("interface {}", name)),
                 self.interfaces
                     .get(name)
-                    .and_then(|info| info.methods.get(&method_name))
+                    .and_then(|info| info.methods.get(method_name))
                     .cloned(),
             ),
             Type::Enum(name) => (
                 Some(format!("enum {}", name)),
                 self.enum_methods
                     .get(name)
-                    .and_then(|methods| methods.get(&method_name))
+                    .and_then(|methods| methods.get(method_name))
                     .cloned(),
             ),
             Type::EnumCase { enum_name, .. } => (
                 Some(format!("enum {}", enum_name)),
                 self.enum_methods
                     .get(enum_name)
-                    .and_then(|methods| methods.get(&method_name))
+                    .and_then(|methods| methods.get(method_name))
                     .cloned(),
             ),
             _ => (None, None),

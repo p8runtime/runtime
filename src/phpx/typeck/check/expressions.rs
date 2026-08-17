@@ -76,7 +76,30 @@ impl<'a> CheckContext<'a> {
                 let _ = self.check_expr(expr, env, explicit);
                 self.infer_expr_with_env(expr, env)
             }
-            Expr::Call { func, args, .. } => {
+            Expr::Call { func, args, span } => {
+                // DekaScript method calls parse as `Expr::Call {
+                //   func: Expr::DotAccess { target, property }, args }` because
+                // `.` is the only member-access operator in .ds. Route these
+                // through the same method-signature checking as PHPX's
+                // `Expr::MethodCall` when the target is a struct/enum/interface.
+                if let Expr::DotAccess { target, property, .. } = *func {
+                    let target_ty = self.check_expr(target, env, explicit);
+                    if matches!(
+                        target_ty,
+                        Type::Struct(_)
+                            | Type::Enum(_)
+                            | Type::EnumCase { .. }
+                            | Type::Interface(_)
+                    ) {
+                        for arg in args.iter() {
+                            let _ = self.check_expr(arg.value, env, explicit);
+                        }
+                        let method_name = token_text(self.source, property.span);
+                        return self.check_method_call_signature_by_name(
+                            &target_ty, &method_name, args, env, span,
+                        );
+                    }
+                }
                 let _ = self.check_expr(func, env, explicit);
                 for arg in args.iter() {
                     let _ = self.check_expr(arg.value, env, explicit);

@@ -342,6 +342,80 @@ impl<'a> CheckContext<'a> {
         }
     }
 
+    // DekaScript impl-block method collection (RFD 19). Struct/enum targets
+    // may receive methods from `impl Target { ... }` (inherent) and from
+    // `impl Trait for Target { ... }` (trait). Default bodies supplied by the
+    // trait itself are also surfaced on the target when the impl block does
+    // not override them, so a call like `target.defaultMethod()` typechecks.
+    pub(in crate::phpx::typeck::check) fn collect_impl_methods(
+        &mut self,
+        program: &Program<'a>,
+    ) {
+        for stmt in program.statements.iter() {
+            let Stmt::Impl {
+                trait_name,
+                target,
+                members,
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            if target.parts.is_empty() {
+                continue;
+            }
+            let target_name = token_text(self.source, target.parts[0].span);
+
+            // Determine which target-side method map to populate.
+            let is_struct = self.structs.contains_key(&target_name);
+            let is_enum = self.enums.contains_key(&target_name);
+            if !is_struct && !is_enum {
+                continue;
+            }
+
+            // Build the new signatures in a local map first so that
+            // `method_signature` can borrow `self` without conflicting with
+            // the mutable borrow of the target's method map.
+            let mut additions: HashMap<String, MethodSig> = HashMap::new();
+
+            // Add the methods the impl block actually provides.
+            for member in members.iter() {
+                if let ClassMember::Method {
+                    name: method_name,
+                    params,
+                    return_type,
+                    ..
+                } = member
+                {
+                    let method_name = token_text(self.source, method_name.span);
+                    let sig = self.method_signature(params, *return_type);
+                    additions.insert(method_name, sig);
+                }
+            }
+
+            // Fold in any un-overridden default methods from the implemented trait.
+            if let Some(trait_ref) = trait_name {
+                let trait_key = token_text(self.source, trait_ref.parts[0].span);
+                if let Some(trait_info) = self.traits.get(&trait_key).cloned() {
+                    for (method_name, (sig, has_default)) in trait_info.methods.iter() {
+                        if *has_default && !additions.contains_key(method_name) {
+                            additions.insert(method_name.clone(), sig.clone());
+                        }
+                    }
+                }
+            }
+
+            let methods = if is_struct {
+                self.struct_methods
+                    .entry(target_name.clone())
+                    .or_default()
+            } else {
+                self.enum_methods.entry(target_name.clone()).or_default()
+            };
+            methods.extend(additions);
+        }
+    }
+
     pub(in crate::phpx::typeck::check) fn collect_enum_methods(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
             let Stmt::Enum { name, members, .. } = stmt else {

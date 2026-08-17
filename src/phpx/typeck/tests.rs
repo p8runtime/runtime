@@ -1112,6 +1112,141 @@ fn ds_legacy_php_trait_still_rejected_outside_ds() {
 }
 
 #[test]
+fn ds_trait_method_call_type_checks() {
+    // The flagship dekaruntime/deka#93 case: a DekaScript method call on a
+    // struct-typed variable resolves through an impl block and type-checks.
+    let code = r#"trait Named {
+  name(): string
+}
+
+struct User {
+  handle: string
+}
+
+impl Named for User {
+  name(): string {
+    return this.handle
+  }
+}
+
+const user = User { handle: "deka" }
+console.log(user.name())
+"#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected typecheck ok: {:?}", res);
+}
+
+#[test]
+fn ds_trait_method_call_self_alias_type_checks() {
+    // `self` should work identically to `this` when accessing the receiver
+    // inside an impl method body.
+    let code = r#"trait Named {
+  name(): string
+}
+
+struct User {
+  handle: string
+}
+
+impl Named for User {
+  name(): string {
+    return self.handle
+  }
+}
+
+const user = User { handle: "deka" }
+console.log(user.name())
+"#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected typecheck ok: {:?}", res);
+}
+
+#[test]
+fn ds_trait_method_call_wrong_arg_errors() {
+    let code = r#"trait Named {
+  name(prefix: string): string
+}
+
+struct User {
+  handle: string
+}
+
+impl Named for User {
+  name(prefix: string): string {
+    return prefix + this.handle
+  }
+}
+
+const user = User { handle: "deka" }
+console.log(user.name(123))
+"#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected argument type mismatch to be caught");
+}
+
+#[test]
+fn ds_trait_default_method_call_type_checks() {
+    // A trait method with a default body is callable even when the impl block
+    // does not override it.
+    let code = r#"trait Greeter {
+  greet(): string { return "hello" }
+}
+
+struct Bot {}
+
+impl Greeter for Bot {}
+
+const bot = Bot {}
+console.log(bot.greet())
+"#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected default method call to typecheck: {:?}", res);
+}
+
+#[test]
+fn ds_inherent_impl_method_call_type_checks() {
+    // Method calls on a struct with only an inherent impl (no trait) should
+    // also resolve and type-check.
+    let code = r#"struct Point {
+  x: int
+  y: int
+}
+
+impl Point {
+  norm(): int {
+    return this.x + this.y
+  }
+}
+
+const p = Point { x: 3, y: 4 }
+console.log(p.norm())
+"#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected inherent impl method call to typecheck: {:?}", res);
+}
+
+#[test]
+fn ds_impl_this_unknown_field_errors() {
+    let code = r#"trait Named {
+  name(): string
+}
+
+struct User {
+  handle: string
+}
+
+impl Named for User {
+  name(): string {
+    return this.hanlde
+  }
+}
+"#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected unknown field error");
+    assert!(res.unwrap_err().contains("hanlde"));
+}
+
+#[test]
 fn bytes_type_in_param_and_return_is_ok() {
     let code = "function encode($input: bytes): bytes { return $input; }";
     assert!(check(code).is_ok());

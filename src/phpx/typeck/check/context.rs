@@ -77,6 +77,7 @@ impl<'a> CheckContext<'a> {
         self.collect_interface_methods(program);
         self.collect_trait_methods(program);
         self.collect_struct_methods(program);
+        self.collect_impl_methods(program);
         self.collect_enum_methods(program);
         self.collect_enum_cases(program);
         self.collect_functions(program);
