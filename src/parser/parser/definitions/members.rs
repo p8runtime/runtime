@@ -290,7 +290,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         // struct/enum still carry pending their own migration (RFD 9/RFD 10).
         let is_bare_ds_method = self.is_ds()
             && matches!(ctx, ClassMemberCtx::Trait | ClassMemberCtx::Impl)
-            && self.current_token.kind == TokenKind::Identifier
+            && (self.current_token.kind == TokenKind::Identifier
+                || self.current_token.kind.is_semi_reserved())
             && self.next_token.kind == TokenKind::OpenParen;
 
         if self.current_token.kind == TokenKind::Function || is_bare_ds_method {
