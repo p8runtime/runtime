@@ -21,7 +21,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 continue;
             }
 
-            let name_token = if self.current_token.kind == TokenKind::Variable {
+            let is_field_name_token = if self.is_ds() {
+                matches!(
+                    self.current_token.kind,
+                    TokenKind::Identifier | TokenKind::Variable
+                )
+            } else {
+                self.current_token.kind == TokenKind::Variable
+            };
+            let name_token = if is_field_name_token {
                 let tok = self.arena.alloc(self.current_token);
                 self.bump();
                 tok

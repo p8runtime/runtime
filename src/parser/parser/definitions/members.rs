@@ -603,9 +603,17 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             );
             let is_phpx_interface = self.is_phpx() && matches!(ctx, ClassMemberCtx::Interface);
+            let is_field_name_token = if self.is_ds() {
+                matches!(
+                    self.current_token.kind,
+                    TokenKind::Identifier | TokenKind::Variable
+                )
+            } else {
+                self.current_token.kind == TokenKind::Variable
+            };
             if self.is_phpx()
                 && (is_struct || is_phpx_interface)
-                && self.current_token.kind == TokenKind::Variable
+                && is_field_name_token
                 && self.next_token.kind == TokenKind::Colon
             {
                 if !modifiers.is_empty() {
@@ -641,7 +649,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 };
 
                 let annotations = self.parse_struct_field_annotations();
-                self.expect_semicolon();
+                if self.current_token.kind == TokenKind::SemiColon {
+                    self.bump();
+                } else if self.current_token.kind == TokenKind::CloseBrace && self.is_ds() {
+                    // DekaScript allows the last struct field to omit the trailing semicolon.
+                } else {
+                    self.expect_semicolon();
+                }
 
                 let entry = PropertyEntry {
                     name,

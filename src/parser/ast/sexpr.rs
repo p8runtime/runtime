@@ -920,9 +920,13 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 for field in *fields {
                     self.write(" ");
                     self.write("(field $");
-                    self.write(&String::from_utf8_lossy(
-                        &self.source[field.name.span.start + 1..field.name.span.end],
-                    ));
+                    let raw = &self.source[field.name.span.start..field.name.span.end];
+                    let name = if raw.first() == Some(&b'$') {
+                        &raw[1..]
+                    } else {
+                        raw
+                    };
+                    self.write(&String::from_utf8_lossy(name));
                     self.write(" ");
                     self.visit_expr(field.value);
                     self.write(")");
