@@ -1,7 +1,5 @@
 use super::super::{ParseError, Parser};
-use crate::parser::ast::{
-    Arg, AttributeGroup, ClassKind, Expr, ExprId, Stmt, StmtId, Type,
-};
+use crate::parser::ast::{Arg, AttributeGroup, ClassKind, Expr, ExprId, Stmt, StmtId, Type};
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::parser::span::Span;
 
@@ -465,9 +463,20 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     // stmt.rs (mirroring the existing `struct`/`type` contextual-keyword
     // pattern) -- `impl` is not a reserved token, so it can never collide
     // with an identifier of that name anywhere else in the language.
-    pub(in crate::parser::parser) fn parse_impl(&mut self, doc_comment: Option<Span>) -> StmtId<'ast> {
+    pub(in crate::parser::parser) fn parse_impl(
+        &mut self,
+        doc_comment: Option<Span>,
+    ) -> StmtId<'ast> {
         let start = self.current_token.span.start;
         self.bump(); // eat 'impl'
+
+        // DekaScript `impl mut Type { ... }` / `impl mut Trait for Type { ... }`.
+        // `mut` is a contextual keyword here only; it is not a reserved token.
+        let is_mut = self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"mut");
+        if is_mut {
+            self.bump(); // eat 'mut'
+        }
 
         let first = self.parse_name();
 
@@ -488,6 +497,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 trait_name,
                 target,
                 members: &[],
+                is_mut,
                 doc_comment,
                 span: Span::new(start, self.current_token.span.end),
             });
@@ -514,6 +524,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             trait_name,
             target,
             members: self.arena.alloc_slice_copy(&members),
+            is_mut,
             doc_comment,
             span: Span::new(start, end),
         })

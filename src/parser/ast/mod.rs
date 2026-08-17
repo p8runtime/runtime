@@ -259,6 +259,7 @@ pub enum Stmt<'ast> {
         trait_name: Option<Name<'ast>>,
         target: Name<'ast>,
         members: &'ast [ClassMember<'ast>],
+        is_mut: bool,
         doc_comment: Option<Span>,
         span: Span,
     },
