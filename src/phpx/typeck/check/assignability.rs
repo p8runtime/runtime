@@ -61,6 +61,41 @@ impl<'a> CheckContext<'a> {
                     }
                 }
             }
+            // General rule for user-defined generic enums: an EnumCase value is
+            // assignable to an Applied enum type when every payload argument
+            // matches the corresponding type parameter substitution.
+            if let Type::EnumCase {
+                enum_name,
+                case_name,
+                args: source_args,
+            } = source
+            {
+                if base.eq_ignore_ascii_case(enum_name) {
+                    if let Some(info) = self.enums.get(enum_name) {
+                        if let Some(case_info) = info.cases.get(case_name) {
+                            if case_info.params.is_empty() {
+                                return true;
+                            }
+                            let mapping: HashMap<String, Type> = info
+                                .type_params
+                                .iter()
+                                .cloned()
+                                .zip(args.iter().cloned())
+                                .collect();
+                            for (idx, param) in case_info.params.iter().enumerate() {
+                                if let Some(param_ty) = &param.ty {
+                                    let expected = substitute_type(param_ty, &mapping);
+                                    let actual = source_args.get(idx).unwrap_or(&Type::Unknown);
+                                    if !self.is_assignable(actual, &expected) {
+                                        return false;
+                                    }
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
         }
         match target {
             Type::Interface(name) => {

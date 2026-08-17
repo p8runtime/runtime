@@ -544,6 +544,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             })
         };
 
+        let type_params = if self.is_phpx() && self.current_token.kind == TokenKind::Lt {
+            self.parse_type_params()
+        } else {
+            &[]
+        };
+
         let backed_type = if self.current_token.kind == TokenKind::Colon {
             self.bump();
             self.parse_type()
@@ -588,6 +594,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.arena.alloc(Stmt::Enum {
                 attributes,
                 name,
+                type_params,
                 backed_type,
                 implements: self.arena.alloc_slice_copy(&implements),
                 members: &[],
@@ -618,6 +625,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         self.arena.alloc(Stmt::Enum {
             attributes,
             name,
+            type_params,
             backed_type,
             implements: self.arena.alloc_slice_copy(&implements),
             members: self.arena.alloc_slice_copy(&members),

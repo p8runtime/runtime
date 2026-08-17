@@ -24,6 +24,7 @@ pub struct EnumCaseInfo {
 pub struct EnumInfo {
     pub cases: BTreeMap<String, EnumCaseInfo>,
     pub backed: Option<PrimitiveType>,
+    pub type_params: Vec<String>,
 }
 
 pub struct InferContext<'a> {
@@ -142,8 +143,22 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
         Expr::DotAccess {
             target, property, ..
         } => {
-            let target_ty = infer_expr(target, ctx);
+            // DekaScript enum variant access: `Status.Ready` is syntactic sugar
+            // for `Status::Ready` when the target names an enum and the property
+            // names one of its cases.
             let prop_name = token_text(ctx.source, property.span);
+            if let Some(target_name) = extract_ident(target, ctx.source) {
+                if let Some(info) = ctx.enums.get(&target_name) {
+                    if info.cases.contains_key(&prop_name) {
+                        return Type::EnumCase {
+                            enum_name: target_name,
+                            case_name: prop_name,
+                            args: Vec::new(),
+                        };
+                    }
+                }
+            }
+            let target_ty = infer_expr(target, ctx);
             match target_ty {
                 Type::ObjectShape(fields) => fields
                     .get(&prop_name)

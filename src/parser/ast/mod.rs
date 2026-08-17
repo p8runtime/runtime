@@ -265,6 +265,7 @@ pub enum Stmt<'ast> {
     Enum {
         attributes: &'ast [AttributeGroup<'ast>],
         name: &'ast Token,
+        type_params: &'ast [TypeParam<'ast>],
         backed_type: Option<&'ast Type<'ast>>,
         implements: &'ast [Name<'ast>],
         members: &'ast [ClassMember<'ast>],

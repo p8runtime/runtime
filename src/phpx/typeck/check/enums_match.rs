@@ -38,7 +38,7 @@ impl<'a> CheckContext<'a> {
         &self,
         class: ExprId<'a>,
         member: ExprId<'a>,
-    ) -> Option<(String, String, EnumCaseInfo)> {
+    ) -> Option<(String, String, EnumCaseInfo, Vec<String>)> {
         let class_name = self.extract_static_ident(class)?;
         let case_name = self.extract_static_ident(member)?;
         if let Some(case_info) = self.builtin_enum_case_info(&class_name, &case_name) {
@@ -58,11 +58,12 @@ impl<'a> CheckContext<'a> {
             } else {
                 "Err"
             };
-            return Some((enum_name, canonical_case.to_string(), case_info));
+            return Some((enum_name, canonical_case.to_string(), case_info, Vec::new()));
         }
         let info = self.enums.get(&class_name)?;
         let case_info = info.cases.get(&case_name)?;
-        Some((class_name, case_name, case_info.clone()))
+        let type_params = info.type_params.clone();
+        Some((class_name, case_name, case_info.clone(), type_params))
     }
 
     pub(in crate::phpx::typeck::check) fn enum_case_from_expr(
@@ -74,10 +75,21 @@ impl<'a> CheckContext<'a> {
                 class, constant, ..
             } => self
                 .enum_case_lookup(class, constant)
-                .map(|(enum_name, case_name, _)| (enum_name, case_name)),
+                .map(|(enum_name, case_name, _, _)| (enum_name, case_name)),
             Expr::StaticCall { class, method, .. } => self
                 .enum_case_lookup(class, method)
-                .map(|(enum_name, case_name, _)| (enum_name, case_name)),
+                .map(|(enum_name, case_name, _, _)| (enum_name, case_name)),
+            Expr::DotAccess { target, property, .. } => {
+                // DekaScript enum variant access: `Status.Ready`.
+                let class_name = self.extract_static_ident(target)?;
+                let case_name = token_text(self.source, property.span);
+                let info = self.enums.get(&class_name)?;
+                if info.cases.contains_key(&case_name) {
+                    Some((class_name, case_name))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -165,10 +177,11 @@ impl<'a> CheckContext<'a> {
         enum_name: &str,
         case_name: &str,
         case_info: &EnumCaseInfo,
+        type_params: &[String],
         args: &'a [crate::parser::ast::Arg<'a>],
         span: Span,
         env: &HashMap<String, Type>,
-    ) {
+    ) -> Vec<Type> {
         if case_info.params.is_empty() {
             self.errors.push(TypeError { severity: Severity::Error,
                 span,
@@ -177,7 +190,7 @@ impl<'a> CheckContext<'a> {
                     enum_name, case_name, enum_name, case_name
                 ),
             });
-            return;
+            return type_params.iter().map(|_| Type::Unknown).collect();
         }
 
         if args.len() != case_info.params.len() {
@@ -191,21 +204,31 @@ impl<'a> CheckContext<'a> {
                     args.len()
                 ),
             });
-            return;
+            return type_params.iter().map(|_| Type::Unknown).collect();
+        }
+
+        let mut inferred: HashMap<String, Type> = HashMap::new();
+        for (idx, param) in case_info.params.iter().enumerate() {
+            let arg = &args[idx];
+            let actual = self.infer_expr_with_env(arg.value, env);
+            if let Some(expected) = &param.ty {
+                self.infer_type_params(expected, &actual, &mut inferred);
+            }
         }
 
         for (idx, param) in case_info.params.iter().enumerate() {
             let arg = &args[idx];
             let actual = self.infer_expr_with_env(arg.value, env);
             if let Some(expected) = &param.ty {
+                let expected = substitute_type(expected, &inferred);
                 if let Expr::ObjectLiteral {
                     items,
                     span: obj_span,
                 } = *arg.value
                 {
-                    self.check_object_literal_against_type(items, expected, obj_span, env);
+                    self.check_object_literal_against_type(items, &expected, obj_span, env);
                 }
-                if !self.is_assignable(&actual, expected) {
+                if !self.is_assignable(&actual, &expected) {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span: arg.span,
                         message: format!(
@@ -220,6 +243,11 @@ impl<'a> CheckContext<'a> {
                 }
             }
         }
+
+        type_params
+            .iter()
+            .map(|name| inferred.get(name).cloned().unwrap_or(Type::Unknown))
+            .collect()
     }
 
     pub(in crate::phpx::typeck::check) fn enum_names_from_type(
