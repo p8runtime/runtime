@@ -293,8 +293,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
             let item_start = self.current_token.span.start;
 
-            if self.current_token.kind == TokenKind::Variable {
-                // Shorthand: { $name } -> { name: $name }
+            if self.current_token.kind == TokenKind::Variable
+                || (self.is_ds() && self.current_token.kind == TokenKind::Identifier)
+            {
+                // Shorthand: { $name } -> { name: $name } in PHPX,
+                //            { name }  -> { name: name }  in DekaScript.
                 let value_tok = self.arena.alloc(self.current_token);
                 self.bump();
                 let key = ObjectKey::Ident(value_tok);

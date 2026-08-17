@@ -1,6 +1,6 @@
 use super::super::{ParseError, Parser};
 use crate::parser::ast::{
-    AttributeGroup, ExprId,
+    AttributeGroup, Expr, ExprId,
     Param, PropertyHook, Stmt, StmtId, Type,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
@@ -158,11 +158,44 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
 
         if self.is_ds() {
-            let param_name = if self.current_token.kind == TokenKind::Identifier {
-                let token = self.arena.alloc(self.current_token); self.bump(); token
+            let (param_name, pattern): (&'ast Token, Option<ExprId<'ast>>) = if matches!(
+                self.current_token.kind,
+                TokenKind::OpenBrace | TokenKind::OpenBracket | TokenKind::List
+            ) {
+                let pattern = self.parse_phpx_param_pattern().unwrap_or_else(|| {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected destructuring pattern",
+                    ));
+                    self.arena.alloc(Expr::Error {
+                        span: self.current_token.span,
+                    })
+                });
+                let binding = self.pattern_last_binding(pattern).unwrap_or_else(|| {
+                    self.errors.push(ParseError::with_help(
+                        pattern.span(),
+                        "Destructuring parameters require at least one variable binding",
+                        "Use a pattern like '{ name }' or '[ first, second ]'.",
+                    ));
+                    self.arena.alloc(Token {
+                        kind: TokenKind::Error,
+                        span: pattern.span(),
+                    })
+                });
+                let name_token = self.arena.alloc(Token {
+                    kind: TokenKind::Identifier,
+                    span: binding.span,
+                });
+                (name_token, Some(pattern))
+            } else if self.current_token.kind == TokenKind::Identifier {
+                let token = self.arena.alloc(self.current_token);
+                self.bump();
+                (token, None)
             } else {
                 self.errors.push(ParseError::with_help(self.current_token.span, "DekaScript parameters use bare identifiers", "Write `name: Type`, not `$name: Type`."));
-                let token = self.arena.alloc(self.current_token); self.bump(); token
+                let token = self.arena.alloc(self.current_token);
+                self.bump();
+                (token, None)
             };
             if self.current_token.kind != TokenKind::Colon {
                 self.errors.push(ParseError::with_help(self.current_token.span, "DekaScript parameters require a type annotation", "Write `name: Type` (for example, `count: number`)."));
@@ -173,6 +206,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             let default = if self.current_token.kind == TokenKind::Eq { self.bump(); Some(self.parse_expr(0)) } else { None };
             let end = default.map_or(param_name.span.end, |expr| expr.span().end);
+            if let Some(pattern_expr) = pattern {
+                self.push_param_pattern_prologue(pattern_expr, param_name);
+            }
             return Param { attributes, modifiers: self.arena.alloc_slice_copy(&modifiers), name: param_name, ty, default, by_ref, variadic, hooks: None, span: Span::new(start, end) };
         }
 
