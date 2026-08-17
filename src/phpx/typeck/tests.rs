@@ -329,6 +329,22 @@ fn jsx_vnode_not_assignable_to_int() {
 }
 
 #[test]
+fn jsx_vnode_return_type_annotation_ok() {
+    // dekaruntime/deka#93: VNode should be nameable as a return type.
+    let code = "<?php function Hero({ $name }: Object): VNode { return <div>{ $name }</div>; }";
+    let res = check(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
+fn jsx_vnode_inside_generic_return_type_ok() {
+    // dekaruntime/deka#93: VNode should also resolve when nested in generics.
+    let code = "<?php async function Hero({ $name }: Object): Promise<VNode> { return <div>{ $name }</div>; }";
+    let res = check(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
 fn jsx_component_untyped_props_allowed_in_default_mode() {
     // Strict JSX type checking is gated by PHPX_STRICT_JSX_TYPES env var;
     // in default mode, untyped props parameters are allowed.
