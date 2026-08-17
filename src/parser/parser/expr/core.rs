@@ -1,7 +1,7 @@
 use super::super::Parser;
 use crate::parser::ast::{
     Arg, ArrayItem, AssignOp, AttributeGroup, BinaryOp, CastKind, Expr, ExprId, IncludeKind,
-    MagicConstKind, MatchArm, ObjectItem, ObjectKey, ParseError, UnaryOp,
+    MagicConstKind, MatchArm, ObjectItem, ObjectKey, ParseError, UnaryOp, UnsafeCatch,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::parser::span::Span;
@@ -1051,6 +1051,89 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.arena.alloc(Expr::Match {
                     condition,
                     arms: arms.into_bump_slice(),
+                    span: Span::new(start, end),
+                })
+            }
+            TokenKind::Unsafe => {
+                let start = token.span.start;
+                self.bump(); // Eat unsafe
+
+                if self.current_token.kind == TokenKind::OpenBrace {
+                    self.bump();
+                }
+                let body = self.parse_expr(0);
+                if self.current_token.kind == TokenKind::CloseBrace {
+                    self.bump();
+                }
+
+                let catch = if self.current_token.kind == TokenKind::Catch {
+                    let catch_start = self.current_token.span.start;
+                    self.bump();
+
+                    if self.current_token.kind == TokenKind::OpenParen {
+                        self.bump();
+                    }
+
+                    let var = if matches!(
+                        self.current_token.kind,
+                        TokenKind::Identifier | TokenKind::Variable
+                    ) {
+                        let t = self.arena.alloc(self.current_token);
+                        self.bump();
+                        &*t
+                    } else {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected catch variable",
+                        ));
+                        self.arena.alloc(Token {
+                            kind: TokenKind::Error,
+                            span: self.current_token.span,
+                        })
+                    };
+
+                    if self.current_token.kind == TokenKind::CloseParen {
+                        self.bump();
+                    }
+
+                    if self.current_token.kind == TokenKind::OpenBrace {
+                        self.bump();
+                    }
+                    let catch_body = self.parse_expr(0);
+                    if self.current_token.kind == TokenKind::CloseBrace {
+                        self.bump();
+                    }
+                    let catch_end = catch_body.span().end;
+
+                    let catch_node = self.arena.alloc(UnsafeCatch {
+                        var,
+                        body: catch_body,
+                        span: Span::new(catch_start, catch_end),
+                    });
+                    Some(&*catch_node)
+                } else {
+                    None
+                };
+
+                let finally = if self.current_token.kind == TokenKind::Finally {
+                    self.bump();
+                    if self.current_token.kind == TokenKind::OpenBrace {
+                        self.bump();
+                    }
+                    let finally_body = self.parse_expr(0);
+                    if self.current_token.kind == TokenKind::CloseBrace {
+                        self.bump();
+                    }
+                    Some(finally_body)
+                } else {
+                    None
+                };
+
+                let end = self.current_token.span.end;
+                self.arena.alloc(Expr::Unsafe {
+                    body,
+                    catch,
+                    finally,
                     span: Span::new(start, end),
                 })
             }

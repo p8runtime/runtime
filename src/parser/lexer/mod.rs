@@ -115,6 +115,7 @@ fn keyword_lookup(text: &[u8]) -> TokenKind {
         b"void" => TokenKind::TypeVoid,
         b"object" => TokenKind::TypeObject,
         b"match" => TokenKind::Match,
+        b"unsafe" => TokenKind::Unsafe,
         b"cql" => TokenKind::Cql,
         // `query` is context-sensitive — only treated as keyword by the parser
         // when followed by an identifier. Otherwise it's a regular identifier.

@@ -618,6 +618,14 @@ pub enum Expr<'ast> {
     VariadicPlaceholder {
         span: Span,
     },
+    /// A DekaScript `unsafe { ... } [catch (e) { ... }] [finally { ... }]`
+    /// expression. Desugars to a call to the runtime `deka.unsafe` helper.
+    Unsafe {
+        body: ExprId<'ast>,
+        catch: Option<&'ast UnsafeCatch<'ast>>,
+        finally: Option<ExprId<'ast>>,
+        span: Span,
+    },
     /// A prepared Cypher query literal.
     /// `cql recs = MATCH (n:Node) RETURN n;`
     /// Produces a query value with the raw Cypher text and extracted $param references.
@@ -632,6 +640,13 @@ pub enum Expr<'ast> {
     Error {
         span: Span,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct UnsafeCatch<'ast> {
+    pub var: &'ast Token,
+    pub body: ExprId<'ast>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -740,6 +755,7 @@ impl<'ast> Expr<'ast> {
             Expr::NullsafePropertyFetch { span, .. } => *span,
             Expr::NullsafeMethodCall { span, .. } => *span,
             Expr::VariadicPlaceholder { span } => *span,
+            Expr::Unsafe { span, .. } => *span,
             Expr::Cql { span, .. } => *span,
             Expr::Error { span } => *span,
             Expr::IndirectVariable { span, .. } => *span,

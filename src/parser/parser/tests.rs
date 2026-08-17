@@ -881,3 +881,72 @@ fn lexer_recognizes_bytes_as_type_keyword() {
     assert_eq!(token.kind, TokenKind::TypeBytes);
     assert_eq!(&code.as_bytes()[token.span.start..token.span.end], b"bytes");
 }
+
+#[test]
+fn ds_parses_unsafe_block_with_catch_and_finally() {
+    let code = r#"const val = unsafe { JSON.parse(text) } catch (e) { defaultValue } finally { cleanup() };"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "parse errors: {:?}",
+        program.errors
+    );
+
+    let unsafe_expr = program
+        .statements
+        .iter()
+        .find_map(|s| match **s {
+            Stmt::Const { consts, .. } => consts.first().map(|c| c.value),
+            _ => None,
+        })
+        .expect("expected const declaration");
+    assert!(
+        matches!(unsafe_expr, Expr::Unsafe { .. }),
+        "expected unsafe expression, got {:?}",
+        unsafe_expr
+    );
+}
+
+#[test]
+fn ds_parses_unsafe_block_without_catch_or_finally() {
+    let code = "const val = unsafe { JSON.parse(text) };";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(
+        program.errors.is_empty(),
+        "parse errors: {:?}",
+        program.errors
+    );
+
+    let unsafe_expr = program
+        .statements
+        .iter()
+        .find_map(|s| match **s {
+            Stmt::Const { consts, .. } => consts.first().map(|c| c.value),
+            _ => None,
+        })
+        .expect("expected const declaration");
+    match unsafe_expr {
+        Expr::Unsafe { catch, finally, .. } => {
+            assert!(catch.is_none(), "expected no catch clause");
+            assert!(finally.is_none(), "expected no finally clause");
+        }
+        _ => panic!("expected unsafe expression, got {:?}", unsafe_expr),
+    }
+}
+
+#[test]
+fn lexer_recognizes_unsafe_keyword() {
+    use crate::parser::lexer::token::TokenKind;
+    let code = "unsafe";
+    let mut lexer = Lexer::new(code.as_bytes());
+    lexer.start_in_scripting();
+    let token = lexer.next().expect("expected a token");
+    assert_eq!(token.kind, TokenKind::Unsafe);
+    assert_eq!(&code.as_bytes()[token.span.start..token.span.end], b"unsafe");
+}
