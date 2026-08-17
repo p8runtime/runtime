@@ -512,6 +512,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             Stmt::Enum {
                 attributes,
                 name,
+                type_params,
                 backed_type,
                 implements,
                 members,
@@ -525,6 +526,19 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write(" \"");
                 self.write(&String::from_utf8_lossy(name.text(self.source)));
                 self.write("\"");
+                if !type_params.is_empty() {
+                    self.write(" (type-params");
+                    for param in *type_params {
+                        let name = String::from_utf8_lossy(param.name.text(self.source));
+                        self.write(" ");
+                        self.write(&name);
+                        if let Some(constraint) = param.constraint {
+                            self.write(":");
+                            self.visit_type(constraint);
+                        }
+                    }
+                    self.write(")");
+                }
                 if let Some(backed_type) = backed_type {
                     self.write(" : ");
                     self.visit_type(backed_type);

@@ -128,10 +128,11 @@ impl<'a> CheckContext<'a> {
                 for arg in args.iter() {
                     let _ = self.check_expr(arg.value, env, explicit);
                 }
-                if let Some((enum_name, case_name, case_info)) =
+                if let Some((enum_name, case_name, case_info, type_params)) =
                     self.enum_case_lookup(class, method)
                 {
-                    self.check_enum_case_call(&enum_name, &case_name, &case_info, args, span, env);
+                    let inferred_args =
+                        self.check_enum_case_call(&enum_name, &case_name, &case_info, &type_params, args, span, env);
                     if enum_name.eq_ignore_ascii_case("Option") {
                         let arg_ty = args
                             .get(0)
@@ -169,7 +170,7 @@ impl<'a> CheckContext<'a> {
                     return Type::EnumCase {
                         enum_name,
                         case_name,
-                        args: Vec::new(),
+                        args: inferred_args,
                     };
                 }
                 self.check_static_class_ref(class, span);
@@ -181,7 +182,7 @@ impl<'a> CheckContext<'a> {
                 span,
             } => {
                 let _ = self.check_expr(class, env, explicit);
-                if let Some((enum_name, case_name, _)) = self.enum_case_lookup(class, constant) {
+                if let Some((enum_name, case_name, _, _)) = self.enum_case_lookup(class, constant) {
                     if enum_name.eq_ignore_ascii_case("Option")
                         || enum_name.eq_ignore_ascii_case("Result")
                     {
@@ -484,8 +485,18 @@ impl<'a> CheckContext<'a> {
         span: Span,
         env: &HashMap<String, Type>,
     ) {
-        let target_ty = self.infer_expr_with_env(target, env);
         let prop_name = token_text(self.source, property.span);
+        // DekaScript enum variant access: `Status.Ready` is syntactic sugar
+        // for `Status::Ready` when the target names an enum and the property
+        // names one of its cases.
+        if let Some(target_name) = self.extract_static_ident(target) {
+            if let Some(info) = self.enums.get(&target_name) {
+                if info.cases.contains_key(&prop_name) {
+                    return;
+                }
+            }
+        }
+        let target_ty = self.infer_expr_with_env(target, env);
         match target_ty {
             Type::ObjectShape(fields) => {
                 if !fields.contains_key(&prop_name) {

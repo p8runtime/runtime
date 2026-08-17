@@ -40,16 +40,22 @@ impl<'a> CheckContext<'a> {
     pub(in crate::phpx::typeck::check) fn collect_enum_names(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
             let Stmt::Enum {
-                name, backed_type, ..
+                name,
+                type_params,
+                backed_type,
+                ..
             } = stmt
             else {
                 continue;
             };
             let enum_name = token_text(self.source, name.span);
             let backed = backed_type.and_then(|ty| enum_backed_primitive(ty));
+            let (type_param_sigs, _) = self.collect_type_param_sigs(type_params);
+            let type_param_names = type_param_sigs.into_iter().map(|s| s.name).collect();
             self.enums.entry(enum_name).or_insert_with(|| EnumInfo {
                 cases: BTreeMap::new(),
                 backed,
+                type_params: type_param_names,
             });
         }
     }
@@ -362,10 +368,17 @@ impl<'a> CheckContext<'a> {
 
     pub(in crate::phpx::typeck::check) fn collect_enum_cases(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
-            let Stmt::Enum { name, members, .. } = stmt else {
+            let Stmt::Enum {
+                name,
+                type_params,
+                members,
+                ..
+            } = stmt
+            else {
                 continue;
             };
             let enum_name = token_text(self.source, name.span);
+            let (_, type_param_set) = self.collect_type_param_sigs(type_params);
             let mut cases = BTreeMap::new();
             for member in members.iter() {
                 let ClassMember::Case {
@@ -421,7 +434,9 @@ impl<'a> CheckContext<'a> {
                                 ),
                             });
                         }
-                        let ty = param.ty.map(|ty| self.resolve_type(ty));
+                        let ty = param
+                            .ty
+                            .map(|ty| self.resolve_type_with_params(ty, &type_param_set));
                         params.push(EnumParamInfo { name, ty });
                     }
                 }
@@ -435,6 +450,7 @@ impl<'a> CheckContext<'a> {
                     EnumInfo {
                         cases,
                         backed: None,
+                        type_params: type_param_set.into_iter().collect(),
                     },
                 );
             }

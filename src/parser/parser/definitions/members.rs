@@ -46,6 +46,35 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             modifiers.push(token);
         }
         self.validate_modifiers(&modifiers, ModifierContext::Other);
+
+        // DekaScript enum bodies use JS-style variant lists:
+        // `enum Status { Loading, Ready, Failed }` or `enum Option<T> { Some(T), None }`.
+        // This must be resolved before the PHP-style `case Name;` path.
+        if self.is_ds()
+            && matches!(ctx, ClassMemberCtx::Enum { backed: false })
+            && (self.current_token.kind == TokenKind::Identifier
+                || self.current_token.kind.is_semi_reserved())
+        {
+            let name = self.arena.alloc(self.current_token);
+            self.bump();
+
+            let payload = self.parse_ds_enum_payload();
+
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+            }
+
+            let end = self.current_token.span.end;
+            return ClassMember::Case {
+                attributes,
+                name,
+                value: None,
+                payload,
+                doc_comment,
+                span: Span::new(start, end),
+            };
+        }
+
         if self.current_token.kind == TokenKind::Case {
             self.bump();
             let name = if self.current_token.kind == TokenKind::Identifier
@@ -1037,6 +1066,64 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
         }
         hooks
+    }
+
+    /// Parse a DekaScript enum variant payload of the form `(T, U)` where each
+    /// item is a type. Each item becomes a synthetic `Param` whose name points
+    /// back at the type text so the emitter and typechecker have a stable
+    /// runtime identifier.
+    pub(in crate::parser::parser) fn parse_ds_enum_payload(&mut self) -> Option<&'ast [Param<'ast>]> {
+        if self.current_token.kind != TokenKind::OpenParen {
+            return None;
+        }
+        self.bump(); // eat (
+        let mut params = std::vec::Vec::new();
+        while self.current_token.kind != TokenKind::CloseParen
+            && self.current_token.kind != TokenKind::Eof
+        {
+            let type_start = self.current_token.span.start;
+            let ty = match self.parse_type() {
+                Some(ty) => ty,
+                None => {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected type in enum payload",
+                    ));
+                    break;
+                }
+            };
+            let type_end = self.current_token.span.start;
+            let ty = self.arena.alloc(ty) as &'ast Type<'ast>;
+            let name = self.arena.alloc(Token {
+                kind: TokenKind::Variable,
+                span: Span::new(type_start, type_end),
+            });
+            params.push(Param {
+                attributes: &[],
+                modifiers: &[],
+                name,
+                ty: Some(ty),
+                default: None,
+                by_ref: false,
+                variadic: false,
+                hooks: None,
+                span: Span::new(type_start, type_end),
+            });
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        if self.current_token.kind == TokenKind::CloseParen {
+            self.bump();
+        } else {
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected ')' after enum payload",
+            ));
+        }
+        Some(self.arena.alloc_slice_copy(&params))
     }
 
     pub(in crate::parser::parser) fn parse_struct_field_annotations(

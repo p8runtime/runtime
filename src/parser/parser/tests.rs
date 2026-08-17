@@ -1033,3 +1033,108 @@ fn lexer_recognizes_unsafe_keyword() {
     assert_eq!(token.kind, TokenKind::Unsafe);
     assert_eq!(&code.as_bytes()[token.span.start..token.span.end], b"unsafe");
 }
+
+#[test]
+fn ds_parses_js_style_enum_body() {
+    let code = "enum Status { Loading, Ready, Failed }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Enum { .. }))
+        .expect("expected enum stmt");
+
+    match **stmt {
+        Stmt::Enum { members, .. } => {
+            assert_eq!(members.len(), 3);
+            for member in members.iter() {
+                assert!(matches!(member, ClassMember::Case { .. }));
+            }
+        }
+        _ => panic!("expected enum stmt"),
+    }
+}
+
+#[test]
+fn ds_parses_js_style_enum_body_with_payload() {
+    let code = "enum Option<T> { Some(T), None }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Enum { .. }))
+        .expect("expected enum stmt");
+
+    match **stmt {
+        Stmt::Enum {
+            type_params,
+            members,
+            ..
+        } => {
+            assert_eq!(type_params.len(), 1);
+            assert_eq!(members.len(), 2);
+
+            let payloads: Vec<_> = members
+                .iter()
+                .filter_map(|member| match member {
+                    ClassMember::Case { payload, .. } => Some(*payload),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(payloads.len(), 2);
+            assert!(payloads[0].is_some(), "expected Some(T) payload");
+            assert_eq!(payloads[0].unwrap().len(), 1);
+            assert!(payloads[1].is_none(), "expected None to have no payload");
+        }
+        _ => panic!("expected enum stmt"),
+    }
+}
+
+#[test]
+fn phpx_accepts_case_form_enum_body() {
+    // Backward compatibility: PHPX mode still accepts PHP-style `case Name;`
+    // enum members.
+    let code = "enum Status { case Loading; case Ready; case Failed; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Enum { .. }))
+        .expect("expected enum stmt");
+
+    match **stmt {
+        Stmt::Enum { members, .. } => {
+            assert_eq!(members.len(), 3);
+            for member in members.iter() {
+                assert!(matches!(member, ClassMember::Case { .. }));
+            }
+        }
+        _ => panic!("expected enum stmt"),
+    }
+}
+
+#[test]
+fn phpx_rejects_js_style_enum_body() {
+    // PHPX mode requires `case Name;` and does not accept JS-style lists.
+    let code = "enum Status { Loading, Ready, Failed }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+
+    assert!(!program.errors.is_empty());
+}

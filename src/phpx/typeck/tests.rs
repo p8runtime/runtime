@@ -1191,3 +1191,76 @@ fn real_type_error_still_fails_exactly_as_before() {
         "Err(..) must contain at least one Error-severity diagnostic"
     );
 }
+
+#[test]
+fn ds_enum_js_style_body_typechecks() {
+    let code = r#"
+        enum Status { Loading, Ready, Failed }
+        function getStatus(): Status { return Status.Ready; }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_enum_generic_payload_typechecks() {
+    let code = r#"
+        enum Option<T> { Some(T), None }
+        function getOption(): Option<int> { return Option::Some(1); }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_enum_generic_payload_mismatch_errors() {
+    let code = r#"
+        enum Option<T> { Some(T), None }
+        function getOption(): Option<int> { return Option::Some("no"); }
+    "#;
+    assert!(check_ds(code).is_err());
+}
+
+#[test]
+fn ds_enum_match_exhaustive_on_js_style_enum() {
+    let code = r#"
+        enum Status { Loading, Ready, Failed }
+        function f(s: Status): int {
+            match (s) {
+                Status::Loading => 0,
+                Status::Ready => 1,
+                Status::Failed => 2,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_enum_match_exhaustive_using_dot_access() {
+    // DekaScript also accepts `Status.Ready` as syntactic sugar for
+    // `Status::Ready` when the left-hand side names an enum.
+    let code = r#"
+        enum Status { Loading, Ready, Failed }
+        function f(s: Status): int {
+            match (s) {
+                Status.Loading => 0,
+                Status.Ready => 1,
+                Status.Failed => 2,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_enum_match_missing_case_errors() {
+    let code = r#"
+        enum Status { Loading, Ready, Failed }
+        function f(s: Status): int {
+            match (s) {
+                Status::Loading => 0,
+                Status::Ready => 1,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_err());
+}

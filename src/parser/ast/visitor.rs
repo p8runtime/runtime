@@ -252,12 +252,18 @@ pub fn walk_stmt<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, stmt: StmtId<
         }
         Stmt::Enum {
             attributes,
+            type_params,
             backed_type,
             implements,
             members,
             ..
         } => {
             walk_attributes(visitor, attributes);
+            for param in type_params.iter() {
+                if let Some(constraint) = param.constraint {
+                    visitor.visit_type(constraint);
+                }
+            }
             if let Some(backed_type) = backed_type {
                 visitor.visit_type(backed_type);
             }
