@@ -411,6 +411,23 @@ fn destructured_param_struct_type_is_rejected_with_guidance() {
 }
 
 #[test]
+fn ds_jsx_component_destructured_param_props_are_recognized() {
+    // dekaruntime/deka#93: DekaScript JSX components use bare destructured
+    // params ({ name }: GreetingProps) and bare interface fields.
+    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): VNode { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
+fn ds_jsx_component_with_separator_destructured_param_props_are_recognized() {
+    // Component files separate script and template with '---'.
+    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): VNode { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
 fn unknown_variable_suggests_nearby_name() {
     let code = "function fullName($name: string): string { return $nam; }";
     let err = check(code).expect_err("expected unknown variable diagnostic");
