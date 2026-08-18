@@ -331,7 +331,7 @@ fn jsx_vnode_not_assignable_to_int() {
 #[test]
 fn jsx_component_return_type_annotation_ok() {
     // dekaruntime/deka#122: Component is the canonical name for JSX return
-    // types. VNode and JSX remain accepted as aliases.
+    // types. VNode and JSX are not accepted as aliases pre-launch.
     let code = "<?php function Hero({ $name }: Object): Component { return <div>{ $name }</div>; }";
     let res = check(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
@@ -345,17 +345,15 @@ fn jsx_component_inside_generic_return_type_ok() {
 }
 
 #[test]
-fn jsx_vnode_alias_still_resolves() {
+fn jsx_vnode_alias_is_rejected() {
     let code = "<?php function Hero({ $name }: Object): VNode { return <div>{ $name }</div>; }";
-    let res = check(code);
-    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+    assert!(check(code).is_err());
 }
 
 #[test]
-fn jsx_jsx_alias_still_resolves() {
+fn jsx_jsx_alias_is_rejected() {
     let code = "<?php function Hero({ $name }: Object): JSX { return <div>{ $name }</div>; }";
-    let res = check(code);
-    assert!(res.is_ok(), "expected ok, got: {:?}", res);
+    assert!(check(code).is_err());
 }
 
 #[test]
