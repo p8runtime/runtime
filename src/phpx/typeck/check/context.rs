@@ -77,6 +77,7 @@ impl<'a> CheckContext<'a> {
         self.collect_interface_methods(program);
         self.collect_trait_methods(program);
         self.collect_struct_methods(program);
+        self.collect_receiver_methods(program);
         self.collect_impl_methods(program);
         self.collect_enum_methods(program);
         self.collect_enum_cases(program);
@@ -84,8 +85,9 @@ impl<'a> CheckContext<'a> {
         self.infer_function_return_types(program);
         let mut env: HashMap<String, Type> = HashMap::new();
         let mut explicit: HashSet<String> = HashSet::new();
+        let mut mut_env: HashSet<String> = HashSet::new();
         for stmt in program.statements.iter() {
-            self.check_stmt(stmt, &mut env, &mut explicit, None);
+            self.check_stmt(stmt, &mut env, &mut explicit, None, &mut mut_env);
         }
         self.check_trait_conflicts();
     }

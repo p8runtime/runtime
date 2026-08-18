@@ -45,6 +45,7 @@ pub(in crate::phpx::typeck::check) struct MethodSig {
     pub(in crate::phpx::typeck::check) params: Vec<ParamSig>,
     pub(in crate::phpx::typeck::check) return_type: Option<Type>,
     pub(in crate::phpx::typeck::check) variadic: bool,
+    pub(in crate::phpx::typeck::check) mutable: bool,
 }
 
 #[derive(Debug, Clone)]

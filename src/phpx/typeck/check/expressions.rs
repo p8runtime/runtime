@@ -6,6 +6,7 @@ impl<'a> CheckContext<'a> {
         expr: ExprId<'a>,
         env: &mut HashMap<String, Type>,
         explicit: &mut HashSet<String>,
+        mut_env: &mut HashSet<String>,
     ) -> Type {
         match *expr {
             Expr::Variable { span, .. } => {
@@ -30,7 +31,7 @@ impl<'a> CheckContext<'a> {
             }
             Expr::Null { .. } => Type::Primitive(PrimitiveType::Null),
             Expr::Assign { var, expr, .. } | Expr::AssignRef { var, expr, .. } => {
-                let rhs_ty = self.check_expr(expr, env, explicit);
+                let rhs_ty = self.check_expr(expr, env, explicit, mut_env);
                 if let Expr::Variable { span, .. } = *var {
                     let name = token_text(self.source, span)
                         .trim_start_matches('$')
@@ -38,13 +39,20 @@ impl<'a> CheckContext<'a> {
                     if self.is_self_destructure_assignment_expr(expr, &name) {
                         explicit.remove(&name);
                     }
+                    mut_env.insert(name);
                 }
-                self.assign_to_target(var, &rhs_ty, env, explicit);
+                self.assign_to_target(var, &rhs_ty, env, explicit, mut_env);
                 rhs_ty
             }
             Expr::AssignOp { var, expr, .. } => {
-                let rhs_ty = self.check_expr(expr, env, explicit);
-                self.assign_to_target(var, &rhs_ty, env, explicit);
+                let rhs_ty = self.check_expr(expr, env, explicit, mut_env);
+                if let Expr::Variable { span, .. } = *var {
+                    let name = token_text(self.source, span)
+                        .trim_start_matches('$')
+                        .to_string();
+                    mut_env.insert(name);
+                }
+                self.assign_to_target(var, &rhs_ty, env, explicit, mut_env);
                 rhs_ty
             }
             Expr::DotAccess {
@@ -69,12 +77,12 @@ impl<'a> CheckContext<'a> {
                             .to_string(),
                     });
                 }
-                let _ = self.check_expr(left, env, explicit);
-                let _ = self.check_expr(right, env, explicit);
+                let _ = self.check_expr(left, env, explicit, mut_env);
+                let _ = self.check_expr(right, env, explicit, mut_env);
                 self.infer_expr_with_env(expr, env)
             }
             Expr::Unary { expr, .. } => {
-                let _ = self.check_expr(expr, env, explicit);
+                let _ = self.check_expr(expr, env, explicit, mut_env);
                 self.infer_expr_with_env(expr, env)
             }
             Expr::Call { func, args, span } => {
@@ -84,7 +92,7 @@ impl<'a> CheckContext<'a> {
                 // through the same method-signature checking as PHPX's
                 // `Expr::MethodCall` when the target is a struct/enum/interface.
                 if let Expr::DotAccess { target, property, .. } = *func {
-                    let target_ty = self.check_expr(target, env, explicit);
+                    let target_ty = self.check_expr(target, env, explicit, mut_env);
                     if matches!(
                         target_ty,
                         Type::Struct(_)
@@ -93,24 +101,30 @@ impl<'a> CheckContext<'a> {
                             | Type::Interface(_)
                     ) {
                         for arg in args.iter() {
-                            let _ = self.check_expr(arg.value, env, explicit);
+                            let _ = self.check_expr(arg.value, env, explicit, mut_env);
                         }
                         let method_name = token_text(self.source, property.span);
+                        let receiver_mutable = self.expr_is_mutable(target, mut_env);
                         return self.check_method_call_signature_by_name(
-                            &target_ty, &method_name, args, env, span,
+                            &target_ty,
+                            &method_name,
+                            args,
+                            env,
+                            span,
+                            receiver_mutable,
                         );
                     }
                 }
-                let _ = self.check_expr(func, env, explicit);
+                let _ = self.check_expr(func, env, explicit, mut_env);
                 for arg in args.iter() {
-                    let _ = self.check_expr(arg.value, env, explicit);
+                    let _ = self.check_expr(arg.value, env, explicit, mut_env);
                 }
                 self.check_call_signature(func, args, env)
             }
             Expr::New { class, args, span } => {
-                let _ = self.check_expr(class, env, explicit);
+                let _ = self.check_expr(class, env, explicit, mut_env);
                 for arg in args.iter() {
-                    let _ = self.check_expr(arg.value, env, explicit);
+                    let _ = self.check_expr(arg.value, env, explicit, mut_env);
                 }
                 self.errors.push(TypeError { severity: Severity::Error,
                     span,
@@ -124,11 +138,19 @@ impl<'a> CheckContext<'a> {
                 args,
                 span,
             } => {
-                let target_ty = self.check_expr(target, env, explicit);
+                let target_ty = self.check_expr(target, env, explicit, mut_env);
                 for arg in args.iter() {
-                    let _ = self.check_expr(arg.value, env, explicit);
+                    let _ = self.check_expr(arg.value, env, explicit, mut_env);
                 }
-                self.check_method_call_signature(&target_ty, method, args, env, span)
+                let receiver_mutable = self.expr_is_mutable(target, mut_env);
+                self.check_method_call_signature(
+                    &target_ty,
+                    method,
+                    args,
+                    env,
+                    span,
+                    receiver_mutable,
+                )
             }
             Expr::NullsafeMethodCall {
                 target,
@@ -136,11 +158,19 @@ impl<'a> CheckContext<'a> {
                 args,
                 span,
             } => {
-                let target_ty = self.check_expr(target, env, explicit);
+                let target_ty = self.check_expr(target, env, explicit, mut_env);
                 for arg in args.iter() {
-                    let _ = self.check_expr(arg.value, env, explicit);
+                    let _ = self.check_expr(arg.value, env, explicit, mut_env);
                 }
-                self.check_method_call_signature(&target_ty, method, args, env, span)
+                let receiver_mutable = self.expr_is_mutable(target, mut_env);
+                self.check_method_call_signature(
+                    &target_ty,
+                    method,
+                    args,
+                    env,
+                    span,
+                    receiver_mutable,
+                )
             }
             Expr::StaticCall {
                 class,
@@ -148,9 +178,9 @@ impl<'a> CheckContext<'a> {
                 args,
                 span,
             } => {
-                let _ = self.check_expr(class, env, explicit);
+                let _ = self.check_expr(class, env, explicit, mut_env);
                 for arg in args.iter() {
-                    let _ = self.check_expr(arg.value, env, explicit);
+                    let _ = self.check_expr(arg.value, env, explicit, mut_env);
                 }
                 if let Some((enum_name, case_name, case_info, type_params)) =
                     self.enum_case_lookup(class, method)
@@ -205,7 +235,7 @@ impl<'a> CheckContext<'a> {
                 constant,
                 span,
             } => {
-                let _ = self.check_expr(class, env, explicit);
+                let _ = self.check_expr(class, env, explicit, mut_env);
                 if let Some((enum_name, case_name, _, _)) = self.enum_case_lookup(class, constant) {
                     if enum_name.eq_ignore_ascii_case("Option")
                         || enum_name.eq_ignore_ascii_case("Result")
@@ -226,21 +256,40 @@ impl<'a> CheckContext<'a> {
                 Type::Unknown
             }
             Expr::PropertyFetch { target, .. } | Expr::NullsafePropertyFetch { target, .. } => {
-                let _ = self.check_expr(target, env, explicit);
+                let _ = self.check_expr(target, env, explicit, mut_env);
                 Type::Unknown
             }
             Expr::Array { items, .. } => {
                 for item in items.iter() {
                     if let Some(key) = item.key {
-                        let _ = self.check_expr(key, env, explicit);
+                        let _ = self.check_expr(key, env, explicit, mut_env);
                     }
-                    let _ = self.check_expr(item.value, env, explicit);
+                    let _ = self.check_expr(item.value, env, explicit, mut_env);
                 }
                 Type::Array
             }
-            Expr::ObjectLiteral { items, .. } => {
+            Expr::ObjectLiteral { items, span: _ } => {
                 for item in items.iter() {
-                    let _ = self.check_expr(item.value, env, explicit);
+                    let value_ty = self.check_expr(item.value, env, explicit, mut_env);
+                    if let Expr::Spread { .. } = item.value {
+                        let is_object_like = matches!(
+                            value_ty,
+                            Type::ObjectShape(_)
+                                | Type::Interface(_)
+                                | Type::Struct(_)
+                                | Type::Object
+                                | Type::Applied { .. }
+                        );
+                        if !is_object_like && !matches!(value_ty, Type::Unknown | Type::Mixed) {
+                            self.errors.push(TypeError { severity: Severity::Error,
+                                span: item.span,
+                                message: format!(
+                                    "Spread value has type {}, which is not an object-like type",
+                                    value_ty
+                                ),
+                            });
+                        }
+                    }
                 }
                 self.infer_expr_with_env(expr, env)
             }
@@ -250,17 +299,17 @@ impl<'a> CheckContext<'a> {
                 children,
                 ..
             } => {
-                self.validate_jsx_element(&name, attributes);
+                self.validate_jsx_element(&name, attributes, env);
                 for attr in attributes.iter() {
                     if let Some(value) = attr.value {
                         self.validate_jsx_expr(value);
-                        let _ = self.check_expr(value, env, explicit);
+                        let _ = self.check_expr(value, env, explicit, mut_env);
                     }
                 }
                 for child in children.iter() {
                     if let JsxChild::Expr(expr) = *child {
                         self.validate_jsx_expr(expr);
-                        let _ = self.check_expr(expr, env, explicit);
+                        let _ = self.check_expr(expr, env, explicit, mut_env);
                     }
                 }
                 Type::Component
@@ -269,7 +318,7 @@ impl<'a> CheckContext<'a> {
                 for child in children.iter() {
                     if let JsxChild::Expr(expr) = *child {
                         self.validate_jsx_expr(expr);
-                        let _ = self.check_expr(expr, env, explicit);
+                        let _ = self.check_expr(expr, env, explicit, mut_env);
                     }
                 }
                 Type::Component
@@ -314,7 +363,7 @@ impl<'a> CheckContext<'a> {
                         });
                     }
 
-                    let actual = self.check_expr(field.value, env, explicit);
+                    let actual = self.check_expr(field.value, env, explicit, mut_env);
                     if let Some(expected) = expected {
                         if !self.is_assignable(&actual, expected) {
                             self.errors.push(TypeError { severity: Severity::Error,
@@ -346,9 +395,9 @@ impl<'a> CheckContext<'a> {
                 Type::Struct(struct_name)
             }
             Expr::ArrayDimFetch { array, dim, .. } => {
-                let _ = self.check_expr(array, env, explicit);
+                let _ = self.check_expr(array, env, explicit, mut_env);
                 if let Some(dim) = dim {
-                    let _ = self.check_expr(dim, env, explicit);
+                    let _ = self.check_expr(dim, env, explicit, mut_env);
                 }
                 Type::Unknown
             }
@@ -358,28 +407,39 @@ impl<'a> CheckContext<'a> {
                 if_false,
                 ..
             } => {
-                let _ = self.check_expr(condition, env, explicit);
+                let _ = self.check_expr(condition, env, explicit, mut_env);
                 if let Some(if_true) = if_true {
-                    let _ = self.check_expr(if_true, env, explicit);
+                    let _ = self.check_expr(if_true, env, explicit, mut_env);
                 }
-                let _ = self.check_expr(if_false, env, explicit);
+                let _ = self.check_expr(if_false, env, explicit, mut_env);
                 Type::Unknown
             }
             Expr::Match {
                 condition, arms, ..
             } => {
-                let cond_ty = self.check_expr(condition, env, explicit);
+                let cond_ty = self.check_expr(condition, env, explicit, mut_env);
                 let mut match_ty = Type::Unknown;
                 for arm in arms.iter() {
                     let mut arm_env = env.clone();
                     let mut arm_explicit = explicit.clone();
+                    let mut arm_mut_env = mut_env.clone();
                     self.apply_match_arm_narrowing(condition, arm, &mut arm_env);
                     if let Some(conds) = arm.conditions {
                         for cond in conds.iter() {
-                            let _ = self.check_expr(cond, &mut arm_env, &mut arm_explicit);
+                            let _ = self.check_expr(
+                                cond,
+                                &mut arm_env,
+                                &mut arm_explicit,
+                                &mut arm_mut_env,
+                            );
                         }
                     }
-                    let body_ty = self.check_expr(arm.body, &mut arm_env, &mut arm_explicit);
+                    let body_ty = self.check_expr(
+                        arm.body,
+                        &mut arm_env,
+                        &mut arm_explicit,
+                        &mut arm_mut_env,
+                    );
                     match_ty = merge_types(&match_ty, &body_ty);
                 }
                 self.check_match_exhaustive(&cond_ty, arms, env);
@@ -388,12 +448,12 @@ impl<'a> CheckContext<'a> {
             Expr::Unsafe {
                 body, catch, finally, ..
             } => {
-                let body_ty = self.check_expr(body, env, explicit);
+                let body_ty = self.check_expr(body, env, explicit, mut_env);
                 if let Some(catch) = catch {
-                    let _ = self.check_expr(catch.body, env, explicit);
+                    let _ = self.check_expr(catch.body, env, explicit, mut_env);
                 }
                 if let Some(finally) = finally {
-                    let _ = self.check_expr(finally, env, explicit);
+                    let _ = self.check_expr(finally, env, explicit, mut_env);
                 }
                 body_ty
             }
@@ -407,6 +467,7 @@ impl<'a> CheckContext<'a> {
             Expr::Closure { params, body, .. } => {
                 let mut inner_env = env.clone();
                 let mut inner_explicit = explicit.clone();
+                let mut inner_mut_env = mut_env.clone();
                 for param in params.iter() {
                     let param_name = token_text(self.source, param.name.span)
                         .trim_start_matches('$')
@@ -417,16 +478,24 @@ impl<'a> CheckContext<'a> {
                         Type::Unknown
                     };
                     inner_env.insert(param_name.clone(), param_ty);
-                    inner_explicit.insert(param_name);
+                    inner_explicit.insert(param_name.clone());
+                    inner_mut_env.insert(param_name);
                 }
                 for stmt in body.iter() {
-                    self.check_stmt(stmt, &mut inner_env, &mut inner_explicit, None);
+                    self.check_stmt(
+                        stmt,
+                        &mut inner_env,
+                        &mut inner_explicit,
+                        None,
+                        &mut inner_mut_env,
+                    );
                 }
                 Type::Unknown
             }
             Expr::ArrowFunction { params, expr, .. } => {
                 let mut inner_env = env.clone();
                 let mut inner_explicit = explicit.clone();
+                let mut inner_mut_env = mut_env.clone();
                 for param in params.iter() {
                     let param_name = token_text(self.source, param.name.span)
                         .trim_start_matches('$')
@@ -437,9 +506,10 @@ impl<'a> CheckContext<'a> {
                         Type::Unknown
                     };
                     inner_env.insert(param_name.clone(), param_ty);
-                    inner_explicit.insert(param_name);
+                    inner_explicit.insert(param_name.clone());
+                    inner_mut_env.insert(param_name);
                 }
-                let _ = self.check_expr(expr, &mut inner_env, &mut inner_explicit);
+                let _ = self.check_expr(expr, &mut inner_env, &mut inner_explicit, &mut inner_mut_env);
                 Type::Unknown
             }
             Expr::Await { expr, span } => {
@@ -449,7 +519,7 @@ impl<'a> CheckContext<'a> {
                         message: "await is only allowed in async functions (or at top-level in PHPX modules)".to_string(),
                     });
                 }
-                let awaited_ty = self.check_expr(expr, env, explicit);
+                let awaited_ty = self.check_expr(expr, env, explicit, mut_env);
                 match awaited_ty {
                     Type::Applied { base, args } if base.eq_ignore_ascii_case("Promise") => {
                         args.first().cloned().unwrap_or(Type::Unknown)
@@ -470,35 +540,77 @@ impl<'a> CheckContext<'a> {
             | Expr::Cast { expr, .. }
             | Expr::Empty { expr, .. }
             | Expr::Eval { expr, .. } => {
-                let _ = self.check_expr(expr, env, explicit);
+                let _ = self.check_expr(expr, env, explicit, mut_env);
                 Type::Unknown
             }
             Expr::Isset { vars, .. } => {
                 for var in vars.iter() {
-                    let _ = self.check_expr(var, env, explicit);
+                    let _ = self.check_expr(var, env, explicit, mut_env);
                 }
                 Type::Unknown
             }
             Expr::Yield { key, value, .. } => {
                 if let Some(key) = key {
-                    let _ = self.check_expr(key, env, explicit);
+                    let _ = self.check_expr(key, env, explicit, mut_env);
                 }
                 if let Some(value) = value {
-                    let _ = self.check_expr(value, env, explicit);
+                    let _ = self.check_expr(value, env, explicit, mut_env);
                 }
                 Type::Unknown
             }
             Expr::Die { expr, .. } | Expr::Exit { expr, .. } => {
                 if let Some(expr) = expr {
-                    let _ = self.check_expr(expr, env, explicit);
+                    let _ = self.check_expr(expr, env, explicit, mut_env);
                 }
                 Type::Unknown
             }
             Expr::PostInc { var, .. } | Expr::PostDec { var, .. } => {
-                let _ = self.check_expr(var, env, explicit);
+                let _ = self.check_expr(var, env, explicit, mut_env);
                 Type::Unknown
             }
             _ => self.infer_expr_with_env(expr, env),
+        }
+    }
+
+    pub(in crate::phpx::typeck::check) fn expr_is_mutable(
+        &self,
+        expr: ExprId<'a>,
+        mut_env: &HashSet<String>,
+    ) -> bool {
+        if let Expr::Variable { span, .. } = *expr {
+            let name = token_text(self.source, span)
+                .trim_start_matches('$')
+                .to_string();
+            return mut_env.contains(&name);
+        }
+        true
+    }
+
+    pub(in crate::phpx::typeck::check) fn object_type_fields(
+        &self,
+        ty: &Type,
+    ) -> Option<BTreeMap<String, ObjectField>> {
+        match ty {
+            Type::ObjectShape(fields) => Some(fields.clone()),
+            Type::Interface(name) => self.interfaces.get(name).map(|info| info.fields.clone()),
+            Type::Struct(name) => self.structs.get(name).map(|info| {
+                info.fields
+                    .iter()
+                    .map(|(field_name, field_ty)| {
+                        (
+                            field_name.clone(),
+                            ObjectField {
+                                ty: field_ty.clone(),
+                                optional: false,
+                            },
+                        )
+                    })
+                    .collect()
+            }),
+            Type::Applied { base, args } if base.eq_ignore_ascii_case("Object") => {
+                args.first().and_then(|arg| self.object_type_fields(arg))
+            }
+            _ => None,
         }
     }
 
@@ -826,7 +938,30 @@ impl<'a> CheckContext<'a> {
         env: &HashMap<String, Type>,
     ) {
         let mut seen = HashSet::new();
+        let mut spread_unknown = false;
         for item in items.iter() {
+            if let Expr::Spread { expr, .. } = item.value {
+                let spread_ty = self.infer_expr_with_env(expr, env);
+                if let Some(spread_fields) = self.object_type_fields(&spread_ty) {
+                    for (key, field) in spread_fields.iter() {
+                        seen.insert(key.clone());
+                        if let Some(expected_field) = expected.get(key) {
+                            if !self.is_assignable(&field.ty, &expected_field.ty) {
+                                self.errors.push(TypeError { severity: Severity::Error,
+                                    span: item.span,
+                                    message: format!(
+                                        "Spread field '{}' has type {}, expected {}",
+                                        key, field.ty, expected_field.ty
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                } else if matches!(spread_ty, Type::Object | Type::Mixed | Type::Unknown) {
+                    spread_unknown = true;
+                }
+                continue;
+            }
             let key = object_key_name(item.key, self.source);
             seen.insert(key.clone());
             let Some(expected_field) = expected.get(&key) else {
@@ -846,6 +981,10 @@ impl<'a> CheckContext<'a> {
                     ),
                 });
             }
+        }
+
+        if spread_unknown {
+            return;
         }
 
         for (name, field) in expected.iter() {
@@ -951,6 +1090,7 @@ impl<'a> CheckContext<'a> {
         value_ty: &Type,
         env: &mut HashMap<String, Type>,
         explicit: &mut HashSet<String>,
+        mut_env: &mut HashSet<String>,
     ) {
         match *target {
             Expr::Variable { span, .. } => {
@@ -996,6 +1136,7 @@ impl<'a> CheckContext<'a> {
                     }
                     env.insert(name.clone(), value_ty.clone());
                 }
+                mut_env.insert(name);
             }
             Expr::DotAccess {
                 target,
@@ -1005,9 +1146,9 @@ impl<'a> CheckContext<'a> {
                 self.check_dot_access(target, property, span, env);
             }
             Expr::Assign { var, expr, .. } => {
-                let default_ty = self.check_expr(expr, env, explicit);
+                let default_ty = self.check_expr(expr, env, explicit, mut_env);
                 let merged = merge_types(value_ty, &default_ty);
-                self.assign_to_target(var, &merged, env, explicit);
+                self.assign_to_target(var, &merged, env, explicit, mut_env);
             }
             Expr::Array { items, .. } => {
                 for (idx, item) in items.iter().enumerate() {
@@ -1019,14 +1160,14 @@ impl<'a> CheckContext<'a> {
                         .and_then(|key| self.pattern_key_name_from_expr(key))
                         .unwrap_or_else(|| idx.to_string());
                     let field_ty = self.field_type_for_pattern_key(value_ty, &key_name);
-                    self.assign_to_target(item.value, &field_ty, env, explicit);
+                    self.assign_to_target(item.value, &field_ty, env, explicit, mut_env);
                 }
             }
             Expr::ObjectLiteral { items, .. } => {
                 for item in items.iter() {
                     let key_name = self.pattern_key_name(item.key);
                     let field_ty = self.field_type_for_pattern_key(value_ty, &key_name);
-                    self.assign_to_target(item.value, &field_ty, env, explicit);
+                    self.assign_to_target(item.value, &field_ty, env, explicit, mut_env);
                 }
             }
             _ => {}

@@ -234,7 +234,7 @@ impl<'a> CheckContext<'a> {
                         ..
                     } => {
                         let method_name = token_text(self.source, method_name.span);
-                        let sig = self.method_signature(params, *return_type);
+                        let sig = self.method_signature(params, *return_type, false);
                         methods.insert(method_name, sig);
                     }
                     ClassMember::Property { ty, entries, .. } => {
@@ -246,7 +246,7 @@ impl<'a> CheckContext<'a> {
                                 field_name,
                                 ObjectField {
                                     ty: field_ty.clone(),
-                                    optional: false,
+                                    optional: entry.optional,
                                 },
                             );
                         }
@@ -300,7 +300,7 @@ impl<'a> CheckContext<'a> {
                 } = member
                 {
                     let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
+                    let sig = self.method_signature(params, *return_type, false);
                     let has_default = !body.is_empty();
                     methods.insert(method_name, (sig, has_default));
                 }
@@ -334,11 +334,43 @@ impl<'a> CheckContext<'a> {
                 } = member
                 {
                     let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
+                    let sig = self.method_signature(params, *return_type, false);
                     methods.insert(method_name, sig);
                 }
             }
             self.struct_methods.insert(struct_name, methods);
+        }
+    }
+
+    pub(in crate::phpx::typeck::check) fn collect_receiver_methods(
+        &mut self,
+        program: &Program<'a>,
+    ) {
+        for stmt in program.statements.iter() {
+            let Stmt::ReceiverMethod {
+                receiver,
+                name,
+                params,
+                return_type,
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            let receiver_ty = self.resolve_type(receiver.ty);
+            let target_name = match &receiver_ty {
+                Type::Struct(name) => name.clone(),
+                Type::Enum(name) => name.clone(),
+                _ => continue,
+            };
+            let method_name = token_text(self.source, name.span);
+            let sig = self.method_signature(params, *return_type, receiver.is_mut);
+            let methods = if self.structs.contains_key(&target_name) {
+                self.struct_methods.entry(target_name).or_default()
+            } else {
+                self.enum_methods.entry(target_name).or_default()
+            };
+            methods.insert(method_name, sig);
         }
     }
 
@@ -388,7 +420,7 @@ impl<'a> CheckContext<'a> {
                 } = member
                 {
                     let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
+                    let sig = self.method_signature(params, *return_type, false);
                     additions.insert(method_name, sig);
                 }
             }
@@ -432,7 +464,7 @@ impl<'a> CheckContext<'a> {
                 } = member
                 {
                     let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
+                    let sig = self.method_signature(params, *return_type, false);
                     methods.insert(method_name, sig);
                 }
             }
@@ -535,6 +567,7 @@ impl<'a> CheckContext<'a> {
         &mut self,
         params: &'a [crate::parser::ast::Param<'a>],
         return_type: Option<&'a AstType<'a>>,
+        mutable: bool,
     ) -> MethodSig {
         let mut sig_params = Vec::new();
         let mut variadic = false;
@@ -550,6 +583,7 @@ impl<'a> CheckContext<'a> {
             params: sig_params,
             return_type: return_type.map(|ty| self.resolve_type(ty)),
             variadic,
+            mutable,
         }
     }
 

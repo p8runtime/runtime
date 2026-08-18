@@ -40,6 +40,7 @@ impl<'a> CheckContext<'a> {
         &mut self,
         name: &Name<'a>,
         attributes: &'a [crate::parser::ast::JsxAttribute<'a>],
+        env: &mut HashMap<String, Type>,
     ) {
         let raw = token_text(self.source, name.span);
         let raw = raw.trim();
@@ -82,7 +83,7 @@ impl<'a> CheckContext<'a> {
         }
 
         if is_component {
-            self.validate_component_props(last, attributes, name.span);
+            self.validate_component_props(last, attributes, name.span, env);
         }
     }
 
@@ -91,12 +92,27 @@ impl<'a> CheckContext<'a> {
         component: &str,
         attributes: &'a [crate::parser::ast::JsxAttribute<'a>],
         span: Span,
+        env: &mut HashMap<String, Type>,
     ) {
         self.validate_component_signature(component, span);
 
         let mut attrs = HashSet::new();
         let mut attr_spans: HashMap<String, Span> = HashMap::new();
+        let mut spread_unknown = false;
         for attr in attributes.iter() {
+            if let Some(value) = attr.value {
+                if let Expr::Spread { expr, .. } = value {
+                    let spread_ty = self.infer_expr_with_env(expr, env);
+                    if let Some(fields) = self.object_type_fields(&spread_ty) {
+                        for (name, _field) in fields {
+                            attrs.insert(name);
+                        }
+                    } else if matches!(spread_ty, Type::Object | Type::Mixed | Type::Unknown) {
+                        spread_unknown = true;
+                    }
+                    continue;
+                }
+            }
             let name = token_text(self.source, attr.name.span);
             attrs.insert(name.clone());
             attr_spans.insert(name, attr.name.span);
@@ -156,17 +172,19 @@ impl<'a> CheckContext<'a> {
             });
         }
 
-        for (field_name, field) in expected_fields.iter() {
-            if field.optional || attrs.contains(field_name) {
-                continue;
+        if !spread_unknown {
+            for (field_name, field) in expected_fields.iter() {
+                if field.optional || attrs.contains(field_name) {
+                    continue;
+                }
+                self.errors.push(TypeError { severity: Severity::Error,
+                    span,
+                    message: format!(
+                        "Missing required prop '{}' for component '{}'",
+                        field_name, component
+                    ),
+                });
             }
-            self.errors.push(TypeError { severity: Severity::Error,
-                span,
-                message: format!(
-                    "Missing required prop '{}' for component '{}'",
-                    field_name, component
-                ),
-            });
         }
     }
 

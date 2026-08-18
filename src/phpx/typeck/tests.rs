@@ -1545,3 +1545,130 @@ fn phpx_function_return_type_inferred_mismatch_rejected() {
     let code = "<?php function maybe($x) { if ($x) { return 1; } else { return \"two\"; } }";
     assert!(check(code).is_err());
 }
+
+// --- RFD 19 Phase 3: receiver methods, optional fields, spread -------------
+
+#[test]
+fn ds_receiver_method_type_checks() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return "hi" }
+        fn f(): string {
+          const person = Person { name: "Ada" };
+          return person.greet();
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected receiver method to type-check: {:?}", res);
+}
+
+#[test]
+fn ds_mutable_receiver_on_const_errors() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p mut Person) setName(name: string) {}
+        fn f() {
+          const person = Person { name: "Ada" };
+          person.setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected mutable receiver call on const to fail");
+    assert!(
+        res.unwrap_err().contains("mutable method"),
+        "expected mutable receiver error"
+    );
+}
+
+#[test]
+fn ds_mutable_receiver_on_let_ok() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p mut Person) setName(name: string) {}
+        fn f() {
+          let person = Person { name: "Ada" };
+          person.setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected mutable receiver call on let to pass: {:?}", res);
+}
+
+#[test]
+fn ds_interface_bare_field_names_accept_object_literal() {
+    let code = r#"
+        interface NameProps { name: string }
+        fn fullName(props: NameProps): string { return props.name; }
+        fullName({ name: "Bob" });
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected bare interface fields to work: {:?}", res);
+}
+
+#[test]
+fn ds_interface_optional_field_allows_missing() {
+    let code = r#"
+        interface Media { title: string; subtitle?: string }
+        fn getSubtitle(m: Media): Option<string> { return m.subtitle; }
+        getSubtitle({ title: "A" });
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected optional interface field to allow missing: {:?}", res);
+}
+
+#[test]
+fn ds_object_literal_spread_from_interface_ok() {
+    let code = r#"
+        interface Base { a: int; b: string }
+        fn f(base: Base): int {
+          const copy = { ...base, b: "y" };
+          return copy.a;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected object-literal spread to type-check: {:?}", res);
+}
+
+#[test]
+fn ds_object_literal_spread_type_mismatch_errors() {
+    let code = r#"
+        interface Base { a: int; b: string }
+        fn f(base: Base): Base {
+          return { ...base, b: 123 };
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected spread field type mismatch to fail");
+}
+
+#[test]
+fn ds_jsx_spread_props_satisfies_required() {
+    let code = r#"
+        interface GreetingProps { name: string }
+        fn Greeting(props: GreetingProps): Component { return <h1>Hello {props.name}</h1> }
+        fn render(): Component {
+          const props = { name: "Deka" };
+          return <Greeting {...props} />;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected JSX spread props to satisfy required prop: {:?}", res);
+}
+
+#[test]
+fn ds_jsx_spread_missing_required_prop_errors() {
+    let code = r#"
+        interface GreetingProps { name: string }
+        fn Greeting(props: GreetingProps): Component { return <h1>Hello {props.name}</h1> }
+        fn render(): Component {
+          const props = {};
+          return <Greeting {...props} />;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected JSX spread missing required prop to fail");
+    assert!(
+        res.unwrap_err().contains("Missing required prop 'name'"),
+        "expected missing required prop error"
+    );
+}

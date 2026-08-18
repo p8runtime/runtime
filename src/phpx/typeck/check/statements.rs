@@ -7,12 +7,13 @@ impl<'a> CheckContext<'a> {
         env: &mut HashMap<String, Type>,
         explicit: &mut HashSet<String>,
         return_type: Option<&Type>,
+        mut_env: &mut HashSet<String>,
     ) {
         match stmt {
             Stmt::Return { expr, span } => {
                 if let Some(expected) = return_type {
                     let actual = expr
-                        .map(|expr| self.check_expr(expr, env, explicit))
+                        .map(|expr| self.check_expr(expr, env, explicit, mut_env))
                         .unwrap_or_else(|| Type::Primitive(PrimitiveType::Null));
                     if let Some(expr) = expr {
                         if let Expr::Null { span: null_span } = *expr {
@@ -77,7 +78,7 @@ impl<'a> CheckContext<'a> {
                         });
                     }
                 }
-                let _ = self.check_expr(expr, env, explicit);
+                let _ = self.check_expr(expr, env, explicit, mut_env);
             }
             Stmt::If {
                 condition,
@@ -85,28 +86,49 @@ impl<'a> CheckContext<'a> {
                 else_block,
                 ..
             } => {
-                let _ = self.check_expr(condition, env, explicit);
+                let _ = self.check_expr(condition, env, explicit, mut_env);
                 let mut then_env = self.narrow_env_for_condition(condition, env, true);
                 let mut then_explicit = explicit.clone();
+                let mut then_mut_env = mut_env.clone();
                 for stmt in then_block.iter() {
-                    self.check_stmt(stmt, &mut then_env, &mut then_explicit, return_type);
+                    self.check_stmt(
+                        stmt,
+                        &mut then_env,
+                        &mut then_explicit,
+                        return_type,
+                        &mut then_mut_env,
+                    );
                 }
                 if let Some(else_block) = else_block {
                     let mut else_env = self.narrow_env_for_condition(condition, env, false);
                     let mut else_explicit = explicit.clone();
+                    let mut else_mut_env = mut_env.clone();
                     for stmt in else_block.iter() {
-                        self.check_stmt(stmt, &mut else_env, &mut else_explicit, return_type);
+                        self.check_stmt(
+                            stmt,
+                            &mut else_env,
+                            &mut else_explicit,
+                            return_type,
+                            &mut else_mut_env,
+                        );
                     }
                 }
             }
             Stmt::While {
                 condition, body, ..
             } => {
-                let _ = self.check_expr(condition, env, explicit);
+                let _ = self.check_expr(condition, env, explicit, mut_env);
                 let mut loop_env = self.narrow_env_for_condition(condition, env, true);
                 let mut loop_explicit = explicit.clone();
+                let mut loop_mut_env = mut_env.clone();
                 for stmt in body.iter() {
-                    self.check_stmt(stmt, &mut loop_env, &mut loop_explicit, return_type);
+                    self.check_stmt(
+                        stmt,
+                        &mut loop_env,
+                        &mut loop_explicit,
+                        return_type,
+                        &mut loop_mut_env,
+                    );
                 }
             }
             Stmt::DoWhile {
@@ -114,10 +136,17 @@ impl<'a> CheckContext<'a> {
             } => {
                 let mut loop_env = env.clone();
                 let mut loop_explicit = explicit.clone();
+                let mut loop_mut_env = mut_env.clone();
                 for stmt in body.iter() {
-                    self.check_stmt(stmt, &mut loop_env, &mut loop_explicit, return_type);
+                    self.check_stmt(
+                        stmt,
+                        &mut loop_env,
+                        &mut loop_explicit,
+                        return_type,
+                        &mut loop_mut_env,
+                    );
                 }
-                let _ = self.check_expr(condition, env, explicit);
+                let _ = self.check_expr(condition, env, explicit, mut_env);
             }
             Stmt::For {
                 init,
@@ -127,13 +156,13 @@ impl<'a> CheckContext<'a> {
                 ..
             } => {
                 for expr in init.iter() {
-                    let _ = self.check_expr(expr, env, explicit);
+                    let _ = self.check_expr(expr, env, explicit, mut_env);
                 }
                 for expr in condition.iter() {
-                    let _ = self.check_expr(expr, env, explicit);
+                    let _ = self.check_expr(expr, env, explicit, mut_env);
                 }
                 for expr in loop_expr.iter() {
-                    let _ = self.check_expr(expr, env, explicit);
+                    let _ = self.check_expr(expr, env, explicit, mut_env);
                 }
                 let mut loop_env = if condition.len() == 1 {
                     self.narrow_env_for_condition(condition[0], env, true)
@@ -141,8 +170,15 @@ impl<'a> CheckContext<'a> {
                     env.clone()
                 };
                 let mut loop_explicit = explicit.clone();
+                let mut loop_mut_env = mut_env.clone();
                 for stmt in body.iter() {
-                    self.check_stmt(stmt, &mut loop_env, &mut loop_explicit, return_type);
+                    self.check_stmt(
+                        stmt,
+                        &mut loop_env,
+                        &mut loop_explicit,
+                        return_type,
+                        &mut loop_mut_env,
+                    );
                 }
             }
             Stmt::Foreach {
@@ -152,16 +188,18 @@ impl<'a> CheckContext<'a> {
                 body,
                 ..
             } => {
-                let _ = self.check_expr(expr, env, explicit);
+                let _ = self.check_expr(expr, env, explicit, mut_env);
                 let mut loop_env = env.clone();
                 let mut loop_explicit = explicit.clone();
+                let mut loop_mut_env = mut_env.clone();
 
                 if let Expr::Variable { name, .. } = *value_var {
                     let value_name = token_text(self.source, *name)
                         .trim_start_matches('$')
                         .to_string();
                     loop_env.insert(value_name.clone(), Type::Unknown);
-                    loop_explicit.insert(value_name);
+                    loop_explicit.insert(value_name.clone());
+                    loop_mut_env.insert(value_name);
                 }
 
                 if let Some(key_expr) = key_var {
@@ -170,19 +208,33 @@ impl<'a> CheckContext<'a> {
                             .trim_start_matches('$')
                             .to_string();
                         loop_env.insert(key_name.clone(), Type::Unknown);
-                        loop_explicit.insert(key_name);
+                        loop_explicit.insert(key_name.clone());
+                        loop_mut_env.insert(key_name);
                     }
                 }
 
                 for stmt in body.iter() {
-                    self.check_stmt(stmt, &mut loop_env, &mut loop_explicit, return_type);
+                    self.check_stmt(
+                        stmt,
+                        &mut loop_env,
+                        &mut loop_explicit,
+                        return_type,
+                        &mut loop_mut_env,
+                    );
                 }
             }
             Stmt::Block { statements, .. } => {
                 let mut block_env = env.clone();
                 let mut block_explicit = explicit.clone();
+                let mut block_mut_env = mut_env.clone();
                 for stmt in statements.iter() {
-                    self.check_stmt(stmt, &mut block_env, &mut block_explicit, return_type);
+                    self.check_stmt(
+                        stmt,
+                        &mut block_env,
+                        &mut block_explicit,
+                        return_type,
+                        &mut block_mut_env,
+                    );
                 }
             }
             Stmt::Function {
@@ -198,10 +250,12 @@ impl<'a> CheckContext<'a> {
                 let (type_param_sigs, type_param_set) = self.collect_type_param_sigs(type_params);
                 let mut fn_env: HashMap<String, Type> = HashMap::new();
                 let mut fn_explicit: HashSet<String> = HashSet::new();
+                let mut fn_mut_env: HashSet<String> = HashSet::new();
                 let destructured_params = self.detect_destructured_param_carriers(params, body);
                 for param in params.iter() {
                     let param_name = token_text(self.source, param.name.span);
                     let param_name = param_name.trim_start_matches('$').to_string();
+                    fn_mut_env.insert(param_name.clone());
                     if destructured_params.contains(&param_name) {
                         if let Some(ty) = param.ty {
                             let resolved = self.resolve_type_with_params(ty, &type_param_set);
@@ -231,7 +285,7 @@ impl<'a> CheckContext<'a> {
                     if let Some(ty) = param.ty {
                         let resolved = self.resolve_type_with_params(ty, &type_param_set);
                         fn_env.insert(param_name.clone(), resolved);
-                        fn_explicit.insert(param_name);
+                        fn_explicit.insert(param_name.clone());
                     } else {
                         // Untyped params are still valid variables in scope
                         fn_env.insert(param_name.clone(), Type::Unknown);
@@ -239,7 +293,7 @@ impl<'a> CheckContext<'a> {
                     if let Some(default) = param.default {
                         if let Some(ty) = param.ty {
                             let expected = self.resolve_type_with_params(ty, &type_param_set);
-                            let actual = self.check_expr(default, env, explicit);
+                            let actual = self.check_expr(default, env, explicit, mut_env);
                             if !self.is_assignable(&actual, &expected) {
                                 self.errors.push(TypeError { severity: Severity::Error,
                                     span: param.span,
@@ -287,7 +341,13 @@ impl<'a> CheckContext<'a> {
                     self.async_depth += 1;
                 }
                 for stmt in body.iter() {
-                    self.check_stmt(stmt, &mut fn_env, &mut fn_explicit, body_return.as_ref());
+                    self.check_stmt(
+                        stmt,
+                        &mut fn_env,
+                        &mut fn_explicit,
+                        body_return.as_ref(),
+                        &mut fn_mut_env,
+                    );
                 }
                 if *is_async {
                     self.async_depth = self.async_depth.saturating_sub(1);
@@ -353,7 +413,7 @@ impl<'a> CheckContext<'a> {
                             ..
                         } => Some((
                             token_text(self.source, name.span),
-                            self.method_signature(params, *return_type),
+                            self.method_signature(params, *return_type, false),
                         )),
                         _ => None,
                     })
@@ -445,6 +505,7 @@ impl<'a> CheckContext<'a> {
                         } else {
                             env.insert(name.clone(), Type::Unknown);
                         }
+                        mut_env.insert(name);
                     }
                 }
             }

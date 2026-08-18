@@ -118,6 +118,15 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
         Expr::ObjectLiteral { items, .. } => {
             let mut fields = BTreeMap::new();
             for item in *items {
+                if let Expr::Spread { expr, .. } = item.value {
+                    let spread_ty = infer_expr(expr, ctx);
+                    if let Some(spread_fields) = object_type_fields(&spread_ty, ctx) {
+                        for (name, field) in spread_fields {
+                            fields.insert(name, field);
+                        }
+                    }
+                    continue;
+                }
                 let key = object_key_name(item.key, ctx.source);
                 let value_ty = infer_expr(&item.value, ctx);
                 fields.insert(
@@ -164,7 +173,10 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                     .get(&prop_name)
                     .map(|field| {
                         if field.optional {
-                            merge_types(&field.ty, &Type::Primitive(PrimitiveType::Null))
+                            Type::Applied {
+                                base: "Option".to_string(),
+                                args: vec![field.ty.clone()],
+                            }
                         } else {
                             field.ty.clone()
                         }
@@ -177,7 +189,16 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                     .interfaces
                     .get(&name)
                     .and_then(|fields| fields.get(&prop_name))
-                    .map(|field| field.ty.clone())
+                    .map(|field| {
+                        if field.optional {
+                            Type::Applied {
+                                base: "Option".to_string(),
+                                args: vec![field.ty.clone()],
+                            }
+                        } else {
+                            field.ty.clone()
+                        }
+                    })
                     .unwrap_or(Type::Unknown),
                 Type::Enum(name) => {
                     if name.eq_ignore_ascii_case("Option") || name.eq_ignore_ascii_case("Result") {
@@ -461,6 +482,34 @@ pub fn literal_type(expr: &Expr) -> Option<Type> {
         Expr::Boolean { .. } => Some(Type::Primitive(PrimitiveType::Bool)),
         Expr::String { .. } => Some(Type::Primitive(PrimitiveType::String)),
         Expr::Null { .. } => Some(Type::Primitive(PrimitiveType::Null)),
+        _ => None,
+    }
+}
+
+fn object_type_fields(
+    ty: &Type,
+    ctx: &InferContext,
+) -> Option<std::collections::BTreeMap<String, ObjectField>> {
+    match ty {
+        Type::ObjectShape(fields) => Some(fields.clone()),
+        Type::Interface(name) => ctx.interfaces.get(name).cloned(),
+        Type::Struct(name) => ctx.structs.get(name).map(|info| {
+            info.fields
+                .iter()
+                .map(|(name, ty)| {
+                    (
+                        name.clone(),
+                        ObjectField {
+                            ty: ty.clone(),
+                            optional: false,
+                        },
+                    )
+                })
+                .collect()
+        }),
+        Type::Applied { base, args } if base.eq_ignore_ascii_case("Object") => {
+            args.first().and_then(|arg| object_type_fields(arg, ctx))
+        }
         _ => None,
     }
 }
