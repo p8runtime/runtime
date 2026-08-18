@@ -1376,3 +1376,39 @@ fn ds_jsx_spread_missing_required_prop_errors() {
         "expected missing required prop error"
     );
 }
+
+#[test]
+fn ds_embed_promotes_methods() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return "hi, " + p.name }
+        struct Employee { Person; employeeId: string }
+        fn f(): string {
+          const e = Employee { Person: Person { name: "Ada" }, employeeId: "E1" };
+          return e.greet();
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected embedded methods to be promoted: {:?}", res);
+}
+
+#[test]
+fn ds_embed_promoted_method_satisfies_interface() {
+    let code = r#"
+        interface Greeter { fn greet(): string }
+        struct Person { name: string }
+        fn (p Person) greet(): string { return "hi" }
+        struct Employee { Person; employeeId: string }
+        fn useGreeter(g: Greeter): string { return g.greet(); }
+        fn f(): string {
+          const e = Employee { Person: Person { name: "Ada" }, employeeId: "E1" };
+          return useGreeter(e);
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_ok(),
+        "expected promoted methods to satisfy interface: {:?}",
+        res
+    );
+}

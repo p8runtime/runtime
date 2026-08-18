@@ -73,6 +73,7 @@ impl<'a> CheckContext<'a> {
         self.collect_interface_methods(program);
         self.collect_struct_methods(program);
         self.collect_receiver_methods(program);
+        self.promote_embedded_struct_methods();
         self.collect_enum_methods(program);
         self.collect_enum_cases(program);
         self.collect_functions(program);

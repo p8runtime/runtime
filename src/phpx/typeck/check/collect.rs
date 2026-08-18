@@ -341,6 +341,56 @@ impl<'a> CheckContext<'a> {
         }
     }
 
+    pub(in crate::phpx::typeck::check) fn promote_embedded_struct_methods(&mut self) {
+        let struct_names: Vec<String> = self.structs.keys().cloned().collect();
+        for struct_name in struct_names {
+            let mut methods = self
+                .struct_methods
+                .get(&struct_name)
+                .cloned()
+                .unwrap_or_default();
+            let mut seen: HashSet<String> = methods.keys().cloned().collect();
+            let mut visited = HashSet::new();
+            if let Some(embeds) = self.structs.get(&struct_name).map(|info| info.embeds.clone()) {
+                for embed in embeds {
+                    self.collect_promoted_struct_methods(
+                        &embed,
+                        &mut methods,
+                        &mut seen,
+                        &mut visited,
+                    );
+                }
+            }
+            if !methods.is_empty() {
+                self.struct_methods.insert(struct_name, methods);
+            }
+        }
+    }
+
+    fn collect_promoted_struct_methods(
+        &self,
+        embed: &str,
+        methods: &mut HashMap<String, MethodSig>,
+        seen: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+    ) {
+        if !visited.insert(embed.to_string()) {
+            return;
+        }
+        if let Some(embed_methods) = self.struct_methods.get(embed) {
+            for (name, sig) in embed_methods.iter() {
+                if seen.insert(name.clone()) {
+                    methods.insert(name.clone(), sig.clone());
+                }
+            }
+        }
+        if let Some(info) = self.structs.get(embed) {
+            for next in info.embeds.clone() {
+                self.collect_promoted_struct_methods(&next, methods, seen, visited);
+            }
+        }
+    }
+
     pub(in crate::phpx::typeck::check) fn collect_enum_methods(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
             let Stmt::Enum { name, members, .. } = stmt else {
