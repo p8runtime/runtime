@@ -40,6 +40,33 @@ impl<'a> CheckContext<'a> {
         span: Span,
         receiver_mutable: bool,
     ) -> Type {
+        // Go-style method precedence: an outer struct method shadows promoted
+        // embedded methods. If two or more embedded structs promote the same
+        // method and the outer struct does not define it, the call is ambiguous.
+        if let Type::Struct(name) = target_ty {
+            let is_own = self
+                .own_struct_methods
+                .get(name)
+                .map(|own| own.contains(method_name))
+                .unwrap_or(false);
+            let is_ambiguous = !is_own
+                && self
+                    .ambiguous_promoted_methods
+                    .get(name)
+                    .map(|set| set.contains(method_name))
+                    .unwrap_or(false);
+            if is_ambiguous {
+                self.errors.push(TypeError { severity: Severity::Error,
+                    span,
+                    message: format!(
+                        "Ambiguous method '{}' on struct '{}'; multiple embedded structs promote it",
+                        method_name, name
+                    ),
+                });
+                return Type::Unknown;
+            }
+        }
+
         let (owner_label, sig) = match target_ty {
             Type::Struct(name) => (
                 Some(format!("struct {}", name)),

@@ -298,6 +298,7 @@ impl<'a> CheckContext<'a> {
             }
             let struct_name = token_text(self.source, name.span);
             let mut methods = HashMap::new();
+            let mut own = HashSet::new();
             for member in members.iter() {
                 if let ClassMember::Method {
                     name: method_name,
@@ -308,10 +309,12 @@ impl<'a> CheckContext<'a> {
                 {
                     let method_name = token_text(self.source, method_name.span);
                     let sig = self.method_signature(params, *return_type, false);
-                    methods.insert(method_name, sig);
+                    methods.insert(method_name.clone(), sig);
+                    own.insert(method_name);
                 }
             }
-            self.struct_methods.insert(struct_name, methods);
+            self.struct_methods.insert(struct_name.clone(), methods);
+            self.own_struct_methods.insert(struct_name, own);
         }
     }
 
@@ -339,11 +342,17 @@ impl<'a> CheckContext<'a> {
             let method_name = token_text(self.source, name.span);
             let sig = self.method_signature(params, *return_type, receiver.is_mut);
             let methods = if self.structs.contains_key(&target_name) {
-                self.struct_methods.entry(target_name).or_default()
+                self.struct_methods.entry(target_name.clone()).or_default()
             } else {
-                self.enum_methods.entry(target_name).or_default()
+                self.enum_methods.entry(target_name.clone()).or_default()
             };
-            methods.insert(method_name, sig);
+            methods.insert(method_name.clone(), sig);
+            if self.structs.contains_key(&target_name) {
+                self.own_struct_methods
+                    .entry(target_name)
+                    .or_default()
+                    .insert(method_name);
+            }
         }
     }
 
@@ -355,16 +364,48 @@ impl<'a> CheckContext<'a> {
                 .get(&struct_name)
                 .cloned()
                 .unwrap_or_default();
-            let mut seen: HashSet<String> = methods.keys().cloned().collect();
-            let mut visited = HashSet::new();
+            let own = self
+                .own_struct_methods
+                .get(&struct_name)
+                .cloned()
+                .unwrap_or_default();
+            let mut origins: HashMap<String, Vec<String>> = HashMap::new();
             if let Some(embeds) = self.structs.get(&struct_name).map(|info| info.embeds.clone()) {
                 for embed in embeds {
-                    self.collect_promoted_struct_methods(
+                    let mut visited = HashSet::new();
+                    self.collect_promoted_method_origins(
                         &embed,
-                        &mut methods,
-                        &mut seen,
+                        &embed,
+                        &mut origins,
                         &mut visited,
                     );
+                }
+            }
+            let mut ambiguous = HashSet::new();
+            for (method_name, sources) in &origins {
+                if sources.len() > 1 && !own.contains(method_name) {
+                    ambiguous.insert(method_name.clone());
+                }
+            }
+            if !ambiguous.is_empty() {
+                self.ambiguous_promoted_methods
+                    .insert(struct_name.clone(), ambiguous.clone());
+            }
+            for (method_name, sources) in origins {
+                if own.contains(&method_name) || methods.contains_key(&method_name) {
+                    continue;
+                }
+                if ambiguous.contains(&method_name) {
+                    continue;
+                }
+                let source = &sources[0];
+                if let Some(sig) = self
+                    .struct_methods
+                    .get(source)
+                    .and_then(|m| m.get(&method_name))
+                    .cloned()
+                {
+                    methods.insert(method_name, sig);
                 }
             }
             if !methods.is_empty() {
@@ -373,26 +414,27 @@ impl<'a> CheckContext<'a> {
         }
     }
 
-    fn collect_promoted_struct_methods(
+    fn collect_promoted_method_origins(
         &self,
+        top_embed: &str,
         embed: &str,
-        methods: &mut HashMap<String, MethodSig>,
-        seen: &mut HashSet<String>,
+        origins: &mut HashMap<String, Vec<String>>,
         visited: &mut HashSet<String>,
     ) {
         if !visited.insert(embed.to_string()) {
             return;
         }
         if let Some(embed_methods) = self.struct_methods.get(embed) {
-            for (name, sig) in embed_methods.iter() {
-                if seen.insert(name.clone()) {
-                    methods.insert(name.clone(), sig.clone());
-                }
+            for name in embed_methods.keys() {
+                origins
+                    .entry(name.clone())
+                    .or_default()
+                    .push(top_embed.to_string());
             }
         }
         if let Some(info) = self.structs.get(embed) {
             for next in info.embeds.clone() {
-                self.collect_promoted_struct_methods(&next, methods, seen, visited);
+                self.collect_promoted_method_origins(top_embed, &next, origins, visited);
             }
         }
     }

@@ -222,6 +222,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     pub(super) fn parse_type(&mut self) -> Option<Type<'ast>> {
         let mut left = self.parse_type_intersection()?;
 
+        // DekaScript postfix optional shorthand: `T?` is sugar for `Option<T>`.
+        if self.current_token.kind == TokenKind::Question {
+            self.bump();
+            left = Type::Option(self.arena.alloc(left));
+        }
+
         if self.current_token.kind == TokenKind::Pipe {
             let mut types = bumpalo::collections::Vec::new_in(self.arena);
             types.push(left);

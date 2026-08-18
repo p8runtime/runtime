@@ -1118,6 +1118,8 @@ pub enum Type<'ast> {
     Union(&'ast [Type<'ast>]),
     Intersection(&'ast [Type<'ast>]),
     Nullable(&'ast Type<'ast>),
+    /// DekaScript postfix optional type: `T?` is syntactic sugar for `Option<T>`.
+    Option(&'ast Type<'ast>),
     ObjectShape(&'ast [ObjectShapeField<'ast>]),
     Applied {
         base: &'ast Type<'ast>,

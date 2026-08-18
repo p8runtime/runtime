@@ -7,6 +7,12 @@ pub(in crate::phpx::typeck::check) struct CheckContext<'a> {
     pub(in crate::phpx::typeck::check) errors: Vec<TypeError>,
     pub(in crate::phpx::typeck::check) structs: HashMap<String, StructInfo>,
     pub(in crate::phpx::typeck::check) struct_methods: HashMap<String, HashMap<String, MethodSig>>,
+    /// Methods declared directly on each struct (body methods + receiver methods),
+    /// used to distinguish own methods from promoted embedded methods.
+    pub(in crate::phpx::typeck::check) own_struct_methods: HashMap<String, HashSet<String>>,
+    /// Promoted method names that are ambiguous because two or more embedded
+    /// structs provide the same name. A direct struct override is required.
+    pub(in crate::phpx::typeck::check) ambiguous_promoted_methods: HashMap<String, HashSet<String>>,
     pub(in crate::phpx::typeck::check) enums: HashMap<String, EnumInfo>,
     pub(in crate::phpx::typeck::check) enum_methods: HashMap<String, HashMap<String, MethodSig>>,
     pub(in crate::phpx::typeck::check) interfaces: HashMap<String, InterfaceInfo>,
@@ -30,6 +36,8 @@ impl<'a> CheckContext<'a> {
             errors: Vec::new(),
             structs: HashMap::new(),
             struct_methods: HashMap::new(),
+            own_struct_methods: HashMap::new(),
+            ambiguous_promoted_methods: HashMap::new(),
             enums: HashMap::new(),
             enum_methods: HashMap::new(),
             interfaces: HashMap::new(),

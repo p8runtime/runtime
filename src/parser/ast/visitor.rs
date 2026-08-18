@@ -643,6 +643,7 @@ pub fn walk_type<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'ast Typ
         Type::Name(name) => visitor.visit_name(name),
         Type::Union(types) | Type::Intersection(types) => walk_types(visitor, types),
         Type::Nullable(inner) => visitor.visit_type(inner),
+        Type::Option(inner) => visitor.visit_type(inner),
         Type::ObjectShape(fields) => {
             for field in fields.iter() {
                 visitor.visit_type(field.ty);

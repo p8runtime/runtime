@@ -61,6 +61,13 @@ impl<'a> CheckContext<'a> {
                     Type::Union(out)
                 }
             }
+            AstType::Option(inner) => {
+                let inner = self.resolve_type_internal(inner, visiting, params);
+                Type::Applied {
+                    base: "Option".to_string(),
+                    args: vec![inner],
+                }
+            }
             AstType::Nullable(inner) => {
                 self.errors.push(TypeError { severity: Severity::Error,
                     span: self.type_span(inner),
@@ -156,6 +163,7 @@ impl<'a> CheckContext<'a> {
                 types.first().map(|t| self.type_span(t)).unwrap_or_default()
             }
             AstType::Nullable(inner) => self.type_span(inner),
+            AstType::Option(inner) => self.type_span(inner),
             AstType::ObjectShape(fields) => {
                 fields.first().map(|field| field.span).unwrap_or_default()
             }

@@ -381,15 +381,26 @@ impl<'a> CheckContext<'a> {
                     if info.defaults.contains(field) {
                         continue;
                     }
-                    if !seen.contains(field) {
-                        self.errors.push(TypeError { severity: Severity::Error,
-                            span: span,
-                            message: format!(
-                                "Missing field '{}' in struct literal '{}'",
-                                field, struct_name
-                            ),
-                        });
+                    if seen.contains(field) {
+                        continue;
                     }
+                    if let Some(ty) = info.fields.get(field) {
+                        if self.type_is_option(ty) {
+                            continue;
+                        }
+                    }
+                    if info.embeds.contains(field)
+                        && self.is_empty_embed_struct(field, &mut HashSet::new())
+                    {
+                        continue;
+                    }
+                    self.errors.push(TypeError { severity: Severity::Error,
+                        span: span,
+                        message: format!(
+                            "Missing field '{}' in struct literal '{}'",
+                            field, struct_name
+                        ),
+                    });
                 }
 
                 Type::Struct(struct_name)
@@ -926,6 +937,37 @@ impl<'a> CheckContext<'a> {
             Type::Union(types) => types.iter().any(|t| self.type_allows_null(t)),
             _ => false,
         }
+    }
+
+    pub(in crate::phpx::typeck::check) fn type_is_option(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Applied { base, .. } if base.eq_ignore_ascii_case("Option")
+        )
+    }
+
+    pub(in crate::phpx::typeck::check) fn is_empty_embed_struct(
+        &self,
+        name: &str,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        if !visiting.insert(name.to_string()) {
+            return true;
+        }
+        let Some(info) = self.structs.get(name) else {
+            return true;
+        };
+        for (field_name, ty) in &info.fields {
+            if info.embeds.contains(field_name) {
+                if !self.is_empty_embed_struct(field_name, visiting) {
+                    return false;
+                }
+            } else {
+                let _ = ty;
+                return false;
+            }
+        }
+        true
     }
 
     pub(in crate::phpx::typeck::check) fn check_object_literal_against_type(

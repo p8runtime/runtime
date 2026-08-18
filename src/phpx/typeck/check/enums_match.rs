@@ -71,6 +71,26 @@ impl<'a> CheckContext<'a> {
         expr: ExprId<'a>,
     ) -> Option<(String, String)> {
         match *expr {
+            Expr::Variable { span, .. } => {
+                // DekaScript shorthand: bare `Some`/`None` in a match arm refer
+                // to the builtin `Option` enum.
+                let name = token_text(self.source, span);
+                if name.eq_ignore_ascii_case("Some") || name.eq_ignore_ascii_case("None") {
+                    Some(("Option".to_string(), name))
+                } else {
+                    None
+                }
+            }
+            Expr::Call { func, .. } => {
+                // DekaScript shorthand: `Some(value)` in a match arm.
+                if let Expr::Variable { span, .. } = *func {
+                    let name = token_text(self.source, span);
+                    if name.eq_ignore_ascii_case("Some") || name.eq_ignore_ascii_case("None") {
+                        return Some(("Option".to_string(), name));
+                    }
+                }
+                None
+            }
             Expr::ClassConstFetch {
                 class, constant, ..
             } => self

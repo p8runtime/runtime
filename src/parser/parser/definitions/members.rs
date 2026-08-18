@@ -790,11 +790,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     self.expect_semicolon();
                 }
 
+                // `name: T?` is sugar for an optional `Option<T>` field.
+                let is_option_ty = ty
+                    .map(|t| matches!(t, Type::Option(_)))
+                    .unwrap_or(false);
                 let entry = PropertyEntry {
                     name,
                     default,
                     annotations: self.arena.alloc_slice_copy(&annotations),
-                    optional,
+                    optional: optional || is_option_ty,
                     is_mut,
                     span: Span::new(
                         name.span.start,
