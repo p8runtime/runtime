@@ -186,6 +186,7 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Stmt::Function {
+                name,
                 is_async,
                 type_params,
                 params,
@@ -193,6 +194,7 @@ impl<'a> CheckContext<'a> {
                 body,
                 ..
             } => {
+                let fn_name = token_text(self.source, name.span);
                 let (type_param_sigs, type_param_set) = self.collect_type_param_sigs(type_params);
                 let mut fn_env: HashMap<String, Type> = HashMap::new();
                 let mut fn_explicit: HashSet<String> = HashSet::new();
@@ -252,8 +254,14 @@ impl<'a> CheckContext<'a> {
                 }
                 let expected_return =
                     fn_return.map(|ty| self.resolve_type_with_params(ty, &type_param_set));
+                let inferred_return = if expected_return.is_none() {
+                    self.function_returns.get(&fn_name).cloned()
+                } else {
+                    None
+                };
+                let effective_return = expected_return.or(inferred_return);
                 let body_return = if *is_async {
-                    match expected_return.as_ref() {
+                    match effective_return.as_ref() {
                         Some(Type::Applied { base, args })
                             if base.eq_ignore_ascii_case("Promise") =>
                         {
@@ -272,7 +280,7 @@ impl<'a> CheckContext<'a> {
                         None => None,
                     }
                 } else {
-                    expected_return.clone()
+                    effective_return.clone()
                 };
                 self.fn_depth += 1;
                 if *is_async {

@@ -593,6 +593,180 @@ impl<'a> CheckContext<'a> {
         }
     }
 
+    pub(in crate::phpx::typeck::check) fn infer_function_return_types(
+        &mut self,
+        program: &Program<'a>,
+    ) {
+        for stmt in program.statements.iter() {
+            let Stmt::Function {
+                name,
+                is_async,
+                type_params,
+                params,
+                return_type,
+                body,
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            if return_type.is_some() {
+                continue;
+            }
+            let fn_name = token_text(self.source, name.span);
+            let (_, type_param_set) = self.collect_type_param_sigs(type_params);
+
+            let mut fn_env: HashMap<String, Type> = HashMap::new();
+            for param in params.iter() {
+                let param_name = token_text(self.source, param.name.span)
+                    .trim_start_matches('$')
+                    .to_string();
+                let param_ty = param
+                    .ty
+                    .map(|ty| self.resolve_type_with_params(ty, &type_param_set))
+                    .unwrap_or(Type::Unknown);
+                fn_env.insert(param_name, param_ty);
+            }
+
+            let returns = self.collect_return_types(body, &fn_env);
+            let inferred = self.merge_return_types(&fn_name, name.span, returns);
+            let final_ty = if *is_async {
+                // Avoid Promise<Promise<T>> if the body already returns a Promise.
+                match inferred {
+                    Type::Applied { base, args } if base.eq_ignore_ascii_case("Promise") => {
+                        Type::Applied {
+                            base: "Promise".to_string(),
+                            args: args.clone(),
+                        }
+                    }
+                    other => Type::Applied {
+                        base: "Promise".to_string(),
+                        args: vec![other],
+                    },
+                }
+            } else {
+                inferred
+            };
+            self.function_returns.insert(fn_name, final_ty);
+        }
+    }
+
+    fn collect_return_types(
+        &self,
+        body: &'a [StmtId<'a>],
+        env: &HashMap<String, Type>,
+    ) -> Vec<(Type, Option<Span>)> {
+        let mut out = Vec::new();
+        for stmt in body.iter() {
+            self.collect_return_types_from_stmt(stmt, env, &mut out);
+        }
+        out
+    }
+
+    fn collect_return_types_from_stmt(
+        &self,
+        stmt: &'a Stmt<'a>,
+        env: &HashMap<String, Type>,
+        out: &mut Vec<(Type, Option<Span>)>,
+    ) {
+        match stmt {
+            Stmt::Return { expr, span } => {
+                let ty = expr
+                    .map(|e| self.infer_expr_with_env(e, env))
+                    .unwrap_or(Type::Primitive(PrimitiveType::Null));
+                out.push((ty, Some(*span)));
+            }
+            Stmt::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                for s in then_block.iter() {
+                    self.collect_return_types_from_stmt(s, env, out);
+                }
+                if let Some(else_block) = else_block {
+                    for s in else_block.iter() {
+                        self.collect_return_types_from_stmt(s, env, out);
+                    }
+                }
+            }
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::Foreach { body, .. } => {
+                for s in body.iter() {
+                    self.collect_return_types_from_stmt(s, env, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter() {
+                    for s in case.body.iter() {
+                        self.collect_return_types_from_stmt(s, env, out);
+                    }
+                }
+            }
+            Stmt::Try {
+                body,
+                catches,
+                finally,
+                ..
+            } => {
+                for s in body.iter() {
+                    self.collect_return_types_from_stmt(s, env, out);
+                }
+                for catch in catches.iter() {
+                    for s in catch.body.iter() {
+                        self.collect_return_types_from_stmt(s, env, out);
+                    }
+                }
+                if let Some(finally) = finally {
+                    for s in finally.iter() {
+                        self.collect_return_types_from_stmt(s, env, out);
+                    }
+                }
+            }
+            Stmt::Block { statements, .. } => {
+                for s in statements.iter() {
+                    self.collect_return_types_from_stmt(s, env, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn merge_return_types(
+        &mut self,
+        fn_name: &str,
+        fn_span: Span,
+        returns: Vec<(Type, Option<Span>)>,
+    ) -> Type {
+        let mut candidate: Option<Type> = None;
+        for (ty, span) in returns {
+            if matches!(ty, Type::Unknown) {
+                continue;
+            }
+            match candidate {
+                None => candidate = Some(ty),
+                Some(ref existing) => {
+                    if !self.is_assignable(&ty, existing) && !self.is_assignable(existing, &ty) {
+                        let err_span = span.unwrap_or(fn_span);
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
+                            span: err_span,
+                            message: format!(
+                                "Inferred return type for '{}' is incompatible across return branches",
+                                fn_name
+                            ),
+                        });
+                        return Type::Unknown;
+                    }
+                    candidate = Some(merge_types(existing, &ty));
+                }
+            }
+        }
+        candidate.unwrap_or(Type::Unknown)
+    }
+
     pub(in crate::phpx::typeck::check) fn collect_type_aliases(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
             let Stmt::TypeAlias {

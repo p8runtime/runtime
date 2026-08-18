@@ -81,6 +81,7 @@ impl<'a> CheckContext<'a> {
         self.collect_enum_methods(program);
         self.collect_enum_cases(program);
         self.collect_functions(program);
+        self.infer_function_return_types(program);
         let mut env: HashMap<String, Type> = HashMap::new();
         let mut explicit: HashSet<String> = HashSet::new();
         for stmt in program.statements.iter() {
