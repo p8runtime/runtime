@@ -263,7 +263,7 @@ impl<'a> CheckContext<'a> {
                         let _ = self.check_expr(expr, env, explicit);
                     }
                 }
-                Type::VNode
+                Type::Component
             }
             Expr::JsxFragment { children, .. } => {
                 for child in children.iter() {
@@ -272,7 +272,7 @@ impl<'a> CheckContext<'a> {
                         let _ = self.check_expr(expr, env, explicit);
                     }
                 }
-                Type::VNode
+                Type::Component
             }
             Expr::StructLiteral { name, fields, span } => {
                 let raw = token_text(self.source, name.span);

@@ -260,7 +260,7 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
             _ => a == b,
         },
         (Type::Array, Type::Array) => true,
-        (Type::VNode, Type::VNode) => true,
+        (Type::Component, Type::Component) => true,
         (Type::Struct(a), Type::Struct(b)) => a == b,
         (Type::Enum(a), Type::Enum(b)) => a == b,
         (Type::EnumCase { enum_name, .. }, Type::Enum(target_name)) => enum_name == target_name,
@@ -312,7 +312,7 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
         | (Type::Struct(_), Type::Object)
         | (Type::Enum(_), Type::Object)
         | (Type::EnumCase { .. }, Type::Object)
-        | (Type::VNode, Type::Object)
+        | (Type::Component, Type::Object)
         | (Type::Object, Type::Object)
         | (Type::Interface(_), Type::Object) => true,
         _ => false,
