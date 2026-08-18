@@ -41,6 +41,22 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_ds_let();
         }
 
+        if self.is_ds()
+            && self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"impl")
+        {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "impl is not part of DekaScript",
+                "Use a receiver method instead: `fn (self: Type) method() { ... }`.",
+            ));
+            // Recover by treating the rest of the statement as an error node.
+            self.sync_to_statement_end();
+            return self.arena.alloc(crate::parser::ast::Stmt::Error {
+                span: self.current_token.span,
+            });
+        }
+
         if self.current_token.kind == TokenKind::Identifier
             && self.next_token.kind == TokenKind::Colon
         {
@@ -68,15 +84,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             && self.token_eq_ident(&self.current_token, b"type")
         {
             return self.parse_type_alias(top_level);
-        }
-
-        // DekaScript `impl` (RFD 19) -- .ds only, contextual identifier like
-        // `struct`/`type` above, never a reserved token.
-        if self.is_ds()
-            && self.current_token.kind == TokenKind::Identifier
-            && self.token_eq_ident(&self.current_token, b"impl")
-        {
-            return self.parse_impl(doc_comment);
         }
 
         // `cql` is a true keyword; `query` is context-sensitive (identifier unless followed by name + =)
@@ -131,7 +138,16 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     }
                     TokenKind::Class => self.parse_class(attributes, &[], doc_comment),
                     TokenKind::Interface => self.parse_interface(attributes, doc_comment),
-                    TokenKind::Trait => self.parse_trait(attributes, doc_comment),
+                    TokenKind::Trait => {
+                        if self.is_ds() {
+                            self.errors.push(ParseError::with_help(
+                                self.current_token.span,
+                                "trait is not part of DekaScript",
+                                "Use a receiver method instead: `fn (self: Type) method() { ... }`.",
+                            ));
+                        }
+                        self.parse_trait(attributes, doc_comment)
+                    }
                     TokenKind::Enum => self.parse_enum(attributes, doc_comment),
                     TokenKind::Const => self.parse_const_stmt(attributes, doc_comment),
                     TokenKind::Final | TokenKind::Abstract | TokenKind::Readonly => {
@@ -291,7 +307,16 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.parse_class(&[], &[], doc_comment)
             }
             TokenKind::Interface => self.parse_interface(&[], doc_comment),
-            TokenKind::Trait => self.parse_trait(&[], doc_comment),
+            TokenKind::Trait => {
+                if self.is_ds() {
+                    self.errors.push(ParseError::with_help(
+                        self.current_token.span,
+                        "trait is not part of DekaScript",
+                        "Use a receiver method instead: `fn (self: Type) method() { ... }`.",
+                    ));
+                }
+                self.parse_trait(&[], doc_comment)
+            }
             TokenKind::Enum => self.parse_enum(&[], doc_comment),
             TokenKind::Namespace => {
                 self.reject_ds_php_statement("Use explicit module imports and exports.");

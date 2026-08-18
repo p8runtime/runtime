@@ -1139,44 +1139,23 @@ fn phpx_rejects_js_style_enum_body() {
     assert!(!program.errors.is_empty());
 }
 
-// --- DekaScript trait/impl parsing (dekaruntime/deka#93) -------------------
+// --- DekaScript trait/impl rejection (RFD 19 Phase 5) ----------------------
 
 #[test]
-fn ds_trait_declaration_parses_unit() {
+fn ds_trait_is_rejected() {
     let code = "trait Named {\n  name(): string\n}";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
-
-    let stmt = program
-        .statements
-        .iter()
-        .find(|s| matches!(***s, Stmt::Trait { .. }))
-        .expect("expected trait stmt");
-    match **stmt {
-        Stmt::Trait { name, .. } => {
-            assert_eq!(&code.as_bytes()[name.span.start..name.span.end], b"Named");
-        }
-        _ => panic!("expected trait statement"),
-    }
+    assert!(
+        program.errors.iter().any(|e| e.message == "trait is not part of DekaScript"),
+        "expected trait rejection, got: {:?}",
+        program.errors
+    );
 }
 
 #[test]
-fn ds_trait_default_method_parses_unit() {
-    // Default method bodies may omit the trailing semicolon on the final
-    // statement and the semicolon after the method signature.
-    let code = r#"trait Greeter {
-  greet(): string { return "hi" }
-}"#;
-    let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
-    let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
-}
-
-#[test]
-fn ds_inherent_impl_parses_unit() {
+fn ds_impl_is_rejected() {
     let code = r#"struct Point { x: int; y: int }
 impl Point {
   norm(): int { return this.x + this.y }
@@ -1184,39 +1163,27 @@ impl Point {
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.iter().any(|e| e.message == "impl is not part of DekaScript"),
+        "expected impl rejection, got: {:?}",
+        program.errors
+    );
 }
 
 #[test]
-fn ds_trait_impl_parses_unit() {
-    let code = r#"trait Named {
-  name(): string
-}
-struct User {
-  handle: string
-}
-impl Named for User {
-  name(): string {
-    return this.handle
-  }
-}"#;
+fn ds_impl_trait_for_type_is_rejected() {
+    let code = r#"trait Named { name(): string }
+struct User { handle: string }
+impl Named for User { name(): string { return this.handle } }"#;
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
-}
-
-#[test]
-fn ds_trait_method_without_return_type_parses_unit() {
-    // `print` is a semi-reserved keyword; it must still be usable as a bare
-    // method name inside a DekaScript trait body.
-    let code = r#"trait Printer {
-  print()
-}"#;
-    let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
-    let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.iter().any(|e| e.message == "trait is not part of DekaScript"
+            || e.message == "impl is not part of DekaScript"),
+        "expected trait/impl rejection, got: {:?}",
+        program.errors
+    );
 }
 
 // --- RFD 19: `fn` keyword, receiver methods, embedding, optional, spread ----

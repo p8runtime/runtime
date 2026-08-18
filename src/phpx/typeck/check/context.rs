@@ -10,8 +10,6 @@ pub(in crate::phpx::typeck::check) struct CheckContext<'a> {
     pub(in crate::phpx::typeck::check) enums: HashMap<String, EnumInfo>,
     pub(in crate::phpx::typeck::check) enum_methods: HashMap<String, HashMap<String, MethodSig>>,
     pub(in crate::phpx::typeck::check) interfaces: HashMap<String, InterfaceInfo>,
-    pub(in crate::phpx::typeck::check) traits: HashMap<String, TraitInfo>,
-    pub(in crate::phpx::typeck::check) impls: HashMap<String, Vec<ImplRecord>>,
     pub(in crate::phpx::typeck::check) interface_shapes:
         HashMap<String, BTreeMap<String, ObjectField>>,
     pub(in crate::phpx::typeck::check) functions: HashMap<String, FunctionSig>,
@@ -35,8 +33,6 @@ impl<'a> CheckContext<'a> {
             enums: HashMap::new(),
             enum_methods: HashMap::new(),
             interfaces: HashMap::new(),
-            traits: HashMap::new(),
-            impls: HashMap::new(),
             interface_shapes: HashMap::new(),
             functions: HashMap::new(),
             function_returns: HashMap::new(),
@@ -75,10 +71,8 @@ impl<'a> CheckContext<'a> {
         self.collect_type_aliases(program);
         self.collect_struct_fields(program);
         self.collect_interface_methods(program);
-        self.collect_trait_methods(program);
         self.collect_struct_methods(program);
         self.collect_receiver_methods(program);
-        self.collect_impl_methods(program);
         self.collect_enum_methods(program);
         self.collect_enum_cases(program);
         self.collect_functions(program);
@@ -89,6 +83,5 @@ impl<'a> CheckContext<'a> {
         for stmt in program.statements.iter() {
             self.check_stmt(stmt, &mut env, &mut explicit, None, &mut mut_env);
         }
-        self.check_trait_conflicts();
     }
 }

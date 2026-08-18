@@ -282,30 +282,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             };
         }
 
-        // DekaScript trait/impl method signatures (RFD 19) drop the `function`
-        // keyword entirely: `read(max: int): Result<Bytes, Error>` rather than
-        // `public function read($max: int): Result { ... }`. This is a fresh
-        // syntax for a fresh feature -- traits have zero existing users, so
-        // there is no reason to inherit the `function`-keyword convention
-        // struct/enum still carry pending their own migration (RFD 9/RFD 10).
-        let is_bare_ds_method = self.is_ds()
-            && matches!(ctx, ClassMemberCtx::Trait | ClassMemberCtx::Impl)
-            && (self.current_token.kind == TokenKind::Identifier
-                || self.current_token.kind.is_semi_reserved())
-            && self.next_token.kind == TokenKind::OpenParen;
-
-        if self.current_token.kind == TokenKind::Function || is_bare_ds_method {
-            let used_function_keyword = self.current_token.kind == TokenKind::Function;
-            if used_function_keyword {
-                let function_token = self.current_token;
-                self.bump();
-                if self.is_ds() {
-                    self.errors.push(ParseError::with_help(
-                        function_token.span,
-                        "DekaScript uses `fn` for function declarations, not `function`",
-                        "Change `function` to `fn` or use the bare-method syntax inside trait/impl bodies.",
-                    ));
-                }
+        if self.current_token.kind == TokenKind::Function {
+            let function_token = self.current_token;
+            self.bump();
+            if self.is_ds() {
+                self.errors.push(ParseError::with_help(
+                    function_token.span,
+                    "DekaScript uses `fn` for function declarations, not `function`",
+                    "Change `function` to `fn`.",
+                ));
             }
             let name = if self.current_token.kind == TokenKind::Identifier
                 || self.current_token.kind.is_semi_reserved()

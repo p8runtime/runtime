@@ -151,7 +151,6 @@ pub fn external_functions_from_stub(
     ctx.collect_type_aliases(program);
     ctx.collect_struct_fields(program);
     ctx.collect_interface_methods(program);
-    ctx.collect_trait_methods(program);
     ctx.collect_struct_methods(program);
     ctx.collect_enum_methods(program);
     ctx.collect_enum_cases(program);

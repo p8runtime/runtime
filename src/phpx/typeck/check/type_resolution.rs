@@ -235,8 +235,6 @@ impl<'a> CheckContext<'a> {
                     Type::Interface(name)
                 } else if self.structs.contains_key(&name) {
                     Type::Struct(name)
-                } else if self.traits.contains_key(&name) {
-                    Type::Interface(name)
                 } else {
                     Type::Object
                 }
@@ -356,10 +354,6 @@ impl<'a> CheckContext<'a> {
             || self.structs.contains_key(name)
             || self.enums.contains_key(name)
             || self.interfaces.contains_key(name)
-            // RFD 19: trait names are valid as generic bounds
-            // (`<R: Reader>`), same shape as `<T: SomeInterface>` already
-            // was for structural interfaces.
-            || self.traits.contains_key(name)
     }
 
     pub(in crate::phpx::typeck::check) fn resolve_alias_applied(
