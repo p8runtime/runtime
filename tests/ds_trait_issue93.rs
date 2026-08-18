@@ -56,9 +56,9 @@ impl Named for User {
 }
 
 #[test]
-fn ds_trait_impl_with_function_keyword_parses() {
-    // The bare-method syntax is the DekaScript default, but `function` is
-    // still accepted inside trait/impl bodies for migration convenience.
+fn ds_trait_impl_rejects_function_keyword() {
+    // `function` is no longer accepted in DekaScript declaration contexts;
+    // bare-method syntax is used inside trait/impl bodies.
     let code = r#"trait Named {
   function name(): string
 }
@@ -67,7 +67,11 @@ impl Named for User {
   function name(): string { return this.handle }
 }"#;
     let errors = parse_ds(code);
-    assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    assert!(
+        errors.iter().any(|e| e.contains("uses `fn` for function declarations")),
+        "expected `function` rejection, got: {:?}",
+        errors
+    );
 }
 
 #[test]

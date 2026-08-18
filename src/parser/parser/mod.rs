@@ -136,6 +136,30 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         self.mode == ParserMode::PhpxInternal
     }
 
+    /// Look ahead `n` tokens from the current position without consuming.
+    /// `n == 0` returns the current token, `n == 1` returns the next token.
+    pub(super) fn lookahead_kind(&self, n: usize) -> Option<TokenKind> {
+        match n {
+            0 => Some(self.current_token.kind),
+            1 => Some(self.next_token.kind),
+            _ => {
+                let mut lexer = self.lexer.clone();
+                let mut last = None;
+                for _ in 0..(n - 1) {
+                    loop {
+                        let token = lexer.next()?;
+                        if token.kind != TokenKind::Comment && token.kind != TokenKind::DocComment
+                        {
+                            last = Some(token.kind);
+                            break;
+                        }
+                    }
+                }
+                last
+            }
+        }
+    }
+
     pub(super) fn take_param_destructure_prologue(&mut self) -> &'ast [StmtId<'ast>] {
         let prologue = std::mem::take(&mut self.param_destructure_prologue);
         self.arena.alloc_slice_copy(&prologue)

@@ -129,20 +129,20 @@ fn struct_default_allows_struct_and_object_literals() {
 #[test]
 fn ds_bare_struct_field_names_typecheck() {
     // dekaruntime/deka#93: DekaScript structs use bare identifiers.
-    let code = "struct Point { x: int; y: int } function f(): int { return Point { x: 3, y: 4 }.x; }";
+    let code = "struct Point { x: int; y: int } fn f(): int { return Point { x: 3, y: 4 }.x; }";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
 
 #[test]
 fn ds_bare_struct_field_missing_field_errors() {
-    let code = "struct Point { x: int; y: int } function f(): Point { return Point { x: 3 }; }";
+    let code = "struct Point { x: int; y: int } fn f(): Point { return Point { x: 3 }; }";
     assert!(check_ds(code).is_err());
 }
 
 #[test]
 fn ds_bare_struct_field_wrong_type_errors() {
-    let code = "struct Point { x: int; y: int } function f(): Point { return Point { x: \"nope\", y: 4 }; }";
+    let code = "struct Point { x: int; y: int } fn f(): Point { return Point { x: \"nope\", y: 4 }; }";
     assert!(check_ds(code).is_err());
 }
 
@@ -426,7 +426,7 @@ fn destructured_param_struct_type_is_rejected_with_guidance() {
 fn ds_jsx_component_destructured_param_props_are_recognized() {
     // dekaruntime/deka#93: DekaScript JSX components use bare destructured
     // params ({ name }: GreetingProps) and bare interface fields.
-    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -434,7 +434,7 @@ fn ds_jsx_component_destructured_param_props_are_recognized() {
 #[test]
 fn ds_jsx_component_with_separator_destructured_param_props_are_recognized() {
     // Component files separate script and template with '---'.
-    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -954,7 +954,7 @@ fn ds_trait_impl_wrong_signature_errors() {
 #[test]
 fn ds_generic_function_trait_bound_resolves() {
     // The exact shape RFD 16's flagship example needs:
-    // export function drain<R: Reader>(reader: R): ... { reader.read() }
+    // export fn drain<R: Reader>(reader: R): ... { reader.read() }
     // Bound SYNTAX resolving is what this test covers. Enforcement (does a
     // concrete type argument actually implement the bound trait at a call
     // site) is a separate, larger gap, not covered here or built yet --
@@ -962,13 +962,13 @@ fn ds_generic_function_trait_bound_resolves() {
     // No `export` here: the real pipeline strips/masks the export
     // keyword via preprocess_source (modules_php) before parsing; check_ds
     // is a php-rs-only test helper and can't depend on modules_php to
-    // replicate that step. Verified bare `function` exercises the exact
+    // replicate that step. Verified bare `fn` exercises the exact
     // same bound-resolution path through the real CLI.
     let code = r#"
         trait Reader {
           read(self: Self): int
         }
-        function drain<R: Reader>(reader: R): int {
+        fn drain<R: Reader>(reader: R): int {
           return reader.read();
         }
     "#;
@@ -1136,7 +1136,7 @@ fn ds_trait_conflict_resolved_by_explicit_override_ok() {
 
 #[test]
 fn ds_legacy_php_trait_still_rejected_outside_ds() {
-    let code = "<?php trait Foo { public function bar() {} }";
+    let code = "<?php trait Foo { public fn bar() {} }";
     assert!(check(code).is_err(), "PHP horizontal-reuse traits must stay rejected in PHPX");
 }
 
@@ -1376,7 +1376,7 @@ fn real_type_error_still_fails_exactly_as_before() {
 fn ds_enum_js_style_body_typechecks() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function getStatus(): Status { return Status.Ready; }
+        fn getStatus(): Status { return Status.Ready; }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -1385,7 +1385,7 @@ fn ds_enum_js_style_body_typechecks() {
 fn ds_enum_generic_payload_typechecks() {
     let code = r#"
         enum Option<T> { Some(T), None }
-        function getOption(): Option<int> { return Option::Some(1); }
+        fn getOption(): Option<int> { return Option::Some(1); }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -1394,7 +1394,7 @@ fn ds_enum_generic_payload_typechecks() {
 fn ds_enum_generic_payload_mismatch_errors() {
     let code = r#"
         enum Option<T> { Some(T), None }
-        function getOption(): Option<int> { return Option::Some("no"); }
+        fn getOption(): Option<int> { return Option::Some("no"); }
     "#;
     assert!(check_ds(code).is_err());
 }
@@ -1403,7 +1403,7 @@ fn ds_enum_generic_payload_mismatch_errors() {
 fn ds_enum_match_exhaustive_on_js_style_enum() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function f(s: Status): int {
+        fn f(s: Status): int {
             match (s) {
                 Status::Loading => 0,
                 Status::Ready => 1,
@@ -1420,7 +1420,7 @@ fn ds_enum_match_exhaustive_using_dot_access() {
     // `Status::Ready` when the left-hand side names an enum.
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function f(s: Status): int {
+        fn f(s: Status): int {
             match (s) {
                 Status.Loading => 0,
                 Status.Ready => 1,
@@ -1435,7 +1435,7 @@ fn ds_enum_match_exhaustive_using_dot_access() {
 fn ds_enum_match_missing_case_errors() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function f(s: Status): int {
+        fn f(s: Status): int {
             match (s) {
                 Status::Loading => 0,
                 Status::Ready => 1,
@@ -1448,88 +1448,88 @@ fn ds_enum_match_missing_case_errors() {
 
 #[test]
 fn ds_function_return_type_inferred_from_literal() {
-    // dekaruntime/deka#120: unannotated function return types are inferred.
-    let code = "function answer() { return 42; } const x = answer();";
+    // dekaruntime/deka#120: unannotated fn return types are inferred.
+    let code = "fn answer() { return 42; } const x = answer();";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_parameters() {
-    let code = "function add(left: number, right: number) { return left + right; } const x = add(1, 2);";
+    let code = "fn add(left: number, right: number) { return left + right; } const x = add(1, 2);";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_async_wraps_promise() {
-    let code = "async function fetch() { return 1; } const x = await fetch();";
+    let code = "async fn fetch() { return 1; } const x = await fetch();";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_inferred_return_mismatch_is_rejected() {
     // Once a return type is inferred, inconsistent return branches should error.
-    let code = "function maybe() { if (true) { return 1; } else { return \"two\"; } }";
+    let code = "fn maybe() { if (true) { return 1; } else { return \"two\"; } }";
     assert!(check_ds(code).is_err());
 }
 
 #[test]
 fn ds_function_inferred_return_used_in_typed_call() {
     // Inferred return types should flow to callers.
-    let code = "function one() { return 1; } function add(left: number, right: number) { return left + right; } const x = add(one(), 2);";
+    let code = "fn one() { return 1; } fn add(left: number, right: number) { return left + right; } const x = add(one(), 2);";
     assert!(check_ds(code).is_ok());
 }
 
 
 #[test]
 fn ds_function_return_type_inferred_from_arithmetic() {
-    let code = "function add(left: number, right: number) { return left + right; } function useNumber(n: number) {} useNumber(add(1, 2));";
+    let code = "fn add(left: number, right: number) { return left + right; } fn useNumber(n: number) {} useNumber(add(1, 2));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_float_arithmetic() {
-    let code = "function add(left: float, right: float) { return left + right; } function useFloat(n: float) {} useFloat(add(1.0, 2.0));";
+    let code = "fn add(left: float, right: float) { return left + right; } fn useFloat(n: float) {} useFloat(add(1.0, 2.0));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_concatenation() {
-    let code = "function greet(name: string) { return \"Hello, \" + name; } function useString(s: string) {} useString(greet(\"Deka\"));";
+    let code = "fn greet(name: string) { return \"Hello, \" + name; } fn useString(s: string) {} useString(greet(\"Deka\"));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_comparison() {
-    let code = "function check(a: number, b: number) { return a > b; } function useBool(b: bool) {} useBool(check(1, 2));";
+    let code = "fn check(a: number, b: number) { return a > b; } fn useBool(b: bool) {} useBool(check(1, 2));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_logical() {
-    let code = "function both(a: bool, b: bool) { return a && b; } function useBool(b: bool) {} useBool(both(true, false));";
+    let code = "fn both(a: bool, b: bool) { return a && b; } fn useBool(b: bool) {} useBool(both(true, false));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_inside_switch() {
-    let code = r#"function pick(n: number) {
+    let code = r#"fn pick(n: number) {
   switch (n) {
     case 1: return "one";
     case 2: return "two";
     default: return "many";
   }
 }
-function useString(s: string) {}
+fn useString(s: string) {}
 useString(pick(1));"#;
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_async_function_return_not_double_wrapped() {
-    // Returning a Promise<T> from an async function should not become Promise<Promise<T>>.
-    let code = r#"async function fetch() { return 1; }
-async function wrapper() { return await fetch(); }
-function useNumber(n: number) {}
+    // Returning a Promise<T> from an async fn should not become Promise<Promise<T>>.
+    let code = r#"async fn fetch() { return 1; }
+async fn wrapper() { return await fetch(); }
+fn useNumber(n: number) {}
 useNumber(await wrapper());"#;
     assert!(check_ds(code).is_ok());
 }

@@ -196,6 +196,22 @@ pub fn walk_stmt<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, stmt: StmtId<
             }
             walk_statements(visitor, body);
         }
+        Stmt::ReceiverMethod {
+            attributes,
+            receiver,
+            params,
+            return_type,
+            body,
+            ..
+        } => {
+            walk_attributes(visitor, attributes);
+            visitor.visit_type(receiver.ty);
+            walk_params(visitor, params);
+            if let Some(return_type) = return_type {
+                visitor.visit_type(return_type);
+            }
+            walk_statements(visitor, body);
+        }
         Stmt::TypeAlias {
             type_params, ty, ..
         } => {
@@ -549,6 +565,9 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
             if let Some(return_type) = return_type {
                 visitor.visit_type(return_type);
             }
+            visitor.visit_expr(expr);
+        }
+        Expr::Spread { expr, .. } => {
             visitor.visit_expr(expr);
         }
         Expr::Variable { .. }

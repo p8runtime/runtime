@@ -183,13 +183,36 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             if self.current_token.kind == TokenKind::OpenBrace {
-                self.errors.push(ParseError::new(
-                    self.current_token.span,
-                    "JSX spread attributes are not supported",
-                ));
-                // Attempt recovery: skip until closing brace
-                self.bump();
-                let _ = self.parse_expr(0);
+                let brace_start = self.current_token.span.start;
+                self.bump(); // consume {
+                if self.current_token.kind == TokenKind::Ellipsis {
+                    let ellipsis_tok = self.arena.alloc(self.current_token);
+                    let ellipsis_start = self.current_token.span.start;
+                    self.bump(); // ...
+                    let expr = self.parse_expr(0);
+                    let spread = self.arena.alloc(Expr::Spread {
+                        expr,
+                        span: Span::new(ellipsis_start, expr.span().end),
+                    });
+                    let end = if self.current_token.kind == TokenKind::CloseBrace {
+                        self.current_token.span.end
+                    } else {
+                        spread.span().end
+                    };
+                    attributes.push(JsxAttribute {
+                        name: ellipsis_tok,
+                        value: Some(spread),
+                        span: Span::new(brace_start, end),
+                    });
+                } else {
+                    self.errors.push(ParseError::new(
+                        Span::new(brace_start, self.current_token.span.start),
+                        "JSX expression attributes require a name, use `{...expr}` for spread",
+                    ));
+                    if self.current_token.kind != TokenKind::CloseBrace {
+                        let _ = self.parse_expr(0);
+                    }
+                }
                 if self.current_token.kind == TokenKind::CloseBrace {
                     self.bump();
                 }

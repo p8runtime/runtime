@@ -219,6 +219,18 @@ pub enum Stmt<'ast> {
         doc_comment: Option<Span>,
         span: Span,
     },
+    /// A DekaScript receiver method: `fn (p Person) greet() { ... }`.
+    ReceiverMethod {
+        attributes: &'ast [AttributeGroup<'ast>],
+        name: &'ast Token,
+        is_async: bool,
+        receiver: &'ast Receiver<'ast>,
+        params: &'ast [Param<'ast>],
+        return_type: Option<&'ast Type<'ast>>,
+        body: &'ast [StmtId<'ast>],
+        doc_comment: Option<Span>,
+        span: Span,
+    },
     TypeAlias {
         name: &'ast Token,
         type_params: &'ast [TypeParam<'ast>],
@@ -373,6 +385,15 @@ pub struct Param<'ast> {
     pub by_ref: bool,
     pub variadic: bool,
     pub hooks: Option<&'ast [PropertyHook<'ast>]>,
+    pub span: Span,
+}
+
+/// A DekaScript receiver parameter: `p` or `p mut` in `fn (p Person) greet()`.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Receiver<'ast> {
+    pub var: &'ast Token,
+    pub is_mut: bool,
+    pub ty: &'ast Type<'ast>,
     pub span: Span,
 }
 
@@ -620,6 +641,11 @@ pub enum Expr<'ast> {
     VariadicPlaceholder {
         span: Span,
     },
+    /// A DekaScript spread element: `{ ...props }` or JSX `{ ...props }`.
+    Spread {
+        expr: ExprId<'ast>,
+        span: Span,
+    },
     /// A DekaScript `unsafe { ... } [catch (e) { ... }] [finally { ... }]`
     /// expression. Desugars to a call to the runtime `deka.unsafe` helper.
     Unsafe {
@@ -757,6 +783,7 @@ impl<'ast> Expr<'ast> {
             Expr::NullsafePropertyFetch { span, .. } => *span,
             Expr::NullsafeMethodCall { span, .. } => *span,
             Expr::VariadicPlaceholder { span } => *span,
+            Expr::Spread { span, .. } => *span,
             Expr::Unsafe { span, .. } => *span,
             Expr::Cql { span, .. } => *span,
             Expr::Error { span } => *span,
@@ -777,6 +804,7 @@ impl<'ast> Stmt<'ast> {
             Stmt::Foreach { span, .. } => *span,
             Stmt::Block { span, .. } => *span,
             Stmt::Function { span, .. } => *span,
+            Stmt::ReceiverMethod { span, .. } => *span,
             Stmt::TypeAlias { span, .. } => *span,
             Stmt::Class { span, .. } => *span,
             Stmt::Interface { span, .. } => *span,
@@ -912,6 +940,7 @@ pub struct PropertyEntry<'ast> {
     pub name: &'ast Token,
     pub default: Option<ExprId<'ast>>,
     pub annotations: &'ast [FieldAnnotation<'ast>],
+    pub optional: bool,
     pub span: Span,
 }
 

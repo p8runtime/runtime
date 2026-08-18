@@ -1,5 +1,6 @@
 use super::visitor::Visitor;
 use super::*;
+use crate::parser::lexer::token::TokenKind;
 
 pub struct SExprFormatter<'a> {
     output: String,
@@ -320,6 +321,58 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                     }
                     self.write(")");
                 }
+                self.write(" (params");
+                for param in *params {
+                    self.write(" ");
+                    self.visit_param(param);
+                }
+                self.write(")");
+                if let Some(rt) = return_type {
+                    self.write(" (return-type ");
+                    self.visit_type(rt);
+                    self.write(")");
+                }
+                self.indent += 1;
+                self.newline();
+                self.write("(body");
+                self.indent += 1;
+                for stmt in *body {
+                    self.newline();
+                    self.visit_stmt(stmt);
+                }
+                self.indent -= 1;
+                self.write("))");
+                self.indent -= 1;
+            }
+            Stmt::ReceiverMethod {
+                attributes,
+                name,
+                is_async,
+                receiver,
+                params,
+                return_type,
+                body,
+                ..
+            } => {
+                self.write("(receiver-method");
+                for attr in *attributes {
+                    self.write(" ");
+                    self.visit_attribute_group(attr);
+                }
+                if *is_async {
+                    self.write(" async");
+                }
+                if receiver.is_mut {
+                    self.write(" mut");
+                }
+                self.write(" (receiver ");
+                self.write(&String::from_utf8_lossy(receiver.var.text(self.source)));
+                self.write(" ");
+                self.visit_type(receiver.ty);
+                self.write(")");
+                self.write(" \"");
+                self.write(&String::from_utf8_lossy(name.text(self.source)));
+                self.write("\"");
                 self.write(" (params");
                 for param in *params {
                     self.write(" ");
@@ -876,15 +929,23 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 ));
                 for attr in *attributes {
                     self.write(" ");
-                    self.write("(attr ");
-                    self.write(&String::from_utf8_lossy(
-                        &self.source[attr.name.span.start..attr.name.span.end],
-                    ));
-                    if let Some(value) = attr.value {
-                        self.write(" ");
-                        self.visit_expr(value);
+                    if attr.name.kind == TokenKind::Ellipsis {
+                        self.write("(spread-attr ");
+                        if let Some(value) = attr.value {
+                            self.visit_expr(value);
+                        }
+                        self.write(")");
+                    } else {
+                        self.write("(attr ");
+                        self.write(&String::from_utf8_lossy(
+                            &self.source[attr.name.span.start..attr.name.span.end],
+                        ));
+                        if let Some(value) = attr.value {
+                            self.write(" ");
+                            self.visit_expr(value);
+                        }
+                        self.write(")");
                     }
-                    self.write(")");
                 }
                 for child in *children {
                     self.write(" ");
@@ -1357,6 +1418,11 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("))");
             }
             Expr::VariadicPlaceholder { .. } => self.write("(...)"),
+            Expr::Spread { expr, .. } => {
+                self.write("(spread ");
+                self.visit_expr(expr);
+                self.write(")");
+            }
             Expr::Cql {
                 name,
                 cypher,
@@ -1753,6 +1819,11 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
     }
 
     fn visit_object_item(&mut self, item: &'ast ObjectItem<'ast>) {
+        // Spread elements are keyed by the ellipsis token.
+        if matches!(item.key, ObjectKey::Ident(token) if token.kind == TokenKind::Ellipsis) {
+            self.visit_expr(item.value);
+            return;
+        }
         self.write("(");
         match item.key {
             ObjectKey::Ident(token) => {
@@ -1896,6 +1967,9 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
 
     fn visit_property_entry(&mut self, entry: &'ast PropertyEntry<'ast>) {
         self.write(&String::from_utf8_lossy(entry.name.text(self.source)));
+        if entry.optional {
+            self.write("?");
+        }
         if let Some(default) = entry.default {
             self.write(" = ");
             self.visit_expr(default);

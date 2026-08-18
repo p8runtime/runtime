@@ -1,6 +1,6 @@
 use super::super::{ParseError, Parser};
 use crate::parser::ast::{
-    AttributeGroup, ClassConst, ClassMember, FieldAnnotation,
+    AttributeGroup, ClassConst, ClassMember, FieldAnnotation, Name,
     Param, PropertyEntry, PropertyHook, PropertyHookBody, Stmt, StmtId, TraitAdaptation,
     TraitMethodRef, Type,
 };
@@ -297,7 +297,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.current_token.kind == TokenKind::Function || is_bare_ds_method {
             let used_function_keyword = self.current_token.kind == TokenKind::Function;
             if used_function_keyword {
+                let function_token = self.current_token;
                 self.bump();
+                if self.is_ds() {
+                    self.errors.push(ParseError::with_help(
+                        function_token.span,
+                        "DekaScript uses `fn` for function declarations, not `function`",
+                        "Change `function` to `fn` or use the bare-method syntax inside trait/impl bodies.",
+                    ));
+                }
             }
             let name = if self.current_token.kind == TokenKind::Identifier
                 || self.current_token.kind.is_semi_reserved()
@@ -641,10 +649,77 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             } else {
                 self.current_token.kind == TokenKind::Variable
             };
+            // DekaScript struct embedding: a bare type name inside a struct body.
+            if self.is_ds()
+                && is_struct
+                && self.current_token.kind == TokenKind::Identifier
+                && self.next_token.kind != TokenKind::Colon
+                && self.next_token.kind != TokenKind::Question
+            {
+                let ty_start = self.current_token.span.start;
+                let ty = match self.parse_type() {
+                    Some(ty) => ty,
+                    None => {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected embedded type name",
+                        ));
+                        self.sync_to_statement_end();
+                        return ClassMember::Embed {
+                            attributes,
+                            types: &[],
+                            doc_comment,
+                            span: Span::new(start, self.current_token.span.end),
+                        };
+                    }
+                };
+                let ty_end = self.current_token.span.end;
+
+                let embed_name = match ty {
+                    Type::Name(name) => name,
+                    _ => {
+                        self.errors.push(ParseError::new(
+                            Span::new(ty_start, ty_end),
+                            "Embedded type must be a simple type name",
+                        ));
+                        Name {
+                            parts: &[],
+                            span: Span::new(ty_start, ty_end),
+                        }
+                    }
+                };
+
+                if self.current_token.kind == TokenKind::SemiColon {
+                    self.bump();
+                } else if self.current_token.kind == TokenKind::CloseBrace
+                    || (self.is_ds()
+                        && matches!(
+                            self.current_token.kind,
+                            TokenKind::Identifier | TokenKind::Variable
+                        ))
+                {
+                    // DekaScript allows embedded types to omit the trailing
+                    // semicolon before another member or the closing brace.
+                } else {
+                    self.expect_semicolon();
+                }
+
+                let end = self.current_token.span.end;
+                return ClassMember::Embed {
+                    attributes,
+                    types: self.arena.alloc_slice_copy(&[embed_name]),
+                    doc_comment,
+                    span: Span::new(start, end),
+                };
+            }
+
+            let next_is_field_colon = self.next_token.kind == TokenKind::Colon;
+            let next_is_optional_field = self.next_token.kind == TokenKind::Question
+                && self.lookahead_kind(2) == Some(TokenKind::Colon);
             if self.is_phpx()
                 && (is_struct || is_phpx_interface)
                 && is_field_name_token
-                && self.next_token.kind == TokenKind::Colon
+                && (next_is_field_colon || next_is_optional_field)
             {
                 if !modifiers.is_empty() {
                     self.errors.push(ParseError::new(
@@ -658,8 +733,22 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
 
                 let name = self.arena.alloc(self.current_token);
-                self.bump(); // $field
-                self.bump(); // :
+                self.bump(); // field name
+
+                let mut optional = false;
+                if self.current_token.kind == TokenKind::Question {
+                    optional = true;
+                    self.bump(); // ?
+                }
+
+                if self.current_token.kind != TokenKind::Colon {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected ':' after field name",
+                    ));
+                } else {
+                    self.bump(); // :
+                }
 
                 let ty = if let Some(t) = self.parse_type() {
                     Some(self.arena.alloc(t) as &'ast Type<'ast>)
@@ -691,6 +780,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     name,
                     default,
                     annotations: self.arena.alloc_slice_copy(&annotations),
+                    optional,
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -829,6 +919,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     name,
                     default,
                     annotations: &[],
+                    optional: false,
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -860,6 +951,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         name,
                         default,
                         annotations: &[],
+                        optional: false,
                         span: Span::new(
                             name.span.start,
                             default.map(|e| e.span().end).unwrap_or(name.span.end),
