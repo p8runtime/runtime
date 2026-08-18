@@ -254,12 +254,12 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
         Expr::Binary {
             op, left, right, ..
         } => {
+            let left_ty = infer_expr(left, ctx);
+            let right_ty = infer_expr(right, ctx);
             if *op == BinaryOp::Coalesce {
-                let left_ty = infer_expr(left, ctx);
-                let right_ty = infer_expr(right, ctx);
                 return merge_types(&left_ty, &right_ty);
             }
-            Type::Unknown
+            infer_binary_op(*op, &left_ty, &right_ty)
         }
         Expr::Ternary {
             condition,
@@ -384,6 +384,73 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             Type::Unknown
         }
         _ => Type::Unknown,
+    }
+}
+
+fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
+    let is_int = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Int));
+    let is_float = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Float));
+    let is_bool = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Bool));
+    let is_string = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::String));
+    let is_unknown = |t: &Type| matches!(t, Type::Unknown);
+
+    match op {
+        BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+            if is_unknown(left) || is_unknown(right) {
+                Type::Unknown
+            } else if is_int(left) && is_int(right) {
+                Type::Primitive(PrimitiveType::Int)
+            } else if (is_int(left) || is_float(left)) && (is_int(right) || is_float(right)) {
+                Type::Primitive(PrimitiveType::Float)
+            } else {
+                Type::Unknown
+            }
+        }
+        BinaryOp::Concat => {
+            if is_unknown(left) && is_unknown(right) {
+                Type::Unknown
+            } else if is_string(left) || is_string(right) || is_unknown(left) || is_unknown(right) {
+                Type::Primitive(PrimitiveType::String)
+            } else {
+                Type::Unknown
+            }
+        }
+        BinaryOp::Eq
+        | BinaryOp::EqEq
+        | BinaryOp::EqEqEq
+        | BinaryOp::NotEq
+        | BinaryOp::NotEqEq
+        | BinaryOp::Lt
+        | BinaryOp::LtEq
+        | BinaryOp::Gt
+        | BinaryOp::GtEq
+        | BinaryOp::Spaceship
+        | BinaryOp::Instanceof => Type::Primitive(PrimitiveType::Bool),
+        BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::LogicalAnd
+        | BinaryOp::LogicalOr
+        | BinaryOp::LogicalXor => {
+            if is_unknown(left) || is_unknown(right) {
+                Type::Unknown
+            } else if is_bool(left) && is_bool(right) {
+                Type::Primitive(PrimitiveType::Bool)
+            } else {
+                Type::Primitive(PrimitiveType::Bool)
+            }
+        }
+        BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
+            if is_int(left) && is_int(right) {
+                Type::Primitive(PrimitiveType::Int)
+            } else {
+                Type::Unknown
+            }
+        }
+        BinaryOp::Coalesce => merge_types(left, right),
+        BinaryOp::Pipe => Type::Unknown,
     }
 }
 

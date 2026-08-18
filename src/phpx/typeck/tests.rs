@@ -1444,3 +1444,104 @@ fn ds_enum_match_missing_case_errors() {
     "#;
     assert!(check_ds(code).is_err());
 }
+
+
+#[test]
+fn ds_function_return_type_inferred_from_literal() {
+    // dekaruntime/deka#120: unannotated function return types are inferred.
+    let code = "function answer() { return 42; } const x = answer();";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_return_type_inferred_from_parameters() {
+    let code = "function add(left: number, right: number) { return left + right; } const x = add(1, 2);";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_return_type_inferred_async_wraps_promise() {
+    let code = "async function fetch() { return 1; } const x = await fetch();";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_inferred_return_mismatch_is_rejected() {
+    // Once a return type is inferred, inconsistent return branches should error.
+    let code = "function maybe() { if (true) { return 1; } else { return \"two\"; } }";
+    assert!(check_ds(code).is_err());
+}
+
+#[test]
+fn ds_function_inferred_return_used_in_typed_call() {
+    // Inferred return types should flow to callers.
+    let code = "function one() { return 1; } function add(left: number, right: number) { return left + right; } const x = add(one(), 2);";
+    assert!(check_ds(code).is_ok());
+}
+
+
+#[test]
+fn ds_function_return_type_inferred_from_arithmetic() {
+    let code = "function add(left: number, right: number) { return left + right; } function useNumber(n: number) {} useNumber(add(1, 2));";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_return_type_inferred_from_float_arithmetic() {
+    let code = "function add(left: float, right: float) { return left + right; } function useFloat(n: float) {} useFloat(add(1.0, 2.0));";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_return_type_inferred_from_concatenation() {
+    let code = "function greet(name: string) { return \"Hello, \" + name; } function useString(s: string) {} useString(greet(\"Deka\"));";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_return_type_inferred_from_comparison() {
+    let code = "function check(a: number, b: number) { return a > b; } function useBool(b: bool) {} useBool(check(1, 2));";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_return_type_inferred_from_logical() {
+    let code = "function both(a: bool, b: bool) { return a && b; } function useBool(b: bool) {} useBool(both(true, false));";
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_function_return_type_inferred_inside_switch() {
+    let code = r#"function pick(n: number) {
+  switch (n) {
+    case 1: return "one";
+    case 2: return "two";
+    default: return "many";
+  }
+}
+function useString(s: string) {}
+useString(pick(1));"#;
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn ds_async_function_return_not_double_wrapped() {
+    // Returning a Promise<T> from an async function should not become Promise<Promise<T>>.
+    let code = r#"async function fetch() { return 1; }
+async function wrapper() { return await fetch(); }
+function useNumber(n: number) {}
+useNumber(await wrapper());"#;
+    assert!(check_ds(code).is_ok());
+}
+
+#[test]
+fn phpx_function_return_type_inferred_from_literal() {
+    let code = "<?php function answer() { return 42; } $x = answer();";
+    assert!(check(code).is_ok());
+}
+
+#[test]
+fn phpx_function_return_type_inferred_mismatch_rejected() {
+    let code = "<?php function maybe($x) { if ($x) { return 1; } else { return \"two\"; } }";
+    assert!(check(code).is_err());
+}
