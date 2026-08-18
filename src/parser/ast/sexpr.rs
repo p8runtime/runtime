@@ -1522,6 +1522,11 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write("?");
                 self.visit_type(t);
             }
+            Type::Option(t) => {
+                self.write("(option ");
+                self.visit_type(t);
+                self.write(")");
+            }
             Type::ObjectShape(fields) => {
                 self.write("(object-shape");
                 for field in *fields {
