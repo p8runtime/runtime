@@ -16,11 +16,19 @@ impl<'a> CheckContext<'a> {
         args: &'a [crate::parser::ast::Arg<'a>],
         env: &HashMap<String, Type>,
         span: Span,
+        receiver_mutable: bool,
     ) -> Type {
         let Some(method_name) = self.extract_static_ident(method) else {
             return Type::Unknown;
         };
-        self.check_method_call_signature_by_name(target_ty, &method_name, args, env, span)
+        self.check_method_call_signature_by_name(
+            target_ty,
+            &method_name,
+            args,
+            env,
+            span,
+            receiver_mutable,
+        )
     }
 
     pub(in crate::phpx::typeck::check) fn check_method_call_signature_by_name(
@@ -30,6 +38,7 @@ impl<'a> CheckContext<'a> {
         args: &'a [crate::parser::ast::Arg<'a>],
         env: &HashMap<String, Type>,
         span: Span,
+        receiver_mutable: bool,
     ) -> Type {
         let (owner_label, sig) = match target_ty {
             Type::Struct(name) => (
@@ -72,6 +81,16 @@ impl<'a> CheckContext<'a> {
             }
             return Type::Unknown;
         };
+
+        if sig.mutable && !receiver_mutable {
+            self.errors.push(TypeError { severity: Severity::Error,
+                span,
+                message: format!(
+                    "Cannot call mutable method '{}' on an immutable receiver",
+                    method_name
+                ),
+            });
+        }
 
         let required = sig.params.iter().filter(|p| p.required).count();
         if args.len() < required {

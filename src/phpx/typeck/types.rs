@@ -40,6 +40,7 @@ pub enum Type {
 pub struct ObjectField {
     pub ty: Type,
     pub optional: bool,
+    pub is_mut: bool,
 }
 
 impl Type {

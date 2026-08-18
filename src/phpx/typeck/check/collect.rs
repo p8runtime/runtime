@@ -234,7 +234,7 @@ impl<'a> CheckContext<'a> {
                         ..
                     } => {
                         let method_name = token_text(self.source, method_name.span);
-                        let sig = self.method_signature(params, *return_type);
+                        let sig = self.method_signature(params, *return_type, false);
                         methods.insert(method_name, sig);
                     }
                     ClassMember::Property { ty, entries, .. } => {
@@ -246,19 +246,25 @@ impl<'a> CheckContext<'a> {
                                 field_name,
                                 ObjectField {
                                     ty: field_ty.clone(),
-                                    optional: false,
+                                    optional: entry.optional,
+                                    is_mut: entry.is_mut,
                                 },
                             );
                         }
                     }
-                    ClassMember::PropertyHook { ty, name, .. } => {
+                    ClassMember::PropertyHook { ty, name, modifiers, .. } => {
                         let field_name = token_text(self.source, name.span);
                         let field_name = field_name.trim_start_matches('$').to_string();
+                        let is_mut = modifiers.iter().any(|token| {
+                            token_text(self.source, token.span)
+                                .eq_ignore_ascii_case("mut")
+                        });
                         fields.insert(
                             field_name,
                             ObjectField {
                                 ty: ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown),
                                 optional: false,
+                                is_mut,
                             },
                         );
                     }
@@ -273,39 +279,6 @@ impl<'a> CheckContext<'a> {
                 },
             );
             self.interface_shapes.insert(iface_name, fields);
-        }
-    }
-
-    // DekaScript trait method collection (RFD 19). Mirrors
-    // collect_interface_methods above; the difference is tracking whether
-    // each method has a default body (`!member_body.is_empty()`), which is
-    // what conformance checking at `impl` needs to know is optional.
-    pub(in crate::phpx::typeck::check) fn collect_trait_methods(
-        &mut self,
-        program: &Program<'a>,
-    ) {
-        for stmt in program.statements.iter() {
-            let Stmt::Trait { name, members, .. } = stmt else {
-                continue;
-            };
-            let trait_name = token_text(self.source, name.span);
-            let mut methods = HashMap::new();
-            for member in members.iter() {
-                if let ClassMember::Method {
-                    name: method_name,
-                    params,
-                    return_type,
-                    body,
-                    ..
-                } = member
-                {
-                    let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
-                    let has_default = !body.is_empty();
-                    methods.insert(method_name, (sig, has_default));
-                }
-            }
-            self.traits.insert(trait_name, TraitInfo { methods });
         }
     }
 
@@ -334,7 +307,7 @@ impl<'a> CheckContext<'a> {
                 } = member
                 {
                     let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
+                    let sig = self.method_signature(params, *return_type, false);
                     methods.insert(method_name, sig);
                 }
             }
@@ -342,77 +315,85 @@ impl<'a> CheckContext<'a> {
         }
     }
 
-    // DekaScript impl-block method collection (RFD 19). Struct/enum targets
-    // may receive methods from `impl Target { ... }` (inherent) and from
-    // `impl Trait for Target { ... }` (trait). Default bodies supplied by the
-    // trait itself are also surfaced on the target when the impl block does
-    // not override them, so a call like `target.defaultMethod()` typechecks.
-    pub(in crate::phpx::typeck::check) fn collect_impl_methods(
+    pub(in crate::phpx::typeck::check) fn collect_receiver_methods(
         &mut self,
         program: &Program<'a>,
     ) {
         for stmt in program.statements.iter() {
-            let Stmt::Impl {
-                trait_name,
-                target,
-                members,
+            let Stmt::ReceiverMethod {
+                receiver,
+                name,
+                params,
+                return_type,
                 ..
             } = stmt
             else {
                 continue;
             };
-            if target.parts.is_empty() {
-                continue;
-            }
-            let target_name = token_text(self.source, target.parts[0].span);
-
-            // Determine which target-side method map to populate.
-            let is_struct = self.structs.contains_key(&target_name);
-            let is_enum = self.enums.contains_key(&target_name);
-            if !is_struct && !is_enum {
-                continue;
-            }
-
-            // Build the new signatures in a local map first so that
-            // `method_signature` can borrow `self` without conflicting with
-            // the mutable borrow of the target's method map.
-            let mut additions: HashMap<String, MethodSig> = HashMap::new();
-
-            // Add the methods the impl block actually provides.
-            for member in members.iter() {
-                if let ClassMember::Method {
-                    name: method_name,
-                    params,
-                    return_type,
-                    ..
-                } = member
-                {
-                    let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
-                    additions.insert(method_name, sig);
-                }
-            }
-
-            // Fold in any un-overridden default methods from the implemented trait.
-            if let Some(trait_ref) = trait_name {
-                let trait_key = token_text(self.source, trait_ref.parts[0].span);
-                if let Some(trait_info) = self.traits.get(&trait_key).cloned() {
-                    for (method_name, (sig, has_default)) in trait_info.methods.iter() {
-                        if *has_default && !additions.contains_key(method_name) {
-                            additions.insert(method_name.clone(), sig.clone());
-                        }
-                    }
-                }
-            }
-
-            let methods = if is_struct {
-                self.struct_methods
-                    .entry(target_name.clone())
-                    .or_default()
-            } else {
-                self.enum_methods.entry(target_name.clone()).or_default()
+            let receiver_ty = self.resolve_type(receiver.ty);
+            let target_name = match &receiver_ty {
+                Type::Struct(name) => name.clone(),
+                Type::Enum(name) => name.clone(),
+                _ => continue,
             };
-            methods.extend(additions);
+            let method_name = token_text(self.source, name.span);
+            let sig = self.method_signature(params, *return_type, receiver.is_mut);
+            let methods = if self.structs.contains_key(&target_name) {
+                self.struct_methods.entry(target_name).or_default()
+            } else {
+                self.enum_methods.entry(target_name).or_default()
+            };
+            methods.insert(method_name, sig);
+        }
+    }
+
+    pub(in crate::phpx::typeck::check) fn promote_embedded_struct_methods(&mut self) {
+        let struct_names: Vec<String> = self.structs.keys().cloned().collect();
+        for struct_name in struct_names {
+            let mut methods = self
+                .struct_methods
+                .get(&struct_name)
+                .cloned()
+                .unwrap_or_default();
+            let mut seen: HashSet<String> = methods.keys().cloned().collect();
+            let mut visited = HashSet::new();
+            if let Some(embeds) = self.structs.get(&struct_name).map(|info| info.embeds.clone()) {
+                for embed in embeds {
+                    self.collect_promoted_struct_methods(
+                        &embed,
+                        &mut methods,
+                        &mut seen,
+                        &mut visited,
+                    );
+                }
+            }
+            if !methods.is_empty() {
+                self.struct_methods.insert(struct_name, methods);
+            }
+        }
+    }
+
+    fn collect_promoted_struct_methods(
+        &self,
+        embed: &str,
+        methods: &mut HashMap<String, MethodSig>,
+        seen: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+    ) {
+        if !visited.insert(embed.to_string()) {
+            return;
+        }
+        if let Some(embed_methods) = self.struct_methods.get(embed) {
+            for (name, sig) in embed_methods.iter() {
+                if seen.insert(name.clone()) {
+                    methods.insert(name.clone(), sig.clone());
+                }
+            }
+        }
+        if let Some(info) = self.structs.get(embed) {
+            for next in info.embeds.clone() {
+                self.collect_promoted_struct_methods(&next, methods, seen, visited);
+            }
         }
     }
 
@@ -432,7 +413,7 @@ impl<'a> CheckContext<'a> {
                 } = member
                 {
                     let method_name = token_text(self.source, method_name.span);
-                    let sig = self.method_signature(params, *return_type);
+                    let sig = self.method_signature(params, *return_type, false);
                     methods.insert(method_name, sig);
                 }
             }
@@ -535,6 +516,7 @@ impl<'a> CheckContext<'a> {
         &mut self,
         params: &'a [crate::parser::ast::Param<'a>],
         return_type: Option<&'a AstType<'a>>,
+        mutable: bool,
     ) -> MethodSig {
         let mut sig_params = Vec::new();
         let mut variadic = false;
@@ -550,6 +532,7 @@ impl<'a> CheckContext<'a> {
             params: sig_params,
             return_type: return_type.map(|ty| self.resolve_type(ty)),
             variadic,
+            mutable,
         }
     }
 

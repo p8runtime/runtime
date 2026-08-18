@@ -29,8 +29,10 @@ pub enum TokenKind {
     Function,
     Class,
     Interface,
+    // PHP horizontal-reuse keyword; rejected in DekaScript mode.
     Trait,
     Extends,
+    // PHP class/interface keyword; rejected in DekaScript mode.
     Implements,
     Enum,
     If,

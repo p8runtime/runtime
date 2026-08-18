@@ -1454,7 +1454,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             }
             TokenKind::OpenBrace => {
-                if !self.is_phpx() {
+                if !self.is_phpx() && !self.is_ds() {
                     self.bump();
                     return self.arena.alloc(Expr::Error { span: token.span });
                 }
@@ -1465,6 +1465,38 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 while self.current_token.kind != TokenKind::CloseBrace
                     && self.current_token.kind != TokenKind::Eof
                 {
+                    if self.current_token.kind == TokenKind::Comma {
+                        self.bump();
+                        continue;
+                    }
+
+                    // Spread element: `...expr`
+                    if self.current_token.kind == TokenKind::Ellipsis {
+                        let ellipsis_tok = self.arena.alloc(self.current_token);
+                        let ellipsis_start = self.current_token.span.start;
+                        self.bump(); // ...
+                        let expr = self.parse_expr(0);
+                        let spread = self.arena.alloc(Expr::Spread {
+                            expr,
+                            span: Span::new(ellipsis_start, expr.span().end),
+                        });
+                        let span = Span::new(ellipsis_start, spread.span().end);
+                        items.push(ObjectItem {
+                            key: ObjectKey::Ident(ellipsis_tok),
+                            value: spread,
+                            span,
+                        });
+                        if self.current_token.kind == TokenKind::Comma {
+                            self.bump();
+                            if self.current_token.kind == TokenKind::CloseBrace {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                        continue;
+                    }
+
                     let (key, key_start) = match self.current_token.kind {
                         TokenKind::Identifier => {
                             let tok = self.arena.alloc(self.current_token);
@@ -1484,7 +1516,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         _ => {
                             self.errors.push(ParseError::new(
                                 self.current_token.span,
-                                "Expected identifier or string literal in object literal",
+                                "Expected identifier, string literal, or '...' in object literal",
                             ));
                             let tok = self.arena.alloc(Token {
                                 kind: TokenKind::Error,

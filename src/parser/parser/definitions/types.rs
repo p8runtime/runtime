@@ -15,9 +15,6 @@ pub(in crate::parser::parser) enum ClassMemberCtx {
     },
     Interface,
     Trait,
-    // DekaScript `impl Type { }` / `impl Trait for Type { }` (RFD 19).
-    // Shares the bare-method-signature parsing path with Trait.
-    Impl,
     Enum {
         backed: bool,
     },

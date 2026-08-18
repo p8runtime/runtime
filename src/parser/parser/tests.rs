@@ -2,7 +2,7 @@ use bumpalo::Bump;
 use std::path::Path;
 
 use crate::parser::ast::{ClassKind, ClassMember, Expr, Stmt};
-use crate::parser::lexer::Lexer;
+use crate::parser::lexer::{Lexer, token::TokenKind};
 use crate::parser::parser::{Parser, ParserMode, detect_parser_mode};
 
 #[test]
@@ -24,7 +24,7 @@ fn detect_mode_treats_ds_extension_as_dekascript() {
 #[test]
 fn ds_parses_bare_typed_parameters_and_const() {
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(b"const answer = 42; function add(left: number, right: number): number { return left + right; }"), &arena, ParserMode::Ds);
+    let mut parser = Parser::new_with_mode(Lexer::new(b"const answer = 42; fn add(left: number, right: number): number { return left + right; }"), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     assert!(
         program.errors.is_empty(),
@@ -37,7 +37,7 @@ fn ds_parses_bare_typed_parameters_and_const() {
 fn ds_rejects_php_sigil_parameters_with_actionable_diagnostic() {
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(
-        Lexer::new(b"function add($value: number): number { return $value; }"),
+        Lexer::new(b"fn add($value: number): number { return $value; }"),
         &arena,
         ParserMode::Ds,
     );
@@ -1139,11 +1139,153 @@ fn phpx_rejects_js_style_enum_body() {
     assert!(!program.errors.is_empty());
 }
 
-// --- DekaScript trait/impl parsing (dekaruntime/deka#93) -------------------
+// --- DekaScript trait/impl rejection (RFD 19 Phase 5) ----------------------
 
 #[test]
-fn ds_trait_declaration_parses_unit() {
+fn ds_trait_is_rejected() {
     let code = "trait Named {\n  name(): string\n}";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.iter().any(|e| e.message == "trait is not part of DekaScript"),
+        "expected trait rejection, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn ds_impl_is_rejected() {
+    let code = r#"struct Point { x: int; y: int }
+impl Point {
+  norm(): int { return this.x + this.y }
+}"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.iter().any(|e| e.message == "impl is not part of DekaScript"),
+        "expected impl rejection, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn ds_impl_trait_for_type_is_rejected() {
+    let code = r#"trait Named { name(): string }
+struct User { handle: string }
+impl Named for User { name(): string { return this.handle } }"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.iter().any(|e| e.message == "trait is not part of DekaScript"
+            || e.message == "impl is not part of DekaScript"),
+        "expected trait/impl rejection, got: {:?}",
+        program.errors
+    );
+}
+
+// --- RFD 19: `fn` keyword, receiver methods, embedding, optional, spread ----
+
+#[test]
+fn ds_fn_keyword_parses_top_level_function() {
+    let code = "fn add(left: number, right: number): number { return left + right; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let func = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Function { .. }))
+        .expect("expected function stmt");
+    match &**func {
+        Stmt::Function { is_async, .. } => assert!(!is_async),
+        _ => panic!("expected function statement"),
+    }
+}
+
+#[test]
+fn ds_async_fn_parses() {
+    let code = "async fn load(p: Promise<int>): Promise<int> { return await p; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let func = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Function { .. }))
+        .expect("expected function stmt");
+    match &**func {
+        Stmt::Function { is_async, .. } => assert!(*is_async),
+        _ => panic!("expected function statement"),
+    }
+}
+
+#[test]
+fn ds_rejects_function_keyword() {
+    let code = "function add(a: int, b: int): int { return a + b; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|e| e.message.contains("uses `fn` for function declarations")),
+        "expected `function` rejection, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn ds_receiver_method_parses() {
+    let code = r#"struct Person { name: string }
+fn (p Person) greet(): string { return "Hello, " + p.name }
+fn (p mut Person) setName(name: string) { p.name = name }"#;
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let methods: Vec<_> = program
+        .statements
+        .iter()
+        .filter(|s| matches!(***s, Stmt::ReceiverMethod { .. }))
+        .collect();
+    assert_eq!(methods.len(), 2, "expected two receiver methods");
+
+    match &*methods[0] {
+        Stmt::ReceiverMethod { receiver, name, .. } => {
+            assert!(!receiver.is_mut);
+            assert_eq!(
+                &code.as_bytes()[receiver.var.span.start..receiver.var.span.end],
+                b"p"
+            );
+            assert_eq!(&code.as_bytes()[name.span.start..name.span.end], b"greet");
+        }
+        _ => unreachable!(),
+    }
+    match &*methods[1] {
+        Stmt::ReceiverMethod { receiver, name, .. } => {
+            assert!(receiver.is_mut);
+            assert_eq!(&code.as_bytes()[name.span.start..name.span.end], b"setName");
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn ds_struct_embedding_parses() {
+    let code = r#"struct Person { name: string }
+struct Employee {
+  Person
+  employeeId: string
+}"#;
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
@@ -1152,31 +1294,285 @@ fn ds_trait_declaration_parses_unit() {
     let stmt = program
         .statements
         .iter()
-        .find(|s| matches!(***s, Stmt::Trait { .. }))
-        .expect("expected trait stmt");
-    match **stmt {
-        Stmt::Trait { name, .. } => {
-            assert_eq!(&code.as_bytes()[name.span.start..name.span.end], b"Named");
+        .find(|s| matches!(***s, Stmt::Class { name, .. } if &code.as_bytes()[name.span.start..name.span.end] == b"Employee"))
+        .expect("expected Employee struct stmt");
+    match &**stmt {
+        Stmt::Class { kind, members, .. } => {
+            assert_eq!(*kind, ClassKind::Struct);
+            let embeds: Vec<_> = members.iter().filter(|m| matches!(m, ClassMember::Embed { .. })).collect();
+            assert_eq!(embeds.len(), 1, "expected one embedded type");
         }
-        _ => panic!("expected trait statement"),
+        _ => panic!("expected struct statement"),
     }
 }
 
 #[test]
-fn ds_trait_default_method_parses_unit() {
-    // Default method bodies may omit the trailing semicolon on the final
-    // statement and the semicolon after the method signature.
-    let code = r#"trait Greeter {
-  greet(): string { return "hi" }
-}"#;
+fn ds_optional_struct_field_parses() {
+    let code = "struct User { name: string; nickname?: string }";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Class { .. }))
+        .expect("expected struct stmt");
+    match &**stmt {
+        Stmt::Class { members, .. } => {
+            let optional = members
+                .iter()
+                .filter_map(|m| match m {
+                    ClassMember::Property { entries, .. } => entries.iter().find(|e| e.optional),
+                    _ => None,
+                })
+                .next()
+                .expect("expected optional field");
+            assert_eq!(
+                &code.as_bytes()[optional.name.span.start..optional.name.span.end],
+                b"nickname"
+            );
+        }
+        _ => panic!("expected struct statement"),
+    }
+}
+
+#[test]
+fn ds_optional_interface_field_parses() {
+    let code = "interface Config { host: string; port?: int }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Interface { .. }))
+        .expect("expected interface stmt");
+    match &**stmt {
+        Stmt::Interface { members, .. } => {
+            let optional = members
+                .iter()
+                .filter_map(|m| match m {
+                    ClassMember::Property { entries, .. } => entries.iter().find(|e| e.optional),
+                    _ => None,
+                })
+                .next()
+                .expect("expected optional field");
+            assert_eq!(
+                &code.as_bytes()[optional.name.span.start..optional.name.span.end],
+                b"port"
+            );
+        }
+        _ => panic!("expected interface statement"),
+    }
+}
+
+#[test]
+fn ds_object_literal_spread_parses() {
+    let code = "const base = { a: 1 }; const copy = { ...base, b: 2 };";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .filter(|s| matches!(***s, Stmt::Const { .. }))
+        .nth(1)
+        .expect("expected second const stmt");
+    match &**stmt {
+        Stmt::Const { consts, .. } => {
+            let value = consts[0].value;
+            match value {
+                Expr::ObjectLiteral { items, .. } => {
+                    let spread_count = items.iter().filter(|i| matches!(i.value, Expr::Spread { .. })).count();
+                    assert_eq!(spread_count, 1);
+                }
+                _ => panic!("expected object literal"),
+            }
+        }
+        _ => panic!("expected const statement"),
+    }
+}
+
+#[test]
+fn phpx_jsx_spread_attribute_parses() {
+    let code = "function Card($props: object) { return <div {...props} id=\"card\" />; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let func = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Function { .. }))
+        .expect("expected function stmt");
+    match &**func {
+        Stmt::Function { body, .. } => {
+            let ret = body
+                .iter()
+                .find(|s| matches!(***s, Stmt::Return { .. }))
+                .expect("expected return");
+            match &**ret {
+                Stmt::Return {
+                    expr: Some(Expr::JsxElement { attributes, .. }),
+                    ..
+                } => {
+                    let spread_count = attributes
+                        .iter()
+                        .filter(|a| a.name.kind == TokenKind::Ellipsis)
+                        .count();
+                    assert_eq!(spread_count, 1);
+                }
+                _ => panic!("expected JSX return"),
+            }
+        }
+        _ => panic!("expected function statement"),
+    }
+}
+
+
+// --- PR #126 parser blocker fixes ------------------------------------------
+
+#[test]
+fn php_rejects_async_function() {
+    let code = "<?php async function load($p: Promise<int>): Promise<int> { return await $p; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new(Lexer::new(code.as_bytes()), &arena);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.iter().any(|e| e.message.contains("async") || e.span.start > 0),
+        "expected an error for async function in PHP mode, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn phpx_still_accepts_async_function() {
+    let code = "async function load($p: Promise<int>): Promise<int> { return await $p; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
     let program = parser.parse_program();
     assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
 }
 
 #[test]
-fn ds_inherent_impl_parses_unit() {
+fn ds_trait_help_uses_receiver_syntax_without_colon() {
+    let code = "trait Named { name(): string }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    let help = program
+        .errors
+        .iter()
+        .find(|e| e.message == "trait is not part of DekaScript")
+        .map(|e| e.help_text)
+        .expect("expected trait rejection");
+    assert!(
+        help.contains("fn (self Type)"),
+        "expected receiver syntax without colon, got: {}",
+        help
+    );
+}
+
+#[test]
+fn ds_impl_help_uses_receiver_syntax_without_colon() {
+    let code = "impl Point { norm(): int { return 0; } }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    let help = program
+        .errors
+        .iter()
+        .find(|e| e.message == "impl is not part of DekaScript")
+        .map(|e| e.help_text)
+        .expect("expected impl rejection");
+    assert!(
+        help.contains("fn (self Type)"),
+        "expected receiver syntax without colon, got: {}",
+        help
+    );
+}
+
+#[test]
+fn ds_interface_accepts_fn_methods() {
+    let code = "interface Named { fn name(): string; fn setName(name: string); }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Interface { .. }))
+        .expect("expected interface stmt");
+    match &**stmt {
+        Stmt::Interface { members, .. } => {
+            let methods: Vec<_> = members.iter().filter(|m| matches!(m, ClassMember::Method { .. })).collect();
+            assert_eq!(methods.len(), 2, "expected two interface methods");
+        }
+        _ => panic!("expected interface statement"),
+    }
+}
+
+#[test]
+fn ds_interface_rejects_function_keyword() {
+    let code = "interface Named { function name(): string; }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|e| e.message.contains("uses `fn` for function declarations")),
+        "expected `function` rejection in DS interface, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn ds_interface_accepts_mut_fields() {
+    let code = "interface Config { host: string; mut port: int }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Interface { .. }))
+        .expect("expected interface stmt");
+    match &**stmt {
+        Stmt::Interface { members, .. } => {
+            let fields: Vec<_> = members
+                .iter()
+                .filter_map(|m| match m {
+                    ClassMember::Property { entries, .. } => entries.iter().next(),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(fields.len(), 2, "expected two interface fields");
+            assert!(!fields[0].is_mut, "expected host to be immutable");
+            assert!(fields[1].is_mut, "expected port to be mutable");
+            assert_eq!(
+                &code.as_bytes()[fields[1].name.span.start..fields[1].name.span.end],
+                b"port"
+            );
+        }
+        _ => panic!("expected interface statement"),
+    }
+}
+
+#[test]
+fn ds_impl_rejection_does_not_leave_stray_brace_error() {
     let code = r#"struct Point { x: int; y: int }
 impl Point {
   norm(): int { return this.x + this.y }
@@ -1184,37 +1580,14 @@ impl Point {
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
-}
-
-#[test]
-fn ds_trait_impl_parses_unit() {
-    let code = r#"trait Named {
-  name(): string
-}
-struct User {
-  handle: string
-}
-impl Named for User {
-  name(): string {
-    return this.handle
-  }
-}"#;
-    let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
-    let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
-}
-
-#[test]
-fn ds_trait_method_without_return_type_parses_unit() {
-    // `print` is a semi-reserved keyword; it must still be usable as a bare
-    // method name inside a DekaScript trait body.
-    let code = r#"trait Printer {
-  print()
-}"#;
-    let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
-    let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+    assert!(
+        program.errors.iter().any(|e| e.message == "impl is not part of DekaScript"),
+        "expected impl rejection, got: {:?}",
+        program.errors
+    );
+    assert!(
+        !program.errors.iter().any(|e| e.message.contains("Unexpected '") && e.message.contains("}'")),
+        "expected no stray brace error, got: {:?}",
+        program.errors
+    );
 }

@@ -41,9 +41,8 @@ fn check(code: &str) -> Result<(), String> {
         })
 }
 
-// DekaScript-mode variant for RFD 19 (traits/impl) and any other .ds-only
-// feature. `check` above hardcodes ParserMode::Phpx, so it cannot reach
-// `impl`, DS-flavored `trait`, or the bare-method-signature grammar.
+// DekaScript-mode variant for .ds-only features. `check` above hardcodes
+// ParserMode::Phpx, so it cannot reach DekaScript-specific syntax.
 fn check_ds(code: &str) -> Result<(), String> {
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
@@ -129,20 +128,20 @@ fn struct_default_allows_struct_and_object_literals() {
 #[test]
 fn ds_bare_struct_field_names_typecheck() {
     // dekaruntime/deka#93: DekaScript structs use bare identifiers.
-    let code = "struct Point { x: int; y: int } function f(): int { return Point { x: 3, y: 4 }.x; }";
+    let code = "struct Point { x: int; y: int } fn f(): int { return Point { x: 3, y: 4 }.x; }";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
 
 #[test]
 fn ds_bare_struct_field_missing_field_errors() {
-    let code = "struct Point { x: int; y: int } function f(): Point { return Point { x: 3 }; }";
+    let code = "struct Point { x: int; y: int } fn f(): Point { return Point { x: 3 }; }";
     assert!(check_ds(code).is_err());
 }
 
 #[test]
 fn ds_bare_struct_field_wrong_type_errors() {
-    let code = "struct Point { x: int; y: int } function f(): Point { return Point { x: \"nope\", y: 4 }; }";
+    let code = "struct Point { x: int; y: int } fn f(): Point { return Point { x: \"nope\", y: 4 }; }";
     assert!(check_ds(code).is_err());
 }
 
@@ -426,7 +425,7 @@ fn destructured_param_struct_type_is_rejected_with_guidance() {
 fn ds_jsx_component_destructured_param_props_are_recognized() {
     // dekaruntime/deka#93: DekaScript JSX components use bare destructured
     // params ({ name }: GreetingProps) and bare interface fields.
-    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -434,7 +433,7 @@ fn ds_jsx_component_destructured_param_props_are_recognized() {
 #[test]
 fn ds_jsx_component_with_separator_destructured_param_props_are_recognized() {
     // Component files separate script and template with '---'.
-    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -870,409 +869,24 @@ fn distinct_type_params_are_not_interchangeable() {
     );
 }
 
-// --- RFD 19: traits + impl -------------------------------------------------
+// --- RFD 19 Phase 5: trait/impl removed; receiver methods remain ----------
 
 #[test]
-fn ds_trait_declaration_abstract_only() {
+fn ds_trait_declaration_rejected() {
     let code = "trait Greeter {\n  greet(): string\n}";
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+    assert!(check_ds(code).is_err(), "expected trait to be rejected");
 }
 
 #[test]
-fn ds_trait_declaration_with_default_body() {
-    let code = r#"trait Greeter { greet(): string { return "hi"; } }"#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_inherent_impl_ok() {
+fn ds_impl_rejected() {
     let code = "struct Point { $x: int; }\n\nimpl Point { norm(): int { return 1; } }";
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_trait_impl_satisfying_all_methods_ok() {
-    let code = r#"
-        trait Greeter {
-          greet(): string
-        }
-        struct Bot { $name: string; }
-        impl Greeter for Bot { greet(): string { return "hi"; } }
-    "#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_trait_impl_missing_required_method_errors() {
-    // This is the exact bug found and fixed live: before the conformance
-    // check existed, this silently passed.
-    let code = r#"
-        trait Greeter {
-          greet(): string
-        }
-        struct Bot { $name: string; }
-        impl Greeter for Bot { }
-    "#;
-    let result = check_ds(code);
-    assert!(result.is_err(), "expected missing-method impl to be rejected");
-    assert!(
-        result.unwrap_err().contains("greet"),
-        "error should name the missing method"
-    );
-}
-
-#[test]
-fn ds_trait_impl_default_method_not_required() {
-    // A method with a default body in the trait is optional to override.
-    let code = r#"
-        trait Greeter {
-            greet(): string { return "default"; }
-        }
-        struct Bot { $name: string; }
-        impl Greeter for Bot { }
-    "#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_trait_impl_wrong_signature_errors() {
-    let code = r#"
-        trait Greeter {
-          greet(): string
-        }
-        struct Bot { $name: string; }
-        impl Greeter for Bot { greet(): int { return 1; } }
-    "#;
-    let result = check_ds(code);
-    assert!(result.is_err(), "expected mismatched return type to be rejected");
-    assert!(
-        result.unwrap_err().contains("greet"),
-        "error should name the mismatched method"
-    );
-}
-
-#[test]
-fn ds_generic_function_trait_bound_resolves() {
-    // The exact shape RFD 16's flagship example needs:
-    // export function drain<R: Reader>(reader: R): ... { reader.read() }
-    // Bound SYNTAX resolving is what this test covers. Enforcement (does a
-    // concrete type argument actually implement the bound trait at a call
-    // site) is a separate, larger gap, not covered here or built yet --
-    // deliberately not claimed.
-    // No `export` here: the real pipeline strips/masks the export
-    // keyword via preprocess_source (modules_php) before parsing; check_ds
-    // is a php-rs-only test helper and can't depend on modules_php to
-    // replicate that step. Verified bare `function` exercises the exact
-    // same bound-resolution path through the real CLI.
-    let code = r#"
-        trait Reader {
-          read(self: Self): int
-        }
-        function drain<R: Reader>(reader: R): int {
-          return reader.read();
-        }
-    "#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_inherent_impl_invalid_param_type_errors() {
-    // Before this, inherent impls (no trait) skipped all signature
-    // resolution entirely -- a made-up type name typechecked clean.
-    let code = r#"
-        struct Point { $x: int; }
-        impl Point { bad(self: Self, weird: TotallyNotARealType): int { return 1; } }
-    "#;
-    assert!(
-        check_ds(code).is_err(),
-        "an invalid parameter type in an inherent impl must be rejected"
-    );
-}
-
-#[test]
-fn ds_impl_method_unknown_self_field_errors() {
-    // self.field accesses inside an impl method body are checked against
-    // the target struct's actual declared fields (v1 scope: struct
-    // targets only). Before the fix, self.field was parsed as
-    // Expr::DotAccess (not Expr::PropertyFetch, which the first version
-    // of this validator matched on) so the check silently never fired.
-    let code = r#"
-        struct Point { $x: int; }
-        impl Point { bad(self: Self): int { return self.totallyBogusFieldName; } }
-    "#;
-    let result = check_ds(code);
-    assert!(
-        result.is_err(),
-        "an unknown self.field access in an impl method must be rejected"
-    );
-    assert!(
-        result.unwrap_err().contains("totallyBogusFieldName"),
-        "error should name the unknown field"
-    );
-}
-
-#[test]
-fn ds_impl_method_known_self_field_ok() {
-    let code = r#"
-        struct Point { $x: int; }
-        impl Point { getX(self: Self): int { return self.x; } }
-    "#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_impl_method_calling_sibling_method_via_self_ok() {
-    // Regression test for a real bug found live: self.method() calls parse
-    // as Expr::Call { func: DotAccess { target: self, property: method },
-    // .. } in DekaScript (the `.` operator has no dedicated method-call
-    // parse branch, unlike PHP's `->`). The first cut of
-    // SelfFieldValidator didn't know about this shape and rejected every
-    // self.method() call as an unknown field access -- e.g. a `double()`
-    // method calling a sibling `quad()` method via `self.quad()` inside the
-    // same impl block was incorrectly flagged as
-    // "self.quad does not refer to a declared field". Fixed by special-
-    // casing Expr::Call so a DotAccess used as a call target is never
-    // treated as a field read.
-    let code = r#"
-        struct Point { $x: int; }
-        impl Point {
-          double(self: Self): int { return self.x * 2; }
-          quad(self: Self): int { return self.double() * 2; }
-        }
-    "#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_impl_method_call_as_argument_to_another_self_method_call_ok() {
-    // Deeper probe of the same fix: a self.method() call nested as an
-    // ARGUMENT to another self.method() call (not just sequential sibling
-    // calls). Confirms visit_arg's default walk still reaches nested
-    // Expr::Call nodes and re-enters the special-cased handling correctly
-    // rather than only working one level deep.
-    let code = r#"
-        struct Point { $x: int; }
-        impl Point {
-          double(self: Self): int { return self.x * 2; }
-          addTo(self: Self, n: int): int { return n + self.double(); }
-          sumBoth(self: Self): int { return self.addTo(self.double()); }
-        }
-    "#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
-}
-
-#[test]
-fn ds_impl_method_bogus_field_alongside_valid_method_call_errors() {
-    // Confirms the Expr::Call special-case doesn't over-suppress: a
-    // genuinely unknown field used alongside a valid method call in the
-    // same expression must still be rejected -- proves args are still
-    // walked and validated normally, not accidentally skipped wholesale.
-    let code = r#"
-        struct Point { $x: int; }
-        impl Point {
-          double(self: Self): int { return self.x * 2; }
-          bad(self: Self): int { return self.double() + self.totallyBogusFieldName; }
-        }
-    "#;
-    let result = check_ds(code);
-    assert!(result.is_err(), "expected the bogus field to still be rejected");
-    assert!(
-        result.unwrap_err().contains("totallyBogusFieldName"),
-        "error should name the bogus field"
-    );
-}
-
-#[test]
-fn ds_trait_conflict_incompatible_signatures_errors() {
-    let code = r#"
-        trait A {
-          greet(): string
-        }
-        trait B {
-          greet(): int
-        }
-        struct Bot { $name: string; }
-        impl A for Bot { greet(): string { return "hi"; } }
-        impl B for Bot { greet(): int { return 1; } }
-    "#;
-    let result = check_ds(code);
-    assert!(result.is_err(), "incompatible cross-trait signatures must be rejected");
-    assert!(result.unwrap_err().contains("incompatible"));
-}
-
-#[test]
-fn ds_trait_conflict_shared_default_without_override_errors() {
-    let code = r#"
-        trait A {
-          greet(): string { return "a"; }
-        }
-        trait B {
-          greet(): string { return "b"; }
-        }
-        struct Bot { $name: string; }
-        impl A for Bot { }
-        impl B for Bot { }
-    "#;
-    let result = check_ds(code);
-    assert!(result.is_err(), "an unresolved shared default must be rejected");
-    assert!(result.unwrap_err().contains("ambiguity"));
-}
-
-#[test]
-fn ds_trait_conflict_resolved_by_explicit_override_ok() {
-    let code = r#"
-        trait A {
-          greet(): string { return "a"; }
-        }
-        trait B {
-          greet(): string { return "b"; }
-        }
-        struct Bot { $name: string; }
-        impl A for Bot { greet(): string { return "resolved"; } }
-        impl B for Bot { }
-    "#;
-    assert!(check_ds(code).is_ok(), "{:?}", check_ds(code));
+    assert!(check_ds(code).is_err(), "expected impl to be rejected");
 }
 
 #[test]
 fn ds_legacy_php_trait_still_rejected_outside_ds() {
-    let code = "<?php trait Foo { public function bar() {} }";
+    let code = "<?php trait Foo { public fn bar() {} }";
     assert!(check(code).is_err(), "PHP horizontal-reuse traits must stay rejected in PHPX");
-}
-
-#[test]
-fn ds_trait_method_call_type_checks() {
-    // The flagship dekaruntime/deka#93 case: a DekaScript method call on a
-    // struct-typed variable resolves through an impl block and type-checks.
-    let code = r#"trait Named {
-  name(): string
-}
-
-struct User {
-  handle: string
-}
-
-impl Named for User {
-  name(): string {
-    return this.handle
-  }
-}
-
-const user = User { handle: "deka" }
-console.log(user.name())
-"#;
-    let res = check_ds(code);
-    assert!(res.is_ok(), "expected typecheck ok: {:?}", res);
-}
-
-#[test]
-fn ds_trait_method_call_self_alias_type_checks() {
-    // `self` should work identically to `this` when accessing the receiver
-    // inside an impl method body.
-    let code = r#"trait Named {
-  name(): string
-}
-
-struct User {
-  handle: string
-}
-
-impl Named for User {
-  name(): string {
-    return self.handle
-  }
-}
-
-const user = User { handle: "deka" }
-console.log(user.name())
-"#;
-    let res = check_ds(code);
-    assert!(res.is_ok(), "expected typecheck ok: {:?}", res);
-}
-
-#[test]
-fn ds_trait_method_call_wrong_arg_errors() {
-    let code = r#"trait Named {
-  name(prefix: string): string
-}
-
-struct User {
-  handle: string
-}
-
-impl Named for User {
-  name(prefix: string): string {
-    return prefix + this.handle
-  }
-}
-
-const user = User { handle: "deka" }
-console.log(user.name(123))
-"#;
-    let res = check_ds(code);
-    assert!(res.is_err(), "expected argument type mismatch to be caught");
-}
-
-#[test]
-fn ds_trait_default_method_call_type_checks() {
-    // A trait method with a default body is callable even when the impl block
-    // does not override it.
-    let code = r#"trait Greeter {
-  greet(): string { return "hello" }
-}
-
-struct Bot {}
-
-impl Greeter for Bot {}
-
-const bot = Bot {}
-console.log(bot.greet())
-"#;
-    let res = check_ds(code);
-    assert!(res.is_ok(), "expected default method call to typecheck: {:?}", res);
-}
-
-#[test]
-fn ds_inherent_impl_method_call_type_checks() {
-    // Method calls on a struct with only an inherent impl (no trait) should
-    // also resolve and type-check.
-    let code = r#"struct Point {
-  x: int
-  y: int
-}
-
-impl Point {
-  norm(): int {
-    return this.x + this.y
-  }
-}
-
-const p = Point { x: 3, y: 4 }
-console.log(p.norm())
-"#;
-    let res = check_ds(code);
-    assert!(res.is_ok(), "expected inherent impl method call to typecheck: {:?}", res);
-}
-
-#[test]
-fn ds_impl_this_unknown_field_errors() {
-    let code = r#"trait Named {
-  name(): string
-}
-
-struct User {
-  handle: string
-}
-
-impl Named for User {
-  name(): string {
-    return this.hanlde
-  }
-}
-"#;
-    let res = check_ds(code);
-    assert!(res.is_err(), "expected unknown field error");
-    assert!(res.unwrap_err().contains("hanlde"));
 }
 
 #[test]
@@ -1376,7 +990,7 @@ fn real_type_error_still_fails_exactly_as_before() {
 fn ds_enum_js_style_body_typechecks() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function getStatus(): Status { return Status.Ready; }
+        fn getStatus(): Status { return Status.Ready; }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -1385,7 +999,7 @@ fn ds_enum_js_style_body_typechecks() {
 fn ds_enum_generic_payload_typechecks() {
     let code = r#"
         enum Option<T> { Some(T), None }
-        function getOption(): Option<int> { return Option::Some(1); }
+        fn getOption(): Option<int> { return Option::Some(1); }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -1394,7 +1008,7 @@ fn ds_enum_generic_payload_typechecks() {
 fn ds_enum_generic_payload_mismatch_errors() {
     let code = r#"
         enum Option<T> { Some(T), None }
-        function getOption(): Option<int> { return Option::Some("no"); }
+        fn getOption(): Option<int> { return Option::Some("no"); }
     "#;
     assert!(check_ds(code).is_err());
 }
@@ -1403,7 +1017,7 @@ fn ds_enum_generic_payload_mismatch_errors() {
 fn ds_enum_match_exhaustive_on_js_style_enum() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function f(s: Status): int {
+        fn f(s: Status): int {
             match (s) {
                 Status::Loading => 0,
                 Status::Ready => 1,
@@ -1420,7 +1034,7 @@ fn ds_enum_match_exhaustive_using_dot_access() {
     // `Status::Ready` when the left-hand side names an enum.
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function f(s: Status): int {
+        fn f(s: Status): int {
             match (s) {
                 Status.Loading => 0,
                 Status.Ready => 1,
@@ -1435,7 +1049,7 @@ fn ds_enum_match_exhaustive_using_dot_access() {
 fn ds_enum_match_missing_case_errors() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        function f(s: Status): int {
+        fn f(s: Status): int {
             match (s) {
                 Status::Loading => 0,
                 Status::Ready => 1,
@@ -1448,88 +1062,88 @@ fn ds_enum_match_missing_case_errors() {
 
 #[test]
 fn ds_function_return_type_inferred_from_literal() {
-    // dekaruntime/deka#120: unannotated function return types are inferred.
-    let code = "function answer() { return 42; } const x = answer();";
+    // dekaruntime/deka#120: unannotated fn return types are inferred.
+    let code = "fn answer() { return 42; } const x = answer();";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_parameters() {
-    let code = "function add(left: number, right: number) { return left + right; } const x = add(1, 2);";
+    let code = "fn add(left: number, right: number) { return left + right; } const x = add(1, 2);";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_async_wraps_promise() {
-    let code = "async function fetch() { return 1; } const x = await fetch();";
+    let code = "async fn fetch() { return 1; } const x = await fetch();";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_inferred_return_mismatch_is_rejected() {
     // Once a return type is inferred, inconsistent return branches should error.
-    let code = "function maybe() { if (true) { return 1; } else { return \"two\"; } }";
+    let code = "fn maybe() { if (true) { return 1; } else { return \"two\"; } }";
     assert!(check_ds(code).is_err());
 }
 
 #[test]
 fn ds_function_inferred_return_used_in_typed_call() {
     // Inferred return types should flow to callers.
-    let code = "function one() { return 1; } function add(left: number, right: number) { return left + right; } const x = add(one(), 2);";
+    let code = "fn one() { return 1; } fn add(left: number, right: number) { return left + right; } const x = add(one(), 2);";
     assert!(check_ds(code).is_ok());
 }
 
 
 #[test]
 fn ds_function_return_type_inferred_from_arithmetic() {
-    let code = "function add(left: number, right: number) { return left + right; } function useNumber(n: number) {} useNumber(add(1, 2));";
+    let code = "fn add(left: number, right: number) { return left + right; } fn useNumber(n: number) {} useNumber(add(1, 2));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_float_arithmetic() {
-    let code = "function add(left: float, right: float) { return left + right; } function useFloat(n: float) {} useFloat(add(1.0, 2.0));";
+    let code = "fn add(left: float, right: float) { return left + right; } fn useFloat(n: float) {} useFloat(add(1.0, 2.0));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_concatenation() {
-    let code = "function greet(name: string) { return \"Hello, \" + name; } function useString(s: string) {} useString(greet(\"Deka\"));";
+    let code = "fn greet(name: string) { return \"Hello, \" + name; } fn useString(s: string) {} useString(greet(\"Deka\"));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_comparison() {
-    let code = "function check(a: number, b: number) { return a > b; } function useBool(b: bool) {} useBool(check(1, 2));";
+    let code = "fn check(a: number, b: number) { return a > b; } fn useBool(b: bool) {} useBool(check(1, 2));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_logical() {
-    let code = "function both(a: bool, b: bool) { return a && b; } function useBool(b: bool) {} useBool(both(true, false));";
+    let code = "fn both(a: bool, b: bool) { return a && b; } fn useBool(b: bool) {} useBool(both(true, false));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_inside_switch() {
-    let code = r#"function pick(n: number) {
+    let code = r#"fn pick(n: number) {
   switch (n) {
     case 1: return "one";
     case 2: return "two";
     default: return "many";
   }
 }
-function useString(s: string) {}
+fn useString(s: string) {}
 useString(pick(1));"#;
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_async_function_return_not_double_wrapped() {
-    // Returning a Promise<T> from an async function should not become Promise<Promise<T>>.
-    let code = r#"async function fetch() { return 1; }
-async function wrapper() { return await fetch(); }
-function useNumber(n: number) {}
+    // Returning a Promise<T> from an async fn should not become Promise<Promise<T>>.
+    let code = r#"async fn fetch() { return 1; }
+async fn wrapper() { return await fetch(); }
+fn useNumber(n: number) {}
 useNumber(await wrapper());"#;
     assert!(check_ds(code).is_ok());
 }
@@ -1544,4 +1158,351 @@ fn phpx_function_return_type_inferred_from_literal() {
 fn phpx_function_return_type_inferred_mismatch_rejected() {
     let code = "<?php function maybe($x) { if ($x) { return 1; } else { return \"two\"; } }";
     assert!(check(code).is_err());
+}
+
+// --- RFD 19 Phase 3: receiver methods, optional fields, spread -------------
+
+#[test]
+fn ds_receiver_method_type_checks() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return "hi" }
+        fn f(): string {
+          const person = Person { name: "Ada" };
+          return person.greet();
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected receiver method to type-check: {:?}", res);
+}
+
+#[test]
+fn ds_receiver_method_body_type_error_is_caught() {
+    // Receiver method bodies must be type-checked even when the method is
+    // never called; before the fix this fell through the Stmt::ReceiverMethod
+    // arm and produced no diagnostics.
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return 123 }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected receiver method body type error: {:?}", res);
+    assert!(
+        res.unwrap_err().contains("Return type mismatch"),
+        "expected return type mismatch error"
+    );
+}
+
+#[test]
+fn ds_receiver_method_receiver_is_bound_in_body() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return p.name }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_ok(),
+        "expected receiver variable to be in scope: {:?}",
+        res
+    );
+}
+
+#[test]
+fn ds_receiver_method_param_type_error_is_caught() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(greeting: string): string { return greeting }
+        fn f(): string {
+          const person = Person { name: "Ada" };
+          return person.greet(123);
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected receiver method parameter type mismatch: {:?}", res);
+}
+
+#[test]
+fn ds_mutable_receiver_on_const_errors() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p mut Person) setName(name: string) {}
+        fn f() {
+          const person = Person { name: "Ada" };
+          person.setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected mutable receiver call on const to fail");
+    assert!(
+        res.unwrap_err().contains("mutable method"),
+        "expected mutable receiver error"
+    );
+}
+
+#[test]
+fn ds_mutable_receiver_on_let_ok() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p mut Person) setName(name: string) {}
+        fn f() {
+          let person = Person { name: "Ada" };
+          person.setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected mutable receiver call on let to pass: {:?}", res);
+}
+
+#[test]
+fn ds_mutable_receiver_on_function_return_errors() {
+    // expr_is_mutable used to return true for any non-variable expression,
+    // allowing mutable receiver calls on temporary values.
+    let code = r#"
+        struct Person { name: string }
+        fn makePerson(): Person { return Person { name: "Ada" } }
+        fn (p mut Person) setName(name: string) {}
+        fn f() {
+          makePerson().setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_err(),
+        "expected mutable receiver call on function return to fail"
+    );
+    assert!(
+        res.unwrap_err().contains("mutable method"),
+        "expected mutable receiver error"
+    );
+}
+
+#[test]
+fn ds_mutable_receiver_on_immutable_param_errors() {
+    // Function parameters were unconditionally added to the mutable
+    // environment, making every parameter mutable.
+    let code = r#"
+        struct Person { name: string }
+        fn (p mut Person) setName(name: string) {}
+        fn f(person: Person) {
+          person.setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_err(),
+        "expected mutable receiver call on immutable param to fail"
+    );
+    assert!(
+        res.unwrap_err().contains("mutable method"),
+        "expected mutable receiver error"
+    );
+}
+
+#[test]
+fn ds_interface_bare_field_names_accept_object_literal() {
+    let code = r#"
+        interface NameProps { name: string }
+        fn fullName(props: NameProps): string { return props.name; }
+        fullName({ name: "Bob" });
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected bare interface fields to work: {:?}", res);
+}
+
+#[test]
+fn ds_interface_optional_field_allows_missing() {
+    let code = r#"
+        interface Media { title: string; subtitle?: string }
+        fn getSubtitle(m: Media): Option<string> { return m.subtitle; }
+        getSubtitle({ title: "A" });
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected optional interface field to allow missing: {:?}", res);
+}
+
+#[test]
+fn ds_object_literal_spread_from_interface_ok() {
+    let code = r#"
+        interface Base { a: int; b: string }
+        fn f(base: Base): int {
+          const copy = { ...base, b: "y" };
+          return copy.a;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected object-literal spread to type-check: {:?}", res);
+}
+
+#[test]
+fn ds_object_literal_spread_type_mismatch_errors() {
+    let code = r#"
+        interface Base { a: int; b: string }
+        fn f(base: Base): Base {
+          return { ...base, b: 123 };
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected spread field type mismatch to fail");
+}
+
+#[test]
+fn ds_jsx_spread_props_satisfies_required() {
+    let code = r#"
+        interface GreetingProps { name: string }
+        fn Greeting(props: GreetingProps): Component { return <h1>Hello {props.name}</h1> }
+        fn render(): Component {
+          const props = { name: "Deka" };
+          return <Greeting {...props} />;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected JSX spread props to satisfy required prop: {:?}", res);
+}
+
+#[test]
+fn ds_jsx_spread_missing_required_prop_errors() {
+    let code = r#"
+        interface GreetingProps { name: string }
+        fn Greeting(props: GreetingProps): Component { return <h1>Hello {props.name}</h1> }
+        fn render(): Component {
+          const props = {};
+          return <Greeting {...props} />;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected JSX spread missing required prop to fail");
+    assert!(
+        res.unwrap_err().contains("Missing required prop 'name'"),
+        "expected missing required prop error"
+    );
+}
+
+#[test]
+fn ds_embed_promotes_methods() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return "hi, " + p.name }
+        struct Employee { Person; employeeId: string }
+        fn f(): string {
+          const e = Employee { Person: Person { name: "Ada" }, employeeId: "E1" };
+          return e.greet();
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected embedded methods to be promoted: {:?}", res);
+}
+
+#[test]
+fn ds_embed_promoted_method_satisfies_interface() {
+    let code = r#"
+        interface Greeter { fn greet(): string }
+        struct Person { name: string }
+        fn (p Person) greet(): string { return "hi" }
+        struct Employee { Person; employeeId: string }
+        fn useGreeter(g: Greeter): string { return g.greet(); }
+        fn f(): string {
+          const e = Employee { Person: Person { name: "Ada" }, employeeId: "E1" };
+          return useGreeter(e);
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_ok(),
+        "expected promoted methods to satisfy interface: {:?}",
+        res
+    );
+}
+
+
+#[test]
+fn ds_const_struct_field_mutation_errors() {
+    let code = r#"
+        struct Point { x: int }
+        fn f() {
+          const p = Point { x: 1 };
+          p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected const struct field mutation to fail");
+    assert!(
+        res.unwrap_err().contains("cannot assign to field of immutable value"),
+        "expected immutable value error"
+    );
+}
+
+#[test]
+fn ds_let_struct_field_mutation_ok() {
+    let code = r#"
+        struct Point { x: int }
+        fn f() {
+          let p = Point { x: 1 };
+          p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected let struct field mutation to pass: {:?}", res);
+}
+
+#[test]
+fn ds_const_struct_nested_field_mutation_errors() {
+    let code = r#"
+        struct Point { x: int }
+        struct Nested { p: Point }
+        fn f() {
+          const nested = Nested { p: Point { x: 1 } };
+          nested.p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected const struct nested field mutation to fail");
+    assert!(
+        res.unwrap_err().contains("cannot assign to field of immutable value"),
+        "expected immutable value error"
+    );
+}
+
+#[test]
+fn ds_interface_mut_field_assignment_ok() {
+    let code = r#"
+        interface Person { mut name: string }
+        fn rename(p: Person) {
+          p.name = "Bob";
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected mut interface field assignment to pass: {:?}", res);
+}
+
+#[test]
+fn ds_interface_readonly_field_assignment_errors() {
+    let code = r#"
+        interface Person { name: string }
+        fn rename(p: Person) {
+          p.name = "Bob";
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected readonly interface field assignment to fail");
+    assert!(
+        res.unwrap_err().contains("field 'name' is read-only"),
+        "expected read-only field error"
+    );
+}
+
+#[test]
+fn ds_struct_field_assignment_uses_base_mutability() {
+    let code = r#"
+        struct Point { x: int }
+        fn f() {
+          const p = Point { x: 1 };
+          p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected struct field assignment on const to fail");
+    assert!(
+        res.unwrap_err().contains("cannot assign to field of immutable value"),
+        "expected immutable value error"
+    );
 }

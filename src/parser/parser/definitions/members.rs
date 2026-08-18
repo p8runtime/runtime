@@ -1,6 +1,6 @@
 use super::super::{ParseError, Parser};
 use crate::parser::ast::{
-    AttributeGroup, ClassConst, ClassMember, FieldAnnotation,
+    AttributeGroup, ClassConst, ClassMember, FieldAnnotation, Name,
     Param, PropertyEntry, PropertyHook, PropertyHookBody, Stmt, StmtId, TraitAdaptation,
     TraitMethodRef, Type,
 };
@@ -282,22 +282,19 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             };
         }
 
-        // DekaScript trait/impl method signatures (RFD 19) drop the `function`
-        // keyword entirely: `read(max: int): Result<Bytes, Error>` rather than
-        // `public function read($max: int): Result { ... }`. This is a fresh
-        // syntax for a fresh feature -- traits have zero existing users, so
-        // there is no reason to inherit the `function`-keyword convention
-        // struct/enum still carry pending their own migration (RFD 9/RFD 10).
-        let is_bare_ds_method = self.is_ds()
-            && matches!(ctx, ClassMemberCtx::Trait | ClassMemberCtx::Impl)
-            && (self.current_token.kind == TokenKind::Identifier
-                || self.current_token.kind.is_semi_reserved())
-            && self.next_token.kind == TokenKind::OpenParen;
-
-        if self.current_token.kind == TokenKind::Function || is_bare_ds_method {
-            let used_function_keyword = self.current_token.kind == TokenKind::Function;
-            if used_function_keyword {
-                self.bump();
+        if self.current_token.kind == TokenKind::Function
+            || (self.current_token.kind == TokenKind::Fn
+                && self.is_ds()
+                && matches!(ctx, ClassMemberCtx::Interface))
+        {
+            let function_token = self.current_token;
+            self.bump();
+            if self.is_ds() && function_token.kind == TokenKind::Function {
+                self.errors.push(ParseError::with_help(
+                    function_token.span,
+                    "DekaScript uses `fn` for function declarations, not `function`",
+                    "Change `function` to `fn`.",
+                ));
             }
             let name = if self.current_token.kind == TokenKind::Identifier
                 || self.current_token.kind.is_semi_reserved()
@@ -633,18 +630,105 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             );
             let is_phpx_interface = self.is_phpx() && matches!(ctx, ClassMemberCtx::Interface);
+            // DekaScript struct embedding: a bare type name inside a struct body.
+            if self.is_ds()
+                && is_struct
+                && self.current_token.kind == TokenKind::Identifier
+                && self.next_token.kind != TokenKind::Colon
+                && self.next_token.kind != TokenKind::Question
+            {
+                let ty_start = self.current_token.span.start;
+                let ty = match self.parse_type() {
+                    Some(ty) => ty,
+                    None => {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected embedded type name",
+                        ));
+                        self.sync_to_statement_end();
+                        return ClassMember::Embed {
+                            attributes,
+                            types: &[],
+                            doc_comment,
+                            span: Span::new(start, self.current_token.span.end),
+                        };
+                    }
+                };
+                let ty_end = self.current_token.span.end;
+
+                let embed_name = match ty {
+                    Type::Name(name) => name,
+                    _ => {
+                        self.errors.push(ParseError::new(
+                            Span::new(ty_start, ty_end),
+                            "Embedded type must be a simple type name",
+                        ));
+                        Name {
+                            parts: &[],
+                            span: Span::new(ty_start, ty_end),
+                        }
+                    }
+                };
+
+                if self.current_token.kind == TokenKind::SemiColon {
+                    self.bump();
+                } else if self.current_token.kind == TokenKind::CloseBrace
+                    || (self.is_ds()
+                        && matches!(
+                            self.current_token.kind,
+                            TokenKind::Identifier | TokenKind::Variable
+                        ))
+                {
+                    // DekaScript allows embedded types to omit the trailing
+                    // semicolon before another member or the closing brace.
+                } else {
+                    self.expect_semicolon();
+                }
+
+                let end = self.current_token.span.end;
+                return ClassMember::Embed {
+                    attributes,
+                    types: self.arena.alloc_slice_copy(&[embed_name]),
+                    doc_comment,
+                    span: Span::new(start, end),
+                };
+            }
+
+            // DekaScript interface fields may be marked mutable: `mut name: Type`.
+            let is_mut_field = self.is_ds()
+                && is_phpx_interface
+                && self.current_token.kind == TokenKind::Identifier
+                && self.token_eq_ident(&self.current_token, b"mut")
+                && matches!(
+                    self.next_token.kind,
+                    TokenKind::Identifier | TokenKind::Variable
+                )
+                && (self.lookahead_kind(2) == Some(TokenKind::Colon)
+                    || (self.lookahead_kind(2) == Some(TokenKind::Question)
+                        && self.lookahead_kind(3) == Some(TokenKind::Colon)));
+            let field_name_offset = if is_mut_field { 1 } else { 0 };
+            let field_name_token = if is_mut_field {
+                self.next_token
+            } else {
+                self.current_token
+            };
             let is_field_name_token = if self.is_ds() {
                 matches!(
-                    self.current_token.kind,
+                    field_name_token.kind,
                     TokenKind::Identifier | TokenKind::Variable
                 )
             } else {
-                self.current_token.kind == TokenKind::Variable
+                field_name_token.kind == TokenKind::Variable
             };
+            let next_is_field_colon =
+                self.lookahead_kind(field_name_offset + 1) == Some(TokenKind::Colon);
+            let next_is_optional_field = self.lookahead_kind(field_name_offset + 1)
+                == Some(TokenKind::Question)
+                && self.lookahead_kind(field_name_offset + 2) == Some(TokenKind::Colon);
             if self.is_phpx()
                 && (is_struct || is_phpx_interface)
                 && is_field_name_token
-                && self.next_token.kind == TokenKind::Colon
+                && (next_is_field_colon || next_is_optional_field)
             {
                 if !modifiers.is_empty() {
                     self.errors.push(ParseError::new(
@@ -657,9 +741,28 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     ));
                 }
 
+                let is_mut = is_mut_field;
+                if is_mut_field {
+                    self.bump(); // mut
+                }
+
                 let name = self.arena.alloc(self.current_token);
-                self.bump(); // $field
-                self.bump(); // :
+                self.bump(); // field name
+
+                let mut optional = false;
+                if self.current_token.kind == TokenKind::Question {
+                    optional = true;
+                    self.bump(); // ?
+                }
+
+                if self.current_token.kind != TokenKind::Colon {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected ':' after field name",
+                    ));
+                } else {
+                    self.bump(); // :
+                }
 
                 let ty = if let Some(t) = self.parse_type() {
                     Some(self.arena.alloc(t) as &'ast Type<'ast>)
@@ -691,6 +794,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     name,
                     default,
                     annotations: self.arena.alloc_slice_copy(&annotations),
+                    optional,
+                    is_mut,
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -829,6 +934,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     name,
                     default,
                     annotations: &[],
+                    optional: false,
+                    is_mut: false,
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -860,6 +967,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         name,
                         default,
                         annotations: &[],
+                        optional: false,
+                        is_mut: false,
                         span: Span::new(
                             name.span.start,
                             default.map(|e| e.span().end).unwrap_or(name.span.end),

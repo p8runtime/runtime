@@ -1,7 +1,7 @@
-use super::{LexerMode, Parser, Token};
+use super::{LexerMode, Parser, ParserMode, Token};
 use crate::parser::ast::{
-    AttributeGroup, Catch, ClassConst, ClassKind, CqlParam, ParseError, StaticVar, Stmt, StmtId,
-    UseItem, UseKind,
+    AttributeGroup, Catch, ClassConst, ClassKind, CqlParam, ParseError, Receiver, StaticVar, Stmt,
+    StmtId, UseItem, UseKind,
 };
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
@@ -41,6 +41,44 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_ds_let();
         }
 
+        if self.is_ds()
+            && self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"impl")
+        {
+            let impl_span = self.current_token.span;
+            self.errors.push(ParseError::with_help(
+                impl_span,
+                "impl is not part of DekaScript",
+                "Use a receiver method instead: `fn (self Type) method() { ... }`.",
+            ));
+            // Recover by skipping the impl target and any trailing block so that
+            // only the primary error is reported.
+            self.bump(); // impl
+            while self.current_token.kind == TokenKind::Identifier
+                || self.current_token.kind == TokenKind::For
+            {
+                self.bump();
+            }
+            if self.current_token.kind == TokenKind::OpenBrace {
+                self.bump(); // {
+                let mut depth = 1;
+                while depth > 0 && self.current_token.kind != TokenKind::Eof {
+                    if self.current_token.kind == TokenKind::OpenBrace {
+                        depth += 1;
+                    } else if self.current_token.kind == TokenKind::CloseBrace {
+                        depth -= 1;
+                    }
+                    self.bump();
+                }
+            }
+            if self.current_token.kind == TokenKind::SemiColon {
+                self.bump();
+            }
+            return self.arena.alloc(crate::parser::ast::Stmt::Error {
+                span: impl_span,
+            });
+        }
+
         if self.current_token.kind == TokenKind::Identifier
             && self.next_token.kind == TokenKind::Colon
         {
@@ -70,15 +108,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_type_alias(top_level);
         }
 
-        // DekaScript `impl` (RFD 19) -- .ds only, contextual identifier like
-        // `struct`/`type` above, never a reserved token.
-        if self.is_ds()
-            && self.current_token.kind == TokenKind::Identifier
-            && self.token_eq_ident(&self.current_token, b"impl")
-        {
-            return self.parse_impl(doc_comment);
-        }
-
         // `cql` is a true keyword; `query` is context-sensitive (identifier unless followed by name + =)
         if self.is_phpx()
             && (self.current_token.kind == TokenKind::Cql
@@ -103,19 +132,56 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         ClassKind::Struct,
                     );
                 }
-                if self.is_phpx()
-                    && self.current_token.kind == TokenKind::Identifier
+                if self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"async")
-                    && self.next_token.kind == TokenKind::Function
+                    && ((self.is_ds() && self.next_token.kind == TokenKind::Fn)
+                        || (self.is_phpx() && self.next_token.kind == TokenKind::Function))
                 {
                     self.bump(); // async
-                    return self.parse_function(attributes, doc_comment, true);
+                    if self.is_ds() {
+                        return self.parse_ds_fn_or_receiver(attributes, doc_comment, true);
+                    } else {
+                        return self.parse_function(attributes, doc_comment, true);
+                    }
+                }
+                if self.current_token.kind == TokenKind::Identifier
+                    && self.token_eq_ident(&self.current_token, b"async")
+                    && self.mode == ParserMode::Php
+                    && self.next_token.kind == TokenKind::Function
+                {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "async functions are not allowed in PHP mode; use PHPX or DekaScript",
+                    ));
+                    self.bump(); // async
+                    return self.parse_function(attributes, doc_comment, false);
                 }
                 match self.current_token.kind {
-                    TokenKind::Function => self.parse_function(attributes, doc_comment, false),
+                    TokenKind::Function => {
+                        if self.is_ds() {
+                            self.errors.push(ParseError::with_help(
+                                self.current_token.span,
+                                "DekaScript uses `fn` for function declarations, not `function`",
+                                "Change `function` to `fn`.",
+                            ));
+                        }
+                        self.parse_function(attributes, doc_comment, false)
+                    }
+                    TokenKind::Fn if self.is_ds() => {
+                        self.parse_ds_fn_or_receiver(attributes, doc_comment, false)
+                    }
                     TokenKind::Class => self.parse_class(attributes, &[], doc_comment),
                     TokenKind::Interface => self.parse_interface(attributes, doc_comment),
-                    TokenKind::Trait => self.parse_trait(attributes, doc_comment),
+                    TokenKind::Trait => {
+                        if self.is_ds() {
+                            self.errors.push(ParseError::with_help(
+                                self.current_token.span,
+                                "trait is not part of DekaScript",
+                                "Use a receiver method instead: `fn (self Type) method() { ... }`.",
+                            ));
+                        }
+                        self.parse_trait(attributes, doc_comment)
+                    }
                     TokenKind::Enum => self.parse_enum(attributes, doc_comment),
                     TokenKind::Const => self.parse_const_stmt(attributes, doc_comment),
                     TokenKind::Final | TokenKind::Abstract | TokenKind::Readonly => {
@@ -156,12 +222,28 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             }
             TokenKind::Identifier
-                if self.is_phpx()
-                    && self.token_eq_ident(&self.current_token, b"async")
+                if self.token_eq_ident(&self.current_token, b"async")
+                    && self.mode == ParserMode::Php
                     && self.next_token.kind == TokenKind::Function =>
             {
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "async functions are not allowed in PHP mode; use PHPX or DekaScript",
+                ));
                 self.bump(); // async
-                self.parse_function(&[], doc_comment, true)
+                self.parse_function(&[], doc_comment, false)
+            }
+            TokenKind::Identifier
+                if self.token_eq_ident(&self.current_token, b"async")
+                    && ((self.is_ds() && self.next_token.kind == TokenKind::Fn)
+                        || (self.is_phpx() && self.next_token.kind == TokenKind::Function)) =>
+            {
+                self.bump(); // async
+                if self.is_ds() {
+                    self.parse_ds_fn_or_receiver(&[], doc_comment, true)
+                } else {
+                    self.parse_function(&[], doc_comment, true)
+                }
             }
             TokenKind::Final | TokenKind::Abstract | TokenKind::Readonly => {
                 let mut modifiers = std::vec::Vec::new();
@@ -255,13 +337,32 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
                 self.parse_foreach()
             }
-            TokenKind::Function => self.parse_function(&[], doc_comment, false),
+            TokenKind::Function => {
+                if self.is_ds() {
+                    self.errors.push(ParseError::with_help(
+                        self.current_token.span,
+                        "DekaScript uses `fn` for function declarations, not `function`",
+                        "Change `function` to `fn`.",
+                    ));
+                }
+                self.parse_function(&[], doc_comment, false)
+            }
+            TokenKind::Fn if self.is_ds() => self.parse_ds_fn_or_receiver(&[], doc_comment, false),
             TokenKind::Class => {
                 self.reject_ds_php_statement("Use DekaScript structs or plain object values.");
                 self.parse_class(&[], &[], doc_comment)
             }
             TokenKind::Interface => self.parse_interface(&[], doc_comment),
-            TokenKind::Trait => self.parse_trait(&[], doc_comment),
+            TokenKind::Trait => {
+                if self.is_ds() {
+                    self.errors.push(ParseError::with_help(
+                        self.current_token.span,
+                        "trait is not part of DekaScript",
+                        "Use a receiver method instead: `fn (self Type) method() { ... }`.",
+                    ));
+                }
+                self.parse_trait(&[], doc_comment)
+            }
             TokenKind::Enum => self.parse_enum(&[], doc_comment),
             TokenKind::Namespace => {
                 self.reject_ds_php_statement("Use explicit module imports and exports.");
@@ -1142,6 +1243,214 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
         self.arena.alloc(Stmt::Expression {
             expr,
+            span: Span::new(start, end),
+        })
+    }
+
+    /// Parse a DekaScript `fn` declaration: either a top-level function or a
+    /// receiver method. Falls back to an expression statement for arrow
+    /// functions at statement position.
+    fn parse_ds_fn_or_receiver(
+        &mut self,
+        attributes: &'ast [AttributeGroup<'ast>],
+        doc_comment: Option<Span>,
+        is_async: bool,
+    ) -> StmtId<'ast> {
+        if self.next_token.kind == TokenKind::Identifier && self.ds_fn_looks_like_function() {
+            self.parse_function(attributes, doc_comment, is_async)
+        } else if self.is_receiver_method_start() {
+            self.parse_receiver_method(attributes, doc_comment, is_async)
+        } else {
+            // Treat as an arrow-function expression statement.
+            let start = self.current_token.span.start;
+            let expr = self.parse_expr(0);
+            self.expect_semicolon();
+            let end = self.current_token.span.end;
+            self.arena.alloc(Stmt::Expression {
+                expr,
+                span: Span::new(start, end),
+            })
+        }
+    }
+
+    /// Returns true when the current token is `fn` followed by a function
+    /// declaration: an identifier, optional generic parameters, and then '('.
+    fn ds_fn_looks_like_function(&self) -> bool {
+        let mut i = 2;
+        if self.lookahead_kind(i) == Some(TokenKind::Lt) {
+            i += 1;
+            let mut depth: i32 = 1;
+            while depth > 0 {
+                match self.lookahead_kind(i) {
+                    Some(TokenKind::Lt) => depth += 1,
+                    Some(TokenKind::Gt) => depth -= 1,
+                    Some(TokenKind::Eof) | None => return false,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        self.lookahead_kind(i) == Some(TokenKind::OpenParen)
+    }
+
+    /// Returns true when the current token is `fn` followed by a Go-style
+    /// receiver clause: `fn (var [mut] Type) methodName(`.
+    fn is_receiver_method_start(&self) -> bool {
+        if self.current_token.kind != TokenKind::Fn
+            || self.next_token.kind != TokenKind::OpenParen
+        {
+            return false;
+        }
+        let mut depth: i32 = 1;
+        let mut i: usize = 2;
+        while depth > 0 {
+            match self.lookahead_kind(i) {
+                Some(TokenKind::OpenParen) => depth += 1,
+                Some(TokenKind::CloseParen) => depth -= 1,
+                Some(TokenKind::Eof) | None => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        self.lookahead_kind(i) == Some(TokenKind::Identifier)
+            && self.lookahead_kind(i + 1) == Some(TokenKind::OpenParen)
+    }
+
+    /// Parse a DekaScript receiver method:
+    /// `fn (p Person) greet() { ... }` or `fn (p mut Person) setName(name: string) { ... }`.
+    fn parse_receiver_method(
+        &mut self,
+        attributes: &'ast [AttributeGroup<'ast>],
+        doc_comment: Option<Span>,
+        is_async: bool,
+    ) -> StmtId<'ast> {
+        let start = if let Some(doc) = doc_comment {
+            doc.start
+        } else if let Some(first) = attributes.first() {
+            first.span.start
+        } else {
+            self.current_token.span.start
+        };
+        self.bump(); // fn
+
+        if self.current_token.kind != TokenKind::OpenParen {
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected '(' after 'fn' for receiver method",
+            ));
+            return self.arena.alloc(Stmt::Error {
+                span: Span::new(start, self.current_token.span.end),
+            });
+        }
+        let receiver_open = self.current_token.span.start;
+        self.bump(); // (
+
+        let var = if self.current_token.kind == TokenKind::Identifier {
+            let token = self.arena.alloc(self.current_token);
+            self.bump();
+            token
+        } else {
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected receiver variable name",
+            ));
+            self.arena.alloc(Token {
+                kind: TokenKind::Error,
+                span: self.current_token.span,
+            })
+        };
+
+        let is_mut = if self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"mut")
+        {
+            self.bump();
+            true
+        } else {
+            false
+        };
+
+        let ty = match self.parse_type() {
+            Some(ty) => self.arena.alloc(ty),
+            None => {
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected receiver type",
+                ));
+                self.arena.alloc(crate::parser::ast::Type::Simple(
+                    self.arena.alloc(Token {
+                        kind: TokenKind::Error,
+                        span: self.current_token.span,
+                    }),
+                ))
+            }
+        };
+
+        let receiver_close = if self.current_token.kind == TokenKind::CloseParen {
+            let span = self.current_token.span;
+            self.bump(); // )
+            span.end
+        } else {
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected ')' after receiver type",
+            ));
+            self.current_token.span.start
+        };
+        let receiver = self.arena.alloc(Receiver {
+            var,
+            is_mut,
+            ty,
+            span: Span::new(receiver_open, receiver_close),
+        });
+
+        let name = if self.current_token.kind == TokenKind::Identifier {
+            let token = self.arena.alloc(self.current_token);
+            self.bump();
+            token
+        } else {
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected method name",
+            ));
+            self.arena.alloc(Token {
+                kind: TokenKind::Error,
+                span: self.current_token.span,
+            })
+        };
+
+        let params = self.parse_parameter_list();
+        let return_type = self.parse_return_type();
+
+        let body_stmt = self.with_function_context(is_async, |parser| parser.parse_block());
+        let body: &'ast [StmtId<'ast>] = match body_stmt {
+            Stmt::Block { statements, .. } => statements,
+            _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],
+        };
+        let prologue = self.take_param_destructure_prologue();
+        let body = if prologue.is_empty() {
+            body
+        } else {
+            let mut merged = std::vec::Vec::with_capacity(prologue.len() + body.len());
+            merged.extend_from_slice(prologue);
+            merged.extend_from_slice(body);
+            self.arena.alloc_slice_copy(&merged)
+        };
+
+        let end = if body.is_empty() {
+            self.current_token.span.end
+        } else {
+            body.last().unwrap().span().end
+        };
+
+        self.arena.alloc(Stmt::ReceiverMethod {
+            attributes,
+            name,
+            is_async,
+            receiver,
+            params,
+            return_type,
+            body,
+            doc_comment,
             span: Span::new(start, end),
         })
     }
