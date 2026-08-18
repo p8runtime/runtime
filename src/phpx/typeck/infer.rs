@@ -134,6 +134,7 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                     ObjectField {
                         ty: value_ty,
                         optional: false,
+                        is_mut: false,
                     },
                 );
             }
@@ -502,6 +503,7 @@ fn object_type_fields(
                         ObjectField {
                             ty: ty.clone(),
                             optional: false,
+                            is_mut: false,
                         },
                     )
                 })

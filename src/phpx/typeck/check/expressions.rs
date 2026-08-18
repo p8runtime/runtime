@@ -612,6 +612,7 @@ impl<'a> CheckContext<'a> {
                             ObjectField {
                                 ty: field_ty.clone(),
                                 optional: false,
+                                is_mut: false,
                             },
                         )
                     })
@@ -1153,6 +1154,66 @@ impl<'a> CheckContext<'a> {
                 property,
                 span,
             } => {
+                let prop_name = token_text(self.source, property.span);
+                let target_ty = self.infer_expr_with_env(target, env);
+                match target_ty {
+                    Type::Interface(name) => {
+                        if let Some(info) = self.interfaces.get(&name) {
+                            if let Some(field) = info.fields.get(&prop_name) {
+                                if !field.is_mut {
+                                    self.errors.push(TypeError {
+                                        severity: Severity::Error,
+                                        span,
+                                        message: format!(
+                                            "field '{}' is read-only",
+                                            prop_name
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Type::ObjectShape(fields) => {
+                        if let Some(field) = fields.get(&prop_name) {
+                            if !field.is_mut {
+                                self.errors.push(TypeError {
+                                    severity: Severity::Error,
+                                    span,
+                                    message: format!(
+                                        "field '{}' is read-only",
+                                        prop_name
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    Type::Applied { base, args } if base.eq_ignore_ascii_case("Object") => {
+                        if let Some(Type::ObjectShape(fields)) = args.first() {
+                            if let Some(field) = fields.get(&prop_name) {
+                                if !field.is_mut {
+                                    self.errors.push(TypeError {
+                                        severity: Severity::Error,
+                                        span,
+                                        message: format!(
+                                            "field '{}' is read-only",
+                                            prop_name
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        if !self.expr_is_mutable(target, mut_env) {
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
+                                span,
+                                message: "cannot assign to field of immutable value"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                }
                 self.check_dot_access(target, property, span, env);
             }
             Expr::Assign { var, expr, .. } => {

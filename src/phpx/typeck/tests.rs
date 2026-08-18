@@ -1412,3 +1412,97 @@ fn ds_embed_promoted_method_satisfies_interface() {
         res
     );
 }
+
+
+#[test]
+fn ds_const_struct_field_mutation_errors() {
+    let code = r#"
+        struct Point { x: int }
+        fn f() {
+          const p = Point { x: 1 };
+          p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected const struct field mutation to fail");
+    assert!(
+        res.unwrap_err().contains("cannot assign to field of immutable value"),
+        "expected immutable value error"
+    );
+}
+
+#[test]
+fn ds_let_struct_field_mutation_ok() {
+    let code = r#"
+        struct Point { x: int }
+        fn f() {
+          let p = Point { x: 1 };
+          p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected let struct field mutation to pass: {:?}", res);
+}
+
+#[test]
+fn ds_const_struct_nested_field_mutation_errors() {
+    let code = r#"
+        struct Point { x: int }
+        struct Nested { p: Point }
+        fn f() {
+          const nested = Nested { p: Point { x: 1 } };
+          nested.p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected const struct nested field mutation to fail");
+    assert!(
+        res.unwrap_err().contains("cannot assign to field of immutable value"),
+        "expected immutable value error"
+    );
+}
+
+#[test]
+fn ds_interface_mut_field_assignment_ok() {
+    let code = r#"
+        interface Person { mut name: string }
+        fn rename(p: Person) {
+          p.name = "Bob";
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_ok(), "expected mut interface field assignment to pass: {:?}", res);
+}
+
+#[test]
+fn ds_interface_readonly_field_assignment_errors() {
+    let code = r#"
+        interface Person { name: string }
+        fn rename(p: Person) {
+          p.name = "Bob";
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected readonly interface field assignment to fail");
+    assert!(
+        res.unwrap_err().contains("field 'name' is read-only"),
+        "expected read-only field error"
+    );
+}
+
+#[test]
+fn ds_struct_field_assignment_uses_base_mutability() {
+    let code = r#"
+        struct Point { x: int }
+        fn f() {
+          const p = Point { x: 1 };
+          p.x = 2;
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected struct field assignment on const to fail");
+    assert!(
+        res.unwrap_err().contains("cannot assign to field of immutable value"),
+        "expected immutable value error"
+    );
+}

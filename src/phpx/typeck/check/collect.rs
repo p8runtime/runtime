@@ -247,18 +247,24 @@ impl<'a> CheckContext<'a> {
                                 ObjectField {
                                     ty: field_ty.clone(),
                                     optional: entry.optional,
+                                    is_mut: entry.is_mut,
                                 },
                             );
                         }
                     }
-                    ClassMember::PropertyHook { ty, name, .. } => {
+                    ClassMember::PropertyHook { ty, name, modifiers, .. } => {
                         let field_name = token_text(self.source, name.span);
                         let field_name = field_name.trim_start_matches('$').to_string();
+                        let is_mut = modifiers.iter().any(|token| {
+                            token_text(self.source, token.span)
+                                .eq_ignore_ascii_case("mut")
+                        });
                         fields.insert(
                             field_name,
                             ObjectField {
                                 ty: ty.map(|ty| self.resolve_type(ty)).unwrap_or(Type::Unknown),
                                 optional: false,
+                                is_mut,
                             },
                         );
                     }

@@ -80,6 +80,7 @@ impl<'a> CheckContext<'a> {
                         ObjectField {
                             ty,
                             optional: field.optional,
+                            is_mut: false,
                         },
                     );
                 }

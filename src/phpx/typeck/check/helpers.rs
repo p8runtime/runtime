@@ -201,6 +201,7 @@ pub(in crate::phpx::typeck::check) fn substitute_type(
                     ObjectField {
                         ty: substitute_type(&field.ty, mapping),
                         optional: field.optional,
+                        is_mut: field.is_mut,
                     },
                 );
             }
