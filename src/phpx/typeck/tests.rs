@@ -1177,6 +1177,51 @@ fn ds_receiver_method_type_checks() {
 }
 
 #[test]
+fn ds_receiver_method_body_type_error_is_caught() {
+    // Receiver method bodies must be type-checked even when the method is
+    // never called; before the fix this fell through the Stmt::ReceiverMethod
+    // arm and produced no diagnostics.
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return 123 }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected receiver method body type error: {:?}", res);
+    assert!(
+        res.unwrap_err().contains("Return type mismatch"),
+        "expected return type mismatch error"
+    );
+}
+
+#[test]
+fn ds_receiver_method_receiver_is_bound_in_body() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(): string { return p.name }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_ok(),
+        "expected receiver variable to be in scope: {:?}",
+        res
+    );
+}
+
+#[test]
+fn ds_receiver_method_param_type_error_is_caught() {
+    let code = r#"
+        struct Person { name: string }
+        fn (p Person) greet(greeting: string): string { return greeting }
+        fn f(): string {
+          const person = Person { name: "Ada" };
+          return person.greet(123);
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(res.is_err(), "expected receiver method parameter type mismatch: {:?}", res);
+}
+
+#[test]
 fn ds_mutable_receiver_on_const_errors() {
     let code = r#"
         struct Person { name: string }
@@ -1206,6 +1251,51 @@ fn ds_mutable_receiver_on_let_ok() {
     "#;
     let res = check_ds(code);
     assert!(res.is_ok(), "expected mutable receiver call on let to pass: {:?}", res);
+}
+
+#[test]
+fn ds_mutable_receiver_on_function_return_errors() {
+    // expr_is_mutable used to return true for any non-variable expression,
+    // allowing mutable receiver calls on temporary values.
+    let code = r#"
+        struct Person { name: string }
+        fn makePerson(): Person { return Person { name: "Ada" } }
+        fn (p mut Person) setName(name: string) {}
+        fn f() {
+          makePerson().setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_err(),
+        "expected mutable receiver call on function return to fail"
+    );
+    assert!(
+        res.unwrap_err().contains("mutable method"),
+        "expected mutable receiver error"
+    );
+}
+
+#[test]
+fn ds_mutable_receiver_on_immutable_param_errors() {
+    // Function parameters were unconditionally added to the mutable
+    // environment, making every parameter mutable.
+    let code = r#"
+        struct Person { name: string }
+        fn (p mut Person) setName(name: string) {}
+        fn f(person: Person) {
+          person.setName("Bob");
+        }
+    "#;
+    let res = check_ds(code);
+    assert!(
+        res.is_err(),
+        "expected mutable receiver call on immutable param to fail"
+    );
+    assert!(
+        res.unwrap_err().contains("mutable method"),
+        "expected mutable receiver error"
+    );
 }
 
 #[test]

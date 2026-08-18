@@ -282,10 +282,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             };
         }
 
-        if self.current_token.kind == TokenKind::Function {
+        if self.current_token.kind == TokenKind::Function
+            || (self.current_token.kind == TokenKind::Fn
+                && self.is_ds()
+                && matches!(ctx, ClassMemberCtx::Interface))
+        {
             let function_token = self.current_token;
             self.bump();
-            if self.is_ds() {
+            if self.is_ds() && function_token.kind == TokenKind::Function {
                 self.errors.push(ParseError::with_help(
                     function_token.span,
                     "DekaScript uses `fn` for function declarations, not `function`",
@@ -626,14 +630,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             );
             let is_phpx_interface = self.is_phpx() && matches!(ctx, ClassMemberCtx::Interface);
-            let is_field_name_token = if self.is_ds() {
-                matches!(
-                    self.current_token.kind,
-                    TokenKind::Identifier | TokenKind::Variable
-                )
-            } else {
-                self.current_token.kind == TokenKind::Variable
-            };
             // DekaScript struct embedding: a bare type name inside a struct body.
             if self.is_ds()
                 && is_struct
@@ -698,9 +694,37 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 };
             }
 
-            let next_is_field_colon = self.next_token.kind == TokenKind::Colon;
-            let next_is_optional_field = self.next_token.kind == TokenKind::Question
-                && self.lookahead_kind(2) == Some(TokenKind::Colon);
+            // DekaScript interface fields may be marked mutable: `mut name: Type`.
+            let is_mut_field = self.is_ds()
+                && is_phpx_interface
+                && self.current_token.kind == TokenKind::Identifier
+                && self.token_eq_ident(&self.current_token, b"mut")
+                && matches!(
+                    self.next_token.kind,
+                    TokenKind::Identifier | TokenKind::Variable
+                )
+                && (self.lookahead_kind(2) == Some(TokenKind::Colon)
+                    || (self.lookahead_kind(2) == Some(TokenKind::Question)
+                        && self.lookahead_kind(3) == Some(TokenKind::Colon)));
+            let field_name_offset = if is_mut_field { 1 } else { 0 };
+            let field_name_token = if is_mut_field {
+                self.next_token
+            } else {
+                self.current_token
+            };
+            let is_field_name_token = if self.is_ds() {
+                matches!(
+                    field_name_token.kind,
+                    TokenKind::Identifier | TokenKind::Variable
+                )
+            } else {
+                field_name_token.kind == TokenKind::Variable
+            };
+            let next_is_field_colon =
+                self.lookahead_kind(field_name_offset + 1) == Some(TokenKind::Colon);
+            let next_is_optional_field = self.lookahead_kind(field_name_offset + 1)
+                == Some(TokenKind::Question)
+                && self.lookahead_kind(field_name_offset + 2) == Some(TokenKind::Colon);
             if self.is_phpx()
                 && (is_struct || is_phpx_interface)
                 && is_field_name_token
@@ -715,6 +739,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             "interface fields do not use visibility modifiers in PHPX"
                         },
                     ));
+                }
+
+                let is_mut = is_mut_field;
+                if is_mut_field {
+                    self.bump(); // mut
                 }
 
                 let name = self.arena.alloc(self.current_token);
@@ -766,6 +795,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     default,
                     annotations: self.arena.alloc_slice_copy(&annotations),
                     optional,
+                    is_mut,
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -905,6 +935,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     default,
                     annotations: &[],
                     optional: false,
+                    is_mut: false,
                     span: Span::new(
                         name.span.start,
                         default.map(|e| e.span().end).unwrap_or(name.span.end),
@@ -937,6 +968,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         default,
                         annotations: &[],
                         optional: false,
+                        is_mut: false,
                         span: Span::new(
                             name.span.start,
                             default.map(|e| e.span().end).unwrap_or(name.span.end),

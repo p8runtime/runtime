@@ -928,6 +928,7 @@ pub struct PropertyEntry<'ast> {
     pub default: Option<ExprId<'ast>>,
     pub annotations: &'ast [FieldAnnotation<'ast>],
     pub optional: bool,
+    pub is_mut: bool,
     pub span: Span,
 }
 

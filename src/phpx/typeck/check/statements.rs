@@ -255,7 +255,9 @@ impl<'a> CheckContext<'a> {
                 for param in params.iter() {
                     let param_name = token_text(self.source, param.name.span);
                     let param_name = param_name.trim_start_matches('$').to_string();
-                    fn_mut_env.insert(param_name.clone());
+                    if self.param_is_mut(param) {
+                        fn_mut_env.insert(param_name.clone());
+                    }
                     if destructured_params.contains(&param_name) {
                         if let Some(ty) = param.ty {
                             let resolved = self.resolve_type_with_params(ty, &type_param_set);
@@ -355,6 +357,128 @@ impl<'a> CheckContext<'a> {
                 self.fn_depth = self.fn_depth.saturating_sub(1);
 
                 let _ = type_param_sigs;
+            }
+            Stmt::ReceiverMethod {
+                name,
+                is_async,
+                receiver,
+                params,
+                return_type: fn_return,
+                body,
+                ..
+            } => {
+                let _method_name = token_text(self.source, name.span);
+                let type_param_set = HashSet::new();
+                let mut fn_env: HashMap<String, Type> = HashMap::new();
+                let mut fn_explicit: HashSet<String> = HashSet::new();
+                let mut fn_mut_env: HashSet<String> = HashSet::new();
+
+                // Bind the receiver variable in the method body's environment.
+                let receiver_name = token_text(self.source, receiver.var.span)
+                    .trim_start_matches('$')
+                    .to_string();
+                let receiver_ty = self.resolve_type(receiver.ty);
+                fn_env.insert(receiver_name.clone(), receiver_ty);
+                fn_explicit.insert(receiver_name.clone());
+                if receiver.is_mut {
+                    fn_mut_env.insert(receiver_name);
+                }
+
+                let destructured_params = self.detect_destructured_param_carriers(params, body);
+                for param in params.iter() {
+                    let param_name = token_text(self.source, param.name.span);
+                    let param_name = param_name.trim_start_matches('$').to_string();
+                    if self.param_is_mut(param) {
+                        fn_mut_env.insert(param_name.clone());
+                    }
+                    if destructured_params.contains(&param_name) {
+                        if let Some(ty) = param.ty {
+                            let resolved = self.resolve_type_with_params(ty, &type_param_set);
+                            if let Type::Struct(ref name) = resolved {
+                                self.errors.push(TypeError { severity: Severity::Error,
+                                    span: param.span,
+                                    message: format!(
+                                        "Destructured parameter '${}' cannot use struct type '{}'; use interface '{}' or Object<{{...}}>",
+                                        param_name, name, name
+                                    ),
+                                });
+                            }
+                            let binding_ty =
+                                self.field_type_for_pattern_key(&resolved, &param_name);
+                            let binding_ty = if matches!(binding_ty, Type::Unknown) {
+                                resolved
+                            } else {
+                                binding_ty
+                            };
+                            fn_env.insert(param_name.clone(), binding_ty);
+                            fn_explicit.insert(param_name.clone());
+                        }
+                        continue;
+                    }
+                    if let Some(ty) = param.ty {
+                        let resolved = self.resolve_type_with_params(ty, &type_param_set);
+                        fn_env.insert(param_name.clone(), resolved);
+                        fn_explicit.insert(param_name.clone());
+                    } else {
+                        fn_env.insert(param_name.clone(), Type::Unknown);
+                    }
+                    if let Some(default) = param.default {
+                        if let Some(ty) = param.ty {
+                            let expected = self.resolve_type_with_params(ty, &type_param_set);
+                            let actual = self.check_expr(default, env, explicit, mut_env);
+                            if !self.is_assignable(&actual, &expected) {
+                                self.errors.push(TypeError { severity: Severity::Error,
+                                    span: param.span,
+                                    message: format!(
+                                        "Default parameter type mismatch: expected {}, got {}",
+                                        expected, actual
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                let expected_return =
+                    fn_return.map(|ty| self.resolve_type_with_params(ty, &type_param_set));
+                let body_return = if *is_async {
+                    match expected_return.as_ref() {
+                        Some(Type::Applied { base, args })
+                            if base.eq_ignore_ascii_case("Promise") =>
+                        {
+                            Some(args.first().cloned().unwrap_or(Type::Unknown))
+                        }
+                        Some(other) => {
+                            self.errors.push(TypeError { severity: Severity::Error,
+                                span: stmt.span(),
+                                message: format!(
+                                    "Async function must declare Promise<T> return type, got {}",
+                                    other
+                                ),
+                            });
+                            Some(Type::Unknown)
+                        }
+                        None => None,
+                    }
+                } else {
+                    expected_return.clone()
+                };
+                self.fn_depth += 1;
+                if *is_async {
+                    self.async_depth += 1;
+                }
+                for stmt in body.iter() {
+                    self.check_stmt(
+                        stmt,
+                        &mut fn_env,
+                        &mut fn_explicit,
+                        body_return.as_ref(),
+                        &mut fn_mut_env,
+                    );
+                }
+                if *is_async {
+                    self.async_depth = self.async_depth.saturating_sub(1);
+                }
+                self.fn_depth = self.fn_depth.saturating_sub(1);
             }
             Stmt::Class { kind, members, .. } => {
                 if *kind == ClassKind::Struct {
@@ -513,6 +637,16 @@ impl<'a> CheckContext<'a> {
             }
             _ => false,
         }
+    }
+
+    pub(in crate::phpx::typeck::check) fn param_is_mut(
+        &self,
+        param: &crate::parser::ast::Param<'a>,
+    ) -> bool {
+        param.modifiers.iter().any(|token| {
+            token_text(self.source, token.span)
+                .eq_ignore_ascii_case("mut")
+        })
     }
 }
 

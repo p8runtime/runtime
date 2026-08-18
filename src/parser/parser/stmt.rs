@@ -1,4 +1,4 @@
-use super::{LexerMode, Parser, Token};
+use super::{LexerMode, Parser, ParserMode, Token};
 use crate::parser::ast::{
     AttributeGroup, Catch, ClassConst, ClassKind, CqlParam, ParseError, Receiver, StaticVar, Stmt,
     StmtId, UseItem, UseKind,
@@ -45,15 +45,37 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             && self.current_token.kind == TokenKind::Identifier
             && self.token_eq_ident(&self.current_token, b"impl")
         {
+            let impl_span = self.current_token.span;
             self.errors.push(ParseError::with_help(
-                self.current_token.span,
+                impl_span,
                 "impl is not part of DekaScript",
-                "Use a receiver method instead: `fn (self: Type) method() { ... }`.",
+                "Use a receiver method instead: `fn (self Type) method() { ... }`.",
             ));
-            // Recover by treating the rest of the statement as an error node.
-            self.sync_to_statement_end();
+            // Recover by skipping the impl target and any trailing block so that
+            // only the primary error is reported.
+            self.bump(); // impl
+            while self.current_token.kind == TokenKind::Identifier
+                || self.current_token.kind == TokenKind::For
+            {
+                self.bump();
+            }
+            if self.current_token.kind == TokenKind::OpenBrace {
+                self.bump(); // {
+                let mut depth = 1;
+                while depth > 0 && self.current_token.kind != TokenKind::Eof {
+                    if self.current_token.kind == TokenKind::OpenBrace {
+                        depth += 1;
+                    } else if self.current_token.kind == TokenKind::CloseBrace {
+                        depth -= 1;
+                    }
+                    self.bump();
+                }
+            }
+            if self.current_token.kind == TokenKind::SemiColon {
+                self.bump();
+            }
             return self.arena.alloc(crate::parser::ast::Stmt::Error {
-                span: self.current_token.span,
+                span: impl_span,
             });
         }
 
@@ -113,7 +135,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"async")
                     && ((self.is_ds() && self.next_token.kind == TokenKind::Fn)
-                        || (!self.is_ds() && self.next_token.kind == TokenKind::Function))
+                        || (self.is_phpx() && self.next_token.kind == TokenKind::Function))
                 {
                     self.bump(); // async
                     if self.is_ds() {
@@ -121,6 +143,18 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     } else {
                         return self.parse_function(attributes, doc_comment, true);
                     }
+                }
+                if self.current_token.kind == TokenKind::Identifier
+                    && self.token_eq_ident(&self.current_token, b"async")
+                    && self.mode == ParserMode::Php
+                    && self.next_token.kind == TokenKind::Function
+                {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "async functions are not allowed in PHP mode; use PHPX or DekaScript",
+                    ));
+                    self.bump(); // async
+                    return self.parse_function(attributes, doc_comment, false);
                 }
                 match self.current_token.kind {
                     TokenKind::Function => {
@@ -143,7 +177,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                             self.errors.push(ParseError::with_help(
                                 self.current_token.span,
                                 "trait is not part of DekaScript",
-                                "Use a receiver method instead: `fn (self: Type) method() { ... }`.",
+                                "Use a receiver method instead: `fn (self Type) method() { ... }`.",
                             ));
                         }
                         self.parse_trait(attributes, doc_comment)
@@ -189,8 +223,20 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Identifier
                 if self.token_eq_ident(&self.current_token, b"async")
+                    && self.mode == ParserMode::Php
+                    && self.next_token.kind == TokenKind::Function =>
+            {
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "async functions are not allowed in PHP mode; use PHPX or DekaScript",
+                ));
+                self.bump(); // async
+                self.parse_function(&[], doc_comment, false)
+            }
+            TokenKind::Identifier
+                if self.token_eq_ident(&self.current_token, b"async")
                     && ((self.is_ds() && self.next_token.kind == TokenKind::Fn)
-                        || (!self.is_ds() && self.next_token.kind == TokenKind::Function)) =>
+                        || (self.is_phpx() && self.next_token.kind == TokenKind::Function)) =>
             {
                 self.bump(); // async
                 if self.is_ds() {
@@ -312,7 +358,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     self.errors.push(ParseError::with_help(
                         self.current_token.span,
                         "trait is not part of DekaScript",
-                        "Use a receiver method instead: `fn (self: Type) method() { ... }`.",
+                        "Use a receiver method instead: `fn (self Type) method() { ... }`.",
                     ));
                 }
                 self.parse_trait(&[], doc_comment)

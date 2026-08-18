@@ -479,7 +479,9 @@ impl<'a> CheckContext<'a> {
                     };
                     inner_env.insert(param_name.clone(), param_ty);
                     inner_explicit.insert(param_name.clone());
-                    inner_mut_env.insert(param_name);
+                    if self.param_is_mut(param) {
+                        inner_mut_env.insert(param_name);
+                    }
                 }
                 for stmt in body.iter() {
                     self.check_stmt(
@@ -507,7 +509,9 @@ impl<'a> CheckContext<'a> {
                     };
                     inner_env.insert(param_name.clone(), param_ty);
                     inner_explicit.insert(param_name.clone());
-                    inner_mut_env.insert(param_name);
+                    if self.param_is_mut(param) {
+                        inner_mut_env.insert(param_name);
+                    }
                 }
                 let _ = self.check_expr(expr, &mut inner_env, &mut inner_explicit, &mut inner_mut_env);
                 Type::Unknown
@@ -577,13 +581,19 @@ impl<'a> CheckContext<'a> {
         expr: ExprId<'a>,
         mut_env: &HashSet<String>,
     ) -> bool {
-        if let Expr::Variable { span, .. } = *expr {
-            let name = token_text(self.source, span)
-                .trim_start_matches('$')
-                .to_string();
-            return mut_env.contains(&name);
+        match *expr {
+            Expr::Variable { span, .. } => {
+                let name = token_text(self.source, span)
+                    .trim_start_matches('$')
+                    .to_string();
+                mut_env.contains(&name)
+            }
+            Expr::PropertyFetch { target, .. }
+            | Expr::NullsafePropertyFetch { target, .. }
+            | Expr::ArrayDimFetch { array: target, .. }
+            | Expr::DotAccess { target, .. } => self.expr_is_mutable(target, mut_env),
+            _ => false,
         }
-        true
     }
 
     pub(in crate::phpx::typeck::check) fn object_type_fields(
