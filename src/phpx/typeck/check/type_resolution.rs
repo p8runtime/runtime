@@ -200,9 +200,9 @@ impl<'a> CheckContext<'a> {
             "array" => Type::Array,
             "object" => Type::Object,
             "mixed" => Type::Mixed,
-            // RFD 8/decision #10: VNode is an internal type but may be named
-            // explicitly in type annotations (e.g. JSX component return types).
-            "vnode" => Type::VNode,
+            // #122: Component is the canonical name for JSX component return
+            // types. VNode and JSX are not accepted as aliases pre-launch.
+            "component" => Type::Component,
             // RFD 19: `Self` in an impl-block method signature (e.g.
             // `self: Self`). Decided but never wired in until now. Resolves
             // to Unknown rather than the precise target type -- honest v1:
@@ -346,8 +346,9 @@ impl<'a> CheckContext<'a> {
             || name.eq_ignore_ascii_case("mixed")
             || name.eq_ignore_ascii_case("option")
             || name.eq_ignore_ascii_case("result")
-            // RFD 8/decision #10: VNode is a nameable internal type.
-            || name.eq_ignore_ascii_case("vnode")
+            // #122: Component is the canonical name for JSX component return
+            // types. VNode and JSX are not accepted as aliases pre-launch.
+            || name.eq_ignore_ascii_case("component")
         {
             return true;
         }

@@ -329,19 +329,31 @@ fn jsx_vnode_not_assignable_to_int() {
 }
 
 #[test]
-fn jsx_vnode_return_type_annotation_ok() {
-    // dekaruntime/deka#93: VNode should be nameable as a return type.
-    let code = "<?php function Hero({ $name }: Object): VNode { return <div>{ $name }</div>; }";
+fn jsx_component_return_type_annotation_ok() {
+    // dekaruntime/deka#122: Component is the canonical name for JSX return
+    // types. VNode and JSX are not accepted as aliases pre-launch.
+    let code = "<?php function Hero({ $name }: Object): Component { return <div>{ $name }</div>; }";
     let res = check(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
 
 #[test]
-fn jsx_vnode_inside_generic_return_type_ok() {
-    // dekaruntime/deka#93: VNode should also resolve when nested in generics.
-    let code = "<?php async function Hero({ $name }: Object): Promise<VNode> { return <div>{ $name }</div>; }";
+fn jsx_component_inside_generic_return_type_ok() {
+    let code = "<?php async function Hero({ $name }: Object): Promise<Component> { return <div>{ $name }</div>; }";
     let res = check(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
+}
+
+#[test]
+fn jsx_vnode_alias_is_rejected() {
+    let code = "<?php function Hero({ $name }: Object): VNode { return <div>{ $name }</div>; }";
+    assert!(check(code).is_err());
+}
+
+#[test]
+fn jsx_jsx_alias_is_rejected() {
+    let code = "<?php function Hero({ $name }: Object): JSX { return <div>{ $name }</div>; }";
+    assert!(check(code).is_err());
 }
 
 #[test]
@@ -414,7 +426,7 @@ fn destructured_param_struct_type_is_rejected_with_guidance() {
 fn ds_jsx_component_destructured_param_props_are_recognized() {
     // dekaruntime/deka#93: DekaScript JSX components use bare destructured
     // params ({ name }: GreetingProps) and bare interface fields.
-    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): VNode { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -422,7 +434,7 @@ fn ds_jsx_component_destructured_param_props_are_recognized() {
 #[test]
 fn ds_jsx_component_with_separator_destructured_param_props_are_recognized() {
     // Component files separate script and template with '---'.
-    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): VNode { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } function Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }

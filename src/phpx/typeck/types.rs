@@ -18,7 +18,7 @@ pub enum Type {
     Primitive(PrimitiveType),
     Array,
     Object,
-    VNode,
+    Component,
     ObjectShape(BTreeMap<String, ObjectField>),
     Struct(String),
     Interface(String),
@@ -57,7 +57,7 @@ impl Type {
             },
             Type::Array => "array".to_string(),
             Type::Object => "object".to_string(),
-            Type::VNode => "VNode".to_string(),
+            Type::Component => "Component".to_string(),
             Type::ObjectShape(fields) => {
                 let mut out = String::from("Object<{");
                 let mut first = true;
