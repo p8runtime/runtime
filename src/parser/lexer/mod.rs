@@ -1523,8 +1523,12 @@ impl<'src> Iterator for Lexer<'src> {
                         TokenKind::Sl
                     }
                 } else if self.peek() == Some(b'>') {
-                    self.advance();
-                    TokenKind::BangEq
+                    // Do NOT tokenize "<>" as a single BangEq token. JSX fragments
+                    // start with "<>"; leaving the ">" for the next token lets the
+                    // parser recognize "<>" as two tokens (Lt, Gt) and enter
+                    // fragment parsing. PHPX/DekaScript do not rely on the "<>"
+                    // not-equal operator ("!=" is used instead).
+                    TokenKind::Lt
                 } else {
                     TokenKind::Lt
                 }
