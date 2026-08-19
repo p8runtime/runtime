@@ -197,12 +197,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump();
                 (token, None)
             };
-            if self.current_token.kind != TokenKind::Colon {
-                self.errors.push(ParseError::with_help(self.current_token.span, "DekaScript parameters require a type annotation", "Write `name: Type` (for example, `count: number`)."));
-            } else {
+            if self.current_token.kind == TokenKind::Colon {
                 self.bump();
                 ty = self.parse_type().map(|t| self.arena.alloc(t) as &'ast Type<'ast>);
                 if ty.is_none() { self.errors.push(ParseError::new(self.current_token.span, "Expected parameter type after ':'")); }
+            } else if !self.allow_optional_param_types {
+                self.errors.push(ParseError::with_help(self.current_token.span, "DekaScript parameters require a type annotation", "Write `name: Type` (for example, `count: number`)."));
             }
             let default = if self.current_token.kind == TokenKind::Eq { self.bump(); Some(self.parse_expr(0)) } else { None };
             let end = default.map_or(param_name.span.end, |expr| expr.span().end);

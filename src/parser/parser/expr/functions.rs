@@ -82,7 +82,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             false
         };
 
+        let prev_allow_optional = self.allow_optional_param_types;
+        self.allow_optional_param_types = true;
         let params = self.parse_parameter_list();
+        self.allow_optional_param_types = prev_allow_optional;
         let return_type = self.parse_return_type();
         if self.current_token.kind == TokenKind::DoubleArrow {
             self.bump();
@@ -103,6 +106,92 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             is_async,
             is_static,
             by_ref,
+            params,
+            return_type,
+            expr,
+            span: Span::new(start, end),
+        })
+    }
+
+    /// Scans ahead from an opening `(` to decide whether the parenthesised
+    /// expression is actually a JS/TS-style arrow function parameter list.
+    ///
+    /// Returns true when the matching `)` is followed by `=>`, or by `: Type =>`.
+    pub(in crate::parser::parser) fn looks_like_parenthesized_arrow_function(&self) -> bool {
+        if !self.is_ds() {
+            return false;
+        }
+        let mut depth: i32 = 1;
+        let mut i: usize = 1;
+        while depth > 0 {
+            match self.lookahead_kind(i) {
+                Some(TokenKind::OpenParen) => depth += 1,
+                Some(TokenKind::CloseParen) => depth -= 1,
+                Some(TokenKind::Eof) | None => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        // `i` now points at the first token after the matching `)`.
+        let mut j = i;
+        if self.lookahead_kind(j) == Some(TokenKind::Colon) {
+            j += 1;
+            let mut type_depth: i32 = 0;
+            loop {
+                match self.lookahead_kind(j) {
+                    Some(TokenKind::Lt)
+                    | Some(TokenKind::OpenParen)
+                    | Some(TokenKind::OpenBracket) => type_depth += 1,
+                    Some(TokenKind::Gt)
+                    | Some(TokenKind::CloseParen)
+                    | Some(TokenKind::CloseBracket) => type_depth -= 1,
+                    Some(TokenKind::DoubleArrow) if type_depth == 0 => return true,
+                    Some(TokenKind::SemiColon)
+                    | Some(TokenKind::Comma)
+                    | Some(TokenKind::CloseBrace)
+                    | Some(TokenKind::Eof)
+                    | None => return false,
+                    _ => {}
+                }
+                j += 1;
+                if j > i + 128 {
+                    return false;
+                }
+            }
+        } else {
+            self.lookahead_kind(j) == Some(TokenKind::DoubleArrow)
+        }
+    }
+
+    /// Parses a JS/TS-style parenthesised arrow function: `(a, b) => a + b`.
+    pub(in crate::parser::parser) fn parse_parenthesized_arrow_function(
+        &mut self,
+        attributes: &'ast [AttributeGroup<'ast>],
+        start: usize,
+    ) -> ExprId<'ast> {
+        let prev_allow_optional = self.allow_optional_param_types;
+        self.allow_optional_param_types = true;
+        let params = self.parse_parameter_list();
+        self.allow_optional_param_types = prev_allow_optional;
+        let return_type = self.parse_return_type();
+        if self.current_token.kind == TokenKind::DoubleArrow {
+            self.bump();
+        }
+        let prologue = self.take_param_destructure_prologue();
+        if !prologue.is_empty() {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Arrow functions do not support parameter destructuring yet",
+                "Use a closure with a block body for destructuring parameters.",
+            ));
+        }
+        let expr = self.with_function_context(false, |parser| parser.parse_expr(0));
+        let end = expr.span().end;
+        self.arena.alloc(Expr::ArrowFunction {
+            attributes,
+            is_async: false,
+            is_static: false,
+            by_ref: false,
             params,
             return_type,
             expr,

@@ -1564,6 +1564,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             }
             TokenKind::OpenParen => {
+                if self.looks_like_parenthesized_arrow_function() {
+                    let start = token.span.start;
+                    return self.parse_parenthesized_arrow_function(attributes, start);
+                }
                 self.bump();
                 let expr = self.parse_expr(0);
                 if self.current_token.kind == TokenKind::CloseParen {
