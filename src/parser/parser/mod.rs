@@ -41,6 +41,9 @@ pub struct Parser<'src, 'ast> {
     pub(super) async_fn_depth: usize,
     /// A declared DekaScript `array` function may be called despite PHP's keyword token.
     pub(super) ds_array_callable_declared: bool,
+    /// When true, DekaScript parameters may omit their type annotation.
+    /// Used for arrow-function parameters while the type inference system is immature.
+    pub(super) allow_optional_param_types: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +123,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             fn_depth: 0,
             async_fn_depth: 0,
             ds_array_callable_declared: false,
+            allow_optional_param_types: false,
         };
         parser.bump();
         parser.bump();

@@ -1260,6 +1260,42 @@ fn ds_async_fn_parses() {
 }
 
 #[test]
+fn ds_parses_parenthesized_arrow_function_with_types() {
+    let code = "const f = (n: int): int => n * 2;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+}
+
+#[test]
+fn ds_parses_parenthesized_arrow_function_without_types() {
+    let code = "const f = (n) => n * 2;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+}
+
+#[test]
+fn ds_parses_parenthesized_arrow_function_with_multiple_params() {
+    let code = "const add = (left: number, right: number): number => left + right;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+}
+
+#[test]
+fn ds_grouped_expression_without_arrow_still_parses() {
+    let code = "const n = (1 + 2) * 3;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+}
+
+#[test]
 fn ds_rejects_function_keyword() {
     let code = "function add(a: int, b: int): int { return a + b; }";
     let arena = Bump::new();
