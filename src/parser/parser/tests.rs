@@ -1101,6 +1101,39 @@ fn ds_parses_js_style_enum_body_with_payload() {
 }
 
 #[test]
+fn ds_parses_js_style_enum_body_with_non_generic_payload() {
+    let code = "enum Msg { Text(string), Ping }";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+
+    assert!(program.errors.is_empty(), "errors: {:?}", program.errors);
+
+    let stmt = program
+        .statements
+        .iter()
+        .find(|s| matches!(***s, Stmt::Enum { .. }))
+        .expect("expected enum stmt");
+
+    match **stmt {
+        Stmt::Enum { members, .. } => {
+            assert_eq!(members.len(), 2);
+            match members[0] {
+                ClassMember::Case { payload: Some(payload), .. } => {
+                    assert_eq!(payload.len(), 1);
+                }
+                _ => panic!("expected Text to have a payload"),
+            }
+            match members[1] {
+                ClassMember::Case { payload: None, .. } => {}
+                _ => panic!("expected Ping to have no payload"),
+            }
+        }
+        _ => panic!("expected enum stmt"),
+    }
+}
+
+#[test]
 fn phpx_accepts_case_form_enum_body() {
     // Backward compatibility: PHPX mode still accepts PHP-style `case Name;`
     // enum members.

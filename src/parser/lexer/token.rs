@@ -344,4 +344,21 @@ impl TokenKind {
                 | TokenKind::NsC
         )
     }
+
+    /// If this token is a PHP cast token such as `(string)` or `(int)`, return
+    /// the corresponding primitive type token kind. This is used by the
+    /// DekaScript parser where `(type)` in an enum payload is a type
+    /// annotation rather than a cast expression.
+    pub fn cast_to_type_kind(self) -> Option<TokenKind> {
+        Some(match self {
+            TokenKind::IntCast => TokenKind::TypeInt,
+            TokenKind::FloatCast => TokenKind::TypeFloat,
+            TokenKind::StringCast => TokenKind::TypeString,
+            TokenKind::BoolCast => TokenKind::TypeBool,
+            TokenKind::ArrayCast => TokenKind::Array,
+            TokenKind::ObjectCast => TokenKind::TypeObject,
+            TokenKind::VoidCast => TokenKind::TypeVoid,
+            _ => return None,
+        })
+    }
 }
