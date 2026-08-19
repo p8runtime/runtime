@@ -1014,6 +1014,54 @@ fn ds_enum_generic_payload_mismatch_errors() {
 }
 
 #[test]
+fn ds_enum_non_generic_payload_typechecks() {
+    let code = r#"
+        enum Msg { Text(string), Ping }
+        fn getMsg(): Msg { return Msg::Text("hi"); }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_enum_non_generic_payload_mismatch_errors() {
+    let code = r#"
+        enum Msg { Text(string), Ping }
+        fn getMsg(): Msg { return Msg::Text(123); }
+    "#;
+    assert!(check_ds(code).is_err());
+}
+
+#[test]
+fn ds_enum_match_destructures_non_generic_payload() {
+    // DekaScript enum payloads are anonymous; the compiler uses the type text
+    // as the synthetic field name so the typechecker can narrow it.
+    let code = r#"
+        enum Msg { Text(string), Ping }
+        fn body(m: Msg): string {
+            return match (m) {
+                Msg::Text => m.string,
+                Msg::Ping => "ok",
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_enum_match_non_generic_payload_field_outside_arm_errors() {
+    let code = r#"
+        enum Msg { Text(string), Ping }
+        fn body(m: Msg): string {
+            return match (m) {
+                Msg::Text => "ok",
+                Msg::Ping => m.string,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_err());
+}
+
+#[test]
 fn ds_enum_match_exhaustive_on_js_style_enum() {
     let code = r#"
         enum Status { Loading, Ready, Failed }

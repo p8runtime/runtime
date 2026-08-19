@@ -1187,6 +1187,36 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     /// back at the type text so the emitter and typechecker have a stable
     /// runtime identifier.
     pub(in crate::parser::parser) fn parse_ds_enum_payload(&mut self) -> Option<&'ast [Param<'ast>]> {
+        // The PHP lexer merges `(string)`, `(int)`, etc. into a single cast token.
+        // In DekaScript enum payloads these are type annotations, not casts, so
+        // treat the cast token as a one-item payload and synthesize the
+        // corresponding primitive type.
+        if let Some(ty_kind) = self.current_token.kind.cast_to_type_kind() {
+            let cast_span = self.current_token.span;
+            // The cast token spans `(string)`; the type text is the inner part.
+            let type_span = Span::new(cast_span.start + 1, cast_span.end.saturating_sub(1));
+            self.bump();
+            let ty = self.arena.alloc(Type::Simple(self.arena.alloc(Token {
+                kind: ty_kind,
+                span: type_span,
+            })));
+            let name = self.arena.alloc(Token {
+                kind: TokenKind::Variable,
+                span: type_span,
+            });
+            return Some(self.arena.alloc_slice_copy(&[Param {
+                attributes: &[],
+                modifiers: &[],
+                name,
+                ty: Some(ty),
+                default: None,
+                by_ref: false,
+                variadic: false,
+                hooks: None,
+                span: type_span,
+            }]));
+        }
+
         if self.current_token.kind != TokenKind::OpenParen {
             return None;
         }
