@@ -264,6 +264,28 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             }
             Type::Unknown
         }
+        Expr::Closure {
+            params,
+            return_type,
+            ..
+        } => {
+            let param_types = params
+                .iter()
+                .map(|param| {
+                    param
+                        .ty
+                        .map(|ty| resolve_ast_type(ctx, ty))
+                        .unwrap_or(Type::Unknown)
+                })
+                .collect();
+            let return_ty = return_type
+                .map(|ty| resolve_ast_type(ctx, ty))
+                .unwrap_or(Type::Unknown);
+            Type::Function {
+                params: param_types,
+                return_type: Box::new(return_ty),
+            }
+        }
         Expr::Await { expr, .. } => {
             let awaited = infer_expr(expr, ctx);
             match awaited {
@@ -280,6 +302,9 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             let right_ty = infer_expr(right, ctx);
             if *op == BinaryOp::Coalesce {
                 return merge_types(&left_ty, &right_ty);
+            }
+            if *op == BinaryOp::Pipe {
+                return infer_pipe_call(right, ctx);
             }
             infer_binary_op(*op, &left_ty, &right_ty)
         }
@@ -476,6 +501,29 @@ fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
     }
 }
 
+fn infer_pipe_call(right: &Expr, ctx: &InferContext) -> Type {
+    // `a |> f(b, c)` desugars to `f(a, b, c)`. The RHS may be a call whose
+    // callee is the function, or just a bare function reference.
+    let func_expr = match right {
+        Expr::Call { func, .. } => func,
+        _ => right,
+    };
+    if let Expr::Variable { span, .. } = func_expr {
+        let name = token_text(ctx.source, *span);
+        if !name.starts_with('$') {
+            if let Some(ret) = ctx.functions.get(&name) {
+                return ret.clone();
+            }
+        }
+    }
+    if let Expr::Closure { return_type, .. } = func_expr {
+        return return_type
+            .map(|ty| resolve_ast_type(ctx, ty))
+            .unwrap_or(Type::Unknown);
+    }
+    Type::Unknown
+}
+
 pub fn literal_type(expr: &Expr) -> Option<Type> {
     match expr {
         Expr::Integer { .. } => Some(Type::Primitive(PrimitiveType::Int)),
@@ -642,4 +690,56 @@ fn infer_enum_case_field(
         return Type::Unknown;
     };
     param.ty.clone().unwrap_or(Type::Unknown)
+}
+
+fn resolve_ast_type(ctx: &InferContext, ty: &crate::parser::ast::Type) -> Type {
+    use crate::parser::ast::Type as AstType;
+    use crate::parser::lexer::token::TokenKind;
+    match ty {
+        AstType::Simple(token) => match token.kind {
+            TokenKind::TypeInt => Type::Primitive(PrimitiveType::Int),
+            TokenKind::TypeString => Type::Primitive(PrimitiveType::String),
+            TokenKind::TypeBool => Type::Primitive(PrimitiveType::Bool),
+            TokenKind::TypeFloat => Type::Primitive(PrimitiveType::Float),
+            TokenKind::TypeBytes => Type::Primitive(PrimitiveType::Bytes),
+            TokenKind::TypeNull => Type::Primitive(PrimitiveType::Null),
+            _ => Type::Unknown,
+        },
+        AstType::Name(name) => {
+            let text = name
+                .parts
+                .iter()
+                .map(|part| token_text(ctx.source, part.span))
+                .collect::<Vec<_>>()
+                .join("\\");
+            match text.to_ascii_lowercase().as_str() {
+                "int" | "integer" | "number" => Type::Primitive(PrimitiveType::Int),
+                "float" | "double" => Type::Primitive(PrimitiveType::Float),
+                "bool" | "boolean" => Type::Primitive(PrimitiveType::Bool),
+                "string" => Type::Primitive(PrimitiveType::String),
+                "bytes" => Type::Primitive(PrimitiveType::Bytes),
+                "null" => Type::Primitive(PrimitiveType::Null),
+                _ => Type::Unknown,
+            }
+        }
+        AstType::Applied { base, args } => {
+            if let AstType::Simple(token) = base {
+                let name = token_text(ctx.source, token.span).to_ascii_lowercase();
+                if name == "array" && args.len() == 1 {
+                    return Type::Applied {
+                        base: "array".to_string(),
+                        args: vec![resolve_ast_type(ctx, &args[0])],
+                    };
+                }
+                if name == "option" && args.len() == 1 {
+                    return Type::Applied {
+                        base: "Option".to_string(),
+                        args: vec![resolve_ast_type(ctx, &args[0])],
+                    };
+                }
+            }
+            Type::Unknown
+        }
+        _ => Type::Unknown,
+    }
 }

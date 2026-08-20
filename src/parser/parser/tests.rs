@@ -1260,8 +1260,8 @@ fn ds_async_fn_parses() {
 }
 
 #[test]
-fn ds_parses_parenthesized_arrow_function_with_types() {
-    let code = "const f = (n: int): int => n * 2;";
+fn ds_parses_function_literal_with_types() {
+    let code = "const f = fn(n: int) int { return n * 2 };";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
@@ -1269,8 +1269,8 @@ fn ds_parses_parenthesized_arrow_function_with_types() {
 }
 
 #[test]
-fn ds_parses_parenthesized_arrow_function_without_types() {
-    let code = "const f = (n) => n * 2;";
+fn ds_parses_function_literal_without_return_type() {
+    let code = "const f = fn(n: int) { return n * 2 };";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
@@ -1278,8 +1278,26 @@ fn ds_parses_parenthesized_arrow_function_without_types() {
 }
 
 #[test]
-fn ds_parses_parenthesized_arrow_function_with_multiple_params() {
-    let code = "const add = (left: number, right: number): number => left + right;";
+fn ds_parses_function_literal_with_multiple_params() {
+    let code = "const add = fn(left: number, right: number) number { return left + right };";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+}
+
+#[test]
+fn ds_parses_function_type_alias() {
+    let code = "type Adder = fn(int, int) int;";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
+}
+
+#[test]
+fn ds_parses_higher_order_function_type_param() {
+    let code = "const apply = fn(n: int, f: fn(int) int) int {\n  return f(n);\n};";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();

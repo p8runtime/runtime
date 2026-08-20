@@ -1125,6 +1125,11 @@ pub enum Type<'ast> {
         base: &'ast Type<'ast>,
         args: &'ast [Type<'ast>],
     },
+    /// A DekaScript function type: `fn(int, int) int`.
+    Function {
+        params: &'ast [Type<'ast>],
+        return_type: &'ast Type<'ast>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

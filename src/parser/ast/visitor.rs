@@ -655,6 +655,12 @@ pub fn walk_type<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'ast Typ
                 visitor.visit_type(arg);
             }
         }
+        Type::Function { params, return_type } => {
+            for param in params.iter() {
+                visitor.visit_type(param);
+            }
+            visitor.visit_type(return_type);
+        }
     }
 }
 

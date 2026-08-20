@@ -63,16 +63,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         // Params
         let params = self.parse_parameter_list();
 
-        let return_type = if self.current_token.kind == TokenKind::Colon {
-            self.bump();
-            if let Some(t) = self.parse_type() {
-                Some(self.arena.alloc(t) as &'ast Type<'ast>)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let return_type = self.parse_return_type();
 
         // Body
         let body_stmt = self.with_function_context(is_async, |parser| parser.parse_stmt()); // Should be a block
