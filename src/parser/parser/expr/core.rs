@@ -834,7 +834,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     token.span.start
                 };
                 self.bump();
-                self.parse_arrow_function(attributes, false, false, start)
+                if self.is_ds() {
+                    self.parse_ds_function_literal(attributes, false, false, start)
+                } else {
+                    self.parse_arrow_function(attributes, false, false, start)
+                }
             }
             TokenKind::Static => {
                 let start = if let Some(first) = attributes.first() {
@@ -850,7 +854,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     }
                     TokenKind::Fn => {
                         self.bump();
-                        self.parse_arrow_function(attributes, false, true, start)
+                        if self.is_ds() {
+                            self.parse_ds_function_literal(attributes, false, true, start)
+                        } else {
+                            self.parse_arrow_function(attributes, false, true, start)
+                        }
                     }
                     TokenKind::DoubleColon => {
                         // static scope resolution (e.g., static::CONST)

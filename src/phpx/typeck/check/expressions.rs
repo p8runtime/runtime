@@ -475,10 +475,16 @@ impl<'a> CheckContext<'a> {
                 });
                 Type::Unknown
             }
-            Expr::Closure { params, body, .. } => {
+            Expr::Closure {
+                params,
+                body,
+                return_type,
+                ..
+            } => {
                 let mut inner_env = env.clone();
                 let mut inner_explicit = explicit.clone();
                 let mut inner_mut_env = mut_env.clone();
+                let mut param_types = Vec::with_capacity(params.len());
                 for param in params.iter() {
                     let param_name = token_text(self.source, param.name.span)
                         .trim_start_matches('$')
@@ -488,6 +494,7 @@ impl<'a> CheckContext<'a> {
                     } else {
                         Type::Unknown
                     };
+                    param_types.push(param_ty.clone());
                     inner_env.insert(param_name.clone(), param_ty);
                     inner_explicit.insert(param_name.clone());
                     if self.param_is_mut(param) {
@@ -503,12 +510,19 @@ impl<'a> CheckContext<'a> {
                         &mut inner_mut_env,
                     );
                 }
-                Type::Unknown
+                let return_ty = return_type
+                    .map(|ty| self.resolve_type(ty))
+                    .unwrap_or(Type::Unknown);
+                Type::Function {
+                    params: param_types,
+                    return_type: Box::new(return_ty),
+                }
             }
             Expr::ArrowFunction { params, expr, .. } => {
                 let mut inner_env = env.clone();
                 let mut inner_explicit = explicit.clone();
                 let mut inner_mut_env = mut_env.clone();
+                let mut param_types = Vec::with_capacity(params.len());
                 for param in params.iter() {
                     let param_name = token_text(self.source, param.name.span)
                         .trim_start_matches('$')
@@ -518,14 +532,19 @@ impl<'a> CheckContext<'a> {
                     } else {
                         Type::Unknown
                     };
+                    param_types.push(param_ty.clone());
                     inner_env.insert(param_name.clone(), param_ty);
                     inner_explicit.insert(param_name.clone());
                     if self.param_is_mut(param) {
                         inner_mut_env.insert(param_name);
                     }
                 }
-                let _ = self.check_expr(expr, &mut inner_env, &mut inner_explicit, &mut inner_mut_env);
-                Type::Unknown
+                let body_ty =
+                    self.check_expr(expr, &mut inner_env, &mut inner_explicit, &mut inner_mut_env);
+                Type::Function {
+                    params: param_types,
+                    return_type: Box::new(body_ty),
+                }
             }
             Expr::Await { expr, span } => {
                 if self.fn_depth > 0 && self.async_depth == 0 {

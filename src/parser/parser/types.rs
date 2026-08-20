@@ -1,6 +1,7 @@
-use super::Parser;
+use super::{Parser, ParserMode};
 use crate::parser::ast::{ObjectShapeField, Type};
-use crate::parser::lexer::token::TokenKind;
+use crate::parser::lexer::token::{Token, TokenKind};
+use crate::parser::span::Span;
 
 impl<'src, 'ast> Parser<'src, 'ast> {
     fn parse_type_atomic(&mut self) -> Option<Type<'ast>> {
@@ -22,8 +23,18 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         {
             self.bump(); // consume 'Object'
             self.parse_object_shape_type()
-        } else if self.is_phpx() && self.current_token.kind == TokenKind::OpenBrace {
+        } else if matches!(self.mode, ParserMode::Phpx | ParserMode::PhpxInternal)
+            && self.current_token.kind == TokenKind::OpenBrace
+        {
             self.parse_object_shape_fields()
+        } else if self.is_ds() && self.current_token.kind == TokenKind::Fn {
+            self.bump(); // consume 'fn'
+            let params = self.parse_function_type_params()?;
+            let return_type = self.parse_function_type_return()?;
+            Some(Type::Function {
+                params,
+                return_type,
+            })
         } else if self.current_token.kind == TokenKind::OpenParen {
             self.bump();
             let ty = self.parse_type()?;
@@ -78,6 +89,63 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             ty
         })
+    }
+
+    fn parse_function_type_params(&mut self) -> Option<&'ast [Type<'ast>]> {
+        // PHP's lexer tokenises `(int)` as a single cast token. In a
+        // DekaScript function type such as `fn(int) int`, treat that token as
+        // the parameter type `int` without requiring an opening '('.
+        if self.is_ds() {
+            if let Some(type_kind) = self.current_token.kind.cast_to_type_kind() {
+                // PHP's lexer tokenises `(int)` as a single cast token. In a
+                // DekaScript function type such as `fn(int) int`, treat that
+                // token as the parameter type `int`.
+                let cast_span = self.current_token.span;
+                self.bump();
+                let inner_span = Span::new(cast_span.start + 1, cast_span.end - 1);
+                let ty = Type::Simple(
+                    self.arena.alloc(Token {
+                        kind: type_kind,
+                        span: inner_span,
+                    }),
+                );
+                return Some(self.arena.alloc_slice_copy(&[ty]));
+            }
+        }
+
+        if self.current_token.kind != TokenKind::OpenParen {
+            return None;
+        }
+        self.bump(); // consume '('
+        let mut params = bumpalo::collections::Vec::new_in(self.arena);
+        while self.current_token.kind != TokenKind::CloseParen
+            && self.current_token.kind != TokenKind::Eof
+        {
+            if let Some(param) = self.parse_type() {
+                params.push(param);
+            } else {
+                break;
+            }
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+                continue;
+            }
+            break;
+        }
+        if self.current_token.kind == TokenKind::CloseParen {
+            self.bump();
+        }
+        Some(params.into_bump_slice())
+    }
+
+    fn parse_function_type_return(&mut self) -> Option<&'ast Type<'ast>> {
+        // DekaScript function types use a return type without a colon:
+        // `fn(int, int) int`.
+        if let Some(ty) = self.parse_type() {
+            Some(self.arena.alloc(ty))
+        } else {
+            None
+        }
     }
 
     fn parse_object_shape_type(&mut self) -> Option<Type<'ast>> {

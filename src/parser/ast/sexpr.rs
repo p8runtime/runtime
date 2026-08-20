@@ -1552,6 +1552,16 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 }
                 self.write(")");
             }
+            Type::Function { params, return_type } => {
+                self.write("(function-type");
+                for param in *params {
+                    self.write(" ");
+                    self.visit_type(param);
+                }
+                self.write(" => ");
+                self.visit_type(return_type);
+                self.write(")");
+            }
         }
     }
 

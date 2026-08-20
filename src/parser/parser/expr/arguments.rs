@@ -457,7 +457,19 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     pub(crate) fn parse_return_type(&mut self) -> Option<&'ast Type<'ast>> {
-        if self.current_token.kind == TokenKind::Colon {
+        if self.is_ds() {
+            // DekaScript function return types are written without a colon.
+            // Accept an optional colon for backward compatibility with existing
+            // DekaScript sources, then parse the type if present.
+            if self.current_token.kind == TokenKind::Colon {
+                self.bump();
+            }
+            if let Some(t) = self.parse_type() {
+                Some(self.arena.alloc(t) as &'ast Type<'ast>)
+            } else {
+                None
+            }
+        } else if self.current_token.kind == TokenKind::Colon {
             self.bump();
             if let Some(t) = self.parse_type() {
                 Some(self.arena.alloc(t) as &'ast Type<'ast>)

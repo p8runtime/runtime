@@ -93,6 +93,20 @@ impl<'a> CheckContext<'a> {
                 }
                 Type::ObjectShape(map)
             }
+            AstType::Function {
+                params: fn_params,
+                return_type,
+            } => {
+                let resolved_params = fn_params
+                    .iter()
+                    .map(|ty| self.resolve_type_internal(ty, visiting, params))
+                    .collect();
+                let resolved_return = self.resolve_type_internal(return_type, visiting, params);
+                Type::Function {
+                    params: resolved_params,
+                    return_type: Box::new(resolved_return),
+                }
+            }
             AstType::Applied { base, args } => {
                 let base_name = match self.base_type_name(base) {
                     Some(name) => name,
@@ -167,6 +181,7 @@ impl<'a> CheckContext<'a> {
             AstType::ObjectShape(fields) => {
                 fields.first().map(|field| field.span).unwrap_or_default()
             }
+            AstType::Function { return_type, .. } => self.type_span(return_type),
             AstType::Applied { base, .. } => self.type_span(base),
         }
     }

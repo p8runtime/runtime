@@ -1261,9 +1261,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else if self.is_receiver_method_start() {
             self.parse_receiver_method(attributes, doc_comment, is_async)
         } else {
-            // Treat as an arrow-function expression statement.
+            // Treat as a DekaScript function literal expression statement.
             let start = self.current_token.span.start;
-            let expr = self.parse_expr(0);
+            self.bump(); // consume 'fn'
+            let expr = self.parse_ds_function_literal(&[], false, false, start);
             self.expect_semicolon();
             let end = self.current_token.span.end;
             self.arena.alloc(Stmt::Expression {

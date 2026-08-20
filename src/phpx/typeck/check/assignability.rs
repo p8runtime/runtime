@@ -306,6 +306,23 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
                     .zip(args_b.iter())
                     .all(|(a, b)| is_assignable_base(a, b))
         }
+        (
+            Type::Function {
+                params: params_a,
+                return_type: ret_a,
+            },
+            Type::Function {
+                params: params_b,
+                return_type: ret_b,
+            },
+        ) => {
+            params_a.len() == params_b.len()
+                && params_a
+                    .iter()
+                    .zip(params_b.iter())
+                    .all(|(a, b)| is_assignable_base(a, b))
+                && is_assignable_base(ret_a, ret_b)
+        }
         (Type::Array, Type::Applied { base, .. }) if base.eq_ignore_ascii_case("array") => true,
         (Type::Applied { base, .. }, Type::Array) if base.eq_ignore_ascii_case("array") => true,
         (Type::ObjectShape(_), Type::Object)

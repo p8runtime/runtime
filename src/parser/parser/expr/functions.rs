@@ -63,6 +63,47 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         })
     }
 
+    /// Parse a DekaScript function literal: `fn(x: int) int { return x * 2 }`.
+    /// The `fn` keyword has already been consumed.
+    pub(in crate::parser::parser) fn parse_ds_function_literal(
+        &mut self,
+        attributes: &'ast [AttributeGroup<'ast>],
+        is_async: bool,
+        is_static: bool,
+        start: usize,
+    ) -> ExprId<'ast> {
+        let params = self.parse_parameter_list();
+        let return_type = self.parse_return_type();
+
+        let body_stmt = self.with_function_context(is_async, |parser| parser.parse_block());
+        let raw_body: &'ast [StmtId<'ast>] = match body_stmt {
+            Stmt::Block { statements, .. } => statements,
+            _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],
+        };
+        let prologue = self.take_param_destructure_prologue();
+        let body = if prologue.is_empty() {
+            raw_body
+        } else {
+            let mut merged = std::vec::Vec::with_capacity(prologue.len() + raw_body.len());
+            merged.extend_from_slice(prologue);
+            merged.extend_from_slice(raw_body);
+            self.arena.alloc_slice_copy(&merged)
+        };
+
+        let end = self.current_token.span.end;
+        self.arena.alloc(Expr::Closure {
+            attributes,
+            is_async,
+            is_static,
+            by_ref: false,
+            params,
+            uses: &[],
+            return_type,
+            body,
+            span: Span::new(start, end),
+        })
+    }
+
     pub(in crate::parser::parser) fn parse_arrow_function(
         &mut self,
         attributes: &'ast [AttributeGroup<'ast>],
@@ -117,8 +158,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     /// expression is actually a JS/TS-style arrow function parameter list.
     ///
     /// Returns true when the matching `)` is followed by `=>`, or by `: Type =>`.
+    /// DekaScript does not allow parenthesised arrow functions.
     pub(in crate::parser::parser) fn looks_like_parenthesized_arrow_function(&self) -> bool {
-        if !self.is_ds() {
+        if self.is_ds() {
             return false;
         }
         let mut depth: i32 = 1;

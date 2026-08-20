@@ -34,6 +34,10 @@ pub enum Type {
         base: String,
         args: Vec<Type>,
     },
+    Function {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +104,10 @@ impl Type {
             Type::Applied { base, args } => {
                 let rendered = args.iter().map(|t| t.name()).collect::<Vec<_>>();
                 format!("{base}<{}>", rendered.join(", "))
+            }
+            Type::Function { params, return_type } => {
+                let rendered = params.iter().map(|t| t.name()).collect::<Vec<_>>();
+                format!("fn({}) {}", rendered.join(", "), return_type.name())
             }
         }
     }
