@@ -630,6 +630,73 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             );
             let is_phpx_interface = self.is_phpx() && matches!(ctx, ClassMemberCtx::Interface);
+            // DekaScript explicit embedding: `embed TypeName;`.
+            if self.is_ds()
+                && is_struct
+                && self.current_token.kind == TokenKind::Identifier
+                && self.token_eq_ident(&self.current_token, b"embed")
+                && self.next_token.kind == TokenKind::Identifier
+                && self.next_token.kind != TokenKind::Colon
+                && self.next_token.kind != TokenKind::Question
+            {
+                self.bump(); // consume `embed`
+                let ty_start = self.current_token.span.start;
+                let ty = match self.parse_type() {
+                    Some(ty) => ty,
+                    None => {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected embedded type name after 'embed'",
+                        ));
+                        self.sync_to_statement_end();
+                        return ClassMember::Embed {
+                            attributes,
+                            types: &[],
+                            doc_comment,
+                            span: Span::new(start, self.current_token.span.end),
+                        };
+                    }
+                };
+                let ty_end = self.current_token.span.end;
+
+                let embed_name = match ty {
+                    Type::Name(name) => name,
+                    _ => {
+                        self.errors.push(ParseError::new(
+                            Span::new(ty_start, ty_end),
+                            "Embedded type must be a simple type name",
+                        ));
+                        Name {
+                            parts: &[],
+                            span: Span::new(ty_start, ty_end),
+                        }
+                    }
+                };
+
+                if self.current_token.kind == TokenKind::SemiColon {
+                    self.bump();
+                } else if self.current_token.kind == TokenKind::CloseBrace
+                    || (self.is_ds()
+                        && matches!(
+                            self.current_token.kind,
+                            TokenKind::Identifier | TokenKind::Variable
+                        ))
+                {
+                    // DekaScript allows embedded types to omit the trailing
+                    // semicolon before another member or the closing brace.
+                } else {
+                    self.expect_semicolon();
+                }
+
+                let end = self.current_token.span.end;
+                return ClassMember::Embed {
+                    attributes,
+                    types: self.arena.alloc_slice_copy(&[embed_name]),
+                    doc_comment,
+                    span: Span::new(start, end),
+                };
+            }
+
             // DekaScript struct embedding: a bare type name inside a struct body.
             if self.is_ds()
                 && is_struct
