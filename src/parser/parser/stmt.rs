@@ -1418,10 +1418,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
         }
         let from = self.arena.alloc(self.current_token);
+        let end = self.current_token.span.end;
         self.bump();
 
         self.expect_semicolon();
-        let end = self.current_token.span.end;
 
         self.arena.alloc(Stmt::Import {
             specs: self.arena.alloc_slice_copy(&specs),
@@ -1512,6 +1512,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 let end = self.current_token.span.end;
                 return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
             }
+            let close_brace_span = self.current_token.span;
             self.bump(); // }
 
             let from = if self.current_token.kind == TokenKind::Identifier
@@ -1528,18 +1529,19 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
                 }
                 let from_tok: &'ast Token = self.arena.alloc(self.current_token);
+                let end = self.current_token.span.end;
                 self.bump();
-                Some(from_tok)
+                Some((from_tok, end))
             } else {
                 None
             };
 
             self.expect_semicolon();
-            let end = self.current_token.span.end;
+            let end = from.map(|(_, end)| end).unwrap_or(close_brace_span.end);
             return self.arena.alloc(Stmt::Export {
                 item: ExportItem::Named {
                     specs: self.arena.alloc_slice_copy(&specs),
-                    from,
+                    from: from.map(|(tok, _)| tok),
                 },
                 span: Span::new(start, end),
             });
