@@ -98,6 +98,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             && self.current_token.kind == TokenKind::Identifier
             && self.token_eq_ident(&self.current_token, b"struct")
         {
+            if self.is_ds() && !top_level {
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "struct declarations are only allowed at the top level in DekaScript",
+                ));
+            }
             return self.parse_class_with_kind(&[], &[], doc_comment, ClassKind::Struct);
         }
 
@@ -125,6 +131,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     && self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"struct")
                 {
+                    if self.is_ds() && !top_level {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "struct declarations are only allowed at the top level in DekaScript",
+                        ));
+                    }
                     return self.parse_class_with_kind(
                         attributes,
                         &[],
@@ -168,6 +180,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         self.parse_function(attributes, doc_comment, false)
                     }
                     TokenKind::Fn if self.is_ds() => {
+                        if !top_level {
+                            self.errors.push(ParseError::new(
+                                self.current_token.span,
+                                "function declarations are only allowed at the top level in DekaScript",
+                            ));
+                        }
                         self.parse_ds_fn_or_receiver(attributes, doc_comment, false)
                     }
                     TokenKind::Class => self.parse_class(attributes, &[], doc_comment),
@@ -182,7 +200,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         }
                         self.parse_trait(attributes, doc_comment)
                     }
-                    TokenKind::Enum => self.parse_enum(attributes, doc_comment),
+                    TokenKind::Enum => {
+                        if self.is_ds() && !top_level {
+                            self.errors.push(ParseError::new(
+                                self.current_token.span,
+                                "enum declarations are only allowed at the top level in DekaScript",
+                            ));
+                        }
+                        self.parse_enum(attributes, doc_comment)
+                    }
                     TokenKind::Const => self.parse_const_stmt(attributes, doc_comment),
                     TokenKind::Final | TokenKind::Abstract | TokenKind::Readonly => {
                         let mut modifiers = std::vec::Vec::new();
@@ -347,7 +373,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
                 self.parse_function(&[], doc_comment, false)
             }
-            TokenKind::Fn if self.is_ds() => self.parse_ds_fn_or_receiver(&[], doc_comment, false),
+            TokenKind::Fn if self.is_ds() => {
+                if !top_level {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "function declarations are only allowed at the top level in DekaScript",
+                    ));
+                }
+                self.parse_ds_fn_or_receiver(&[], doc_comment, false)
+            }
             TokenKind::Class => {
                 self.reject_ds_php_statement("Use DekaScript structs or plain object values.");
                 self.parse_class(&[], &[], doc_comment)
@@ -363,7 +397,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
                 self.parse_trait(&[], doc_comment)
             }
-            TokenKind::Enum => self.parse_enum(&[], doc_comment),
+            TokenKind::Enum => {
+                if self.is_ds() && !top_level {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "enum declarations are only allowed at the top level in DekaScript",
+                    ));
+                }
+                self.parse_enum(&[], doc_comment)
+            }
             TokenKind::Namespace => {
                 self.reject_ds_php_statement("Use explicit module imports and exports.");
                 if self.is_phpx() && !self.allow_phpx_namespace() {
