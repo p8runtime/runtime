@@ -1063,29 +1063,10 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.indent -= 1;
                 self.write(")");
             }
-            Expr::Unsafe {
-                body,
-                catch,
-                finally,
-                ..
-            } => {
-                self.write("(unsafe ");
-                self.visit_expr(body);
-                if let Some(catch) = catch {
-                    self.write(" (catch ");
-                    self.write(&String::from_utf8_lossy(
-                        catch.var.text(self.source),
-                    ));
-                    self.write(" ");
-                    self.visit_expr(catch.body);
-                    self.write(")");
-                }
-                if let Some(finally) = finally {
-                    self.write(" (finally ");
-                    self.visit_expr(finally);
-                    self.write(")");
-                }
-                self.write(")");
+            Expr::Unsafe { raw, .. } => {
+                self.write("(unsafe \"");
+                self.write(&String::from_utf8_lossy(raw).replace('\\', "\\\\").replace('"', "\\\""));
+                self.write("\")");
             }
             Expr::Closure {
                 attributes,

@@ -330,7 +330,10 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             }
             out
         }
-        Expr::Unsafe { body, .. } => infer_expr(body, ctx),
+        Expr::Unsafe { .. } => Type::Applied {
+            base: "Result".to_string(),
+            args: vec![Type::Unknown, Type::Unknown],
+        },
         Expr::Assign { expr: rhs, .. } | Expr::AssignRef { expr: rhs, .. } => infer_expr(rhs, ctx),
         Expr::New { .. } => Type::Unknown,
         Expr::ClassConstFetch {

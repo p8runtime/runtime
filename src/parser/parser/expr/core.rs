@@ -1,10 +1,149 @@
 use super::super::Parser;
 use crate::parser::ast::{
     Arg, ArrayItem, AssignOp, AttributeGroup, BinaryOp, CastKind, Expr, ExprId, IncludeKind,
-    MagicConstKind, MatchArm, ObjectItem, ObjectKey, ParseError, UnaryOp, UnsafeCatch,
+    MagicConstKind, MatchArm, ObjectItem, ObjectKey, ParseError, UnaryOp,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::parser::span::Span;
+
+/// Scan a raw JavaScript block starting immediately after the opening `{`.
+/// Returns the byte index of the matching closing `}` (the position of the `}`
+/// character itself), or `None` if no matching brace is found.
+///
+/// The scanner understands JS string literals, block comments, line comments,
+/// and template literals (including `${...}` nesting) so that braces inside
+/// them do not affect depth counting.
+fn scan_raw_js_block(source: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    let mut depth = 1usize;
+
+    while i < source.len() {
+        let c = source[i];
+
+        // Line comment.
+        if c == b'/' && source.get(i + 1) == Some(&b'/') {
+            i += 2;
+            while i < source.len() && source[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+
+        // Block comment.
+        if c == b'/' && source.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i < source.len() {
+                if source[i] == b'*' && source.get(i + 1) == Some(&b'/') {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Double-quoted string.
+        if c == b'"' {
+            i += 1;
+            while i < source.len() {
+                let s = source[i];
+                if s == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if s == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Single-quoted string.
+        if c == b'\'' {
+            i += 1;
+            while i < source.len() {
+                let s = source[i];
+                if s == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if s == b'\'' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Template literal, including `${...}` nesting.
+        if c == b'`' {
+            i += 1;
+            while i < source.len() {
+                let s = source[i];
+                if s == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if s == b'`' {
+                    i += 1;
+                    break;
+                }
+                if s == b'$' && source.get(i + 1) == Some(&b'{') {
+                    // Skip nested expression as a raw brace-balanced block.
+                    i += 2;
+                    let mut nested = 1usize;
+                    while i < source.len() && nested > 0 {
+                        match source[i] {
+                            b'{' => nested += 1,
+                            b'}' => nested -= 1,
+                            b'\\' => i += 1,
+                            b'"' | b'\'' | b'`' => {
+                                // Simple skip for strings inside interpolation.
+                                let quote = source[i];
+                                i += 1;
+                                while i < source.len() {
+                                    if source[i] == b'\\' {
+                                        i += 2;
+                                        continue;
+                                    }
+                                    if source[i] == quote {
+                                        i += 1;
+                                        break;
+                                    }
+                                    i += 1;
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        match c {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+
+        i += 1;
+    }
+
+    None
+}
 
 impl<'src, 'ast> Parser<'src, 'ast> {
     pub(in crate::parser::parser) fn parse_expr(&mut self, min_bp: u8) -> ExprId<'ast> {
@@ -1066,82 +1205,42 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 let start = token.span.start;
                 self.bump(); // Eat unsafe
 
-                if self.current_token.kind == TokenKind::OpenBrace {
-                    self.bump();
-                }
-                let body = self.parse_expr(0);
-                if self.current_token.kind == TokenKind::CloseBrace {
-                    self.bump();
-                }
-
-                let catch = if self.current_token.kind == TokenKind::Catch {
-                    let catch_start = self.current_token.span.start;
-                    self.bump();
-
-                    if self.current_token.kind == TokenKind::OpenParen {
-                        self.bump();
-                    }
-
-                    let var = if matches!(
-                        self.current_token.kind,
-                        TokenKind::Identifier | TokenKind::Variable
-                    ) {
-                        let t = self.arena.alloc(self.current_token);
-                        self.bump();
-                        &*t
-                    } else {
-                        self.errors.push(ParseError::new(
-                            self.current_token.span,
-                            "Expected catch variable",
-                        ));
-                        self.arena.alloc(Token {
-                            kind: TokenKind::Error,
-                            span: self.current_token.span,
-                        })
-                    };
-
-                    if self.current_token.kind == TokenKind::CloseParen {
-                        self.bump();
-                    }
-
-                    if self.current_token.kind == TokenKind::OpenBrace {
-                        self.bump();
-                    }
-                    let catch_body = self.parse_expr(0);
-                    if self.current_token.kind == TokenKind::CloseBrace {
-                        self.bump();
-                    }
-                    let catch_end = catch_body.span().end;
-
-                    let catch_node = self.arena.alloc(UnsafeCatch {
-                        var,
-                        body: catch_body,
-                        span: Span::new(catch_start, catch_end),
+                if self.current_token.kind != TokenKind::OpenBrace {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected '{' after unsafe",
+                    ));
+                    return self.arena.alloc(Expr::Error {
+                        span: Span::new(start, self.current_token.span.end),
                     });
-                    Some(&*catch_node)
-                } else {
-                    None
+                }
+                // The lexer cursor is positioned right after the '{', which is
+                // also current_token.span.end. Record it before we bump and the
+                // lexer skips leading whitespace for the next token.
+                let raw_start = self.current_token.span.end;
+                self.bump(); // Eat '{'
+                let closing = scan_raw_js_block(self.lexer.source(), raw_start);
+                let Some(closing_brace) = closing else {
+                    self.errors.push(ParseError::new(
+                        Span::new(raw_start, self.lexer.source().len().min(raw_start + 1)),
+                        "Unclosed unsafe block",
+                    ));
+                    return self.arena.alloc(Expr::Error {
+                        span: Span::new(start, self.current_token.span.end),
+                    });
                 };
 
-                let finally = if self.current_token.kind == TokenKind::Finally {
-                    self.bump();
-                    if self.current_token.kind == TokenKind::OpenBrace {
-                        self.bump();
-                    }
-                    let finally_body = self.parse_expr(0);
-                    if self.current_token.kind == TokenKind::CloseBrace {
-                        self.bump();
-                    }
-                    Some(finally_body)
-                } else {
-                    None
-                };
+                let raw_bytes = &self.lexer.source()[raw_start..closing_brace];
+                let raw = self.arena.alloc_slice_copy(raw_bytes);
+                let end = closing_brace + 1;
 
-                let end = self.current_token.span.end;
+                // Skip the lexer past the raw block and refresh tokens.
+                self.lexer.skip_to(end);
+                self.bump();
+                self.bump();
+
                 self.arena.alloc(Expr::Unsafe {
-                    body,
-                    catch,
-                    finally,
+                    raw,
                     span: Span::new(start, end),
                 })
             }

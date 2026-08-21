@@ -170,6 +170,25 @@ impl<'src> Lexer<'src> {
         &self.input[span.start..span.end]
     }
 
+    /// Access the full source input. Used for raw-block pass-through scanning.
+    pub fn source(&self) -> &'src [u8] {
+        self.input
+    }
+
+    /// Current lexer cursor position in the source.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Advance the cursor and reset the state stack. Used after skipping over a
+    /// raw source span (e.g. an `unsafe { ... }` block) that has already been
+    /// scanned by an external brace-matcher.
+    pub fn skip_to(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.input.len());
+        self.state_stack.clear();
+        self.state_stack.push(LexerState::Scripting);
+    }
+
     fn peek(&self) -> Option<u8> {
         if self.cursor < self.input.len() {
             Some(self.input[self.cursor])

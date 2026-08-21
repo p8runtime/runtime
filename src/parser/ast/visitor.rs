@@ -495,16 +495,9 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
                 visitor.visit_match_arm(arm);
             }
         }
-        Expr::Unsafe {
-            body, catch, finally, ..
-        } => {
-            visitor.visit_expr(body);
-            if let Some(catch) = catch {
-                visitor.visit_expr(catch.body);
-            }
-            if let Some(finally) = finally {
-                visitor.visit_expr(finally);
-            }
+        Expr::Unsafe { .. } => {
+            // Raw JavaScript inside `unsafe { ... }` is intentionally opaque to
+            // DekaScript AST visitors.
         }
         Expr::AnonymousClass {
             attributes,

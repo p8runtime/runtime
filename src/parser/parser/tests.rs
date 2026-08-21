@@ -966,35 +966,20 @@ fn lexer_recognizes_bytes_as_type_keyword() {
 }
 
 #[test]
-fn ds_parses_unsafe_block_with_catch_and_finally() {
+fn ds_unsafe_block_with_catch_is_rejected() {
     let code = r#"const val = unsafe { JSON.parse(text) } catch (e) { defaultValue } finally { cleanup() };"#;
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
-        program.errors.is_empty(),
-        "parse errors: {:?}",
-        program.errors
-    );
-
-    let unsafe_expr = program
-        .statements
-        .iter()
-        .find_map(|s| match **s {
-            Stmt::Const { consts, .. } => consts.first().map(|c| c.value),
-            _ => None,
-        })
-        .expect("expected const declaration");
-    assert!(
-        matches!(unsafe_expr, Expr::Unsafe { .. }),
-        "expected unsafe expression, got {:?}",
-        unsafe_expr
+        !program.errors.is_empty(),
+        "expected a parse error for explicit catch/finally on unsafe, but got none"
     );
 }
 
 #[test]
-fn ds_parses_unsafe_block_without_catch_or_finally() {
+fn ds_parses_unsafe_block_raw_source() {
     let code = "const val = unsafe { JSON.parse(text) };";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
@@ -1015,9 +1000,8 @@ fn ds_parses_unsafe_block_without_catch_or_finally() {
         })
         .expect("expected const declaration");
     match unsafe_expr {
-        Expr::Unsafe { catch, finally, .. } => {
-            assert!(catch.is_none(), "expected no catch clause");
-            assert!(finally.is_none(), "expected no finally clause");
+        Expr::Unsafe { raw, .. } => {
+            assert_eq!(raw, b" JSON.parse(text) ");
         }
         _ => panic!("expected unsafe expression, got {:?}", unsafe_expr),
     }
