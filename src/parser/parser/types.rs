@@ -1,4 +1,4 @@
-use super::{Parser, ParserMode};
+use super::Parser;
 use crate::parser::ast::{ObjectShapeField, Type};
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::parser::span::Span;
@@ -23,10 +23,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         {
             self.bump(); // consume 'Object'
             self.parse_object_shape_type()
-        } else if matches!(self.mode, ParserMode::Phpx | ParserMode::PhpxInternal)
-            && self.current_token.kind == TokenKind::OpenBrace
-        {
-            self.parse_object_shape_fields()
         } else if self.is_ds() && self.current_token.kind == TokenKind::Fn {
             self.bump(); // consume 'fn'
             let params = self.parse_function_type_params()?;
@@ -252,7 +248,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if !(self.next_token.kind == TokenKind::Identifier
                 || self.next_token.kind == TokenKind::Question
                 || self.next_token.kind == TokenKind::OpenParen
-                || (self.is_phpx() && self.next_token.kind == TokenKind::OpenBrace)
+                || (self.is_ds_scripting() && self.next_token.kind == TokenKind::OpenBrace)
                 || self.next_token.kind == TokenKind::NsSeparator
                 || self.next_token.kind.is_semi_reserved())
             {
@@ -268,7 +264,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if !(self.next_token.kind == TokenKind::Identifier
                     || self.next_token.kind == TokenKind::Question
                     || self.next_token.kind == TokenKind::OpenParen
-                    || (self.is_phpx() && self.next_token.kind == TokenKind::OpenBrace)
+                    || (self.is_ds_scripting() && self.next_token.kind == TokenKind::OpenBrace)
                     || self.next_token.kind == TokenKind::NsSeparator
                     || self.next_token.kind.is_semi_reserved())
                 {

@@ -303,7 +303,7 @@ pub(in crate::phpx::typeck::check) fn object_key_name(key: ObjectKey, source: &[
 }
 
 // Keep in sync with `decode_string_key` in
-// runtime/crates/phpx_js/src/lib.rs and runtime/crates/phpx_lsp/src/lib.rs.
+// runtime/crates/deka_js/src/lib.rs and runtime/crates/deka_lsp/src/lib.rs.
 // All three strip the matching quote pair and decode the same escape set on
 // ObjectKey::String tokens.
 pub(in crate::phpx::typeck::check) fn parse_string_key(raw: &str) -> String {

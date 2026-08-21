@@ -31,7 +31,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             self.current_token.span.start
         };
-        if self.is_phpx() && kind == ClassKind::Class {
+        if self.is_ds_scripting() && kind == ClassKind::Class {
             self.errors.push(ParseError::new(
                 self.current_token.span,
                 "classes are not allowed in PHPX; use struct instead",
@@ -93,7 +93,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             }
         }
-        if self.is_phpx() && kind == ClassKind::Struct {
+        if self.is_ds_scripting() && kind == ClassKind::Struct {
             if let Some(parent) = extends.as_ref() {
                 self.errors.push(ParseError::new(
                     parent.span,
@@ -176,7 +176,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else {
             self.current_token.span.start
         };
-        if self.is_phpx() {
+        if self.is_ds_scripting() {
             self.errors.push(ParseError::new(
                 self.current_token.span,
                 "anonymous classes are not allowed in PHPX",
@@ -331,7 +331,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             }
         }
-        if self.is_phpx() {
+        if self.is_ds_scripting() {
             if let Some(first) = extends.first() {
                 self.errors.push(ParseError::new(
                     first.span,
@@ -396,7 +396,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
         // DekaScript traits are a distinct feature from PHP horizontal-reuse
         // traits (RFD 19) -- reject only in legacy PHPX, not in .ds.
-        if self.is_phpx() && !self.is_ds() {
+        if self.is_ds_scripting() && !self.is_ds() {
             self.errors.push(ParseError::new(
                 self.current_token.span,
                 "traits are not allowed in PHPX",
@@ -483,7 +483,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             })
         };
 
-        let type_params = if self.is_phpx() && self.current_token.kind == TokenKind::Lt {
+        let type_params = if self.is_ds_scripting() && self.current_token.kind == TokenKind::Lt {
             self.parse_type_params()
         } else {
             &[]

@@ -156,7 +156,7 @@ pub fn execute_source(
         }
         return Ok(());
     }
-    if mode == ParserMode::Phpx {
+    if mode == ParserMode::Ds {
         if let Err(errors) =
             php_rs::phpx::typeck::check_program_with_path(&program, source_bytes, file_path)
         {

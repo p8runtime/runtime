@@ -331,7 +331,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             value_var = self.parse_expr(0);
         }
 
-        if self.is_phpx()
+        if self.is_ds_scripting()
             && matches!(
                 value_var,
                 Expr::ObjectLiteral { .. } | Expr::Array { .. } | Expr::Assign { .. }
@@ -499,7 +499,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let keyword_span = self.current_token.span;
         self.bump(); // Eat break
 
-        let level = if !(self.is_phpx()
+        let level = if !(self.is_ds_scripting()
             && self.has_line_terminator_between(keyword_span, self.current_token.span))
             && self.current_token.kind != TokenKind::SemiColon
             && self.current_token.kind != TokenKind::CloseTag
@@ -528,7 +528,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let keyword_span = self.current_token.span;
         self.bump(); // Eat continue
 
-        let level = if !(self.is_phpx()
+        let level = if !(self.is_ds_scripting()
             && self.has_line_terminator_between(keyword_span, self.current_token.span))
             && self.current_token.kind != TokenKind::SemiColon
             && self.current_token.kind != TokenKind::CloseTag

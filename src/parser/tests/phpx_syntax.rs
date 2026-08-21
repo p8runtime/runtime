@@ -8,7 +8,7 @@ use php_parser::ast::Type;
 fn parses_object_literal_and_dot_access_in_phpx() {
     let code = "<?php $var = { hello: \"world\", \"count\": 2 }; $var.hello;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -57,7 +57,7 @@ fn parses_object_literal_and_dot_access_in_phpx() {
 fn parses_struct_in_phpx() {
     let code = "<?php struct Point { }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -78,7 +78,7 @@ fn parses_struct_in_phpx() {
 fn parses_struct_use_composition_in_phpx() {
     let code = "<?php struct A { $x: int; } struct B { use A; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -111,7 +111,7 @@ fn parses_struct_use_composition_in_phpx() {
 fn parses_struct_literal_in_phpx() {
     let code = "<?php struct Point { $x: int; $y: int; } $p = Point { $x: 1, $y: 2 };";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -144,7 +144,7 @@ fn parses_struct_literal_in_phpx() {
 fn parses_struct_field_annotations_in_phpx() {
     let code = "struct User { $id: int @id @autoIncrement; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty(), "unexpected parse errors: {:?}", program.errors);
@@ -178,7 +178,7 @@ fn parses_struct_field_annotations_in_phpx() {
 fn parses_struct_field_annotation_args_in_phpx() {
     let code = "struct User { $email: string @index(\"users_email_idx\"); }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty(), "unexpected parse errors: {:?}", program.errors);
@@ -213,7 +213,7 @@ fn parses_struct_field_annotation_args_in_phpx() {
 fn parses_jsx_element_in_phpx() {
     let code = "<?php $v = <div class=\"x\">Hello { $name }</div>;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -241,7 +241,7 @@ fn parses_jsx_element_in_phpx() {
 fn parses_jsx_namespaced_attribute_in_phpx() {
     let code = "<?php $v = <Card client:idle={true} />;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty(), "unexpected parse errors: {:?}", program.errors);
@@ -251,7 +251,7 @@ fn parses_jsx_namespaced_attribute_in_phpx() {
 fn jsx_object_literal_requires_double_braces() {
     let code = "<?php $v = <Component config={ foo: 'bar' } />;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(!program.errors.is_empty());
@@ -265,7 +265,7 @@ fn jsx_object_literal_requires_double_braces() {
 fn phpx_rejects_top_level_use() {
     let code = "<?php use Foo\\Bar; $x = 1;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(!program.errors.is_empty());
@@ -275,7 +275,7 @@ fn phpx_rejects_top_level_use() {
 fn parses_object_shape_type() {
     let code = "<?php function f(Object<{ foo: int, \"bar-baz\": string }> $x) {}";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -305,7 +305,7 @@ fn parses_object_shape_type() {
 fn parses_type_alias_object_shape() {
     let code = "<?php type Person = Object<{ foo: int, \"bar-baz\"?: string }>; ";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -329,7 +329,7 @@ fn parses_type_alias_object_shape() {
 fn parses_type_alias_sugar_object_shape() {
     let code = "<?php type Person = { foo: int };";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -353,7 +353,7 @@ fn parses_type_alias_sugar_object_shape() {
 fn parses_generic_type_alias() {
     let code = "<?php type Box<T> = { value: T };";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
@@ -380,7 +380,7 @@ fn parses_generic_type_alias() {
 fn parses_enum_case_payload_in_phpx() {
     let code = "<?php enum Msg { case Text(string $body, int $len); }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty());
