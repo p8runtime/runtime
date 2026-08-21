@@ -15,14 +15,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         loop {
             // PHPX ASI guard: a line break before `(` should terminate the expression
             // instead of continuing as a call chain on the next line.
-            if self.is_phpx()
+            if self.is_ds_scripting()
                 && self.current_token.kind == TokenKind::OpenParen
                 && self.has_line_terminator_between(self.prev_token.span, self.current_token.span)
             {
                 break;
             }
 
-            if self.current_token.kind == TokenKind::Dot && self.is_phpx() {
+            if self.current_token.kind == TokenKind::Dot && self.is_ds_scripting() {
                 let dot_span = self.current_token.span;
                 let next = self.next_token;
                 let left_span = left.span();
@@ -594,7 +594,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let token = self.current_token;
         match token.kind {
             TokenKind::Lt => {
-                if self.is_phpx() {
+                if self.is_ds_scripting() {
                     return self.parse_jsx_element();
                 }
                 self.errors
@@ -874,7 +874,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             }
             TokenKind::Identifier if self.token_eq_ident(&token, b"await") => {
-                if !self.is_phpx() {
+                if !self.is_ds_scripting() {
                     self.errors.push(ParseError::with_help(
                         token.span,
                         "await is only available in PHPX mode",
@@ -896,7 +896,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             }
             TokenKind::Identifier
-                if self.is_phpx()
+                if self.is_ds_scripting()
                     && self.token_eq_ident(&token, b"async")
                     && self.next_token.kind == TokenKind::Function =>
             {
@@ -910,7 +910,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.parse_closure_expr(attributes, true, false, start)
             }
             TokenKind::Identifier
-                if self.is_phpx()
+                if self.is_ds_scripting()
                     && self.token_eq_ident(&token, b"async")
                     && self.next_token.kind == TokenKind::Fn =>
             {
@@ -924,7 +924,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.parse_arrow_function(attributes, true, false, start)
             }
             TokenKind::New => {
-                if self.is_phpx() {
+                if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         token.span,
                         "new is not allowed in PHPX; use struct literals instead",
@@ -1269,7 +1269,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         "Use DekaScript string and collection methods instead.",
                     ));
                 }
-                if self.is_phpx() && self.current_token.kind == TokenKind::OpenBrace {
+                if self.is_ds_scripting() && self.current_token.kind == TokenKind::OpenBrace {
                     return self.parse_struct_literal(name, name.span.start);
                 }
                 self.arena.alloc(Expr::Variable {
@@ -1462,7 +1462,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             }
             TokenKind::OpenBrace => {
-                if !self.is_phpx() && !self.is_ds() {
+                if !self.is_ds_scripting() && !self.is_ds() {
                     self.bump();
                     return self.arena.alloc(Expr::Error { span: token.span });
                 }

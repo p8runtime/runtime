@@ -94,7 +94,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             });
         }
 
-        if self.is_phpx()
+        if self.is_ds_scripting()
             && self.current_token.kind == TokenKind::Identifier
             && self.token_eq_ident(&self.current_token, b"struct")
         {
@@ -107,7 +107,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_class_with_kind(&[], &[], doc_comment, ClassKind::Struct);
         }
 
-        if self.is_phpx()
+        if self.is_ds_scripting()
             && self.current_token.kind == TokenKind::Identifier
             && self.token_eq_ident(&self.current_token, b"type")
         {
@@ -115,13 +115,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
 
         // ECMAScript-style imports/exports are supported in PHPX and DekaScript.
-        if self.is_phpx()
+        if self.is_ds_scripting()
             && self.current_token.kind == TokenKind::Identifier
             && self.token_eq_ident(&self.current_token, b"import")
         {
             return self.parse_import_stmt();
         }
-        if self.is_phpx()
+        if self.is_ds_scripting()
             && self.current_token.kind == TokenKind::Identifier
             && self.token_eq_ident(&self.current_token, b"export")
         {
@@ -129,7 +129,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
 
         // `cql` is a true keyword; `query` is context-sensitive (identifier unless followed by name + =)
-        if self.is_phpx()
+        if self.is_ds_scripting()
             && (self.current_token.kind == TokenKind::Cql
                 || (self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"query")))
@@ -141,7 +141,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         match self.current_token.kind {
             TokenKind::Attribute => {
                 let attributes = self.parse_attributes();
-                if self.is_phpx()
+                if self.is_ds_scripting()
                     && self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"struct")
                 {
@@ -161,7 +161,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"async")
                     && ((self.is_ds() && self.next_token.kind == TokenKind::Fn)
-                        || (self.is_phpx() && self.next_token.kind == TokenKind::Function))
+                        || (self.is_ds_scripting() && self.next_token.kind == TokenKind::Function))
                 {
                     self.bump(); // async
                     if self.is_ds() {
@@ -182,7 +182,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     self.bump(); // async
                     return self.parse_function(attributes, doc_comment, false);
                 }
-                if self.is_phpx()
+                if self.is_ds_scripting()
                     && self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"export")
                 {
@@ -246,7 +246,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                                 self.arena.alloc_slice_copy(&modifiers),
                                 doc_comment,
                             )
-                        } else if self.is_phpx()
+                        } else if self.is_ds_scripting()
                             && self.current_token.kind == TokenKind::Identifier
                             && self.token_eq_ident(&self.current_token, b"struct")
                         {
@@ -282,7 +282,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             TokenKind::Identifier
                 if self.token_eq_ident(&self.current_token, b"async")
                     && ((self.is_ds() && self.next_token.kind == TokenKind::Fn)
-                        || (self.is_phpx() && self.next_token.kind == TokenKind::Function)) =>
+                        || (self.is_ds_scripting() && self.next_token.kind == TokenKind::Function)) =>
             {
                 self.bump(); // async
                 if self.is_ds() {
@@ -303,7 +303,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
                 if self.current_token.kind == TokenKind::Class {
                     self.parse_class(&[], self.arena.alloc_slice_copy(&modifiers), doc_comment)
-                } else if self.is_phpx()
+                } else if self.is_ds_scripting()
                     && self.current_token.kind == TokenKind::Identifier
                     && self.token_eq_ident(&self.current_token, b"struct")
                 {
@@ -428,10 +428,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Namespace => {
                 self.reject_ds_php_statement("Use explicit module imports and exports.");
-                if self.is_phpx() && !self.allow_phpx_namespace() {
+                if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
-                        "namespace is not allowed in PHPX; use import instead",
+                        "namespace is not allowed in DekaScript; use import instead",
                     ));
                 }
                 if !top_level {
@@ -440,10 +440,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.parse_namespace()
             }
             TokenKind::Use => {
-                if self.is_phpx() && !self.allow_phpx_namespace() {
+                if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
-                        "use is not allowed in PHPX; use import instead",
+                        "use is not allowed in DekaScript; use import instead",
                     ));
                 }
                 if !top_level {
@@ -459,7 +459,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.reject_ds_php_statement(
                     "Use Result or Option values for fallible operations.",
                 );
-                if self.is_phpx() {
+                if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
                         "try/catch is not allowed in PHPX; use Result/Option instead",
@@ -469,7 +469,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Throw => {
                 self.reject_ds_php_statement("Return an explicit Result error value instead.");
-                if self.is_phpx() {
+                if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
                         "throw is not allowed in PHPX; use Result/Option instead",
@@ -594,7 +594,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let keyword_span = self.current_token.span;
         self.bump();
 
-        let expr = if self.is_phpx()
+        let expr = if self.is_ds_scripting()
             && self.has_line_terminator_between(keyword_span, self.current_token.span)
         {
             None
@@ -643,7 +643,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             });
         };
 
-        let type_params = if self.is_phpx() && self.current_token.kind == TokenKind::Lt {
+        let type_params = if self.is_ds_scripting() && self.current_token.kind == TokenKind::Lt {
             self.parse_type_params()
         } else {
             &[]

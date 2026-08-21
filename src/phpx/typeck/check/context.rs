@@ -49,7 +49,7 @@ impl<'a> CheckContext<'a> {
             resolved_aliases: HashMap::new(),
             fn_depth: 0,
             async_depth: 0,
-            strict_null: std::env::var("PHPX_STRICT_NULL")
+            strict_null: std::env::var("DEKA_STRICT_NULL")
                 .map(|value| {
                     let value = value.trim().to_ascii_lowercase();
                     value == "1" || value == "true" || value == "yes" || value == "on"

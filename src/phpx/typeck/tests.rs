@@ -23,7 +23,7 @@ fn normalize_phpx_snippet(code: &str) -> &str {
 fn check(code: &str) -> Result<(), String> {
     let code = normalize_phpx_snippet(code);
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     if !program.errors.is_empty() {
         let mut out = String::new();
@@ -46,7 +46,7 @@ fn check(code: &str) -> Result<(), String> {
 }
 
 // DekaScript-mode variant for .ds-only features. `check` above hardcodes
-// ParserMode::Phpx, so it cannot reach DekaScript-specific syntax.
+// ParserMode::Ds, so it cannot reach DekaScript-specific syntax.
 fn check_ds(code: &str) -> Result<(), String> {
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
@@ -74,7 +74,7 @@ fn check_ds(code: &str) -> Result<(), String> {
 fn check_with_path(code: &str, path: &str) -> Result<(), String> {
     let code = normalize_phpx_snippet(code);
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     if !program.errors.is_empty() {
         let mut out = String::new();
@@ -526,7 +526,7 @@ fn return_object_shape_excess_field_errors() {
 
 #[test]
 fn null_literal_allowed_in_default_mode() {
-    // Strict null checking is gated by PHPX_STRICT_NULL env var;
+    // Strict null checking is gated by DEKA_STRICT_NULL env var;
     // in default mode, null literals are allowed.
     let code = "<?php $x = null;";
     assert!(check(code).is_ok());
@@ -930,7 +930,7 @@ fn bytes_type_in_struct_field_is_ok() {
 fn poc_warning_only_program_checks_out_successfully() {
     let code = normalize_phpx_snippet("<?php function __deka_poc_warn__() {}");
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     assert!(program.errors.is_empty(), "program should parse cleanly");
 
@@ -974,7 +974,7 @@ fn real_type_error_still_fails_exactly_as_before() {
     // warnings, and that check_program still returns Err for them.
     let code = normalize_phpx_snippet("<?php function bad<T>($v: T): int { return $v; }");
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     assert!(program.errors.is_empty(), "program should parse cleanly");
 

@@ -54,7 +54,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.ds_array_callable_declared = true;
         }
 
-        let type_params = if self.is_phpx() && self.current_token.kind == TokenKind::Lt {
+        let type_params = if self.is_ds_scripting() && self.current_token.kind == TokenKind::Lt {
             self.parse_type_params()
         } else {
             &[]
@@ -122,7 +122,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let mut old_style_phpx_type = false;
         let mut pattern: Option<ExprId<'ast>> = None;
 
-        if !self.is_phpx() {
+        if !self.is_ds_scripting() {
             // PHP mode keeps classic syntax: Type $name
             ty = if let Some(t) = self.parse_type() {
                 Some(self.arena.alloc(t) as &'ast Type<'ast>)
@@ -205,7 +205,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
         // PHPX mode prefers: $name: Type
         // Recovery path: if legacy `Type $name` is used, accept for now but emit a syntax error.
-        if self.is_phpx()
+        if self.is_ds_scripting()
             && self.current_token.kind != TokenKind::Variable
             && !matches!(
                 self.current_token.kind,
@@ -222,7 +222,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             let param_name = self.arena.alloc(self.current_token);
             self.bump();
             param_name
-        } else if self.is_phpx()
+        } else if self.is_ds_scripting()
             && matches!(
                 self.current_token.kind,
                 TokenKind::OpenBrace | TokenKind::OpenBracket | TokenKind::List
@@ -258,19 +258,19 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             })
         };
 
-        if self.is_phpx() && self.current_token.kind == TokenKind::Colon {
+        if self.is_ds_scripting() && self.current_token.kind == TokenKind::Colon {
             self.bump();
             if let Some(t) = self.parse_type() {
                 ty = Some(self.arena.alloc(t) as &'ast Type<'ast>);
             }
         }
 
-        // Keep legacy `Type $name` syntax available for internal std modules while
-        // enforcing `$name: Type` in user PHPX files.
-        if old_style_phpx_type && !self.allow_phpx_namespace() {
+        // Keep legacy `Type $name` syntax available for plain PHP while
+        // enforcing `$name: Type` in DekaScript files.
+        if old_style_phpx_type && self.is_ds_scripting() {
             self.errors.push(ParseError::with_help(
                 param_name.span,
-                "PHPX function parameters must use '$name: Type' syntax",
+                "DekaScript function parameters must use '$name: Type' syntax",
                 "Rewrite parameter as '$name: Type' (for example, '$props: NameProps').",
             ));
         }

@@ -90,7 +90,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             };
 
-            let payload = if self.is_phpx() && self.current_token.kind == TokenKind::OpenParen {
+            let payload = if self.is_ds_scripting() && self.current_token.kind == TokenKind::OpenParen {
                 Some(self.parse_parameter_list())
             } else {
                 None
@@ -137,7 +137,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
 
         if self.current_token.kind == TokenKind::Use {
-            if self.is_phpx() {
+            if self.is_ds_scripting() {
                 let is_struct = matches!(
                     ctx,
                     ClassMemberCtx::Class {
@@ -408,7 +408,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     ..
                 }
             );
-            if self.is_phpx() && is_struct && is_ctor {
+            if self.is_ds_scripting() && is_struct && is_ctor {
                 self.errors.push(ParseError::new(
                     name.span,
                     "constructors are not allowed in PHPX structs; use struct literals",
@@ -629,7 +629,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     ..
                 }
             );
-            let is_phpx_interface = self.is_phpx() && matches!(ctx, ClassMemberCtx::Interface);
+            let is_phpx_interface = self.is_ds_scripting() && matches!(ctx, ClassMemberCtx::Interface);
             // DekaScript explicit embedding: `embed TypeName;`.
             if self.is_ds()
                 && is_struct
@@ -792,7 +792,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             let next_is_optional_field = self.lookahead_kind(field_name_offset + 1)
                 == Some(TokenKind::Question)
                 && self.lookahead_kind(field_name_offset + 2) == Some(TokenKind::Colon);
-            if self.is_phpx()
+            if self.is_ds_scripting()
                 && (is_struct || is_phpx_interface)
                 && is_field_name_token
                 && (next_is_field_colon || next_is_optional_field)
@@ -932,7 +932,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             };
 
-            if self.is_phpx() && is_struct {
+            if self.is_ds_scripting() && is_struct {
                 self.errors.push(ParseError::new(
                     name.span,
                     "struct fields must use `$name: Type` syntax in PHPX",
@@ -987,7 +987,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     span: Span::new(start, end),
                 }
             } else {
-                if matches!(ctx, ClassMemberCtx::Interface) && !self.is_phpx() {
+                if matches!(ctx, ClassMemberCtx::Interface) && !self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         Span::new(start, start),
                         "interfaces cannot declare properties",

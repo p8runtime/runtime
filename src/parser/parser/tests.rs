@@ -10,7 +10,7 @@ fn detect_mode_treats_phpx_cache_php_as_internal() {
     let source = b"namespace deka_module_test;\nfunction x() { return 1; }\n";
     let path = Path::new("/tmp/php_modules/.cache/phpx/core/bridge.php");
     let mode = detect_parser_mode(source, Some(path));
-    assert_eq!(mode, ParserMode::PhpxInternal);
+    assert_eq!(mode, ParserMode::Ds);
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn ds_parses_let_and_for_of_without_php_foreach() {
 fn phpx_allows_automatic_semicolons() {
     let code = "$a = 1\n$b = 2\necho $a\n";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -94,7 +94,7 @@ fn php_requires_semicolons() {
 fn phpx_return_line_terminator_ends_statement() {
     let code = "function f() { return\n $x\n }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -134,7 +134,7 @@ fn phpx_return_line_terminator_ends_statement() {
 fn phpx_parses_struct_field_annotations() {
     let code = "struct User { $id: int @id @autoIncrement; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -172,7 +172,7 @@ fn phpx_parses_struct_field_annotations() {
 fn phpx_parses_struct_field_annotation_args() {
     let code = "struct User { $email: string @map(\"email_address\"); }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -272,7 +272,7 @@ fn ds_still_accepts_dollar_sigil_in_structs_for_back_compat() {
 fn phpx_still_requires_dollar_sigil_in_struct_fields() {
     let code = "struct Point { x: int }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -293,7 +293,7 @@ fn phpx_still_requires_dollar_sigil_in_struct_fields() {
 fn phpx_parses_colon_typed_parameters() {
     let code = "function Name($props: Object<{ name: string }>): string { return $props.name; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -307,7 +307,7 @@ fn phpx_parses_colon_typed_parameters() {
 fn phpx_rejects_legacy_typed_parameters() {
     let code = "function Name(Object<{ name: string }> $props): string { return $props.name; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -330,7 +330,7 @@ fn phpx_allows_untyped_parameter() {
     // type checking is handled by the typechecker (gated behind PHPX_STRICT_JSX_TYPES).
     let code = "function Name($props) { return $props; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -358,7 +358,7 @@ fn php_mode_still_allows_legacy_typed_parameters() {
 fn phpx_parses_param_object_destructuring_with_defaults() {
     let code = "function FullName({ first: $first, last: $last = 'Smith' }: Object<{ first: string, last: string }>): string { return $first . ' ' . $last; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -388,7 +388,7 @@ fn phpx_parses_param_object_destructuring_with_defaults() {
 fn phpx_param_object_destructure_shorthand_uses_identifier_key() {
     let code = "interface NameProps { $name: string; } function FullName({ $name }: NameProps): string { return $name; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -434,7 +434,7 @@ fn phpx_param_object_destructure_shorthand_uses_identifier_key() {
 fn phpx_parses_interface_shape_fields() {
     let code = "interface NameProps { $name: string; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -466,7 +466,7 @@ fn phpx_parses_interface_shape_fields() {
 fn phpx_parses_async_function_and_await() {
     let code = "async function load($p: Promise<int>): Promise<int> {\n  return await $p\n}\n$v = await load($p)\n";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -538,7 +538,7 @@ fn php_mode_rejects_await_syntax() {
 fn phpx_non_async_function_rejects_await() {
     let code = "function load($p: Promise<int>): Promise<int> { return await $p; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -554,7 +554,7 @@ fn phpx_non_async_function_rejects_await() {
 fn phpx_parses_foreach_object_destructuring() {
     let code = "foreach ($rows as { id: $id, name: $name }) { echo $id; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -586,7 +586,7 @@ fn phpx_parses_foreach_object_destructuring() {
 fn phpx_parses_object_assignment_destructuring() {
     let code = "echo ({ id: $id, slug: $slug } = $pkg)";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -618,7 +618,7 @@ foreach ($rows as { name: $name, count: $count }) {
 }
 "#;
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -632,7 +632,7 @@ foreach ($rows as { name: $name, count: $count }) {
 fn phpx_parses_variable_assignment_from_object_literal() {
     let code = "$a = { foo: \"bar\" }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -669,7 +669,7 @@ fn phpx_parses_variable_assignment_from_object_literal() {
 fn phpx_inserts_asi_before_newline_open_paren() {
     let code = "$a = { foo: \"bar\" }\n({ foo: $x } = $a)\n";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -700,7 +700,7 @@ function App($props: object) {
 }
 "#;
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -723,7 +723,7 @@ function App($props: object) {
     let mut parser = Parser::new_with_mode(
         Lexer::new(code.as_bytes()),
         &arena,
-        ParserMode::PhpxInternal,
+        ParserMode::Ds,
     );
     let program = parser.parse_program();
 
@@ -738,7 +738,7 @@ function App($props: object) {
 fn cql_parses_simple_query() {
     let code = "cql results = MATCH (n:Person) RETURN n;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -781,7 +781,7 @@ fn cql_extracts_dollar_params() {
     let code =
         "cql recs = MATCH (c:Customer) WHERE c.id = $customer_id AND c.age > $min_age RETURN c;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -813,7 +813,7 @@ fn cql_extracts_dollar_params() {
 fn query_keyword_works_as_alias() {
     let code = "query items = MATCH (p:Product) RETURN p.name;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -844,7 +844,7 @@ fn query_keyword_works_as_alias() {
 fn cql_error_on_missing_name() {
     let code = "cql = MATCH (n) RETURN n;";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -858,7 +858,7 @@ fn query_as_function_call_not_keyword() {
     // `query(...)` should parse as a function call, not a cql statement
     let code = "query($handle, $cypher);";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -901,7 +901,7 @@ function test() {
 }
 "#;
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -915,7 +915,7 @@ function test() {
 fn phpx_parses_bytes_type_in_param_and_return() {
     let code = "function encode($input: bytes): bytes { return $input; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -929,7 +929,7 @@ fn phpx_parses_bytes_type_in_param_and_return() {
 fn phpx_parses_bytes_type_in_struct_field() {
     let code = "struct Packet { $payload: bytes; $len: int; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -943,7 +943,7 @@ fn phpx_parses_bytes_type_in_struct_field() {
 fn phpx_parses_bytes_union_type() {
     let code = "function maybe_bytes(): bytes|string { return ''; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(
@@ -1139,7 +1139,7 @@ fn phpx_accepts_case_form_enum_body() {
     // enum members.
     let code = "enum Status { case Loading; case Ready; case Failed; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(program.errors.is_empty(), "errors: {:?}", program.errors);
@@ -1166,7 +1166,7 @@ fn phpx_rejects_js_style_enum_body() {
     // PHPX mode requires `case Name;` and does not accept JS-style lists.
     let code = "enum Status { Loading, Ready, Failed }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
 
     assert!(!program.errors.is_empty());
@@ -1487,10 +1487,10 @@ fn ds_object_literal_spread_parses() {
 }
 
 #[test]
-fn phpx_jsx_spread_attribute_parses() {
+fn deka_jsx_spread_attribute_parses() {
     let code = "function Card($props: object) { return <div {...props} id=\"card\" />; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
 
@@ -1543,7 +1543,7 @@ fn php_rejects_async_function() {
 fn phpx_still_accepts_async_function() {
     let code = "async function load($p: Promise<int>): Promise<int> { return await $p; }";
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Phpx);
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     assert!(program.errors.is_empty(), "unexpected errors: {:?}", program.errors);
 }
