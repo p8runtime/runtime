@@ -70,9 +70,87 @@ impl<'a> CheckContext<'a> {
         ctx
     }
 
+    pub(in crate::phpx::typeck::check) fn seed_imports(
+        &mut self,
+        program: &Program<'a>,
+        imports: &HashMap<String, TypeckProgramSummary>,
+    ) {
+        for stmt in program.statements.iter() {
+            let Stmt::Import { specs, from, .. } = stmt else {
+                continue;
+            };
+            let module_path =
+                String::from_utf8_lossy(&self.source[from.span.start..from.span.end]).to_string();
+            let module_path = unquote_module_path(&module_path);
+            let Some(summary) = imports.get(&module_path) else {
+                self.errors.push(TypeError {
+                    span: from.span,
+                    message: format!("Module '{}' not found", module_path),
+                    severity: Severity::Error,
+                });
+                continue;
+            };
+            for spec in specs.iter() {
+                let remote = String::from_utf8_lossy(
+                    &self.source[spec.remote.span.start..spec.remote.span.end],
+                )
+                .to_string();
+                let local = String::from_utf8_lossy(
+                    &self.source[spec.local.span.start..spec.local.span.end],
+                )
+                .to_string();
+                if let Some(info) = summary.functions.get(&remote) {
+                    self.functions.insert(
+                        local.clone(),
+                        FunctionSig {
+                            type_params: Vec::new(),
+                            params: info
+                                .params
+                                .iter()
+                                .map(|p| ParamSig {
+                                    ty: p.ty.clone(),
+                                    required: p.required,
+                                })
+                                .collect(),
+                            return_type: info.return_type.clone(),
+                            variadic: info.variadic,
+                        },
+                    );
+                    continue;
+                }
+                if summary.structs.contains_key(&remote) {
+                    // Structs are not currently movable across module summaries
+                    // because StructInfo carries private inference state. For
+                    // Phase 1 we only validate function imports; type imports
+                    // are accepted silently to avoid false positives.
+                    continue;
+                }
+                if summary.enums.contains_key(&remote) {
+                    continue;
+                }
+                if summary.type_aliases.contains_key(&remote) {
+                    self.type_aliases.insert(
+                        local.clone(),
+                        TypeAliasInfo {
+                            params: Vec::new(),
+                            ty: summary.type_aliases[&remote].clone(),
+                            span: spec.remote.span,
+                        },
+                    );
+                    continue;
+                }
+                self.errors.push(TypeError {
+                    span: spec.remote.span,
+                    message: format!("'{}' is not exported by '{}'", remote, module_path),
+                    severity: Severity::Error,
+                });
+            }
+        }
+    }
+
     pub(in crate::phpx::typeck::check) fn check_program(&mut self, program: &Program<'a>) {
         self.check_wasm_stubs();
-        self.collect_imported_names();
+        self.collect_imported_names(program);
         self.collect_struct_names(program);
         self.collect_interface_names(program);
         self.collect_enum_names(program);
@@ -93,4 +171,17 @@ impl<'a> CheckContext<'a> {
             self.check_stmt(stmt, &mut env, &mut explicit, None, &mut mut_env);
         }
     }
+}
+
+fn unquote_module_path(path: &str) -> String {
+    let path = path.trim();
+    if path.len() >= 2 {
+        let bytes = path.as_bytes();
+        let first = bytes[0] as char;
+        let last = bytes[bytes.len() - 1] as char;
+        if (first == '\'' && last == '\'') || (first == '"' && last == '"') {
+            return path[1..path.len() - 1].to_string();
+        }
+    }
+    path.to_string()
 }

@@ -287,6 +287,19 @@ pub fn walk_stmt<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, stmt: StmtId<
                 visitor.visit_use_item(use_item);
             }
         }
+        Stmt::Import { specs, .. } => {
+            for spec in specs {
+                let _ = spec;
+            }
+        }
+        Stmt::Export { ref item, .. } => match item {
+            ExportItem::Named { specs, .. } => {
+                for spec in *specs {
+                    let _ = spec;
+                }
+            }
+            ExportItem::Decl(stmt) => visitor.visit_stmt(*stmt),
+        },
         Stmt::Switch {
             condition, cases, ..
         } => {

@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use std::path::Path;
 
-use crate::parser::ast::{ClassKind, ClassMember, Expr, Stmt};
+use crate::parser::ast::{ClassKind, ClassMember, Expr, ExportItem, Stmt};
 use crate::parser::lexer::{Lexer, token::TokenKind};
 use crate::parser::parser::{Parser, ParserMode, detect_parser_mode};
 
@@ -1677,4 +1677,61 @@ impl Point {
         "expected no stray brace error, got: {:?}",
         program.errors
     );
+}
+
+#[test]
+fn ds_parses_import_and_export_declarations() {
+    let arena = Bump::new();
+    let source = b"
+import { add, subtract as sub } from './math.ds';
+export fn answer(): number { return 42; }
+export const greeting = 'hello';
+export { answer, greeting as hi };
+";
+    let mut parser = Parser::new_with_mode(Lexer::new(source), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
+
+    let mut imports = 0;
+    let mut exports = 0;
+    for stmt in program.statements {
+        match **stmt {
+            Stmt::Import { ref specs, .. } => {
+                imports += 1;
+                assert_eq!(specs.len(), 2);
+                assert_eq!(
+                    std::str::from_utf8(specs[0].remote.text(source)).unwrap(),
+                    "add"
+                );
+                assert_eq!(
+                    std::str::from_utf8(specs[0].local.text(source)).unwrap(),
+                    "add"
+                );
+                assert_eq!(
+                    std::str::from_utf8(specs[1].remote.text(source)).unwrap(),
+                    "subtract"
+                );
+                assert_eq!(
+                    std::str::from_utf8(specs[1].local.text(source)).unwrap(),
+                    "sub"
+                );
+            }
+            Stmt::Export { ref item, .. } => {
+                exports += 1;
+                match item {
+                    ExportItem::Decl(_) => {}
+                    ExportItem::Named { specs, .. } => {
+                        assert_eq!(specs.len(), 2);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(imports, 1);
+    assert_eq!(exports, 3);
 }

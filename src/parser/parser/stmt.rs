@@ -1,7 +1,7 @@
 use super::{LexerMode, Parser, ParserMode, Token};
 use crate::parser::ast::{
-    AttributeGroup, Catch, ClassConst, ClassKind, CqlParam, ParseError, Receiver, StaticVar, Stmt,
-    StmtId, UseItem, UseKind,
+    AttributeGroup, Catch, ClassConst, ClassKind, CqlParam, ExportItem, ImportExportSpec, ParseError,
+    Receiver, StaticVar, Stmt, StmtId, UseItem, UseKind,
 };
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
@@ -114,6 +114,20 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_type_alias(top_level);
         }
 
+        // ECMAScript-style imports/exports are supported in PHPX and DekaScript.
+        if self.is_phpx()
+            && self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"import")
+        {
+            return self.parse_import_stmt();
+        }
+        if self.is_phpx()
+            && self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"export")
+        {
+            return self.parse_export_stmt(&[], doc_comment, top_level);
+        }
+
         // `cql` is a true keyword; `query` is context-sensitive (identifier unless followed by name + =)
         if self.is_phpx()
             && (self.current_token.kind == TokenKind::Cql
@@ -167,6 +181,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     ));
                     self.bump(); // async
                     return self.parse_function(attributes, doc_comment, false);
+                }
+                if self.is_phpx()
+                    && self.current_token.kind == TokenKind::Identifier
+                    && self.token_eq_ident(&self.current_token, b"export")
+                {
+                    return self.parse_export_stmt(attributes, doc_comment, top_level);
                 }
                 match self.current_token.kind {
                     TokenKind::Function => {
@@ -1287,6 +1307,289 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             expr,
             span: Span::new(start, end),
         })
+    }
+
+    /// Parse an ECMAScript-style named import:
+    /// `import { a, b as c } from "./mod";`
+    fn parse_import_stmt(&mut self) -> StmtId<'ast> {
+        let start = self.current_token.span.start;
+        self.bump(); // import
+
+        if self.current_token.kind != TokenKind::OpenBrace {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected '{' after import",
+                "Use named imports: `import { name } from './module';`.",
+            ));
+            self.sync_to_statement_end();
+            let end = self.current_token.span.end;
+            return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+        }
+        self.bump(); // {
+
+        let mut specs = std::vec::Vec::new();
+        while self.current_token.kind != TokenKind::CloseBrace
+            && self.current_token.kind != TokenKind::Eof
+        {
+            let remote = if self.current_token.kind == TokenKind::Identifier {
+                let tok = self.arena.alloc(self.current_token);
+                self.bump();
+                tok
+            } else {
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected import specifier name",
+                ));
+                let span = self.current_token.span;
+                self.sync_to_statement_end();
+                return self.arena.alloc(Stmt::Error {
+                    span: Span::new(start, span.end),
+                });
+            };
+
+            let local: &'ast Token;
+            if self.current_token.kind == TokenKind::As {
+                self.bump(); // as
+                if self.current_token.kind == TokenKind::Identifier {
+                    local = self.arena.alloc(self.current_token);
+                    self.bump();
+                } else {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected local name after 'as'",
+                    ));
+                    let span = self.current_token.span;
+                    self.sync_to_statement_end();
+                    return self.arena.alloc(Stmt::Error {
+                        span: Span::new(start, span.end),
+                    });
+                }
+            } else {
+                local = remote;
+            }
+
+            let spec_span = Span::new(remote.span.start, local.span.end);
+            specs.push(ImportExportSpec {
+                remote,
+                local,
+                span: spec_span,
+            });
+
+            if self.current_token.kind == TokenKind::Comma {
+                self.bump();
+                continue;
+            }
+            break;
+        }
+
+        if self.current_token.kind != TokenKind::CloseBrace {
+            self.errors.push(ParseError::new(
+                self.current_token.span,
+                "Expected '}' after import specifiers",
+            ));
+            self.sync_to_statement_end();
+            let end = self.current_token.span.end;
+            return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+        }
+        self.bump(); // }
+
+        if !(self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"from"))
+        {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected 'from' after import specifiers",
+                "Use: `import { name } from './module';`.",
+            ));
+            self.sync_to_statement_end();
+            let end = self.current_token.span.end;
+            return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+        }
+        self.bump(); // from
+
+        if self.current_token.kind != TokenKind::StringLiteral {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected module path string after 'from'",
+                "Use: `import { name } from './module';`.",
+            ));
+            self.sync_to_statement_end();
+            let end = self.current_token.span.end;
+            return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+        }
+        let from = self.arena.alloc(self.current_token);
+        self.bump();
+
+        self.expect_semicolon();
+        let end = self.current_token.span.end;
+
+        self.arena.alloc(Stmt::Import {
+            specs: self.arena.alloc_slice_copy(&specs),
+            from,
+            span: Span::new(start, end),
+        })
+    }
+
+    /// Parse an ECMAScript-style export:
+    /// `export fn name() {}`, `export function name() {}`,
+    /// `export const name = ...;`, `export { a, b as c };`,
+    /// `export { a, b as c } from "./mod";`.
+    fn parse_export_stmt(
+        &mut self,
+        attributes: &'ast [AttributeGroup<'ast>],
+        doc_comment: Option<Span>,
+        _top_level: bool,
+    ) -> StmtId<'ast> {
+        let start = if let Some(doc) = doc_comment {
+            doc.start
+        } else if let Some(first) = attributes.first() {
+            first.span.start
+        } else {
+            self.current_token.span.start
+        };
+        self.bump(); // export
+
+        // Named export list: `export { a, b as c } [from "..."];`
+        if self.current_token.kind == TokenKind::OpenBrace {
+            self.bump(); // {
+            let mut specs = std::vec::Vec::new();
+            while self.current_token.kind != TokenKind::CloseBrace
+                && self.current_token.kind != TokenKind::Eof
+            {
+                let local = if self.current_token.kind == TokenKind::Identifier {
+                    let tok = self.arena.alloc(self.current_token);
+                    self.bump();
+                    tok
+                } else {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected export specifier name",
+                    ));
+                    self.sync_to_statement_end();
+                    let end = self.current_token.span.end;
+                    return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+                };
+
+                let remote: &'ast Token;
+                if self.current_token.kind == TokenKind::As {
+                    self.bump(); // as
+                    if self.current_token.kind == TokenKind::Identifier {
+                        remote = self.arena.alloc(self.current_token);
+                        self.bump();
+                    } else {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected exported name after 'as'",
+                        ));
+                        self.sync_to_statement_end();
+                        let end = self.current_token.span.end;
+                        return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+                    }
+                } else {
+                    remote = local;
+                }
+
+                let spec_span = Span::new(local.span.start, remote.span.end);
+                specs.push(ImportExportSpec {
+                    remote,
+                    local,
+                    span: spec_span,
+                });
+
+                if self.current_token.kind == TokenKind::Comma {
+                    self.bump();
+                    continue;
+                }
+                break;
+            }
+
+            if self.current_token.kind != TokenKind::CloseBrace {
+                self.errors.push(ParseError::new(
+                    self.current_token.span,
+                    "Expected '}' after export specifiers",
+                ));
+                self.sync_to_statement_end();
+                let end = self.current_token.span.end;
+                return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+            }
+            self.bump(); // }
+
+            let from = if self.current_token.kind == TokenKind::Identifier
+                && self.token_eq_ident(&self.current_token, b"from")
+            {
+                self.bump(); // from
+                if self.current_token.kind != TokenKind::StringLiteral {
+                    self.errors.push(ParseError::new(
+                        self.current_token.span,
+                        "Expected module path string after 'from'",
+                    ));
+                    self.sync_to_statement_end();
+                    let end = self.current_token.span.end;
+                    return self.arena.alloc(Stmt::Error { span: Span::new(start, end) });
+                }
+                let from_tok: &'ast Token = self.arena.alloc(self.current_token);
+                self.bump();
+                Some(from_tok)
+            } else {
+                None
+            };
+
+            self.expect_semicolon();
+            let end = self.current_token.span.end;
+            return self.arena.alloc(Stmt::Export {
+                item: ExportItem::Named {
+                    specs: self.arena.alloc_slice_copy(&specs),
+                    from,
+                },
+                span: Span::new(start, end),
+            });
+        }
+
+        // Declaration exports.
+        let is_async = self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"async");
+        if is_async {
+            self.bump();
+        }
+
+        if self.is_ds()
+            && self.current_token.kind == TokenKind::Fn
+            && self.next_token.kind == TokenKind::Identifier
+        {
+            let decl = self.parse_function(attributes, doc_comment, is_async);
+            return self.arena.alloc(Stmt::Export {
+                item: ExportItem::Decl(decl),
+                span: Span::new(start, decl.span().end),
+            });
+        }
+
+        if !self.is_ds()
+            && self.current_token.kind == TokenKind::Function
+            && self.next_token.kind == TokenKind::Identifier
+        {
+            let decl = self.parse_function(attributes, doc_comment, is_async);
+            return self.arena.alloc(Stmt::Export {
+                item: ExportItem::Decl(decl),
+                span: Span::new(start, decl.span().end),
+            });
+        }
+
+        if self.is_ds() && self.current_token.kind == TokenKind::Const {
+            let decl = self.parse_const_stmt(attributes, doc_comment);
+            return self.arena.alloc(Stmt::Export {
+                item: ExportItem::Decl(decl),
+                span: Span::new(start, decl.span().end),
+            });
+        }
+
+        self.errors.push(ParseError::with_help(
+            self.current_token.span,
+            "Unsupported export syntax",
+            "Use `export fn name() {}`, `export const name = ...;`, or `export { name };`.",
+        ));
+        self.sync_to_statement_end();
+        let end = self.current_token.span.end;
+        self.arena.alloc(Stmt::Error { span: Span::new(start, end) })
     }
 
     /// Parse a DekaScript `fn` declaration: either a top-level function or a

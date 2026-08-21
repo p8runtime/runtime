@@ -3,7 +3,11 @@ use std::path::Path;
 
 use crate::parser::lexer::Lexer;
 use crate::parser::parser::{Parser, ParserMode};
-use crate::phpx::typeck::{check_program, check_program_with_path};
+use crate::phpx::typeck::{
+    TypeckProgramSummary, check_program, check_program_with_imports, check_program_with_path,
+    summarize_program_with_path,
+};
+use std::collections::HashMap;
 
 fn normalize_phpx_snippet(code: &str) -> &str {
     let trimmed = code.trim_start();
@@ -1552,5 +1556,74 @@ fn ds_struct_field_assignment_uses_base_mutability() {
     assert!(
         res.unwrap_err().contains("cannot assign to field of immutable value"),
         "expected immutable value error"
+    );
+}
+
+
+#[test]
+fn ds_cross_module_import_type_checks_against_remote_signature() {
+    let arena = Bump::new();
+    let math_code = r#"
+        export fn add(a: int, b: int): int {
+            return a + b;
+        }
+    "#;
+    let mut parser = Parser::new_with_mode(Lexer::new(math_code.as_bytes()), &arena, ParserMode::Ds);
+    let math_program = parser.parse_program();
+    assert!(math_program.errors.is_empty(), "{:?}", math_program.errors);
+    let math_summary = summarize_program_with_path(&math_program, math_code.as_bytes(), None)
+        .expect("math module should summarize");
+
+    let app_code = r#"
+        import { add } from "./math.ds";
+        const result = add(1, 2);
+        console.log(result);
+    "#;
+    let mut parser = Parser::new_with_mode(Lexer::new(app_code.as_bytes()), &arena, ParserMode::Ds);
+    let app_program = parser.parse_program();
+    assert!(app_program.errors.is_empty(), "{:?}", app_program.errors);
+
+    let mut imports = HashMap::new();
+    imports.insert("./math.ds".to_string(), math_summary);
+    let result = check_program_with_imports(
+        &app_program,
+        app_code.as_bytes(),
+        None,
+        &imports,
+    );
+    assert!(result.is_ok(), "expected cross-module import to type-check, got: {:?}", result);
+}
+
+#[test]
+fn ds_cross_module_import_rejects_missing_export() {
+    let arena = Bump::new();
+    let math_summary = TypeckProgramSummary {
+        structs: HashMap::new(),
+        enums: HashMap::new(),
+        functions: HashMap::new(),
+        type_aliases: HashMap::new(),
+    };
+
+    let app_code = r#"
+        import { missing } from "./math.ds";
+        missing();
+    "#;
+    let mut parser = Parser::new_with_mode(Lexer::new(app_code.as_bytes()), &arena, ParserMode::Ds);
+    let app_program = parser.parse_program();
+    assert!(app_program.errors.is_empty(), "{:?}", app_program.errors);
+
+    let mut imports = HashMap::new();
+    imports.insert("./math.ds".to_string(), math_summary);
+    let result = check_program_with_imports(
+        &app_program,
+        app_code.as_bytes(),
+        None,
+        &imports,
+    );
+    let errors = result.expect_err("expected missing export error");
+    assert!(
+        errors.iter().any(|e| e.message.contains("is not exported by")),
+        "expected 'not exported' error, got: {:?}",
+        errors
     );
 }

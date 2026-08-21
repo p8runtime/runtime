@@ -283,6 +283,18 @@ pub enum Stmt<'ast> {
         kind: UseKind,
         span: Span,
     },
+    /// ECMAScript-style named import: `import { a, b as c } from "./mod";`.
+    Import {
+        specs: &'ast [ImportExportSpec<'ast>],
+        from: &'ast Token,
+        span: Span,
+    },
+    /// ECMAScript-style export. The wrapped declaration is emitted unchanged
+    /// except for the exported binding; named-list exports carry their own specs.
+    Export {
+        item: ExportItem<'ast>,
+        span: Span,
+    },
     Switch {
         condition: ExprId<'ast>,
         cases: &'ast [Case<'ast>],
@@ -800,6 +812,8 @@ impl<'ast> Stmt<'ast> {
             Stmt::Enum { span, .. } => *span,
             Stmt::Namespace { span, .. } => *span,
             Stmt::Use { span, .. } => *span,
+            Stmt::Import { span, .. } => *span,
+            Stmt::Export { span, .. } => *span,
             Stmt::Switch { span, .. } => *span,
             Stmt::Try { span, .. } => *span,
             Stmt::Throw { span, .. } => *span,
@@ -1081,6 +1095,28 @@ pub enum UseKind {
     Normal,
     Function,
     Const,
+}
+
+/// A single name in an `import { ... }` or `export { ... }` list.
+/// `remote` is the name used by the source module; `local` is the binding
+/// in the current module. For non-aliased specifiers the two are identical.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ImportExportSpec<'ast> {
+    pub remote: &'ast Token,
+    pub local: &'ast Token,
+    pub span: Span,
+}
+
+/// Body of an `export` statement.
+#[derive(Debug, Serialize)]
+pub enum ExportItem<'ast> {
+    /// `export { a, b as c };` and `export { a, b as c } from "./mod";`.
+    Named {
+        specs: &'ast [ImportExportSpec<'ast>],
+        from: Option<&'ast Token>,
+    },
+    /// `export fn ...`, `export function ...`, `export const ...`.
+    Decl(StmtId<'ast>),
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
