@@ -66,6 +66,7 @@ pub struct TypeckProgramSummary {
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
     pub functions: HashMap<String, TypeckFunctionInfo>,
+    pub type_aliases: HashMap<String, Type>,
 }
 
 #[derive(Debug, Clone)]

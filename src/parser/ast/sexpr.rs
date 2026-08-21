@@ -689,6 +689,8 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write(&String::from_utf8_lossy(value));
                 self.write("\")");
             }
+            Stmt::Import { .. } => self.write("(import ...)"),
+            Stmt::Export { .. } => self.write("(export ...)"),
             Stmt::Error { .. } => self.write("(error)"),
             Stmt::Nop { .. } => self.write("(nop)"),
         }

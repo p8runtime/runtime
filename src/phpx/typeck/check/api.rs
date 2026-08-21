@@ -88,6 +88,28 @@ pub fn check_program_with_path_and_externals(
     }
 }
 
+/// Type-check a program with a map of imported module summaries.
+///
+/// Each named import is resolved against the corresponding module's export
+/// summary and seeded into the check context so that cross-module calls and
+/// type references are validated.
+pub fn check_program_with_imports(
+    program: &Program,
+    source: &[u8],
+    file_path: Option<&Path>,
+    imports: &HashMap<String, TypeckProgramSummary>,
+) -> Result<Vec<TypeError>, Vec<TypeError>> {
+    let mut ctx = CheckContext::new(source, file_path);
+    ctx.seed_imports(program, imports);
+    ctx.check_program(program);
+
+    if ctx.errors.iter().any(TypeError::is_error) {
+        Err(ctx.errors)
+    } else {
+        Ok(ctx.errors)
+    }
+}
+
 pub fn summarize_program_with_path(
     program: &Program,
     source: &[u8],
@@ -122,10 +144,17 @@ pub fn summarize_program_with_path(
         })
         .collect();
 
+    let type_aliases: HashMap<String, Type> = ctx
+        .type_aliases
+        .into_iter()
+        .map(|(name, info)| (name, info.ty))
+        .collect();
+
     Ok(TypeckProgramSummary {
         structs: ctx.structs,
         enums: ctx.enums,
         functions,
+        type_aliases,
     })
 }
 

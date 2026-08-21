@@ -1,4 +1,5 @@
 use super::*;
+use crate::parser::ast::{Program, Stmt};
 
 impl<'ast> Visitor<'ast> for JsxExprValidator {
     fn visit_expr(&mut self, expr: ExprId<'ast>) {
@@ -319,44 +320,15 @@ impl<'a> CheckContext<'a> {
         self.functions.contains_key(name) || self.imported.contains_key(name)
     }
 
-    pub(in crate::phpx::typeck::check) fn collect_imported_names(&mut self) {
-        let source = String::from_utf8_lossy(self.source);
-        let import_re = match Regex::new(
-            r#"(?m)^[\t \r]*import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*;?\s*$"#,
-        ) {
-            Ok(regex) => regex,
-            Err(_) => return,
-        };
-        let spec_re = match Regex::new(
-            r#"^([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$"#,
-        ) {
-            Ok(regex) => regex,
-            Err(_) => return,
-        };
-
-        for caps in import_re.captures_iter(&source) {
-            let Some(specs) = caps.get(1).map(|m| m.as_str()) else {
+    pub(in crate::phpx::typeck::check) fn collect_imported_names(&mut self, program: &Program<'a>) {
+        for stmt in program.statements.iter() {
+            let Stmt::Import { specs, from, .. } = stmt else {
                 continue;
             };
-            let Some(module) = caps.get(2).map(|m| m.as_str()) else {
-                continue;
-            };
-            for spec in specs.split(',') {
-                let trimmed = spec.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let Some(spec_caps) = spec_re.captures(trimmed) else {
-                    continue;
-                };
-                let local = spec_caps
-                    .get(2)
-                    .map(|m| m.as_str())
-                    .unwrap_or_else(|| spec_caps.get(1).map(|m| m.as_str()).unwrap_or(""));
-                if local.is_empty() {
-                    continue;
-                }
-                self.imported.insert(local.to_string(), module.to_string());
+            let module = String::from_utf8_lossy(from.text(self.source)).to_string();
+            for spec in specs.iter() {
+                let local = String::from_utf8_lossy(spec.local.text(self.source)).to_string();
+                self.imported.insert(local, module.clone());
             }
         }
     }

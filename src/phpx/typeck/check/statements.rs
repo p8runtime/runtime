@@ -517,6 +517,11 @@ impl<'a> CheckContext<'a> {
                     explicit.insert(name);
                 }
             }
+            Stmt::Export { item, .. } => {
+                if let ExportItem::Decl(decl) = item {
+                    self.check_stmt(decl, env, explicit, return_type, mut_env);
+                }
+            }
             _ => {}
         }
     }

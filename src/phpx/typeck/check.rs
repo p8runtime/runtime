@@ -1,6 +1,6 @@
 use crate::parser::ast::visitor::{Visitor, walk_expr};
 use crate::parser::ast::{
-    BinaryOp, ClassKind, ClassMember, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
+    BinaryOp, ClassKind, ClassMember, ExportItem, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
     PropertyEntry, Severity, Stmt, StmtId, Type as AstType, TypeParam, UnaryOp,
 };
 use crate::parser::lexer::token::TokenKind;
@@ -30,8 +30,9 @@ mod structs;
 mod type_resolution;
 
 pub use api::{
-    check_program, check_program_with_path, check_program_with_path_and_externals,
-    external_functions_from_stub, format_type_errors, summarize_program_with_path,
+    check_program, check_program_with_imports, check_program_with_path,
+    check_program_with_path_and_externals, external_functions_from_stub, format_type_errors,
+    summarize_program_with_path,
 };
 pub use model::{
     ExternalFunctionSig, ExternalParamSig, ExternalTypeParamSig, TypeError, TypeckFunctionInfo,

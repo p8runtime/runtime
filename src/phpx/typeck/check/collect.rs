@@ -580,6 +580,7 @@ impl<'a> CheckContext<'a> {
 
     pub(in crate::phpx::typeck::check) fn collect_functions(&mut self, program: &Program<'a>) {
         for stmt in program.statements.iter() {
+            let stmt = export_decl_stmt(stmt);
             if let Stmt::Function {
                 name,
                 type_params,
@@ -623,6 +624,7 @@ impl<'a> CheckContext<'a> {
         program: &Program<'a>,
     ) {
         for stmt in program.statements.iter() {
+            let stmt = export_decl_stmt(stmt);
             let Stmt::Function {
                 name,
                 is_async,

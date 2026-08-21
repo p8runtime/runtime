@@ -1,5 +1,18 @@
 use super::*;
 
+/// If `stmt` is `export <decl>`, return the wrapped declaration so that
+/// collectors and the statement checker can treat exported declarations the
+/// same as top-level declarations.
+pub(in crate::phpx::typeck::check) fn export_decl_stmt<'a>(stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
+    match stmt {
+        Stmt::Export {
+            item: ExportItem::Decl(decl),
+            ..
+        } => decl,
+        _ => stmt,
+    }
+}
+
 pub(in crate::phpx::typeck::check) fn member_span(member: &ClassMember) -> Span {
     match member {
         ClassMember::Property { span, .. }
