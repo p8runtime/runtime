@@ -646,12 +646,13 @@ pub enum Expr<'ast> {
         expr: ExprId<'ast>,
         span: Span,
     },
-    /// A DekaScript `unsafe { ... } [catch (e) { ... }] [finally { ... }]`
-    /// expression. Desugars to a call to the runtime `deka.unsafe` helper.
+    /// A DekaScript `unsafe { ... }` expression. The body is raw JavaScript
+    /// source text that is passed through verbatim; it is not parsed as
+    /// DekaScript. At runtime it desugars to a `Result<T, Error>` where `T` is
+    /// the completion value of the embedded JS (or `undefined` if it is a
+    /// statement block).
     Unsafe {
-        body: ExprId<'ast>,
-        catch: Option<&'ast UnsafeCatch<'ast>>,
-        finally: Option<ExprId<'ast>>,
+        raw: &'ast [u8],
         span: Span,
     },
     /// A prepared Cypher query literal.
@@ -668,13 +669,6 @@ pub enum Expr<'ast> {
     Error {
         span: Span,
     },
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct UnsafeCatch<'ast> {
-    pub var: &'ast Token,
-    pub body: ExprId<'ast>,
-    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

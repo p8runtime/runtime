@@ -456,17 +456,13 @@ impl<'a> CheckContext<'a> {
                 self.check_match_exhaustive(&cond_ty, arms, env);
                 match_ty
             }
-            Expr::Unsafe {
-                body, catch, finally, ..
-            } => {
-                let body_ty = self.check_expr(body, env, explicit, mut_env);
-                if let Some(catch) = catch {
-                    let _ = self.check_expr(catch.body, env, explicit, mut_env);
+            Expr::Unsafe { .. } => {
+                // Raw JavaScript inside `unsafe { ... }` is opaque to PHPX type
+                // checking. The expression always has type Result<unknown, unknown>.
+                Type::Applied {
+                    base: "Result".to_string(),
+                    args: vec![Type::Unknown, Type::Unknown],
                 }
-                if let Some(finally) = finally {
-                    let _ = self.check_expr(finally, env, explicit, mut_env);
-                }
-                body_ty
             }
             Expr::AnonymousClass { span, .. } => {
                 self.errors.push(TypeError { severity: Severity::Error,
@@ -740,7 +736,8 @@ impl<'a> CheckContext<'a> {
             Type::Applied { base, .. }
                 if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") =>
             {
-                if prop_name != "name" {
+                const ALLOWED: &[&str] = &["name", "__case", "value", "error"];
+                if !ALLOWED.contains(&prop_name.as_str()) {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!("Unknown enum field '{}::{}'", base, prop_name),
