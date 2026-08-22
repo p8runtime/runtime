@@ -1304,6 +1304,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     span: token.span,
                 })
             }
+            TokenKind::BigIntNumber => {
+                self.bump();
+                self.arena.alloc(Expr::BigInt {
+                    value: self.arena.alloc_slice_copy(self.lexer.slice(token.span)),
+                    span: token.span,
+                })
+            }
             TokenKind::StringLiteral => {
                 self.bump();
                 self.arena.alloc(Expr::String {

@@ -1293,6 +1293,11 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 self.write(&String::from_utf8_lossy(value));
                 self.write(")");
             }
+            Expr::BigInt { value, .. } => {
+                self.write("(bigint ");
+                self.write(&String::from_utf8_lossy(value));
+                self.write(")");
+            }
             Expr::AnonymousClass {
                 attributes,
                 modifiers,

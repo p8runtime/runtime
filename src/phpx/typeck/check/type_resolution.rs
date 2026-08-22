@@ -219,6 +219,7 @@ impl<'a> CheckContext<'a> {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
             "number" => Type::Primitive(PrimitiveType::Number),
+            "bigint" => Type::Primitive(PrimitiveType::BigInt),
             "boolean" => Type::Primitive(PrimitiveType::Bool),
             "string" => Type::Primitive(PrimitiveType::String),
             "bytes" => Type::Primitive(PrimitiveType::Bytes),
@@ -362,6 +363,7 @@ impl<'a> CheckContext<'a> {
             return true;
         }
         if name.eq_ignore_ascii_case("number")
+            || name.eq_ignore_ascii_case("bigint")
             || name.eq_ignore_ascii_case("boolean")
             || name.eq_ignore_ascii_case("string")
             || name.eq_ignore_ascii_case("bytes")
@@ -506,7 +508,6 @@ fn retired_type_spelling(name: &str) -> Option<String> {
             "'undefined' is not a DekaScript type; use Option<T> for a value that may be absent"
         }
         "symbol" => "'symbol' is not supported in DekaScript",
-        "bigint" => "'bigint' is not supported in DekaScript yet",
         "any" | "unknown" => {
             "'any' and 'unknown' are not DekaScript types; use 'object' or a type parameter"
         }

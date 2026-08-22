@@ -242,7 +242,7 @@ impl<'src> Lexer<'src> {
                             break;
                         }
                     }
-                    return TokenKind::LNumber;
+                    return self.finish_number_token(false);
                 } else if c == b'b' || c == b'B' {
                     self.advance();
                     while let Some(c) = self.peek() {
@@ -252,7 +252,7 @@ impl<'src> Lexer<'src> {
                             break;
                         }
                     }
-                    return TokenKind::LNumber;
+                    return self.finish_number_token(false);
                 } else if c == b'o' || c == b'O' {
                     self.advance();
                     while let Some(c) = self.peek() {
@@ -262,7 +262,7 @@ impl<'src> Lexer<'src> {
                             break;
                         }
                     }
-                    return TokenKind::LNumber;
+                    return self.finish_number_token(false);
                 }
             }
         }
@@ -289,6 +289,18 @@ impl<'src> Lexer<'src> {
             }
         }
 
+        self.finish_number_token(is_float)
+    }
+
+    /// A trailing `n` marks a BigInt literal, as in JavaScript (`100n`).
+    /// Only valid on integers -- `1.5n` is not a thing in JS either, so the
+    /// suffix is simply not consumed after a float and the `n` will surface
+    /// as an unexpected token rather than being silently swallowed.
+    fn finish_number_token(&mut self, is_float: bool) -> TokenKind {
+        if !is_float && self.peek() == Some(b'n') {
+            self.advance();
+            return TokenKind::BigIntNumber;
+        }
         if is_float {
             TokenKind::DNumber
         } else {

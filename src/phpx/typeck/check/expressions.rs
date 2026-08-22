@@ -77,8 +77,35 @@ impl<'a> CheckContext<'a> {
                             .to_string(),
                     });
                 }
-                let _ = self.check_expr(left, env, explicit, mut_env);
-                let _ = self.check_expr(right, env, explicit, mut_env);
+                let left_ty = self.check_expr(left, env, explicit, mut_env);
+                let right_ty = self.check_expr(right, env, explicit, mut_env);
+                // JavaScript throws a TypeError on mixed bigint/number
+                // arithmetic rather than coercing, so this has to be an error
+                // rather than a widening. Reported here because
+                // infer_binary_op is a pure function with no error channel --
+                // it can only return Unknown, which is permissive and would
+                // let the mix through silently.
+                let is_bigint = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::BigInt));
+                let is_number = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Number));
+                if matches!(
+                    op,
+                    BinaryOp::Plus
+                        | BinaryOp::Minus
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                ) && ((is_bigint(&left_ty) && is_number(&right_ty))
+                    || (is_number(&left_ty) && is_bigint(&right_ty)))
+                {
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span,
+                        message:
+                            "Cannot mix bigint and number in arithmetic; convert one side explicitly"
+                                .to_string(),
+                    });
+                }
                 self.infer_expr_with_env(expr, env)
             }
             Expr::Unary { expr, .. } => {

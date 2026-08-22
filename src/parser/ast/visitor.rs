@@ -567,6 +567,7 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
         Expr::Variable { .. }
         | Expr::Integer { .. }
         | Expr::Float { .. }
+        | Expr::BigInt { .. }
         | Expr::Boolean { .. }
         | Expr::Null { .. }
         | Expr::String { .. }

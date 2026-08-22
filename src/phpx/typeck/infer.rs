@@ -439,6 +439,7 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
 
 fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
     let is_number = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Number));
+    let is_bigint = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::BigInt));
     let is_bool = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Bool));
     let is_string = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::String));
     let is_unknown = |t: &Type| matches!(t, Type::Unknown);
@@ -446,6 +447,14 @@ fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
     match op {
         BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
             if is_unknown(left) || is_unknown(right) {
+                Type::Unknown
+            } else if is_bigint(left) && is_bigint(right) {
+                Type::Primitive(PrimitiveType::BigInt)
+            } else if is_bigint(left) || is_bigint(right) {
+                // JavaScript throws a TypeError on mixed bigint/number
+                // arithmetic rather than coercing, and TypeScript rejects it
+                // statically. Unknown keeps the error at the assignment or
+                // call site instead of inventing a result type here.
                 Type::Unknown
             } else if is_number(left) && is_number(right) {
                 Type::Primitive(PrimitiveType::Number)
@@ -528,6 +537,7 @@ pub fn literal_type(expr: &Expr) -> Option<Type> {
     match expr {
         Expr::Integer { .. } => Some(Type::Primitive(PrimitiveType::Number)),
         Expr::Float { .. } => Some(Type::Primitive(PrimitiveType::Number)),
+        Expr::BigInt { .. } => Some(Type::Primitive(PrimitiveType::BigInt)),
         Expr::Boolean { .. } => Some(Type::Primitive(PrimitiveType::Bool)),
         Expr::String { .. } => Some(Type::Primitive(PrimitiveType::String)),
         Expr::Null { .. } => Some(Type::Primitive(PrimitiveType::Null)),

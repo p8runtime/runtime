@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrimitiveType {
     Number,
+    BigInt,
     Bool,
     String,
     Bytes,
@@ -53,6 +54,7 @@ impl Type {
             Type::Mixed => "mixed".to_string(),
             Type::Primitive(prim) => match prim {
                 PrimitiveType::Number => "number".to_string(),
+                PrimitiveType::BigInt => "bigint".to_string(),
                 PrimitiveType::Bool => "bool".to_string(),
                 PrimitiveType::String => "string".to_string(),
                 PrimitiveType::Bytes => "bytes".to_string(),
