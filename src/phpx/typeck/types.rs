@@ -3,8 +3,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrimitiveType {
-    Int,
-    Float,
+    Number,
     Bool,
     String,
     Bytes,
@@ -53,8 +52,7 @@ impl Type {
             Type::Unknown => "unknown".to_string(),
             Type::Mixed => "mixed".to_string(),
             Type::Primitive(prim) => match prim {
-                PrimitiveType::Int => "int".to_string(),
-                PrimitiveType::Float => "float".to_string(),
+                PrimitiveType::Number => "number".to_string(),
                 PrimitiveType::Bool => "bool".to_string(),
                 PrimitiveType::String => "string".to_string(),
                 PrimitiveType::Bytes => "bytes".to_string(),
@@ -131,13 +129,6 @@ pub fn merge_types(left: &Type, right: &Type) -> Type {
     }
     if matches!(left, Type::Mixed) || matches!(right, Type::Mixed) {
         return Type::Mixed;
-    }
-    match (left, right) {
-        (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float))
-        | (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
-            return Type::Primitive(PrimitiveType::Float);
-        }
-        _ => {}
     }
     let mut out = Vec::new();
     collect_union_types(left, &mut out);

@@ -438,8 +438,7 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
 }
 
 fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
-    let is_int = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Int));
-    let is_float = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Float));
+    let is_number = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Number));
     let is_bool = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Bool));
     let is_string = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::String));
     let is_unknown = |t: &Type| matches!(t, Type::Unknown);
@@ -448,10 +447,8 @@ fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
         BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
             if is_unknown(left) || is_unknown(right) {
                 Type::Unknown
-            } else if is_int(left) && is_int(right) {
-                Type::Primitive(PrimitiveType::Int)
-            } else if (is_int(left) || is_float(left)) && (is_int(right) || is_float(right)) {
-                Type::Primitive(PrimitiveType::Float)
+            } else if is_number(left) && is_number(right) {
+                Type::Primitive(PrimitiveType::Number)
             } else {
                 Type::Unknown
             }
@@ -493,8 +490,8 @@ fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
             }
         }
         BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
-            if is_int(left) && is_int(right) {
-                Type::Primitive(PrimitiveType::Int)
+            if is_number(left) && is_number(right) {
+                Type::Primitive(PrimitiveType::Number)
             } else {
                 Type::Unknown
             }
@@ -529,8 +526,8 @@ fn infer_pipe_call(right: &Expr, ctx: &InferContext) -> Type {
 
 pub fn literal_type(expr: &Expr) -> Option<Type> {
     match expr {
-        Expr::Integer { .. } => Some(Type::Primitive(PrimitiveType::Int)),
-        Expr::Float { .. } => Some(Type::Primitive(PrimitiveType::Float)),
+        Expr::Integer { .. } => Some(Type::Primitive(PrimitiveType::Number)),
+        Expr::Float { .. } => Some(Type::Primitive(PrimitiveType::Number)),
         Expr::Boolean { .. } => Some(Type::Primitive(PrimitiveType::Bool)),
         Expr::String { .. } => Some(Type::Primitive(PrimitiveType::String)),
         Expr::Null { .. } => Some(Type::Primitive(PrimitiveType::Null)),
@@ -647,7 +644,7 @@ fn infer_enum_field(enum_name: String, field: &str, ctx: &InferContext) -> Type 
     }
     if field == "value" {
         return match info.backed {
-            Some(PrimitiveType::Int) => Type::Primitive(PrimitiveType::Int),
+            Some(PrimitiveType::Number) => Type::Primitive(PrimitiveType::Number),
             Some(PrimitiveType::String) => Type::Primitive(PrimitiveType::String),
             _ => Type::Unknown,
         };
@@ -681,7 +678,7 @@ fn infer_enum_case_field(
     }
     if field == "value" {
         return match info.backed {
-            Some(PrimitiveType::Int) => Type::Primitive(PrimitiveType::Int),
+            Some(PrimitiveType::Number) => Type::Primitive(PrimitiveType::Number),
             Some(PrimitiveType::String) => Type::Primitive(PrimitiveType::String),
             _ => Type::Unknown,
         };
@@ -700,10 +697,10 @@ fn resolve_ast_type(ctx: &InferContext, ty: &crate::parser::ast::Type) -> Type {
     use crate::parser::lexer::token::TokenKind;
     match ty {
         AstType::Simple(token) => match token.kind {
-            TokenKind::TypeInt => Type::Primitive(PrimitiveType::Int),
+            TokenKind::TypeInt => Type::Primitive(PrimitiveType::Number),
             TokenKind::TypeString => Type::Primitive(PrimitiveType::String),
             TokenKind::TypeBool => Type::Primitive(PrimitiveType::Bool),
-            TokenKind::TypeFloat => Type::Primitive(PrimitiveType::Float),
+            TokenKind::TypeFloat => Type::Primitive(PrimitiveType::Number),
             TokenKind::TypeBytes => Type::Primitive(PrimitiveType::Bytes),
             TokenKind::TypeNull => Type::Primitive(PrimitiveType::Null),
             _ => Type::Unknown,
@@ -716,9 +713,8 @@ fn resolve_ast_type(ctx: &InferContext, ty: &crate::parser::ast::Type) -> Type {
                 .collect::<Vec<_>>()
                 .join("\\");
             match text.to_ascii_lowercase().as_str() {
-                "int" | "integer" | "number" => Type::Primitive(PrimitiveType::Int),
-                "float" | "double" => Type::Primitive(PrimitiveType::Float),
-                "bool" | "boolean" => Type::Primitive(PrimitiveType::Bool),
+                "number" => Type::Primitive(PrimitiveType::Number),
+                "boolean" => Type::Primitive(PrimitiveType::Bool),
                 "string" => Type::Primitive(PrimitiveType::String),
                 "bytes" => Type::Primitive(PrimitiveType::Bytes),
                 "null" => Type::Primitive(PrimitiveType::Null),

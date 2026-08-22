@@ -256,7 +256,6 @@ fn is_assignable_base(source: &Type, target: &Type) -> bool {
     match (source, target) {
         (Type::TypeParam(a), Type::TypeParam(b)) => a == b,
         (Type::Primitive(a), Type::Primitive(b)) => match (a, b) {
-            (PrimitiveType::Int, PrimitiveType::Float) => true,
             _ => a == b,
         },
         (Type::Array, Type::Array) => true,
