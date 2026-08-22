@@ -590,7 +590,6 @@ impl<'a> CheckContext<'a> {
             } = stmt
             {
                 let fn_name = token_text(self.source, name.span);
-                self.check_poc_severity_warning(&fn_name, name.span);
                 let (type_param_sigs, type_param_set) = self.collect_type_param_sigs(type_params);
                 let mut param_sigs = Vec::new();
                 let mut variadic = false;

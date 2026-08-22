@@ -921,50 +921,8 @@ fn bytes_type_in_struct_field_is_ok() {
 //
 // check_program's Result discriminant is the severity signal: Ok(diagnostics)
 // means the program checked out (diagnostics, if any, are all Warning-level);
-// Err(diagnostics) means at least one Error-level diagnostic is present. The
-// `__deka_poc_warn__` sentinel function name is a synthetic, test-only
-// trigger (see check/poc_warning.rs) that proves a Warning diagnostic flows
-// through without failing the check -- it is not a real language rule.
+// Err(diagnostics) means at least one Error-level diagnostic is present.
 
-#[test]
-fn poc_warning_only_program_checks_out_successfully() {
-    let code = normalize_phpx_snippet("<?php function __deka_poc_warn__() {}");
-    let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
-    let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "program should parse cleanly");
-
-    let result = check_program(&program, code.as_bytes());
-    let diagnostics = match result {
-        Ok(diagnostics) => diagnostics,
-        Err(diagnostics) => panic!(
-            "a warnings-only program must be Ok, not Err: {:?}",
-            diagnostics
-                .iter()
-                .map(|d| &d.message)
-                .collect::<Vec<_>>()
-        ),
-    };
-
-    assert_eq!(
-        diagnostics.len(),
-        1,
-        "expected exactly the one PoC warning, got {:?}",
-        diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
-    );
-    assert_eq!(diagnostics[0].severity, crate::parser::ast::Severity::Warning);
-    assert!(
-        diagnostics[0].message.contains("__deka_poc_warn__"),
-        "unexpected warning message: {}",
-        diagnostics[0].message
-    );
-    assert!(diagnostics[0].message.contains("deka#59"));
-
-    // The rendered form must be visually distinguishable ("type warning",
-    // never "type error") from a hard failure.
-    let rendered = diagnostics[0].to_human_readable(code.as_bytes());
-    assert!(rendered.starts_with("type warning:"), "got: {rendered}");
-}
 
 #[test]
 fn real_type_error_still_fails_exactly_as_before() {

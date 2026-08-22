@@ -93,9 +93,7 @@ pub(in crate::phpx::typeck::check) enum StructFieldResolution {
 pub struct TypeError {
     pub span: Span,
     pub message: String,
-    /// Defaults to `Severity::Error` at every existing call site. Only the
-    /// deka#59 proof-of-concept warning (see `check/poc_warning.rs`) sets
-    /// `Severity::Warning` today.
+    /// Defaults to `Severity::Error` at every existing call site.
     pub severity: Severity,
 }
 
