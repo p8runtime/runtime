@@ -115,9 +115,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     /// Look ahead `n` tokens from the current position without consuming.
     /// `n == 0` returns the current token, `n == 1` returns the next token.
     pub(super) fn lookahead_kind(&self, n: usize) -> Option<TokenKind> {
+        self.lookahead_token(n).map(|t| t.kind)
+    }
+
+    /// Look ahead `n` tokens and return the full token (including span/text).
+    /// `n == 0` returns the current token, `n == 1` returns the next token.
+    pub(super) fn lookahead_token(&self, n: usize) -> Option<Token> {
         match n {
-            0 => Some(self.current_token.kind),
-            1 => Some(self.next_token.kind),
+            0 => Some(self.current_token),
+            1 => Some(self.next_token),
             _ => {
                 let mut lexer = self.lexer.clone();
                 let mut last = None;
@@ -126,7 +132,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         let token = lexer.next()?;
                         if token.kind != TokenKind::Comment && token.kind != TokenKind::DocComment
                         {
-                            last = Some(token.kind);
+                            last = Some(token);
                             break;
                         }
                     }

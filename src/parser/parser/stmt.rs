@@ -364,10 +364,28 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Return => self.parse_return(),
             TokenKind::If => self.parse_if(),
-            TokenKind::While => self.parse_while(),
-            TokenKind::Do => self.parse_do_while(),
+            TokenKind::While => {
+                if self.is_ds() {
+                    self.errors.push(ParseError::with_help(
+                        self.current_token.span,
+                        "`while` is not part of DekaScript",
+                        "Use a C-style `for` loop such as `for (let i = 0; i < n; i = i + 1) { ... }`, or put JS `while` inside an `unsafe { }` block.",
+                    ));
+                }
+                self.parse_while()
+            }
+            TokenKind::Do => {
+                if self.is_ds() {
+                    self.errors.push(ParseError::with_help(
+                        self.current_token.span,
+                        "`do-while` is not part of DekaScript",
+                        "Use a C-style `for` loop, or put JS `do-while` inside an `unsafe { }` block.",
+                    ));
+                }
+                self.parse_do_while()
+            }
             TokenKind::For => {
-                if self.is_ds() && self.next_token.kind == TokenKind::OpenParen {
+                if self.is_ds() && self.next_token.kind == TokenKind::OpenParen && self.is_ds_for_of_loop() {
                     self.parse_ds_for_of()
                 } else {
                     self.parse_for()
