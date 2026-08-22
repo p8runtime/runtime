@@ -20,7 +20,7 @@ impl<'a> CheckContext<'a> {
                             if self.strict_null && !self.type_allows_null(expected) {
                                 self.errors.push(TypeError { severity: Severity::Error,
                                     span: *null_span,
-                                    message: "Null is not allowed in PHPX; use Option<T> instead"
+                                    message: "Null is not allowed in DekaScript; use Option<T> instead"
                                         .to_string(),
                                 });
                             }
@@ -28,7 +28,7 @@ impl<'a> CheckContext<'a> {
                     } else if self.strict_null && !self.type_allows_null(expected) {
                         self.errors.push(TypeError { severity: Severity::Error,
                             span: *span,
-                            message: "Null is not allowed in PHPX; use Option<T> instead"
+                            message: "Null is not allowed in DekaScript; use Option<T> instead"
                                 .to_string(),
                         });
                     }
@@ -56,7 +56,7 @@ impl<'a> CheckContext<'a> {
                         if let Expr::Null { span: null_span } = *expr {
                             self.errors.push(TypeError { severity: Severity::Error,
                                 span: *null_span,
-                                message: "Null is not allowed in PHPX; use Option<T> instead"
+                                message: "Null is not allowed in DekaScript; use Option<T> instead"
                                     .to_string(),
                             });
                         }
@@ -73,7 +73,7 @@ impl<'a> CheckContext<'a> {
                     if let Expr::Null { span } = *expr {
                         self.errors.push(TypeError { severity: Severity::Error,
                             span: *span,
-                            message: "Null is not allowed in PHPX; use Option<T> instead"
+                            message: "Null is not allowed in DekaScript; use Option<T> instead"
                                 .to_string(),
                         });
                     }

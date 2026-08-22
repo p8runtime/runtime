@@ -177,7 +177,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
-                        "async functions are not allowed in PHP mode; use PHPX or DekaScript",
+                        "async functions are not allowed in PHP mode; use DekaScript or DekaScript",
                     ));
                     self.bump(); // async
                     return self.parse_function(attributes, doc_comment, false);
@@ -274,7 +274,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             {
                 self.errors.push(ParseError::new(
                     self.current_token.span,
-                    "async functions are not allowed in PHP mode; use PHPX or DekaScript",
+                    "async functions are not allowed in PHP mode; use DekaScript or DekaScript",
                 ));
                 self.bump(); // async
                 self.parse_function(&[], doc_comment, false)
@@ -480,7 +480,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
-                        "try/catch is not allowed in PHPX; use Result/Option instead",
+                        "try/catch is not allowed in DekaScript; use Result/Option instead",
                     ));
                 }
                 self.parse_try()
@@ -490,7 +490,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
-                        "throw is not allowed in PHPX; use Result/Option instead",
+                        "throw is not allowed in DekaScript; use Result/Option instead",
                     ));
                 }
                 self.parse_throw()
@@ -1146,7 +1146,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.is_ds() {
             self.errors.push(ParseError::with_help(
                 self.current_token.span,
-                "PHP/PHPX construct is not part of DekaScript",
+                "PHP construct is not part of DekaScript",
                 help,
             ));
         }

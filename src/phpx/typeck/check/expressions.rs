@@ -128,7 +128,7 @@ impl<'a> CheckContext<'a> {
                 }
                 self.errors.push(TypeError { severity: Severity::Error,
                     span,
-                    message: "new is not allowed in PHPX; use struct literals".to_string(),
+                    message: "new is not allowed in DekaScript; use struct literals".to_string(),
                 });
                 Type::Unknown
             }
@@ -467,7 +467,7 @@ impl<'a> CheckContext<'a> {
             Expr::AnonymousClass { span, .. } => {
                 self.errors.push(TypeError { severity: Severity::Error,
                     span,
-                    message: "Anonymous classes are not allowed in PHPX".to_string(),
+                    message: "Anonymous classes are not allowed in DekaScript".to_string(),
                 });
                 Type::Unknown
             }
@@ -546,7 +546,7 @@ impl<'a> CheckContext<'a> {
                 if self.fn_depth > 0 && self.async_depth == 0 {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span,
-                        message: "await is only allowed in async functions (or at top-level in PHPX modules)".to_string(),
+                        message: "await is only allowed in async functions (or at top-level in DekaScript modules)".to_string(),
                     });
                 }
                 let awaited_ty = self.check_expr(expr, env, explicit, mut_env);
@@ -1171,7 +1171,7 @@ impl<'a> CheckContext<'a> {
                         if self.strict_null && is_null && !self.type_allows_null(existing) {
                             self.errors.push(TypeError { severity: Severity::Error,
                                 span,
-                                message: "Null is not allowed in PHPX; use Option<T> instead"
+                                message: "Null is not allowed in DekaScript; use Option<T> instead"
                                     .to_string(),
                             });
                         }
@@ -1188,7 +1188,7 @@ impl<'a> CheckContext<'a> {
                         if self.strict_null && is_null {
                             self.errors.push(TypeError { severity: Severity::Error,
                                 span,
-                                message: "Null is not allowed in PHPX; use Option<T> instead"
+                                message: "Null is not allowed in DekaScript; use Option<T> instead"
                                     .to_string(),
                             });
                         }
@@ -1199,7 +1199,7 @@ impl<'a> CheckContext<'a> {
                     if self.strict_null && is_null {
                         self.errors.push(TypeError { severity: Severity::Error,
                             span,
-                            message: "Null is not allowed in PHPX; use Option<T> instead"
+                            message: "Null is not allowed in DekaScript; use Option<T> instead"
                                 .to_string(),
                         });
                     }

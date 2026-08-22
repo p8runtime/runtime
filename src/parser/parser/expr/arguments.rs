@@ -250,7 +250,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.errors.push(ParseError::with_help(
                     fallback_span,
                     "Unsupported destructuring pattern",
-                    "Use variable, array, or object patterns in PHPX destructuring.",
+                    "Use variable, array, or object patterns in DekaScript destructuring.",
                 ));
             }
         }

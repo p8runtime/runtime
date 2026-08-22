@@ -148,7 +148,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if !is_struct {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
-                        "use is only allowed for struct composition in PHPX",
+                        "use is only allowed for struct composition in DekaScript",
                     ));
                 }
                 self.bump();
@@ -164,7 +164,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.current_token.kind == TokenKind::OpenBrace {
                     self.errors.push(ParseError::new(
                         self.current_token.span,
-                        "Trait adaptations are not allowed in PHPX",
+                        "Trait adaptations are not allowed in DekaScript",
                     ));
                     self.bump();
                     while self.current_token.kind != TokenKind::CloseBrace
@@ -411,7 +411,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if self.is_ds_scripting() && is_struct && is_ctor {
                 self.errors.push(ParseError::new(
                     name.span,
-                    "constructors are not allowed in PHPX structs; use struct literals",
+                    "constructors are not allowed in DekaScript structs; use struct literals",
                 ));
             }
             if !is_ctor {
@@ -801,9 +801,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     self.errors.push(ParseError::new(
                         modifiers.first().map(|t| t.span).unwrap_or_default(),
                         if is_struct {
-                            "struct fields do not use visibility modifiers in PHPX"
+                            "struct fields do not use visibility modifiers in DekaScript"
                         } else {
-                            "interface fields do not use visibility modifiers in PHPX"
+                            "interface fields do not use visibility modifiers in DekaScript"
                         },
                     ));
                 }
@@ -935,13 +935,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if self.is_ds_scripting() && is_struct {
                 self.errors.push(ParseError::new(
                     name.span,
-                    "struct fields must use `$name: Type` syntax in PHPX",
+                    "struct fields must use `$name: Type` syntax in DekaScript",
                 ));
             }
             if is_phpx_interface {
                 self.errors.push(ParseError::new(
                     name.span,
-                    "interface fields must use `$name: Type` syntax in PHPX",
+                    "interface fields must use `$name: Type` syntax in DekaScript",
                 ));
             }
 
@@ -970,7 +970,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if is_phpx_interface {
                     self.errors.push(ParseError::new(
                         Span::new(start, start),
-                        "interface fields cannot declare property hooks in PHPX",
+                        "interface fields cannot declare property hooks in DekaScript",
                     ));
                 }
                 let hooks = self.parse_property_hooks();
@@ -1052,7 +1052,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         if entry.default.is_some() {
                             self.errors.push(ParseError::new(
                                 entry.span,
-                                "interface fields cannot have default values in PHPX",
+                                "interface fields cannot have default values in DekaScript",
                             ));
                         }
                     }

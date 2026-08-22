@@ -34,7 +34,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.is_ds_scripting() && kind == ClassKind::Class {
             self.errors.push(ParseError::new(
                 self.current_token.span,
-                "classes are not allowed in PHPX; use struct instead",
+                "classes are not allowed in DekaScript; use struct instead",
             ));
         }
         self.bump(); // Eat class/struct
@@ -97,13 +97,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if let Some(parent) = extends.as_ref() {
                 self.errors.push(ParseError::new(
                     parent.span,
-                    "structs cannot extend other types in PHPX",
+                    "structs cannot extend other types in DekaScript",
                 ));
             }
             if let Some(first) = implements.first() {
                 self.errors.push(ParseError::new(
                     first.span,
-                    "structs cannot implement interfaces in PHPX; interfaces are structural",
+                    "structs cannot implement interfaces in DekaScript; interfaces are structural",
                 ));
             }
         }
@@ -179,7 +179,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.is_ds_scripting() {
             self.errors.push(ParseError::new(
                 self.current_token.span,
-                "anonymous classes are not allowed in PHPX",
+                "anonymous classes are not allowed in DekaScript",
             ));
         }
         self.bump(); // eat class
@@ -335,7 +335,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             if let Some(first) = extends.first() {
                 self.errors.push(ParseError::new(
                     first.span,
-                    "interface inheritance is not allowed in PHPX",
+                    "interface inheritance is not allowed in DekaScript",
                 ));
             }
         }
@@ -399,7 +399,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if self.is_ds_scripting() && !self.is_ds() {
             self.errors.push(ParseError::new(
                 self.current_token.span,
-                "traits are not allowed in PHPX",
+                "traits are not allowed in DekaScript",
             ));
         }
         self.bump(); // Eat trait

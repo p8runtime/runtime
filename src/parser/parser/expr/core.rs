@@ -1016,7 +1016,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if !self.is_ds_scripting() {
                     self.errors.push(ParseError::with_help(
                         token.span,
-                        "await is only available in PHPX mode",
+                        "await is only available in DekaScript mode",
                         "Use a .phpx file for async/await support.",
                     ));
                 } else if self.fn_depth > 0 && self.async_fn_depth == 0 {
@@ -1066,7 +1066,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 if self.is_ds_scripting() {
                     self.errors.push(ParseError::new(
                         token.span,
-                        "new is not allowed in PHPX; use struct literals instead",
+                        "new is not allowed in DekaScript; use struct literals instead",
                     ));
                 }
                 self.bump();

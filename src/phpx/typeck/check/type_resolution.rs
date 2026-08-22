@@ -82,15 +82,6 @@ impl<'a> CheckContext<'a> {
                     args: vec![inner],
                 }
             }
-            AstType::Nullable(inner) => {
-                self.errors.push(TypeError { severity: Severity::Error,
-                    span: self.type_span(inner),
-                    message: "Nullable types are not allowed in DekaScript; use Option<T> instead"
-                        .to_string(),
-                });
-                let inner = self.resolve_type_internal(inner, visiting, params);
-                Type::Union(vec![inner, Type::Primitive(PrimitiveType::Null)])
-            }
             AstType::ObjectShape(fields) => {
                 let mut map = BTreeMap::new();
                 for field in fields.iter() {
@@ -190,7 +181,6 @@ impl<'a> CheckContext<'a> {
             AstType::Union(types) | AstType::Intersection(types) => {
                 types.first().map(|t| self.type_span(t)).unwrap_or_default()
             }
-            AstType::Nullable(inner) => self.type_span(inner),
             AstType::Option(inner) => self.type_span(inner),
             AstType::ObjectShape(fields) => {
                 fields.first().map(|field| field.span).unwrap_or_default()
@@ -209,7 +199,6 @@ impl<'a> CheckContext<'a> {
                 AstType::Simple(token) if token.kind == TokenKind::TypeNull => {
                     return Some(token.span);
                 }
-                AstType::Nullable(inner) => return Some(self.type_span(inner)),
                 AstType::Union(inner) | AstType::Intersection(inner) => {
                     if let Some(span) = self.find_null_type_span(inner) {
                         return Some(span);

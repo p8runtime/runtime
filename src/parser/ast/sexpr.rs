@@ -1501,10 +1501,6 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 }
                 self.write(")");
             }
-            Type::Nullable(t) => {
-                self.write("?");
-                self.visit_type(t);
-            }
             Type::Option(t) => {
                 self.write("(option ");
                 self.visit_type(t);
