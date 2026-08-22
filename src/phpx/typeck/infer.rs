@@ -33,6 +33,7 @@ pub struct InferContext<'a> {
     pub structs: &'a HashMap<String, StructInfo>,
     pub interfaces: &'a HashMap<String, BTreeMap<String, ObjectField>>,
     pub functions: &'a HashMap<String, Type>,
+    pub function_value_types: &'a HashMap<String, Type>,
     pub enums: &'a HashMap<String, EnumInfo>,
 }
 
@@ -87,7 +88,16 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
         Expr::Variable { span, .. } => {
             let name = token_text(ctx.source, *span);
             let name = name.strip_prefix('$').unwrap_or(&name);
-            ctx.vars.get(name).cloned().unwrap_or(Type::Unknown)
+            // A bare identifier can be a local binding or a declared function
+            // used as a value (passed to a higher-order function, returned,
+            // stored). Only vars was consulted, so every function reference
+            // inferred as Unknown -- which is permissive in is_assignable, so
+            // passing the wrong function anywhere type-checked clean.
+            ctx.vars
+                .get(name)
+                .or_else(|| ctx.function_value_types.get(name))
+                .cloned()
+                .unwrap_or(Type::Unknown)
         }
         Expr::Array { items, .. } => {
             let mut element_ty = Type::Unknown;
@@ -458,6 +468,14 @@ fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
                 Type::Unknown
             } else if is_number(left) && is_number(right) {
                 Type::Primitive(PrimitiveType::Number)
+            } else if matches!(op, BinaryOp::Plus) && (is_string(left) || is_string(right)) {
+                // `+` is string concatenation when either operand is a string,
+                // as in JavaScript. Without this the Plus arm only understood
+                // numbers and bigints and fell through to Unknown, so every
+                // string built with `+` was un-inferable -- and Unknown is
+                // permissive in is_assignable, so the result could then be
+                // assigned anywhere with no error.
+                Type::Primitive(PrimitiveType::String)
             } else {
                 Type::Unknown
             }

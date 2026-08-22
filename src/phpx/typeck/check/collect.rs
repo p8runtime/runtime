@@ -612,6 +612,18 @@ impl<'a> CheckContext<'a> {
                 };
                 if let Some(ret) = &sig.return_type {
                     self.function_returns.insert(fn_name.clone(), ret.clone());
+                    let param_types: Vec<Type> = sig
+                        .params
+                        .iter()
+                        .map(|p| p.ty.clone().unwrap_or(Type::Unknown))
+                        .collect();
+                    self.function_value_types.insert(
+                        fn_name.clone(),
+                        Type::Function {
+                            params: param_types,
+                            return_type: Box::new(ret.clone()),
+                        },
+                    );
                 }
                 self.functions.insert(fn_name, sig);
             }
