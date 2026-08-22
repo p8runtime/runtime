@@ -1,9 +1,33 @@
 use super::{Parser, Token};
-use crate::parser::ast::{Case, Expr, ExprId, Stmt, StmtId};
+use crate::parser::ast::{Case, Expr, ExprId, ParseError, Stmt, StmtId};
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
 
 impl<'src, 'ast> Parser<'src, 'ast> {
+    /// True when the current `for` token starts a DekaScript for-of loop of
+    /// the form `for (const/let <id> of <expr>) { ... }`. Used to disambiguate
+    /// from C-style `for (init; cond; step)` loops before any tokens are
+    /// consumed.
+    pub(super) fn is_ds_for_of_loop(&self) -> bool {
+        if !self.is_ds() || self.next_token.kind != TokenKind::OpenParen {
+            return false;
+        }
+        let kind2 = self.lookahead_kind(2);
+        let is_const_or_let = kind2 == Some(TokenKind::Const)
+            || (kind2 == Some(TokenKind::Identifier)
+                && self
+                    .lookahead_token(2)
+                    .map_or(false, |t| self.token_eq_ident(&t, b"let")));
+        if !is_const_or_let {
+            return false;
+        }
+        if self.lookahead_kind(3) != Some(TokenKind::Identifier) {
+            return false;
+        }
+        self.lookahead_token(4)
+            .map_or(false, |t| t.kind == TokenKind::Identifier && self.token_eq_ident(&t, b"of"))
+    }
+
     /// Parse TypeScript-familiar `for (const item of items) { ... }`.
     /// The generic AST represents it as a foreach so downstream consumers do
     /// not need a PHP-compatibility branch.
@@ -229,6 +253,73 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         })
     }
 
+    /// True when the current token starts a DekaScript for-init declaration
+    /// (`let i = 0` or `const i = 0`). Used inside C-style `for` clauses.
+    fn is_for_init_declaration_start(&self) -> bool {
+        if !self.is_ds() {
+            return false;
+        }
+        self.current_token.kind == TokenKind::Const
+            || (self.current_token.kind == TokenKind::Identifier
+                && self.token_eq_ident(&self.current_token, b"let"))
+    }
+
+    /// Parse a `let`/`const` declaration list inside a C-style for-init and
+    /// append synthetic `Expr::Assign` nodes to `init`. This keeps the for-init
+    /// AST as expressions while letting the emitter lower them to `let`.
+    fn parse_ds_for_init_declarations(
+        &mut self,
+        init: &mut bumpalo::collections::Vec<'ast, ExprId<'ast>>,
+    ) {
+        let keyword_start = self.current_token.span.start;
+        let is_let = self.current_token.kind == TokenKind::Identifier
+            && self.token_eq_ident(&self.current_token, b"let");
+        // `const` is also accepted syntactically; reassigning a const loop
+        // variable is a runtime error, matching JS semantics.
+        let _ = is_let;
+        self.bump(); // let / const
+
+        loop {
+            let name_token = self.current_token;
+            if name_token.kind != TokenKind::Identifier {
+                self.errors.push(ParseError::with_help(
+                    self.current_token.span,
+                    "Expected identifier in for-init declaration",
+                    "Write `for (let i = 0; ...) { ... }`.",
+                ));
+                break;
+            }
+            self.bump();
+            let var_expr = self.arena.alloc(Expr::Variable {
+                name: name_token.span,
+                span: name_token.span,
+            });
+            let default = if self.current_token.kind == TokenKind::Eq {
+                self.bump();
+                self.parse_expr(0)
+            } else {
+                self.errors.push(ParseError::with_help(
+                    self.current_token.span,
+                    "DekaScript for-init declarations require an initializer",
+                    "Write `for (let i = 0; ...) { ... }`.",
+                ));
+                self.arena.alloc(Expr::Error {
+                    span: self.current_token.span,
+                })
+            };
+            let end = default.span();
+            init.push(self.arena.alloc(Expr::Assign {
+                var: var_expr,
+                expr: default,
+                span: Span::new(keyword_start, end.end),
+            }));
+            if self.current_token.kind != TokenKind::Comma {
+                break;
+            }
+            self.bump();
+        }
+    }
+
     pub(super) fn parse_for(&mut self) -> StmtId<'ast> {
         let start = self.current_token.span.start;
         self.bump(); // Eat for
@@ -237,13 +328,25 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
         }
 
-        // Init expressions
+        // Init expressions. In DekaScript the C-style init clause may also
+        // introduce a new binding with `let`/`const`, e.g.
+        // `for (let i = 0; i < n; i = i + 1) { ... }`. We parse these as
+        // assignments so the existing emitter can turn them into a `let`
+        // initializer when it lowers the loop.
         let mut init = bumpalo::collections::Vec::new_in(self.arena);
         if self.current_token.kind != TokenKind::SemiColon {
-            init.push(self.parse_expr(0));
+            if self.is_ds() && self.is_for_init_declaration_start() {
+                self.parse_ds_for_init_declarations(&mut init);
+            } else {
+                init.push(self.parse_expr(0));
+            }
             while self.current_token.kind == TokenKind::Comma {
                 self.bump();
-                init.push(self.parse_expr(0));
+                if self.is_ds() && self.is_for_init_declaration_start() {
+                    self.parse_ds_for_init_declarations(&mut init);
+                } else {
+                    init.push(self.parse_expr(0));
+                }
             }
         }
         if self.current_token.kind == TokenKind::SemiColon {

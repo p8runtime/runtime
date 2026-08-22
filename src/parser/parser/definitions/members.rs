@@ -1249,10 +1249,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         hooks
     }
 
-    /// Parse a DekaScript enum variant payload of the form `(T, U)` where each
-    /// item is a type. Each item becomes a synthetic `Param` whose name points
-    /// back at the type text so the emitter and typechecker have a stable
-    /// runtime identifier.
+    /// Parse a DekaScript enum variant payload. Supports two forms:
+    ///   - Positional: `(T, U)` where each item is a type. The type text is
+    ///     used as the runtime field name.
+    ///   - Named: `(name: T, error: E)` where each item is an identifier
+    ///     followed by a type annotation.
     pub(in crate::parser::parser) fn parse_ds_enum_payload(&mut self) -> Option<&'ast [Param<'ast>]> {
         // The PHP lexer merges `(string)`, `(int)`, etc. into a single cast token.
         // In DekaScript enum payloads these are type annotations, not casts, so
@@ -1292,34 +1293,67 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         while self.current_token.kind != TokenKind::CloseParen
             && self.current_token.kind != TokenKind::Eof
         {
-            let type_start = self.current_token.span.start;
-            let ty = match self.parse_type() {
-                Some(ty) => ty,
-                None => {
-                    self.errors.push(ParseError::new(
-                        self.current_token.span,
-                        "Expected type in enum payload",
-                    ));
-                    break;
-                }
-            };
-            let type_end = self.current_token.span.start;
-            let ty = self.arena.alloc(ty) as &'ast Type<'ast>;
-            let name = self.arena.alloc(Token {
-                kind: TokenKind::Variable,
-                span: Span::new(type_start, type_end),
-            });
-            params.push(Param {
-                attributes: &[],
-                modifiers: &[],
-                name,
-                ty: Some(ty),
-                default: None,
-                by_ref: false,
-                variadic: false,
-                hooks: None,
-                span: Span::new(type_start, type_end),
-            });
+            // Named payload field: `value: T`
+            if self.current_token.kind == TokenKind::Identifier
+                && self.next_token.kind == TokenKind::Colon
+            {
+                let name_token = self.current_token;
+                let name_span = name_token.span;
+                self.bump(); // name
+                self.bump(); // :
+                let ty = match self.parse_type() {
+                    Some(ty) => self.arena.alloc(ty) as &'ast Type<'ast>,
+                    None => {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected type after ':' in enum payload",
+                        ));
+                        break;
+                    }
+                };
+                let end = self.prev_token.span.end;
+                params.push(Param {
+                    attributes: &[],
+                    modifiers: &[],
+                    name: self.arena.alloc(name_token),
+                    ty: Some(ty),
+                    default: None,
+                    by_ref: false,
+                    variadic: false,
+                    hooks: None,
+                    span: Span::new(name_span.start, end),
+                });
+            } else {
+                // Positional payload field: just a type.
+                let type_start = self.current_token.span.start;
+                let ty = match self.parse_type() {
+                    Some(ty) => ty,
+                    None => {
+                        self.errors.push(ParseError::new(
+                            self.current_token.span,
+                            "Expected type in enum payload",
+                        ));
+                        break;
+                    }
+                };
+                let type_end = self.current_token.span.start;
+                let ty = self.arena.alloc(ty) as &'ast Type<'ast>;
+                let name = self.arena.alloc(Token {
+                    kind: TokenKind::Variable,
+                    span: Span::new(type_start, type_end),
+                });
+                params.push(Param {
+                    attributes: &[],
+                    modifiers: &[],
+                    name,
+                    ty: Some(ty),
+                    default: None,
+                    by_ref: false,
+                    variadic: false,
+                    hooks: None,
+                    span: Span::new(type_start, type_end),
+                });
+            }
             if self.current_token.kind == TokenKind::Comma {
                 self.bump();
             } else {
