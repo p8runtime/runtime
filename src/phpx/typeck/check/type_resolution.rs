@@ -226,7 +226,6 @@ impl<'a> CheckContext<'a> {
             "null" => Type::Primitive(PrimitiveType::Null),
             "array" => Type::Array,
             "object" => Type::Object,
-            "mixed" => Type::Mixed,
             // #122: Component is the canonical name for JSX component return
             // types. VNode and JSX are not accepted as aliases pre-launch.
             "component" => Type::Component,
@@ -370,7 +369,6 @@ impl<'a> CheckContext<'a> {
             || name.eq_ignore_ascii_case("null")
             || name.eq_ignore_ascii_case("array")
             || name.eq_ignore_ascii_case("object")
-            || name.eq_ignore_ascii_case("mixed")
             || name.eq_ignore_ascii_case("option")
             || name.eq_ignore_ascii_case("result")
             // #122: Component is the canonical name for JSX component return
@@ -506,6 +504,9 @@ fn retired_type_spelling(name: &str) -> Option<String> {
         "bool" => "DekaScript spells this 'boolean'",
         "undefined" => {
             "'undefined' is not a DekaScript type; use Option<T> for a value that may be absent"
+        }
+        "mixed" => {
+            "'mixed' is not a DekaScript type; use a type parameter like <T>, or 'object'"
         }
         "symbol" => "'symbol' is not supported in DekaScript",
         "any" | "unknown" => {
