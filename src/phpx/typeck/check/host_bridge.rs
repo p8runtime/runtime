@@ -38,6 +38,13 @@ fn result_bool() -> Type {
     }
 }
 
+fn result_number() -> Type {
+    Type::Applied {
+        base: "Result".to_string(),
+        args: vec![Type::Primitive(PrimitiveType::Number), Type::Unknown],
+    }
+}
+
 struct HostOp {
     kind: &'static str,
     action: &'static str,
@@ -118,6 +125,62 @@ const CATALOG: &[HostOp] = &[
         params: &[PrimitiveType::String],
         ret: result_bytes,
         is_async: true,
+    },
+    HostOp {
+        kind: "net",
+        action: "connect",
+        params: &[PrimitiveType::String, PrimitiveType::Number],
+        ret: result_number,
+        is_async: false,
+    },
+    HostOp {
+        kind: "net",
+        action: "listen",
+        params: &[PrimitiveType::String, PrimitiveType::Number],
+        ret: result_number,
+        is_async: false,
+    },
+    HostOp {
+        kind: "net",
+        action: "accept",
+        params: &[PrimitiveType::Number],
+        ret: result_number,
+        is_async: false,
+    },
+    HostOp {
+        kind: "net",
+        action: "read",
+        params: &[PrimitiveType::Number, PrimitiveType::Number],
+        ret: result_bytes,
+        is_async: false,
+    },
+    HostOp {
+        kind: "net",
+        action: "write",
+        params: &[PrimitiveType::Number, PrimitiveType::Bytes],
+        ret: result_number,
+        is_async: false,
+    },
+    HostOp {
+        kind: "net",
+        action: "close",
+        params: &[PrimitiveType::Number],
+        ret: result_bool,
+        is_async: false,
+    },
+    HostOp {
+        kind: "net",
+        action: "set_deadline",
+        params: &[PrimitiveType::Number, PrimitiveType::Number],
+        ret: result_bool,
+        is_async: false,
+    },
+    HostOp {
+        kind: "tls",
+        action: "upgrade",
+        params: &[PrimitiveType::Number, PrimitiveType::String],
+        ret: result_number,
+        is_async: false,
     },
 ];
 

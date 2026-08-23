@@ -1617,6 +1617,58 @@ fn bridge_allowed_in_workspace_stdlib_package() {
 }
 
 #[test]
+fn bridge_allowed_in_workspace_tcp_package() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "@deka/tcp", "host": { "kinds": ["net"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge net.connect(\"127.0.0.1\", 80); }\n";
+    std::fs::write(&src, code).unwrap();
+    assert!(
+        check_with_path(code, src.to_str().unwrap()).is_ok(),
+        "workspace tcp package should be allowed to bridge net.*"
+    );
+}
+
+#[test]
+fn bridge_allowed_in_workspace_tls_package() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "@deka/tls", "host": { "kinds": ["tls"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge tls.upgrade(1, \"localhost\"); }\n";
+    std::fs::write(&src, code).unwrap();
+    assert!(
+        check_with_path(code, src.to_str().unwrap()).is_ok(),
+        "workspace tls package should be allowed to bridge tls.upgrade"
+    );
+}
+
+#[test]
+fn tcp_workspace_cannot_bridge_tls() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "@deka/tcp", "host": { "kinds": ["net"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge tls.upgrade(1, \"localhost\"); }\n";
+    std::fs::write(&src, code).unwrap();
+    let err = check_with_path(code, src.to_str().unwrap()).expect_err("tls is not granted to tcp");
+    assert!(
+        err.contains("does not include kind tls"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn bridge_rejects_kind_not_on_workspace_grant() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
