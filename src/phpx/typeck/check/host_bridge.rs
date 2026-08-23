@@ -6,6 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Official stdlib packages that may declare `host.kinds` at their compile root.
+/// Published names may be `@deka/<name>`; the grant uses the bare name.
 const OFFICIAL_PACKAGES: &[&str] = &[
     "crypto",
     "fs",
@@ -19,10 +20,21 @@ const OFFICIAL_PACKAGES: &[&str] = &[
     "vault",
 ];
 
+fn canonical_stdlib_name(name: &str) -> &str {
+    name.strip_prefix("@deka/").unwrap_or(name)
+}
+
 fn result_bytes() -> Type {
     Type::Applied {
         base: "Result".to_string(),
         args: vec![Type::Primitive(PrimitiveType::Bytes), Type::Unknown],
+    }
+}
+
+fn result_bool() -> Type {
+    Type::Applied {
+        base: "Result".to_string(),
+        args: vec![Type::Primitive(PrimitiveType::Bool), Type::Unknown],
     }
 }
 
@@ -34,12 +46,70 @@ struct HostOp {
     is_async: bool,
 }
 
+/// Keep in sync with isolate `__deka_host` allowlist
+/// (`crates/pool/src/isolate_pool/worker_execution.rs`).
 const CATALOG: &[HostOp] = &[
     HostOp {
         kind: "crypto",
         action: "random_bytes",
         params: &[PrimitiveType::Number],
         ret: result_bytes,
+        is_async: false,
+    },
+    HostOp {
+        kind: "crypto",
+        action: "digest",
+        params: &[PrimitiveType::String, PrimitiveType::Bytes],
+        ret: result_bytes,
+        is_async: false,
+    },
+    HostOp {
+        kind: "crypto",
+        action: "hmac",
+        params: &[
+            PrimitiveType::String,
+            PrimitiveType::Bytes,
+            PrimitiveType::Bytes,
+        ],
+        ret: result_bytes,
+        is_async: false,
+    },
+    HostOp {
+        kind: "crypto",
+        action: "secure_compare",
+        params: &[PrimitiveType::Bytes, PrimitiveType::Bytes],
+        ret: result_bool,
+        is_async: false,
+    },
+    HostOp {
+        kind: "crypto",
+        action: "aes_256_gcm_encrypt",
+        params: &[
+            PrimitiveType::Bytes,
+            PrimitiveType::Bytes,
+            PrimitiveType::Bytes,
+            PrimitiveType::Bytes,
+        ],
+        ret: result_bytes,
+        is_async: false,
+    },
+    HostOp {
+        kind: "crypto",
+        action: "aes_256_gcm_decrypt",
+        params: &[
+            PrimitiveType::Bytes,
+            PrimitiveType::Bytes,
+            PrimitiveType::Bytes,
+            PrimitiveType::Bytes,
+        ],
+        ret: result_bytes,
+        is_async: false,
+    },
+    HostOp {
+        kind: "crypto",
+        action: "bcrypt_verify",
+        params: &[PrimitiveType::String, PrimitiveType::String],
+        ret: result_bool,
         is_async: false,
     },
     HostOp {
@@ -58,7 +128,7 @@ fn lookup_op(kind: &str, action: &str) -> Option<&'static HostOp> {
 }
 
 fn official_kinds_for(package_name: &str) -> Option<&'static [&'static str]> {
-    match package_name {
+    match canonical_stdlib_name(package_name) {
         "crypto" => Some(&["crypto"]),
         "fs" => Some(&["fs"]),
         "tcp" => Some(&["net"]),
@@ -154,10 +224,7 @@ pub(in crate::phpx::typeck::check) fn resolve_grant(
     }
 }
 
-fn workspace_grant(
-    file_path: Option<&Path>,
-    kind: &str,
-) -> BridgeGrant {
+fn workspace_grant(file_path: Option<&Path>, kind: &str) -> BridgeGrant {
     let Some(file_path) = file_path else {
         return BridgeGrant::Denied {
             message: "bridge is only allowed in a host-granted stdlib package".to_string(),
@@ -184,7 +251,7 @@ fn workspace_grant(
                 message: "bridge is only allowed in a host-granted stdlib package".to_string(),
             };
         }
-        if !OFFICIAL_PACKAGES.contains(&manifest.name.as_str()) {
+        if !OFFICIAL_PACKAGES.contains(&canonical_stdlib_name(&manifest.name)) {
             return BridgeGrant::Denied {
                 message: "host.kinds is only valid on an official stdlib package".to_string(),
             };

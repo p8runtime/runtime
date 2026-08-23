@@ -1723,6 +1723,66 @@ fn bridge_rejects_installed_package_without_digest_grant() {
 }
 
 #[test]
+fn bridge_crypto_digest_hmac_secure_compare_typecheck() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "@deka/crypto", "host": { "kinds": ["crypto"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = r#"
+fn go(data: bytes, key: bytes) {
+  bridge crypto.digest("sha256", data)
+  bridge crypto.hmac("sha256", key, data)
+  bridge crypto.secure_compare(data, key)
+}
+"#;
+    std::fs::write(&src, code).unwrap();
+    assert!(
+        check_with_path(code, src.to_str().unwrap()).is_ok(),
+        "workspace @deka/crypto should typecheck digest/hmac/secure_compare: {:?}",
+        check_with_path(code, src.to_str().unwrap()).err()
+    );
+}
+
+#[test]
+fn bridge_crypto_digest_rejects_string_data() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "crypto", "host": { "kinds": ["crypto"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge crypto.digest(\"sha256\", \"not-bytes\"); }\n";
+    std::fs::write(&src, code).unwrap();
+    let err = check_with_path(code, src.to_str().unwrap()).expect_err("string is not bytes");
+    assert!(
+        err.contains("expected bytes"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn bridge_unknown_crypto_action_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "crypto", "host": { "kinds": ["crypto"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge crypto.sign(\"x\"); }\n";
+    std::fs::write(&src, code).unwrap();
+    let err = check_with_path(code, src.to_str().unwrap()).expect_err("sign is not catalogued");
+    assert!(
+        err.contains("unknown bridge action"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn host_module_runtime_import_typechecks() {
     let code = r#"
 import { runtime } from "host"
@@ -1746,5 +1806,23 @@ import { not_a_thing } from "host"
     assert!(
         err.contains("not exported by 'host'"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn host_module_runtime_match_typechecks() {
+    let code = r#"
+import { runtime } from "host"
+fn go() {
+  match (runtime) {
+    HostRuntime.Browser => 1,
+    HostRuntime.Native => 2,
+  }
+}
+"#;
+    assert!(
+        check_ds(code).is_ok(),
+        "match on host runtime should typecheck: {:?}",
+        check_ds(code).err()
     );
 }
