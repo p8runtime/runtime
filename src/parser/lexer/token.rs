@@ -145,6 +145,7 @@ pub enum TokenKind {
     Identifier,
     LNumber,
     DNumber,
+    BigIntNumber,
     StringLiteral,
     NumString,     // For array offset in string
     StringVarname, // For ${var} in string

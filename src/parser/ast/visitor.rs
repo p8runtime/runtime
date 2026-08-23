@@ -567,6 +567,7 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
         Expr::Variable { .. }
         | Expr::Integer { .. }
         | Expr::Float { .. }
+        | Expr::BigInt { .. }
         | Expr::Boolean { .. }
         | Expr::Null { .. }
         | Expr::String { .. }
@@ -648,7 +649,6 @@ pub fn walk_type<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'ast Typ
         Type::Simple(_) => {}
         Type::Name(name) => visitor.visit_name(name),
         Type::Union(types) | Type::Intersection(types) => walk_types(visitor, types),
-        Type::Nullable(inner) => visitor.visit_type(inner),
         Type::Option(inner) => visitor.visit_type(inner),
         Type::ObjectShape(fields) => {
             for field in fields.iter() {

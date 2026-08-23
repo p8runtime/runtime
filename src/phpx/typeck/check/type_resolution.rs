@@ -27,18 +27,32 @@ impl<'a> CheckContext<'a> {
                 if token.kind == TokenKind::TypeNull {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span: token.span,
-                        message: "Null types are not allowed in PHPX; use Option<T> instead"
+                        message: "Null types are not allowed in DekaScript; use Option<T> instead"
                             .to_string(),
                     });
                 }
-                self.resolve_named_type(token_text(self.source, token.span), visiting, params)
+                // Retired and unsupported type spellings. These are reported
+                // here rather than left to resolve_named_type because this is
+                // the only place with a real span to point at -- the fallback
+                // there silently resolves an unrecognised name to Object, so
+                // without this a typo'd or PHP-era type annotation checks out
+                // clean and means nothing.
+                let text = token_text(self.source, token.span);
+                if let Some(msg) = retired_type_spelling(&text) {
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span: token.span,
+                        message: msg,
+                    });
+                }
+                self.resolve_named_type(text, visiting, params)
             }
             AstType::Name(name) => self.resolve_name_type(name, visiting, params),
             AstType::Union(types) => {
                 if let Some(span) = self.find_null_type_span(types) {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span,
-                        message: "Nullable unions are not allowed in PHPX; use Option<T> instead"
+                        message: "Nullable unions are not allowed in DekaScript; use Option<T> instead"
                             .to_string(),
                     });
                 }
@@ -67,15 +81,6 @@ impl<'a> CheckContext<'a> {
                     base: "Option".to_string(),
                     args: vec![inner],
                 }
-            }
-            AstType::Nullable(inner) => {
-                self.errors.push(TypeError { severity: Severity::Error,
-                    span: self.type_span(inner),
-                    message: "Nullable types are not allowed in PHPX; use Option<T> instead"
-                        .to_string(),
-                });
-                let inner = self.resolve_type_internal(inner, visiting, params);
-                Type::Union(vec![inner, Type::Primitive(PrimitiveType::Null)])
             }
             AstType::ObjectShape(fields) => {
                 let mut map = BTreeMap::new();
@@ -153,7 +158,7 @@ impl<'a> CheckContext<'a> {
                         self.errors.push(TypeError { severity: Severity::Error,
                             span: self.type_span(base),
                             message: format!(
-                                "Unknown generic type '{}' in PHPX; classes are not allowed",
+                                "Unknown generic type '{}' in DekaScript; classes are not allowed",
                                 base_name
                             ),
                         });
@@ -176,7 +181,6 @@ impl<'a> CheckContext<'a> {
             AstType::Union(types) | AstType::Intersection(types) => {
                 types.first().map(|t| self.type_span(t)).unwrap_or_default()
             }
-            AstType::Nullable(inner) => self.type_span(inner),
             AstType::Option(inner) => self.type_span(inner),
             AstType::ObjectShape(fields) => {
                 fields.first().map(|field| field.span).unwrap_or_default()
@@ -195,7 +199,6 @@ impl<'a> CheckContext<'a> {
                 AstType::Simple(token) if token.kind == TokenKind::TypeNull => {
                     return Some(token.span);
                 }
-                AstType::Nullable(inner) => return Some(self.type_span(inner)),
                 AstType::Union(inner) | AstType::Intersection(inner) => {
                     if let Some(span) = self.find_null_type_span(inner) {
                         return Some(span);
@@ -215,15 +218,14 @@ impl<'a> CheckContext<'a> {
     ) -> Type {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
-            "int" | "integer" | "number" => Type::Primitive(PrimitiveType::Int),
-            "float" | "double" => Type::Primitive(PrimitiveType::Float),
-            "bool" | "boolean" => Type::Primitive(PrimitiveType::Bool),
+            "number" => Type::Primitive(PrimitiveType::Number),
+            "bigint" => Type::Primitive(PrimitiveType::BigInt),
+            "boolean" => Type::Primitive(PrimitiveType::Bool),
             "string" => Type::Primitive(PrimitiveType::String),
             "bytes" => Type::Primitive(PrimitiveType::Bytes),
             "null" => Type::Primitive(PrimitiveType::Null),
             "array" => Type::Array,
             "object" => Type::Object,
-            "mixed" => Type::Mixed,
             // #122: Component is the canonical name for JSX component return
             // types. VNode and JSX are not accepted as aliases pre-launch.
             "component" => Type::Component,
@@ -303,9 +305,15 @@ impl<'a> CheckContext<'a> {
             return Type::Unknown;
         }
         if !self.is_known_named_type(&out, params) {
+            // Prefer a specific message for spellings we deliberately retired
+            // or never supported; the generic fallback's "classes are not
+            // allowed" tail is misleading for e.g. bigint or symbol.
+            let message = retired_type_spelling(&out).unwrap_or_else(|| {
+                format!("Unknown type '{}' in DekaScript; classes are not allowed", out)
+            });
             self.errors.push(TypeError { severity: Severity::Error,
                 span: name.span,
-                message: format!("Unknown type '{}' in PHPX; classes are not allowed", out),
+                message,
             });
             return Type::Unknown;
         }
@@ -353,19 +361,14 @@ impl<'a> CheckContext<'a> {
         if params.contains(name) {
             return true;
         }
-        if name.eq_ignore_ascii_case("int")
-            || name.eq_ignore_ascii_case("integer")
-            || name.eq_ignore_ascii_case("number")
-            || name.eq_ignore_ascii_case("float")
-            || name.eq_ignore_ascii_case("double")
-            || name.eq_ignore_ascii_case("bool")
+        if name.eq_ignore_ascii_case("number")
+            || name.eq_ignore_ascii_case("bigint")
             || name.eq_ignore_ascii_case("boolean")
             || name.eq_ignore_ascii_case("string")
             || name.eq_ignore_ascii_case("bytes")
             || name.eq_ignore_ascii_case("null")
             || name.eq_ignore_ascii_case("array")
             || name.eq_ignore_ascii_case("object")
-            || name.eq_ignore_ascii_case("mixed")
             || name.eq_ignore_ascii_case("option")
             || name.eq_ignore_ascii_case("result")
             // #122: Component is the canonical name for JSX component return
@@ -486,4 +489,30 @@ impl<'a> CheckContext<'a> {
             }
         }
     }
+}
+
+/// Type names DekaScript deliberately does not accept, with the spelling to
+/// use instead. DekaScript has exactly one numeric type, matching JavaScript,
+/// so the PHP-era int/float split is gone rather than aliased -- aliasing
+/// would mean carrying two names for one type indefinitely.
+fn retired_type_spelling(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let msg = match lower.as_str() {
+        "int" | "integer" | "float" | "double" | "real" => {
+            "DekaScript has one numeric type; use 'number' instead"
+        }
+        "bool" => "DekaScript spells this 'boolean'",
+        "undefined" => {
+            "'undefined' is not a DekaScript type; use Option<T> for a value that may be absent"
+        }
+        "mixed" => {
+            "'mixed' is not a DekaScript type; use a type parameter like <T>, or 'object'"
+        }
+        "symbol" => "'symbol' is not supported in DekaScript",
+        "any" | "unknown" => {
+            "'any' and 'unknown' are not DekaScript types; use 'object' or a type parameter"
+        }
+        _ => return None,
+    };
+    Some(msg.to_string())
 }

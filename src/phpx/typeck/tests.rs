@@ -116,14 +116,14 @@ fn struct_default_type_mismatch_errors() {
 
 #[test]
 fn struct_default_unary_const_ok() {
-    let code = "<?php struct Point { $x: int = -1; $y: float = +1.5; }";
+    let code = "<?php struct Point { $x: number = -1; $y: number = +1.5; }";
     assert!(check(code).is_ok());
 }
 
 #[test]
 fn struct_default_allows_struct_and_object_literals() {
     let code = "<?php
-        struct Point { $x: int = 0; $y: int = 0; }
+        struct Point { $x: number = 0; $y: number = 0; }
         struct Box { $pos: Point = Point { $x: 1, $y: 2 }; $meta: Object = { foo: 'bar' }; }
     ";
     assert!(check(code).is_ok());
@@ -132,7 +132,7 @@ fn struct_default_allows_struct_and_object_literals() {
 #[test]
 fn ds_bare_struct_field_names_typecheck() {
     // dekaruntime/deka#93: DekaScript structs use bare identifiers.
-    let code = "struct Point { x: int; y: int } fn f(): int { return Point { x: 3, y: 4 }.x; }";
+    let code = "struct Point { x: number; y: number } fn f(): number { return Point { x: 3, y: 4 }.x; }";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -151,7 +151,7 @@ fn ds_bare_struct_field_wrong_type_errors() {
 
 #[test]
 fn struct_field_annotations_basic_ok() {
-    let code = "struct User { $id: int @id @autoIncrement; }";
+    let code = "struct User { $id: number @id @autoIncrement; }";
     let res = check(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -182,7 +182,7 @@ fn struct_field_annotation_map_requires_string_arg() {
 
 #[test]
 fn struct_field_annotation_relation_basic_ok() {
-    let code = "struct Post { $id: int @id; } struct User { $posts: array<Post> @relation(\"hasMany\", \"Post\", \"authorId\"); }";
+    let code = "struct Post { $id: number @id; } struct User { $posts: array<Post> @relation(\"hasMany\", \"Post\", \"authorId\"); }";
     let res = check(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -921,50 +921,8 @@ fn bytes_type_in_struct_field_is_ok() {
 //
 // check_program's Result discriminant is the severity signal: Ok(diagnostics)
 // means the program checked out (diagnostics, if any, are all Warning-level);
-// Err(diagnostics) means at least one Error-level diagnostic is present. The
-// `__deka_poc_warn__` sentinel function name is a synthetic, test-only
-// trigger (see check/poc_warning.rs) that proves a Warning diagnostic flows
-// through without failing the check -- it is not a real language rule.
+// Err(diagnostics) means at least one Error-level diagnostic is present.
 
-#[test]
-fn poc_warning_only_program_checks_out_successfully() {
-    let code = normalize_phpx_snippet("<?php function __deka_poc_warn__() {}");
-    let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
-    let program = parser.parse_program();
-    assert!(program.errors.is_empty(), "program should parse cleanly");
-
-    let result = check_program(&program, code.as_bytes());
-    let diagnostics = match result {
-        Ok(diagnostics) => diagnostics,
-        Err(diagnostics) => panic!(
-            "a warnings-only program must be Ok, not Err: {:?}",
-            diagnostics
-                .iter()
-                .map(|d| &d.message)
-                .collect::<Vec<_>>()
-        ),
-    };
-
-    assert_eq!(
-        diagnostics.len(),
-        1,
-        "expected exactly the one PoC warning, got {:?}",
-        diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
-    );
-    assert_eq!(diagnostics[0].severity, crate::parser::ast::Severity::Warning);
-    assert!(
-        diagnostics[0].message.contains("__deka_poc_warn__"),
-        "unexpected warning message: {}",
-        diagnostics[0].message
-    );
-    assert!(diagnostics[0].message.contains("deka#59"));
-
-    // The rendered form must be visually distinguishable ("type warning",
-    // never "type error") from a hard failure.
-    let rendered = diagnostics[0].to_human_readable(code.as_bytes());
-    assert!(rendered.starts_with("type warning:"), "got: {rendered}");
-}
 
 #[test]
 fn real_type_error_still_fails_exactly_as_before() {
@@ -1003,7 +961,7 @@ fn ds_enum_js_style_body_typechecks() {
 fn ds_enum_generic_payload_typechecks() {
     let code = r#"
         enum Option<T> { Some(T), None }
-        fn getOption(): Option<int> { return Option::Some(1); }
+        fn getOption(): Option<number> { return Option::Some(1); }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -1069,7 +1027,7 @@ fn ds_enum_match_non_generic_payload_field_outside_arm_errors() {
 fn ds_enum_match_exhaustive_on_js_style_enum() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        fn f(s: Status): int {
+        fn f(s: Status): number {
             match (s) {
                 Status::Loading => 0,
                 Status::Ready => 1,
@@ -1086,7 +1044,7 @@ fn ds_enum_match_exhaustive_using_dot_access() {
     // `Status::Ready` when the left-hand side names an enum.
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        fn f(s: Status): int {
+        fn f(s: Status): number {
             match (s) {
                 Status.Loading => 0,
                 Status.Ready => 1,
@@ -1154,7 +1112,7 @@ fn ds_function_return_type_inferred_from_arithmetic() {
 
 #[test]
 fn ds_function_return_type_inferred_from_float_arithmetic() {
-    let code = "fn add(left: float, right: float) { return left + right; } fn useFloat(n: float) {} useFloat(add(1.0, 2.0));";
+    let code = "fn add(left: number, right: number) { return left + right; } fn useFloat(n: number) {} useFloat(add(1.0, 2.0));";
     assert!(check_ds(code).is_ok());
 }
 
@@ -1166,13 +1124,13 @@ fn ds_function_return_type_inferred_from_concatenation() {
 
 #[test]
 fn ds_function_return_type_inferred_from_comparison() {
-    let code = "fn check(a: number, b: number) { return a > b; } fn useBool(b: bool) {} useBool(check(1, 2));";
+    let code = "fn check(a: number, b: number) { return a > b; } fn useBool(b: boolean) {} useBool(check(1, 2));";
     assert!(check_ds(code).is_ok());
 }
 
 #[test]
 fn ds_function_return_type_inferred_from_logical() {
-    let code = "fn both(a: bool, b: bool) { return a && b; } fn useBool(b: bool) {} useBool(both(true, false));";
+    let code = "fn both(a: boolean, b: boolean) { return a && b; } fn useBool(b: boolean) {} useBool(both(true, false));";
     assert!(check_ds(code).is_ok());
 }
 
@@ -1375,8 +1333,8 @@ fn ds_interface_optional_field_allows_missing() {
 #[test]
 fn ds_object_literal_spread_from_interface_ok() {
     let code = r#"
-        interface Base { a: int; b: string }
-        fn f(base: Base): int {
+        interface Base { a: number; b: string }
+        fn f(base: Base): number {
           const copy = { ...base, b: "y" };
           return copy.a;
         }
@@ -1486,7 +1444,7 @@ fn ds_const_struct_field_mutation_errors() {
 #[test]
 fn ds_let_struct_field_mutation_ok() {
     let code = r#"
-        struct Point { x: int }
+        struct Point { x: number }
         fn f() {
           let p = Point { x: 1 };
           p.x = 2;
@@ -1564,7 +1522,7 @@ fn ds_struct_field_assignment_uses_base_mutability() {
 fn ds_cross_module_import_type_checks_against_remote_signature() {
     let arena = Bump::new();
     let math_code = r#"
-        export fn add(a: int, b: int): int {
+        export fn add(a: number, b: number): number {
             return a + b;
         }
     "#;

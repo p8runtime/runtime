@@ -77,8 +77,35 @@ impl<'a> CheckContext<'a> {
                             .to_string(),
                     });
                 }
-                let _ = self.check_expr(left, env, explicit, mut_env);
-                let _ = self.check_expr(right, env, explicit, mut_env);
+                let left_ty = self.check_expr(left, env, explicit, mut_env);
+                let right_ty = self.check_expr(right, env, explicit, mut_env);
+                // JavaScript throws a TypeError on mixed bigint/number
+                // arithmetic rather than coercing, so this has to be an error
+                // rather than a widening. Reported here because
+                // infer_binary_op is a pure function with no error channel --
+                // it can only return Unknown, which is permissive and would
+                // let the mix through silently.
+                let is_bigint = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::BigInt));
+                let is_number = |t: &Type| matches!(t, Type::Primitive(PrimitiveType::Number));
+                if matches!(
+                    op,
+                    BinaryOp::Plus
+                        | BinaryOp::Minus
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                ) && ((is_bigint(&left_ty) && is_number(&right_ty))
+                    || (is_number(&left_ty) && is_bigint(&right_ty)))
+                {
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span,
+                        message:
+                            "Cannot mix bigint and number in arithmetic; convert one side explicitly"
+                                .to_string(),
+                    });
+                }
                 self.infer_expr_with_env(expr, env)
             }
             Expr::Unary { expr, .. } => {
@@ -128,7 +155,7 @@ impl<'a> CheckContext<'a> {
                 }
                 self.errors.push(TypeError { severity: Severity::Error,
                     span,
-                    message: "new is not allowed in PHPX; use struct literals".to_string(),
+                    message: "new is not allowed in DekaScript; use struct literals".to_string(),
                 });
                 Type::Unknown
             }
@@ -467,7 +494,7 @@ impl<'a> CheckContext<'a> {
             Expr::AnonymousClass { span, .. } => {
                 self.errors.push(TypeError { severity: Severity::Error,
                     span,
-                    message: "Anonymous classes are not allowed in PHPX".to_string(),
+                    message: "Anonymous classes are not allowed in DekaScript".to_string(),
                 });
                 Type::Unknown
             }
@@ -546,7 +573,7 @@ impl<'a> CheckContext<'a> {
                 if self.fn_depth > 0 && self.async_depth == 0 {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span,
-                        message: "await is only allowed in async functions (or at top-level in PHPX modules)".to_string(),
+                        message: "await is only allowed in async functions (or at top-level in DekaScript modules)".to_string(),
                     });
                 }
                 let awaited_ty = self.check_expr(expr, env, explicit, mut_env);
@@ -1171,7 +1198,7 @@ impl<'a> CheckContext<'a> {
                         if self.strict_null && is_null && !self.type_allows_null(existing) {
                             self.errors.push(TypeError { severity: Severity::Error,
                                 span,
-                                message: "Null is not allowed in PHPX; use Option<T> instead"
+                                message: "Null is not allowed in DekaScript; use Option<T> instead"
                                     .to_string(),
                             });
                         }
@@ -1188,7 +1215,7 @@ impl<'a> CheckContext<'a> {
                         if self.strict_null && is_null {
                             self.errors.push(TypeError { severity: Severity::Error,
                                 span,
-                                message: "Null is not allowed in PHPX; use Option<T> instead"
+                                message: "Null is not allowed in DekaScript; use Option<T> instead"
                                     .to_string(),
                             });
                         }
@@ -1199,7 +1226,7 @@ impl<'a> CheckContext<'a> {
                     if self.strict_null && is_null {
                         self.errors.push(TypeError { severity: Severity::Error,
                             span,
-                            message: "Null is not allowed in PHPX; use Option<T> instead"
+                            message: "Null is not allowed in DekaScript; use Option<T> instead"
                                 .to_string(),
                         });
                     }

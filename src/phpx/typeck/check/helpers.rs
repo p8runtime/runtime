@@ -30,7 +30,7 @@ pub(in crate::phpx::typeck::check) fn enum_backed_primitive(
 ) -> Option<PrimitiveType> {
     match ty {
         AstType::Simple(token) => match token.kind {
-            TokenKind::TypeInt => Some(PrimitiveType::Int),
+            TokenKind::TypeInt => Some(PrimitiveType::Number),
             TokenKind::TypeString => Some(PrimitiveType::String),
             _ => None,
         },

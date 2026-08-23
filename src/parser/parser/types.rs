@@ -6,9 +6,18 @@ use crate::parser::span::Span;
 impl<'src, 'ast> Parser<'src, 'ast> {
     fn parse_type_atomic(&mut self) -> Option<Type<'ast>> {
         if self.current_token.kind == TokenKind::Question {
+            // PHP's prefix nullable `?T`. DekaScript spells this `T?`, which
+            // parse_type desugars to Option<T>. Rejected here rather than in
+            // the typechecker so the error points at the `?` itself.
+            let span = self.current_token.span;
             self.bump();
             let ty = self.parse_type_atomic()?;
-            Some(Type::Nullable(self.arena.alloc(ty)))
+            self.errors.push(crate::parser::ast::ParseError::with_help(
+                span,
+                "Prefix `?T` is not DekaScript syntax",
+                "Write the type as `T?`, or use `Option<T>` explicitly.",
+            ));
+            Some(ty)
         } else if self.current_token.kind == TokenKind::TypeObject
             && self.next_token.kind == TokenKind::Lt
         {

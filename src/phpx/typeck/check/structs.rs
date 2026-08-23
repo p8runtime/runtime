@@ -195,7 +195,7 @@ impl<'a> CheckContext<'a> {
             }
 
             if ann_name == "autoIncrement" {
-                let is_int = matches!(field_type, Some(Type::Primitive(PrimitiveType::Int)));
+                let is_int = matches!(field_type, Some(Type::Primitive(PrimitiveType::Number)));
                 if !is_int {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span: ann.span,

@@ -155,7 +155,7 @@ impl<'a> CheckContext<'a> {
                 {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span: args[idx].span,
-                        message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
+                        message: "Null is not allowed in DekaScript; use Option<T> instead".to_string(),
                     });
                 }
                 if let Expr::ObjectLiteral { items, span } = *args[idx].value {
@@ -177,7 +177,7 @@ impl<'a> CheckContext<'a> {
             {
                 self.errors.push(TypeError { severity: Severity::Error,
                     span: args[idx].span,
-                    message: "Null is not allowed in PHPX; use Option<T> instead".to_string(),
+                    message: "Null is not allowed in DekaScript; use Option<T> instead".to_string(),
                 });
             }
             idx += 1;

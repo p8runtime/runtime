@@ -528,7 +528,7 @@ fn php_mode_rejects_await_syntax() {
         program
             .errors
             .iter()
-            .any(|err| err.message.contains("await is only available in PHPX mode")),
+            .any(|err| err.message.contains("await is only available in DekaScript mode")),
         "expected php mode await error, got: {:?}",
         program.errors
     );

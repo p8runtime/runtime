@@ -12,6 +12,7 @@ impl<'a> CheckContext<'a> {
             structs: &self.structs,
             interfaces: &self.interface_shapes,
             functions: &self.function_returns,
+            function_value_types: &self.function_value_types,
             enums: &self.enums,
         };
         infer_expr(expr, &ctx)
@@ -536,7 +537,7 @@ impl<'a> CheckContext<'a> {
         let Some(name) = self.extract_static_ident(class) else {
             self.errors.push(TypeError { severity: Severity::Error,
                 span,
-                message: "Dynamic class references are not allowed in PHPX".to_string(),
+                message: "Dynamic class references are not allowed in DekaScript".to_string(),
             });
             return;
         };
@@ -545,7 +546,7 @@ impl<'a> CheckContext<'a> {
         }
         self.errors.push(TypeError { severity: Severity::Error,
             span,
-            message: format!("Unknown type '{}' in PHPX; classes are not allowed", name),
+            message: format!("Unknown type '{}' in DekaScript; classes are not allowed", name),
         });
     }
 

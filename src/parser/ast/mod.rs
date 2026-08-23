@@ -507,6 +507,10 @@ pub enum Expr<'ast> {
         value: &'ast [u8],
         span: Span,
     },
+    BigInt {
+        value: &'ast [u8],
+        span: Span,
+    },
     Boolean {
         value: bool,
         span: Span,
@@ -750,6 +754,7 @@ impl<'ast> Expr<'ast> {
             Expr::Variable { span, .. } => *span,
             Expr::Integer { span, .. } => *span,
             Expr::Float { span, .. } => *span,
+            Expr::BigInt { span, .. } => *span,
             Expr::Boolean { span, .. } => *span,
             Expr::Null { span, .. } => *span,
             Expr::String { span, .. } => *span,
@@ -1147,7 +1152,6 @@ pub enum Type<'ast> {
     Name(Name<'ast>),
     Union(&'ast [Type<'ast>]),
     Intersection(&'ast [Type<'ast>]),
-    Nullable(&'ast Type<'ast>),
     /// DekaScript postfix optional type: `T?` is syntactic sugar for `Option<T>`.
     Option(&'ast Type<'ast>),
     ObjectShape(&'ast [ObjectShapeField<'ast>]),
