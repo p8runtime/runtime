@@ -454,12 +454,18 @@ pub(in crate::phpx::typeck::check) fn read_stub_path(
 pub(in crate::phpx::typeck::check) fn find_modules_root(file_path: &Path) -> Option<PathBuf> {
     let mut dir = file_path.parent()?;
     loop {
-        if dir.file_name().and_then(|name| name.to_str()) == Some("php_modules") {
+        if dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("ds_modules") || name.eq_ignore_ascii_case("php_modules"))
+        {
             return Some(dir.to_path_buf());
         }
-        let candidate = dir.join("php_modules");
-        if candidate.is_dir() {
-            return Some(candidate);
+        for dir_name in ["ds_modules", "php_modules"] {
+            let candidate = dir.join(dir_name);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
         }
         match dir.parent() {
             Some(parent) => dir = parent,
