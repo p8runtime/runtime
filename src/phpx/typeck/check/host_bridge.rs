@@ -411,7 +411,7 @@ fn digest_grant(file_path: Option<&Path>, kind: &str) -> BridgeGrant {
             message: "bridge is only allowed in a host-granted stdlib package".to_string(),
         };
     };
-    let grants = load_grant_table();
+    let grants = load_grant_table_from(Some(file_path));
     let package_name = parse_manifest(&manifest_path)
         .map(|m| m.name)
         .unwrap_or_else(|| "package".to_string());
@@ -428,11 +428,39 @@ fn digest_grant(file_path: Option<&Path>, kind: &str) -> BridgeGrant {
     BridgeGrant::Allowed
 }
 
-fn load_grant_table() -> Vec<LoadedGrant> {
-    let Ok(raw) = std::env::var("DEKA_HOST_GRANTS") else {
-        return Vec::new();
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+fn load_grant_table_from(file_path: Option<&Path>) -> Vec<LoadedGrant> {
+    let mut grants = Vec::new();
+    if let Ok(raw) = std::env::var("DEKA_HOST_GRANTS") {
+        grants.extend(parse_grant_json(&raw));
+    }
+    if let Ok(path) = std::env::var("DEKA_HOST_GRANTS_FILE") {
+        if let Ok(raw) = fs::read_to_string(path) {
+            grants.extend(parse_grant_json(&raw));
+        }
+    }
+    if let Some(file_path) = file_path {
+        if let Some(path) = nearest_host_grants_file(file_path) {
+            if let Ok(raw) = fs::read_to_string(path) {
+                grants.extend(parse_grant_json(&raw));
+            }
+        }
+    }
+    grants
+}
+
+fn nearest_host_grants_file(file_path: &Path) -> Option<PathBuf> {
+    let mut dir = file_path.parent()?;
+    loop {
+        let candidate = dir.join("host-grants.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = dir.parent()?;
+    }
+}
+
+fn parse_grant_json(raw: &str) -> Vec<LoadedGrant> {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return Vec::new();
     };
     let Some(items) = value.as_array() else {

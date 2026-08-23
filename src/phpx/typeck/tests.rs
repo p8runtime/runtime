@@ -1723,6 +1723,47 @@ fn bridge_rejects_installed_package_without_digest_grant() {
 }
 
 #[test]
+fn bridge_allowed_for_installed_package_with_host_grants_file() {
+    let app = tempfile::tempdir().unwrap();
+    std::fs::write(app.path().join("deka.json"), r#"{ "name": "my-app" }"#).unwrap();
+    let pkg = app.path().join("ds_modules").join("crypto");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        pkg.join("deka.json"),
+        r#"{ "name": "crypto", "host": { "kinds": ["crypto"] } }"#,
+    )
+    .unwrap();
+    let src = pkg.join("index.ds");
+    let code = "fn go() { bridge crypto.random_bytes(32); }\n";
+    std::fs::write(&src, code).unwrap();
+
+    let digest = crate::phpx::typeck::check::package_fs_digest(&pkg).expect("digest");
+    std::fs::write(
+        app.path().join("host-grants.json"),
+        format!(r#"[{{"digest":"{digest}","kinds":["crypto"]}}]"#),
+    )
+    .unwrap();
+
+    let _guard = HOST_GRANT_ENV.lock().expect("grant env lock");
+    let prev = std::env::var("DEKA_HOST_GRANTS").ok();
+    unsafe {
+        std::env::remove_var("DEKA_HOST_GRANTS");
+    }
+    let result = check_with_path(code, src.to_str().unwrap());
+    unsafe {
+        match prev {
+            Some(value) => std::env::set_var("DEKA_HOST_GRANTS", value),
+            None => std::env::remove_var("DEKA_HOST_GRANTS"),
+        }
+    }
+    assert!(
+        result.is_ok(),
+        "host-grants.json next to the app should grant crypto: {:?}",
+        result.err()
+    );
+}
+
+#[test]
 fn bridge_crypto_digest_hmac_secure_compare_typecheck() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
