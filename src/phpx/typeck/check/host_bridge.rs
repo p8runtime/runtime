@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::Value;
-use std::fs;
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Official stdlib packages that may declare `host.kinds` at their compile root.
@@ -133,7 +135,26 @@ pub(in crate::phpx::typeck::check) enum BridgeGrant {
     Denied { message: String },
 }
 
-pub(in crate::phpx::typeck::check) fn workspace_grant(
+pub(in crate::phpx::typeck::check) fn resolve_grant(
+    file_path: Option<&Path>,
+    kind: &str,
+) -> BridgeGrant {
+    match workspace_grant(file_path, kind) {
+        BridgeGrant::Allowed => BridgeGrant::Allowed,
+        workspace_denied => match digest_grant(file_path, kind) {
+            BridgeGrant::Allowed => BridgeGrant::Allowed,
+            digest_denied => {
+                if file_path.is_some_and(under_modules_dir) {
+                    digest_denied
+                } else {
+                    workspace_denied
+                }
+            }
+        },
+    }
+}
+
+fn workspace_grant(
     file_path: Option<&Path>,
     kind: &str,
 ) -> BridgeGrant {
@@ -237,7 +258,7 @@ impl<'a> CheckContext<'a> {
             }
         };
 
-        match workspace_grant(self.file_path.as_deref(), &kind) {
+        match resolve_grant(self.file_path.as_deref(), &kind) {
             BridgeGrant::Allowed => {}
             BridgeGrant::Denied { message } => {
                 self.errors.push(TypeError {
@@ -289,4 +310,152 @@ impl<'a> CheckContext<'a> {
 
 fn is_assignable_bridge(got: &Type, expected: &Type) -> bool {
     got == expected || matches!(got, Type::Unknown)
+}
+
+#[derive(Debug, Clone)]
+struct LoadedGrant {
+    digest: String,
+    kinds: Vec<String>,
+}
+
+fn digest_grant(file_path: Option<&Path>, kind: &str) -> BridgeGrant {
+    let Some(file_path) = file_path else {
+        return BridgeGrant::Denied {
+            message: "bridge is only allowed in a host-granted stdlib package".to_string(),
+        };
+    };
+    if !under_modules_dir(file_path) {
+        return BridgeGrant::Denied {
+            message: "bridge is only allowed in a host-granted stdlib package".to_string(),
+        };
+    }
+    let Some(manifest_path) = nearest_deka_json(file_path) else {
+        return BridgeGrant::Denied {
+            message: "bridge is only allowed in a host-granted stdlib package".to_string(),
+        };
+    };
+    let Some(root) = manifest_path.parent() else {
+        return BridgeGrant::Denied {
+            message: "bridge is only allowed in a host-granted stdlib package".to_string(),
+        };
+    };
+    let Ok(digest) = package_fs_digest(root) else {
+        return BridgeGrant::Denied {
+            message: "bridge is only allowed in a host-granted stdlib package".to_string(),
+        };
+    };
+    let grants = load_grant_table();
+    let package_name = parse_manifest(&manifest_path)
+        .map(|m| m.name)
+        .unwrap_or_else(|| "package".to_string());
+    let Some(grant) = grants.iter().find(|g| g.digest == digest) else {
+        return BridgeGrant::Denied {
+            message: format!("package {package_name} digest does not match a host grant"),
+        };
+    };
+    if !grant.kinds.iter().any(|k| k == kind) {
+        return BridgeGrant::Denied {
+            message: format!("host grant does not include kind {kind}"),
+        };
+    }
+    BridgeGrant::Allowed
+}
+
+fn load_grant_table() -> Vec<LoadedGrant> {
+    let Ok(raw) = std::env::var("DEKA_HOST_GRANTS") else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let digest = item.get("digest")?.as_str()?.trim().to_string();
+            if digest.is_empty() {
+                return None;
+            }
+            let kinds = item
+                .get("kinds")?
+                .as_array()?
+                .iter()
+                .filter_map(|k| k.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>();
+            if kinds.is_empty() {
+                return None;
+            }
+            Some(LoadedGrant { digest, kinds })
+        })
+        .collect()
+}
+
+/// Filesystem-graph digest, same shape as `modules_php::integrity` fs_graph.
+pub(crate) fn package_fs_digest(root: &Path) -> Result<String, String> {
+    let mut files = Vec::new();
+    collect_files(root, root, &mut files)?;
+    files.sort();
+
+    let mut hasher = Sha256::new();
+    for path in files {
+        let rel = path
+            .strip_prefix(root)
+            .map_err(|_| "failed to normalize integrity path")?;
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        hasher.update(rel_str.as_bytes());
+        hasher.update(b"\0");
+
+        let mut file = File::open(&path)
+            .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+        let mut buf = [0u8; 8192];
+        loop {
+            let read = file
+                .read(&mut buf)
+                .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buf[..read]);
+        }
+        hasher.update(b"\n");
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_files(root: &Path, current: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in fs::read_dir(current)
+        .map_err(|err| format!("failed to read {}: {}", current.display(), err))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read entry: {}", err))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("failed to read entry type: {}", err))?;
+        if file_type.is_dir() {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if rel_str == ".git"
+                || rel_str == ".cache"
+                || rel_str == "node_modules"
+                || rel_str == "target"
+                || rel_str.starts_with(".git/")
+                || rel_str.starts_with(".cache/")
+                || rel_str.starts_with("node_modules/")
+                || rel_str.starts_with("target/")
+            {
+                continue;
+            }
+            collect_files(root, &path, out)?;
+        } else if file_type.is_file() {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if rel_str != ".DS_Store" {
+                out.push(path);
+            }
+        }
+    }
+    Ok(())
 }
