@@ -45,6 +45,13 @@ fn result_number() -> Type {
     }
 }
 
+fn result_array() -> Type {
+    Type::Applied {
+        base: "Result".to_string(),
+        args: vec![Type::Array, Type::Unknown],
+    }
+}
+
 struct HostOp {
     kind: &'static str,
     action: &'static str,
@@ -125,6 +132,34 @@ const CATALOG: &[HostOp] = &[
         params: &[PrimitiveType::String],
         ret: result_bytes,
         is_async: true,
+    },
+    HostOp {
+        kind: "fs",
+        action: "write_file",
+        params: &[PrimitiveType::String, PrimitiveType::Bytes],
+        ret: result_number,
+        is_async: true,
+    },
+    HostOp {
+        kind: "fs",
+        action: "read_dir",
+        params: &[PrimitiveType::String],
+        ret: result_array,
+        is_async: true,
+    },
+    HostOp {
+        kind: "fs",
+        action: "mkdirs",
+        params: &[PrimitiveType::String],
+        ret: result_bool,
+        is_async: true,
+    },
+    HostOp {
+        kind: "time",
+        action: "sleep_ms",
+        params: &[PrimitiveType::Number],
+        ret: result_number,
+        is_async: false,
     },
     HostOp {
         kind: "net",

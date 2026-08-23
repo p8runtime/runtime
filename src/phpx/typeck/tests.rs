@@ -1617,6 +1617,40 @@ fn bridge_allowed_in_workspace_stdlib_package() {
 }
 
 #[test]
+fn bridge_allowed_in_workspace_fs_write_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "@deka/fs", "host": { "kinds": ["fs"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go(data: bytes) { bridge fs.write_file(\"a.txt\", data); }\n";
+    std::fs::write(&src, code).unwrap();
+    assert!(
+        check_with_path(code, src.to_str().unwrap()).is_ok(),
+        "workspace fs package should be allowed to bridge fs.write_file"
+    );
+}
+
+#[test]
+fn bridge_allowed_in_workspace_time_sleep_ms() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "@deka/time", "host": { "kinds": ["time"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge time.sleep_ms(1); }\n";
+    std::fs::write(&src, code).unwrap();
+    assert!(
+        check_with_path(code, src.to_str().unwrap()).is_ok(),
+        "workspace time package should be allowed to bridge time.sleep_ms"
+    );
+}
+
+#[test]
 fn bridge_allowed_in_workspace_tcp_package() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
