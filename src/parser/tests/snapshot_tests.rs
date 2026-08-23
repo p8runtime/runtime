@@ -326,7 +326,7 @@ fn test_closures_and_arrow_functions() {
 $a = function($b) { return $b; };
 $c = function($d) use ($e) { return $d + $e; };
 $f = fn($x) => $x * 2;
-$g = fn($y): int => $y + 1;
+$g = fn($y) int => $y + 1;
 ";
     let lexer = Lexer::new(code.as_bytes());
     let bump = Bump::new();

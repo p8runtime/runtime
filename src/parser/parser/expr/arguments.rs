@@ -458,10 +458,16 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
     pub(crate) fn parse_return_type(&mut self) -> Option<&'ast Type<'ast>> {
         if self.is_ds() {
-            // DekaScript function return types are written without a colon.
-            // Accept an optional colon for backward compatibility with existing
-            // DekaScript sources, then parse the type if present.
+            // DekaScript function return types are written without a colon:
+            // `fn f(a: number) number`. There is exactly one spelling, so the
+            // colon is rejected rather than tolerated -- an accepted second
+            // form is how the whole fixture corpus drifted onto it.
             if self.current_token.kind == TokenKind::Colon {
+                self.errors.push(ParseError::with_help(
+                    self.current_token.span,
+                    "DekaScript return types are written without a colon",
+                    "Write `fn name(a: Type) ReturnType` (for example, `fn add(a: number) number`).",
+                ));
                 self.bump();
             }
             if let Some(t) = self.parse_type() {
