@@ -1721,3 +1721,30 @@ fn bridge_rejects_installed_package_without_digest_grant() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn host_module_runtime_import_typechecks() {
+    let code = r#"
+import { runtime } from "host"
+fn go() {
+  runtime
+}
+"#;
+    assert!(
+        check_ds(code).is_ok(),
+        "from \"host\" import {{ runtime }} should typecheck: {:?}",
+        check_ds(code).err()
+    );
+}
+
+#[test]
+fn host_module_unknown_export_errors() {
+    let code = r#"
+import { not_a_thing } from "host"
+"#;
+    let err = check_ds(code).expect_err("unknown host export");
+    assert!(
+        err.contains("not exported by 'host'"),
+        "unexpected error: {err}"
+    );
+}

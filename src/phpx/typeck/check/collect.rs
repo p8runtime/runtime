@@ -908,13 +908,14 @@ impl<'a> CheckContext<'a> {
             || name == "__deka_wasm_call_async"
             || name == "__bridge"
             || name == "__bridge_async"
-            || name == "__deka_bridge")
+            || name == "__deka_bridge"
+            || name == "__deka_host")
             && !self.allow_internal_bridge_call()
         {
             self.errors.push(TypeError { severity: Severity::Error,
                 span: Span::new(span.start, span.end),
                 message: format!(
-                    "{} is internal-only; import public modules instead (for example: db, postgres, mysql, sqlite, tcp, tls, encoding/json)",
+                    "{} is internal-only; use `bridge kind.action(args)` from a host-granted stdlib package",
                     name
                 ),
             });

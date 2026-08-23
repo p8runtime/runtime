@@ -87,6 +87,9 @@ impl<'a> CheckContext<'a> {
             let module_path =
                 String::from_utf8_lossy(&self.source[from.span.start..from.span.end]).to_string();
             let module_path = unquote_module_path(&module_path);
+            if module_path == "host" {
+                continue;
+            }
             let Some(summary) = imports.get(&module_path) else {
                 self.errors.push(TypeError {
                     span: from.span,
@@ -172,8 +175,79 @@ impl<'a> CheckContext<'a> {
         let mut env: HashMap<String, Type> = HashMap::new();
         let mut explicit: HashSet<String> = HashSet::new();
         let mut mut_env: HashSet<String> = HashSet::new();
+        self.bind_host_imports(program, &mut env);
         for stmt in program.statements.iter() {
             self.check_stmt(stmt, &mut env, &mut explicit, None, &mut mut_env);
+        }
+    }
+
+    fn ensure_host_runtime_enum(&mut self) {
+        if self.enums.contains_key("HostRuntime") {
+            return;
+        }
+        let mut cases = BTreeMap::new();
+        cases.insert(
+            "Native".to_string(),
+            crate::phpx::typeck::infer::EnumCaseInfo { params: Vec::new() },
+        );
+        cases.insert(
+            "Browser".to_string(),
+            crate::phpx::typeck::infer::EnumCaseInfo { params: Vec::new() },
+        );
+        self.enums.insert(
+            "HostRuntime".to_string(),
+            crate::phpx::typeck::infer::EnumInfo {
+                cases,
+                backed: None,
+                type_params: Vec::new(),
+            },
+        );
+    }
+
+    fn bind_host_imports(&mut self, program: &Program<'a>, env: &mut HashMap<String, Type>) {
+        for stmt in program.statements.iter() {
+            let Stmt::Import { specs, from, .. } = stmt else {
+                continue;
+            };
+            let module_path =
+                String::from_utf8_lossy(&self.source[from.span.start..from.span.end]).to_string();
+            let module_path = unquote_module_path(&module_path);
+            if module_path != "host" {
+                continue;
+            }
+            self.ensure_host_runtime_enum();
+            for spec in specs.iter() {
+                let remote = String::from_utf8_lossy(
+                    &self.source[spec.remote.span.start..spec.remote.span.end],
+                )
+                .to_string();
+                let local = String::from_utf8_lossy(
+                    &self.source[spec.local.span.start..spec.local.span.end],
+                )
+                .to_string();
+                match remote.as_str() {
+                    "runtime" => {
+                        env.insert(local, Type::Enum("HostRuntime".to_string()));
+                    }
+                    "HostRuntime" => {}
+                    "select" => {
+                        env.insert(
+                            local,
+                            Type::Function {
+                                params: vec![Type::Unknown],
+                                return_type: Box::new(Type::Unknown),
+                            },
+                        );
+                    }
+                    _ => {
+                        self.errors.push(TypeError {
+                            span: spec.remote.span,
+                            message: format!("'{remote}' is not exported by 'host'"),
+                            severity: Severity::Error,
+                        });
+                    }
+                }
+            }
         }
     }
 }
