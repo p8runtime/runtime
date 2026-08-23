@@ -12,6 +12,7 @@ impl<'a> CheckContext<'a> {
             structs: &self.structs,
             interfaces: &self.interface_shapes,
             functions: &self.function_returns,
+            function_value_types: &self.function_value_types,
             enums: &self.enums,
         };
         infer_expr(expr, &ctx)

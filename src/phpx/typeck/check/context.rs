@@ -20,6 +20,10 @@ pub(in crate::phpx::typeck::check) struct CheckContext<'a> {
         HashMap<String, BTreeMap<String, ObjectField>>,
     pub(in crate::phpx::typeck::check) functions: HashMap<String, FunctionSig>,
     pub(in crate::phpx::typeck::check) function_returns: HashMap<String, Type>,
+    /// Full `fn(params) ret` types, for when a function NAME is used as a
+    /// value rather than called. function_returns only holds return types,
+    /// which is what a call site needs and exactly wrong for a reference.
+    pub(in crate::phpx::typeck::check) function_value_types: HashMap<String, Type>,
     pub(in crate::phpx::typeck::check) imported: HashMap<String, String>,
     pub(in crate::phpx::typeck::check) type_aliases: HashMap<String, TypeAliasInfo>,
     pub(in crate::phpx::typeck::check) resolved_aliases: HashMap<String, Type>,
@@ -44,6 +48,7 @@ impl<'a> CheckContext<'a> {
             interface_shapes: HashMap::new(),
             functions: HashMap::new(),
             function_returns: HashMap::new(),
+            function_value_types: HashMap::new(),
             imported: HashMap::new(),
             type_aliases: HashMap::new(),
             resolved_aliases: HashMap::new(),
