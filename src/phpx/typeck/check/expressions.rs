@@ -491,6 +491,12 @@ impl<'a> CheckContext<'a> {
                     args: vec![Type::Unknown, Type::Unknown],
                 }
             }
+            Expr::Bridge {
+                kind,
+                action,
+                args,
+                span,
+            } => self.check_bridge_expr(kind, action, args, span, env, explicit, mut_env),
             Expr::AnonymousClass { span, .. } => {
                 self.errors.push(TypeError { severity: Severity::Error,
                     span,

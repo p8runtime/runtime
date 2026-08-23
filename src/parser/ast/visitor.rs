@@ -499,6 +499,11 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
             // Raw JavaScript inside `unsafe { ... }` is intentionally opaque to
             // DekaScript AST visitors.
         }
+        Expr::Bridge { args, .. } => {
+            for arg in args {
+                visitor.visit_arg(arg);
+            }
+        }
         Expr::AnonymousClass {
             attributes,
             args,
@@ -661,7 +666,10 @@ pub fn walk_type<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'ast Typ
                 visitor.visit_type(arg);
             }
         }
-        Type::Function { params, return_type } => {
+        Type::Function {
+            params,
+            return_type,
+        } => {
             for param in params.iter() {
                 visitor.visit_type(param);
             }

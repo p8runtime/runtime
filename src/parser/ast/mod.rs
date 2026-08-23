@@ -659,6 +659,15 @@ pub enum Expr<'ast> {
         raw: &'ast [u8],
         span: Span,
     },
+    /// A DekaScript host call: `bridge crypto.random_bytes(n)` (RFD 27).
+    /// `kind` and `action` are identifier bytes. Only host-granted stdlib
+    /// packages may write this expression.
+    Bridge {
+        kind: &'ast [u8],
+        action: &'ast [u8],
+        args: &'ast [Arg<'ast>],
+        span: Span,
+    },
     /// A prepared Cypher query literal.
     /// `cql recs = MATCH (n:Node) RETURN n;`
     /// Produces a query value with the raw Cypher text and extracted $param references.
@@ -784,6 +793,7 @@ impl<'ast> Expr<'ast> {
             Expr::VariadicPlaceholder { span } => *span,
             Expr::Spread { span, .. } => *span,
             Expr::Unsafe { span, .. } => *span,
+            Expr::Bridge { span, .. } => *span,
             Expr::Cql { span, .. } => *span,
             Expr::Error { span } => *span,
             Expr::IndirectVariable { span, .. } => *span,

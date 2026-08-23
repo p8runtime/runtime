@@ -1065,8 +1065,25 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             }
             Expr::Unsafe { raw, .. } => {
                 self.write("(unsafe \"");
-                self.write(&String::from_utf8_lossy(raw).replace('\\', "\\\\").replace('"', "\\\""));
+                self.write(
+                    &String::from_utf8_lossy(raw)
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\""),
+                );
                 self.write("\")");
+            }
+            Expr::Bridge {
+                kind, action, args, ..
+            } => {
+                self.write("(bridge ");
+                self.write(&String::from_utf8_lossy(kind));
+                self.write(".");
+                self.write(&String::from_utf8_lossy(action));
+                for arg in *args {
+                    self.write(" ");
+                    self.visit_arg(arg);
+                }
+                self.write(")");
             }
             Expr::Closure {
                 attributes,
@@ -1536,7 +1553,10 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 }
                 self.write(")");
             }
-            Type::Function { params, return_type } => {
+            Type::Function {
+                params,
+                return_type,
+            } => {
                 self.write("(function-type");
                 for param in *params {
                     self.write(" ");

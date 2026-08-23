@@ -344,6 +344,10 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             base: "Result".to_string(),
             args: vec![Type::Unknown, Type::Unknown],
         },
+        Expr::Bridge { .. } => Type::Applied {
+            base: "Result".to_string(),
+            args: vec![Type::Unknown, Type::Unknown],
+        },
         Expr::Assign { expr: rhs, .. } | Expr::AssignRef { expr: rhs, .. } => infer_expr(rhs, ctx),
         Expr::New { .. } => Type::Unknown,
         Expr::ClassConstFetch {
@@ -455,7 +459,12 @@ fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
     let is_unknown = |t: &Type| matches!(t, Type::Unknown);
 
     match op {
-        BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+        BinaryOp::Plus
+        | BinaryOp::Minus
+        | BinaryOp::Mul
+        | BinaryOp::Div
+        | BinaryOp::Mod
+        | BinaryOp::Pow => {
             if is_unknown(left) || is_unknown(right) {
                 Type::Unknown
             } else if is_bigint(left) && is_bigint(right) {

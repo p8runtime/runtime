@@ -1008,6 +1008,37 @@ fn ds_parses_unsafe_block_raw_source() {
 }
 
 #[test]
+fn ds_parses_bridge_call() {
+    let code = "const x = bridge crypto.random_bytes(32);";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.is_empty(),
+        "parse errors: {:?}",
+        program.errors
+    );
+    let expr = program
+        .statements
+        .iter()
+        .find_map(|s| match **s {
+            Stmt::Const { consts, .. } => consts.first().map(|c| c.value),
+            _ => None,
+        })
+        .expect("expected const declaration");
+    match expr {
+        Expr::Bridge {
+            kind, action, args, ..
+        } => {
+            assert_eq!(kind, b"crypto");
+            assert_eq!(action, b"random_bytes");
+            assert_eq!(args.len(), 1);
+        }
+        _ => panic!("expected bridge expression, got {:?}", expr),
+    }
+}
+
+#[test]
 fn lexer_recognizes_unsafe_keyword() {
     use crate::parser::lexer::token::TokenKind;
     let code = "unsafe";

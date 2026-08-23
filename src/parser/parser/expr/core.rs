@@ -1012,6 +1012,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     }),
                 }
             }
+            TokenKind::Identifier if self.is_ds() && self.token_eq_ident(&token, b"bridge") => {
+                self.parse_bridge_expr(token.span.start)
+            }
             TokenKind::Identifier if self.token_eq_ident(&token, b"await") => {
                 if !self.is_ds_scripting() {
                     self.errors.push(ParseError::with_help(
@@ -1719,5 +1722,69 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             }
         }
+    }
+
+    fn parse_bridge_expr(&mut self, start: usize) -> ExprId<'ast> {
+        self.bump(); // `bridge`
+
+        if self.current_token.kind != TokenKind::Identifier {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected a host kind after `bridge`",
+                "Write `bridge crypto.random_bytes(n)` with kind and action as identifiers.",
+            ));
+            return self.arena.alloc(Expr::Error {
+                span: Span::new(start, self.current_token.span.end),
+            });
+        }
+        let kind = self
+            .arena
+            .alloc_slice_copy(self.lexer.slice(self.current_token.span));
+        self.bump();
+
+        if self.current_token.kind != TokenKind::Dot {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected `.` after the host kind",
+                "Write `bridge <kind>.<action>(args)`.",
+            ));
+            return self.arena.alloc(Expr::Error {
+                span: Span::new(start, self.current_token.span.end),
+            });
+        }
+        self.bump();
+
+        if self.current_token.kind != TokenKind::Identifier {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected a host action after `bridge <kind>.`",
+                "Write `bridge crypto.random_bytes(n)`.",
+            ));
+            return self.arena.alloc(Expr::Error {
+                span: Span::new(start, self.current_token.span.end),
+            });
+        }
+        let action = self
+            .arena
+            .alloc_slice_copy(self.lexer.slice(self.current_token.span));
+        self.bump();
+
+        if self.current_token.kind != TokenKind::OpenParen {
+            self.errors.push(ParseError::with_help(
+                self.current_token.span,
+                "Expected `(` after the host action",
+                "Write `bridge crypto.random_bytes(n)`.",
+            ));
+            return self.arena.alloc(Expr::Error {
+                span: Span::new(start, self.current_token.span.end),
+            });
+        }
+        let (args, args_span) = self.parse_call_arguments();
+        self.arena.alloc(Expr::Bridge {
+            kind,
+            action,
+            args,
+            span: Span::new(start, args_span.end),
+        })
     }
 }

@@ -1585,3 +1585,66 @@ fn ds_cross_module_import_rejects_missing_export() {
         errors
     );
 }
+
+#[test]
+fn bridge_rejected_without_host_grant() {
+    let code = "fn go() { bridge crypto.random_bytes(32); }";
+    let err = check_ds(code).expect_err("app code must not call bridge");
+    assert!(
+        err.contains("host-granted stdlib package"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn bridge_allowed_in_workspace_stdlib_package() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "crypto", "host": { "kinds": ["crypto"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge crypto.random_bytes(32); }\n";
+    std::fs::write(&src, code).unwrap();
+    assert!(
+        check_with_path(code, src.to_str().unwrap()).is_ok(),
+        "workspace crypto package should be allowed to bridge crypto.*"
+    );
+}
+
+#[test]
+fn bridge_rejects_kind_not_on_workspace_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "crypto", "host": { "kinds": ["crypto"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("index.ds");
+    let code = "fn go() { bridge fs.read_file(\"a\"); }\n";
+    std::fs::write(&src, code).unwrap();
+    let err = check_with_path(code, src.to_str().unwrap()).expect_err("fs is not granted");
+    assert!(
+        err.contains("does not include kind fs"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn app_deka_json_cannot_declare_host_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("deka.json"),
+        r#"{ "name": "my-app", "host": { "kinds": ["crypto"] } }"#,
+    )
+    .unwrap();
+    let src = dir.path().join("main.ds");
+    let code = "fn go() { bridge crypto.random_bytes(32); }\n";
+    std::fs::write(&src, code).unwrap();
+    let err = check_with_path(code, src.to_str().unwrap()).expect_err("app grant is illegal");
+    assert!(
+        err.contains("official stdlib package"),
+        "unexpected error: {err}"
+    );
+}
