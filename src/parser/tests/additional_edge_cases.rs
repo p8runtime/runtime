@@ -218,11 +218,11 @@ function gen() {
 #[test]
 fn test_arrow_function_complex() {
     let code = r#"<?php
-$fn = fn(int $x): int => $x * 2;
+$fn = fn(int $x) int => $x * 2;
 $nested = fn($a) => fn($b) => $a + $b;
 $with_ref = fn(&$x) => $x++;
 $variadic = fn(...$args) => array_sum($args);
-$typed = fn(int|string $x): bool|int => is_int($x) ? $x : 0;
+$typed = fn(int|string $x) bool|int => is_int($x) ? $x : 0;
 "#;
     let bump = Bump::new();
     let lexer = Lexer::new(code.as_bytes());

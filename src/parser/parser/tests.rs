@@ -24,7 +24,7 @@ fn detect_mode_treats_ds_extension_as_dekascript() {
 #[test]
 fn ds_parses_bare_typed_parameters_and_const() {
     let arena = Bump::new();
-    let mut parser = Parser::new_with_mode(Lexer::new(b"const answer = 42; fn add(left: number, right: number): number { return left + right; }"), &arena, ParserMode::Ds);
+    let mut parser = Parser::new_with_mode(Lexer::new(b"const answer = 42; fn add(left: number, right: number) number { return left + right; }"), &arena, ParserMode::Ds);
     let program = parser.parse_program();
     assert!(
         program.errors.is_empty(),
@@ -37,7 +37,7 @@ fn ds_parses_bare_typed_parameters_and_const() {
 fn ds_rejects_php_sigil_parameters_with_actionable_diagnostic() {
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(
-        Lexer::new(b"fn add($value: number): number { return $value; }"),
+        Lexer::new(b"fn add($value: number) number { return $value; }"),
         &arena,
         ParserMode::Ds,
     );
@@ -1238,7 +1238,7 @@ impl Named for User { name(): string { return this.handle } }"#;
 
 #[test]
 fn ds_fn_keyword_parses_top_level_function() {
-    let code = "fn add(left: number, right: number): number { return left + right; }";
+    let code = "fn add(left: number, right: number) number { return left + right; }";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
@@ -1257,7 +1257,7 @@ fn ds_fn_keyword_parses_top_level_function() {
 
 #[test]
 fn ds_async_fn_parses() {
-    let code = "async fn load(p: Promise<int>): Promise<int> { return await p; }";
+    let code = "async fn load(p: Promise<int>) Promise<int> { return await p; }";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
@@ -1347,7 +1347,7 @@ fn ds_rejects_function_keyword() {
 #[test]
 fn ds_receiver_method_parses() {
     let code = r#"struct Person { name: string }
-fn (p Person) greet(): string { return "Hello, " + p.name }
+fn (p Person) greet() string { return "Hello, " + p.name }
 fn (p mut Person) setName(name: string) { p.name = name }"#;
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
@@ -1603,7 +1603,7 @@ fn ds_impl_help_uses_receiver_syntax_without_colon() {
 
 #[test]
 fn ds_interface_accepts_fn_methods() {
-    let code = "interface Named { fn name(): string; fn setName(name: string); }";
+    let code = "interface Named { fn name() string; fn setName(name: string); }";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
@@ -1699,7 +1699,7 @@ fn ds_parses_import_and_export_declarations() {
     let arena = Bump::new();
     let source = b"
 import { add, subtract as sub } from './math.ds';
-export fn answer(): number { return 42; }
+export fn answer() number { return 42; }
 export const greeting = 'hello';
 export { answer, greeting as hi };
 ";

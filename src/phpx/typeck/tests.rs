@@ -135,20 +135,20 @@ fn struct_default_allows_struct_and_object_literals() {
 #[test]
 fn ds_bare_struct_field_names_typecheck() {
     // dekaruntime/deka#93: DekaScript structs use bare identifiers.
-    let code = "struct Point { x: number; y: number } fn f(): number { return Point { x: 3, y: 4 }.x; }";
+    let code = "struct Point { x: number; y: number } fn f() number { return Point { x: 3, y: 4 }.x; }";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
 
 #[test]
 fn ds_bare_struct_field_missing_field_errors() {
-    let code = "struct Point { x: int; y: int } fn f(): Point { return Point { x: 3 }; }";
+    let code = "struct Point { x: int; y: int } fn f() Point { return Point { x: 3 }; }";
     assert!(check_ds(code).is_err());
 }
 
 #[test]
 fn ds_bare_struct_field_wrong_type_errors() {
-    let code = "struct Point { x: int; y: int } fn f(): Point { return Point { x: \"nope\", y: 4 }; }";
+    let code = "struct Point { x: int; y: int } fn f() Point { return Point { x: \"nope\", y: 4 }; }";
     assert!(check_ds(code).is_err());
 }
 
@@ -432,7 +432,7 @@ fn destructured_param_struct_type_is_rejected_with_guidance() {
 fn ds_jsx_component_destructured_param_props_are_recognized() {
     // dekaruntime/deka#93: DekaScript JSX components use bare destructured
     // params ({ name }: GreetingProps) and bare interface fields.
-    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps) Component { return <h1>Hello {name}</h1> } <Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -440,7 +440,7 @@ fn ds_jsx_component_destructured_param_props_are_recognized() {
 #[test]
 fn ds_jsx_component_with_separator_destructured_param_props_are_recognized() {
     // Component files separate script and template with '---'.
-    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps): Component { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
+    let code = "interface GreetingProps { name: string } fn Greeting({ name }: GreetingProps) Component { return <h1>Hello {name}</h1> }\n---\n<Greeting name=\"DekaScript\" />";
     let res = check_ds(code);
     assert!(res.is_ok(), "expected ok, got: {:?}", res);
 }
@@ -827,7 +827,7 @@ fn foreach_binds_key_and_value_variables() {
 
 #[test]
 fn arrow_function_params_are_in_scope() {
-    let code = "$f = fn($x: int): int => $x + 1;";
+    let code = "$f = fn($x: int) int => $x + 1;";
     assert!(check(code).is_ok());
 }
 
@@ -955,7 +955,7 @@ fn real_type_error_still_fails_exactly_as_before() {
 fn ds_enum_js_style_body_typechecks() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        fn getStatus(): Status { return Status.Ready; }
+        fn getStatus() Status { return Status.Ready; }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -964,7 +964,7 @@ fn ds_enum_js_style_body_typechecks() {
 fn ds_enum_generic_payload_typechecks() {
     let code = r#"
         enum Option<T> { Some(T), None }
-        fn getOption(): Option<number> { return Option::Some(1); }
+        fn getOption() Option<number> { return Option::Some(1); }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -973,7 +973,7 @@ fn ds_enum_generic_payload_typechecks() {
 fn ds_enum_generic_payload_mismatch_errors() {
     let code = r#"
         enum Option<T> { Some(T), None }
-        fn getOption(): Option<int> { return Option::Some("no"); }
+        fn getOption() Option<int> { return Option::Some("no"); }
     "#;
     assert!(check_ds(code).is_err());
 }
@@ -982,7 +982,7 @@ fn ds_enum_generic_payload_mismatch_errors() {
 fn ds_enum_non_generic_payload_typechecks() {
     let code = r#"
         enum Msg { Text(string), Ping }
-        fn getMsg(): Msg { return Msg::Text("hi"); }
+        fn getMsg() Msg { return Msg::Text("hi"); }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
@@ -991,7 +991,7 @@ fn ds_enum_non_generic_payload_typechecks() {
 fn ds_enum_non_generic_payload_mismatch_errors() {
     let code = r#"
         enum Msg { Text(string), Ping }
-        fn getMsg(): Msg { return Msg::Text(123); }
+        fn getMsg() Msg { return Msg::Text(123); }
     "#;
     assert!(check_ds(code).is_err());
 }
@@ -1002,7 +1002,7 @@ fn ds_enum_match_destructures_non_generic_payload() {
     // as the synthetic field name so the typechecker can narrow it.
     let code = r#"
         enum Msg { Text(string), Ping }
-        fn body(m: Msg): string {
+        fn body(m: Msg) string {
             return match (m) {
                 Msg::Text => m.string,
                 Msg::Ping => "ok",
@@ -1016,7 +1016,7 @@ fn ds_enum_match_destructures_non_generic_payload() {
 fn ds_enum_match_non_generic_payload_field_outside_arm_errors() {
     let code = r#"
         enum Msg { Text(string), Ping }
-        fn body(m: Msg): string {
+        fn body(m: Msg) string {
             return match (m) {
                 Msg::Text => "ok",
                 Msg::Ping => m.string,
@@ -1030,7 +1030,7 @@ fn ds_enum_match_non_generic_payload_field_outside_arm_errors() {
 fn ds_enum_match_exhaustive_on_js_style_enum() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        fn f(s: Status): number {
+        fn f(s: Status) number {
             match (s) {
                 Status::Loading => 0,
                 Status::Ready => 1,
@@ -1047,7 +1047,7 @@ fn ds_enum_match_exhaustive_using_dot_access() {
     // `Status::Ready` when the left-hand side names an enum.
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        fn f(s: Status): number {
+        fn f(s: Status) number {
             match (s) {
                 Status.Loading => 0,
                 Status.Ready => 1,
@@ -1062,7 +1062,7 @@ fn ds_enum_match_exhaustive_using_dot_access() {
 fn ds_enum_match_missing_case_errors() {
     let code = r#"
         enum Status { Loading, Ready, Failed }
-        fn f(s: Status): int {
+        fn f(s: Status) int {
             match (s) {
                 Status::Loading => 0,
                 Status::Ready => 1,
@@ -1179,8 +1179,8 @@ fn phpx_function_return_type_inferred_mismatch_rejected() {
 fn ds_receiver_method_type_checks() {
     let code = r#"
         struct Person { name: string }
-        fn (p Person) greet(): string { return "hi" }
-        fn f(): string {
+        fn (p Person) greet() string { return "hi" }
+        fn f() string {
           const person = Person { name: "Ada" };
           return person.greet();
         }
@@ -1196,7 +1196,7 @@ fn ds_receiver_method_body_type_error_is_caught() {
     // arm and produced no diagnostics.
     let code = r#"
         struct Person { name: string }
-        fn (p Person) greet(): string { return 123 }
+        fn (p Person) greet() string { return 123 }
     "#;
     let res = check_ds(code);
     assert!(res.is_err(), "expected receiver method body type error: {:?}", res);
@@ -1210,7 +1210,7 @@ fn ds_receiver_method_body_type_error_is_caught() {
 fn ds_receiver_method_receiver_is_bound_in_body() {
     let code = r#"
         struct Person { name: string }
-        fn (p Person) greet(): string { return p.name }
+        fn (p Person) greet() string { return p.name }
     "#;
     let res = check_ds(code);
     assert!(
@@ -1224,8 +1224,8 @@ fn ds_receiver_method_receiver_is_bound_in_body() {
 fn ds_receiver_method_param_type_error_is_caught() {
     let code = r#"
         struct Person { name: string }
-        fn (p Person) greet(greeting: string): string { return greeting }
-        fn f(): string {
+        fn (p Person) greet(greeting: string) string { return greeting }
+        fn f() string {
           const person = Person { name: "Ada" };
           return person.greet(123);
         }
@@ -1272,7 +1272,7 @@ fn ds_mutable_receiver_on_function_return_errors() {
     // allowing mutable receiver calls on temporary values.
     let code = r#"
         struct Person { name: string }
-        fn makePerson(): Person { return Person { name: "Ada" } }
+        fn makePerson() Person { return Person { name: "Ada" } }
         fn (p mut Person) setName(name: string) {}
         fn f() {
           makePerson().setName("Bob");
@@ -1315,7 +1315,7 @@ fn ds_mutable_receiver_on_immutable_param_errors() {
 fn ds_interface_bare_field_names_accept_object_literal() {
     let code = r#"
         interface NameProps { name: string }
-        fn fullName(props: NameProps): string { return props.name; }
+        fn fullName(props: NameProps) string { return props.name; }
         fullName({ name: "Bob" });
     "#;
     let res = check_ds(code);
@@ -1326,7 +1326,7 @@ fn ds_interface_bare_field_names_accept_object_literal() {
 fn ds_interface_optional_field_allows_missing() {
     let code = r#"
         interface Media { title: string; subtitle?: string }
-        fn getSubtitle(m: Media): Option<string> { return m.subtitle; }
+        fn getSubtitle(m: Media) Option<string> { return m.subtitle; }
         getSubtitle({ title: "A" });
     "#;
     let res = check_ds(code);
@@ -1337,7 +1337,7 @@ fn ds_interface_optional_field_allows_missing() {
 fn ds_object_literal_spread_from_interface_ok() {
     let code = r#"
         interface Base { a: number; b: string }
-        fn f(base: Base): number {
+        fn f(base: Base) number {
           const copy = { ...base, b: "y" };
           return copy.a;
         }
@@ -1350,7 +1350,7 @@ fn ds_object_literal_spread_from_interface_ok() {
 fn ds_object_literal_spread_type_mismatch_errors() {
     let code = r#"
         interface Base { a: int; b: string }
-        fn f(base: Base): Base {
+        fn f(base: Base) Base {
           return { ...base, b: 123 };
         }
     "#;
@@ -1362,8 +1362,8 @@ fn ds_object_literal_spread_type_mismatch_errors() {
 fn ds_jsx_spread_props_satisfies_required() {
     let code = r#"
         interface GreetingProps { name: string }
-        fn Greeting(props: GreetingProps): Component { return <h1>Hello {props.name}</h1> }
-        fn render(): Component {
+        fn Greeting(props: GreetingProps) Component { return <h1>Hello {props.name}</h1> }
+        fn render() Component {
           const props = { name: "Deka" };
           return <Greeting {...props} />;
         }
@@ -1376,8 +1376,8 @@ fn ds_jsx_spread_props_satisfies_required() {
 fn ds_jsx_spread_missing_required_prop_errors() {
     let code = r#"
         interface GreetingProps { name: string }
-        fn Greeting(props: GreetingProps): Component { return <h1>Hello {props.name}</h1> }
-        fn render(): Component {
+        fn Greeting(props: GreetingProps) Component { return <h1>Hello {props.name}</h1> }
+        fn render() Component {
           const props = {};
           return <Greeting {...props} />;
         }
@@ -1394,9 +1394,9 @@ fn ds_jsx_spread_missing_required_prop_errors() {
 fn ds_embed_promotes_methods() {
     let code = r#"
         struct Person { name: string }
-        fn (p Person) greet(): string { return "hi, " + p.name }
+        fn (p Person) greet() string { return "hi, " + p.name }
         struct Employee { Person; employeeId: string }
-        fn f(): string {
+        fn f() string {
           const e = Employee { Person: Person { name: "Ada" }, employeeId: "E1" };
           return e.greet();
         }
@@ -1408,12 +1408,12 @@ fn ds_embed_promotes_methods() {
 #[test]
 fn ds_embed_promoted_method_satisfies_interface() {
     let code = r#"
-        interface Greeter { fn greet(): string }
+        interface Greeter { fn greet() string }
         struct Person { name: string }
-        fn (p Person) greet(): string { return "hi" }
+        fn (p Person) greet() string { return "hi" }
         struct Employee { Person; employeeId: string }
-        fn useGreeter(g: Greeter): string { return g.greet(); }
-        fn f(): string {
+        fn useGreeter(g: Greeter) string { return g.greet(); }
+        fn f() string {
           const e = Employee { Person: Person { name: "Ada" }, employeeId: "E1" };
           return useGreeter(e);
         }
@@ -1525,7 +1525,7 @@ fn ds_struct_field_assignment_uses_base_mutability() {
 fn ds_cross_module_import_type_checks_against_remote_signature() {
     let arena = Bump::new();
     let math_code = r#"
-        export fn add(a: number, b: number): number {
+        export fn add(a: number, b: number) number {
             return a + b;
         }
     "#;
