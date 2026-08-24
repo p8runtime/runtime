@@ -495,11 +495,39 @@ impl<'a> CheckContext<'a> {
                         let name = token_text(self.source, span)
                             .trim_start_matches('$')
                             .to_string();
+                        let declared = var.ty.map(|t| self.resolve_type(t));
                         if let Some(default) = var.default {
-                            let ty = self.infer_expr_with_env(default, env);
-                            env.insert(name.clone(), ty);
+                            let inferred = self.infer_expr_with_env(default, env);
+                            if let Some(declared) = &declared {
+                                if !self.is_assignable(&inferred, declared) {
+                                    self.errors.push(TypeError {
+                                        severity: Severity::Error,
+                                        span,
+                                        message: format!(
+                                            "Type mismatch: `{}` is declared {} but the initializer is {}",
+                                            name, declared, inferred
+                                        ),
+                                    });
+                                }
+                            }
+                            // The annotation wins: later uses are checked
+                            // against what the author declared.
+                            let stated = declared.is_some();
+                            env.insert(name.clone(), declared.unwrap_or(inferred));
+                            // `explicit` marks bindings whose type was stated
+                            // rather than inferred; assign_to_target only
+                            // enforces assignability for those. Without this a
+                            // declared type governs the initializer and nothing
+                            // after it.
+                            if stated {
+                                explicit.insert(name.clone());
+                            }
                         } else {
-                            env.insert(name.clone(), Type::Unknown);
+                            let stated = declared.is_some();
+                            env.insert(name.clone(), declared.unwrap_or(Type::Unknown));
+                            if stated {
+                                explicit.insert(name.clone());
+                            }
                         }
                         mut_env.insert(name);
                     }
@@ -512,8 +540,21 @@ impl<'a> CheckContext<'a> {
                     let name = token_text(self.source, c.name.span)
                         .trim_start_matches('$')
                         .to_string();
-                    let ty = self.infer_expr_with_env(c.value, env);
-                    env.insert(name.clone(), ty);
+                    let inferred = self.infer_expr_with_env(c.value, env);
+                    let declared = c.ty.map(|t| self.resolve_type(t));
+                    if let Some(declared) = &declared {
+                        if !self.is_assignable(&inferred, declared) {
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
+                                span: c.name.span,
+                                message: format!(
+                                    "Type mismatch: `{}` is declared {} but the initializer is {}",
+                                    name, declared, inferred
+                                ),
+                            });
+                        }
+                    }
+                    env.insert(name.clone(), declared.unwrap_or(inferred));
                     explicit.insert(name);
                 }
             }

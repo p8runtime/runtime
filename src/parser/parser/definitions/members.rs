@@ -594,6 +594,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
                 let value = self.parse_expr(0);
                 consts.push(ClassConst {
+                    ty: None,
                     name,
                     value,
                     span: Span::new(name.span.start, value.span().end),

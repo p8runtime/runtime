@@ -371,6 +371,9 @@ pub enum Stmt<'ast> {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct StaticVar<'ast> {
     pub var: ExprId<'ast>,
+    /// DekaScript binding annotation: `let n: number = 42`. None for PHP
+    /// `static $x = 1`, which has no type position.
+    pub ty: Option<&'ast Type<'ast>>,
     pub default: Option<ExprId<'ast>>,
     pub span: Span,
 }
@@ -1033,6 +1036,9 @@ pub struct Case<'ast> {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ClassConst<'ast> {
     pub name: &'ast Token,
+    /// DekaScript binding annotation: `const n: number = 42`. None for PHP
+    /// class constants, which have no type position here.
+    pub ty: Option<&'ast Type<'ast>>,
     pub value: ExprId<'ast>,
     pub span: Span,
 }

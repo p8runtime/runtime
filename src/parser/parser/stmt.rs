@@ -1,7 +1,7 @@
 use super::{LexerMode, Parser, ParserMode, Token};
 use crate::parser::ast::{
     AttributeGroup, Catch, ClassConst, ClassKind, CqlParam, ExportItem, ImportExportSpec, ParseError,
-    Receiver, StaticVar, Stmt, StmtId, UseItem, UseKind,
+    Receiver, StaticVar, Stmt, StmtId, Type, UseItem, UseKind,
 };
 use crate::parser::lexer::token::TokenKind;
 use crate::parser::span::Span;
@@ -1059,6 +1059,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 })
             };
 
+            let ty = self.parse_ds_binding_type();
+
             if self.current_token.kind == TokenKind::Eq {
                 self.bump();
             } else {
@@ -1069,7 +1071,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             let value = self.parse_expr(0);
             let span = Span::new(name.span.start, value.span().end);
-            consts.push(ClassConst { name, value, span });
+            consts.push(ClassConst {
+                name,
+                ty,
+                value,
+                span,
+            });
 
             if self.current_token.kind == TokenKind::Comma {
                 self.bump();
@@ -1093,6 +1100,27 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     /// `Static` AST node as a compact internal representation; it is lowered
     /// to a lexical `let` by the JS emitter and never exposes PHP `static`
     /// semantics to `.ds` authors.
+    /// A DekaScript binding may carry a type: `const n: number = 42`.
+    /// PHP has no such position, so this only fires for DekaScript sources.
+    fn parse_ds_binding_type(&mut self) -> Option<&'ast Type<'ast>> {
+        if !self.is_ds() || self.current_token.kind != TokenKind::Colon {
+            return None;
+        }
+        let colon = self.current_token.span;
+        self.bump();
+        match self.parse_type() {
+            Some(t) => Some(self.arena.alloc(t) as &'ast Type<'ast>),
+            None => {
+                self.errors.push(ParseError::with_help(
+                    colon,
+                    "Expected a type after ':' in this binding",
+                    "Write `const name: Type = value`, or drop the ':' to infer the type.",
+                ));
+                None
+            }
+        }
+    }
+
     fn parse_ds_let(&mut self) -> StmtId<'ast> {
         let start = self.current_token.span.start;
         self.bump(); // let
@@ -1112,6 +1140,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 name: name.span,
                 span: name.span,
             });
+            let ty = self.parse_ds_binding_type();
+
             let default = if self.current_token.kind == TokenKind::Eq {
                 self.bump();
                 Some(self.parse_expr(0))
@@ -1126,6 +1156,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             let end = default.map_or(name.span.end, |expr| expr.span().end);
             vars.push(StaticVar {
                 var,
+                ty,
                 default,
                 span: Span::new(name.span.start, end),
             });
@@ -1196,7 +1227,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 var.span()
             };
 
-            vars.push(StaticVar { var, default, span });
+            vars.push(StaticVar {
+                var,
+                ty: None,
+                default,
+                span,
+            });
 
             if self.current_token.kind == TokenKind::Comma {
                 self.bump();
