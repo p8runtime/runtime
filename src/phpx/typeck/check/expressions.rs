@@ -464,6 +464,11 @@ impl<'a> CheckContext<'a> {
                     self.apply_match_arm_narrowing(condition, arm, &mut arm_env);
                     if let Some(conds) = arm.conditions {
                         for cond in conds.iter() {
+                            // Payload patterns (`Msg.Text(b)`, `Ok(v)`) bind
+                            // variables; they are not constructor calls.
+                            if self.enum_case_from_expr(*cond).is_some() {
+                                continue;
+                            }
                             let _ = self.check_expr(
                                 cond,
                                 &mut arm_env,

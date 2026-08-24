@@ -73,24 +73,13 @@ impl<'a> CheckContext<'a> {
     ) -> Option<(String, String)> {
         match *expr {
             Expr::Variable { span, .. } => {
-                // DekaScript shorthand: bare `Some`/`None` in a match arm refer
-                // to the builtin `Option` enum.
+                // DekaScript shorthand: bare `Some`/`None`/`Ok`/`Err` in a match arm.
                 let name = token_text(self.source, span);
-                if name.eq_ignore_ascii_case("Some") || name.eq_ignore_ascii_case("None") {
-                    Some(("Option".to_string(), name))
-                } else {
-                    None
-                }
+                self.prelude_enum_case(&name)
             }
             Expr::Call { func, .. } => {
-                // DekaScript shorthand: `Some(value)` in a match arm.
-                if let Expr::Variable { span, .. } = *func {
-                    let name = token_text(self.source, span);
-                    if name.eq_ignore_ascii_case("Some") || name.eq_ignore_ascii_case("None") {
-                        return Some(("Option".to_string(), name));
-                    }
-                }
-                None
+                // Payload patterns: `Some(v)`, `Msg.Text(b)`, `Msg::Text(b)`.
+                self.enum_case_from_expr(func)
             }
             Expr::ClassConstFetch {
                 class, constant, ..
@@ -112,6 +101,16 @@ impl<'a> CheckContext<'a> {
                 }
             }
             _ => None,
+        }
+    }
+
+    fn prelude_enum_case(&self, name: &str) -> Option<(String, String)> {
+        if name.eq_ignore_ascii_case("Some") || name.eq_ignore_ascii_case("None") {
+            Some(("Option".to_string(), name.to_string()))
+        } else if name.eq_ignore_ascii_case("Ok") || name.eq_ignore_ascii_case("Err") {
+            Some(("Result".to_string(), name.to_string()))
+        } else {
+            None
         }
     }
 
@@ -446,6 +445,95 @@ impl<'a> CheckContext<'a> {
             Type::Union(variants)
         };
         env.insert(var_name, narrowed);
+        self.bind_match_arm_payloads(condition, arm, env);
+    }
+
+    /// Bind `Msg::Text(b)` / `Ok(v)` pattern variables into the arm env.
+    /// Payload types come from the case definition, with type parameters
+    /// filled from the match subject.
+    fn bind_match_arm_payloads(
+        &self,
+        subject: ExprId<'a>,
+        arm: &crate::parser::ast::MatchArm<'a>,
+        env: &mut HashMap<String, Type>,
+    ) {
+        let Some(conds) = arm.conditions else {
+            return;
+        };
+        if conds.len() != 1 {
+            return;
+        }
+        let cond = conds[0];
+        let args = match *cond {
+            Expr::Call { args, .. } | Expr::StaticCall { args, .. } => args,
+            _ => return,
+        };
+        let Some((enum_name, case_name)) = self.enum_case_from_expr(cond) else {
+            return;
+        };
+        let case_info = self
+            .enums
+            .get(&enum_name)
+            .and_then(|info| info.cases.get(&case_name))
+            .cloned()
+            .or_else(|| self.builtin_enum_case_info(&enum_name, &case_name));
+        let Some(case_info) = case_info else {
+            return;
+        };
+        if args.len() != case_info.params.len() {
+            return;
+        }
+        let subject_ty = self.extract_var_name(subject).and_then(|name| env.get(&name).cloned());
+        let type_args = subject_ty
+            .as_ref()
+            .and_then(|ty| self.builtin_enum_args_from_type(&enum_name, ty))
+            .unwrap_or_default();
+        let type_params = self
+            .enums
+            .get(&enum_name)
+            .map(|info| info.type_params.clone())
+            .unwrap_or_else(|| {
+                if enum_name.eq_ignore_ascii_case("Option") {
+                    vec!["T".to_string()]
+                } else if enum_name.eq_ignore_ascii_case("Result") {
+                    vec!["T".to_string(), "E".to_string()]
+                } else {
+                    Vec::new()
+                }
+            });
+        let subst: HashMap<String, Type> = type_params
+            .iter()
+            .cloned()
+            .zip(type_args.into_iter())
+            .collect();
+        for (arg, param) in args.iter().zip(case_info.params.iter()) {
+            let Expr::Variable { span, .. } = *arg.value else {
+                continue;
+            };
+            let binding = token_text(self.source, span)
+                .trim_start_matches('$')
+                .to_string();
+            if binding == "_" {
+                continue;
+            }
+            let ty = param
+                .ty
+                .as_ref()
+                .map(|ty| substitute_type(ty, &subst))
+                .or_else(|| {
+                    if enum_name.eq_ignore_ascii_case("Option") && param.name == "value" {
+                        subst.get("T").cloned()
+                    } else if enum_name.eq_ignore_ascii_case("Result") && param.name == "value" {
+                        subst.get("T").cloned()
+                    } else if enum_name.eq_ignore_ascii_case("Result") && param.name == "error" {
+                        subst.get("E").cloned()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(Type::Unknown);
+            env.insert(binding, ty);
+        }
     }
 
     pub(in crate::phpx::typeck::check) fn narrow_env_for_condition(
