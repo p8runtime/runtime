@@ -283,7 +283,8 @@ pub enum Stmt<'ast> {
         kind: UseKind,
         span: Span,
     },
-    /// ECMAScript-style named import: `import { a, b as c } from "./mod";`.
+    /// ECMAScript-style import: `import { a, b as c } from "./mod";` or
+    /// side-effect `import "./mod";` (empty `specs`).
     Import {
         specs: &'ast [ImportExportSpec<'ast>],
         from: &'ast Token,
