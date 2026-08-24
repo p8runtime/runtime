@@ -1209,9 +1209,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 self.bump(); // Eat unsafe
 
                 if self.current_token.kind != TokenKind::OpenBrace {
-                    self.errors.push(ParseError::new(
-                        self.current_token.span,
-                        "Expected '{' after unsafe",
+                    self.errors.push(ParseError::with_help(
+                        token.span,
+                        "`unsafe` starts a JS-mode block",
+                        "Write `unsafe { JSON.parse(s) }`. `unsafe` is not a namespace; `unsafe.JSON` is not DekaScript.",
                     ));
                     return self.arena.alloc(Expr::Error {
                         span: Span::new(start, self.current_token.span.end),

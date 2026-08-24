@@ -12,6 +12,7 @@ impl<'a> CheckContext<'a> {
             Expr::Variable { span, .. } => {
                 let raw = token_text(self.source, span);
                 if !raw.starts_with('$') {
+                    self.refuse_js_host_name(&raw, span, env);
                     return self.infer_expr_with_env(expr, env);
                 }
                 let name = raw.trim_start_matches('$');
@@ -113,6 +114,13 @@ impl<'a> CheckContext<'a> {
                 self.infer_expr_with_env(expr, env)
             }
             Expr::Call { func, args, span } => {
+                if self.is_deka_unsafe_call(func) {
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span,
+                        message: "call `unsafe { ... }` instead of `deka.unsafe(...)`; `deka.unsafe` is an implementation helper".to_string(),
+                    });
+                }
                 // DekaScript method calls parse as `Expr::Call {
                 //   func: Expr::DotAccess { target, property }, args }` because
                 // `.` is the only member-access operator in .ds. Route these
@@ -1378,6 +1386,47 @@ impl<'a> CheckContext<'a> {
             }
             _ => {}
         }
+    }
+
+    /// RFD 21: JSON / fetch are host JS. In DekaScript they belong in
+    /// `unsafe { }` or a module (`@deka/json`). A user binding of the same
+    /// name is allowed.
+    fn refuse_js_host_name(
+        &mut self,
+        name: &str,
+        span: Span,
+        env: &HashMap<String, Type>,
+    ) {
+        if env.contains_key(name)
+            || self.functions.contains_key(name)
+            || self.imported.contains_key(name)
+        {
+            return;
+        }
+        let message = match name {
+            "JSON" => "JSON is not a DekaScript name; write `unsafe { JSON.parse(s) }` or `import { parse } from \"@deka/json\"`",
+            "fetch" => "fetch is not a DekaScript name; write `unsafe { await fetch(url) }` or import from `@deka/http`",
+            _ => return,
+        };
+        self.errors.push(TypeError {
+            severity: Severity::Error,
+            span,
+            message: message.to_string(),
+        });
+    }
+
+    fn is_deka_unsafe_call(&self, func: ExprId<'a>) -> bool {
+        let Expr::DotAccess {
+            target, property, ..
+        } = *func
+        else {
+            return false;
+        };
+        let Expr::Variable { span, .. } = *target else {
+            return false;
+        };
+        token_text(self.source, span) == "deka"
+            && token_text(self.source, property.span) == "unsafe"
     }
 
     pub(in crate::phpx::typeck::check) fn pattern_key_name(&self, key: ObjectKey<'a>) -> String {

@@ -1259,6 +1259,49 @@ fn ds_unsafe_await_typechecks() {
 }
 
 #[test]
+fn ds_bare_json_parse_is_rejected() {
+    let err = check_ds("const parsed = JSON.parse(\"{}\")")
+        .expect_err("bare JSON.parse must be a type error");
+    assert!(
+        err.contains("JSON is not a DekaScript name") && err.contains("unsafe"),
+        "expected RFD 21 diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_bare_fetch_is_rejected() {
+    let err = check_ds("const r = fetch(\"/x\")").expect_err("bare fetch must be a type error");
+    assert!(
+        err.contains("fetch is not a DekaScript name") && err.contains("unsafe"),
+        "expected RFD 21 diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_user_fn_named_fetch_is_allowed() {
+    let code = r#"
+        fn fetch() string { return "ok" }
+        const r = fetch()
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_deka_unsafe_helper_is_rejected() {
+    let err = check_ds(
+        r#"
+        fn go() number { return 1 }
+        const x = deka.unsafe(go)
+    "#,
+    )
+    .expect_err("deka.unsafe must be a type error");
+    assert!(
+        err.contains("deka.unsafe") && err.contains("unsafe {"),
+        "expected deka.unsafe diagnostic, got: {err}"
+    );
+}
+
+#[test]
 fn ds_match_number_requires_wildcard() {
     let err = check_ds(
         r#"

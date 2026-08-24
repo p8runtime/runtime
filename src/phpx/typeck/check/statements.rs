@@ -497,7 +497,7 @@ impl<'a> CheckContext<'a> {
                             .to_string();
                         let declared = var.ty.map(|t| self.resolve_type(t));
                         if let Some(default) = var.default {
-                            let inferred = self.infer_expr_with_env(default, env);
+                            let inferred = self.check_expr(default, env, explicit, mut_env);
                             if let Some(declared) = &declared {
                                 if !self.is_assignable(&inferred, declared) {
                                     self.errors.push(TypeError {
@@ -540,7 +540,7 @@ impl<'a> CheckContext<'a> {
                     let name = token_text(self.source, c.name.span)
                         .trim_start_matches('$')
                         .to_string();
-                    let inferred = self.infer_expr_with_env(c.value, env);
+                    let inferred = self.check_expr(c.value, env, explicit, mut_env);
                     let declared = c.ty.map(|t| self.resolve_type(t));
                     if let Some(declared) = &declared {
                         if !self.is_assignable(&inferred, declared) {

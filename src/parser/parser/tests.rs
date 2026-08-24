@@ -979,6 +979,24 @@ fn ds_unsafe_block_with_catch_is_rejected() {
 }
 
 #[test]
+fn ds_unsafe_as_namespace_is_rejected() {
+    let code = "const val = unsafe.JSON.parse(text);";
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        !program.errors.is_empty(),
+        "expected a parse error for `unsafe.JSON`"
+    );
+    let msg = program.errors.iter().map(|e| e.message).collect::<Vec<_>>().join("\n");
+    let help = program.errors.iter().map(|e| e.help_text).collect::<Vec<_>>().join("\n");
+    assert!(
+        msg.contains("JS-mode") && help.contains("not a namespace"),
+        "expected RFD 21 unsafe-namespace diagnostic, got message={msg:?} help={help:?}"
+    );
+}
+
+#[test]
 fn ds_parses_unsafe_block_raw_source() {
     let code = "const val = unsafe { JSON.parse(text) };";
     let arena = Bump::new();
