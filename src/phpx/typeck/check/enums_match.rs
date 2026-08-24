@@ -125,6 +125,7 @@ impl<'a> CheckContext<'a> {
                     params: vec![EnumParamInfo {
                         name: "value".to_string(),
                         ty: None,
+                        unnamed: false,
                     }],
                 });
             }
@@ -138,6 +139,7 @@ impl<'a> CheckContext<'a> {
                     params: vec![EnumParamInfo {
                         name: "value".to_string(),
                         ty: None,
+                        unnamed: false,
                     }],
                 });
             }
@@ -146,6 +148,7 @@ impl<'a> CheckContext<'a> {
                     params: vec![EnumParamInfo {
                         name: "error".to_string(),
                         ty: None,
+                        unnamed: false,
                     }],
                 });
             }

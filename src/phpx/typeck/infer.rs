@@ -13,6 +13,9 @@ pub struct StructInfo {
 pub struct EnumParamInfo {
     pub name: String,
     pub ty: Option<Type>,
+    /// Positional payload (`Text(string)`): the name is the type text, used
+    /// only as the runtime storage key. Not a user-facing field.
+    pub unnamed: bool,
 }
 
 #[derive(Debug, Clone)]
