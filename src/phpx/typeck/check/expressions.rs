@@ -464,6 +464,11 @@ impl<'a> CheckContext<'a> {
                     self.apply_match_arm_narrowing(condition, arm, &mut arm_env);
                     if let Some(conds) = arm.conditions {
                         for cond in conds.iter() {
+                            // Payload patterns (`Msg.Text(b)`, `Ok(v)`) bind
+                            // variables; they are not constructor calls.
+                            if self.enum_case_from_expr(*cond).is_some() {
+                                continue;
+                            }
                             let _ = self.check_expr(
                                 cond,
                                 &mut arm_env,
@@ -744,7 +749,14 @@ impl<'a> CheckContext<'a> {
                 }
             }
             Type::Enum(name) => {
-                if !self.enum_allows_field(&name, &prop_name) {
+                if self.enum_payload_accessed_as_field(&name, None, &prop_name) {
+                    self.errors.push(TypeError { severity: Severity::Error,
+                        span,
+                        message: format!(
+                            "enum payload is bound in the match pattern, not as a field; write `{name}::Case(x) => x` instead of `m.{prop_name}`"
+                        ),
+                    });
+                } else if !self.enum_allows_field(&name, &prop_name) {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!("Unknown enum field '{}::{}'", name, prop_name),
@@ -756,7 +768,14 @@ impl<'a> CheckContext<'a> {
                 case_name,
                 ..
             } => {
-                if !self.enum_case_allows_field(&enum_name, &case_name, &prop_name) {
+                if self.enum_payload_accessed_as_field(&enum_name, Some(&case_name), &prop_name) {
+                    self.errors.push(TypeError { severity: Severity::Error,
+                        span,
+                        message: format!(
+                            "enum payload is bound in the match pattern, not as a field; write `{enum_name}::{case_name}(x) => x` instead of `m.{prop_name}`"
+                        ),
+                    });
+                } else if !self.enum_case_allows_field(&enum_name, &case_name, &prop_name) {
                     self.errors.push(TypeError { severity: Severity::Error,
                         span,
                         message: format!(
@@ -932,11 +951,41 @@ impl<'a> CheckContext<'a> {
             return info.backed.is_some();
         }
         for case in info.cases.values() {
-            if !case.params.iter().any(|param| param.name == field) {
+            if !case
+                .params
+                .iter()
+                .any(|param| param.name == field && !param.unnamed)
+            {
                 return false;
             }
         }
         !info.cases.is_empty()
+    }
+
+    /// True when `field` is a positional payload (`Text(string)` → `string`).
+    /// That is runtime storage, not a user-facing field.
+    fn enum_payload_accessed_as_field(
+        &self,
+        enum_name: &str,
+        case_name: Option<&str>,
+        field: &str,
+    ) -> bool {
+        if enum_name.eq_ignore_ascii_case("Option") || enum_name.eq_ignore_ascii_case("Result") {
+            return false;
+        }
+        let Some(info) = self.enums.get(enum_name) else {
+            return false;
+        };
+        let cases = if let Some(case_name) = case_name {
+            info.cases.get(case_name).into_iter().collect::<Vec<_>>()
+        } else {
+            info.cases.values().collect()
+        };
+        cases.iter().any(|case| {
+            case.params
+                .iter()
+                .any(|param| param.unnamed && param.name == field)
+        })
     }
 
     pub(in crate::phpx::typeck::check) fn enum_case_allows_field(
@@ -975,7 +1024,9 @@ impl<'a> CheckContext<'a> {
         let Some(case) = info.cases.get(case_name) else {
             return false;
         };
-        case.params.iter().any(|param| param.name == field)
+        case.params
+            .iter()
+            .any(|param| param.name == field && !param.unnamed)
     }
 
     pub(in crate::phpx::typeck::check) fn type_allows_null(&self, ty: &Type) -> bool {

@@ -520,8 +520,13 @@ impl<'a> CheckContext<'a> {
                                     .to_string(),
                             });
                         }
-                        let name = token_text(self.source, param.name.span);
-                        let name = name.trim_start_matches('$').to_string();
+                        let raw_name = token_text(self.source, param.name.span);
+                        // Positional payloads synthesize a Variable token over
+                        // the type span (`Text(string)` → name "string"). Named
+                        // fields are Identifier (`value: T`) or `$body`.
+                        let unnamed =
+                            param.name.kind == TokenKind::Variable && !raw_name.starts_with('$');
+                        let name = raw_name.trim_start_matches('$').to_string();
                         if !seen_params.insert(name.clone()) {
                             self.errors.push(TypeError { severity: Severity::Error,
                                 span: param.span,
@@ -534,7 +539,7 @@ impl<'a> CheckContext<'a> {
                         let ty = param
                             .ty
                             .map(|ty| self.resolve_type_with_params(ty, &type_param_set));
-                        params.push(EnumParamInfo { name, ty });
+                        params.push(EnumParamInfo { name, ty, unnamed });
                     }
                 }
                 cases.insert(case_name, EnumCaseInfo { params });

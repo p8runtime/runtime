@@ -998,18 +998,30 @@ fn ds_enum_non_generic_payload_mismatch_errors() {
 
 #[test]
 fn ds_enum_match_destructures_non_generic_payload() {
-    // DekaScript enum payloads are anonymous; the compiler uses the type text
-    // as the synthetic field name so the typechecker can narrow it.
     let code = r#"
         enum Msg { Text(string), Ping }
         fn body(m: Msg) string {
             return match (m) {
-                Msg::Text => m.string,
+                Msg::Text(b) => b,
                 Msg::Ping => "ok",
             }
         }
     "#;
     assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_enum_match_payload_binding_is_typed() {
+    let code = r#"
+        enum Msg { Text(string), Ping }
+        fn body(m: Msg) number {
+            return match (m) {
+                Msg::Text(b) => b,
+                Msg::Ping => 0,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_err());
 }
 
 #[test]
@@ -1024,6 +1036,77 @@ fn ds_enum_match_non_generic_payload_field_outside_arm_errors() {
         }
     "#;
     assert!(check_ds(code).is_err());
+}
+
+#[test]
+fn ds_enum_match_rejects_type_named_payload_field() {
+    let err = check_ds(
+        r#"
+        enum Msg { Text(string), Ping }
+        fn body(m: Msg) string {
+            return match (m) {
+                Msg::Text => m.string,
+                Msg::Ping => "ok",
+            }
+        }
+    "#,
+    )
+    .expect_err("m.string must be a hard error");
+    assert!(
+        err.contains("bound in the match pattern"),
+        "expected pattern-binding diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_enum_rejects_type_named_payload_field_outside_match() {
+    let err = check_ds(
+        r#"
+        enum Msg { Text(string), Ping }
+        fn body(m: Msg) string {
+            return m.string;
+        }
+    "#,
+    )
+    .expect_err("m.string must be a hard error even without match");
+    assert!(
+        err.contains("bound in the match pattern"),
+        "expected pattern-binding diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_enum_rejects_int_named_payload_field() {
+    let err = check_ds(
+        r#"
+        enum Msg { Count(int), Ping }
+        fn body(m: Msg) number {
+            return match (m) {
+                Msg::Count => m.int,
+                Msg::Ping => 0,
+            }
+        }
+    "#,
+    )
+    .expect_err("m.int must be a hard error");
+    assert!(
+        err.contains("bound in the match pattern"),
+        "expected pattern-binding diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_enum_named_payload_field_still_allowed() {
+    let code = r#"
+        enum Outcome { Win(score: number), Fail }
+        fn points(o: Outcome) number {
+            return match (o) {
+                Outcome::Win => o.score,
+                Outcome::Fail => 0,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
 }
 
 #[test]
