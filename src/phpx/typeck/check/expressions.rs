@@ -461,7 +461,7 @@ impl<'a> CheckContext<'a> {
                     let mut arm_env = env.clone();
                     let mut arm_explicit = explicit.clone();
                     let mut arm_mut_env = mut_env.clone();
-                    self.apply_match_arm_narrowing(condition, arm, &mut arm_env);
+                    self.apply_match_arm_narrowing(condition, arm, &mut arm_env, &cond_ty);
                     if let Some(conds) = arm.conditions {
                         for cond in conds.iter() {
                             // Payload patterns (`Msg.Text(b)`, `Ok(v)`) bind

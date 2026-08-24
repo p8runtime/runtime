@@ -1,5 +1,46 @@
 use super::*;
 
+#[derive(Clone, Debug)]
+enum MatchPat {
+    Irrefutable,
+    Ctor {
+        enum_name: String,
+        case_name: String,
+        args: Vec<MatchPat>,
+    },
+    Other,
+}
+
+impl MatchPat {
+    fn matches_ctor(&self, enum_name: &str, case_name: &str) -> bool {
+        match self {
+            MatchPat::Ctor {
+                enum_name: en,
+                case_name: cn,
+                ..
+            } => en.eq_ignore_ascii_case(enum_name) && cn.eq_ignore_ascii_case(case_name),
+            _ => false,
+        }
+    }
+
+    fn covers_ctor_fully(&self) -> bool {
+        match self {
+            MatchPat::Irrefutable => true,
+            MatchPat::Ctor { args, .. } => {
+                args.iter().all(|arg| matches!(arg, MatchPat::Irrefutable))
+            }
+            MatchPat::Other => false,
+        }
+    }
+
+    fn first_arg(&self) -> Option<&MatchPat> {
+        match self {
+            MatchPat::Ctor { args, .. } => args.first(),
+            _ => None,
+        }
+    }
+}
+
 impl<'a> CheckContext<'a> {
     pub(in crate::phpx::typeck::check) fn infer_expr_with_env(
         &self,
@@ -89,10 +130,20 @@ impl<'a> CheckContext<'a> {
             Expr::StaticCall { class, method, .. } => self
                 .enum_case_lookup(class, method)
                 .map(|(enum_name, case_name, _, _)| (enum_name, case_name)),
-            Expr::DotAccess { target, property, .. } => {
+            Expr::DotAccess {
+                target, property, ..
+            } => {
                 // DekaScript enum variant access: `Status.Ready`.
                 let class_name = self.extract_static_ident(target)?;
                 let case_name = token_text(self.source, property.span);
+                if self
+                    .builtin_enum_case_info(&class_name, &case_name)
+                    .is_some()
+                {
+                    return self
+                        .prelude_enum_case(&case_name)
+                        .or_else(|| Some((class_name, case_name)));
+                }
                 let info = self.enums.get(&class_name)?;
                 if info.cases.contains_key(&case_name) {
                     Some((class_name, case_name))
@@ -206,7 +257,8 @@ impl<'a> CheckContext<'a> {
         env: &HashMap<String, Type>,
     ) -> Vec<Type> {
         if case_info.params.is_empty() {
-            self.errors.push(TypeError { severity: Severity::Error,
+            self.errors.push(TypeError {
+                severity: Severity::Error,
                 span,
                 message: format!(
                     "Enum case {}::{} has no payload; use {}::{} without calling it",
@@ -217,7 +269,8 @@ impl<'a> CheckContext<'a> {
         }
 
         if args.len() != case_info.params.len() {
-            self.errors.push(TypeError { severity: Severity::Error,
+            self.errors.push(TypeError {
+                severity: Severity::Error,
                 span,
                 message: format!(
                     "Enum case {}::{} expects {} arguments, got {}",
@@ -252,7 +305,8 @@ impl<'a> CheckContext<'a> {
                     self.check_object_literal_against_type(items, &expected, obj_span, env);
                 }
                 if !self.is_assignable(&actual, &expected) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span: arg.span,
                         message: format!(
                             "Enum case {}::{} argument {} has type {}, expected {}",
@@ -340,6 +394,7 @@ impl<'a> CheckContext<'a> {
 
     /// deka#281: every `match` must cover the scrutinee type. `_` and
     /// `default` are catch-alls. Literals do not cover `number`/`string`.
+    /// Nested constructors (`Ok(Some(v))`) cover only that inner case.
     pub(in crate::phpx::typeck::check) fn check_match_exhaustive(
         &mut self,
         cond_ty: &Type,
@@ -350,7 +405,7 @@ impl<'a> CheckContext<'a> {
             return;
         }
 
-        let mut cases: HashSet<(String, String)> = HashSet::new();
+        let mut pats: Vec<MatchPat> = Vec::new();
         let mut bools: HashSet<bool> = HashSet::new();
         let mut null_covered = false;
         let expected_enums = self
@@ -386,13 +441,14 @@ impl<'a> CheckContext<'a> {
                             return;
                         }
                     }
-                    cases.insert((enum_name, case_name));
                 }
+                pats.push(self.expr_to_match_pat(*cond, cond_ty));
             }
         }
 
-        if let Some(message) = self.match_uncovered(cond_ty, &cases, &bools, null_covered) {
-            self.errors.push(TypeError { severity: Severity::Error,
+        if let Some(message) = self.match_uncovered(cond_ty, &pats, &bools, null_covered) {
+            self.errors.push(TypeError {
+                severity: Severity::Error,
                 span: arms.last().map(|arm| arm.span).unwrap_or_default(),
                 message,
             });
@@ -402,36 +458,25 @@ impl<'a> CheckContext<'a> {
     fn match_uncovered(
         &self,
         ty: &Type,
-        cases: &HashSet<(String, String)>,
+        pats: &[MatchPat],
         bools: &HashSet<bool>,
         null_covered: bool,
     ) -> Option<String> {
+        if pats.iter().any(|pat| matches!(pat, MatchPat::Irrefutable)) {
+            return None;
+        }
+        if let Type::EnumCase {
+            enum_name,
+            case_name,
+            ..
+        } = ty
+        {
+            return self.missing_nested_case(ty, enum_name, pats, Some(case_name.as_str()));
+        }
+        if let Some(enum_name) = self.enum_name_of_type(ty) {
+            return self.missing_nested_case(ty, &enum_name, pats, None);
+        }
         match ty {
-            Type::Enum(name) => self.missing_enum_case(name, cases),
-            Type::EnumCase {
-                enum_name,
-                case_name,
-                ..
-            } => {
-                if cases.contains(&(enum_name.clone(), case_name.clone())) {
-                    None
-                } else {
-                    Some(format!(
-                        "Match on {} is not exhaustive; missing case {}::{}",
-                        enum_name, enum_name, case_name
-                    ))
-                }
-            }
-            Type::Applied { base, .. }
-                if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") =>
-            {
-                let name = if base.eq_ignore_ascii_case("Option") {
-                    "Option"
-                } else {
-                    "Result"
-                };
-                self.missing_enum_case(name, cases)
-            }
             Type::Primitive(PrimitiveType::Bool) => {
                 let mut missing = Vec::new();
                 if !bools.contains(&true) {
@@ -458,100 +503,203 @@ impl<'a> CheckContext<'a> {
             }
             Type::Union(types) => {
                 for inner in types {
-                    if let Some(message) = self.match_uncovered(inner, cases, bools, null_covered) {
+                    if let Some(message) = self.match_uncovered(inner, pats, bools, null_covered) {
                         return Some(message);
                     }
                 }
                 None
             }
             Type::Unknown | Type::Mixed => None,
-            _ => Some(format!(
-                "Match on {} is not exhaustive; add a `_` arm",
-                ty
-            )),
+            _ => Some(format!("Match on {} is not exhaustive; add a `_` arm", ty)),
         }
     }
 
-    fn missing_enum_case(
+    fn enum_name_of_type(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::Enum(name)
+            | Type::EnumCase {
+                enum_name: name, ..
+            } => Some(name.clone()),
+            Type::Applied { base, .. }
+                if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") =>
+            {
+                if base.eq_ignore_ascii_case("Option") {
+                    Some("Option".to_string())
+                } else {
+                    Some("Result".to_string())
+                }
+            }
+            Type::Applied { base, .. } if self.enums.contains_key(base) => Some(base.clone()),
+            _ => None,
+        }
+    }
+
+    fn missing_nested_case(
         &self,
+        ty: &Type,
         enum_name: &str,
-        cases: &HashSet<(String, String)>,
+        pats: &[MatchPat],
+        only_case: Option<&str>,
     ) -> Option<String> {
-        let case_names = if let Some(info) = self.enums.get(enum_name) {
+        let case_names = if let Some(case_name) = only_case {
+            vec![case_name.to_string()]
+        } else if let Some(info) = self.enums.get(enum_name) {
             info.cases.keys().cloned().collect::<Vec<_>>()
         } else {
             self.builtin_enum_cases(enum_name)?
         };
         for case_name in case_names {
-            if !cases.contains(&(enum_name.to_string(), case_name.clone())) {
+            let matching: Vec<&MatchPat> = pats
+                .iter()
+                .filter(|pat| pat.matches_ctor(enum_name, &case_name))
+                .collect();
+            if matching.is_empty() {
                 return Some(format!(
-                    "Match on {} is not exhaustive; missing case {}::{}",
-                    enum_name, enum_name, case_name
+                    "Match on {} is not exhaustive; missing {}",
+                    self.coverage_root_name(ty, enum_name),
+                    self.format_missing_ctor(enum_name, &case_name, None)
+                ));
+            }
+            if matching.iter().any(|pat| pat.covers_ctor_fully()) {
+                continue;
+            }
+            let payload_tys = self.case_payload_types(enum_name, &case_name, ty);
+            if payload_tys.len() != 1 {
+                continue;
+            }
+            let subpats: Vec<MatchPat> = matching
+                .iter()
+                .map(|pat| pat.first_arg().cloned().unwrap_or(MatchPat::Irrefutable))
+                .collect();
+            let payload_ty = self.coverage_type_from_pats(&payload_tys[0], &subpats);
+            if let Some(inner) = self.match_uncovered(&payload_ty, &subpats, &HashSet::new(), false)
+            {
+                let inner_pat = inner
+                    .rsplit("missing ")
+                    .next()
+                    .unwrap_or(inner.as_str())
+                    .to_string();
+                return Some(format!(
+                    "Match on {} is not exhaustive; missing {}",
+                    self.coverage_root_name(ty, enum_name),
+                    self.format_missing_ctor(enum_name, &case_name, Some(&inner_pat))
                 ));
             }
         }
         None
     }
 
+    fn coverage_root_name(&self, ty: &Type, enum_name: &str) -> String {
+        match ty {
+            Type::Applied { .. } => ty.name(),
+            _ => enum_name.to_string(),
+        }
+    }
+
+    fn format_missing_ctor(&self, enum_name: &str, case_name: &str, inner: Option<&str>) -> String {
+        let head = if enum_name.eq_ignore_ascii_case("Option")
+            || enum_name.eq_ignore_ascii_case("Result")
+        {
+            case_name.to_string()
+        } else {
+            format!("{enum_name}::{case_name}")
+        };
+        match inner {
+            Some(inner) => format!("{head}({inner})"),
+            None => head,
+        }
+    }
+
+    fn coverage_type_from_pats(&self, declared: &Type, pats: &[MatchPat]) -> Type {
+        if self.enum_name_of_type(declared).is_some() && !self.type_is_open(declared) {
+            return declared.clone();
+        }
+        let mut names = HashSet::new();
+        for pat in pats {
+            if let MatchPat::Ctor { enum_name, .. } = pat {
+                names.insert(enum_name.clone());
+            }
+        }
+        if names.len() == 1 {
+            let name = names.into_iter().next().unwrap();
+            if name.eq_ignore_ascii_case("Option") {
+                return Type::Applied {
+                    base: "Option".to_string(),
+                    args: vec![Type::Unknown],
+                };
+            }
+            if name.eq_ignore_ascii_case("Result") {
+                return Type::Applied {
+                    base: "Result".to_string(),
+                    args: vec![Type::Unknown, Type::Unknown],
+                };
+            }
+            return Type::Enum(name);
+        }
+        declared.clone()
+    }
+
+    fn type_is_open(&self, ty: &Type) -> bool {
+        matches!(ty, Type::Unknown | Type::Mixed)
+    }
+
     pub(in crate::phpx::typeck::check) fn apply_match_arm_narrowing(
-        &self,
+        &mut self,
         condition: ExprId<'a>,
         arm: &crate::parser::ast::MatchArm<'a>,
         env: &mut HashMap<String, Type>,
+        cond_ty: &Type,
     ) {
-        let Some(var_name) = self.extract_var_name(condition) else {
-            return;
-        };
-        let Some(conds) = arm.conditions else {
-            return;
-        };
-        let current_ty = env.get(&var_name);
-        let mut cases = Vec::new();
-        for cond in conds.iter() {
-            let Some((enum_name, case_name)) = self.enum_case_from_expr(*cond) else {
-                return;
-            };
-            cases.push((enum_name, case_name));
-        }
-        if cases.is_empty() {
-            return;
-        }
-        let narrowed = if cases.len() == 1 {
-            let (enum_name, case_name) = &cases[0];
-            let args = current_ty
-                .and_then(|ty| self.builtin_enum_args_from_type(enum_name, ty))
-                .unwrap_or_default();
-            Type::EnumCase {
-                enum_name: enum_name.clone(),
-                case_name: case_name.clone(),
-                args,
+        if let Some(var_name) = self.extract_var_name(condition) {
+            if let Some(conds) = arm.conditions {
+                let mut cases = Vec::new();
+                let mut all_ctors = true;
+                for cond in conds.iter() {
+                    if let Some((enum_name, case_name)) = self.enum_case_from_expr(*cond) {
+                        cases.push((enum_name, case_name));
+                    } else {
+                        all_ctors = false;
+                        break;
+                    }
+                }
+                if all_ctors && !cases.is_empty() {
+                    let narrowed = if cases.len() == 1 {
+                        let (enum_name, case_name) = &cases[0];
+                        let args = self
+                            .builtin_enum_args_from_type(enum_name, cond_ty)
+                            .unwrap_or_default();
+                        Type::EnumCase {
+                            enum_name: enum_name.clone(),
+                            case_name: case_name.clone(),
+                            args,
+                        }
+                    } else {
+                        let mut variants = Vec::new();
+                        for (enum_name, case_name) in cases.into_iter() {
+                            let args = self
+                                .builtin_enum_args_from_type(&enum_name, cond_ty)
+                                .unwrap_or_default();
+                            variants.push(Type::EnumCase {
+                                enum_name,
+                                case_name,
+                                args,
+                            });
+                        }
+                        Type::Union(variants)
+                    };
+                    env.insert(var_name, narrowed);
+                }
             }
-        } else {
-            let mut variants = Vec::new();
-            for (enum_name, case_name) in cases.into_iter() {
-                let args = current_ty
-                    .and_then(|ty| self.builtin_enum_args_from_type(&enum_name, ty))
-                    .unwrap_or_default();
-                variants.push(Type::EnumCase {
-                    enum_name,
-                    case_name,
-                    args,
-                });
-            }
-            Type::Union(variants)
-        };
-        env.insert(var_name, narrowed);
-        self.bind_match_arm_payloads(condition, arm, env);
+        }
+        self.bind_match_arm_payloads(arm, env, cond_ty);
     }
 
-    /// Bind `Msg::Text(b)` / `Ok(v)` pattern variables into the arm env.
-    /// Payload types come from the case definition, with type parameters
-    /// filled from the match subject.
+    /// Bind `Msg::Text(b)` / `Ok(v)` / `Ok(Some(v))` pattern variables.
     fn bind_match_arm_payloads(
-        &self,
-        subject: ExprId<'a>,
+        &mut self,
         arm: &crate::parser::ast::MatchArm<'a>,
         env: &mut HashMap<String, Type>,
+        cond_ty: &Type,
     ) {
         let Some(conds) = arm.conditions else {
             return;
@@ -559,34 +707,174 @@ impl<'a> CheckContext<'a> {
         if conds.len() != 1 {
             return;
         }
-        let cond = conds[0];
-        let args = match *cond {
-            Expr::Call { args, .. } | Expr::StaticCall { args, .. } => args,
-            _ => return,
-        };
-        let Some((enum_name, case_name)) = self.enum_case_from_expr(cond) else {
-            return;
-        };
-        let case_info = self
-            .enums
-            .get(&enum_name)
-            .and_then(|info| info.cases.get(&case_name))
-            .cloned()
-            .or_else(|| self.builtin_enum_case_info(&enum_name, &case_name));
-        let Some(case_info) = case_info else {
-            return;
-        };
-        if args.len() != case_info.params.len() {
+        self.bind_pattern(conds[0], cond_ty, env);
+    }
+
+    fn bind_pattern(&mut self, expr: ExprId<'a>, expected: &Type, env: &mut HashMap<String, Type>) {
+        if self.is_match_wildcard(expr) {
             return;
         }
-        let subject_ty = self.extract_var_name(subject).and_then(|name| env.get(&name).cloned());
-        let type_args = subject_ty
-            .as_ref()
-            .and_then(|ty| self.builtin_enum_args_from_type(&enum_name, ty))
-            .unwrap_or_default();
+        if let Some((enum_name, case_name, args)) = self.ctor_parts(expr) {
+            if !self.ctor_fits_type(&enum_name, expected) {
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
+                    span: expr.span(),
+                    message: format!(
+                        "Pattern '{}::{}' does not match {}",
+                        enum_name,
+                        case_name,
+                        expected.name()
+                    ),
+                });
+                return;
+            }
+            if args.is_empty() {
+                return;
+            }
+            let payloads = self.case_payload_types(&enum_name, &case_name, expected);
+            if args.len() != payloads.len() {
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
+                    span: expr.span(),
+                    message: format!(
+                        "Enum case {}::{} expects {} arguments, got {}",
+                        enum_name,
+                        case_name,
+                        payloads.len(),
+                        args.len()
+                    ),
+                });
+                return;
+            }
+            for (arg, payload_ty) in args.iter().zip(payloads.iter()) {
+                self.bind_pattern(arg.value, payload_ty, env);
+            }
+            return;
+        }
+        if let Expr::Variable { span, .. } = *expr {
+            let binding = token_text(self.source, span)
+                .trim_start_matches('$')
+                .to_string();
+            if binding != "_" {
+                env.insert(binding, expected.clone());
+            }
+        }
+    }
+
+    fn ctor_parts(&self, expr: ExprId<'a>) -> Option<(String, String, &'a [Arg<'a>])> {
+        match *expr {
+            Expr::Variable { span, .. } => {
+                let name = token_text(self.source, span);
+                let (enum_name, case_name) = self.prelude_enum_case(&name)?;
+                Some((enum_name, case_name, &[][..]))
+            }
+            Expr::Call { func, args, .. } => {
+                let (enum_name, case_name) = self.enum_case_from_expr(func)?;
+                Some((enum_name, case_name, args))
+            }
+            Expr::StaticCall {
+                class,
+                method,
+                args,
+                ..
+            } => {
+                let (enum_name, case_name, _, _) = self.enum_case_lookup(class, method)?;
+                Some((enum_name, case_name, args))
+            }
+            Expr::DotAccess { .. } | Expr::ClassConstFetch { .. } => {
+                let (enum_name, case_name) = self.enum_case_from_expr(expr)?;
+                Some((enum_name, case_name, &[][..]))
+            }
+            _ => None,
+        }
+    }
+
+    fn ctor_fits_type(&self, enum_name: &str, expected: &Type) -> bool {
+        if self.type_is_open(expected) {
+            return true;
+        }
+        match self.enum_name_of_type(expected) {
+            Some(name) => name.eq_ignore_ascii_case(enum_name),
+            None => false,
+        }
+    }
+
+    fn expr_to_match_pat(&self, expr: ExprId<'a>, expected: &Type) -> MatchPat {
+        if self.is_match_wildcard(expr) {
+            return MatchPat::Irrefutable;
+        }
+        if let Some((enum_name, case_name, args)) = self.ctor_parts(expr) {
+            if self.ctor_fits_type(&enum_name, expected) {
+                if args.is_empty() {
+                    return MatchPat::Ctor {
+                        enum_name,
+                        case_name,
+                        args: Vec::new(),
+                    };
+                }
+                let payloads = self.case_payload_types(&enum_name, &case_name, expected);
+                let nested = args
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, arg)| {
+                        let payload_ty = payloads.get(idx).unwrap_or(&Type::Unknown);
+                        self.expr_to_match_pat(arg.value, payload_ty)
+                    })
+                    .collect();
+                return MatchPat::Ctor {
+                    enum_name,
+                    case_name,
+                    args: nested,
+                };
+            }
+        }
+        if matches!(*expr, Expr::Variable { .. }) {
+            return MatchPat::Irrefutable;
+        }
+        MatchPat::Other
+    }
+
+    fn case_payload_types(&self, enum_name: &str, case_name: &str, subject: &Type) -> Vec<Type> {
+        let subst = self.enum_type_subst(enum_name, subject);
+        let case_info = self
+            .enums
+            .get(enum_name)
+            .and_then(|info| info.cases.get(case_name))
+            .cloned()
+            .or_else(|| self.builtin_enum_case_info(enum_name, case_name));
+        let Some(case_info) = case_info else {
+            return Vec::new();
+        };
+        case_info
+            .params
+            .iter()
+            .map(|param| {
+                param
+                    .ty
+                    .as_ref()
+                    .map(|ty| substitute_type(ty, &subst))
+                    .or_else(|| {
+                        if enum_name.eq_ignore_ascii_case("Option") && param.name == "value" {
+                            subst.get("T").cloned()
+                        } else if enum_name.eq_ignore_ascii_case("Result") && param.name == "value"
+                        {
+                            subst.get("T").cloned()
+                        } else if enum_name.eq_ignore_ascii_case("Result") && param.name == "error"
+                        {
+                            subst.get("E").cloned()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(Type::Unknown)
+            })
+            .collect()
+    }
+
+    fn enum_type_subst(&self, enum_name: &str, subject: &Type) -> HashMap<String, Type> {
         let type_params = self
             .enums
-            .get(&enum_name)
+            .get(enum_name)
             .map(|info| info.type_params.clone())
             .unwrap_or_else(|| {
                 if enum_name.eq_ignore_ascii_case("Option") {
@@ -597,39 +885,17 @@ impl<'a> CheckContext<'a> {
                     Vec::new()
                 }
             });
-        let subst: HashMap<String, Type> = type_params
-            .iter()
-            .cloned()
-            .zip(type_args.into_iter())
-            .collect();
-        for (arg, param) in args.iter().zip(case_info.params.iter()) {
-            let Expr::Variable { span, .. } = *arg.value else {
-                continue;
-            };
-            let binding = token_text(self.source, span)
-                .trim_start_matches('$')
-                .to_string();
-            if binding == "_" {
-                continue;
-            }
-            let ty = param
-                .ty
-                .as_ref()
-                .map(|ty| substitute_type(ty, &subst))
-                .or_else(|| {
-                    if enum_name.eq_ignore_ascii_case("Option") && param.name == "value" {
-                        subst.get("T").cloned()
-                    } else if enum_name.eq_ignore_ascii_case("Result") && param.name == "value" {
-                        subst.get("T").cloned()
-                    } else if enum_name.eq_ignore_ascii_case("Result") && param.name == "error" {
-                        subst.get("E").cloned()
-                    } else {
-                        None
+        let type_args = self
+            .builtin_enum_args_from_type(enum_name, subject)
+            .unwrap_or_else(|| {
+                if let Type::Applied { base, args } = subject {
+                    if base.eq_ignore_ascii_case(enum_name) {
+                        return args.clone();
                     }
-                })
-                .unwrap_or(Type::Unknown);
-            env.insert(binding, ty);
-        }
+                }
+                Vec::new()
+            });
+        type_params.into_iter().zip(type_args).collect()
     }
 
     pub(in crate::phpx::typeck::check) fn narrow_env_for_condition(
@@ -719,7 +985,8 @@ impl<'a> CheckContext<'a> {
         span: Span,
     ) {
         let Some(name) = self.extract_static_ident(class) else {
-            self.errors.push(TypeError { severity: Severity::Error,
+            self.errors.push(TypeError {
+                severity: Severity::Error,
                 span,
                 message: "Dynamic class references are not allowed in DekaScript".to_string(),
             });
@@ -728,9 +995,13 @@ impl<'a> CheckContext<'a> {
         if self.structs.contains_key(&name) || self.enums.contains_key(&name) {
             return;
         }
-        self.errors.push(TypeError { severity: Severity::Error,
+        self.errors.push(TypeError {
+            severity: Severity::Error,
             span,
-            message: format!("Unknown type '{}' in DekaScript; classes are not allowed", name),
+            message: format!(
+                "Unknown type '{}' in DekaScript; classes are not allowed",
+                name
+            ),
         });
     }
 
