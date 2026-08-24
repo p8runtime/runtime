@@ -1156,6 +1156,88 @@ fn ds_enum_match_missing_case_errors() {
 }
 
 #[test]
+fn ds_nested_match_patterns_exhaustive() {
+    let code = r#"
+        fn f(r: Result<Option<number>, string>) number {
+            return match (r) {
+                Err(e) => 0,
+                Ok(None) => 1,
+                Ok(Some(v)) => v,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_nested_match_patterns_missing_some_errors() {
+    let err = check_ds(
+        r#"
+        fn f(r: Result<Option<number>, string>) number {
+            return match (r) {
+                Err(e) => 0,
+                Ok(None) => 1,
+            }
+        }
+    "#,
+    )
+    .expect_err("Ok(None) must not cover Ok(Some(_))");
+    assert!(
+        err.contains("not exhaustive") && err.contains("Some"),
+        "expected missing Ok(Some(_)) diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_nested_match_ok_binding_still_covers_option() {
+    let code = r#"
+        fn f(r: Result<Option<number>, string>) number {
+            return match (r) {
+                Err(e) => 0,
+                Ok(v) => 1,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_nested_match_binds_inner_payload_type() {
+    let err = check_ds(
+        r#"
+        fn f(r: Result<Option<number>, string>) string {
+            return match (r) {
+                Err(e) => e,
+                Ok(None) => "",
+                Ok(Some(v)) => v,
+            }
+        }
+    "#,
+    )
+    .expect_err("inner Some(v) must be number, not string");
+    assert!(
+        err.contains("Type mismatch") || err.contains("expected string") || err.contains("number"),
+        "expected payload type mismatch, got: {err}"
+    );
+}
+
+#[test]
+fn ds_nested_user_enum_match_patterns() {
+    let code = r#"
+        enum Msg { Text(string), Ping }
+        enum Wrap { Inner(Msg), Empty }
+        fn f(w: Wrap) string {
+            return match (w) {
+                Wrap.Inner(Msg.Text(b)) => b,
+                Wrap.Inner(Msg.Ping) => "ping",
+                Wrap.Empty => "",
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
 fn ds_unsafe_sync_is_result() {
     let code = r#"
         fn f(s: string) object {

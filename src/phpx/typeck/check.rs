@@ -1,6 +1,6 @@
 use crate::parser::ast::visitor::{Visitor, walk_expr};
 use crate::parser::ast::{
-    BinaryOp, ClassKind, ClassMember, ExportItem, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
+    Arg, BinaryOp, ClassKind, ClassMember, ExportItem, Expr, ExprId, JsxChild, Name, ObjectKey, Program,
     PropertyEntry, Severity, Stmt, StmtId, Type as AstType, TypeParam, UnaryOp,
 };
 use crate::parser::lexer::token::TokenKind;
