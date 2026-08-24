@@ -1155,6 +1155,96 @@ fn ds_enum_match_missing_case_errors() {
     assert!(check_ds(code).is_err());
 }
 
+#[test]
+fn ds_match_number_requires_wildcard() {
+    let err = check_ds(
+        r#"
+        fn label(n: number) string {
+            return match (n) {
+                1 => "one",
+                2 => "two",
+            }
+        }
+    "#,
+    )
+    .expect_err("number match without _ must be a type error");
+    assert!(
+        err.contains("not exhaustive") && err.contains("`_`"),
+        "expected catch-all diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_match_number_ok_with_wildcard() {
+    let code = r#"
+        fn label(n: number) string {
+            return match (n) {
+                1 => "one",
+                2 => "two",
+                _ => "other",
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_match_number_ok_with_default() {
+    let code = r#"
+        fn label(n: number) string {
+            return match (n) {
+                1 => "one",
+                default => "other",
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_match_bool_requires_both_arms() {
+    let err = check_ds(
+        r#"
+        fn label(flag: boolean) number {
+            return match (flag) {
+                true => 1,
+            }
+        }
+    "#,
+    )
+    .expect_err("bool match missing false must be a type error");
+    assert!(
+        err.contains("not exhaustive") && err.contains("false"),
+        "expected missing false diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_match_bool_ok_when_both_covered() {
+    let code = r#"
+        fn label(flag: boolean) number {
+            return match (flag) {
+                true => 1,
+                false => 0,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_match_enum_wildcard_covers_remaining_cases() {
+    let code = r#"
+        enum Status { Loading, Ready, Failed }
+        fn f(s: Status) number {
+            match (s) {
+                Status::Loading => 0,
+                _ => 1,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
 
 #[test]
 fn ds_function_return_type_inferred_from_literal() {

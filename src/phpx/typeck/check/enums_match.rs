@@ -322,82 +322,175 @@ impl<'a> CheckContext<'a> {
         }
     }
 
+    fn is_match_wildcard(&self, expr: ExprId<'a>) -> bool {
+        match *expr {
+            Expr::Variable { name, .. } => {
+                token_text(self.source, name).trim_start_matches('$') == "_"
+            }
+            _ => false,
+        }
+    }
+
+    fn match_has_catch_all(&self, arms: &[crate::parser::ast::MatchArm<'a>]) -> bool {
+        arms.iter().any(|arm| match arm.conditions {
+            None => true,
+            Some(conds) => conds.iter().any(|cond| self.is_match_wildcard(*cond)),
+        })
+    }
+
+    /// deka#281: every `match` must cover the scrutinee type. `_` and
+    /// `default` are catch-alls. Literals do not cover `number`/`string`.
     pub(in crate::phpx::typeck::check) fn check_match_exhaustive(
         &mut self,
         cond_ty: &Type,
         arms: &'a [crate::parser::ast::MatchArm<'a>],
         _env: &HashMap<String, Type>,
     ) {
-        let Some((enum_names, allows_null)) = self.enum_names_from_type(cond_ty) else {
+        if self.match_has_catch_all(arms) {
             return;
-        };
-
-        let mut covered: HashMap<String, HashSet<String>> = HashMap::new();
-        for name in enum_names.iter() {
-            covered.insert(name.clone(), HashSet::new());
         }
+
+        let mut cases: HashSet<(String, String)> = HashSet::new();
+        let mut bools: HashSet<bool> = HashSet::new();
         let mut null_covered = false;
+        let expected_enums = self
+            .enum_names_from_type(cond_ty)
+            .map(|(names, _)| names.into_iter().collect::<HashSet<_>>());
 
         for arm in arms.iter() {
             let Some(conds) = arm.conditions else {
                 return;
             };
             for cond in conds.iter() {
+                if self.is_match_wildcard(*cond) {
+                    return;
+                }
                 if matches!(*cond, Expr::Null { .. }) {
                     null_covered = true;
                     continue;
                 }
+                if let Expr::Boolean { value, .. } = *cond {
+                    bools.insert(*value);
+                    continue;
+                }
                 if let Some((enum_name, case_name)) = self.enum_case_from_expr(*cond) {
-                    if let Some(entry) = covered.get_mut(&enum_name) {
-                        entry.insert(case_name);
-                    } else {
-                        self.errors.push(TypeError { severity: Severity::Error,
-                            span: arm.span,
-                            message: format!(
-                                "Match arm uses enum case '{}::{}' that is not part of this match",
-                                enum_name, case_name
-                            ),
-                        });
-                        return;
+                    if let Some(expected) = expected_enums.as_ref() {
+                        if !expected.contains(&enum_name) {
+                            self.errors.push(TypeError { severity: Severity::Error,
+                                span: arm.span,
+                                message: format!(
+                                    "Match arm uses enum case '{}::{}' that is not part of this match",
+                                    enum_name, case_name
+                                ),
+                            });
+                            return;
+                        }
                     }
-                } else {
-                    // Mixed conditions: skip exhaustiveness checking.
-                    return;
+                    cases.insert((enum_name, case_name));
                 }
             }
         }
 
-        for enum_name in enum_names.iter() {
-            let case_names = if let Some(info) = self.enums.get(enum_name) {
-                info.cases.keys().cloned().collect::<Vec<_>>()
-            } else if let Some(builtin) = self.builtin_enum_cases(enum_name) {
-                builtin
-            } else {
-                continue;
-            };
-            let Some(seen) = covered.get(enum_name) else {
-                continue;
-            };
-            for case_name in case_names.iter() {
-                if !seen.contains(case_name) {
-                    self.errors.push(TypeError { severity: Severity::Error,
-                        span: arms.last().map(|arm| arm.span).unwrap_or_default(),
-                        message: format!(
-                            "Match on {} is not exhaustive; missing case {}::{}",
-                            enum_name, enum_name, case_name
-                        ),
-                    });
-                    return;
-                }
-            }
-        }
-
-        if allows_null && !null_covered {
+        if let Some(message) = self.match_uncovered(cond_ty, &cases, &bools, null_covered) {
             self.errors.push(TypeError { severity: Severity::Error,
                 span: arms.last().map(|arm| arm.span).unwrap_or_default(),
-                message: "Match on nullable enum is not exhaustive; missing null arm".to_string(),
+                message,
             });
         }
+    }
+
+    fn match_uncovered(
+        &self,
+        ty: &Type,
+        cases: &HashSet<(String, String)>,
+        bools: &HashSet<bool>,
+        null_covered: bool,
+    ) -> Option<String> {
+        match ty {
+            Type::Enum(name) => self.missing_enum_case(name, cases),
+            Type::EnumCase {
+                enum_name,
+                case_name,
+                ..
+            } => {
+                if cases.contains(&(enum_name.clone(), case_name.clone())) {
+                    None
+                } else {
+                    Some(format!(
+                        "Match on {} is not exhaustive; missing case {}::{}",
+                        enum_name, enum_name, case_name
+                    ))
+                }
+            }
+            Type::Applied { base, .. }
+                if base.eq_ignore_ascii_case("Option") || base.eq_ignore_ascii_case("Result") =>
+            {
+                let name = if base.eq_ignore_ascii_case("Option") {
+                    "Option"
+                } else {
+                    "Result"
+                };
+                self.missing_enum_case(name, cases)
+            }
+            Type::Primitive(PrimitiveType::Bool) => {
+                let mut missing = Vec::new();
+                if !bools.contains(&true) {
+                    missing.push("true");
+                }
+                if !bools.contains(&false) {
+                    missing.push("false");
+                }
+                if missing.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "Match on bool is not exhaustive; missing {}",
+                        missing.join(" and ")
+                    ))
+                }
+            }
+            Type::Primitive(PrimitiveType::Null) => {
+                if null_covered {
+                    None
+                } else {
+                    Some("Match on null is not exhaustive; missing null arm".to_string())
+                }
+            }
+            Type::Union(types) => {
+                for inner in types {
+                    if let Some(message) = self.match_uncovered(inner, cases, bools, null_covered) {
+                        return Some(message);
+                    }
+                }
+                None
+            }
+            Type::Unknown | Type::Mixed => None,
+            _ => Some(format!(
+                "Match on {} is not exhaustive; add a `_` arm",
+                ty
+            )),
+        }
+    }
+
+    fn missing_enum_case(
+        &self,
+        enum_name: &str,
+        cases: &HashSet<(String, String)>,
+    ) -> Option<String> {
+        let case_names = if let Some(info) = self.enums.get(enum_name) {
+            info.cases.keys().cloned().collect::<Vec<_>>()
+        } else {
+            self.builtin_enum_cases(enum_name)?
+        };
+        for case_name in case_names {
+            if !cases.contains(&(enum_name.to_string(), case_name.clone())) {
+                return Some(format!(
+                    "Match on {} is not exhaustive; missing case {}::{}",
+                    enum_name, enum_name, case_name
+                ));
+            }
+        }
+        None
     }
 
     pub(in crate::phpx::typeck::check) fn apply_match_arm_narrowing(
