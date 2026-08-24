@@ -1750,3 +1750,45 @@ export { answer, greeting as hi };
     assert_eq!(imports, 1);
     assert_eq!(exports, 3);
 }
+
+#[test]
+fn ds_parses_side_effect_import() {
+    let arena = Bump::new();
+    let source = b"import \"./logger.ds\";\nconsole.log(1);\n";
+    let mut parser = Parser::new_with_mode(Lexer::new(source), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
+    let import = program
+        .statements
+        .iter()
+        .find_map(|stmt| match **stmt {
+            Stmt::Import { specs, from, .. } => Some((specs.len(), from)),
+            _ => None,
+        });
+    let (spec_count, from) = import.expect("expected a side-effect import");
+    assert_eq!(spec_count, 0);
+    assert_eq!(
+        std::str::from_utf8(from.text(source)).unwrap().trim_matches(|c| c == '"' || c == '\''),
+        "./logger.ds"
+    );
+}
+
+#[test]
+fn ds_rejects_default_import() {
+    let arena = Bump::new();
+    let source = b"import foo from \"./bar.ds\";\n";
+    let mut parser = Parser::new_with_mode(Lexer::new(source), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|e| e.message == "Expected '{' after import"),
+        "expected default-import rejection, got: {:?}",
+        program.errors
+    );
+}

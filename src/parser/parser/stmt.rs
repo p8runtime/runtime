@@ -1363,17 +1363,35 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         })
     }
 
-    /// Parse an ECMAScript-style named import:
+    /// Parse an ECMAScript-style import:
     /// `import { a, b as c } from "./mod";`
+    /// `import "./mod";` (side-effect only)
     fn parse_import_stmt(&mut self) -> StmtId<'ast> {
         let start = self.current_token.span.start;
         self.bump(); // import
 
+        if self.current_token.kind == TokenKind::StringLiteral {
+            let from = self.arena.alloc(self.current_token);
+            let end = self.current_token.span.end;
+            self.bump();
+            self.expect_semicolon();
+            return self.arena.alloc(Stmt::Import {
+                specs: self.arena.alloc_slice_copy(&[]),
+                from,
+                span: Span::new(start, end),
+            });
+        }
+
         if self.current_token.kind != TokenKind::OpenBrace {
+            let help = if self.current_token.kind == TokenKind::Identifier {
+                "Default imports are not DekaScript. Use named imports: `import { name } from './module';`."
+            } else {
+                "Use named imports: `import { name } from './module';`, or a side-effect import: `import './module';`."
+            };
             self.errors.push(ParseError::with_help(
                 self.current_token.span,
                 "Expected '{' after import",
-                "Use named imports: `import { name } from './module';`.",
+                help,
             ));
             self.sync_to_statement_end();
             let end = self.current_token.span.end;
