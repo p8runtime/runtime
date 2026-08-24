@@ -488,14 +488,7 @@ impl<'a> CheckContext<'a> {
                 self.check_match_exhaustive(&cond_ty, arms, env);
                 match_ty
             }
-            Expr::Unsafe { .. } => {
-                // Raw JavaScript inside `unsafe { ... }` is opaque to PHPX type
-                // checking. The expression always has type Result<unknown, unknown>.
-                Type::Applied {
-                    base: "Result".to_string(),
-                    args: vec![Type::Unknown, Type::Unknown],
-                }
-            }
+            Expr::Unsafe { raw, .. } => unsafe_js_block_type(raw),
             Expr::Bridge {
                 kind,
                 action,

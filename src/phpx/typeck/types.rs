@@ -119,6 +119,23 @@ impl fmt::Display for Type {
     }
 }
 
+/// `unsafe { }` is `Result<unknown, unknown>`, or `Promise<Result<...>>`
+/// when the JS body has top-level `await` (RFD 21).
+pub fn unsafe_js_block_type(raw: &[u8]) -> Type {
+    let result = Type::Applied {
+        base: "Result".to_string(),
+        args: vec![Type::Unknown, Type::Unknown],
+    };
+    if crate::js_scan::js_has_top_level_await(&String::from_utf8_lossy(raw)) {
+        Type::Applied {
+            base: "Promise".to_string(),
+            args: vec![result],
+        }
+    } else {
+        result
+    }
+}
+
 pub fn merge_types(left: &Type, right: &Type) -> Type {
     if left == right {
         return left.clone();

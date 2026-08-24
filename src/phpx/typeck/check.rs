@@ -8,7 +8,9 @@ use crate::parser::span::Span;
 use crate::phpx::typeck::infer::{
     EnumCaseInfo, EnumInfo, EnumParamInfo, InferContext, StructInfo, infer_expr,
 };
-use crate::phpx::typeck::types::{ObjectField, PrimitiveType, Type, merge_types};
+use crate::phpx::typeck::types::{
+    ObjectField, PrimitiveType, Type, merge_types, unsafe_js_block_type,
+};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
