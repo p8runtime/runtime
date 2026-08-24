@@ -1156,6 +1156,27 @@ fn ds_enum_match_missing_case_errors() {
 }
 
 #[test]
+fn ds_unsafe_sync_is_result() {
+    let code = r#"
+        fn f(s: string) object {
+            return match (unsafe { JSON.parse(s) }) {
+                Ok(v) => v,
+                Err(e) => e,
+            }
+        }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_unsafe_await_typechecks() {
+    let code = r#"
+        const r = unsafe { await fetch("/x") }
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
 fn ds_match_number_requires_wildcard() {
     let err = check_ds(
         r#"

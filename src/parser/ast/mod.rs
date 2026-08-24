@@ -656,9 +656,8 @@ pub enum Expr<'ast> {
     },
     /// A DekaScript `unsafe { ... }` expression. The body is raw JavaScript
     /// source text that is passed through verbatim; it is not parsed as
-    /// DekaScript. At runtime it desugars to a `Result<T, Error>` where `T` is
-    /// the completion value of the embedded JS (or `undefined` if it is a
-    /// statement block).
+    /// DekaScript. At runtime it desugars to `Result` (throw vs complete), or
+    /// `Promise<Result>` when the JS body has top-level `await` (RFD 21).
     Unsafe {
         raw: &'ast [u8],
         span: Span,

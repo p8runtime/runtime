@@ -1,5 +1,7 @@
 use crate::parser::ast::{BinaryOp, Expr, ObjectKey};
-use crate::phpx::typeck::types::{ObjectField, PrimitiveType, Type, merge_types};
+use crate::phpx::typeck::types::{
+    ObjectField, PrimitiveType, Type, merge_types, unsafe_js_block_type,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -343,10 +345,7 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
             }
             out
         }
-        Expr::Unsafe { .. } => Type::Applied {
-            base: "Result".to_string(),
-            args: vec![Type::Unknown, Type::Unknown],
-        },
+        Expr::Unsafe { raw, .. } => unsafe_js_block_type(raw),
         Expr::Bridge { .. } => Type::Applied {
             base: "Result".to_string(),
             args: vec![Type::Unknown, Type::Unknown],
