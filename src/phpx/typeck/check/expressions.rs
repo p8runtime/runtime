@@ -11,6 +11,15 @@ impl<'a> CheckContext<'a> {
         match *expr {
             Expr::Variable { span, .. } => {
                 let raw = token_text(self.source, span);
+                if raw.trim_start_matches('$') == "_" {
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span,
+                        message: "`_` is only a function-capture hole or a match wildcard; write `f(1, _)` to capture"
+                            .to_string(),
+                    });
+                    return Type::Unknown;
+                }
                 if !raw.starts_with('$') {
                     self.refuse_js_host_name(&raw, span, env);
                     return self.infer_expr_with_env(expr, env);
@@ -27,7 +36,11 @@ impl<'a> CheckContext<'a> {
                 if let Some(suggested) = suggestion {
                     message.push_str(&format!("; did you mean '${}'?", suggested));
                 }
-                self.errors.push(TypeError { severity: Severity::Error, span, message });
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
+                    span,
+                    message,
+                });
                 Type::Unknown
             }
             Expr::Null { .. } => Type::Primitive(PrimitiveType::Null),
@@ -70,6 +83,9 @@ impl<'a> CheckContext<'a> {
                 op,
                 span,
             } => {
+                if matches!(op, BinaryOp::Pipe) {
+                    return self.check_pipe(left, right, span, env, explicit, mut_env);
+                }
                 if self.is_null_comparison(op, left, right) && !self.allow_null_comparisons() {
                     self.errors.push(TypeError {
                         severity: Severity::Error,
@@ -126,7 +142,10 @@ impl<'a> CheckContext<'a> {
                 // `.` is the only member-access operator in .ds. Route these
                 // through the same method-signature checking as PHPX's
                 // `Expr::MethodCall` when the target is a struct/enum/interface.
-                if let Expr::DotAccess { target, property, .. } = *func {
+                if let Expr::DotAccess {
+                    target, property, ..
+                } = *func
+                {
                     let target_ty = self.check_expr(target, env, explicit, mut_env);
                     if matches!(
                         target_ty,
@@ -150,18 +169,15 @@ impl<'a> CheckContext<'a> {
                         );
                     }
                 }
-                let _ = self.check_expr(func, env, explicit, mut_env);
-                for arg in args.iter() {
-                    let _ = self.check_expr(arg.value, env, explicit, mut_env);
-                }
-                self.check_call_signature(func, args, env)
+                self.check_call_expr(func, args, span, env, explicit, mut_env)
             }
             Expr::New { class, args, span } => {
                 let _ = self.check_expr(class, env, explicit, mut_env);
                 for arg in args.iter() {
                     let _ = self.check_expr(arg.value, env, explicit, mut_env);
                 }
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span,
                     message: "new is not allowed in DekaScript; use struct literals".to_string(),
                 });
@@ -220,8 +236,15 @@ impl<'a> CheckContext<'a> {
                 if let Some((enum_name, case_name, case_info, type_params)) =
                     self.enum_case_lookup(class, method)
                 {
-                    let inferred_args =
-                        self.check_enum_case_call(&enum_name, &case_name, &case_info, &type_params, args, span, env);
+                    let inferred_args = self.check_enum_case_call(
+                        &enum_name,
+                        &case_name,
+                        &case_info,
+                        &type_params,
+                        args,
+                        span,
+                        env,
+                    );
                     if enum_name.eq_ignore_ascii_case("Option") {
                         let arg_ty = args
                             .get(0)
@@ -316,7 +339,8 @@ impl<'a> CheckContext<'a> {
                                 | Type::Applied { .. }
                         );
                         if !is_object_like && !matches!(value_ty, Type::Unknown | Type::Mixed) {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span: item.span,
                                 message: format!(
                                     "Spread value has type {}, which is not an object-like type",
@@ -364,7 +388,8 @@ impl<'a> CheckContext<'a> {
                 let info = if let Some(info) = self.structs.get(&struct_name) {
                     info.clone()
                 } else {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span: span,
                         message: format!("Unknown struct '{}'", struct_name),
                     });
@@ -377,7 +402,8 @@ impl<'a> CheckContext<'a> {
                     let field_name = field_name.trim_start_matches('$').to_string();
 
                     if !seen.insert(field_name.clone()) {
-                        self.errors.push(TypeError { severity: Severity::Error,
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
                             span: field.span,
                             message: format!(
                                 "Duplicate field '{}' in struct literal '{}'",
@@ -389,7 +415,8 @@ impl<'a> CheckContext<'a> {
 
                     let expected = info.fields.get(&field_name);
                     if expected.is_none() {
-                        self.errors.push(TypeError { severity: Severity::Error,
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
                             span: field.span,
                             message: format!(
                                 "Unknown field '{}' in struct literal '{}'",
@@ -401,7 +428,8 @@ impl<'a> CheckContext<'a> {
                     let actual = self.check_expr(field.value, env, explicit, mut_env);
                     if let Some(expected) = expected {
                         if !self.is_assignable(&actual, expected) {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span: field.span,
                                 message: format!(
                                     "Field '{}' expects {}, got {}",
@@ -429,7 +457,8 @@ impl<'a> CheckContext<'a> {
                     {
                         continue;
                     }
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span: span,
                         message: format!(
                             "Missing field '{}' in struct literal '{}'",
@@ -477,6 +506,9 @@ impl<'a> CheckContext<'a> {
                             if self.enum_case_from_expr(*cond).is_some() {
                                 continue;
                             }
+                            if self.expr_is_hole(*cond) {
+                                continue;
+                            }
                             let _ = self.check_expr(
                                 cond,
                                 &mut arm_env,
@@ -504,7 +536,8 @@ impl<'a> CheckContext<'a> {
                 span,
             } => self.check_bridge_expr(kind, action, args, span, env, explicit, mut_env),
             Expr::AnonymousClass { span, .. } => {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span,
                     message: "Anonymous classes are not allowed in DekaScript".to_string(),
                 });
@@ -574,8 +607,12 @@ impl<'a> CheckContext<'a> {
                         inner_mut_env.insert(param_name);
                     }
                 }
-                let body_ty =
-                    self.check_expr(expr, &mut inner_env, &mut inner_explicit, &mut inner_mut_env);
+                let body_ty = self.check_expr(
+                    expr,
+                    &mut inner_env,
+                    &mut inner_explicit,
+                    &mut inner_mut_env,
+                );
                 Type::Function {
                     params: param_types,
                     return_type: Box::new(body_ty),
@@ -595,7 +632,8 @@ impl<'a> CheckContext<'a> {
                     }
                     Type::Unknown => Type::Unknown,
                     other => {
-                        self.errors.push(TypeError { severity: Severity::Error,
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
                             span,
                             message: format!("await expects Promise<T>, got {}", other),
                         });
@@ -712,7 +750,8 @@ impl<'a> CheckContext<'a> {
         match target_ty {
             Type::ObjectShape(fields) => {
                 if !fields.contains_key(&prop_name) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span,
                         message: format!("Unknown object field '{}'", prop_name),
                     });
@@ -725,13 +764,15 @@ impl<'a> CheckContext<'a> {
                 match self.resolve_struct_field(&name, &prop_name) {
                     StructFieldResolution::Found(_) => {}
                     StructFieldResolution::Ambiguous => {
-                        self.errors.push(TypeError { severity: Severity::Error,
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
                             span,
                             message: format!("Ambiguous promoted field '{}::{}'", name, prop_name),
                         });
                     }
                     StructFieldResolution::Missing => {
-                        self.errors.push(TypeError { severity: Severity::Error,
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
                             span,
                             message: format!("Unknown struct field '{}::{}'", name, prop_name),
                         });
@@ -743,7 +784,8 @@ impl<'a> CheckContext<'a> {
                     return;
                 };
                 if !info.fields.contains_key(&prop_name) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span,
                         message: format!("Unknown interface field '{}::{}'", name, prop_name),
                     });
@@ -758,7 +800,8 @@ impl<'a> CheckContext<'a> {
                         ),
                     });
                 } else if !self.enum_allows_field(&name, &prop_name) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span,
                         message: format!("Unknown enum field '{}::{}'", name, prop_name),
                     });
@@ -777,7 +820,8 @@ impl<'a> CheckContext<'a> {
                         ),
                     });
                 } else if !self.enum_case_allows_field(&enum_name, &case_name, &prop_name) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span,
                         message: format!(
                             "Unknown enum field '{}::{}::{}'",
@@ -791,7 +835,8 @@ impl<'a> CheckContext<'a> {
             {
                 const ALLOWED: &[&str] = &["name", "__case", "value", "error"];
                 if !ALLOWED.contains(&prop_name.as_str()) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span,
                         message: format!("Unknown enum field '{}::{}'", base, prop_name),
                     });
@@ -870,7 +915,8 @@ impl<'a> CheckContext<'a> {
                     }
                 }
                 if invalid || (any_ok && missing) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span,
                         message: format!("Unknown object field '{}' for union type", prop_name),
                     });
@@ -1101,7 +1147,8 @@ impl<'a> CheckContext<'a> {
                         seen.insert(key.clone());
                         if let Some(expected_field) = expected.get(key) {
                             if !self.is_assignable(&field.ty, &expected_field.ty) {
-                                self.errors.push(TypeError { severity: Severity::Error,
+                                self.errors.push(TypeError {
+                                    severity: Severity::Error,
                                     span: item.span,
                                     message: format!(
                                         "Spread field '{}' has type {}, expected {}",
@@ -1119,7 +1166,8 @@ impl<'a> CheckContext<'a> {
             let key = object_key_name(item.key, self.source);
             seen.insert(key.clone());
             let Some(expected_field) = expected.get(&key) else {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span: item.span,
                     message: format!("Unknown object field '{}' in object literal", key),
                 });
@@ -1127,7 +1175,8 @@ impl<'a> CheckContext<'a> {
             };
             let actual = self.infer_expr_with_env(item.value, env);
             if !self.is_assignable(&actual, &expected_field.ty) {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span: item.span,
                     message: format!(
                         "Object field '{}' has type {}, expected {}",
@@ -1146,7 +1195,8 @@ impl<'a> CheckContext<'a> {
                 continue;
             }
             if !seen.contains(name) {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span,
                     message: format!("Missing required object field '{}'", name),
                 });
@@ -1254,14 +1304,16 @@ impl<'a> CheckContext<'a> {
                 if let Some(existing) = env.get(&name) {
                     if explicit.contains(&name) {
                         if self.strict_null && is_null && !self.type_allows_null(existing) {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span,
                                 message: "Null is not allowed in DekaScript; use Option<T> instead"
                                     .to_string(),
                             });
                         }
                         if !self.is_assignable(value_ty, existing) {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span,
                                 message: format!(
                                     "Type mismatch: expected {}, got {}",
@@ -1271,7 +1323,8 @@ impl<'a> CheckContext<'a> {
                         }
                     } else {
                         if self.strict_null && is_null {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span,
                                 message: "Null is not allowed in DekaScript; use Option<T> instead"
                                     .to_string(),
@@ -1282,7 +1335,8 @@ impl<'a> CheckContext<'a> {
                     }
                 } else {
                     if self.strict_null && is_null {
-                        self.errors.push(TypeError { severity: Severity::Error,
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
                             span,
                             message: "Null is not allowed in DekaScript; use Option<T> instead"
                                 .to_string(),
@@ -1307,10 +1361,7 @@ impl<'a> CheckContext<'a> {
                                     self.errors.push(TypeError {
                                         severity: Severity::Error,
                                         span,
-                                        message: format!(
-                                            "field '{}' is read-only",
-                                            prop_name
-                                        ),
+                                        message: format!("field '{}' is read-only", prop_name),
                                     });
                                 }
                             }
@@ -1322,10 +1373,7 @@ impl<'a> CheckContext<'a> {
                                 self.errors.push(TypeError {
                                     severity: Severity::Error,
                                     span,
-                                    message: format!(
-                                        "field '{}' is read-only",
-                                        prop_name
-                                    ),
+                                    message: format!("field '{}' is read-only", prop_name),
                                 });
                             }
                         }
@@ -1337,10 +1385,7 @@ impl<'a> CheckContext<'a> {
                                     self.errors.push(TypeError {
                                         severity: Severity::Error,
                                         span,
-                                        message: format!(
-                                            "field '{}' is read-only",
-                                            prop_name
-                                        ),
+                                        message: format!("field '{}' is read-only", prop_name),
                                     });
                                 }
                             }
@@ -1351,8 +1396,7 @@ impl<'a> CheckContext<'a> {
                             self.errors.push(TypeError {
                                 severity: Severity::Error,
                                 span,
-                                message: "cannot assign to field of immutable value"
-                                    .to_string(),
+                                message: "cannot assign to field of immutable value".to_string(),
                             });
                         }
                     }
@@ -1391,12 +1435,7 @@ impl<'a> CheckContext<'a> {
     /// RFD 21: JSON / fetch are host JS. In DekaScript they belong in
     /// `unsafe { }` or a module (`@deka/json`). A user binding of the same
     /// name is allowed.
-    fn refuse_js_host_name(
-        &mut self,
-        name: &str,
-        span: Span,
-        env: &HashMap<String, Type>,
-    ) {
+    fn refuse_js_host_name(&mut self, name: &str, span: Span, env: &HashMap<String, Type>) {
         if env.contains_key(name)
             || self.functions.contains_key(name)
             || self.imported.contains_key(name)

@@ -27,6 +27,7 @@ mod host_bridge;
 mod jsx;
 mod methods;
 mod model;
+mod pipe;
 mod statements;
 mod structs;
 mod type_resolution;
@@ -47,6 +48,6 @@ pub(crate) use host_bridge::package_fs_digest;
 pub(in crate::phpx::typeck::check) use context::CheckContext;
 pub(in crate::phpx::typeck::check) use helpers::*;
 pub(in crate::phpx::typeck::check) use model::{
-    FunctionSig, InterfaceInfo, JsxExprValidator, MethodSig, ParamSig, StructFieldResolution,
-    TypeAliasInfo, TypeParamSig,
+    CallActual, FunctionSig, InterfaceInfo, JsxExprValidator, MethodSig, ParamSig,
+    StructFieldResolution, TypeAliasInfo, TypeParamSig,
 };

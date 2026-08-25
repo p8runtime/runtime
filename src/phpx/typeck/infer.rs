@@ -1,6 +1,6 @@
-use crate::parser::ast::{BinaryOp, Expr, ObjectKey};
+use crate::parser::ast::{Arg, BinaryOp, Expr, ObjectKey};
 use crate::phpx::typeck::types::{
-    ObjectField, PrimitiveType, Type, merge_types, unsafe_js_block_type,
+    merge_types, unsafe_js_block_type, ObjectField, PrimitiveType, Type,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -45,7 +45,11 @@ pub struct InferContext<'a> {
 fn resolve_struct_field_type(name: &str, field: &str, ctx: &InferContext) -> Option<Type> {
     let mut visited = HashSet::new();
     let (ty, ambiguous) = resolve_struct_field_type_inner(name, field, ctx, &mut visited);
-    if ambiguous { None } else { ty }
+    if ambiguous {
+        None
+    } else {
+        ty
+    }
 }
 
 fn resolve_struct_field_type_inner(
@@ -268,7 +272,10 @@ pub fn infer_expr(expr: &Expr, ctx: &InferContext) -> Type {
                 _ => Type::Unknown,
             }
         }
-        Expr::Call { func, .. } => {
+        Expr::Call { func, args, .. } => {
+            if let Some(capture) = infer_function_capture(func, args, ctx) {
+                return capture;
+            }
             if let Expr::Variable { span, .. } = &**func {
                 let name = token_text(ctx.source, *span);
                 if !name.starts_with('$') {
@@ -540,8 +547,8 @@ fn infer_binary_op(op: BinaryOp, left: &Type, right: &Type) -> Type {
 }
 
 fn infer_pipe_call(right: &Expr, ctx: &InferContext) -> Type {
-    // `a |> f(b, c)` desugars to `f(a, b, c)`. The RHS may be a call whose
-    // callee is the function, or just a bare function reference.
+    // `a |> f(b, c)` desugars to `f(a, b, c)`. A capture `a |> f(b, _)`
+    // applies the capture, so the type is still `f`'s return type.
     let func_expr = match right {
         Expr::Call { func, .. } => func,
         _ => right,
@@ -560,6 +567,41 @@ fn infer_pipe_call(right: &Expr, ctx: &InferContext) -> Type {
             .unwrap_or(Type::Unknown);
     }
     Type::Unknown
+}
+
+fn infer_function_capture(func: &Expr, args: &[Arg<'_>], ctx: &InferContext) -> Option<Type> {
+    let holes: Vec<usize> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| expr_is_hole(arg.value, ctx.source))
+        .map(|(idx, _)| idx)
+        .collect();
+    if holes.len() != 1 {
+        return None;
+    }
+    let Expr::Variable { span, .. } = func else {
+        return None;
+    };
+    let name = token_text(ctx.source, *span);
+    let Type::Function {
+        params,
+        return_type,
+    } = ctx.function_value_types.get(&name)?
+    else {
+        return None;
+    };
+    let hole_ty = params.get(holes[0]).cloned().unwrap_or(Type::Unknown);
+    Some(Type::Function {
+        params: vec![hole_ty],
+        return_type: return_type.clone(),
+    })
+}
+
+fn expr_is_hole(expr: &Expr, source: &[u8]) -> bool {
+    match expr {
+        Expr::Variable { span, .. } => token_text(source, *span).trim_start_matches('$') == "_",
+        _ => false,
+    }
 }
 
 pub fn literal_type(expr: &Expr) -> Option<Type> {

@@ -377,12 +377,7 @@ impl<'a> CheckContext<'a> {
     }
 
     fn is_match_wildcard(&self, expr: ExprId<'a>) -> bool {
-        match *expr {
-            Expr::Variable { name, .. } => {
-                token_text(self.source, name).trim_start_matches('$') == "_"
-            }
-            _ => false,
-        }
+        self.expr_is_hole(expr)
     }
 
     fn match_has_catch_all(&self, arms: &[crate::parser::ast::MatchArm<'a>]) -> bool {

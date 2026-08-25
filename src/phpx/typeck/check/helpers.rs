@@ -69,6 +69,14 @@ pub(in crate::phpx::typeck::check) fn token_text(source: &[u8], span: Span) -> S
     String::from_utf8_lossy(&source[start..end]).to_string()
 }
 
+/// `_` as a match wildcard or a function-capture hole (RFD 30). Not a variable.
+pub(in crate::phpx::typeck::check) fn expr_is_hole(source: &[u8], expr: ExprId<'_>) -> bool {
+    match *expr {
+        Expr::Variable { name, .. } => token_text(source, name).trim_start_matches('$') == "_",
+        _ => false,
+    }
+}
+
 pub(in crate::phpx::typeck::check) fn capitalize_jsx_name(name: &str) -> String {
     if name.is_empty() {
         return String::new();
@@ -457,7 +465,9 @@ pub(in crate::phpx::typeck::check) fn find_modules_root(file_path: &Path) -> Opt
         if dir
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("ds_modules") || name.eq_ignore_ascii_case("php_modules"))
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("ds_modules") || name.eq_ignore_ascii_case("php_modules")
+            })
         {
             return Some(dir.to_path_buf());
         }

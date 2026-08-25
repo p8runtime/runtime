@@ -1393,6 +1393,73 @@ fn ds_match_enum_wildcard_covers_remaining_cases() {
 }
 
 #[test]
+fn ds_pipe_inserts_first_argument() {
+    let code = r#"
+        fn add(a: number, b: number) number { return a + b }
+        const n = 5 |> add(1)
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_pipe_capture_fills_non_first_slot() {
+    let code = r#"
+        fn append(s: string, suffix: string) string { return s + suffix }
+        const n = "1" |> append("3", _)
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_function_capture_is_a_unary_function() {
+    let code = r#"
+        fn add(a: number, b: number) number { return a + b }
+        const add1 = add(1, _)
+        const n = add1(2)
+    "#;
+    assert!(check_ds(code).is_ok(), "{}", check_ds(code).unwrap_err());
+}
+
+#[test]
+fn ds_pipe_arity_still_checked_after_desugar() {
+    let err = check_ds(
+        r#"
+        fn add(a: number, b: number) number { return a + b }
+        const n = 5 |> add
+        "#,
+    )
+    .expect_err("unary pipe into a binary function must be a type error");
+    assert!(
+        err.contains("Missing arguments"),
+        "expected missing-arguments diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_function_capture_rejects_two_holes() {
+    let err = check_ds(
+        r#"
+        fn add(a: number, b: number) number { return a + b }
+        const f = add(_, _)
+        "#,
+    )
+    .expect_err("two holes must be a type error");
+    assert!(
+        err.contains("exactly one"),
+        "expected capture diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn ds_bare_hole_is_not_a_value() {
+    let err = check_ds("const x = _").expect_err("bare _ must be a type error");
+    assert!(
+        err.contains("function-capture") || err.contains("match wildcard"),
+        "expected hole diagnostic, got: {err}"
+    );
+}
+
+#[test]
 fn ds_function_return_type_inferred_from_literal() {
     // dekaruntime/deka#120: unannotated fn return types are inferred.
     let code = "fn answer() { return 42; } const x = answer();";

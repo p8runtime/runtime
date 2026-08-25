@@ -6,6 +6,14 @@ pub(in crate::phpx::typeck::check) struct ParamSig {
     pub(in crate::phpx::typeck::check) required: bool,
 }
 
+/// One argument to a call after pipe desugar / capture holes (RFD 30).
+pub(in crate::phpx::typeck::check) struct CallActual<'a> {
+    pub(in crate::phpx::typeck::check) ty: Type,
+    pub(in crate::phpx::typeck::check) span: Span,
+    pub(in crate::phpx::typeck::check) value: Option<ExprId<'a>>,
+    pub(in crate::phpx::typeck::check) is_hole: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::phpx::typeck::check) struct TypeParamSig {
     pub(in crate::phpx::typeck::check) name: String,
@@ -106,5 +114,3 @@ impl TypeError {
 pub(in crate::phpx::typeck::check) struct JsxExprValidator {
     pub(in crate::phpx::typeck::check) errors: Vec<TypeError>,
 }
-
-

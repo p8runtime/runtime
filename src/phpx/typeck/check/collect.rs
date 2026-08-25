@@ -118,7 +118,8 @@ impl<'a> CheckContext<'a> {
                                     &declared_fields,
                                 );
                                 if embed_names.contains(&field_name) {
-                                    self.errors.push(TypeError { severity: Severity::Error,
+                                    self.errors.push(TypeError {
+                                        severity: Severity::Error,
                                         span: entry.name.span,
                                         message: format!(
                                             "Struct '{}' already embeds '{}'",
@@ -141,7 +142,8 @@ impl<'a> CheckContext<'a> {
                             let field_name = token_text(self.source, name.span);
                             let field_name = field_name.trim_start_matches('$').to_string();
                             if embed_names.contains(&field_name) {
-                                self.errors.push(TypeError { severity: Severity::Error,
+                                self.errors.push(TypeError {
+                                    severity: Severity::Error,
                                     span: name.span,
                                     message: format!(
                                         "Struct '{}' already embeds '{}'",
@@ -160,14 +162,16 @@ impl<'a> CheckContext<'a> {
                             for embed in types.iter() {
                                 let embed_name = token_text(self.source, embed.span);
                                 if embed_name == class_name {
-                                    self.errors.push(TypeError { severity: Severity::Error,
+                                    self.errors.push(TypeError {
+                                        severity: Severity::Error,
                                         span: embed.span,
                                         message: "Struct cannot embed itself".to_string(),
                                     });
                                     continue;
                                 }
                                 if !self.structs.contains_key(&embed_name) {
-                                    self.errors.push(TypeError { severity: Severity::Error,
+                                    self.errors.push(TypeError {
+                                        severity: Severity::Error,
                                         span: embed.span,
                                         message: format!(
                                             "Unknown embedded struct '{}'",
@@ -179,7 +183,8 @@ impl<'a> CheckContext<'a> {
                                 if fields.contains_key(&embed_name)
                                     || embed_names.contains(&embed_name)
                                 {
-                                    self.errors.push(TypeError { severity: Severity::Error,
+                                    self.errors.push(TypeError {
+                                        severity: Severity::Error,
                                         span: embed.span,
                                         message: format!(
                                             "Duplicate embedded struct '{}'",
@@ -252,12 +257,16 @@ impl<'a> CheckContext<'a> {
                             );
                         }
                     }
-                    ClassMember::PropertyHook { ty, name, modifiers, .. } => {
+                    ClassMember::PropertyHook {
+                        ty,
+                        name,
+                        modifiers,
+                        ..
+                    } => {
                         let field_name = token_text(self.source, name.span);
                         let field_name = field_name.trim_start_matches('$').to_string();
                         let is_mut = modifiers.iter().any(|token| {
-                            token_text(self.source, token.span)
-                                .eq_ignore_ascii_case("mut")
+                            token_text(self.source, token.span).eq_ignore_ascii_case("mut")
                         });
                         fields.insert(
                             field_name,
@@ -370,7 +379,11 @@ impl<'a> CheckContext<'a> {
                 .cloned()
                 .unwrap_or_default();
             let mut origins: HashMap<String, Vec<String>> = HashMap::new();
-            if let Some(embeds) = self.structs.get(&struct_name).map(|info| info.embeds.clone()) {
+            if let Some(embeds) = self
+                .structs
+                .get(&struct_name)
+                .map(|info| info.embeds.clone())
+            {
                 for embed in embeds {
                     let mut visited = HashSet::new();
                     self.collect_promoted_method_origins(
@@ -489,7 +502,8 @@ impl<'a> CheckContext<'a> {
                 };
                 let case_name = token_text(self.source, case_name.span);
                 if cases.contains_key(&case_name) {
-                    self.errors.push(TypeError { severity: Severity::Error,
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
                         span: *span,
                         message: format!("Duplicate enum case '{}::{}'", enum_name, case_name),
                     });
@@ -500,21 +514,24 @@ impl<'a> CheckContext<'a> {
                     let mut seen_params = HashSet::new();
                     for param in payload.iter() {
                         if param.by_ref {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span: param.span,
                                 message: "Enum case payload parameters cannot be by-reference"
                                     .to_string(),
                             });
                         }
                         if param.variadic {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span: param.span,
                                 message: "Enum case payload parameters cannot be variadic"
                                     .to_string(),
                             });
                         }
                         if param.default.is_some() {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span: param.span,
                                 message: "Enum case payload parameters cannot have default values"
                                     .to_string(),
@@ -528,7 +545,8 @@ impl<'a> CheckContext<'a> {
                             param.name.kind == TokenKind::Variable && !raw_name.starts_with('$');
                         let name = raw_name.trim_start_matches('$').to_string();
                         if !seen_params.insert(name.clone()) {
-                            self.errors.push(TypeError { severity: Severity::Error,
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
                                 span: param.span,
                                 message: format!(
                                     "Duplicate payload field '{}' on enum case {}::{}",
@@ -823,28 +841,32 @@ impl<'a> CheckContext<'a> {
             };
             let alias_name = token_text(self.source, name.span);
             if is_builtin_type_name(&alias_name) {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span: *span,
                     message: format!("Type alias '{}' shadows a builtin type", alias_name),
                 });
                 continue;
             }
             if self.structs.contains_key(&alias_name) {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span: *span,
                     message: format!("Type alias '{}' conflicts with struct name", alias_name),
                 });
                 continue;
             }
             if self.enums.contains_key(&alias_name) {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span: *span,
                     message: format!("Type alias '{}' conflicts with enum name", alias_name),
                 });
                 continue;
             }
             if self.type_aliases.contains_key(&alias_name) {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span: *span,
                     message: format!("Duplicate type alias '{}'", alias_name),
                 });
@@ -875,7 +897,8 @@ impl<'a> CheckContext<'a> {
         for param in params.iter() {
             let name = token_text(self.source, param.name.span);
             if !seen.insert(name.clone()) {
-                self.errors.push(TypeError { severity: Severity::Error,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
                     span: param.span,
                     message: format!("Duplicate type parameter '{}'", name),
                 });
@@ -896,16 +919,20 @@ impl<'a> CheckContext<'a> {
         (out, param_set)
     }
 
-    pub(in crate::phpx::typeck::check) fn check_call_signature(
+    pub(in crate::phpx::typeck::check) fn check_call_with_actuals(
         &mut self,
         func: ExprId<'a>,
-        args: &'a [crate::parser::ast::Arg<'a>],
+        actuals: &[CallActual<'a>],
+        span: Span,
         env: &HashMap<String, Type>,
     ) -> Type {
-        let Expr::Variable { span, .. } = *func else {
-            return Type::Unknown;
+        let Expr::Variable {
+            span: name_span, ..
+        } = *func
+        else {
+            return self.check_function_value_call(func, actuals, span, env);
         };
-        let name = token_text(self.source, span);
+        let name = token_text(self.source, name_span);
         if name.starts_with('$') {
             return Type::Unknown;
         }
@@ -918,7 +945,7 @@ impl<'a> CheckContext<'a> {
             && !self.allow_internal_bridge_call()
         {
             self.errors.push(TypeError { severity: Severity::Error,
-                span: Span::new(span.start, span.end),
+                span: Span::new(name_span.start, name_span.end),
                 message: format!(
                     "{} is internal-only; use `bridge kind.action(args)` from a host-granted stdlib package",
                     name
@@ -927,32 +954,87 @@ impl<'a> CheckContext<'a> {
             return Type::Unknown;
         }
         let Some(sig) = self.functions.get(&name) else {
-            return Type::Unknown;
+            return self.check_function_value_call(func, actuals, span, env);
         };
         let sig = sig.clone();
+        self.check_function_sig(&name, &sig, actuals, span, env)
+    }
 
+    fn check_function_value_call(
+        &mut self,
+        func: ExprId<'a>,
+        actuals: &[CallActual<'a>],
+        span: Span,
+        env: &HashMap<String, Type>,
+    ) -> Type {
+        match self.infer_expr_with_env(func, env) {
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                let required = params.len();
+                if actuals.len() < required {
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span,
+                        message: format!(
+                            "Missing arguments: expected at least {}, got {}",
+                            required,
+                            actuals.len()
+                        ),
+                    });
+                }
+                for (idx, actual) in actuals.iter().enumerate() {
+                    if actual.is_hole {
+                        continue;
+                    }
+                    if let Some(expected) = params.get(idx) {
+                        if !self.is_assignable(&actual.ty, expected) {
+                            self.errors.push(TypeError {
+                                severity: Severity::Error,
+                                span: actual.span,
+                                message: format!(
+                                    "Argument {} type mismatch: expected {}, got {}",
+                                    idx + 1,
+                                    expected,
+                                    actual.ty
+                                ),
+                            });
+                        }
+                    }
+                }
+                *return_type
+            }
+            _ => Type::Unknown,
+        }
+    }
+
+    fn check_function_sig(
+        &mut self,
+        name: &str,
+        sig: &FunctionSig,
+        actuals: &[CallActual<'a>],
+        span: Span,
+        env: &HashMap<String, Type>,
+    ) -> Type {
         let required = sig.params.iter().filter(|p| p.required).count();
-        if args.len() < required {
-            self.errors.push(TypeError { severity: Severity::Error,
-                span: Span::new(span.start, span.end),
+        if actuals.len() < required {
+            self.errors.push(TypeError {
+                severity: Severity::Error,
+                span,
                 message: format!(
                     "Missing arguments for {}(): expected at least {}, got {}",
                     name,
                     required,
-                    args.len()
+                    actuals.len()
                 ),
             });
-        }
-
-        let mut actuals = Vec::new();
-        for arg in args.iter() {
-            actuals.push(self.infer_expr_with_env(arg.value, env));
         }
 
         let mut inferred = HashMap::new();
         if !sig.type_params.is_empty() {
             let mut idx = 0;
-            while idx < args.len() {
+            while idx < actuals.len() {
                 let param_ty = if idx >= sig.params.len() {
                     if sig.variadic {
                         sig.params.last().and_then(|p| p.ty.as_ref())
@@ -963,15 +1045,18 @@ impl<'a> CheckContext<'a> {
                     sig.params[idx].ty.as_ref()
                 };
                 if let Some(param_ty) = param_ty {
-                    self.infer_type_params(param_ty, &actuals[idx], &mut inferred);
+                    if !actuals[idx].is_hole {
+                        self.infer_type_params(param_ty, &actuals[idx].ty, &mut inferred);
+                    }
                 }
                 idx += 1;
             }
 
             for param in sig.type_params.iter() {
                 if !inferred.contains_key(&param.name) {
-                    self.errors.push(TypeError { severity: Severity::Error,
-                        span: Span::new(span.start, span.end),
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span,
                         message: format!(
                             "Unable to infer type parameter '{}' for {}()",
                             param.name, name
@@ -986,8 +1071,9 @@ impl<'a> CheckContext<'a> {
                 };
                 if let Some(constraint) = &param.constraint {
                     if !self.is_assignable(inferred_ty, constraint) {
-                        self.errors.push(TypeError { severity: Severity::Error,
-                            span: Span::new(span.start, span.end),
+                        self.errors.push(TypeError {
+                            severity: Severity::Error,
+                            span,
                             message: format!(
                                 "Type argument for '{}' does not satisfy constraint {}",
                                 param.name, constraint
@@ -999,7 +1085,12 @@ impl<'a> CheckContext<'a> {
         }
 
         let mut idx = 0;
-        while idx < args.len() {
+        while idx < actuals.len() {
+            let actual = &actuals[idx];
+            if actual.is_hole {
+                idx += 1;
+                continue;
+            }
             let param_ty = if idx >= sig.params.len() {
                 if sig.variadic {
                     sig.params.last().and_then(|p| p.ty.as_ref())
@@ -1011,34 +1102,39 @@ impl<'a> CheckContext<'a> {
             };
             if let Some(param_ty) = param_ty {
                 let expected = substitute_type(param_ty, &inferred);
-                if matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
+                if matches!(actual.ty, Type::Primitive(PrimitiveType::Null))
                     && self.strict_null
                     && !self.type_allows_null(&expected)
                 {
-                    self.errors.push(TypeError { severity: Severity::Error,
-                        span: args[idx].span,
-                        message: "Null is not allowed in DekaScript; use Option<T> instead".to_string(),
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span: actual.span,
+                        message: "Null is not allowed in DekaScript; use Option<T> instead"
+                            .to_string(),
                     });
                 }
-                if let Expr::ObjectLiteral { items, span } = *args[idx].value {
-                    self.check_object_literal_against_type(items, &expected, span, env);
+                if let Some(value) = actual.value {
+                    if let Expr::ObjectLiteral { items, span } = *value {
+                        self.check_object_literal_against_type(items, &expected, span, env);
+                    }
                 }
-                if !self.is_assignable(&actuals[idx], &expected) {
-                    self.errors.push(TypeError { severity: Severity::Error,
-                        span: args[idx].span,
+                if !self.is_assignable(&actual.ty, &expected) {
+                    self.errors.push(TypeError {
+                        severity: Severity::Error,
+                        span: actual.span,
                         message: format!(
                             "Argument {} type mismatch: expected {}, got {}",
                             idx + 1,
                             expected,
-                            actuals[idx]
+                            actual.ty
                         ),
                     });
                 }
-            } else if self.strict_null
-                && matches!(actuals[idx], Type::Primitive(PrimitiveType::Null))
+            } else if self.strict_null && matches!(actual.ty, Type::Primitive(PrimitiveType::Null))
             {
-                self.errors.push(TypeError { severity: Severity::Error,
-                    span: args[idx].span,
+                self.errors.push(TypeError {
+                    severity: Severity::Error,
+                    span: actual.span,
                     message: "Null is not allowed in DekaScript; use Option<T> instead".to_string(),
                 });
             }
