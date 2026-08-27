@@ -1820,6 +1820,21 @@ echo(\"hello\");
 }
 
 #[test]
+fn ds_rejects_php_echo_statement_without_call_parens() {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(b"echo \"hello\";"), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|error| error.message == "echo is not part of DekaScript"),
+        "expected PHP echo-statement rejection, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
 fn php_still_lexes_echo_as_keyword() {
     let mut lexer = Lexer::new(b"<?php echo 1;");
     let mut kinds = Vec::new();
