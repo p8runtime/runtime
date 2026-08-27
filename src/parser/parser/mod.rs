@@ -72,6 +72,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     pub fn new_with_mode(mut lexer: Lexer<'src>, arena: &'ast Bump, mode: ParserMode) -> Self {
         if mode == ParserMode::Ds {
             lexer.start_in_scripting();
+            lexer.set_ds_ident_mode(true);
         }
         let mut parser = Self {
             lexer,
