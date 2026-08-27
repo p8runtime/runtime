@@ -41,6 +41,33 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             return self.parse_ds_let();
         }
 
+        // `echo` / `print` are identifiers (import { echo }, echo("hello")),
+        // but PHP `echo "hello"` is not a DekaScript statement.
+        if self.is_ds()
+            && self.current_token.kind == TokenKind::Identifier
+            && (self.token_eq_ident(&self.current_token, b"echo")
+                || self.token_eq_ident(&self.current_token, b"print"))
+            && self.next_token.kind != TokenKind::OpenParen
+        {
+            let span = self.current_token.span;
+            self.errors.push(ParseError::with_help(
+                span,
+                "echo is not part of DekaScript",
+                "Import the function: `import { echo } from \"io\"` and call `echo(\"hello\")`.",
+            ));
+            self.bump();
+            while self.current_token.kind != TokenKind::SemiColon
+                && self.current_token.kind != TokenKind::Eof
+                && self.current_token.kind != TokenKind::CloseBrace
+            {
+                self.bump();
+            }
+            if self.current_token.kind == TokenKind::SemiColon {
+                self.bump();
+            }
+            return self.arena.alloc(crate::parser::ast::Stmt::Error { span });
+        }
+
         if self.is_ds()
             && self.current_token.kind == TokenKind::Identifier
             && self.token_eq_ident(&self.current_token, b"impl")
@@ -357,7 +384,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     self.errors.push(ParseError::with_help(
                         self.current_token.span,
                         "echo is not part of DekaScript",
-                        "Return a value from a function or use an explicit output module.",
+                        "Import the function: `import { echo } from \"io\"` and call `echo(\"hello\")`.",
                     ));
                 }
                 self.parse_echo()

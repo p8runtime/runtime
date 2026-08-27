@@ -68,7 +68,7 @@ fn ds_parses_let_and_for_of_without_php_foreach() {
 
 #[test]
 fn phpx_allows_automatic_semicolons() {
-    let code = "$a = 1\n$b = 2\necho $a\n";
+    let code = "const a = 1\nconst b = 2\nconst c = a\n";
     let arena = Bump::new();
     let mut parser = Parser::new_with_mode(Lexer::new(code.as_bytes()), &arena, ParserMode::Ds);
     let program = parser.parse_program();
@@ -1767,6 +1767,93 @@ export { answer, greeting as hi };
     }
     assert_eq!(imports, 1);
     assert_eq!(exports, 3);
+}
+
+#[test]
+fn ds_treats_echo_as_identifier_for_import_export_and_call() {
+    let arena = Bump::new();
+    let source = b"
+import { echo } from 'io';
+export fn echo(message: string) {
+  echo(message);
+}
+echo(\"hello\");
+";
+    let mut parser = Parser::new_with_mode(Lexer::new(source), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program.errors.is_empty(),
+        "unexpected errors: {:?}",
+        program.errors
+    );
+
+    let mut saw_import_echo = false;
+    let mut saw_export_echo = false;
+    for stmt in program.statements {
+        match **stmt {
+            Stmt::Import { ref specs, .. } => {
+                assert_eq!(specs.len(), 1);
+                assert_eq!(
+                    std::str::from_utf8(specs[0].remote.text(source)).unwrap(),
+                    "echo"
+                );
+                saw_import_echo = true;
+            }
+            Stmt::Export {
+                item: ExportItem::Decl(decl),
+                ..
+            } => match *decl {
+                Stmt::Function { name, .. } => {
+                    assert_eq!(
+                        std::str::from_utf8(&source[name.span.start..name.span.end]).unwrap(),
+                        "echo"
+                    );
+                    saw_export_echo = true;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    assert!(saw_import_echo, "expected import {{ echo }}");
+    assert!(saw_export_echo, "expected export fn echo");
+}
+
+#[test]
+fn ds_rejects_php_echo_statement_without_call_parens() {
+    let arena = Bump::new();
+    let mut parser = Parser::new_with_mode(Lexer::new(b"echo \"hello\";"), &arena, ParserMode::Ds);
+    let program = parser.parse_program();
+    assert!(
+        program
+            .errors
+            .iter()
+            .any(|error| error.message == "echo is not part of DekaScript"),
+        "expected PHP echo-statement rejection, got: {:?}",
+        program.errors
+    );
+}
+
+#[test]
+fn php_still_lexes_echo_as_keyword() {
+    let mut lexer = Lexer::new(b"<?php echo 1;");
+    let mut kinds = Vec::new();
+    while let Some(tok) = lexer.next() {
+        if tok.kind != TokenKind::OpenTag {
+            kinds.push(tok.kind);
+        }
+        if tok.kind == TokenKind::Echo {
+            break;
+        }
+        if kinds.len() > 16 {
+            break;
+        }
+    }
+    assert!(
+        kinds.contains(&TokenKind::Echo),
+        "PHP mode must keep echo as T_ECHO, got {:?}",
+        kinds
+    );
 }
 
 #[test]

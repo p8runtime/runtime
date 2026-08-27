@@ -136,6 +136,10 @@ pub struct Lexer<'src> {
     cursor: usize,
     state_stack: Vec<LexerState>,
     mode: LexerMode,
+    /// When true, PHP output keywords `echo` / `print` lex as identifiers so
+    /// DekaScript can `import { echo }` / `export fn echo` (RFD 32). PHP mode
+    /// keeps `TokenKind::Echo` / `Print`.
+    ds_ident_mode: bool,
 }
 
 impl<'src> Lexer<'src> {
@@ -154,12 +158,17 @@ impl<'src> Lexer<'src> {
             cursor,
             state_stack: vec![LexerState::Initial],
             mode: LexerMode::Standard,
+            ds_ident_mode: false,
         }
     }
 
     pub fn start_in_scripting(&mut self) {
         self.state_stack.clear();
         self.state_stack.push(LexerState::Scripting);
+    }
+
+    pub fn set_ds_ident_mode(&mut self, enabled: bool) {
+        self.ds_ident_mode = enabled;
     }
 
     pub fn set_mode(&mut self, mode: LexerMode) {
@@ -1680,6 +1689,13 @@ impl<'src> Iterator for Lexer<'src> {
                     } else {
                         keyword_lookup(&text.to_ascii_lowercase())
                     };
+
+                    if self.ds_ident_mode {
+                        kind = match kind {
+                            TokenKind::Echo | TokenKind::Print => TokenKind::Identifier,
+                            other => other,
+                        };
+                    }
 
                     match kind {
                         TokenKind::Yield => {
