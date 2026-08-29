@@ -585,7 +585,7 @@ fn parse_grant_json(raw: &str) -> Vec<LoadedGrant> {
         .collect()
 }
 
-/// Filesystem-graph digest, same shape as `modules_php::integrity` fs_graph.
+/// Filesystem-graph digest, same shape as `deka_host::integrity` fs_graph.
 pub(crate) fn package_fs_digest(root: &Path) -> Result<String, String> {
     let mut files = Vec::new();
     collect_files(root, root, &mut files)?;

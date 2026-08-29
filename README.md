@@ -5,7 +5,7 @@ Core PHP/PHPX runtime crate used by the Deka MVP workspace.
 ## Scope in MVP
 
 - Provides parser, VM, builtins, runtime context, and PHPX-facing internals.
-- Consumed by workspace crates like `modules_php` and `cli`.
+- Consumed by workspace crates like `deka_host` and `cli`.
 - Maintained as a runtime library first.
 
 ## Build
