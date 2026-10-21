@@ -83,8 +83,29 @@ impl PartialEq for ArrayData {
     }
 }
 
+/// Reference to a heap slot. The generation distinguishes successive values
+/// stored in the same slot, so a handle that outlived its value is detected
+/// instead of silently reading whatever reused the slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Handle(pub u32);
+pub struct Handle {
+    index: u32,
+    generation: u32,
+}
+
+impl Handle {
+    pub(crate) fn new(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
+
+    /// Slot index (stable for the value's lifetime; used for object ids).
+    pub fn index(self) -> u32 {
+        self.index
+    }
+
+    pub(crate) fn generation(self) -> u32 {
+        self.generation
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Symbol(pub u32); // Interned String

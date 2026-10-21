@@ -83,7 +83,7 @@ pub fn php_spl_object_hash(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         }
     };
 
-    let hash = format!("{:016x}", object_handle.0);
+    let hash = format!("{:016x}", object_handle.index());
     let hash_bytes = Rc::new(hash.into_bytes());
     Ok(vm.arena.alloc(Val::String(hash_bytes)))
 }

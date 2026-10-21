@@ -147,8 +147,10 @@ impl Traceable for Zval {
 /// Collection traces from a provided root set and frees unreachable slots.
 #[derive(Debug)]
 pub struct GcHeap {
-    /// Zval storage indexed by Handle(u32); `None` = freed slot
+    /// Zval storage indexed by `Handle::index`; `None` = freed slot
     storage: Vec<Option<Zval>>,
+    /// Current generation per slot; bumped each time a freed slot is reused
+    generations: Vec<u32>,
     /// Free slot indices for reuse
     free_slots: Vec<usize>,
     /// Mark bits (one per slot)
@@ -165,6 +167,7 @@ impl GcHeap {
     pub fn new() -> Self {
         Self {
             storage: Vec::with_capacity(1024),
+            generations: Vec::with_capacity(1024),
             free_slots: Vec::new(),
             marks: Vec::with_capacity(1024),
             alloc_debt: 0,
@@ -185,34 +188,49 @@ impl GcHeap {
         if let Some(idx) = self.free_slots.pop() {
             self.storage[idx] = Some(zval);
             self.marks[idx] = false;
-            return Handle(idx as u32);
+            self.generations[idx] = self.generations[idx].wrapping_add(1);
+            return Handle::new(idx as u32, self.generations[idx]);
         }
 
         let idx = self.storage.len();
         self.storage.push(Some(zval));
+        self.generations.push(0);
         self.marks.push(false);
-        Handle(idx as u32)
+        Handle::new(idx as u32, 0)
+    }
+
+    /// Slot index of `h` if it still refers to the value it was issued for.
+    fn live_index(&self, h: Handle) -> Option<usize> {
+        let idx = h.index() as usize;
+        match (self.storage.get(idx), self.generations.get(idx)) {
+            (Some(Some(_)), Some(&generation)) if generation == h.generation() => Some(idx),
+            _ => None,
+        }
     }
 
     /// # Panics
-    /// Panics if the handle refers to a collected slot.
+    /// Panics if the handle's value was collected, even if the slot has
+    /// since been reused.
     pub fn get(&self, h: Handle) -> &Zval {
-        self.storage[h.0 as usize]
-            .as_ref()
-            .expect("use-after-free: handle refers to collected slot")
+        match self.live_index(h) {
+            Some(idx) => self.storage[idx].as_ref().unwrap(),
+            None => stale_handle(h),
+        }
     }
 
     /// # Panics
-    /// Panics if the handle refers to a collected slot.
+    /// Panics if the handle's value was collected, even if the slot has
+    /// since been reused.
     pub fn get_mut(&mut self, h: Handle) -> &mut Zval {
-        self.storage[h.0 as usize]
-            .as_mut()
-            .expect("use-after-free: handle refers to collected slot")
+        match self.live_index(h) {
+            Some(idx) => self.storage[idx].as_mut().unwrap(),
+            None => stale_handle(h),
+        }
     }
 
-    /// Whether `h` refers to a live (not collected) slot.
+    /// Whether `h` still refers to the value it was issued for.
     pub fn is_live(&self, h: Handle) -> bool {
-        matches!(self.storage.get(h.0 as usize), Some(Some(_)))
+        self.live_index(h).is_some()
     }
 
     /// Number of live values.
@@ -238,8 +256,11 @@ impl GcHeap {
 
         let mut worklist: Vec<Handle> = roots.to_vec();
         while let Some(h) = worklist.pop() {
-            let idx = h.0 as usize;
-            if idx >= self.marks.len() || self.marks[idx] {
+            let Some(idx) = self.live_index(h) else {
+                debug_assert!(false, "GC root or edge is a stale handle: {h:?}");
+                continue;
+            };
+            if self.marks[idx] {
                 continue;
             }
             self.marks[idx] = true;
@@ -247,7 +268,7 @@ impl GcHeap {
             if let Some(zval) = &self.storage[idx] {
                 let marks = &self.marks;
                 zval.trace_handles(&mut |child| {
-                    let child_idx = child.0 as usize;
+                    let child_idx = child.index() as usize;
                     if child_idx < marks.len() && !marks[child_idx] {
                         worklist.push(child);
                     }
@@ -276,6 +297,12 @@ impl GcHeap {
 
         collected
     }
+}
+
+#[cold]
+#[inline(never)]
+fn stale_handle(h: Handle) -> ! {
+    panic!("use-after-free: {h:?} refers to a collected value")
 }
 
 impl Default for GcHeap {
@@ -398,7 +425,7 @@ mod tests {
 
         // Allocate new values - should reuse freed slots
         let h4 = heap.alloc(Val::Int(4));
-        assert!(h4.0 < 3); // Should reuse slot 0 or 1
+        assert!(h4.index() < 3); // Should reuse slot 0 or 1
     }
 
     #[test]
@@ -507,5 +534,23 @@ mod tests {
         assert!(heap.is_live(bound_this));
         assert!(heap.is_live(static_var));
         assert!(!heap.is_live(garbage));
+    }
+
+    #[test]
+    fn stale_handle_to_reused_slot_is_detected() {
+        let mut heap = GcHeap::new();
+        let old = heap.alloc(Val::Int(1));
+        assert_eq!(heap.collect(&[]), 1);
+        let new = heap.alloc(Val::Int(2));
+        assert_eq!(old.index(), new.index(), "slot should be reused");
+        assert!(!heap.is_live(old));
+        assert!(heap.is_live(new));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| heap.get(old).value.clone()));
+        assert!(
+            result.is_err(),
+            "stale handle must not read the reused slot"
+        );
+        assert_eq!(heap.get(new).value, Val::Int(2));
     }
 }
