@@ -120,6 +120,18 @@ impl std::fmt::Debug for CondResource {
 // Volatile (Thread-safe shared state)
 // ============================================================================
 
+/// Trace handles held by a resource (for the garbage collector).
+/// Only Volatile resources hold VM handles.
+pub(crate) fn trace_resource(res: &dyn Any, tracer: &mut dyn FnMut(Handle)) {
+    if let Some(volatile) = res.downcast_ref::<VolatileResource>()
+        && let Ok(data) = volatile.data.read()
+    {
+        for h in data.values() {
+            tracer(*h);
+        }
+    }
+}
+
 /// Volatile resource for thread-safe shared data
 struct VolatileResource {
     data: Arc<RwLock<HashMap<String, Handle>>>,

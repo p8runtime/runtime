@@ -24,6 +24,11 @@ impl Stack {
         self.values.len()
     }
 
+    /// All handles on the stack (GC roots).
+    pub fn handles(&self) -> &[Handle] {
+        &self.values
+    }
+
     pub fn peek(&self) -> Option<Handle> {
         self.values.last().copied()
     }

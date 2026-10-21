@@ -49,7 +49,7 @@
 //! - Zend Compile: `$PHP_SRC_PATH/Zend/zend_compile.c` - Visibility rules
 
 use crate::compiler::chunk::{ClosureData, CodeChunk, ReturnType, UserFunc};
-use crate::core::heap::Arena;
+use crate::core::gc::{GcHeap, Traceable, trace_call_frame, trace_user_func};
 use crate::core::value::{ArrayData, ArrayKey, Handle, ObjectData, Symbol, Val, Visibility};
 use crate::runtime::context::{
     AttributeInstance, ClassConstEntry, ClassDef, EngineContext, EnumBackedType, MethodEntry,
@@ -310,7 +310,10 @@ const SUPERGLOBAL_SPECS: &[(SuperglobalKind, &[u8])] = &[
 ];
 
 pub struct VM {
-    pub arena: Arena,
+    pub arena: GcHeap,
+    /// Nesting depth of `run_loop`; garbage is collected only at depth 1,
+    /// where no native code holds handles on the Rust stack.
+    gc_run_depth: usize,
     pub operand_stack: Stack,
     pub frames: Vec<CallFrame>,
     pub context: RequestContext,
@@ -369,7 +372,8 @@ impl VM {
             eprintln!("[php-vm] include tracing enabled");
         }
         let mut vm = Self {
-            arena: Arena::new(),
+            arena: GcHeap::new(),
+            gc_run_depth: 0,
             operand_stack: Stack::new(),
             frames: Vec::new(),
             context: RequestContext::new(engine_context),
@@ -778,7 +782,8 @@ impl VM {
             eprintln!("[php-vm] include tracing enabled");
         }
         let mut vm = Self {
-            arena: Arena::new(),
+            arena: GcHeap::new(),
+            gc_run_depth: 0,
             operand_stack: Stack::new(),
             frames: Vec::new(),
             context,
@@ -2979,6 +2984,96 @@ impl VM {
     }
 
     fn run_loop(&mut self, target_depth: usize) -> Result<(), VmError> {
+        self.gc_run_depth += 1;
+        let result = self.run_loop_inner(target_depth);
+        self.gc_run_depth -= 1;
+        result
+    }
+
+    /// Collect every handle reachable from VM state outside the heap.
+    fn collect_gc_roots(&self) -> Vec<Handle> {
+        let mut roots = Vec::with_capacity(
+            self.operand_stack.len() + self.frames.len() * 16 + self.context.globals.len() + 32,
+        );
+        let mut push = |h: Handle| roots.push(h);
+
+        for h in self.operand_stack.handles() {
+            push(*h);
+        }
+        for frame in &self.frames {
+            trace_call_frame(frame, &mut push);
+        }
+        for h in self.context.globals.values() {
+            push(*h);
+        }
+        for h in [self.last_return_value, self.finally_return_value]
+            .into_iter()
+            .flatten()
+        {
+            push(h);
+        }
+        for pc in &self.pending_calls {
+            for h in [pc.func_handle, pc.this_handle].into_iter().flatten() {
+                push(h);
+            }
+            for h in pc.args.iter() {
+                push(*h);
+            }
+        }
+        for h in &self.context.autoloaders {
+            push(*h);
+        }
+        for buf in &self.output_buffers {
+            if let Some(h) = buf.handler {
+                push(h);
+            }
+        }
+        for val in self.context.constants.values() {
+            val.trace_handles(&mut push);
+        }
+        for func in self.context.user_functions.values() {
+            trace_user_func(func, &mut push);
+        }
+        for class_def in self.context.classes.values() {
+            for entry in class_def.constants.values() {
+                entry.value.trace_handles(&mut push);
+            }
+            for entry in class_def.static_properties.values() {
+                entry.value.trace_handles(&mut push);
+            }
+            for method in class_def.methods.values() {
+                trace_user_func(&method.func, &mut push);
+            }
+            for case in &class_def.enum_cases {
+                push(case.handle);
+            }
+        }
+        roots
+    }
+
+    /// Collect unreachable values when allocation debt warrants it. Runs only
+    /// from the outermost execution loop: nested loops (callbacks from
+    /// builtins, autoload, include) may have native callers holding handles
+    /// that are not roots.
+    pub fn collect_garbage(&mut self) {
+        if self.gc_run_depth != 1 || !self.arena.should_collect() {
+            return;
+        }
+        let roots = self.collect_gc_roots();
+        self.arena.collect(&roots);
+        // Weak maps: they name or flag values but never keep them alive.
+        let arena = &self.arena;
+        self.var_handle_map.retain(|h, _| arena.is_live(*h));
+        self.pending_undefined.retain(|h, _| arena.is_live(*h));
+        if let Some(core) = self
+            .context
+            .get_extension_data_mut::<crate::runtime::core_extension::CoreExtensionData>()
+        {
+            core.array_pointers.retain(|h, _| arena.is_live(*h));
+        }
+    }
+
+    fn run_loop_inner(&mut self, target_depth: usize) -> Result<(), VmError> {
         const TIMEOUT_CHECK_INTERVAL: u64 = 1000; // Check every 1000 instructions
         let mut instructions_until_timeout_check = TIMEOUT_CHECK_INTERVAL;
         const MEMORY_CHECK_INTERVAL: u64 = 5000; // Check every 5000 instructions (less frequent)
@@ -2987,6 +3082,8 @@ impl VM {
         while self.frames.len() > target_depth {
             // Increment opcode counter for profiling
             self.opcodes_executed += 1;
+
+            self.collect_garbage();
 
             // Periodically check execution timeout (countdown is faster than modulo)
             instructions_until_timeout_check -= 1;
