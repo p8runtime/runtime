@@ -24,6 +24,38 @@ pub enum TestResult {
 /// Output kept per test run; anything past this is discarded.
 const MAX_OUTPUT: usize = 1 << 20;
 
+/// The settings php-src's run-tests.php gives every test (its
+/// `$ini_overwrites`); a test's --INI-- section comes after and wins.
+const RUN_TESTS_INI: &[(&str, &str)] = &[
+    ("output_handler", ""),
+    ("open_basedir", ""),
+    ("disable_functions", ""),
+    ("output_buffering", "Off"),
+    ("error_reporting", "32767"),
+    ("display_errors", "1"),
+    ("display_startup_errors", "1"),
+    ("log_errors", "0"),
+    ("html_errors", "0"),
+    ("track_errors", "0"),
+    ("report_memleaks", "1"),
+    ("report_zend_debug", "0"),
+    ("docref_root", ""),
+    ("docref_ext", ".html"),
+    ("error_prepend_string", ""),
+    ("error_append_string", ""),
+    ("auto_prepend_file", ""),
+    ("auto_append_file", ""),
+    ("ignore_repeated_errors", "0"),
+    ("precision", "14"),
+    ("serialize_precision", "-1"),
+    ("memory_limit", "128M"),
+    ("zend.assertions", "1"),
+    ("zend.exception_ignore_args", "0"),
+    ("zend.exception_string_param_max_len", "15"),
+    ("short_open_tag", "0"),
+    ("date.timezone", "UTC"),
+];
+
 pub struct PhptExecutor {
     php: PathBuf,
     timeout: Duration,
@@ -153,6 +185,11 @@ impl PhptExecutor {
     fn spawn(&self, test: &PhptTest, path: &Path) -> Result<Output, String> {
         let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&self.php);
+        let dir = path.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        let section = test.sections.ini.iter().map(|(k, v)| (k.as_str(), v.as_str()));
+        for (name, value) in RUN_TESTS_INI.iter().copied().chain(section) {
+            cmd.arg("-d").arg(format!("{}={}", name, value.replace("{PWD}", &dir)));
+        }
         cmd.arg(path)
             .stdin(Stdio::null())
             .stdout(writer.try_clone().map_err(|e| e.to_string())?)
