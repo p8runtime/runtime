@@ -1285,29 +1285,29 @@ impl<'src> Emitter<'src> {
                                 false
                             };
 
-                            if is_static_prop {
-                                if let Expr::Variable { span, .. } = class {
-                                    let name = &self.resolve_class_name(self.raw_text(*span));
-                                    if !name.starts_with(b"$") {
-                                        let idx =
-                                            self.add_constant(Val::String(name.to_vec().into()));
-                                        self.chunk.code.push(OpCode::Const(idx as u16));
-                                    } else {
-                                        let sym = self.interner.intern(&name[1..]);
-                                        self.chunk.code.push(OpCode::LoadVar(sym));
-                                    }
+                            if is_static_prop
+                                && let Expr::Variable { span, .. } = class
+                            {
+                                let name = &self.resolve_class_name(self.raw_text(*span));
+                                if !name.starts_with(b"$") {
+                                    let idx =
+                                        self.add_constant(Val::String(name.to_vec().into()));
+                                    self.chunk.code.push(OpCode::Const(idx as u16));
+                                } else {
+                                    let sym = self.interner.intern(&name[1..]);
+                                    self.chunk.code.push(OpCode::LoadVar(sym));
+                                }
 
-                                    if let Expr::Variable {
-                                        span: prop_span, ..
-                                    } = constant
-                                    {
-                                        let prop_name = self.get_text(*prop_span);
-                                        let idx = self.add_constant(Val::String(
-                                            prop_name[1..].to_vec().into(),
-                                        ));
-                                        self.chunk.code.push(OpCode::Const(idx as u16));
-                                        self.chunk.code.push(OpCode::UnsetStaticProp);
-                                    }
+                                if let Expr::Variable {
+                                    span: prop_span, ..
+                                } = constant
+                                {
+                                    let prop_name = self.get_text(*prop_span);
+                                    let idx = self.add_constant(Val::String(
+                                        prop_name[1..].to_vec().into(),
+                                    ));
+                                    self.chunk.code.push(OpCode::Const(idx as u16));
+                                    self.chunk.code.push(OpCode::UnsetStaticProp);
                                 }
                             }
                         }
@@ -3877,90 +3877,90 @@ impl<'src> Emitter<'src> {
                         }
                     }
                     Expr::ClassConstFetch {
-                        class, constant, ..
+                        class: Expr::Variable { span, .. },
+                        constant,
+                        ..
                     } => {
-                        if let Expr::Variable { span, .. } = class {
-                            let class_name = &self.resolve_class_name(self.raw_text(*span));
-                            if !class_name.starts_with(b"$") {
-                                let class_sym = self.interner.intern(class_name);
+                        let class_name = &self.resolve_class_name(self.raw_text(*span));
+                        if !class_name.starts_with(b"$") {
+                            let class_sym = self.interner.intern(class_name);
 
-                                if let Expr::Variable {
-                                    span: const_span, ..
-                                } = constant
-                                {
-                                    let const_name = self.get_text(*const_span);
-                                    if const_name.starts_with(b"$") {
-                                        let prop_name = &const_name[1..];
-                                        let prop_sym = self.interner.intern(prop_name);
+                            if let Expr::Variable {
+                                span: const_span, ..
+                            } = constant
+                            {
+                                let const_name = self.get_text(*const_span);
+                                if const_name.starts_with(b"$") {
+                                    let prop_name = &const_name[1..];
+                                    let prop_sym = self.interner.intern(prop_name);
 
-                                        if let AssignOp::Coalesce = op {
-                                            let idx = self.add_constant(Val::String(
-                                                class_name.to_vec().into(),
-                                            ));
-                                            self.chunk.code.push(OpCode::Const(idx as u16));
-                                            self.chunk.code.push(OpCode::IssetStaticProp(prop_sym));
+                                    if let AssignOp::Coalesce = op {
+                                        let idx = self.add_constant(Val::String(
+                                            class_name.to_vec().into(),
+                                        ));
+                                        self.chunk.code.push(OpCode::Const(idx as u16));
+                                        self.chunk.code.push(OpCode::IssetStaticProp(prop_sym));
 
-                                            let jump_idx = self.chunk.code.len();
-                                            self.chunk.code.push(OpCode::JmpIfFalse(0));
-
-                                            self.chunk
-                                                .code
-                                                .push(OpCode::FetchStaticProp(class_sym, prop_sym));
-                                            let jump_end_idx = self.chunk.code.len();
-                                            self.chunk.code.push(OpCode::Jmp(0));
-
-                                            let label_assign = self.chunk.code.len();
-                                            self.chunk.code[jump_idx] =
-                                                OpCode::JmpIfFalse(label_assign as u32);
-
-                                            self.emit_expr(expr);
-                                            self.chunk.code.push(OpCode::AssignStaticProp(
-                                                class_sym, prop_sym,
-                                            ));
-
-                                            let label_end = self.chunk.code.len();
-                                            self.chunk.code[jump_end_idx] =
-                                                OpCode::Jmp(label_end as u32);
-                                            return;
-                                        }
+                                        let jump_idx = self.chunk.code.len();
+                                        self.chunk.code.push(OpCode::JmpIfFalse(0));
 
                                         self.chunk
                                             .code
                                             .push(OpCode::FetchStaticProp(class_sym, prop_sym));
+                                        let jump_end_idx = self.chunk.code.len();
+                                        self.chunk.code.push(OpCode::Jmp(0));
+
+                                        let label_assign = self.chunk.code.len();
+                                        self.chunk.code[jump_idx] =
+                                            OpCode::JmpIfFalse(label_assign as u32);
+
                                         self.emit_expr(expr);
+                                        self.chunk.code.push(OpCode::AssignStaticProp(
+                                            class_sym, prop_sym,
+                                        ));
 
-                                        match op {
-                                            AssignOp::Plus => self.chunk.code.push(OpCode::Add),
-                                            AssignOp::Minus => self.chunk.code.push(OpCode::Sub),
-                                            AssignOp::Mul => self.chunk.code.push(OpCode::Mul),
-                                            AssignOp::Div => self.chunk.code.push(OpCode::Div),
-                                            AssignOp::Mod => self.chunk.code.push(OpCode::Mod),
-                                            AssignOp::Concat => {
-                                                self.chunk.code.push(OpCode::Concat)
-                                            }
-                                            AssignOp::Pow => self.chunk.code.push(OpCode::Pow),
-                                            AssignOp::BitAnd => {
-                                                self.chunk.code.push(OpCode::BitwiseAnd)
-                                            }
-                                            AssignOp::BitOr => {
-                                                self.chunk.code.push(OpCode::BitwiseOr)
-                                            }
-                                            AssignOp::BitXor => {
-                                                self.chunk.code.push(OpCode::BitwiseXor)
-                                            }
-                                            AssignOp::ShiftLeft => {
-                                                self.chunk.code.push(OpCode::ShiftLeft)
-                                            }
-                                            AssignOp::ShiftRight => {
-                                                self.chunk.code.push(OpCode::ShiftRight)
-                                            }
-                                            _ => {}
-                                        }
-
-                                        self.chunk
-                                            .code
-                                            .push(OpCode::AssignStaticProp(class_sym, prop_sym));
+                                        let label_end = self.chunk.code.len();
+                                        self.chunk.code[jump_end_idx] =
+                                            OpCode::Jmp(label_end as u32);
+                                        return;
                                     }
+
+                                    self.chunk
+                                        .code
+                                        .push(OpCode::FetchStaticProp(class_sym, prop_sym));
+                                    self.emit_expr(expr);
+
+                                    match op {
+                                        AssignOp::Plus => self.chunk.code.push(OpCode::Add),
+                                        AssignOp::Minus => self.chunk.code.push(OpCode::Sub),
+                                        AssignOp::Mul => self.chunk.code.push(OpCode::Mul),
+                                        AssignOp::Div => self.chunk.code.push(OpCode::Div),
+                                        AssignOp::Mod => self.chunk.code.push(OpCode::Mod),
+                                        AssignOp::Concat => {
+                                            self.chunk.code.push(OpCode::Concat)
+                                        }
+                                        AssignOp::Pow => self.chunk.code.push(OpCode::Pow),
+                                        AssignOp::BitAnd => {
+                                            self.chunk.code.push(OpCode::BitwiseAnd)
+                                        }
+                                        AssignOp::BitOr => {
+                                            self.chunk.code.push(OpCode::BitwiseOr)
+                                        }
+                                        AssignOp::BitXor => {
+                                            self.chunk.code.push(OpCode::BitwiseXor)
+                                        }
+                                        AssignOp::ShiftLeft => {
+                                            self.chunk.code.push(OpCode::ShiftLeft)
+                                        }
+                                        AssignOp::ShiftRight => {
+                                            self.chunk.code.push(OpCode::ShiftRight)
+                                        }
+                                        _ => {}
+                                    }
+
+                                    self.chunk
+                                        .code
+                                        .push(OpCode::AssignStaticProp(class_sym, prop_sym));
                                 }
                             }
                         }
