@@ -199,12 +199,21 @@ fn prop(vm: &mut VM, ex: Handle, name: &[u8]) -> Option<Handle> {
 }
 
 fn trace_string(vm: &mut VM, ex: Handle) -> String {
-    let mut out = String::new();
-    let mut n = 0;
     let frames: Vec<Handle> = match prop(vm, ex, b"trace").map(|h| vm.arena.get(h).value.clone()) {
         Some(Val::Array(arr)) => arr.map.values().copied().collect(),
         _ => Vec::new(),
     };
+    let mut out = trace_lines(vm, &frames);
+    out.push_str(&format!("#{} {{main}}", frames.len()));
+    out
+}
+
+/// "#N file(line): Class->function(args)" for each backtrace entry, as
+/// getTraceAsString() and debug_print_backtrace() print them.
+pub(crate) fn trace_lines(vm: &mut VM, frames: &[Handle]) -> String {
+    let mut out = String::new();
+    let mut n = 0;
+    let frames = frames.to_vec();
     for frame in frames {
         let Val::Array(entry) = vm.arena.get(frame).value.clone() else { continue };
         let get = |key: &[u8]| entry.map.get(&crate::core::value::ArrayKey::Str(Rc::new(key.to_vec()))).copied();
@@ -229,7 +238,6 @@ fn trace_string(vm: &mut VM, ex: Handle) -> String {
         out.push_str(")\n");
         n += 1;
     }
-    out.push_str(&format!("#{} {{main}}", n));
     out
 }
 

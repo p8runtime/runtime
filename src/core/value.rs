@@ -160,6 +160,30 @@ impl PartialEq for Val {
     }
 }
 
+/// A float as an int, as zend_dval_to_lval does on 64-bit: NAN and the
+/// infinities are 0, and values out of range wrap modulo 2^64.
+pub fn dval_to_lval(d: f64) -> i64 {
+    if !d.is_finite() {
+        return 0;
+    }
+    if (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&d) {
+        return d as i64;
+    }
+    let two_pow_64 = 18_446_744_073_709_551_616.0_f64;
+    let mut dmod = d % two_pow_64;
+    if dmod < 0.0 {
+        // -2^63 stays itself; anything else becomes positive first
+        if dmod == -9.223_372_036_854_776e18 {
+            return i64::MIN;
+        }
+        dmod += two_pow_64;
+    }
+    if dmod > 9.223_372_036_854_775_807e18 {
+        dmod -= two_pow_64;
+    }
+    dmod as i64
+}
+
 /// How many significant digits a float is printed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloatPrecision {
@@ -343,7 +367,7 @@ impl Val {
                 }
             }
             Val::Int(i) => *i,
-            Val::Float(f) => *f as i64,
+            Val::Float(f) => dval_to_lval(*f),
             Val::String(s) => {
                 // Parse numeric string
                 Self::parse_numeric_string(s)

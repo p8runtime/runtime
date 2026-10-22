@@ -1007,7 +1007,7 @@ impl VM {
 
     /// Get approximate memory usage in bytes
     /// This is a simplified estimate based on arena storage
-    fn get_memory_usage(&self) -> usize {
+    pub(crate) fn get_memory_usage(&self) -> usize {
         // Estimate: each Zval is approximately 64 bytes (rough estimate)
         // This includes the Val enum discriminant and typical payloads
         const ZVAL_SIZE: usize = 64;
@@ -1068,6 +1068,128 @@ impl VM {
                 Err(e)
             }
         }
+    }
+
+    /// `(int)`, `(bool)`, `(float)`, `(string)`, `(array)`, `(object)`,
+    /// `(unset)` (kinds 0-6) of a value, as zend_operators.c converts.
+    pub(crate) fn cast_value(&mut self, kind: u8, handle: Handle) -> Result<Handle, VmError> {
+        let val = self.arena.get(handle).value.clone();
+        let object_class = |vm: &VM, v: &Val| match v {
+            Val::Object(p) => match &vm.arena.get(*p).value {
+                Val::ObjPayload(o) => Some(o.class),
+                _ => None,
+            },
+            _ => None,
+        };
+        let new_val = match kind {
+            0 | 2 => {
+                if let Some(class) = object_class(self, &val) {
+                    let name = self.symbol_to_string(class);
+                    let target = if kind == 0 { "int" } else { "float" };
+                    self.report_error(
+                        ErrorLevel::Warning,
+                        &format!("Object of class {} could not be converted to {}", name, target),
+                    );
+                }
+                match kind {
+                    0 => Val::Int(val.to_int()),
+                    _ => Val::Float(val.to_float()),
+                }
+            }
+            1 => Val::Bool(val.to_bool()),
+            3 => Val::String(self.convert_to_string(handle)?.into()),
+            4 => match val {
+                Val::Array(a) => Val::Array(a),
+                Val::Null => Val::Array(ArrayData::new().into()),
+                Val::Object(payload) => Val::Array(self.object_to_array(payload).into()),
+                _ => {
+                    let mut map = IndexMap::new();
+                    map.insert(ArrayKey::Int(0), self.arena.alloc(val));
+                    Val::Array(ArrayData::from(map).into())
+                }
+            },
+            5 => {
+                let props: IndexMap<Symbol, Handle> = match val {
+                    Val::Object(h) => return Ok(self.arena.alloc(Val::Object(h))),
+                    Val::Array(a) => a
+                        .map
+                        .iter()
+                        .map(|(k, v)| {
+                            let name = match k {
+                                ArrayKey::Int(i) => i.to_string().into_bytes(),
+                                ArrayKey::Str(s) => s.to_vec(),
+                            };
+                            let copy = self.arena.get(*v).value.clone();
+                            (self.context.interner.intern(&name), self.arena.alloc(copy))
+                        })
+                        .collect(),
+                    Val::Null => IndexMap::new(),
+                    other => {
+                        let mut props = IndexMap::new();
+                        props.insert(self.context.interner.intern(b"scalar"), self.arena.alloc(other));
+                        props
+                    }
+                };
+                let dynamic = props.keys().copied().collect();
+                let obj_data = ObjectData {
+                    class: self.context.interner.intern(b"stdClass"),
+                    properties: props,
+                    internal: None,
+                    dynamic_properties: dynamic,
+                    id: 0,
+                };
+                let payload = self.arena.alloc(Val::ObjPayload(obj_data));
+                Val::Object(payload)
+            }
+            6 => Val::Null,
+            _ => val,
+        };
+        Ok(self.arena.alloc(new_val))
+    }
+
+    /// The class and visibility that declare property `prop` of `class`
+    /// (None for a dynamic property).
+    pub(crate) fn property_owner(&self, class: Symbol, prop: Symbol) -> Option<(Symbol, Visibility)> {
+        self.walk_inheritance_chain(class, |def, cls| def.properties.get(&prop).map(|entry| (cls, entry.visibility)))
+    }
+
+    /// `(array)$object`: the properties, with private ones keyed
+    /// "\0Class\0name" and protected ones "\0*\0name"; numeric names
+    /// become int keys (zend_std_get_properties_for, ZEND_PROP_PURPOSE_ARRAY_CAST).
+    pub(crate) fn object_to_array(&mut self, payload: Handle) -> ArrayData {
+        let (class, props) = match &self.arena.get(payload).value {
+            Val::ObjPayload(obj) => (obj.class, obj.properties.clone()),
+            _ => return ArrayData::new(),
+        };
+        let mut out = ArrayData::new();
+        for (prop, handle) in props {
+            if matches!(self.arena.get(handle).value, Val::Uninitialized) {
+                continue;
+            }
+            let name = self.context.interner.lookup(prop).unwrap_or(b"").to_vec();
+            let key = match self.property_owner(class, prop) {
+                Some((_, Visibility::Protected)) => [b"\0*\0".as_slice(), &name].concat(),
+                Some((owner, Visibility::Private)) => {
+                    let owner = self.context.interner.lookup(owner).unwrap_or(b"");
+                    [b"\0".as_slice(), owner, b"\0", &name].concat()
+                }
+                _ => name,
+            };
+            let key = match crate::core::value::Val::numeric_string(&key) {
+                Some(Val::Int(i)) if i.to_string().as_bytes() == key.as_slice() => ArrayKey::Int(i),
+                _ => ArrayKey::Str(Rc::new(key)),
+            };
+            // A copy, unless the property is a reference (then both share it)
+            let entry = match self.arena.get(handle).is_ref {
+                true => handle,
+                false => {
+                    let copy = self.arena.get(handle).value.clone();
+                    self.arena.alloc(copy)
+                }
+            };
+            out.insert(key, entry);
+        }
+        out
     }
 
     /// "Constant X is deprecated" for a built-in constant PHP 8.4 deprecates.
@@ -4291,6 +4413,13 @@ impl VM {
     /// each entry is the call (file and line of the call site, function,
     /// class, type, args).
     pub(crate) fn capture_backtrace(&mut self) -> Handle {
+        self.capture_backtrace_with(false, false, 0)
+    }
+
+    /// The backtrace as debug_backtrace() returns it: `provide_object` adds
+    /// each method call's `object`, `ignore_args` leaves out `args`, and a
+    /// `limit` above 0 keeps that many innermost entries.
+    pub(crate) fn capture_backtrace_with(&mut self, provide_object: bool, ignore_args: bool, limit: usize) -> Handle {
         let mut entries = Vec::new();
         for i in (1..self.frames.len()).rev() {
             let frame = &self.frames[i];
@@ -4311,10 +4440,14 @@ impl VM {
                 .filter(|_| frame.class_scope.is_some());
             let kind: &[u8] = if frame.this.is_some() { b"->" } else { b"::" };
             let args: Vec<Handle> = frame.args.iter().copied().collect();
-            entries.push((file, line, function, class, kind, args));
+            let object = frame.this.filter(|_| provide_object && class.is_some());
+            entries.push((file, line, function, class, kind, args, object));
+        }
+        if limit > 0 {
+            entries.truncate(limit);
         }
         let mut trace = ArrayData::new();
-        for (file, line, function, class, kind, args) in entries {
+        for (file, line, function, class, kind, args, object) in entries {
             let mut e = ArrayData::new();
             let mut put = |vm: &mut VM, k: &[u8], v: Val| {
                 let h = vm.arena.alloc(v);
@@ -4325,13 +4458,19 @@ impl VM {
             put(self, b"function", Val::String(function.into()));
             if let Some(class) = class {
                 put(self, b"class", Val::String(class.into()));
+                if let Some(object) = object {
+                    let value = self.arena.get(object).value.clone();
+                    put(self, b"object", value);
+                }
                 put(self, b"type", Val::String(kind.to_vec().into()));
             }
-            let mut arr = ArrayData::new();
-            for a in args {
-                arr.push(a);
+            if !ignore_args {
+                let mut arr = ArrayData::new();
+                for a in args {
+                    arr.push(a);
+                }
+                put(self, b"args", Val::Array(Rc::new(arr)));
             }
-            put(self, b"args", Val::Array(Rc::new(arr)));
             let h = self.arena.alloc(Val::Array(Rc::new(e)));
             trace.push(h);
         }
@@ -5111,117 +5250,7 @@ impl VM {
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
-                if kind == 3 {
-                    let s = self.convert_to_string(handle)?;
-                    let res_handle = self.arena.alloc(Val::String(s.into()));
-                    self.operand_stack.push(res_handle);
-                    return Ok(());
-                }
-
-                let val = self.arena.get(handle).value.clone();
-
-                let new_val = match kind {
-                    0 => match val {
-                        // Int
-                        Val::Int(i) => Val::Int(i),
-                        Val::Float(f) => Val::Int(f as i64),
-                        Val::Bool(b) => Val::Int(if b { 1 } else { 0 }),
-                        Val::String(s) => {
-                            let s = String::from_utf8_lossy(&s);
-                            Val::Int(s.parse().unwrap_or(0))
-                        }
-                        Val::Null => Val::Int(0),
-                        _ => Val::Int(0),
-                    },
-                    1 => Val::Bool(val.to_bool()), // Bool
-                    2 => match val {
-                        // Float
-                        Val::Float(f) => Val::Float(f),
-                        Val::Int(i) => Val::Float(i as f64),
-                        Val::String(s) => {
-                            let s = String::from_utf8_lossy(&s);
-                            Val::Float(s.parse().unwrap_or(0.0))
-                        }
-                        _ => Val::Float(0.0),
-                    },
-                    3 => match val {
-                        // String
-                        Val::String(s) => Val::String(s),
-                        Val::Int(i) => Val::String(i.to_string().into_bytes().into()),
-                        Val::Float(f) => Val::String(f.to_string().into_bytes().into()),
-                        Val::Bool(b) => Val::String(if b {
-                            b"1".to_vec().into()
-                        } else {
-                            b"".to_vec().into()
-                        }),
-                        Val::Null => Val::String(Vec::new().into()),
-                        Val::Object(_) => unreachable!(), // Handled above
-                        _ => Val::String(b"Array".to_vec().into()),
-                    },
-                    4 => match val {
-                        // Array
-                        Val::Array(a) => Val::Array(a),
-                        Val::Null => Val::Array(ArrayData::new().into()),
-                        _ => {
-                            let mut map = IndexMap::new();
-                            map.insert(ArrayKey::Int(0), self.arena.alloc(val));
-                            Val::Array(ArrayData::from(map).into())
-                        }
-                    },
-                    5 => match val {
-                        // Object
-                        Val::Object(h) => Val::Object(h),
-                        Val::Array(a) => {
-                            let mut props = IndexMap::new();
-                            for (k, v) in a.map.iter() {
-                                let key_sym = match k {
-                                    ArrayKey::Int(i) => {
-                                        self.context.interner.intern(i.to_string().as_bytes())
-                                    }
-                                    ArrayKey::Str(s) => self.context.interner.intern(&s),
-                                };
-                                props.insert(key_sym, *v);
-                            }
-                            let obj_data = ObjectData {
-                                class: self.context.interner.intern(b"stdClass"),
-                                properties: props,
-                                internal: None,
-                                dynamic_properties: std::collections::HashSet::new(),
-                                id: 0,
-                            };
-                            let payload = self.arena.alloc(Val::ObjPayload(obj_data));
-                            Val::Object(payload)
-                        }
-                        Val::Null => {
-                            let obj_data = ObjectData {
-                                class: self.context.interner.intern(b"stdClass"),
-                                properties: IndexMap::new(),
-                                internal: None,
-                                dynamic_properties: std::collections::HashSet::new(),
-                                id: 0,
-                            };
-                            let payload = self.arena.alloc(Val::ObjPayload(obj_data));
-                            Val::Object(payload)
-                        }
-                        _ => {
-                            let mut props = IndexMap::new();
-                            let key_sym = self.context.interner.intern(b"scalar");
-                            props.insert(key_sym, self.arena.alloc(val));
-                            let obj_data = ObjectData {
-                                class: self.context.interner.intern(b"stdClass"),
-                                properties: props,
-                                internal: None,
-                                dynamic_properties: std::collections::HashSet::new(),
-                                id: 0,
-                            };
-                            let payload = self.arena.alloc(Val::ObjPayload(obj_data));
-                            Val::Object(payload)
-                        }
-                    },
-                    6 => Val::Null, // Unset
-                    _ => val,
-                };
-                let res_handle = self.arena.alloc(new_val);
+                let res_handle = self.cast_value(kind, handle)?;
                 self.operand_stack.push(res_handle);
             }
             OpCode::TypeCheck => {}
@@ -8685,7 +8714,7 @@ impl VM {
 
                                 if !program.errors.is_empty() {
                                     if inserted_once_guard {
-                                        self.context.included_files.remove(&canonical_path);
+                                        self.context.included_files.shift_remove(&canonical_path);
                                     }
                                     let error = program.errors[0];
                                     return Err(self.parse_error(&error, &source, &canonical_path));
@@ -8766,7 +8795,7 @@ impl VM {
 
                                 if let Some(err) = include_error {
                                     if inserted_once_guard {
-                                        self.context.included_files.remove(&canonical_path);
+                                        self.context.included_files.shift_remove(&canonical_path);
                                     }
                                     return Err(err);
                                 }
@@ -8780,7 +8809,7 @@ impl VM {
                             }
                             Err(e) => {
                                 if inserted_once_guard {
-                                    self.context.included_files.remove(&canonical_path);
+                                    self.context.included_files.shift_remove(&canonical_path);
                                 }
                                 if is_require {
                                     return Err(VmError::RuntimeError(format!(

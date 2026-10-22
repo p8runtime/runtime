@@ -291,7 +291,8 @@ pub struct RequestContext {
     pub deprecated_constants: HashSet<Symbol>,
     pub user_functions: HashMap<Symbol, Rc<UserFunc>>,
     pub classes: HashMap<Symbol, ClassDef>,
-    pub included_files: HashSet<String>,
+    /// Files compiled by include/require, in order (get_included_files()).
+    pub included_files: indexmap::IndexSet<String>,
     pub autoloaders: Vec<Handle>,
     pub interner: Interner,
     pub last_error: Option<ErrorInfo>,
@@ -326,7 +327,7 @@ impl RequestContext {
             deprecated_constants: HashSet::new(),
             user_functions: HashMap::new(),
             classes: HashMap::new(),
-            included_files: HashSet::new(),
+            included_files: indexmap::IndexSet::new(),
             autoloaders: Vec::new(),
             interner: Interner::new(),
             last_error: None,
