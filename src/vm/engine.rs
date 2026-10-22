@@ -2540,12 +2540,16 @@ impl VM {
         false
     }
 
-    fn handle_exception(&mut self, ex_handle: Handle) -> bool {
+    /// Find a catch for `ex_handle` in the frames this run loop owns (index >=
+    /// `base_depth`). Frames below belong to an outer loop (a builtin called back
+    /// into PHP), so when nothing here catches, only this loop's frames are
+    /// unwound and the exception propagates to the caller.
+    fn handle_exception(&mut self, ex_handle: Handle, base_depth: usize) -> bool {
         // Validate that the exception is a Throwable
         let throwable_sym = self.context.interner.intern(b"Throwable");
         if !self.is_instance_of(ex_handle, throwable_sym) {
             // Not a valid exception object - this shouldn't happen if Throw validates properly
-            self.frames.clear();
+            self.frames.truncate(base_depth);
             return false;
         }
 
@@ -2553,7 +2557,7 @@ impl VM {
         let mut finally_blocks = Vec::new(); // Track finally blocks to execute
 
         // Unwind stack, collecting finally blocks
-        while frame_idx > 0 {
+        while frame_idx > base_depth {
             frame_idx -= 1;
 
             let (ip, chunk) = {
@@ -2616,7 +2620,10 @@ impl VM {
         // In PHP, finally blocks execute from innermost to outermost
         // We've already collected them in the correct order during iteration
         self.execute_finally_blocks(&finally_blocks);
-        self.frames.clear();
+        if let Some(base) = self.frames.get(base_depth).and_then(|f| f.stack_base) {
+            self.operand_stack.truncate(base);
+        }
+        self.frames.truncate(base_depth);
         false
     }
 
@@ -3232,7 +3239,7 @@ impl VM {
             if let Err(e) = res {
                 match e {
                     VmError::Exception(h) => {
-                        if !self.handle_exception(h) {
+                        if !self.handle_exception(h, target_depth) {
                             return Err(VmError::Exception(h));
                         }
                     }
@@ -3526,6 +3533,19 @@ impl VM {
         let handle = self.new_throwable(class, message);
         self.pending_throw = Some(handle);
         message.to_string()
+    }
+
+    /// A VmError from PHP code a builtin called back into (a callback, a magic
+    /// method), as the builtin's error string. A thrown exception stays pending,
+    /// so it propagates out of the builtin to the PHP caller.
+    pub fn callback_error(&mut self, e: VmError) -> String {
+        match e {
+            VmError::Exception(h) => {
+                self.pending_throw = Some(h);
+                "uncaught exception".into()
+            }
+            other => format!("{:?}", other),
+        }
     }
 
     /// Turn a builtin's error into a VmError, throwing its pending Throwable if it raised one.

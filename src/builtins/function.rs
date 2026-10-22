@@ -242,7 +242,7 @@ pub fn php_call_user_func(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
     let func_args: smallvec::SmallVec<[Handle; 8]> = args[1..].iter().copied().collect();
 
     vm.call_callable(callback_handle, func_args)
-        .map_err(|e| format!("call_user_func error: {:?}", e))
+            .map_err(|e| vm.callback_error(e))
 }
 
 /// call_user_func_array() - Call a user function with parameters as an array
@@ -261,5 +261,5 @@ pub fn php_call_user_func_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, 
     };
 
     vm.call_callable(callback_handle, func_args)
-        .map_err(|e| format!("call_user_func_array error: {:?}", e))
+            .map_err(|e| vm.callback_error(e))
 }

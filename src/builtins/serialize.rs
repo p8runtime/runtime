@@ -357,14 +357,9 @@ fn materialize(vm: &mut VM, handle: Handle) -> Handle {
     }
 }
 
-/// A VmError raised while calling user code, as a builtin error string
-/// (an exception stays pending so it propagates when the builtin returns).
+/// See VM::callback_error.
 fn vm_error(vm: &mut VM, e: VmError) -> String {
-    if let VmError::Exception(h) = e {
-        vm.pending_throw = Some(h);
-        return "exception".into();
-    }
-    format!("{:?}", e)
+    vm.callback_error(e)
 }
 
 // ---------------------------------------------------------------------------

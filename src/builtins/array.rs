@@ -63,7 +63,7 @@ pub fn php_array_all(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         };
         let result = vm
             .call_callable(callback, smallvec::smallvec![value_handle, key_handle])
-            .map_err(|e| format!("array_all(): {}", e))?;
+            .map_err(|e| vm.callback_error(e))?;
         if !vm.arena.get(result).value.to_bool() {
             return Ok(vm.arena.alloc(Val::Bool(false)));
         }
@@ -90,7 +90,7 @@ pub fn php_array_any(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         };
         let result = vm
             .call_callable(callback, smallvec::smallvec![value_handle, key_handle])
-            .map_err(|e| format!("array_any(): {}", e))?;
+            .map_err(|e| vm.callback_error(e))?;
         if vm.arena.get(result).value.to_bool() {
             return Ok(vm.arena.alloc(Val::Bool(true)));
         }
@@ -477,7 +477,7 @@ pub fn php_array_diff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
                 };
                 let cmp = vm
                     .call_callable(callback, smallvec::smallvec![key_handle, other_key_handle])
-                    .map_err(|e| format!("array_diff_uassoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(cmp).value.to_int() == 0 {
                     found = true;
                     break;
@@ -530,7 +530,7 @@ pub fn php_array_diff_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
             };
             let cmp = vm
                 .call_callable(callback, smallvec::smallvec![key_handle, other_key_handle])
-                .map_err(|e| format!("array_diff_ukey(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             if vm.arena.get(cmp).value.to_int() == 0 {
                 found = true;
                 break;
@@ -621,7 +621,7 @@ pub fn php_array_filter(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
             };
             let result = vm
                 .call_callable(cb, args)
-                .map_err(|e| format!("array_filter(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             vm.arena.get(result).value.to_bool()
         } else {
             vm.arena.get(value_handle).value.to_bool()
@@ -655,7 +655,7 @@ pub fn php_array_find(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         };
         let result = vm
             .call_callable(callback, smallvec::smallvec![value_handle, key_handle])
-            .map_err(|e| format!("array_find(): {}", e))?;
+            .map_err(|e| vm.callback_error(e))?;
         if vm.arena.get(result).value.to_bool() {
             return Ok(value_handle);
         }
@@ -682,7 +682,7 @@ pub fn php_array_find_key(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
         };
         let result = vm
             .call_callable(callback, smallvec::smallvec![value_handle, key_handle])
-            .map_err(|e| format!("array_find_key(): {}", e))?;
+            .map_err(|e| vm.callback_error(e))?;
         if vm.arena.get(result).value.to_bool() {
             return Ok(key_handle);
         }
@@ -887,7 +887,7 @@ pub fn php_array_intersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle
                 };
                 let cmp = vm
                     .call_callable(callback, smallvec::smallvec![key_handle, other_key_handle])
-                    .map_err(|e| format!("array_intersect_uassoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(cmp).value.to_int() == 0 {
                     found = true;
                     break;
@@ -940,7 +940,7 @@ pub fn php_array_intersect_ukey(vm: &mut VM, args: &[Handle]) -> Result<Handle, 
             };
             let cmp = vm
                 .call_callable(callback, smallvec::smallvec![key_handle, other_key_handle])
-                .map_err(|e| format!("array_intersect_ukey(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             if vm.arena.get(cmp).value.to_int() == 0 {
                 found = true;
                 break;
@@ -1081,7 +1081,7 @@ pub fn php_array_map(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             vm.arena.alloc(Val::Array(crate::core::value::ArrayData::from(row).into()))
         } else {
             vm.call_callable(callback, params)
-                .map_err(|e| format!("array_map(): {}", e))?
+                .map_err(|e| vm.callback_error(e))?
         };
 
         out.insert(key.clone(), mapped);
@@ -1275,7 +1275,7 @@ pub fn php_array_reduce(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
     for value_handle in values.iter().skip(index) {
         carry = vm
             .call_callable(callback, smallvec::smallvec![carry, *value_handle])
-            .map_err(|e| format!("array_reduce(): {}", e))?;
+            .map_err(|e| vm.callback_error(e))?;
     }
 
     Ok(carry)
@@ -1646,7 +1646,7 @@ pub fn php_array_udiff(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
                     callback,
                     smallvec::smallvec![value_handle, *other_handle],
                 )
-                .map_err(|e| format!("array_udiff(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             if vm.arena.get(cmp).value.to_int() == 0 {
                 found = true;
                 break;
@@ -1688,7 +1688,7 @@ pub fn php_array_udiff_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
                         callback,
                         smallvec::smallvec![value_handle, *other_handle],
                     )
-                    .map_err(|e| format!("array_udiff_assoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(cmp).value.to_int() == 0 {
                     found = true;
                     break;
@@ -1735,7 +1735,7 @@ pub fn php_array_udiff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, St
                         value_cb,
                         smallvec::smallvec![value_handle, *other_handle],
                     )
-                    .map_err(|e| format!("array_udiff_uassoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(val_cmp).value.to_int() != 0 {
                     continue;
                 }
@@ -1744,7 +1744,7 @@ pub fn php_array_udiff_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handle, St
                 let other_key_handle = vm.arena.alloc(array_key_to_val(other_key));
                 let key_cmp = vm
                     .call_callable(key_cb, smallvec::smallvec![key_handle, other_key_handle])
-                    .map_err(|e| format!("array_udiff_uassoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(key_cmp).value.to_int() == 0 {
                     found = true;
                     break;
@@ -1792,7 +1792,7 @@ pub fn php_array_uintersect(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
                     callback,
                     smallvec::smallvec![value_handle, *other_handle],
                 )
-                .map_err(|e| format!("array_uintersect(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             if vm.arena.get(cmp).value.to_int() == 0 {
                 found = true;
                 break;
@@ -1834,7 +1834,7 @@ pub fn php_array_uintersect_assoc(vm: &mut VM, args: &[Handle]) -> Result<Handle
                         callback,
                         smallvec::smallvec![value_handle, *other_handle],
                     )
-                    .map_err(|e| format!("array_uintersect_assoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(cmp).value.to_int() == 0 {
                     found = true;
                     break;
@@ -1881,7 +1881,7 @@ pub fn php_array_uintersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handl
                         value_cb,
                         smallvec::smallvec![value_handle, *other_handle],
                     )
-                    .map_err(|e| format!("array_uintersect_uassoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(val_cmp).value.to_int() != 0 {
                     continue;
                 }
@@ -1890,7 +1890,7 @@ pub fn php_array_uintersect_uassoc(vm: &mut VM, args: &[Handle]) -> Result<Handl
                 let other_key_handle = vm.arena.alloc(array_key_to_val(other_key));
                 let key_cmp = vm
                     .call_callable(key_cb, smallvec::smallvec![key_handle, other_key_handle])
-                    .map_err(|e| format!("array_uintersect_uassoc(): {}", e))?;
+                    .map_err(|e| vm.callback_error(e))?;
                 if vm.arena.get(key_cmp).value.to_int() == 0 {
                     found = true;
                     break;
@@ -1959,7 +1959,7 @@ pub fn php_array_walk(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             params.push(extra);
         }
         vm.call_callable(callback, params)
-            .map_err(|e| format!("array_walk(): {}", e))?;
+            .map_err(|e| vm.callback_error(e))?;
     }
 
     Ok(vm.arena.alloc(Val::Bool(true)))
@@ -2001,7 +2001,7 @@ pub fn php_array_walk_recursive(vm: &mut VM, args: &[Handle]) -> Result<Handle, 
                 params.push(extra);
             }
             vm.call_callable(callback, params)
-                .map_err(|e| format!("array_walk_recursive(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
         }
         Ok(())
     }
@@ -2463,7 +2463,7 @@ pub fn php_uasort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
                     callback,
                     smallvec::smallvec![entries[i].1, entries[j].1],
                 )
-                .map_err(|e| format!("uasort(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             if vm.arena.get(cmp).value.to_int() > 0 {
                 entries.swap(i, j);
             }
@@ -2500,7 +2500,7 @@ pub fn php_uksort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             let key_j = vm.arena.alloc(array_key_to_val(&entries[j].0));
             let cmp = vm
                 .call_callable(callback, smallvec::smallvec![key_i, key_j])
-                .map_err(|e| format!("uksort(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             if vm.arena.get(cmp).value.to_int() > 0 {
                 entries.swap(i, j);
             }
@@ -2534,7 +2534,7 @@ pub fn php_usort(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         for j in (i + 1)..len {
             let cmp = vm
                 .call_callable(callback, smallvec::smallvec![values[i], values[j]])
-                .map_err(|e| format!("usort(): {}", e))?;
+                .map_err(|e| vm.callback_error(e))?;
             if vm.arena.get(cmp).value.to_int() > 0 {
                 values.swap(i, j);
             }
