@@ -3245,32 +3245,16 @@ impl VM {
 
         if let Some((ret_type, func_name, callee_strict)) = return_type_check {
             // Check return type with callee's strictness (not caller's!)
-            if !self.check_return_type(ret_val, &ret_type)? {
-                // Type mismatch - attempt coercion in weak mode
-                if !callee_strict {
-                    // Weak mode: try coercion
-                    if let Some(coerced_handle) = self.coerce_parameter_value(ret_val, &ret_type)? {
-                        // Coercion succeeded, use coerced value
-                        ret_val = coerced_handle;
-                    } else {
-                        // Coercion failed in weak mode - still throw error
-                        let val_type = self.get_type_name(ret_val);
-                        let expected_type = self.return_type_to_string(&ret_type);
-
-                        return Err(VmError::RuntimeError(format!(
-                            "{}(): Return value must be of type {}, {} returned",
-                            func_name, expected_type, val_type
-                        )));
-                    }
-                } else {
-                    // Strict mode: throw TypeError
-                    let val_type = self.get_type_name(ret_val);
-                    let expected_type = self.return_type_to_string(&ret_type);
-
-                    return Err(VmError::RuntimeError(format!(
+            match self.coerce_to_declared_type(ret_val, &ret_type, callee_strict)? {
+                Some(accepted) => ret_val = accepted,
+                None => {
+                    let given = crate::builtins::signature::value_name(self, ret_val);
+                    let expected = self.return_type_to_string(&ret_type);
+                    let message = format!(
                         "{}(): Return value must be of type {}, {} returned",
-                        func_name, expected_type, val_type
-                    )));
+                        func_name, expected, given
+                    );
+                    return Err(self.throw_error(b"TypeError", &message));
                 }
             }
         }
@@ -5531,6 +5515,7 @@ impl VM {
                                 callsite_strict,
                                 param.name,
                                 &func_name_str,
+                                arg_idx as usize + 1,
                             )?
                         } else {
                             arg_handle
@@ -5589,6 +5574,7 @@ impl VM {
                                 callsite_strict,
                                 param.name,
                                 &func_name_str,
+                                arg_idx as usize + 1,
                             )?
                         } else {
                             arg_handle
@@ -5656,6 +5642,7 @@ impl VM {
                                 callsite_strict,
                                 param.name,
                                 &func_name_str,
+                                arg_idx as usize + i + 1,
                             )?;
                         }
 
@@ -12392,7 +12379,9 @@ impl VM {
     }
 
     /// Check and coerce parameter type based on strictness
-    /// Reference: $PHP_SRC_PATH/Zend/zend_execute.c - zend_verify_arg_type
+    /// Reference: $PHP_SRC_PATH/Zend/zend_execute.c - zend_verify_arg_type:
+    /// an exact match passes, scalars coerce as zend_verify_scalar_type_hint
+    /// allows, anything else is PHP's TypeError, located at the call site.
     fn check_parameter_type(
         &mut self,
         arg_handle: Handle,
@@ -12400,45 +12389,71 @@ impl VM {
         strict: bool,
         param_name: Symbol,
         func_name: &str,
+        position: usize,
     ) -> Result<Handle, VmError> {
-        // Check if type matches
-        let matches = self.check_return_type(arg_handle, param_type)?;
-
-        if matches {
-            return Ok(arg_handle);
+        if let Some(accepted) = self.coerce_to_declared_type(arg_handle, param_type, strict)? {
+            return Ok(accepted);
         }
-
-        // Type doesn't match - decide whether to coerce or error
-        if strict {
-            // Strict mode: no coercion, throw TypeError
-            let param_name_str =
-                String::from_utf8_lossy(self.context.interner.lookup(param_name).unwrap_or(b"?"));
-            let expected = self.return_type_name(param_type);
-            let val_type = self.arena.get(arg_handle).value.type_name();
-            return Err(VmError::RuntimeError(format!(
-                "{}(): Argument #{} (${}
-) must be of type {}, {} given",
-                func_name, param_name_str, param_name_str, expected, val_type
-            )));
+        let name = String::from_utf8_lossy(self.context.interner.lookup(param_name).unwrap_or(b"?")).into_owned();
+        let expected = self.return_type_name(param_type);
+        let given = crate::builtins::signature::value_name(self, arg_handle);
+        // The caller's location: the frame below the function's own.
+        let caller = self
+            .frames
+            .len()
+            .checked_sub(2)
+            .and_then(|i| self.frames.get(i))
+            .map(|f| (f.chunk.file_path.clone().unwrap_or_default(), frame_line(f)));
+        let mut message = format!(
+            "{}(): Argument #{} (${}) must be of type {}, {} given",
+            func_name, position, name, expected, given
+        );
+        if let Some((file, line)) = caller {
+            message.push_str(&format!(", called in {} on line {}", file, line));
         }
+        Err(self.throw_error(b"TypeError", &message))
+    }
 
-        // Weak mode: attempt coercion for scalar types
-        let coerced = self.coerce_parameter_value(arg_handle, param_type)?;
-        if let Some(coerced_handle) = coerced {
-            Ok(coerced_handle)
-        } else {
-            // Coercion failed - emit warning and use original value
-            let param_name_str =
-                String::from_utf8_lossy(self.context.interner.lookup(param_name).unwrap_or(b"?"));
-            let expected = self.return_type_name(param_type);
-            let val_type = self.arena.get(arg_handle).value.type_name();
-            let message = format!(
-                "{}(): Argument #{} (${}
-) must be of type {}, {} given",
-                func_name, param_name_str, param_name_str, expected, val_type
-            );
-            self.trigger_error(ErrorLevel::Warning, &message);
-            Ok(arg_handle)
+    /// A value checked against a declared type: Some(value), coerced as
+    /// PHP's weak or strict mode allows, or None for a TypeError
+    /// (zend_verify_type_assignable / zend_verify_scalar_type_hint).
+    pub(crate) fn coerce_to_declared_type(
+        &mut self,
+        handle: Handle,
+        ty: &ReturnType,
+        strict: bool,
+    ) -> Result<Option<Handle>, VmError> {
+        use crate::builtins::signature::{T_FLOAT, T_INT, T_MIXED};
+        let mask = Self::scalar_type_mask(ty);
+        // int to float is a conversion even where float "matches" an int
+        if let Val::Int(i) = self.arena.get(handle).value
+            && mask & T_FLOAT != 0
+            && mask & (T_INT | T_MIXED) == 0
+        {
+            return Ok(Some(self.arena.alloc(Val::Float(i as f64))));
+        }
+        if self.check_return_type(handle, ty)? {
+            return Ok(Some(handle));
+        }
+        Ok(crate::builtins::signature::coerce_user_scalar(self, mask, handle, strict)?
+            .map(|v| self.arena.alloc(v)))
+    }
+
+    /// The scalar members of a declared type as signature T_* bits.
+    fn scalar_type_mask(ty: &ReturnType) -> u32 {
+        use crate::builtins::signature::*;
+        match ty {
+            ReturnType::Int => T_INT,
+            ReturnType::Float => T_FLOAT,
+            ReturnType::String => T_STRING,
+            ReturnType::Bool => T_BOOL,
+            ReturnType::True => T_TRUE,
+            ReturnType::False => T_FALSE,
+            ReturnType::Null => T_NULL,
+            ReturnType::Mixed => T_MIXED,
+            ReturnType::Nullable(inner) => Self::scalar_type_mask(inner) | T_NULL,
+            ReturnType::Union(types) => types.iter().fold(0, |m, t| m | Self::scalar_type_mask(t)),
+            _ => 0,
         }
     }
 
