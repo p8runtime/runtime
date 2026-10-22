@@ -160,6 +160,73 @@ impl PartialEq for Val {
     }
 }
 
+/// How many significant digits a float is printed with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatPrecision {
+    /// PHP's `precision` ini (14): echo, string casts, print_r.
+    Digits(usize),
+    /// PHP's `serialize_precision = -1`: shortest round-trip digits; var_dump,
+    /// var_export, json_encode and serialize.
+    Shortest,
+}
+
+impl FloatPrecision {
+    /// The `precision` ini default.
+    pub const ECHO: FloatPrecision = FloatPrecision::Digits(14);
+}
+
+/// Format a float the way zend_gcvt does: `precision` significant digits,
+/// exponent form (`1.0E+25`) when the decimal point falls outside the digits.
+/// Reference: $PHP_SRC_PATH/main/snprintf.c - php_gcvt
+pub fn php_float_to_string(f: f64, precision: FloatPrecision, exp_char: char) -> String {
+    if f.is_nan() {
+        return "NAN".into();
+    }
+    if f.is_infinite() {
+        return if f > 0.0 { "INF" } else { "-INF" }.into();
+    }
+    if f == 0.0 {
+        return if f.is_sign_negative() { "-0" } else { "0" }.into();
+    }
+    let (sci, ndigit) = match precision {
+        FloatPrecision::Shortest => (format!("{:e}", f.abs()), 17),
+        FloatPrecision::Digits(p) => {
+            let p = p.max(1);
+            (format!("{:.*e}", p - 1, f.abs()), p as i64)
+        }
+    };
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let mut digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    while digits.len() > 1 && digits.ends_with('0') {
+        digits.pop();
+    }
+    let decpt = exp.parse::<i64>().unwrap_or(0) + 1;
+    let mut out = String::new();
+    if f < 0.0 {
+        out.push('-');
+    }
+    if decpt < -3 || decpt > ndigit {
+        out.push_str(&digits[..1]);
+        out.push('.');
+        out.push_str(if digits.len() > 1 { &digits[1..] } else { "0" });
+        out.push(exp_char);
+        out.push(if decpt - 1 < 0 { '-' } else { '+' });
+        out.push_str(&(decpt - 1).abs().to_string());
+    } else if decpt <= 0 {
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', (-decpt) as usize));
+        out.push_str(&digits);
+    } else if digits.len() as i64 <= decpt {
+        out.push_str(&digits);
+        out.extend(std::iter::repeat_n('0', decpt as usize - digits.len()));
+    } else {
+        out.push_str(&digits[..decpt as usize]);
+        out.push('.');
+        out.push_str(&digits[decpt as usize..]);
+    }
+    out
+}
+
 impl Val {
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -189,19 +256,7 @@ impl Val {
                 }
             }
             Val::Int(i) => i.to_string().into_bytes(),
-            Val::Float(f) => {
-                // PHP's float to string conversion has specific rules
-                // It removes trailing zeros if integer part is not zero, or if precision makes it integer
-                // For 0.0, it's "0"
-                // For 1.0, it's "1"
-                // For 1.23, it's "1.23"
-                // Using format! ensures trailing zeros are removed if possible for whole numbers
-                if f.fract() == 0.0 {
-                    format!("{:.0}", f).into_bytes()
-                } else {
-                    format!("{}", f).into_bytes()
-                }
-            }
+            Val::Float(f) => php_float_to_string(*f, FloatPrecision::ECHO, 'E').into_bytes(),
             Val::String(s) => s.to_vec(),
             Val::Array(_) | Val::ConstArray(_) => b"Array".to_vec(),
             Val::Object(_) | Val::ObjPayload(_) => b"Object".to_vec(),
@@ -334,24 +389,26 @@ impl Val {
     /// whitespace allowed, as in PHP 8), as an Int when it fits, else a Float.
     /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - is_numeric_string_ex
     pub fn numeric_string(s: &[u8]) -> Option<Val> {
+        let (value, rest) = Self::leading_numeric(s)?;
+        rest.iter()
+            .all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c'))
+            .then_some(value)
+    }
+
+    /// The value of the numeric prefix of `s` ("12abc" -> 12) and the bytes
+    /// after it, or None when `s` does not start with a number.
+    pub fn leading_numeric(s: &[u8]) -> Option<(Val, &[u8])> {
         let prefix = Self::numeric_prefix(s);
         if prefix.is_empty() {
             return None;
         }
         let end = prefix.as_ptr() as usize - s.as_ptr() as usize + prefix.len();
-        if !s[end..]
-            .iter()
-            .all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c'))
-        {
-            return None;
-        }
         let text = std::str::from_utf8(prefix).ok()?;
-        if !text.contains(['.', 'e', 'E'])
-            && let Ok(i) = text.parse::<i64>()
-        {
-            return Some(Val::Int(i));
-        }
-        text.parse::<f64>().ok().map(Val::Float)
+        let value = match text.parse::<i64>() {
+            Ok(i) if !text.contains(['.', 'e', 'E']) => Val::Int(i),
+            _ => Val::Float(text.parse::<f64>().ok()?),
+        };
+        Some((value, &s[end..]))
     }
 
     /// The numeric prefix of `s` after leading whitespace (may be empty).
@@ -413,4 +470,38 @@ pub enum ArrayKey {
 pub struct Zval {
     pub value: Val,
     pub is_ref: bool, // Explicit Reference Flag (&$a)
+}
+
+#[cfg(test)]
+mod float_format_tests {
+    use super::{FloatPrecision, php_float_to_string};
+
+    // Expected strings are PHP 8.4's output for the same values.
+    #[test]
+    fn shortest_matches_var_dump() {
+        let f = |v| php_float_to_string(v, FloatPrecision::Shortest, 'E');
+        assert_eq!(f(1.0), "1");
+        assert_eq!(f(-0.0), "-0");
+        assert_eq!(f(0.1 + 0.2), "0.30000000000000004");
+        assert_eq!(f(1e16), "10000000000000000");
+        assert_eq!(f(1.5e17), "1.5E+17");
+        assert_eq!(f(1e25), "1.0E+25");
+        assert_eq!(f(0.0001), "0.0001");
+        assert_eq!(f(1e-5), "1.0E-5");
+        assert_eq!(f(-2.5e-5), "-2.5E-5");
+        assert_eq!(f(123.456), "123.456");
+    }
+
+    #[test]
+    fn precision_14_matches_echo() {
+        let f = |v| php_float_to_string(v, FloatPrecision::ECHO, 'E');
+        assert_eq!(f(0.1 + 0.2), "0.3");
+        assert_eq!(f(1.0 / 3.0), "0.33333333333333");
+        assert_eq!(f(1e14), "1.0E+14");
+        assert_eq!(f(123456789012345.0), "1.2345678901234E+14");
+        assert_eq!(f(1234567890123456.0), "1.2345678901235E+15");
+        assert_eq!(f(9007199254740993.0), "9.007199254741E+15");
+        assert_eq!(f(-1.5), "-1.5");
+        assert_eq!(f(100.0), "100");
+    }
 }

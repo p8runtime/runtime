@@ -34,7 +34,7 @@ fn handle_to_path(vm: &VM, handle: Handle) -> Result<Vec<u8>, String> {
     match &val.value {
         Val::String(s) => Ok(s.to_vec()),
         Val::Int(i) => Ok(i.to_string().into_bytes()),
-        Val::Float(f) => Ok(f.to_string().into_bytes()),
+        Val::Float(f) => Ok(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes()),
         _ => Err("Expected string path".into()),
     }
 }
@@ -314,7 +314,7 @@ pub fn php_fwrite(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         match &val.value {
             Val::String(s) => s.to_vec(),
             Val::Int(i) => i.to_string().into_bytes(),
-            Val::Float(f) => f.to_string().into_bytes(),
+            Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes(),
             _ => return Err("fwrite(): Data must be string or scalar".into()),
         }
     };
@@ -424,7 +424,7 @@ pub fn php_file_put_contents(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
     let data = match &data_val.value {
         Val::String(s) => s.to_vec(),
         Val::Int(i) => i.to_string().into_bytes(),
-        Val::Float(f) => f.to_string().into_bytes(),
+        Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes(),
         Val::Array(arr) => {
             // PHP concatenates array elements
             let mut result = Vec::new();
@@ -433,7 +433,7 @@ pub fn php_file_put_contents(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
                 match &elem.value {
                     Val::String(s) => result.extend_from_slice(s),
                     Val::Int(i) => result.extend_from_slice(i.to_string().as_bytes()),
-                    Val::Float(f) => result.extend_from_slice(f.to_string().as_bytes()),
+                    Val::Float(f) => result.extend_from_slice(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').as_bytes()),
                     _ => {}
                 }
             }

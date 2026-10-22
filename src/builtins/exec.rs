@@ -78,7 +78,7 @@ pub fn php_escapeshellarg(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
     let arg = match &val.value {
         Val::String(s) => String::from_utf8_lossy(s).to_string(),
         Val::Int(i) => i.to_string(),
-        Val::Float(f) => f.to_string(),
+        Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E'),
         _ => return Err("escapeshellarg() expects parameter 1 to be string".into()),
     };
 

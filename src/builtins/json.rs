@@ -225,11 +225,11 @@ impl<'a> EncodeContext<'a> {
             return Err(JsonError::InfOrNan);
         }
 
-        if self.options.preserve_zero_fraction && f.fract() == 0.0 {
-            Ok(format!("{:.1}", f))
-        } else {
-            Ok(f.to_string())
+        let mut repr = crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::Shortest, 'e');
+        if self.options.preserve_zero_fraction && repr.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+            repr.push_str(".0");
         }
+        Ok(repr)
     }
 
     fn encode_string(&self, bytes: &Rc<Vec<u8>>) -> Result<String, JsonError> {

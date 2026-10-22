@@ -72,7 +72,7 @@ fn dump_value(vm: &VM, handle: Handle, depth: usize) {
             println!("{}int({})", indent, i);
         }
         Val::Float(f) => {
-            println!("{}float({})", indent, f);
+            println!("{}float({})", indent, crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::Shortest, 'E'));
         }
         Val::Bool(b) => {
             println!("{}bool({})", indent, b);
@@ -187,7 +187,12 @@ fn export_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
             output.push_str(&i.to_string());
         }
         Val::Float(f) => {
-            output.push_str(&f.to_string());
+            let repr = crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::Shortest, 'E');
+            let integral = repr.bytes().all(|b| b.is_ascii_digit() || b == b'-');
+            output.push_str(&repr);
+            if integral {
+                output.push_str(".0");
+            }
         }
         Val::Bool(b) => {
             output.push_str(if *b { "true" } else { "false" });
@@ -296,7 +301,7 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
             output.push_str(&i.to_string());
         }
         Val::Float(f) => {
-            output.push_str(&f.to_string());
+            output.push_str(&crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E'));
         }
         Val::Bool(b) => {
             output.push_str(if *b { "1" } else { "" });
@@ -894,20 +899,7 @@ fn serialize_value(vm: &VM, handle: Handle) -> Result<Vec<u8>, String> {
         }
         Val::Float(f) => {
             result.extend_from_slice(b"d:");
-            // Format float like PHP does
-            let f_str = if f.is_infinite() {
-                if f.is_sign_positive() {
-                    "INF"
-                } else {
-                    "-INF"
-                }
-            } else if f.is_nan() {
-                "NAN"
-            } else {
-                // PHP uses specific formatting for floats
-                &format!("{}", f)
-            };
-            result.extend_from_slice(f_str.as_bytes());
+            result.extend_from_slice(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::Shortest, 'E').as_bytes());
             result.push(b';');
         }
         Val::String(s) => {

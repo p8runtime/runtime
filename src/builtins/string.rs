@@ -133,7 +133,7 @@ pub fn php_implode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         match &val.value {
             Val::String(s) => result.extend_from_slice(s),
             Val::Int(n) => result.extend_from_slice(n.to_string().as_bytes()),
-            Val::Float(f) => result.extend_from_slice(f.to_string().as_bytes()),
+            Val::Float(f) => result.extend_from_slice(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').as_bytes()),
             Val::Bool(b) => {
                 if *b {
                     result.push(b'1');
@@ -3986,7 +3986,7 @@ fn read_version_operand(vm: &VM, handle: Handle, position: usize) -> Result<Vec<
     let bytes = match &val.value {
         Val::String(s) => s.to_vec(),
         Val::Int(i) => i.to_string().into_bytes(),
-        Val::Float(f) => f.to_string().into_bytes(),
+        Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes(),
         Val::Bool(b) => {
             if *b {
                 b"1".to_vec()
@@ -4199,7 +4199,7 @@ fn value_to_string_bytes(val: &Val) -> Vec<u8> {
     match val {
         Val::String(s) => s.as_ref().clone(),
         Val::Int(i) => i.to_string().into_bytes(),
-        Val::Float(f) => f.to_string().into_bytes(),
+        Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes(),
         Val::Bool(b) => {
             if *b {
                 b"1".to_vec()
