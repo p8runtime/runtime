@@ -146,7 +146,7 @@ fn undefined_key_message(key: &ArrayKey) -> String {
 /// The source line a frame is executing.
 fn frame_line(frame: &CallFrame) -> u32 {
     if frame.ip > 0 && frame.ip <= frame.chunk.lines.len() {
-        frame.chunk.lines[frame.ip - 1] as u32
+        frame.chunk.lines[frame.ip - 1]
     } else {
         0
     }
