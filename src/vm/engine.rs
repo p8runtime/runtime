@@ -384,6 +384,8 @@ pub struct VM {
     pub(crate) pending_throw: Option<Handle>,
     /// Counter giving each declared method and property its declaration order.
     decl_counter: u64,
+    /// Other spellings of class names seen at runtime -> the declared name.
+    class_case_cache: std::cell::RefCell<HashMap<Symbol, Symbol>>,
     /// Exit status set by exit(int).
     pub exit_status: i32,
     /// set_error_handler() stack: (callable, E_* mask); None = no handler.
@@ -460,6 +462,7 @@ impl VM {
             last_return_value: None,
             pending_throw: None,
             decl_counter: 0,
+            class_case_cache: Default::default(),
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
@@ -879,6 +882,7 @@ impl VM {
             last_return_value: None,
             pending_throw: None,
             decl_counter: 0,
+            class_case_cache: Default::default(),
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
@@ -1675,6 +1679,7 @@ impl VM {
     }
 
     pub fn is_subclass_of(&self, child: Symbol, parent: Symbol) -> bool {
+        let parent = self.canonical_class(parent);
         if child == parent {
             return true;
         }
@@ -2182,7 +2187,35 @@ impl VM {
                 "Cannot access static:: when no called scope is active".into(),
             ));
         }
-        Ok(class_name)
+        Ok(self.canonical_class(class_name))
+    }
+
+    /// The declared spelling of a class name, which PHP compares
+    /// case-insensitively (`new stdclass`, `catch (exception $e)`). Exact
+    /// matches are free; others are resolved once and cached.
+    pub(crate) fn canonical_class(&self, name: Symbol) -> Symbol {
+        if self.context.classes.contains_key(&name) {
+            return name;
+        }
+        if let Some(&canonical) = self.class_case_cache.borrow().get(&name) {
+            return canonical;
+        }
+        let Some(lower) = self.context.interner.lookup(name).map(<[u8]>::to_ascii_lowercase) else {
+            return name;
+        };
+        let found = self.context.classes.keys().copied().find(|k| {
+            self.context
+                .interner
+                .lookup(*k)
+                .is_some_and(|n| n.eq_ignore_ascii_case(&lower))
+        });
+        match found {
+            Some(canonical) => {
+                self.class_case_cache.borrow_mut().insert(name, canonical);
+                canonical
+            }
+            None => name,
+        }
     }
 
     pub(crate) fn find_class_constant(
@@ -2695,6 +2728,7 @@ impl VM {
     }
 
     pub(crate) fn is_instance_of(&self, obj_handle: Handle, class_sym: Symbol) -> bool {
+        let class_sym = self.canonical_class(class_sym);
         let obj_val = self.arena.get(obj_handle);
         if let Val::Object(payload_handle) = obj_val.value {
             if let Val::ObjPayload(data) = &self.arena.get(payload_handle).value {
@@ -6921,6 +6955,18 @@ impl VM {
             OpCode::DefClass(name, parent) => {
                 let mut methods = HashMap::new();
                 let mut abstract_methods = HashSet::new();
+                // The parent may be spelled in any case, or still to be autoloaded.
+                let parent = match parent {
+                    Some(p) => {
+                        let mut p = self.canonical_class(p);
+                        if !self.context.classes.contains_key(&p) {
+                            self.trigger_autoload(p)?;
+                            p = self.canonical_class(p);
+                        }
+                        Some(p)
+                    }
+                    None => None,
+                };
 
                 if let Some(parent_sym) = parent {
                     if let Some(parent_def) = self.context.classes.get(&parent_sym) {
@@ -7098,6 +7144,11 @@ impl VM {
             }
             OpCode::AddInterface(class_name, interface_name) => {
                 // Just add the interface - validation happens later in FinalizeClass
+                let mut interface_name = self.canonical_class(interface_name);
+                if !self.context.classes.contains_key(&interface_name) {
+                    self.trigger_autoload(interface_name)?;
+                    interface_name = self.canonical_class(interface_name);
+                }
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.interfaces.push(interface_name);
                 }
@@ -12718,6 +12769,7 @@ impl VM {
     /// Get a human-readable type name for a value
     /// Check if a class is a subclass of another (or the same class)
     fn is_instance_of_class(&self, obj_class: Symbol, target_class: Symbol) -> bool {
+        let target_class = self.canonical_class(target_class);
         if obj_class == target_class {
             return true;
         }
