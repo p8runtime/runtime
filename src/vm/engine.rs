@@ -2580,29 +2580,29 @@ impl VM {
                     }
 
                     // Check for matching catch block
-                    if let Some(type_sym) = entry.catch_type {
-                        if self.is_instance_of(ex_handle, type_sym) {
-                            // Execute any finally blocks collected so far before entering catch
-                            self.execute_finally_blocks(&finally_blocks);
-                            finally_blocks.clear();
+                    if let Some(type_sym) = entry.catch_type
+                        && self.is_instance_of(ex_handle, type_sym)
+                    {
+                        // Execute any finally blocks collected so far before entering catch
+                        self.execute_finally_blocks(&finally_blocks);
+                        finally_blocks.clear();
 
-                            // Found matching catch block; drop the temporaries of the
-                            // interrupted expression (e.g. a half-built call).
-                            self.frames.truncate(frame_idx + 1);
-                            let frame = &mut self.frames[frame_idx];
-                            frame.ip = entry.target as usize;
-                            let depth = frame.stack_base.unwrap_or(0) + entry.stack_depth as usize;
-                            self.operand_stack.truncate(depth);
-                            self.operand_stack.push(ex_handle);
+                        // Found matching catch block; drop the temporaries of the
+                        // interrupted expression (e.g. a half-built call).
+                        self.frames.truncate(frame_idx + 1);
+                        let frame = &mut self.frames[frame_idx];
+                        frame.ip = entry.target as usize;
+                        let depth = frame.stack_base.unwrap_or(0) + entry.stack_depth as usize;
+                        self.operand_stack.truncate(depth);
+                        self.operand_stack.push(ex_handle);
 
-                            // Mark finally for execution after catch completes
-                            if let Some(finally_tgt) = entry.finally_target {
-                                frame.pending_finally = Some(finally_tgt as usize);
-                            }
-
-                            found_catch = true;
-                            break;
+                        // Mark finally for execution after catch completes
+                        if let Some(finally_tgt) = entry.finally_target {
+                            frame.pending_finally = Some(finally_tgt as usize);
                         }
+
+                        found_catch = true;
+                        break;
                     }
                 }
             }
@@ -3411,7 +3411,7 @@ impl VM {
                 frame.called_scope = Some(class_name);
                 frame.discard_return = true;
 
-                if let Some(param) = method.params.get(0) {
+                if let Some(param) = method.params.first() {
                     frame.locals.insert(param.name, name_handle);
                 }
                 if let Some(param) = method.params.get(1) {
@@ -3421,9 +3421,7 @@ impl VM {
                 self.operand_stack.push(val_handle);
                 self.push_frame(frame);
             } else {
-                if let Err(e) = visibility_check {
-                    return Err(e);
-                }
+                visibility_check?;
 
                 // Check for dynamic property deprecation (PHP 8.2+)
                 if !prop_exists {
@@ -3437,36 +3435,25 @@ impl VM {
                         .map(|entry| (entry.is_readonly, cls))
                 });
 
-                if let Some((is_readonly, defining_class)) = prop_info {
-                    if is_readonly {
-                        // Check if already initialized in object
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                            if let Some(current_handle) =
-                                obj_data.properties.get(&prop_name)
-                            {
-                                let current_val = &self.arena.get(*current_handle).value;
-                                if !matches!(current_val, Val::Uninitialized) {
-                                    let class_str = String::from_utf8_lossy(
-                                        self.context
-                                            .interner
-                                            .lookup(defining_class)
-                                            .unwrap_or(b"???"),
-                                    );
-                                    let prop_str = String::from_utf8_lossy(
-                                        self.context
-                                            .interner
-                                            .lookup(prop_name)
-                                            .unwrap_or(b"???"),
-                                    );
-                                    return Err(VmError::RuntimeError(format!(
-                                        "Cannot modify readonly property {}::${}",
-                                        class_str, prop_str
-                                    )));
-                                }
-                            }
-                        }
-                    }
+                // A readonly property can only be set while uninitialized
+                if let Some((true, defining_class)) = prop_info
+                    && let Val::ObjPayload(obj_data) = &self.arena.get(payload_handle).value
+                    && let Some(current_handle) = obj_data.properties.get(&prop_name)
+                    && !matches!(self.arena.get(*current_handle).value, Val::Uninitialized)
+                {
+                    let class_str = String::from_utf8_lossy(
+                        self.context
+                            .interner
+                            .lookup(defining_class)
+                            .unwrap_or(b"???"),
+                    );
+                    let prop_str = String::from_utf8_lossy(
+                        self.context.interner.lookup(prop_name).unwrap_or(b"???"),
+                    );
+                    return Err(VmError::RuntimeError(format!(
+                        "Cannot modify readonly property {}::${}",
+                        class_str, prop_str
+                    )));
                 }
 
                 // Validate property type (check class definition for type hint)

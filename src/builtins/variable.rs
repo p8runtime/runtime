@@ -65,7 +65,8 @@ impl Dumper<'_> {
             Val::ConstArray(_) | Val::ObjPayload(_) => self.line(indent, b"NULL"),
             Val::Array(arr) => {
                 if self.visiting.contains(&handle) {
-                    return Ok(self.line(indent, b"*RECURSION*"));
+                    self.line(indent, b"*RECURSION*");
+                    return Ok(());
                 }
                 self.line(indent, format!("array({}) {{", arr.map.len()).as_bytes());
                 self.visiting.push(handle);
@@ -84,7 +85,10 @@ impl Dumper<'_> {
     fn object(&mut self, vm: &mut VM, handle: Handle, payload: Handle, indent: usize) -> Result<(), String> {
         let (class, props) = match &vm.arena.get(payload).value {
             Val::ObjPayload(obj) => (obj.class, obj.properties.clone()),
-            _ => return Ok(self.line(indent, b"NULL")),
+            _ => {
+                self.line(indent, b"NULL");
+                return Ok(());
+            }
         };
         let class_name = vm.context.interner.lookup(class).unwrap_or(b"").to_vec();
         let shown = display_class_name(&class_name).to_vec();
@@ -102,10 +106,12 @@ impl Dumper<'_> {
             text.extend_from_slice(b"::");
             text.extend_from_slice(&case);
             text.push(b')');
-            return Ok(self.line(indent, &text));
+            self.line(indent, &text);
+            return Ok(());
         }
         if self.visiting.contains(&payload) {
-            return Ok(self.line(indent, b"*RECURSION*"));
+            self.line(indent, b"*RECURSION*");
+            return Ok(());
         }
 
         // __debugInfo() replaces the property table.

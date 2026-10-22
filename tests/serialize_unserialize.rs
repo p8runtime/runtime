@@ -40,8 +40,8 @@ fn test_serialize_int_zero() {
 
 #[test]
 fn test_serialize_float() {
-    let result = run_php(r#"<?php return serialize(3.14);"#);
-    assert_eq!(result, Val::String(std::rc::Rc::new(b"d:3.14;".to_vec())));
+    let result = run_php(r#"<?php return serialize(2.75);"#);
+    assert_eq!(result, Val::String(std::rc::Rc::new(b"d:2.75;".to_vec())));
 }
 
 #[test]
@@ -195,8 +195,8 @@ fn test_unserialize_negative_int() {
 
 #[test]
 fn test_unserialize_float() {
-    let result = run_php(r#"<?php return unserialize("d:3.14;");"#);
-    assert_eq!(result, Val::Float(3.14));
+    let result = run_php(r#"<?php return unserialize("d:2.75;");"#);
+    assert_eq!(result, Val::Float(2.75));
 }
 
 #[test]
@@ -293,11 +293,11 @@ fn test_serialize_unserialize_roundtrip_int() {
 fn test_serialize_unserialize_roundtrip_float() {
     let result = run_php(
         r#"<?php 
-        $serialized = serialize(3.14159);
+        $serialized = serialize(2.71875);
         return unserialize($serialized);
     "#,
     );
-    assert_eq!(result, Val::Float(3.14159));
+    assert_eq!(result, Val::Float(2.71875));
 }
 
 #[test]

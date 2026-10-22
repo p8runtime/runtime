@@ -1584,7 +1584,7 @@ fn parse_strtotime(input: &str, base_timestamp: i64, tz: Tz) -> Option<i64> {
     // Unix timestamp format (@timestamp [timezone])
     // The timezone suffix is ignored - @ format is always interpreted as UTC timestamp
     if let Some(stripped) = input.strip_prefix('@') {
-        let ts_part = stripped.trim().split_whitespace().next().unwrap_or(stripped.trim());
+        let ts_part = stripped.split_whitespace().next().unwrap_or(stripped.trim());
         if let Ok(ts) = ts_part.parse::<i64>() {
             return Some(ts);
         }
@@ -1913,84 +1913,78 @@ fn parse_absolute_datetime(input: &str, base_dt: &NaiveDateTime, tz: Tz) -> Opti
     
     // gnunocolon with optional 't': t?HHMM (4-5 chars total)
     // HHMM (4 digits): 1530 → 15:30:00 today, t1530 → same
-    if has_time_prefix && time_input.len() == 4 && time_input.chars().all(|c| c.is_ascii_digit()) {
-        if let (Ok(hour), Ok(minute)) = (
-            time_input[..2].parse::<u32>(),
-            time_input[2..4].parse::<u32>()
-        ) {
-            if hour < 24 && minute < 60 {
-                let today = base_dt.date();
-                if let Some(time) = NaiveTime::from_hms_opt(hour, minute, 0) {
-                    let dt = NaiveDateTime::new(today, time);
-                    return Some(tz.from_local_datetime(&dt).single()?.timestamp());
-                }
-            }
-        }
+    if has_time_prefix
+        && time_input.len() == 4
+        && time_input.chars().all(|c| c.is_ascii_digit())
+        && let (Ok(hour), Ok(minute)) = (time_input[..2].parse::<u32>(), time_input[2..4].parse::<u32>())
+        && hour < 24
+        && minute < 60
+        && let Some(time) = NaiveTime::from_hms_opt(hour, minute, 0)
+    {
+        let dt = NaiveDateTime::new(base_dt.date(), time);
+        return Some(tz.from_local_datetime(&dt).single()?.timestamp());
     }
     
     // iso8601nocolon with optional 't': t?HHMMSS (6-7 chars total)
     // HHMMSS (6 digits): 202613 → 20:26:13 today, t202613 → same
-    if has_time_prefix && time_input.len() == 6 && time_input.chars().all(|c| c.is_ascii_digit()) {
-        if let (Ok(hour), Ok(minute), Ok(second)) = (
+    if has_time_prefix
+        && time_input.len() == 6
+        && time_input.chars().all(|c| c.is_ascii_digit())
+        && let (Ok(hour), Ok(minute), Ok(second)) = (
             time_input[..2].parse::<u32>(),
             time_input[2..4].parse::<u32>(),
-            time_input[4..6].parse::<u32>()
-        ) {
-            if hour < 24 && minute < 60 && second < 60 {
-                let today = base_dt.date();
-                if let Some(time) = NaiveTime::from_hms_opt(hour, minute, second) {
-                    let dt = NaiveDateTime::new(today, time);
-                    return Some(tz.from_local_datetime(&dt).single()?.timestamp());
-                }
-            }
-        }
+            time_input[4..6].parse::<u32>(),
+        )
+        && hour < 24
+        && minute < 60
+        && second < 60
+        && let Some(time) = NaiveTime::from_hms_opt(hour, minute, second)
+    {
+        let dt = NaiveDateTime::new(base_dt.date(), time);
+        return Some(tz.from_local_datetime(&dt).single()?.timestamp());
     }
     
     // Only try bare digit time formats if no 't' prefix
     if !has_time_prefix {
         // gnunocolon: HHMM (4 digits) → time today
-        if input.len() == 4 && input.chars().all(|c| c.is_ascii_digit()) {
-            if let (Ok(hour), Ok(minute)) = (
-                input[..2].parse::<u32>(),
-                input[2..4].parse::<u32>()
-            ) {
-                if hour < 24 && minute < 60 {
-                    let today = base_dt.date();
-                    if let Some(time) = NaiveTime::from_hms_opt(hour, minute, 0) {
-                        let dt = NaiveDateTime::new(today, time);
-                        return Some(tz.from_local_datetime(&dt).single()?.timestamp());
-                    }
-                }
-                // If HHMM validation fails (hour >= 24 or minute >= 60), try as year4
-                // This handles cases like '2560', '2461' which should be years
-                // PHP preserves the time from base_dt in this case
-                if let Ok(year) = input.parse::<i32>() {
-                    let today = base_dt.date();
-                    let month = today.month();
-                    let day = today.day();
-                    if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
-                        let naive = NaiveDateTime::new(date, base_dt.time());
-                        return Some(tz.from_local_datetime(&naive).single()?.timestamp());
-                    }
+        if input.len() == 4
+            && input.chars().all(|c| c.is_ascii_digit())
+            && let (Ok(hour), Ok(minute)) = (input[..2].parse::<u32>(), input[2..4].parse::<u32>())
+        {
+            if hour < 24
+                && minute < 60
+                && let Some(time) = NaiveTime::from_hms_opt(hour, minute, 0)
+            {
+                let dt = NaiveDateTime::new(base_dt.date(), time);
+                return Some(tz.from_local_datetime(&dt).single()?.timestamp());
+            }
+            // If HHMM validation fails (hour >= 24 or minute >= 60), try as year4
+            // This handles cases like '2560', '2461' which should be years
+            // PHP preserves the time from base_dt in this case
+            if let Ok(year) = input.parse::<i32>() {
+                let today = base_dt.date();
+                if let Some(date) = NaiveDate::from_ymd_opt(year, today.month(), today.day()) {
+                    let naive = NaiveDateTime::new(date, base_dt.time());
+                    return Some(tz.from_local_datetime(&naive).single()?.timestamp());
                 }
             }
         }
         
         // iso8601nocolon: HHMMSS (6 digits) → time today
-        if input.len() == 6 && input.chars().all(|c| c.is_ascii_digit()) {
-            if let (Ok(hour), Ok(minute), Ok(second)) = (
+        if input.len() == 6
+            && input.chars().all(|c| c.is_ascii_digit())
+            && let (Ok(hour), Ok(minute), Ok(second)) = (
                 input[..2].parse::<u32>(),
                 input[2..4].parse::<u32>(),
-                input[4..6].parse::<u32>()
-            ) {
-                if hour < 24 && minute < 60 && second < 60 {
-                    let today = base_dt.date();
-                    if let Some(time) = NaiveTime::from_hms_opt(hour, minute, second) {
-                        let dt = NaiveDateTime::new(today, time);
-                        return Some(tz.from_local_datetime(&dt).single()?.timestamp());
-                    }
-                }
-            }
+                input[4..6].parse::<u32>(),
+            )
+            && hour < 24
+            && minute < 60
+            && second < 60
+            && let Some(time) = NaiveTime::from_hms_opt(hour, minute, second)
+        {
+            let dt = NaiveDateTime::new(base_dt.date(), time);
+            return Some(tz.from_local_datetime(&dt).single()?.timestamp());
         }
         
         // pgydotd: YYYY-DDD or YYYY.DDD (8 chars with separator)
@@ -1999,68 +1993,59 @@ fn parse_absolute_datetime(input: &str, base_dt: &NaiveDateTime, tz: Tz) -> Opti
             if let Some(4) = sep_pos {
                 let year_part = &input[..4];
                 let doy_part = &input[5..];
-                if year_part.chars().all(|c| c.is_ascii_digit()) && doy_part.chars().all(|c| c.is_ascii_digit()) {
-                    if let (Ok(year), Ok(day_of_year)) = (
-                        year_part.parse::<i32>(),
-                        doy_part.parse::<u32>()
-                    ) {
-                        if day_of_year >= 1 && day_of_year <= 366 {
-                            if let Some(date) = NaiveDate::from_yo_opt(year, day_of_year) {
-                                let naive = date.and_hms_opt(0, 0, 0)?;
-                                return Some(tz.from_local_datetime(&naive).single()?.timestamp());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // pgydotd: YYYYDDD (7 digits), e.g., 2026113 = 2026 day 113 = April 23
-        if input.len() == 7 && input.chars().all(|c| c.is_ascii_digit()) {
-            if let (Ok(year), Ok(day_of_year)) = (
-                input[..4].parse::<i32>(),
-                input[4..].parse::<u32>()
-            ) {
-                if day_of_year >= 1 && day_of_year <= 366 {
-                    if let Some(date) = NaiveDate::from_yo_opt(year, day_of_year) {
-                        let naive = date.and_hms_opt(0, 0, 0)?;
-                        return Some(tz.from_local_datetime(&naive).single()?.timestamp());
-                    }
-                }
-            }
-        }
-        
-        // datenocolon: YYYYMMDD (8 digits), e.g., 20260113 = 2026-01-13
-        if input.len() == 8 && input.chars().all(|c| c.is_ascii_digit()) {
-            if let (Ok(year), Ok(month), Ok(day)) = (
-                input[..4].parse::<i32>(),
-                input[4..6].parse::<u32>(),
-                input[6..8].parse::<u32>()
-            ) {
-                if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+                if year_part.chars().all(|c| c.is_ascii_digit())
+                    && doy_part.chars().all(|c| c.is_ascii_digit())
+                    && let (Ok(year), Ok(day_of_year)) = (year_part.parse::<i32>(), doy_part.parse::<u32>())
+                    && (1..=366).contains(&day_of_year)
+                    && let Some(date) = NaiveDate::from_yo_opt(year, day_of_year)
+                {
                     let naive = date.and_hms_opt(0, 0, 0)?;
                     return Some(tz.from_local_datetime(&naive).single()?.timestamp());
                 }
             }
         }
         
+        // pgydotd: YYYYDDD (7 digits), e.g., 2026113 = 2026 day 113 = April 23
+        if input.len() == 7
+            && input.chars().all(|c| c.is_ascii_digit())
+            && let (Ok(year), Ok(day_of_year)) = (input[..4].parse::<i32>(), input[4..].parse::<u32>())
+            && (1..=366).contains(&day_of_year)
+            && let Some(date) = NaiveDate::from_yo_opt(year, day_of_year)
+        {
+            let naive = date.and_hms_opt(0, 0, 0)?;
+            return Some(tz.from_local_datetime(&naive).single()?.timestamp());
+        }
+        
+        // datenocolon: YYYYMMDD (8 digits), e.g., 20260113 = 2026-01-13
+        if input.len() == 8
+            && input.chars().all(|c| c.is_ascii_digit())
+            && let (Ok(year), Ok(month), Ok(day)) = (
+                input[..4].parse::<i32>(),
+                input[4..6].parse::<u32>(),
+                input[6..8].parse::<u32>(),
+            )
+            && let Some(date) = NaiveDate::from_ymd_opt(year, month, day)
+        {
+            let naive = date.and_hms_opt(0, 0, 0)?;
+            return Some(tz.from_local_datetime(&naive).single()?.timestamp());
+        }
+        
         // MySQL format: YYYYMMDDHHMMSS (14 digits)
-        if input.len() == 14 && input.chars().all(|c| c.is_ascii_digit()) {
-            if let (Ok(year), Ok(month), Ok(day), Ok(hour), Ok(minute), Ok(second)) = (
+        if input.len() == 14
+            && input.chars().all(|c| c.is_ascii_digit())
+            && let (Ok(year), Ok(month), Ok(day), Ok(hour), Ok(minute), Ok(second)) = (
                 input[..4].parse::<i32>(),
                 input[4..6].parse::<u32>(),
                 input[6..8].parse::<u32>(),
                 input[8..10].parse::<u32>(),
                 input[10..12].parse::<u32>(),
-                input[12..14].parse::<u32>()
-            ) {
-                if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
-                    if let Some(time) = NaiveTime::from_hms_opt(hour, minute, second) {
-                        let dt = NaiveDateTime::new(date, time);
-                        return Some(tz.from_local_datetime(&dt).single()?.timestamp());
-                    }
-                }
-            }
+                input[12..14].parse::<u32>(),
+            )
+            && let Some(date) = NaiveDate::from_ymd_opt(year, month, day)
+            && let Some(time) = NaiveTime::from_hms_opt(hour, minute, second)
+        {
+            let dt = NaiveDateTime::new(date, time);
+            return Some(tz.from_local_datetime(&dt).single()?.timestamp());
         }
     }
     
@@ -2132,61 +2117,57 @@ fn parse_absolute_datetime(input: &str, base_dt: &NaiveDateTime, tz: Tz) -> Opti
     }
     
     // D-M-YYYY: 2-3-2004 (day-month-year with dashes)
-    if let Some((day_str, rest)) = input.split_once('-') {
-        if let Some((month_str, year_str)) = rest.split_once('-') {
-            if let (Ok(day), Ok(month), Ok(year)) = (
-                day_str.parse::<u32>(),
-                month_str.parse::<u32>(),
-                year_str.parse::<i32>()
-            ) {
-                if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
-                    let naive = date.and_hms_opt(0, 0, 0)?;
-                    return Some(tz.from_local_datetime(&naive).single()?.timestamp());
-                }
-            }
-        }
+    if let Some((day_str, rest)) = input.split_once('-')
+        && let Some((month_str, year_str)) = rest.split_once('-')
+        && let (Ok(day), Ok(month), Ok(year)) = (
+            day_str.parse::<u32>(),
+            month_str.parse::<u32>(),
+            year_str.parse::<i32>(),
+        )
+        && let Some(date) = NaiveDate::from_ymd_opt(year, month, day)
+    {
+        let naive = date.and_hms_opt(0, 0, 0)?;
+        return Some(tz.from_local_datetime(&naive).single()?.timestamp());
     }
     
     // D.M.YYYY: 2.3.2004 (day.month.year with dots)
-    if let Some((day_str, rest)) = input.split_once('.') {
-        if let Some((month_str, year_str)) = rest.split_once('.') {
-            if let (Ok(day), Ok(month), Ok(year)) = (
-                day_str.parse::<u32>(),
-                month_str.parse::<u32>(),
-                year_str.parse::<i32>()
-            ) {
-                if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
-                    let naive = date.and_hms_opt(0, 0, 0)?;
-                    return Some(tz.from_local_datetime(&naive).single()?.timestamp());
-                }
-            }
-        }
+    if let Some((day_str, rest)) = input.split_once('.')
+        && let Some((month_str, year_str)) = rest.split_once('.')
+        && let (Ok(day), Ok(month), Ok(year)) = (
+            day_str.parse::<u32>(),
+            month_str.parse::<u32>(),
+            year_str.parse::<i32>(),
+        )
+        && let Some(date) = NaiveDate::from_ymd_opt(year, month, day)
+    {
+        let naive = date.and_hms_opt(0, 0, 0)?;
+        return Some(tz.from_local_datetime(&naive).single()?.timestamp());
     }
     
     // Month-only format: "January" or "JAN" - use current year and day from base
     let parts: Vec<&str> = input.split_whitespace().collect();
-    if parts.len() == 1 {
-        if let Some(month) = parse_month(parts[0]) {
-            let year = base_dt.year();
-            let day = base_dt.day();
-            // Clamp day to valid day in target month
-            let max_day_in_month = match month {
-                2 => {
-                    // Check for leap year
-                    if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-                        29
-                    } else {
-                        28
-                    }
+    if parts.len() == 1
+        && let Some(month) = parse_month(parts[0])
+    {
+        let year = base_dt.year();
+        let day = base_dt.day();
+        // Clamp day to valid day in target month
+        let max_day_in_month = match month {
+            2 => {
+                // Check for leap year
+                if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                    29
+                } else {
+                    28
                 }
-                4 | 6 | 9 | 11 => 30,
-                _ => 31,
-            };
-            let clamped_day = day.min(max_day_in_month);
-            if let Some(date) = NaiveDate::from_ymd_opt(year, month, clamped_day) {
-                let naive = date.and_hms_opt(0, 0, 0)?;
-                return Some(tz.from_local_datetime(&naive).single()?.timestamp());
             }
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        let clamped_day = day.min(max_day_in_month);
+        if let Some(date) = NaiveDate::from_ymd_opt(year, month, clamped_day) {
+            let naive = date.and_hms_opt(0, 0, 0)?;
+            return Some(tz.from_local_datetime(&naive).single()?.timestamp());
         }
     }
     
@@ -2208,8 +2189,8 @@ fn parse_absolute_datetime(input: &str, base_dt: &NaiveDateTime, tz: Tz) -> Opti
     ];
     
     for (suffix, offset_seconds) in &tz_suffixes {
-        if input.ends_with(suffix) {
-            let datetime_part = input[..input.len() - suffix.len()].trim();
+        if let Some(datetime_part) = input.strip_suffix(suffix) {
+            let datetime_part = datetime_part.trim();
             
             // Try various datetime formats
             if let Ok(dt) = NaiveDateTime::parse_from_str(datetime_part, "%Y-%m-%d %H:%M:%S") {
@@ -2284,7 +2265,7 @@ fn add_months(dt: &NaiveDateTime, months: i64) -> Option<NaiveDateTime> {
     // Get the last valid day of the target month
     let mut test_day = day;
     while test_day > 1 {
-        if let Some(_) = NaiveDate::from_ymd_opt(year, month as u32, test_day) {
+        if NaiveDate::from_ymd_opt(year, month as u32, test_day).is_some() {
             break;
         }
         test_day -= 1;
@@ -2319,7 +2300,7 @@ fn add_years(dt: &NaiveDateTime, years: i64) -> Option<NaiveDateTime> {
     // Calculate overflow
     let mut test_day = day;
     while test_day > 1 {
-        if let Some(_) = NaiveDate::from_ymd_opt(new_year, month, test_day) {
+        if NaiveDate::from_ymd_opt(new_year, month, test_day).is_some() {
             break;
         }
         test_day -= 1;
