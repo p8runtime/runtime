@@ -361,8 +361,8 @@ impl Extension for CoreExtension {
         registry.register_function(b"ini_set", variable::php_ini_set);
         registry.register_function(b"error_reporting", variable::php_error_reporting);
         registry.register_function(b"error_get_last", variable::php_error_get_last);
-        registry.register_function(b"serialize", variable::php_serialize);
-        registry.register_function(b"unserialize", variable::php_unserialize);
+        registry.register_function(b"serialize", crate::builtins::serialize::php_serialize);
+        registry.register_function(b"unserialize", crate::builtins::serialize::php_unserialize);
 
         // HTTP functions
         registry.register_function(b"header", http::php_header);
@@ -477,6 +477,7 @@ impl Extension for CoreExtension {
         registry.register_function(b"extension_loaded", function::php_extension_loaded);
         registry.register_function(b"spl_autoload_register", spl::php_spl_autoload_register);
         registry.register_function(b"spl_object_hash", spl::php_spl_object_hash);
+        registry.register_function(b"spl_object_id", spl::php_spl_object_id);
         registry.register_function(b"assert", function::php_assert);
 
         // Filesystem functions - File I/O

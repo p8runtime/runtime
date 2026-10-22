@@ -13,65 +13,98 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-/// Unescape a double-quoted string, processing escape sequences like \n, \r, \t, etc.
+/// Unescape a double-quoted string (or heredoc / interpolated part) the way
+/// Zend's scanner does: \n \t \r \v \e \f \\ \$ \", octal \[0-7]{1,3},
+/// hex \x[0-9a-f]{1,2} and \u{codepoint}; any other backslash is kept.
+/// Reference: $PHP_SRC_PATH/Zend/zend_language_scanner.l - zend_scan_escape_string
 fn unescape_string(s: &[u8]) -> Vec<u8> {
-    let mut result = Vec::new();
+    let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
-        if s[i] == b'\\' && i + 1 < s.len() {
-            match s[i + 1] {
-                b'n' => result.push(b'\n'),
-                b'r' => result.push(b'\r'),
-                b't' => result.push(b'\t'),
-                b'\\' => result.push(b'\\'),
-                b'$' => result.push(b'$'),
-                b'"' => result.push(b'"'),
-                b'\'' => result.push(b'\''),
-                b'v' => result.push(b'\x0B'), // vertical tab
-                b'e' => result.push(b'\x1B'), // escape
-                b'f' => result.push(b'\x0C'), // form feed
-                b'0' => result.push(b'\0'),   // null byte
-                // Hexadecimal: \xHH
-                b'x' if i + 3 < s.len() => {
-                    if let (Some(h1), Some(h2)) = (
-                        char::from(s[i + 2]).to_digit(16),
-                        char::from(s[i + 3]).to_digit(16),
-                    ) {
-                        result.push((h1 * 16 + h2) as u8);
-                        i += 2; // Skip the two hex digits
-                    } else {
-                        result.push(b'\\');
-                        result.push(s[i + 1]);
-                    }
+        if s[i] != b'\\' || i + 1 >= s.len() {
+            out.push(s[i]);
+            i += 1;
+            continue;
+        }
+        let c = s[i + 1];
+        i += 2;
+        match c {
+            b'n' => out.push(b'\n'),
+            b't' => out.push(b'\t'),
+            b'r' => out.push(b'\r'),
+            b'v' => out.push(0x0B),
+            b'e' => out.push(0x1B),
+            b'f' => out.push(0x0C),
+            b'\\' | b'$' | b'"' => out.push(c),
+            b'0'..=b'7' => {
+                let mut value = u32::from(c - b'0');
+                let mut digits = 1;
+                while digits < 3 && i < s.len() && (b'0'..=b'7').contains(&s[i]) {
+                    value = value * 8 + u32::from(s[i] - b'0');
+                    i += 1;
+                    digits += 1;
                 }
-                // Octal: \nnn (up to 3 digits)
-                b'0'..=b'7' => {
-                    let mut octal_val = s[i + 1] - b'0';
-                    let mut consumed = 1;
-                    if i + 2 < s.len() && (b'0'..=b'7').contains(&s[i + 2]) {
-                        octal_val = octal_val * 8 + (s[i + 2] - b'0');
-                        consumed = 2;
-                        if i + 3 < s.len() && (b'0'..=b'7').contains(&s[i + 3]) {
-                            octal_val = octal_val * 8 + (s[i + 3] - b'0');
-                            consumed = 3;
-                        }
-                    }
-                    result.push(octal_val);
-                    i += consumed;
+                out.push(value as u8); // "\400" wraps, as in PHP
+            }
+            b'x' if i < s.len() && s[i].is_ascii_hexdigit() => {
+                let mut value = 0u32;
+                let mut digits = 0;
+                while digits < 2 && i < s.len() && s[i].is_ascii_hexdigit() {
+                    value = value * 16 + char::from(s[i]).to_digit(16).unwrap_or(0);
+                    i += 1;
+                    digits += 1;
                 }
-                _ => {
-                    // Unknown escape, keep both characters
-                    result.push(b'\\');
-                    result.push(s[i + 1]);
+                out.push(value as u8);
+            }
+            b'u' if s.get(i) == Some(&b'{') => {
+                let end = s[i..].iter().position(|b| *b == b'}').map(|p| i + p);
+                let code = end.and_then(|end| {
+                    std::str::from_utf8(&s[i + 1..end])
+                        .ok()
+                        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                        .and_then(char::from_u32)
+                });
+                match (end, code) {
+                    (Some(end), Some(ch)) => {
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                        i = end + 1;
+                    }
+                    _ => out.extend_from_slice(b"\\u"),
                 }
             }
-            i += 2;
-        } else {
-            result.push(s[i]);
-            i += 1;
+            _ => {
+                out.push(b'\\');
+                out.push(c);
+            }
         }
     }
-    result
+    out
+}
+
+/// The value of a string literal token: '...' (only \\ and \' are escapes),
+/// "..." (full escapes) or an unquoted interpolation/heredoc part.
+fn string_literal(value: &[u8]) -> Vec<u8> {
+    let quoted = |q: u8| value.len() >= 2 && value[0] == q && value[value.len() - 1] == q;
+    if quoted(b'\'') {
+        let inner = &value[1..value.len() - 1];
+        let mut out = Vec::with_capacity(inner.len());
+        let mut i = 0;
+        while i < inner.len() {
+            if inner[i] == b'\\' && matches!(inner.get(i + 1), Some(b'\'' | b'\\')) {
+                out.push(inner[i + 1]);
+                i += 2;
+            } else {
+                out.push(inner[i]);
+                i += 1;
+            }
+        }
+        out
+    } else if quoted(b'"') {
+        unescape_string(&value[1..value.len() - 1])
+    } else {
+        unescape_string(value)
+    }
 }
 
 struct LoopInfo {
@@ -1653,42 +1686,7 @@ impl<'src> Emitter<'src> {
                 Some(Val::Int(i))
             }
             Expr::String { value, .. } => {
-                let s = if value.len() >= 2 {
-                    let first = value[0];
-                    let last = value[value.len() - 1];
-                    if first == b'"' && last == b'"' {
-                        let inner = &value[1..value.len() - 1];
-                        unescape_string(inner)
-                    } else if first == b'\'' && last == b'\'' {
-                        let inner = &value[1..value.len() - 1];
-                        let mut result = Vec::new();
-                        let mut i = 0;
-                        while i < inner.len() {
-                            if inner[i] == b'\\' && i + 1 < inner.len() {
-                                if inner[i + 1] == b'\'' || inner[i + 1] == b'\\' {
-                                    result.push(inner[i + 1]);
-                                    i += 2;
-                                } else {
-                                    result.push(inner[i]);
-                                    i += 1;
-                                }
-                            } else {
-                                result.push(inner[i]);
-                                i += 1;
-                            }
-                        }
-                        result
-                    } else {
-                        // No quotes - this is from string interpolation (EncapsedAndWhitespace)
-                        // These strings need unescaping too
-                        unescape_string(value)
-                    }
-                } else if !value.is_empty() {
-                    // Short string without quotes - also from interpolation
-                    unescape_string(value)
-                } else {
-                    value.to_vec()
-                };
+                let s = string_literal(value);
                 Some(Val::String(s.into()))
             }
             Expr::Boolean { value, .. } => Some(Val::Bool(*value)),
@@ -1719,44 +1717,7 @@ impl<'src> Emitter<'src> {
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
             Expr::String { value, .. } => {
-                let s = if value.len() >= 2 {
-                    let first = value[0];
-                    let last = value[value.len() - 1];
-                    if first == b'"' && last == b'"' {
-                        // Double-quoted string: unescape escape sequences
-                        let inner = &value[1..value.len() - 1];
-                        unescape_string(inner)
-                    } else if first == b'\'' && last == b'\'' {
-                        // Single-quoted string: no escape processing (except \' and \\)
-                        let inner = &value[1..value.len() - 1];
-                        let mut result = Vec::new();
-                        let mut i = 0;
-                        while i < inner.len() {
-                            if inner[i] == b'\\' && i + 1 < inner.len() {
-                                if inner[i + 1] == b'\'' || inner[i + 1] == b'\\' {
-                                    result.push(inner[i + 1]);
-                                    i += 2;
-                                } else {
-                                    result.push(inner[i]);
-                                    i += 1;
-                                }
-                            } else {
-                                result.push(inner[i]);
-                                i += 1;
-                            }
-                        }
-                        result
-                    } else {
-                        // No quotes - this is from string interpolation (EncapsedAndWhitespace)
-                        // These strings need unescaping too
-                        unescape_string(value)
-                    }
-                } else if !value.is_empty() {
-                    // Short string without quotes - also from interpolation
-                    unescape_string(value)
-                } else {
-                    value.to_vec()
-                };
+                let s = string_literal(value);
                 let idx = self.add_constant(Val::String(s.into()));
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
@@ -2061,9 +2022,6 @@ impl<'src> Emitter<'src> {
                         self.chunk.code.push(OpCode::BeginSilence);
                         self.emit_expr(expr);
                         self.chunk.code.push(OpCode::EndSilence);
-                    }
-                    _ => {
-                        self.emit_expr(expr);
                     }
                 }
             }
@@ -3794,17 +3752,7 @@ impl<'src> Emitter<'src> {
                     Val::Float(0.0)
                 }
             }
-            Expr::String { value, .. } => {
-                let s = value;
-                if s.len() >= 2
-                    && ((s[0] == b'"' && s[s.len() - 1] == b'"')
-                        || (s[0] == b'\'' && s[s.len() - 1] == b'\''))
-                {
-                    Val::String(s[1..s.len() - 1].to_vec().into())
-                } else {
-                    Val::String(s.to_vec().into())
-                }
-            }
+            Expr::String { value, .. } => Val::String(string_literal(value).into()),
             Expr::Boolean { value, .. } => Val::Bool(*value),
             Expr::Null { .. } => Val::Null,
             Expr::Array { items, .. } => {

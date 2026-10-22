@@ -318,6 +318,8 @@ pub struct VM {
     pub frames: Vec<CallFrame>,
     pub context: RequestContext,
     pub last_return_value: Option<Handle>,
+    /// A Throwable raised by a builtin via `throw_from_native`, thrown when the builtin returns.
+    pub(crate) pending_throw: Option<Handle>,
     pub silence_stack: Vec<u32>,
     pub pending_calls: Vec<PendingCall>,
     pub output_writer: Box<dyn OutputWriter>,
@@ -378,6 +380,7 @@ impl VM {
             frames: Vec::new(),
             context: RequestContext::new(engine_context),
             last_return_value: None,
+            pending_throw: None,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -788,6 +791,7 @@ impl VM {
             frames: Vec::new(),
             context,
             last_return_value: None,
+            pending_throw: None,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -1146,7 +1150,7 @@ impl VM {
             .into_owned()
     }
 
-    fn trigger_autoload(&mut self, class_name: Symbol) -> Result<(), VmError> {
+    pub(crate) fn trigger_autoload(&mut self, class_name: Symbol) -> Result<(), VmError> {
         let callsite_strict_types = self
             .frames
             .last()
@@ -1278,6 +1282,17 @@ impl VM {
         obj_handle: Handle,
         method_name: Symbol,
     ) -> Result<Handle, VmError> {
+        self.call_method(obj_handle, method_name, &[])
+    }
+
+    /// Call a method on an object from native code: user-defined methods
+    /// first, then native ones.
+    pub(crate) fn call_method(
+        &mut self,
+        obj_handle: Handle,
+        method_name: Symbol,
+        args: &[Handle],
+    ) -> Result<Handle, VmError> {
         let class_name = if let Val::Object(h) = self.arena.get(obj_handle).value {
             if let Val::ObjPayload(data) = &self.arena.get(h).value {
                 data.class
@@ -1297,6 +1312,7 @@ impl VM {
             frame.class_scope = Some(declaring_class);
             frame.called_scope = Some(class_name);
             frame.stack_base = Some(self.operand_stack.len());
+            frame.args = args.to_vec().into();
             let depth = self.frames.len();
             self.push_frame(frame);
             self.run_loop(depth)?;
@@ -1314,7 +1330,7 @@ impl VM {
             if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = Some(obj_handle);
             }
-            let result = (native_entry.handler)(self, &[]).map_err(VmError::RuntimeError)?;
+            let result = (native_entry.handler)(self, args).map_err(|e| self.native_error(e))?;
             if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = saved_this;
             }
@@ -1784,7 +1800,7 @@ impl VM {
     }
 
     /// Convert type hint to string for error messages
-    fn type_hint_to_string(&self, hint: &TypeHint) -> String {
+    pub(crate) fn type_hint_to_string(&self, hint: &TypeHint) -> String {
         match hint {
             TypeHint::Int => "int".to_string(),
             TypeHint::Float => "float".to_string(),
@@ -2465,7 +2481,7 @@ impl VM {
         false
     }
 
-    fn is_instance_of(&self, obj_handle: Handle, class_sym: Symbol) -> bool {
+    pub(crate) fn is_instance_of(&self, obj_handle: Handle, class_sym: Symbol) -> bool {
         let obj_val = self.arena.get(obj_handle);
         if let Val::Object(payload_handle) = obj_val.value {
             if let Val::ObjPayload(data) = &self.arena.get(payload_handle).value {
@@ -3062,7 +3078,7 @@ impl VM {
         for h in self.context.globals.values() {
             push(*h);
         }
-        for h in [self.last_return_value, self.finally_return_value]
+        for h in [self.last_return_value, self.finally_return_value, self.pending_throw]
             .into_iter()
             .flatten()
         {
@@ -3437,9 +3453,8 @@ impl VM {
         Ok(())
     }
 
-    /// Raise a built-in Throwable as if by `throw new $class($message)`, from
-    /// inside an opcode or builtin: `return Err(vm.throw_error(b"TypeError", msg))`.
-    pub(crate) fn throw_error(&mut self, class: &[u8], message: &str) -> VmError {
+    /// A new instance of a built-in Throwable class with `message` set.
+    fn new_throwable(&mut self, class: &[u8], message: &str) -> Handle {
         let class_sym = self.context.interner.intern(class);
         let properties = self.collect_properties(class_sym, PropertyCollectionMode::All);
         let payload = self.arena.alloc(Val::ObjPayload(ObjectData {
@@ -3448,16 +3463,44 @@ impl VM {
             internal: None,
             dynamic_properties: std::collections::HashSet::new(),
         }));
-        let ex_handle = self.arena.alloc(Val::Object(payload));
         let message_sym = self.context.interner.intern(b"message");
         let message_val = self.arena.alloc(Val::String(message.as_bytes().to_vec().into()));
         if let Val::ObjPayload(obj) = &mut self.arena.get_mut(payload).value {
             obj.properties.insert(message_sym, message_val);
         }
-        self.operand_stack.push(ex_handle);
+        self.arena.alloc(Val::Object(payload))
+    }
+
+    /// Throw `handle` (a Throwable) from inside an opcode handler.
+    fn throw_handle(&mut self, handle: Handle) -> VmError {
+        self.operand_stack.push(handle);
         match self.exec_throw() {
             Err(e) => e,
-            Ok(()) => VmError::RuntimeError(message.to_string()),
+            Ok(()) => VmError::RuntimeError("throw did not raise".into()),
+        }
+    }
+
+    /// Raise a built-in Throwable as if by `throw new $class($message)`, from
+    /// inside an opcode handler: `return Err(vm.throw_error(b"TypeError", msg))`.
+    pub(crate) fn throw_error(&mut self, class: &[u8], message: &str) -> VmError {
+        let handle = self.new_throwable(class, message);
+        self.throw_handle(handle)
+    }
+
+    /// Raise a built-in Throwable from a builtin function or method:
+    /// `return Err(vm.throw_from_native(b"ValueError", msg))`. The exception is
+    /// thrown when the builtin returns.
+    pub fn throw_from_native(&mut self, class: &[u8], message: &str) -> String {
+        let handle = self.new_throwable(class, message);
+        self.pending_throw = Some(handle);
+        message.to_string()
+    }
+
+    /// Turn a builtin's error into a VmError, throwing its pending Throwable if it raised one.
+    pub(crate) fn native_error(&mut self, message: String) -> VmError {
+        match self.pending_throw.take() {
+            Some(handle) => self.throw_handle(handle),
+            None => VmError::RuntimeError(message),
         }
     }
 
@@ -7448,7 +7491,7 @@ impl VM {
 
                             // Call native handler
                             let _result = (native_entry.handler)(self, &args)
-                                .map_err(VmError::RuntimeError)?;
+                                .map_err(|e| self.native_error(e))?;
 
                             // Restore previous this
                             if let Some(frame) = self.frames.last_mut() {
@@ -11604,7 +11647,7 @@ impl VM {
     }
 
     #[inline]
-    fn array_key_from_value(&self, value: &Val) -> Result<ArrayKey, VmError> {
+    pub(crate) fn array_key_from_value(&self, value: &Val) -> Result<ArrayKey, VmError> {
         match value {
             Val::Int(i) => Ok(ArrayKey::Int(*i)),
             Val::Bool(b) => Ok(ArrayKey::Int(if *b { 1 } else { 0 })),
@@ -12283,7 +12326,7 @@ impl VM {
             }
 
             // Call native handler
-            let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+            let result = (native_entry.handler)(self, &args).map_err(|e| self.native_error(e))?;
 
             // Restore previous this
             if let Some(frame) = self.frames.get_mut(frame_idx) {
@@ -12436,7 +12479,7 @@ impl VM {
                 frame.class_scope = Some(native_entry.declaring_class);
             }
 
-            let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+            let result = (native_entry.handler)(self, &args).map_err(|e| self.native_error(e))?;
 
             if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.called_scope = saved_called_scope;

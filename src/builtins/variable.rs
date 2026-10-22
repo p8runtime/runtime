@@ -3,142 +3,185 @@ use crate::vm::engine::VM;
 use std::rc::Rc;
 
 pub fn php_var_dump(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    for arg in args {
-        // Check for __debugInfo
-        let class_sym = if let Val::Object(obj_handle) = vm.arena.get(*arg).value {
-            if let Val::ObjPayload(obj_data) = &vm.arena.get(obj_handle).value {
-                Some((obj_handle, obj_data.class))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some((obj_handle, class)) = class_sym {
-            let debug_info_sym = vm.context.interner.intern(b"__debugInfo");
-            if let Some((method, _, _, _)) = vm.find_method(class, debug_info_sym) {
-                let mut frame = crate::vm::frame::CallFrame::new(method.chunk.clone());
-                frame.func = Some(method.clone());
-                frame.this = Some(obj_handle);
-                frame.class_scope = Some(class);
-
-                let res = vm.run_frame(frame);
-                if let Ok(res_handle) = res {
-                    let res_val = vm.arena.get(res_handle);
-                    if let Val::Array(arr) = &res_val.value {
-                        println!(
-                            "object({}) ({}) {{",
-                            String::from_utf8_lossy(
-                                vm.context.interner.lookup(class).unwrap_or(b"")
-                            ),
-                            arr.map.len()
-                        );
-                        for (key, val_handle) in arr.map.iter() {
-                            match key {
-                                crate::core::value::ArrayKey::Int(i) => print!("  [{}]=>\n", i),
-                                crate::core::value::ArrayKey::Str(s) => {
-                                    print!("  [\"{}\"]=>\n", String::from_utf8_lossy(s))
-                                }
-                            }
-                            dump_value(vm, *val_handle, 1);
-                        }
-                        println!("}}");
-                        continue;
-                    }
-                }
-            }
-        }
-
-        dump_value(vm, *arg, 0);
+    for &arg in args {
+        let mut out = Vec::new();
+        let mut dumper = Dumper { out: &mut out, visiting: Vec::new() };
+        dumper.value(vm, arg, 0)?;
+        vm.print_bytes(&out)?;
     }
     Ok(vm.arena.alloc(Val::Null))
 }
 
-fn dump_value(vm: &VM, handle: Handle, depth: usize) {
-    let val = vm.arena.get(handle);
-    let indent = "  ".repeat(depth);
+/// var_dump's writer.
+/// Reference: $PHP_SRC_PATH/ext/standard/var.c - php_var_dump
+struct Dumper<'a> {
+    out: &'a mut Vec<u8>,
+    /// Arrays and objects being dumped, to print *RECURSION* on a cycle.
+    visiting: Vec<Handle>,
+}
 
-    match &val.value {
-        Val::String(s) => {
-            println!(
-                "{}string({}) \"{}\"",
-                indent,
-                s.len(),
-                String::from_utf8_lossy(s)
-            );
-        }
-        Val::Int(i) => {
-            println!("{}int({})", indent, i);
-        }
-        Val::Float(f) => {
-            println!("{}float({})", indent, crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::Shortest, 'E'));
-        }
-        Val::Bool(b) => {
-            println!("{}bool({})", indent, b);
-        }
-        Val::Null => {
-            println!("{}NULL", indent);
-        }
-        Val::ConstArray(arr) => {
-            // ConstArray shouldn't appear at runtime, but handle it just in case
-            println!("{}array({}) {{ /* const array */ }}", indent, arr.len());
-        }
-        Val::Array(arr) => {
-            println!("{}array({}) {{", indent, arr.map.len());
-            for (key, val_handle) in arr.map.iter() {
-                match key {
-                    crate::core::value::ArrayKey::Int(i) => print!("{}  [{}]=>\n", indent, i),
-                    crate::core::value::ArrayKey::Str(s) => {
-                        print!("{}  [\"{}\"]=>\n", indent, String::from_utf8_lossy(s))
-                    }
-                }
-                dump_value(vm, *val_handle, depth + 1);
+impl Dumper<'_> {
+    fn line(&mut self, indent: usize, text: &[u8]) {
+        self.out.extend(std::iter::repeat_n(b' ', indent));
+        self.out.extend_from_slice(text);
+        self.out.push(b'\n');
+    }
+
+    fn key(&mut self, indent: usize, key: &crate::core::value::ArrayKey) {
+        let mut text = Vec::new();
+        match key {
+            crate::core::value::ArrayKey::Int(i) => text.extend_from_slice(format!("[{}]=>", i).as_bytes()),
+            crate::core::value::ArrayKey::Str(s) => {
+                text.extend_from_slice(b"[\"");
+                text.extend_from_slice(s);
+                text.extend_from_slice(b"\"]=>");
             }
-            println!("{}}}", indent);
         }
-        Val::Object(handle) => {
-            // Dereference the object payload
-            let payload_val = vm.arena.get(*handle);
-            if let Val::ObjPayload(obj) = &payload_val.value {
-                let class_name = vm
-                    .context
-                    .interner
-                    .lookup(obj.class)
-                    .unwrap_or(b"<unknown>");
-                println!(
-                    "{}object({})#{} ({}) {{",
-                    indent,
-                    String::from_utf8_lossy(class_name),
-                    handle.index(),
-                    obj.properties.len()
+        self.line(indent, &text);
+    }
+
+    fn value(&mut self, vm: &mut VM, handle: Handle, indent: usize) -> Result<(), String> {
+        let val = vm.arena.get(handle).value.clone();
+        match val {
+            Val::Null | Val::AppendPlaceholder => self.line(indent, b"NULL"),
+            Val::Uninitialized => self.line(indent, b"uninitialized"),
+            Val::Bool(b) => self.line(indent, if b { b"bool(true)" } else { b"bool(false)" }),
+            Val::Int(i) => self.line(indent, format!("int({})", i).as_bytes()),
+            Val::Float(f) => {
+                let text = crate::core::value::php_float_to_string(
+                    f,
+                    crate::core::value::FloatPrecision::Shortest,
+                    'E',
                 );
-                for (prop_sym, prop_handle) in &obj.properties {
-                    let prop_name = vm
-                        .context
-                        .interner
-                        .lookup(*prop_sym)
-                        .unwrap_or(b"<unknown>");
-                    println!("{}  [\"{}\"]=>", indent, String::from_utf8_lossy(prop_name));
-                    dump_value(vm, *prop_handle, depth + 1);
+                self.line(indent, format!("float({})", text).as_bytes());
+            }
+            Val::String(s) => {
+                let mut text = format!("string({}) \"", s.len()).into_bytes();
+                text.extend_from_slice(&s);
+                text.push(b'"');
+                self.line(indent, &text);
+            }
+            Val::Resource(_) => self.line(indent, b"resource(0) of type (Unknown)"),
+            Val::ConstArray(_) | Val::ObjPayload(_) => self.line(indent, b"NULL"),
+            Val::Array(arr) => {
+                if self.visiting.contains(&handle) {
+                    return Ok(self.line(indent, b"*RECURSION*"));
                 }
-                println!("{}}}", indent);
+                self.line(indent, format!("array({}) {{", arr.map.len()).as_bytes());
+                self.visiting.push(handle);
+                for (key, &element) in arr.map.iter() {
+                    self.key(indent + 2, key);
+                    self.value(vm, element, indent + 2)?;
+                }
+                self.visiting.pop();
+                self.line(indent, b"}");
+            }
+            Val::Object(payload) => self.object(vm, handle, payload, indent)?,
+        }
+        Ok(())
+    }
+
+    fn object(&mut self, vm: &mut VM, handle: Handle, payload: Handle, indent: usize) -> Result<(), String> {
+        let (class, props) = match &vm.arena.get(payload).value {
+            Val::ObjPayload(obj) => (obj.class, obj.properties.clone()),
+            _ => return Ok(self.line(indent, b"NULL")),
+        };
+        let class_name = vm.context.interner.lookup(class).unwrap_or(b"").to_vec();
+        let shown = display_class_name(&class_name).to_vec();
+
+        if let Some(def) = vm.context.classes.get(&class).filter(|d| d.is_enum) {
+            let case = def
+                .enum_cases
+                .iter()
+                .find(|c| vm.arena.get(c.handle).value == Val::Object(payload))
+                .and_then(|c| vm.context.interner.lookup(c.name))
+                .unwrap_or(b"")
+                .to_vec();
+            let mut text = b"enum(".to_vec();
+            text.extend_from_slice(&shown);
+            text.extend_from_slice(b"::");
+            text.extend_from_slice(&case);
+            text.push(b')');
+            return Ok(self.line(indent, &text));
+        }
+        if self.visiting.contains(&payload) {
+            return Ok(self.line(indent, b"*RECURSION*"));
+        }
+
+        // __debugInfo() replaces the property table.
+        let debug_info = vm.context.interner.intern(b"__debugInfo");
+        let entries: Vec<(Vec<u8>, Handle, Option<crate::core::value::Symbol>)> = if vm.find_method(class, debug_info).is_some() {
+            let res = vm
+                .call_method(handle, debug_info, &[])
+                .map_err(|e| format!("{:?}", e))?;
+            match vm.arena.get(res).value.clone() {
+                Val::Array(arr) => arr
+                    .map
+                    .iter()
+                    .map(|(k, v)| {
+                        let name = match k {
+                            crate::core::value::ArrayKey::Int(i) => format!("[{}]=>", i).into_bytes(),
+                            crate::core::value::ArrayKey::Str(s) => {
+                                [b"[\"".as_slice(), s, b"\"]=>"].concat()
+                            }
+                        };
+                        (name, *v, None)
+                    })
+                    .collect(),
+                _ => {
+                    let msg = "__debuginfo() must return an array";
+                    return Err(vm.throw_from_native(b"Error", msg));
+                }
+            }
+        } else {
+            props
+                .iter()
+                .map(|(prop, v)| {
+                    let name = vm.context.interner.lookup(*prop).unwrap_or(b"").to_vec();
+                    let owner = vm.walk_inheritance_chain(class, |def, cls| {
+                        def.properties.get(prop).map(|entry| (cls, entry.visibility))
+                    });
+                    let label = match owner {
+                        Some((_, crate::core::value::Visibility::Protected)) => {
+                            [b"[\"".as_slice(), &name, b"\":protected]=>"].concat()
+                        }
+                        Some((cls, crate::core::value::Visibility::Private)) => {
+                            let cls = vm.context.interner.lookup(cls).unwrap_or(b"");
+                            [b"[\"".as_slice(), &name, b"\":\"", display_class_name(cls), b"\":private]=>"].concat()
+                        }
+                        _ => [b"[\"".as_slice(), &name, b"\"]=>"].concat(),
+                    };
+                    (label, *v, Some(*prop))
+                })
+                .collect()
+        };
+
+        let initialized = entries
+            .iter()
+            .filter(|(_, v, _)| !matches!(vm.arena.get(*v).value, Val::Uninitialized))
+            .count();
+        let mut header = b"object(".to_vec();
+        header.extend_from_slice(&shown);
+        header.extend_from_slice(format!(")#{} ({}) {{", payload.index(), initialized).as_bytes());
+        self.line(indent, &header);
+        self.visiting.push(payload);
+        for (label, value, prop) in entries {
+            self.line(indent + 2, &label);
+            if let (Val::Uninitialized, Some(prop)) = (&vm.arena.get(value).value, prop) {
+                let ty = vm
+                    .walk_inheritance_chain(class, |def, _| {
+                        def.properties.get(&prop).and_then(|e| e.type_hint.clone())
+                    })
+                    .map(|t| vm.type_hint_to_string(&t))
+                    .unwrap_or_else(|| "mixed".into());
+                self.line(indent + 2, format!("uninitialized({})", ty).as_bytes());
             } else {
-                println!("{}object(INVALID)", indent);
+                self.value(vm, value, indent + 2)?;
             }
         }
-        Val::ObjPayload(_) => {
-            println!("{}ObjPayload(Internal)", indent);
-        }
-        Val::Resource(_) => {
-            println!("{}resource", indent);
-        }
-        Val::AppendPlaceholder => {
-            println!("{}AppendPlaceholder", indent);
-        }
-        Val::Uninitialized => {
-            println!("{}uninitialized", indent);
-        }
+        self.visiting.pop();
+        self.line(indent, b"}");
+        Ok(())
     }
 }
 
@@ -164,7 +207,7 @@ pub fn php_var_export(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if return_res {
         Ok(vm.arena.alloc(Val::String(output.into_bytes().into())))
     } else {
-        print!("{}", output);
+        vm.print_bytes(output.as_bytes())?;
         Ok(vm.arena.alloc(Val::Null))
     }
 }
@@ -218,6 +261,12 @@ fn export_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                     }
                 }
                 output.push_str(" => ");
+                // Nested arrays and objects start on their own line.
+                if matches!(vm.arena.get(*val_handle).value, Val::Array(_) | Val::Object(_)) {
+                    output.push('\n');
+                    output.push_str(&indent);
+                    output.push_str("  ");
+                }
                 export_value(vm, *val_handle, depth + 1, output);
                 output.push_str(",\n");
             }
@@ -353,7 +402,7 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                     .interner
                     .lookup(obj.class)
                     .unwrap_or(b"<unknown>");
-                output.push_str(&String::from_utf8_lossy(class_name));
+                output.push_str(&String::from_utf8_lossy(display_class_name(class_name)));
                 output.push_str(" Object\n");
                 output.push_str(&indent);
                 output.push_str("(\n");
@@ -867,444 +916,9 @@ pub fn php_error_get_last(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
     }
 }
 
-pub fn php_serialize(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() {
-        return Err("serialize() expects exactly 1 argument, 0 given".into());
-    }
 
-    let value = args[0];
-    let serialized = serialize_value(vm, value)?;
-    Ok(vm.arena.alloc(Val::String(Rc::new(serialized))))
-}
-
-fn serialize_value(vm: &VM, handle: Handle) -> Result<Vec<u8>, String> {
-    let val = vm.arena.get(handle);
-    let mut result = Vec::new();
-
-    match &val.value {
-        Val::Null => {
-            result.extend_from_slice(b"N;");
-        }
-        Val::Bool(b) => {
-            if *b {
-                result.extend_from_slice(b"b:1;");
-            } else {
-                result.extend_from_slice(b"b:0;");
-            }
-        }
-        Val::Int(i) => {
-            result.extend_from_slice(b"i:");
-            result.extend_from_slice(i.to_string().as_bytes());
-            result.push(b';');
-        }
-        Val::Float(f) => {
-            result.extend_from_slice(b"d:");
-            result.extend_from_slice(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::Shortest, 'E').as_bytes());
-            result.push(b';');
-        }
-        Val::String(s) => {
-            result.extend_from_slice(b"s:");
-            result.extend_from_slice(s.len().to_string().as_bytes());
-            result.extend_from_slice(b":\"");
-            result.extend_from_slice(s);
-            result.extend_from_slice(b"\";");
-        }
-        Val::Array(arr) => {
-            result.extend_from_slice(b"a:");
-            result.extend_from_slice(arr.map.len().to_string().as_bytes());
-            result.extend_from_slice(b":{");
-            for (key, val_handle) in arr.map.iter() {
-                match key {
-                    crate::core::value::ArrayKey::Int(i) => {
-                        result.extend_from_slice(b"i:");
-                        result.extend_from_slice(i.to_string().as_bytes());
-                        result.push(b';');
-                    }
-                    crate::core::value::ArrayKey::Str(s) => {
-                        result.extend_from_slice(b"s:");
-                        result.extend_from_slice(s.len().to_string().as_bytes());
-                        result.extend_from_slice(b":\"");
-                        result.extend_from_slice(s);
-                        result.extend_from_slice(b"\";");
-                    }
-                }
-                let val_serialized = serialize_value(vm, *val_handle)?;
-                result.extend_from_slice(&val_serialized);
-            }
-            result.push(b'}');
-        }
-        Val::ConstArray(arr) => {
-            result.extend_from_slice(b"a:");
-            result.extend_from_slice(arr.len().to_string().as_bytes());
-            result.extend_from_slice(b":{");
-            for (key, val) in arr.iter() {
-                match key {
-                    crate::core::value::ConstArrayKey::Int(i) => {
-                        result.extend_from_slice(b"i:");
-                        result.extend_from_slice(i.to_string().as_bytes());
-                        result.push(b';');
-                    }
-                    crate::core::value::ConstArrayKey::Str(s) => {
-                        result.extend_from_slice(b"s:");
-                        result.extend_from_slice(s.len().to_string().as_bytes());
-                        result.extend_from_slice(b":\"");
-                        result.extend_from_slice(s);
-                        result.extend_from_slice(b"\";");
-                    }
-                }
-                // ConstArray contains Val directly, serialize it recursively
-                let val_serialized = serialize_val(vm, val)?;
-                result.extend_from_slice(&val_serialized);
-            }
-            result.push(b'}');
-        }
-        Val::Object(obj_handle) => {
-            if let Val::ObjPayload(obj_data) = &vm.arena.get(*obj_handle).value {
-                let class_name = vm
-                    .context
-                    .interner
-                    .lookup(obj_data.class)
-                    .unwrap_or(b"stdClass");
-                
-                result.extend_from_slice(b"O:");
-                result.extend_from_slice(class_name.len().to_string().as_bytes());
-                result.extend_from_slice(b":\"");
-                result.extend_from_slice(class_name);
-                result.extend_from_slice(b"\":");
-                result.extend_from_slice(obj_data.properties.len().to_string().as_bytes());
-                result.extend_from_slice(b":{");
-                
-                for (prop_name, prop_handle) in obj_data.properties.iter() {
-                    let prop_name_bytes = vm.context.interner.lookup(*prop_name).unwrap_or(b"");
-                    result.extend_from_slice(b"s:");
-                    result.extend_from_slice(prop_name_bytes.len().to_string().as_bytes());
-                    result.extend_from_slice(b":\"");
-                    result.extend_from_slice(prop_name_bytes);
-                    result.extend_from_slice(b"\";");
-                    let val_serialized = serialize_value(vm, *prop_handle)?;
-                    result.extend_from_slice(&val_serialized);
-                }
-                result.push(b'}');
-            } else {
-                return Err("Invalid object payload".into());
-            }
-        }
-        _ => {
-            return Err(format!("serialize() does not support type: {:?}", val.value));
-        }
-    }
-
-    Ok(result)
-}
-
-// Helper function to serialize Val directly (for ConstArray)
-fn serialize_val(vm: &VM, val: &Val) -> Result<Vec<u8>, String> {
-    let mut result = Vec::new();
-
-    match val {
-        Val::Null => {
-            result.extend_from_slice(b"N;");
-        }
-        Val::Bool(b) => {
-            if *b {
-                result.extend_from_slice(b"b:1;");
-            } else {
-                result.extend_from_slice(b"b:0;");
-            }
-        }
-        Val::Int(i) => {
-            result.extend_from_slice(b"i:");
-            result.extend_from_slice(i.to_string().as_bytes());
-            result.push(b';');
-        }
-        Val::Float(f) => {
-            result.extend_from_slice(b"d:");
-            let f_str = if f.is_infinite() {
-                if f.is_sign_positive() {
-                    "INF"
-                } else {
-                    "-INF"
-                }
-            } else if f.is_nan() {
-                "NAN"
-            } else {
-                &format!("{}", f)
-            };
-            result.extend_from_slice(f_str.as_bytes());
-            result.push(b';');
-        }
-        Val::String(s) => {
-            result.extend_from_slice(b"s:");
-            result.extend_from_slice(s.len().to_string().as_bytes());
-            result.extend_from_slice(b":\"");
-            result.extend_from_slice(s);
-            result.extend_from_slice(b"\";");
-        }
-        Val::ConstArray(arr) => {
-            result.extend_from_slice(b"a:");
-            result.extend_from_slice(arr.len().to_string().as_bytes());
-            result.extend_from_slice(b":{");
-            for (key, nested_val) in arr.iter() {
-                match key {
-                    crate::core::value::ConstArrayKey::Int(i) => {
-                        result.extend_from_slice(b"i:");
-                        result.extend_from_slice(i.to_string().as_bytes());
-                        result.push(b';');
-                    }
-                    crate::core::value::ConstArrayKey::Str(s) => {
-                        result.extend_from_slice(b"s:");
-                        result.extend_from_slice(s.len().to_string().as_bytes());
-                        result.extend_from_slice(b":\"");
-                        result.extend_from_slice(s);
-                        result.extend_from_slice(b"\";");
-                    }
-                }
-                let val_serialized = serialize_val(vm, nested_val)?;
-                result.extend_from_slice(&val_serialized);
-            }
-            result.push(b'}');
-        }
-        _ => {
-            return Err(format!("serialize_val() does not support type: {:?}", val));
-        }
-    }
-
-    Ok(result)
-}
-
-pub fn php_unserialize(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() {
-        return Err("unserialize() expects at least 1 argument, 0 given".into());
-    }
-
-    let data = match &vm.arena.get(args[0]).value {
-        Val::String(s) => s.clone(),
-        _ => return Err("unserialize() expects parameter 1 to be string".into()),
-    };
-
-    // Options parameter is optional (args[1]) but not implemented yet
-    let mut parser = UnserializeParser::new(&data);
-    match parser.parse(vm) {
-        Ok(handle) => Ok(handle),
-        Err(_e) => {
-            // PHP returns false on unserialize errors
-            Ok(vm.arena.alloc(Val::Bool(false)))
-        }
-    }
-}
-
-struct UnserializeParser<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> UnserializeParser<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn consume(&mut self) -> Option<u8> {
-        if self.pos < self.data.len() {
-            let byte = self.data[self.pos];
-            self.pos += 1;
-            Some(byte)
-        } else {
-            None
-        }
-    }
-
-    fn expect(&mut self, expected: u8) -> Result<(), String> {
-        match self.consume() {
-            Some(byte) if byte == expected => Ok(()),
-            Some(byte) => Err(format!(
-                "Expected '{}' but got '{}'",
-                expected as char, byte as char
-            )),
-            None => Err("Unexpected end of data".into()),
-        }
-    }
-
-    fn read_until(&mut self, delimiter: u8) -> Result<Vec<u8>, String> {
-        let mut result = Vec::new();
-        loop {
-            match self.consume() {
-                Some(byte) if byte == delimiter => return Ok(result),
-                Some(byte) => result.push(byte),
-                None => return Err("Unexpected end of data".into()),
-            }
-        }
-    }
-
-    fn read_int(&mut self) -> Result<i64, String> {
-        let bytes = self.read_until(b';')?;
-        let s = String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in integer")?;
-        s.parse::<i64>()
-            .map_err(|_| format!("Invalid integer: {}", s))
-    }
-
-    fn read_length(&mut self) -> Result<usize, String> {
-        let bytes = self.read_until(b':')?;
-        let s = String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in length")?;
-        s.parse::<usize>()
-            .map_err(|_| format!("Invalid length: {}", s))
-    }
-
-    fn read_float(&mut self) -> Result<f64, String> {
-        let bytes = self.read_until(b';')?;
-        let s = String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in float")?;
-        
-        // Handle special values
-        match s.as_str() {
-            "INF" => Ok(f64::INFINITY),
-            "-INF" => Ok(f64::NEG_INFINITY),
-            "NAN" => Ok(f64::NAN),
-            _ => s.parse::<f64>()
-                .map_err(|_| format!("Invalid float: {}", s)),
-        }
-    }
-
-    fn read_string(&mut self, len: usize) -> Result<Vec<u8>, String> {
-        self.expect(b'"')?;
-        if self.pos + len > self.data.len() {
-            return Err("String length exceeds data".into());
-        }
-        let result = self.data[self.pos..self.pos + len].to_vec();
-        self.pos += len;
-        self.expect(b'"')?;
-        self.expect(b';')?;
-        Ok(result)
-    }
-
-    fn read_string_no_semicolon(&mut self, len: usize) -> Result<Vec<u8>, String> {
-        self.expect(b'"')?;
-        if self.pos + len > self.data.len() {
-            return Err("String length exceeds data".into());
-        }
-        let result = self.data[self.pos..self.pos + len].to_vec();
-        self.pos += len;
-        self.expect(b'"')?;
-        Ok(result)
-    }
-
-    fn parse(&mut self, vm: &mut VM) -> Result<Handle, String> {
-        let type_char = self.consume().ok_or("Empty serialized data")?;
-        
-        match type_char {
-            b'N' => {
-                // NULL doesn't have a colon, just N;
-                self.expect(b';')?;
-                Ok(vm.arena.alloc(Val::Null))
-            }
-            _ => {
-                // All other types have a colon after the type character
-                self.expect(b':')?;
-                match type_char {
-                    b'b' => {
-                        let val = self.consume().ok_or("Missing bool value")?;
-                        self.expect(b';')?;
-                        Ok(vm.arena.alloc(Val::Bool(val == b'1')))
-                    }
-                    b'i' => {
-                        let i = self.read_int()?;
-                        Ok(vm.arena.alloc(Val::Int(i)))
-                    }
-                    b'd' => {
-                        let f = self.read_float()?;
-                        Ok(vm.arena.alloc(Val::Float(f)))
-                    }
-                    b's' => {
-                        let len = self.read_length()?;
-                        let s = self.read_string(len)?;
-                        Ok(vm.arena.alloc(Val::String(Rc::new(s))))
-                    }
-                    b'a' => {
-                        let count = self.read_length()?;
-                        self.expect(b'{')?;
-                        
-                        let mut map = crate::core::value::ArrayData::new();
-                        for _ in 0..count {
-                            // Parse key
-                            let key_type = self.consume().ok_or("Missing array key type")?;
-                            self.expect(b':')?;
-                            
-                            let key = match key_type {
-                                b'i' => {
-                                    let i = self.read_int()?;
-                                    crate::core::value::ArrayKey::Int(i)
-                                }
-                                b's' => {
-                                    let len = self.read_length()?;
-                                    let s = self.read_string(len)?;
-                                    crate::core::value::ArrayKey::Str(s.into())
-                                }
-                                _ => return Err(format!("Invalid array key type: {}", key_type as char)),
-                            };
-                            
-                            // Parse value
-                            let value = self.parse(vm)?;
-                            map.insert(key, value);
-                        }
-                        
-                        self.expect(b'}')?;
-                        Ok(vm.arena.alloc(Val::Array(map.into())))
-                    }
-                    b'O' => {
-                        let class_name_len = self.read_length()?;
-                        let class_name = self.read_string_no_semicolon(class_name_len)?;
-                        self.expect(b':')?;
-                        let class_sym = vm.context.interner.intern(&class_name);
-                        
-                        // Look up the class
-                        let class_info = vm.context.classes.get(&class_sym);
-                        if class_info.is_none() {
-                            return Err(format!(
-                                "Class '{}' not found",
-                                String::from_utf8_lossy(&class_name)
-                            ));
-                        }
-                        
-                        let prop_count = self.read_length()?;
-                        self.expect(b'{')?;
-                        
-                        // Create object
-                        let obj_payload = crate::core::value::ObjectData {
-                            class: class_sym,
-                            properties: indexmap::IndexMap::new(),
-                            internal: None,
-                            dynamic_properties: std::collections::HashSet::new(),
-                        };
-                        let obj_handle = vm.arena.alloc(Val::ObjPayload(obj_payload));
-                        let obj_ref = vm.arena.alloc(Val::Object(obj_handle));
-                        
-                        // Parse properties
-                        for _ in 0..prop_count {
-                            // Parse property name (always string)
-                            let prop_type = self.consume().ok_or("Missing property name type")?;
-                            self.expect(b':')?;
-                            
-                            if prop_type != b's' {
-                                return Err(format!("Expected string for property name, got {}", prop_type as char));
-                            }
-                            
-                            let prop_name_len = self.read_length()?;
-                            let prop_name = self.read_string(prop_name_len)?;
-                            let prop_sym = vm.context.interner.intern(&prop_name);
-                            
-                            // Parse property value
-                            let value = self.parse(vm)?;
-                            
-                            // Set property
-                            if let Val::ObjPayload(obj_data) = &mut vm.arena.get_mut(obj_handle).value {
-                                obj_data.properties.insert(prop_sym, value);
-                            }
-                        }
-                        
-                        self.expect(b'}')?;
-                        Ok(obj_ref)
-                    }
-                    _ => Err(format!("Unknown serialization type: {}", type_char as char)),
-                }
-            }
-        }
-    }
+/// A class name as var_dump and print_r show it: an anonymous class's name
+/// ends at the NUL that precedes its file and line.
+fn display_class_name(name: &[u8]) -> &[u8] {
+    name.split(|b| *b == 0).next().unwrap_or(name)
 }

@@ -466,9 +466,9 @@ fn test_unserialize_missing_argument() {
 
 #[test]
 fn test_unserialize_non_string() {
-    let code = r#"<?php unserialize(123);"#;
-    let result = std::panic::catch_unwind(|| run_php(code));
-    assert!(result.is_err(), "Expected error when calling unserialize() with non-string");
+    // PHP coerces the int to "123", warns "Error at offset 0 of 3 bytes" and returns false.
+    let code = r#"<?php return unserialize(123);"#;
+    assert!(matches!(run_php(code), Val::Bool(false)));
 }
 
 // ========== Additional Edge Case Tests ==========
