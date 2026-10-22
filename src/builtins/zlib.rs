@@ -157,6 +157,8 @@ pub struct DeflateContext {
 
 pub struct InflateContext {
     pub decompress: RefCell<Decompress>,
+    /// Preset dictionary ('dictionary' option), for zlib streams that ask for it.
+    pub dictionary: Option<Vec<u8>>,
     pub encoding: i64,
     pub status: RefCell<Status>,
     pub read_len: RefCell<usize>,
@@ -696,10 +698,41 @@ pub fn php_inflate_init(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         _ => return Err(format!("inflate_init(): Unknown encoding: {}", encoding)),
     };
 
-    let decompress = Decompress::new(zlib_header);
+    // options['dictionary']: a string, or strings joined with NUL separators
+    let dictionary = match args.get(1).map(|h| vm.arena.get(*h).value.clone()) {
+        Some(Val::Array(opts)) => opts
+            .map
+            .get(&crate::core::value::ArrayKey::Str(Rc::new(b"dictionary".to_vec())))
+            .map(|h| match vm.arena.get(*h).value.clone() {
+                Val::Array(parts) => {
+                    let mut dict = Vec::new();
+                    for p in parts.map.values() {
+                        dict.extend_from_slice(&vm.arena.get(*p).value.to_php_string_bytes());
+                        dict.push(0);
+                    }
+                    dict
+                }
+                other => other.to_php_string_bytes(),
+            }),
+        _ => None,
+    };
+
+    let mut decompress = if encoding == 31 {
+        Decompress::new_gzip(15)
+    } else {
+        Decompress::new(zlib_header)
+    };
+    // A raw stream has no header asking for the dictionary; it applies up front.
+    if encoding == -1
+        && let Some(dict) = &dictionary
+        && decompress.set_dictionary(dict).is_err()
+    {
+        return Ok(vm.arena.alloc(Val::Bool(false)));
+    }
 
     let context = InflateContext {
         decompress: RefCell::new(decompress),
+        dictionary,
         encoding,
         status: RefCell::new(Status::Ok),
         read_len: RefCell::new(0),
@@ -781,6 +814,13 @@ pub fn php_inflate_add(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
                     if input_pos >= data.len() {
                         break;
                     }
+                }
+            }
+            // A zlib stream that names a preset dictionary: supply it and go on.
+            Err(e) if e.needs_dictionary().is_some() && context.dictionary.is_some() => {
+                let dict = context.dictionary.as_deref().unwrap_or_default();
+                if decompress.set_dictionary(dict).is_err() {
+                    return Ok(vm.arena.alloc(Val::Bool(false)));
                 }
             }
             Err(_) => return Ok(vm.arena.alloc(Val::Bool(false))),
