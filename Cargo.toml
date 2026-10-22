@@ -59,7 +59,8 @@ postgres = { version = "0.19", optional = true }
 oracle = { version = "0.6", optional = true }
 
 # Zlib extension dependencies
-flate2 = "1.0"
+# zlib-rs: a Rust port of zlib with byte-identical output (miniz_oxide compresses differently)
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 
 # Zip extension dependencies
 zip = { version = "2.2.2", optional = true, default-features = false, features = ["aes-crypto", "deflate", "deflate64", "lzma", "time"] }

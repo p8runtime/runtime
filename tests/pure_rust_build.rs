@@ -9,6 +9,8 @@ const ALLOWED: &[(&str, &str)] = &[
     // Binds macOS's own CoreFoundation framework (local timezone lookup in
     // chrono); no C is compiled and nothing is linked beyond the OS.
     ("core-foundation-sys", "operating-system framework"),
+    // zlib-rs's zlib-compatible API layer: Rust, despite the -sys name.
+    ("libz-rs-sys", "Rust"),
 ];
 
 /// C libraries still in the default build, each tracked for replacement.
