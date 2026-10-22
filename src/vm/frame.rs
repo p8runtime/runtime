@@ -27,6 +27,8 @@ pub struct CallFrame {
     /// A suspended generator's temporaries (its slice of the operand stack
     /// at the yield), put back when it resumes.
     pub saved_operands: Vec<Handle>,
+    /// Named arguments no parameter declares, for the variadic parameter.
+    pub named_extra: Vec<(Symbol, Handle)>,
     pub pending_finally: Option<usize>,
 }
 
@@ -47,6 +49,7 @@ impl CallFrame {
             callsite_strict_types: false,
             stack_base: None,
             saved_operands: Vec::new(),
+            named_extra: Vec::new(),
             pending_finally: None,
         }
     }

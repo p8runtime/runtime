@@ -151,7 +151,20 @@ impl VM {
                     }
                 }
             }
-            if let Some(sig) = crate::builtins::signature::lookup(&lower_name) {
+            let sig = crate::builtins::signature::lookup(&lower_name);
+            if let Some(names) = self.pending_arg_names.take() {
+                match sig {
+                    Some(sig) => self.bind_named_builtin_args(sig, &mut args, names)?,
+                    None => {
+                        let msg = format!(
+                            "Unknown named parameter ${}",
+                            self.symbol_to_string(names[0])
+                        );
+                        return Err(self.throw_error(b"Error", &msg));
+                    }
+                }
+            }
+            if let Some(sig) = sig {
                 crate::builtins::signature::check_builtin_call(
                     self,
                     sig,

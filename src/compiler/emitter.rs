@@ -2,7 +2,7 @@ use crate::compiler::chunk::{CatchEntry, CodeChunk, FuncParam, ReturnType, UserF
 use crate::core::interner::Interner;
 use crate::core::value::{Symbol, Val, Visibility};
 use crate::parser::ast::{
-    AssignOp, AttributeGroup, BinaryOp, CastKind, ClassMember, Expr, IncludeKind, MagicConstKind,
+    Arg, AssignOp, AttributeGroup, BinaryOp, CastKind, ClassMember, Expr, IncludeKind, MagicConstKind,
     Stmt, StmtId, Type, UnaryOp,
 };
 use crate::parser::lexer::token::{Token, TokenKind};
@@ -2747,9 +2747,7 @@ impl<'src> Emitter<'src> {
                     _ => self.emit_expr(func),
                 }
 
-                for arg in *args {
-                    self.emit_arg(arg.value);
-                }
+                self.emit_call_args(args);
 
                 self.chunk.code.push(OpCode::Call(args.len() as u8));
             }
@@ -2830,9 +2828,7 @@ impl<'src> Emitter<'src> {
                     let end = self.chunk.code.len();
                     self.patch_jump(skip, end);
 
-                    for arg in *args {
-                        self.emit_arg(arg.value);
-                    }
+                    self.emit_call_args(args);
                     self.chunk
                         .code
                         .push(OpCode::New(class_sym, args.len() as u8));
@@ -2841,9 +2837,7 @@ impl<'src> Emitter<'src> {
                     if !name.starts_with(b"$") {
                         let class_sym = self.interner.intern(name);
 
-                        for arg in *args {
-                            self.emit_arg(arg.value);
-                        }
+                        self.emit_call_args(args);
 
                         self.chunk
                             .code
@@ -2853,9 +2847,7 @@ impl<'src> Emitter<'src> {
                         // Emit expression to get class name (string)
                         self.emit_expr(class);
 
-                        for arg in *args {
-                            self.emit_arg(arg.value);
-                        }
+                        self.emit_call_args(args);
 
                         self.chunk.code.push(OpCode::NewDynamic(args.len() as u8));
                     }
@@ -2863,9 +2855,7 @@ impl<'src> Emitter<'src> {
                     // Complex expression for class name
                     self.emit_expr(class);
 
-                    for arg in *args {
-                        self.emit_arg(arg.value);
-                    }
+                    self.emit_call_args(args);
 
                     self.chunk.code.push(OpCode::NewDynamic(args.len() as u8));
                 }
@@ -2901,9 +2891,7 @@ impl<'src> Emitter<'src> {
                 if let Expr::Variable { span, .. } = method {
                     let name = self.get_text(*span);
                     if !name.starts_with(b"$") {
-                        for arg in *args {
-                            self.emit_arg(arg.value);
-                        }
+                        self.emit_call_args(args);
                         let sym = self.interner.intern(name);
                         self.chunk
                             .code
@@ -2911,9 +2899,7 @@ impl<'src> Emitter<'src> {
                     } else {
                         // Dynamic method call: $obj->$method()
                         self.emit_expr(method);
-                        for arg in *args {
-                            self.emit_arg(arg.value);
-                        }
+                        self.emit_call_args(args);
                         self.chunk
                             .code
                             .push(OpCode::CallMethodDynamic(args.len() as u8));
@@ -2921,9 +2907,7 @@ impl<'src> Emitter<'src> {
                 } else {
                     // Dynamic method call with expression: $obj->{$expr}()
                     self.emit_expr(method);
-                    for arg in *args {
-                        self.emit_arg(arg.value);
-                    }
+                    self.emit_call_args(args);
                     self.chunk
                         .code
                         .push(OpCode::CallMethodDynamic(args.len() as u8));
@@ -2947,9 +2931,7 @@ impl<'src> Emitter<'src> {
                         {
                             let method_name = self.get_text(*method_span);
                             if !method_name.starts_with(b"$") {
-                                for arg in *args {
-                                    self.emit_arg(arg.value);
-                                }
+                                self.emit_call_args(args);
                                 let method_sym = self.interner.intern(method_name);
                                 self.chunk.code.push(OpCode::CallStaticMethod(
                                     class_sym,
@@ -2965,9 +2947,7 @@ impl<'src> Emitter<'src> {
                             let idx = self.add_constant(Val::String(class_name.to_vec().into()));
                             self.chunk.code.push(OpCode::Const(idx as u16));
                             self.emit_expr(method);
-                            for arg in *args {
-                                self.emit_arg(arg.value);
-                            }
+                            self.emit_call_args(args);
                             self.chunk
                                 .code
                                 .push(OpCode::CallStaticMethodDynamic(args.len() as u8));
@@ -2980,9 +2960,7 @@ impl<'src> Emitter<'src> {
                     // Dynamic static call: $class::$method()
                     self.emit_expr(class);
                     self.emit_expr(method);
-                    for arg in *args {
-                        self.emit_arg(arg.value);
-                    }
+                    self.emit_call_args(args);
                     self.chunk
                         .code
                         .push(OpCode::CallStaticMethodDynamic(args.len() as u8));
@@ -3839,6 +3817,33 @@ impl<'src> Emitter<'src> {
             }
             _ => self.emit_expr(expr),
         }
+    }
+
+    /// A call's arguments. With a spread (`...$a`) or named (`x: 1`)
+    /// argument the count is only known at run time: BeginArgs .. EndArgs
+    /// hand the real count and the names to the call opcode that follows.
+    fn emit_call_args(&mut self, args: &[Arg]) {
+        if !args.iter().any(|a| a.unpack || a.name.is_some()) {
+            for arg in args {
+                self.emit_arg(arg.value);
+            }
+            return;
+        }
+        self.chunk.code.push(OpCode::BeginArgs);
+        for arg in args {
+            if arg.unpack {
+                self.emit_expr(arg.value);
+                self.chunk.code.push(OpCode::SpreadArg);
+            } else if let Some(name) = arg.name {
+                let sym = self.interner.intern(self.get_text(name.span));
+                self.emit_arg(arg.value);
+                self.chunk.code.push(OpCode::NamedArg(sym));
+            } else {
+                self.emit_arg(arg.value);
+                self.chunk.code.push(OpCode::PositionalArg);
+            }
+        }
+        self.chunk.code.push(OpCode::EndArgs);
     }
 
     /// Push the right-hand side of `= &expr` as a reference.

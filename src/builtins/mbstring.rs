@@ -787,22 +787,57 @@ pub fn php_mb_strimwidth(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
     Ok(vm.arena.alloc(Val::String(output.into())))
 }
 
-pub fn php_mb_trim(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() || args.len() > 2 {
-        vm.report_error(
-            ErrorLevel::Warning,
-            &format!("mb_trim() expects 1 or 2 parameters, {} given", args.len()),
-        );
-        return Ok(vm.arena.alloc(Val::Null));
-    }
+/// Which ends mb_trim/mb_ltrim/mb_rtrim strip.
+#[derive(Clone, Copy)]
+enum TrimMode {
+    Both,
+    Left,
+    Right,
+}
 
-    let input = vm.check_builtin_param_string(args[0], 1, "mb_trim")?;
-    let encoding = resolve_encoding_arg(vm, args.get(1));
+/// What mb_trim() strips when no characters are given.
+/// Reference: $PHP_SRC_PATH/ext/mbstring/mbstring.c - mb_trim_default_chars
+const MB_TRIM_DEFAULT: &[char] = &[
+    ' ', '\x0C', '\n', '\r', '\t', '\x0B', '\0', '\u{A0}', '\u{1680}', '\u{2000}', '\u{2001}',
+    '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}',
+    '\u{200A}', '\u{2028}', '\u{2029}', '\u{202F}', '\u{205F}', '\u{3000}', '\u{85}', '\u{180E}',
+];
+
+/// mb_trim(string $string, ?string $characters = null, ?string $encoding = null)
+/// and mb_ltrim/mb_rtrim. Reference: $PHP_SRC_PATH/ext/mbstring/mbstring.c - php_do_mb_trim
+fn mb_trim_impl(vm: &mut VM, args: &[Handle], name: &str, mode: TrimMode) -> Result<Handle, String> {
+    let input = vm.check_builtin_param_string(args[0], 1, name)?;
+    let encoding_arg = args.get(2).filter(|&&h| !matches!(vm.arena.get(h).value, Val::Null));
+    let encoding = resolve_encoding_arg(vm, encoding_arg);
     let decoded = crate::runtime::mb::convert::decode_bytes(&input, &encoding)
-        .map_err(|message| format!("mb_trim(): {}", message))?;
-    let trimmed = decoded.trim().to_string();
-    let output = crate::runtime::mb::convert::encode_string(&trimmed, &encoding)?;
+        .map_err(|message| format!("{}(): {}", name, message))?;
+    let chars: Vec<char> = match args.get(1).map(|&h| vm.arena.get(h).value.clone()) {
+        Some(Val::String(what)) => crate::runtime::mb::convert::decode_bytes(&what, &encoding)
+            .map_err(|message| format!("{}(): {}", name, message))?
+            .chars()
+            .collect(),
+        _ => MB_TRIM_DEFAULT.to_vec(),
+    };
+    let strip = |c: char| chars.contains(&c);
+    let trimmed = match mode {
+        TrimMode::Both => decoded.trim_matches(strip),
+        TrimMode::Left => decoded.trim_start_matches(strip),
+        TrimMode::Right => decoded.trim_end_matches(strip),
+    };
+    let output = crate::runtime::mb::convert::encode_string(trimmed, &encoding)?;
     Ok(vm.arena.alloc(Val::String(output.into())))
+}
+
+pub fn php_mb_trim(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    mb_trim_impl(vm, args, "mb_trim", TrimMode::Both)
+}
+
+pub fn php_mb_ltrim(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    mb_trim_impl(vm, args, "mb_ltrim", TrimMode::Left)
+}
+
+pub fn php_mb_rtrim(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    mb_trim_impl(vm, args, "mb_rtrim", TrimMode::Right)
 }
 
 pub fn php_mb_str_split(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {

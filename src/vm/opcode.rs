@@ -48,6 +48,14 @@ pub enum OpCode {
     StoreVarDynamic,    // [Val, Name] -> [Val] (Stores Val in Name, pushes Val)
     AssignRef(Symbol),  // Pop value (handle), mark as ref, store in local
     AssignDimRef,       // [Array, Index, ValueRef] -> Assigns ref to array index
+    /// Calls with spread or named arguments: BeginArgs, then one of
+    /// PositionalArg / SpreadArg / NamedArg after each argument, then EndArgs
+    /// right before the call opcode, whose static count it replaces.
+    BeginArgs,
+    PositionalArg,
+    SpreadArg,
+    NamedArg(Symbol),
+    EndArgs,
     /// Push the current frame's Nth argument (the stub frame that returns a
     /// freshly created Generator).
     PushFrameArg(u32),

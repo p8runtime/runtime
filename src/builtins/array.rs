@@ -1452,7 +1452,7 @@ pub fn php_array_slice(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let mut offset = vm.check_builtin_param_int(args[1], 2, "array_slice")?;
-    let length = if args.len() >= 3 {
+    let length = if args.len() >= 3 && !matches!(vm.arena.get(args[2]).value, Val::Null) {
         Some(vm.check_builtin_param_int(args[2], 3, "array_slice")?)
     } else {
         None

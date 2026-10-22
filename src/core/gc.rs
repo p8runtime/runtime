@@ -52,6 +52,9 @@ pub fn trace_call_frame(frame: &CallFrame, tracer: &mut dyn FnMut(Handle)) {
     for h in frame.args.iter().chain(&frame.saved_operands) {
         tracer(*h);
     }
+    for (_, h) in &frame.named_extra {
+        tracer(*h);
+    }
     if let Some(func) = &frame.func {
         trace_user_func(func, tracer);
     }
@@ -457,6 +460,7 @@ mod tests {
             callsite_strict_types: false,
             stack_base: None,
             saved_operands: Vec::new(),
+            named_extra: Vec::new(),
             pending_finally: None,
         };
 
@@ -468,6 +472,7 @@ mod tests {
             sub_iter: None,
             sent_val: None,
             return_val: None,
+            advanced: false,
         };
 
         // Store generator as ObjPayload with internal data
