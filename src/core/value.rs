@@ -330,6 +330,30 @@ impl Val {
         text.parse::<f64>().map_or(0, |f| f as i64)
     }
 
+    /// The value of `s` if the whole string is numeric (leading and trailing
+    /// whitespace allowed, as in PHP 8), as an Int when it fits, else a Float.
+    /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - is_numeric_string_ex
+    pub fn numeric_string(s: &[u8]) -> Option<Val> {
+        let prefix = Self::numeric_prefix(s);
+        if prefix.is_empty() {
+            return None;
+        }
+        let end = prefix.as_ptr() as usize - s.as_ptr() as usize + prefix.len();
+        if !s[end..]
+            .iter()
+            .all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c'))
+        {
+            return None;
+        }
+        let text = std::str::from_utf8(prefix).ok()?;
+        if !text.contains(['.', 'e', 'E'])
+            && let Ok(i) = text.parse::<i64>()
+        {
+            return Some(Val::Int(i));
+        }
+        text.parse::<f64>().ok().map(Val::Float)
+    }
+
     /// The numeric prefix of `s` after leading whitespace (may be empty).
     fn numeric_prefix(s: &[u8]) -> &[u8] {
         let start = s

@@ -1384,9 +1384,8 @@ pub fn php_array_search(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         return Err("array_search() expects 2 or 3 parameters".into());
     }
 
-    let needle = vm.arena.get(args[0]).value.clone();
     let haystack = match &vm.arena.get(args[1]).value {
-        Val::Array(arr) => arr,
+        Val::Array(arr) => arr.clone(),
         _ => return Err("array_search() expects parameter 2 to be array".into()),
     };
 
@@ -1397,8 +1396,7 @@ pub fn php_array_search(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
     };
 
     for (key, value_handle) in haystack.map.iter() {
-        let candidate = vm.arena.get(*value_handle).value.clone();
-        if values_equal(&needle, &candidate, strict) {
+        if values_equal(vm, args[0], *value_handle, strict) {
             return Ok(vm.arena.alloc(array_key_to_val(key)));
         }
     }
@@ -2696,10 +2694,8 @@ pub fn php_in_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("in_array() expects 2 or 3 parameters".into());
     }
 
-    let needle = vm.arena.get(args[0]).value.clone();
-
     let haystack = match &vm.arena.get(args[1]).value {
-        Val::Array(arr) => arr,
+        Val::Array(arr) => arr.clone(),
         _ => return Err("in_array(): Argument #2 ($haystack) must be of type array".into()),
     };
 
@@ -2710,8 +2706,7 @@ pub fn php_in_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     };
 
     for (_, value_handle) in haystack.map.iter() {
-        let candidate = vm.arena.get(*value_handle).value.clone();
-        if values_equal(&needle, &candidate, strict) {
+        if values_equal(vm, args[0], *value_handle, strict) {
             return Ok(vm.arena.alloc(Val::Bool(true)));
         }
     }
@@ -2719,22 +2714,11 @@ pub fn php_in_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Bool(false)))
 }
 
-fn values_equal(a: &Val, b: &Val, strict: bool) -> bool {
+fn values_equal(vm: &VM, a: Handle, b: Handle, strict: bool) -> bool {
     if strict {
-        return a == b;
-    }
-
-    match (a, b) {
-        (Val::Bool(_), _) | (_, Val::Bool(_)) => a.to_bool() == b.to_bool(),
-        (Val::Int(_), Val::Int(_)) => a == b,
-        (Val::Float(_), Val::Float(_)) => a == b,
-        (Val::Int(_), Val::Float(_)) | (Val::Float(_), Val::Int(_)) => a.to_float() == b.to_float(),
-        (Val::String(_), Val::String(_)) => a == b,
-        (Val::String(_), Val::Int(_))
-        | (Val::Int(_), Val::String(_))
-        | (Val::String(_), Val::Float(_))
-        | (Val::Float(_), Val::String(_)) => a.to_float() == b.to_float(),
-        _ => a == b,
+        vm.strict_equals(a, b)
+    } else {
+        vm.loose_equals(a, b)
     }
 }
 
