@@ -57,7 +57,7 @@ use crate::runtime::context::{
     StaticPropertyEntry, TypeHint,
 };
 use crate::vm::frame::{
-    ArgList, CallFrame, GeneratorData, GeneratorState, SubGenState, SubIterator,
+    ArgList, CallFrame, GeneratorData, GeneratorState,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::Stack;
@@ -370,6 +370,14 @@ const SUPERGLOBAL_SPECS: &[(SuperglobalKind, &[u8])] = &[
     (SuperglobalKind::Session, b"_SESSION"),
     (SuperglobalKind::Globals, b"GLOBALS"),
 ];
+
+thread_local! {
+    /// The body of the stub frame push_frame uses to return a new Generator.
+    static GENERATOR_STUB: Rc<CodeChunk> = Rc::new(CodeChunk {
+        code: vec![OpCode::PushFrameArg(0), OpCode::Return],
+        ..CodeChunk::default()
+    });
+}
 
 pub struct VM {
     pub arena: GcHeap,
@@ -1237,10 +1245,41 @@ impl VM {
         if !self.pending_undefined.is_empty() {
             self.settle_undefined_args(&frame);
         }
+        // Calling a generator function runs none of its body: it returns a
+        // Generator holding the frame. A stub frame returns that object, so
+        // every caller receives it the way it receives any return value.
+        if frame.generator.is_none() && frame.func.as_ref().is_some_and(|f| f.is_generator) {
+            let generator = self.new_generator(frame);
+            let mut stub = CallFrame::new(GENERATOR_STUB.with(Rc::clone));
+            stub.args = std::iter::once(generator).collect();
+            frame = stub;
+        }
         if frame.stack_base.is_none() {
             frame.stack_base = Some(self.operand_stack.len());
         }
         self.frames.push(frame);
+    }
+
+    /// A Generator object for a generator function's (not yet started) frame.
+    pub(crate) fn new_generator(&mut self, frame: CallFrame) -> Handle {
+        let gen_data = GeneratorData {
+            state: GeneratorState::Created(frame),
+            current_val: None,
+            current_key: None,
+            auto_key: 0,
+            sub_iter: None,
+            sent_val: None,
+            return_val: None,
+            advanced: false,
+        };
+        let obj_data = ObjectData {
+            class: self.context.interner.intern(b"Generator"),
+            properties: IndexMap::new(),
+            internal: Some(Rc::new(RefCell::new(gen_data))),
+            dynamic_properties: HashSet::new(),
+        };
+        let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
+        self.arena.alloc(Val::Object(payload_handle))
     }
 
     /// An undefined variable passed to a user function (LoadVarArg): a
@@ -3480,6 +3519,17 @@ impl VM {
         self.complete_return(ret_val, force_by_ref, target_depth)
     }
 
+    /// Run frames above `depth` (a nested loop, as for callbacks).
+    pub(crate) fn run_nested(&mut self, depth: usize) -> Result<(), VmError> {
+        self.run_loop(depth)
+    }
+
+    /// Unwind to a catch for `ex` among the frames above `depth`; false when
+    /// none catches it.
+    pub(crate) fn handle_exception_at(&mut self, ex: Handle, depth: usize) -> bool {
+        self.handle_exception(ex, depth)
+    }
+
     fn run_loop(&mut self, target_depth: usize) -> Result<(), VmError> {
         self.gc_run_depth += 1;
         let result = self.run_loop_inner(target_depth);
@@ -5130,9 +5180,10 @@ impl VM {
                 }
                 captured_vals.reverse();
 
-                for (i, sym) in user_func.uses.iter().enumerate() {
-                    if i < captured_vals.len() {
-                        captures.insert(*sym, captured_vals[i]);
+                for (sym, &handle) in user_func.uses.iter().zip(&captured_vals) {
+                    // An arrow function binds only the variables that exist.
+                    if !matches!(self.arena.get(handle).value, Val::Uninitialized) {
+                        captures.insert(*sym, handle);
                     }
                 }
 
@@ -5424,13 +5475,14 @@ impl VM {
                     None
                 };
 
-                let frame = self
+                let mut frame = self
                     .frames
                     .pop()
                     .ok_or(VmError::RuntimeError("No frame to yield from".into()))?;
                 let gen_handle = frame.generator.ok_or(VmError::RuntimeError(
                     "Yield outside of generator context".into(),
                 ))?;
+                frame.saved_operands = self.operand_stack.split_off(frame.stack_base.unwrap_or(0));
 
                 let gen_val = self.arena.get(gen_handle);
                 if let Val::Object(payload_handle) = &gen_val.value {
@@ -5465,322 +5517,7 @@ impl VM {
                 // We don't push anything to the stack here. The sent value will be retrieved
                 // by OpCode::GetSentValue when the generator is resumed.
             }
-            OpCode::YieldFrom => {
-                let frame_idx = self.frames.len() - 1;
-                let frame = &mut self.frames[frame_idx];
-                let gen_handle = frame.generator.ok_or(VmError::RuntimeError(
-                    "YieldFrom outside of generator context".into(),
-                ))?;
-
-                let (mut sub_iter, is_new) = {
-                    let gen_val = self.arena.get(gen_handle);
-                    if let Val::Object(payload_handle) = &gen_val.value {
-                        let payload = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload.value {
-                            if let Some(internal) = &obj_data.internal {
-                                if let Ok(gen_data) =
-                                    internal.clone().downcast::<RefCell<GeneratorData>>()
-                                {
-                                    let mut data = gen_data.borrow_mut();
-                                    if let Some(iter) = &data.sub_iter {
-                                        (iter.clone(), false)
-                                    } else {
-                                        let iterable_handle = self.operand_stack.pop().ok_or(
-                                            VmError::RuntimeError("Stack underflow".into()),
-                                        )?;
-                                        let iter = match &self.arena.get(iterable_handle).value {
-                                            Val::Array(_) => SubIterator::Array {
-                                                handle: iterable_handle,
-                                                index: 0,
-                                            },
-                                            Val::Object(_) => SubIterator::Generator {
-                                                handle: iterable_handle,
-                                                state: SubGenState::Initial,
-                                            },
-                                            val => {
-                                                return Err(VmError::RuntimeError(format!(
-                                                    "Yield from expects array or traversable, got {:?}",
-                                                    val
-                                                )));
-                                            }
-                                        };
-                                        data.sub_iter = Some(iter.clone());
-                                        (iter, true)
-                                    }
-                                } else {
-                                    return Err(VmError::RuntimeError(
-                                        "Invalid generator data".into(),
-                                    ));
-                                }
-                            } else {
-                                return Err(VmError::RuntimeError("Invalid generator data".into()));
-                            }
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid generator data".into()));
-                        }
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid generator data".into()));
-                    }
-                };
-
-                match &mut sub_iter {
-                    SubIterator::Array { handle, index } => {
-                        if !is_new {
-                            // Pop sent value (ignored for array)
-                            {
-                                let gen_val = self.arena.get(gen_handle);
-                                if let Val::Object(payload_handle) = &gen_val.value {
-                                    let payload = self.arena.get(*payload_handle);
-                                    if let Val::ObjPayload(obj_data) = &payload.value {
-                                        if let Some(internal) = &obj_data.internal {
-                                            if let Ok(gen_data) = internal
-                                                .clone()
-                                                .downcast::<RefCell<GeneratorData>>()
-                                            {
-                                                let mut data = gen_data.borrow_mut();
-                                                data.sent_val.take();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if let Val::Array(map) = &self.arena.get(*handle).value {
-                            if let Some((k, v)) = map.map.get_index(*index) {
-                                let val_handle = *v;
-                                let key_handle = match k {
-                                    ArrayKey::Int(i) => self.arena.alloc(Val::Int(*i)),
-                                    ArrayKey::Str(s) => {
-                                        self.arena.alloc(Val::String(s.as_ref().clone().into()))
-                                    }
-                                };
-
-                                *index += 1;
-
-                                let mut frame = self.frames.pop().unwrap();
-                                frame.ip -= 1; // Stay on YieldFrom
-
-                                {
-                                    let gen_val = self.arena.get(gen_handle);
-                                    if let Val::Object(payload_handle) = &gen_val.value {
-                                        let payload = self.arena.get(*payload_handle);
-                                        if let Val::ObjPayload(obj_data) = &payload.value {
-                                            if let Some(internal) = &obj_data.internal {
-                                                if let Ok(gen_data) = internal
-                                                    .clone()
-                                                    .downcast::<RefCell<GeneratorData>>()
-                                                {
-                                                    let mut data = gen_data.borrow_mut();
-                                                    data.current_val = Some(val_handle);
-                                                    data.current_key = Some(key_handle);
-                                                    data.state = GeneratorState::Delegating(frame);
-                                                    data.sub_iter = Some(sub_iter.clone());
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Do NOT push to caller stack
-                                return Ok(());
-                            } else {
-                                // Finished
-                                {
-                                    let gen_val = self.arena.get(gen_handle);
-                                    if let Val::Object(payload_handle) = &gen_val.value {
-                                        let payload = self.arena.get(*payload_handle);
-                                        if let Val::ObjPayload(obj_data) = &payload.value {
-                                            if let Some(internal) = &obj_data.internal {
-                                                if let Ok(gen_data) = internal
-                                                    .clone()
-                                                    .downcast::<RefCell<GeneratorData>>()
-                                                {
-                                                    let mut data = gen_data.borrow_mut();
-                                                    data.state = GeneratorState::Running;
-                                                    data.sub_iter = None;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                let null_handle = self.arena.alloc(Val::Null);
-                                self.operand_stack.push(null_handle);
-                            }
-                        }
-                    }
-                    SubIterator::Generator { handle, state } => {
-                        match state {
-                            SubGenState::Initial | SubGenState::Resuming => {
-                                let gen_b_val = self.arena.get(*handle);
-                                if let Val::Object(payload_handle) = &gen_b_val.value {
-                                    let payload = self.arena.get(*payload_handle);
-                                    if let Val::ObjPayload(obj_data) = &payload.value {
-                                        if let Some(internal) = &obj_data.internal {
-                                            if let Ok(gen_data) = internal
-                                                .clone()
-                                                .downcast::<RefCell<GeneratorData>>()
-                                            {
-                                                let mut data = gen_data.borrow_mut();
-
-                                                let frame_to_push = match &data.state {
-                                                    GeneratorState::Created(f)
-                                                    | GeneratorState::Suspended(f) => {
-                                                        let mut f = f.clone();
-                                                        f.generator = Some(*handle);
-                                                        Some(f)
-                                                    }
-                                                    _ => None,
-                                                };
-
-                                                if let Some(f) = frame_to_push {
-                                                    data.state = GeneratorState::Running;
-
-                                                    // Update state to Yielded
-                                                    *state = SubGenState::Yielded;
-
-                                                    // Decrement IP of current frame so we re-execute YieldFrom when we return
-                                                    {
-                                                        let frame = self.frames.last_mut().unwrap();
-                                                        frame.ip -= 1;
-                                                    }
-
-                                                    // Update GenA state (set sub_iter, but keep Running)
-                                                    {
-                                                        let gen_val = self.arena.get(gen_handle);
-                                                        if let Val::Object(payload_handle) =
-                                                            &gen_val.value
-                                                        {
-                                                            let payload =
-                                                                self.arena.get(*payload_handle);
-                                                            if let Val::ObjPayload(obj_data) =
-                                                                &payload.value
-                                                            {
-                                                                if let Some(internal) =
-                                                                    &obj_data.internal
-                                                                {
-                                                                    if let Ok(parent_gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
-                                                                        let mut parent_data = parent_gen_data.borrow_mut();
-                                                                        parent_data.sub_iter = Some(sub_iter.clone());
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-
-                                                    self.push_frame(f);
-
-                                                    // If Resuming, we leave the sent value on stack for GenB
-                                                    // If Initial, we push null (dummy sent value)
-                                                    if is_new {
-                                                        let null_handle =
-                                                            self.arena.alloc(Val::Null);
-                                                        // Set sent_val in child generator data
-                                                        data.sent_val = Some(null_handle);
-                                                    }
-                                                    return Ok(());
-                                                } else if let GeneratorState::Finished = data.state
-                                                {
-                                                    // Already finished?
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            SubGenState::Yielded => {
-                                let mut gen_b_finished = false;
-                                let mut yielded_val = None;
-                                let mut yielded_key = None;
-
-                                {
-                                    let gen_b_val = self.arena.get(*handle);
-                                    if let Val::Object(payload_handle) = &gen_b_val.value {
-                                        let payload = self.arena.get(*payload_handle);
-                                        if let Val::ObjPayload(obj_data) = &payload.value {
-                                            if let Some(internal) = &obj_data.internal {
-                                                if let Ok(gen_data) = internal
-                                                    .clone()
-                                                    .downcast::<RefCell<GeneratorData>>()
-                                                {
-                                                    let data = gen_data.borrow();
-                                                    if let GeneratorState::Finished = data.state {
-                                                        gen_b_finished = true;
-                                                    } else {
-                                                        yielded_val = data.current_val;
-                                                        yielded_key = data.current_key;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if gen_b_finished {
-                                    // GenB finished, return value is on the stack (pushed by OpCode::Return)
-                                    let result_handle = self
-                                        .operand_stack
-                                        .pop()
-                                        .unwrap_or_else(|| self.arena.alloc(Val::Null));
-
-                                    // GenB finished, result_handle is return value
-                                    {
-                                        let gen_val = self.arena.get(gen_handle);
-                                        if let Val::Object(payload_handle) = &gen_val.value {
-                                            let payload = self.arena.get(*payload_handle);
-                                            if let Val::ObjPayload(obj_data) = &payload.value {
-                                                if let Some(internal) = &obj_data.internal {
-                                                    if let Ok(gen_data) = internal
-                                                        .clone()
-                                                        .downcast::<RefCell<GeneratorData>>()
-                                                    {
-                                                        let mut data = gen_data.borrow_mut();
-                                                        data.state = GeneratorState::Running;
-                                                        data.sub_iter = None;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    self.operand_stack.push(result_handle);
-                                } else {
-                                    // GenB yielded
-                                    *state = SubGenState::Resuming;
-
-                                    let mut frame = self.frames.pop().unwrap();
-                                    frame.ip -= 1;
-
-                                    {
-                                        let gen_val = self.arena.get(gen_handle);
-                                        if let Val::Object(payload_handle) = &gen_val.value {
-                                            let payload = self.arena.get(*payload_handle);
-                                            if let Val::ObjPayload(obj_data) = &payload.value {
-                                                if let Some(internal) = &obj_data.internal {
-                                                    if let Ok(gen_data) = internal
-                                                        .clone()
-                                                        .downcast::<RefCell<GeneratorData>>()
-                                                    {
-                                                        let mut data = gen_data.borrow_mut();
-                                                        data.current_val = yielded_val;
-                                                        data.current_key = yielded_key;
-                                                        data.state =
-                                                            GeneratorState::Delegating(frame);
-                                                        data.sub_iter = Some(sub_iter.clone());
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Do NOT push to caller stack
-                                    return Ok(());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
+            OpCode::YieldFrom => self.exec_yield_from()?,
             OpCode::GetSentValue => {
                 let frame_idx = self.frames.len() - 1;
                 let frame = &mut self.frames[frame_idx];
@@ -6485,6 +6222,20 @@ impl VM {
             OpCode::UnsetNestedDim(depth) => self.exec_unset_nested_dim(depth)?,
 
             OpCode::IterInit(target) => {
+                // Generators run synchronously (vm/generator.rs), like any Iterator.
+                if let Some(it) = self.operand_stack.peek()
+                    && self.generator_data(it).is_some()
+                {
+                    self.generator_rewind(it)?;
+                    if self.generator_valid(it)? {
+                        let idx = self.arena.alloc(Val::Int(0));
+                        self.operand_stack.push(idx);
+                    } else {
+                        self.operand_stack.pop();
+                        self.set_ip(target as usize)?;
+                    }
+                    return Ok(());
+                }
                 // Stack: [Array/Object]
                 let iterable_handle = self
                     .operand_stack
@@ -6578,6 +6329,16 @@ impl VM {
             }
 
             OpCode::IterValid(target) => {
+                if let Some(it) = self.operand_stack.peek_at(1)
+                    && self.generator_data(it).is_some()
+                {
+                    if !self.generator_valid(it)? {
+                        self.operand_stack.pop();
+                        self.operand_stack.pop();
+                        self.set_ip(target as usize)?;
+                    }
+                    return Ok(());
+                }
                 // Stack: [Iterable, Index]
                 // Or [Iterable, DummyIndex, ReturnValue] if generator returned
 
@@ -6672,6 +6433,12 @@ impl VM {
             }
 
             OpCode::IterNext => {
+                if let Some(it) = self.operand_stack.peek_at(1)
+                    && self.generator_data(it).is_some()
+                {
+                    self.generator_next(it)?;
+                    return Ok(());
+                }
                 // Stack: [Iterable, Index]
                 let idx_handle = self
                     .operand_stack
@@ -6732,7 +6499,7 @@ impl VM {
                                         self.operand_stack.push(idx_handle);
                                     } else {
                                         return Err(VmError::RuntimeError(
-                                            "Cannot resume running generator".into(),
+                                            "Cannot resume an already running generator".into(),
                                         ));
                                     }
                                     handled = true;
@@ -6766,6 +6533,15 @@ impl VM {
             }
 
             OpCode::IterGetVal(sym) => {
+                if let Some(it) = self.operand_stack.peek_at(1)
+                    && self.generator_data(it).is_some()
+                {
+                    let current = self.generator_current(it)?;
+                    let value = self.arena.get(current).value.clone();
+                    let copy = self.arena.alloc(value);
+                    self.current_frame_mut()?.locals.insert(sym, copy);
+                    return Ok(());
+                }
                 // Stack: [Iterable, Index]
                 let idx_handle = self
                     .operand_stack
@@ -6907,6 +6683,13 @@ impl VM {
             }
 
             OpCode::IterGetKey(sym) => {
+                if let Some(it) = self.operand_stack.peek_at(1)
+                    && self.generator_data(it).is_some()
+                {
+                    let key = self.generator_key(it)?;
+                    self.current_frame_mut()?.locals.insert(sym, key);
+                    return Ok(());
+                }
                 // Stack: [Array, Index]
                 let idx_handle = self
                     .operand_stack
@@ -10928,6 +10711,23 @@ impl VM {
                         "__clone method called on non-object".into(),
                     ));
                 }
+            }
+            OpCode::PushFrameArg(i) => {
+                let handle = *self
+                    .current_frame()?
+                    .args
+                    .get(i as usize)
+                    .ok_or(VmError::RuntimeError("Missing frame argument".into()))?;
+                self.operand_stack.push(handle);
+            }
+            OpCode::CaptureImplicit(sym) => {
+                let existing = self.current_frame()?.locals.get(&sym).copied();
+                let val = match existing {
+                    Some(h) => self.arena.get(h).value.clone(),
+                    None => Val::Uninitialized,
+                };
+                let handle = self.arena.alloc(val);
+                self.operand_stack.push(handle);
             }
             OpCode::Copy => {
                 let handle = self

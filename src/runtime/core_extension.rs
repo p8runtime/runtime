@@ -491,6 +491,9 @@ impl Extension for CoreExtension {
         registry.register_function(b"spl_autoload_register", spl::php_spl_autoload_register);
         registry.register_function(b"spl_object_hash", spl::php_spl_object_hash);
         registry.register_function(b"spl_object_id", spl::php_spl_object_id);
+        registry.register_function(b"iterator_to_array", spl::php_iterator_to_array);
+        registry.register_function(b"iterator_count", spl::php_iterator_count);
+        registry.register_function(b"iterator_apply", spl::php_iterator_apply);
         registry.register_function(b"assert", function::php_assert);
 
         // Filesystem functions - File I/O

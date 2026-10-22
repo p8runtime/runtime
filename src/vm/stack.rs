@@ -21,6 +21,14 @@ impl Stack {
     }
 
     /// Drop everything above `len` values.
+    /// Remove and return everything above `len`.
+    pub fn split_off(&mut self, len: usize) -> Vec<Handle> {
+        if len >= self.values.len() {
+            return Vec::new();
+        }
+        self.values.split_off(len)
+    }
+
     pub fn truncate(&mut self, len: usize) {
         self.values.truncate(len);
     }

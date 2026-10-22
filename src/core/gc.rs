@@ -49,7 +49,7 @@ pub fn trace_call_frame(frame: &CallFrame, tracer: &mut dyn FnMut(Handle)) {
     if let Some(h) = frame.generator {
         tracer(h);
     }
-    for h in frame.args.iter() {
+    for h in frame.args.iter().chain(&frame.saved_operands) {
         tracer(*h);
     }
     if let Some(func) = &frame.func {
@@ -456,6 +456,7 @@ mod tests {
             args: smallvec::SmallVec::new(),
             callsite_strict_types: false,
             stack_base: None,
+            saved_operands: Vec::new(),
             pending_finally: None,
         };
 

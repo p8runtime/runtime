@@ -24,6 +24,9 @@ pub struct CallFrame {
     /// This controls scalar parameter/return coercion.
     pub callsite_strict_types: bool,
     pub stack_base: Option<usize>,
+    /// A suspended generator's temporaries (its slice of the operand stack
+    /// at the yield), put back when it resumes.
+    pub saved_operands: Vec<Handle>,
     pub pending_finally: Option<usize>,
 }
 
@@ -43,6 +46,7 @@ impl CallFrame {
             args: ArgList::new(),
             callsite_strict_types: false,
             stack_base: None,
+            saved_operands: Vec::new(),
             pending_finally: None,
         }
     }
@@ -79,4 +83,6 @@ pub struct GeneratorData {
     pub sub_iter: Option<SubIterator>,
     pub sent_val: Option<Handle>,
     pub return_val: Option<Handle>,
+    /// Moved past its first yield (rewind() then throws).
+    pub advanced: bool,
 }

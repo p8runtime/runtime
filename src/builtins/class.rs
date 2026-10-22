@@ -1,9 +1,7 @@
 use crate::core::value::{ArrayKey, Handle, Val};
 use crate::runtime::context::EnumBackedType;
 use crate::vm::engine::{PropertyCollectionMode, VM};
-use crate::vm::frame::{GeneratorData, GeneratorState};
 use indexmap::IndexMap;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 //=============================================================================
@@ -131,132 +129,65 @@ pub fn closure_from_callable(_vm: &mut VM, args: &[Handle]) -> Result<Handle, St
 
 // Generator class methods
 // Reference: $PHP_SRC_PATH/Zend/zend_generators.c
-pub fn generator_current(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    let this_handle = vm
-        .frames
+
+/// `$this` of the Generator method being called.
+fn this_generator(vm: &VM) -> Result<Handle, String> {
+    vm.frames
         .last()
         .and_then(|f| f.this)
-        .ok_or("Generator::current() called outside object context")?;
+        .ok_or_else(|| "Generator method called outside object context".into())
+}
 
-    let payload_handle = match &vm.arena.get(this_handle).value {
-        Val::Object(payload_handle) => *payload_handle,
-        _ => return Err("Generator::current() expects object context".into()),
-    };
-
-    let payload = vm.arena.get(payload_handle);
-    if let Val::ObjPayload(obj_data) = &payload.value {
-        if let Some(internal) = &obj_data.internal {
-            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
-                let data = gen_data.borrow();
-                if let Some(handle) = data.current_val {
-                    return Ok(handle);
-                }
-            }
-        }
-    }
-
-    Ok(vm.arena.alloc(Val::Null))
+pub fn generator_current(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    let generator = this_generator(vm)?;
+    vm.generator_current(generator).map_err(|e| vm.callback_error(e))
 }
 
 pub fn generator_key(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    let this_handle = vm
-        .frames
-        .last()
-        .and_then(|f| f.this)
-        .ok_or("Generator::key() called outside object context")?;
-
-    let payload_handle = match &vm.arena.get(this_handle).value {
-        Val::Object(payload_handle) => *payload_handle,
-        _ => return Err("Generator::key() expects object context".into()),
-    };
-
-    let payload = vm.arena.get(payload_handle);
-    if let Val::ObjPayload(obj_data) = &payload.value {
-        if let Some(internal) = &obj_data.internal {
-            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
-                let data = gen_data.borrow();
-                if let Some(handle) = data.current_key {
-                    return Ok(handle);
-                }
-            }
-        }
-    }
-
-    Ok(vm.arena.alloc(Val::Null))
+    let generator = this_generator(vm)?;
+    vm.generator_key(generator).map_err(|e| vm.callback_error(e))
 }
 
 pub fn generator_next(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    let generator = this_generator(vm)?;
+    vm.generator_next(generator).map_err(|e| vm.callback_error(e))?;
     Ok(vm.arena.alloc(Val::Null))
 }
 
 pub fn generator_rewind(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    // Generators can only be rewound before first iteration
+    let generator = this_generator(vm)?;
+    vm.generator_rewind(generator).map_err(|e| vm.callback_error(e))?;
     Ok(vm.arena.alloc(Val::Null))
 }
 
-pub fn generator_send(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Ok(vm.arena.alloc(Val::Null))
+pub fn generator_send(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let generator = this_generator(vm)?;
+    let value = match args.first() {
+        Some(&v) => v,
+        None => vm.arena.alloc(Val::Null),
+    };
+    vm.generator_send(generator, value).map_err(|e| vm.callback_error(e))
 }
 
-pub fn generator_throw(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Err("Generator::throw() not yet implemented".into())
+pub fn generator_throw(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let generator = this_generator(vm)?;
+    let exception = *args
+        .first()
+        .ok_or("Generator::throw() expects exactly 1 argument, 0 given")?;
+    vm.generator_throw(generator, exception)
+        .map_err(|e| vm.callback_error(e))
 }
 
 pub fn generator_valid(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    let this_handle = vm
-        .frames
-        .last()
-        .and_then(|f| f.this)
-        .ok_or("Generator::valid() called outside object context")?;
-
-    let payload_handle = match &vm.arena.get(this_handle).value {
-        Val::Object(payload_handle) => *payload_handle,
-        _ => return Err("Generator::valid() expects object context".into()),
-    };
-
-    let payload = vm.arena.get(payload_handle);
-    if let Val::ObjPayload(obj_data) = &payload.value {
-        if let Some(internal) = &obj_data.internal {
-            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
-                let data = gen_data.borrow();
-                let is_valid = !matches!(data.state, GeneratorState::Finished)
-                    && data.current_val.is_some();
-                return Ok(vm.arena.alloc(Val::Bool(is_valid)));
-            }
-        }
-    }
-
-    Ok(vm.arena.alloc(Val::Bool(false)))
+    let generator = this_generator(vm)?;
+    let valid = vm.generator_valid(generator).map_err(|e| vm.callback_error(e))?;
+    Ok(vm.arena.alloc(Val::Bool(valid)))
 }
 
 pub fn generator_get_return(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    let this_handle = vm
-        .frames
-        .last()
-        .and_then(|f| f.this)
-        .ok_or("Generator::getReturn() called outside object context")?;
-
-    let payload_handle = match &vm.arena.get(this_handle).value {
-        Val::Object(payload_handle) => *payload_handle,
-        _ => return Err("Generator::getReturn() expects object context".into()),
-    };
-
-    let payload = vm.arena.get(payload_handle);
-    if let Val::ObjPayload(obj_data) = &payload.value {
-        if let Some(internal) = &obj_data.internal {
-            if let Ok(gen_data) = internal.clone().downcast::<RefCell<GeneratorData>>() {
-                let data = gen_data.borrow();
-                if let Some(handle) = data.return_val {
-                    return Ok(handle);
-                }
-                return Err(
-                    "Generator::getReturn() cannot be called before generator has returned".into(),
-                );
-            }
-        }
-    }
-
-    Err("Generator::getReturn() called on invalid generator".into())
+    let generator = this_generator(vm)?;
+    vm.generator_get_return(generator)
+        .map_err(|e| vm.callback_error(e))
 }
 
 // Fiber class methods (PHP 8.1+)

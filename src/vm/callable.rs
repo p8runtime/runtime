@@ -186,6 +186,7 @@ impl VM {
                     sub_iter: None,
                     sent_val: None,
                     return_val: None,
+                    advanced: false,
                 };
                 let obj_data = ObjectData {
                     class: self.context.interner.intern(b"Generator"),
@@ -205,7 +206,7 @@ impl VM {
             Ok(())
         } else {
             Err(VmError::RuntimeError(format!(
-                "Call to undefined function: {}",
+                "Call to undefined function {}()",
                 String::from_utf8_lossy(name_bytes)
             )))
         }
