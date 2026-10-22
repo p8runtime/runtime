@@ -466,10 +466,11 @@ pub(crate) fn coerce_user_scalar(
     // Type preference order: int -> float -> string -> bool
     if mask & T_INT != 0 {
         match &value {
-            Val::String(s) if mask & T_FLOAT != 0 => match numeric_string(s) {
-                Some(n) => return Ok(Some(n)),
-                None => {}
-            },
+            Val::String(s) if mask & T_FLOAT != 0 => {
+                if let Some(n) = numeric_string(s) {
+                    return Ok(Some(n));
+                }
+            }
             // zend_parse_arg_long_weak
             Val::Float(f) if f.is_finite() && fits_long(*f) => {
                 if f.fract() != 0.0 {
