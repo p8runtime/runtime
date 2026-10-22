@@ -2,6 +2,7 @@
 //!
 //! Uses tokio with LocalSet to support !Send VM state (Rc pointers).
 //! Each worker thread runs its own single-threaded tokio runtime.
+#![forbid(unsafe_code)] // memory safety is the point of this runtime; see SECURITY.md
 
 use bumpalo::Bump;
 use clap::Parser;
