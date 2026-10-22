@@ -2978,7 +2978,6 @@ dependencies = [
  "hkdf",
  "hmac",
  "indexmap",
- "lazy_static",
  "libc",
  "md-5",
  "md2",

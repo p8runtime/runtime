@@ -10,29 +10,33 @@ use regex::Regex;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref RELATIVE_TIME_RE: Regex = Regex::new(
-        r"^([+-]?\d+)\s*(year|month|week|day|hour|minute|second|fortnight)s?(\s+ago)?$"
-    ).unwrap();
-    
-    static ref WEEKDAY_REFERENCE_RE: Regex = Regex::new(
-        r"^(next|last|this|previous)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)$"
-    ).unwrap();
-    
-    static ref SPECIAL_PHRASE_RE: Regex = Regex::new(
-        r"^(first|last)\s+day\s+of\s+(next|this|last)\s+month$"
-    ).unwrap();
-    
-    static ref ORDINAL_WEEKDAY_RE: Regex = Regex::new(
-        r"^(\d+|first|second|third|fourth|fifth)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\s+(?:(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+)?(\d{4})$"
-    ).unwrap();
-    
-    static ref SCOTTISH_TIME_RE: Regex = Regex::new(
-        r"^(back|front)\s+of\s+(\d+)$"
-    ).unwrap();
-}
+static RELATIVE_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^([+-]?\d+)\s*(year|month|week|day|hour|minute|second|fortnight)s?(\s+ago)?$")
+        .unwrap()
+});
+
+static WEEKDAY_REFERENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(next|last|this|previous)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)$",
+    )
+    .unwrap()
+});
+
+static SPECIAL_PHRASE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(first|last)\s+day\s+of\s+(next|this|last)\s+month$").unwrap()
+});
+
+static ORDINAL_WEEKDAY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(\d+|first|second|third|fourth|fifth)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\s+(?:(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+)?(\d{4})$",
+    )
+    .unwrap()
+});
+
+static SCOTTISH_TIME_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(back|front)\s+of\s+(\d+)$").unwrap());
 
 // ============================================================================
 // Internal Data Structures
@@ -112,19 +116,33 @@ fn get_string_arg(vm: &VM, handle: Handle) -> Result<Vec<u8>, String> {
     }
 }
 
+/// An int parameter in PHP's weak mode: bools, null, floats and numeric
+/// strings are converted; arrays, objects and non-numeric strings are not.
 fn get_int_arg(vm: &VM, handle: Handle) -> Result<i64, String> {
-    let val = vm.arena.get(handle);
-    match &val.value {
+    match &vm.arena.get(handle).value {
         Val::Int(i) => Ok(*i),
+        Val::Bool(b) => Ok(i64::from(*b)),
+        Val::Null => Ok(0),
+        Val::Float(f) if f.is_finite() => Ok(*f as i64),
+        Val::String(s) => match Val::numeric_string(s) {
+            Some(n) => Ok(n.to_int()),
+            None => Err("Expected integer argument".into()),
+        },
         _ => Err("Expected integer argument".into()),
     }
 }
 
+/// A float parameter in PHP's weak mode (see get_int_arg).
 fn get_float_arg(vm: &VM, handle: Handle) -> Result<f64, String> {
-    let val = vm.arena.get(handle);
-    match &val.value {
+    match &vm.arena.get(handle).value {
         Val::Float(f) => Ok(*f),
         Val::Int(i) => Ok(*i as f64),
+        Val::Bool(b) => Ok(f64::from(u8::from(*b))),
+        Val::Null => Ok(0.0),
+        Val::String(s) => match Val::numeric_string(s) {
+            Some(n) => Ok(n.to_float()),
+            None => Err("Expected float argument".into()),
+        },
         _ => Err("Expected float argument".into()),
     }
 }
