@@ -2946,6 +2946,7 @@ dependencies = [
  "digest 0.10.7",
  "encoding_rs",
  "flate2",
+ "hashbrown 0.16.1",
  "hex",
  "hkdf",
  "hmac 0.12.1",
