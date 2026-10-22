@@ -819,12 +819,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 }
             }
             if let ClassMemberCtx::Class { is_abstract, .. } = ctx {
-                if method_is_abstract && !is_abstract {
-                    self.errors.push(ParseError {
-                        span: Span::new(start, start),
-                        message: "abstract method in non-abstract class",
-                    });
-                }
+                // An abstract method in a concrete class is reported when the
+                // class is linked ("contains 1 abstract method"), not here.
+                let _ = is_abstract;
                 if !method_is_abstract && !has_body {
                     self.errors.push(ParseError {
                         span: Span::new(start, start),

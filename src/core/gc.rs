@@ -518,6 +518,8 @@ mod tests {
             statics: Rc::new(RefCell::new(statics)),
             return_type: None,
             attributes: Vec::new(),
+            decl_line: 0,
+            is_final: false,
         };
         let mut captures = IndexMap::new();
         captures.insert(Symbol(5), captured);
