@@ -162,10 +162,11 @@ pub fn execute_source(source: &[u8], file_path: Option<&Path>, vm: &mut VM) -> i
 
     let program = parser.parse_program();
 
-    if !program.errors.is_empty() {
-        for error in program.errors {
-            println!("{}", error.to_human_readable(source));
-        }
+    if let Some(error) = program.errors.first() {
+        // PHP stops at the first parse error and shows it like any error.
+        let line = error.span.line_info(source).map_or(1, |info| info.line);
+        let file = file_path.map_or("Standard input code".into(), |p| p.to_string_lossy());
+        print!("\nParse error: {} in {} on line {}\n", error.message, file, line);
         return 255;
     }
 

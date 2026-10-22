@@ -210,8 +210,12 @@ pub fn execute_code_with_config(
         )));
     }
 
-    // Execute (timeout checking happens inside run_loop)
-    vm.run(std::rc::Rc::new(chunk))?;
+    // Execute (timeout checking happens inside run_loop); a file that
+    // failed to compile shows its error and does not run.
+    match vm.compile_failure(&chunk) {
+        Some(failure) => return Err(failure),
+        None => vm.run(std::rc::Rc::new(chunk))?,
+    }
 
     // Extract result
     let value = match vm.last_return_value {
