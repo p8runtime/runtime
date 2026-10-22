@@ -1253,20 +1253,20 @@ impl VM {
 
     #[inline]
     pub(super) fn push_frame(&mut self, mut frame: CallFrame) {
-        if let Some(names) = self.pending_arg_names.take() {
-            if let Some(func) = frame.func.clone() {
-                let mut args = std::mem::take(&mut frame.args);
-                let mut extra = Vec::new();
-                if let Err(e) = self.bind_named_args(&func, &mut args, names, &mut extra) {
-                    // The callee never starts; the error is thrown in the caller.
-                    if let VmError::Exception(h) = e {
-                        self.pending_throw = Some(h);
-                    }
-                    return;
+        if let Some(names) = self.pending_arg_names.take()
+            && let Some(func) = frame.func.clone()
+        {
+            let mut args = std::mem::take(&mut frame.args);
+            let mut extra = Vec::new();
+            if let Err(e) = self.bind_named_args(&func, &mut args, names, &mut extra) {
+                // The callee never starts; the error is thrown in the caller.
+                if let VmError::Exception(h) = e {
+                    self.pending_throw = Some(h);
                 }
-                frame.args = args;
-                frame.named_extra = extra;
+                return;
             }
+            frame.args = args;
+            frame.named_extra = extra;
         }
         if !self.pending_undefined.is_empty() {
             self.settle_undefined_args(&frame);
@@ -5331,58 +5331,58 @@ impl VM {
                     (frame.func.clone(), frame.callsite_strict_types, name_str)
                 };
 
-                if let Some(func) = func_clone {
-                    if (arg_idx as usize) < func.params.len() {
-                        let param = func.params[arg_idx as usize].clone();
+                if let Some(func) = func_clone
+                    && (arg_idx as usize) < func.params.len()
+                {
+                    let param = func.params[arg_idx as usize].clone();
 
-                        // Get arg_handle first
-                        let has_arg = {
-                            let frame = self.frames.last().unwrap();
-                            (arg_idx as usize) < frame.args.len()
+                    // Get arg_handle first
+                    let has_arg = {
+                        let frame = self.frames.last().unwrap();
+                        (arg_idx as usize) < frame.args.len()
+                    };
+                    // Magic-method dispatch binds its parameters directly.
+                    let prebound = !has_arg
+                        && self.frames.last().unwrap().locals.contains_key(&param.name);
+                    if !prebound
+                        && (!has_arg
+                            || matches!(
+                                self.arena
+                                    .get(self.frames.last().unwrap().args[arg_idx as usize])
+                                    .value,
+                                Val::Uninitialized
+                            ))
+                    {
+                        return Err(self.missing_argument_error(&func, arg_idx as usize, &func_name_str));
+                    }
+
+                    if has_arg {
+                        let arg_handle = self.frames.last().unwrap().args[arg_idx as usize];
+
+                        // Type check and coerce if needed (this may mutate self)
+                        let checked_handle = if let Some(ref param_type) = param.param_type {
+                            self.check_parameter_type(
+                                arg_handle,
+                                param_type,
+                                callsite_strict,
+                                param.name,
+                                &func_name_str,
+                            )?
+                        } else {
+                            arg_handle
                         };
-                        // Magic-method dispatch binds its parameters directly.
-                        let prebound = !has_arg
-                            && self.frames.last().unwrap().locals.contains_key(&param.name);
-                        if !prebound
-                            && (!has_arg
-                                || matches!(
-                                    self.arena
-                                        .get(self.frames.last().unwrap().args[arg_idx as usize])
-                                        .value,
-                                    Val::Uninitialized
-                                ))
-                        {
-                            return Err(self.missing_argument_error(&func, arg_idx as usize, &func_name_str));
-                        }
 
-                        if has_arg {
-                            let arg_handle = self.frames.last().unwrap().args[arg_idx as usize];
-
-                            // Type check and coerce if needed (this may mutate self)
-                            let checked_handle = if let Some(ref param_type) = param.param_type {
-                                self.check_parameter_type(
-                                    arg_handle,
-                                    param_type,
-                                    callsite_strict,
-                                    param.name,
-                                    &func_name_str,
-                                )?
-                            } else {
-                                arg_handle
-                            };
-
-                            // Now insert into frame locals
-                            let frame = self.frames.last_mut().unwrap();
-                            if param.by_ref {
-                                if !self.arena.get(checked_handle).is_ref {
-                                    self.arena.get_mut(checked_handle).is_ref = true;
-                                }
-                                frame.locals.insert(param.name, checked_handle);
-                            } else {
-                                let val = self.arena.get(checked_handle).value.clone();
-                                let final_handle = self.arena.alloc(val);
-                                frame.locals.insert(param.name, final_handle);
+                        // Now insert into frame locals
+                        let frame = self.frames.last_mut().unwrap();
+                        if param.by_ref {
+                            if !self.arena.get(checked_handle).is_ref {
+                                self.arena.get_mut(checked_handle).is_ref = true;
                             }
+                            frame.locals.insert(param.name, checked_handle);
+                        } else {
+                            let val = self.arena.get(checked_handle).value.clone();
+                            let final_handle = self.arena.alloc(val);
+                            frame.locals.insert(param.name, final_handle);
                         }
                     }
                 }
@@ -5400,55 +5400,55 @@ impl VM {
                     (frame.func.clone(), frame.callsite_strict_types, name_str)
                 };
 
-                if let Some(func) = func_clone {
-                    if (arg_idx as usize) < func.params.len() {
-                        let param = func.params[arg_idx as usize].clone();
+                if let Some(func) = func_clone
+                    && (arg_idx as usize) < func.params.len()
+                {
+                    let param = func.params[arg_idx as usize].clone();
 
-                        // Check if arg was supplied
-                        // A named call may skip an optional parameter (Uninitialized).
-                        let has_arg = {
-                            let frame = self.frames.last().unwrap();
-                            frame.args.get(arg_idx as usize).is_some_and(|&h| {
-                                !matches!(self.arena.get(h).value, Val::Uninitialized)
-                            })
+                    // Check if arg was supplied
+                    // A named call may skip an optional parameter (Uninitialized).
+                    let has_arg = {
+                        let frame = self.frames.last().unwrap();
+                        frame.args.get(arg_idx as usize).is_some_and(|&h| {
+                            !matches!(self.arena.get(h).value, Val::Uninitialized)
+                        })
+                    };
+
+                    if has_arg {
+                        let arg_handle = self.frames.last().unwrap().args[arg_idx as usize];
+
+                        // Type check and coerce if needed
+                        let checked_handle = if let Some(ref param_type) = param.param_type {
+                            self.check_parameter_type(
+                                arg_handle,
+                                param_type,
+                                callsite_strict,
+                                param.name,
+                                &func_name_str,
+                            )?
+                        } else {
+                            arg_handle
                         };
 
-                        if has_arg {
-                            let arg_handle = self.frames.last().unwrap().args[arg_idx as usize];
-
-                            // Type check and coerce if needed
-                            let checked_handle = if let Some(ref param_type) = param.param_type {
-                                self.check_parameter_type(
-                                    arg_handle,
-                                    param_type,
-                                    callsite_strict,
-                                    param.name,
-                                    &func_name_str,
-                                )?
-                            } else {
-                                arg_handle
-                            };
-
-                            // Insert into frame locals
-                            let frame = self.frames.last_mut().unwrap();
-                            if param.by_ref {
-                                if !self.arena.get(checked_handle).is_ref {
-                                    self.arena.get_mut(checked_handle).is_ref = true;
-                                }
-                                frame.locals.insert(param.name, checked_handle);
-                            } else {
-                                let val = self.arena.get(checked_handle).value.clone();
-                                let final_handle = self.arena.alloc(val);
-                                frame.locals.insert(param.name, final_handle);
+                        // Insert into frame locals
+                        let frame = self.frames.last_mut().unwrap();
+                        if param.by_ref {
+                            if !self.arena.get(checked_handle).is_ref {
+                                self.arena.get_mut(checked_handle).is_ref = true;
                             }
+                            frame.locals.insert(param.name, checked_handle);
                         } else {
-                            // Use default value
-                            let frame = self.frames.last_mut().unwrap();
-                            let default_val =
-                                frame.chunk.constants[default_val_idx as usize].clone();
-                            let default_handle = self.arena.alloc(default_val);
-                            frame.locals.insert(param.name, default_handle);
+                            let val = self.arena.get(checked_handle).value.clone();
+                            let final_handle = self.arena.alloc(val);
+                            frame.locals.insert(param.name, final_handle);
                         }
+                    } else {
+                        // Use default value
+                        let frame = self.frames.last_mut().unwrap();
+                        let default_val =
+                            frame.chunk.constants[default_val_idx as usize].clone();
+                        let default_handle = self.arena.alloc(default_val);
+                        frame.locals.insert(param.name, default_handle);
                     }
                 }
             }
@@ -5475,45 +5475,45 @@ impl VM {
                     )
                 };
 
-                if let Some(func) = func_clone {
-                    if (arg_idx as usize) < func.params.len() {
-                        let param = func.params[arg_idx as usize].clone();
-                        let mut arr = IndexMap::new();
+                if let Some(func) = func_clone
+                    && (arg_idx as usize) < func.params.len()
+                {
+                    let param = func.params[arg_idx as usize].clone();
+                    let mut arr = IndexMap::new();
 
-                        for (i, handle) in args_to_check.iter().enumerate() {
-                            let mut arg_handle = *handle;
+                    for (i, handle) in args_to_check.iter().enumerate() {
+                        let mut arg_handle = *handle;
 
-                            // Type check each variadic argument
-                            if let Some(ref param_type) = param.param_type {
-                                arg_handle = self.check_parameter_type(
-                                    arg_handle,
-                                    param_type,
-                                    callsite_strict,
-                                    param.name,
-                                    &func_name_str,
-                                )?;
-                            }
-
-                            if param.by_ref {
-                                if !self.arena.get(arg_handle).is_ref {
-                                    self.arena.get_mut(arg_handle).is_ref = true;
-                                }
-                                arr.insert(ArrayKey::Int(i as i64), arg_handle);
-                            } else {
-                                let val = self.arena.get(arg_handle).value.clone();
-                                let h = self.arena.alloc(val);
-                                arr.insert(ArrayKey::Int(i as i64), h);
-                            }
+                        // Type check each variadic argument
+                        if let Some(ref param_type) = param.param_type {
+                            arg_handle = self.check_parameter_type(
+                                arg_handle,
+                                param_type,
+                                callsite_strict,
+                                param.name,
+                                &func_name_str,
+                            )?;
                         }
-                        let named_extra = std::mem::take(&mut self.frames.last_mut().unwrap().named_extra);
-                        for (name, h) in named_extra {
-                            let key = self.context.interner.lookup(name).unwrap_or(b"").to_vec();
-                            arr.insert(ArrayKey::Str(Rc::new(key)), h);
+
+                        if param.by_ref {
+                            if !self.arena.get(arg_handle).is_ref {
+                                self.arena.get_mut(arg_handle).is_ref = true;
+                            }
+                            arr.insert(ArrayKey::Int(i as i64), arg_handle);
+                        } else {
+                            let val = self.arena.get(arg_handle).value.clone();
+                            let h = self.arena.alloc(val);
+                            arr.insert(ArrayKey::Int(i as i64), h);
                         }
-                        let arr_handle = self.arena.alloc(Val::Array(ArrayData::from(arr).into()));
-                        let frame = self.frames.last_mut().unwrap();
-                        frame.locals.insert(param.name, arr_handle);
                     }
+                    let named_extra = std::mem::take(&mut self.frames.last_mut().unwrap().named_extra);
+                    for (name, h) in named_extra {
+                        let key = self.context.interner.lookup(name).unwrap_or(b"").to_vec();
+                        arr.insert(ArrayKey::Str(Rc::new(key)), h);
+                    }
+                    let arr_handle = self.arena.alloc(Val::Array(ArrayData::from(arr).into()));
+                    let frame = self.frames.last_mut().unwrap();
+                    frame.locals.insert(param.name, arr_handle);
                 }
             }
             OpCode::SendVal => {
@@ -6353,38 +6353,8 @@ impl VM {
                     }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload.value {
+                        if let Val::ObjPayload(_) = &payload.value {
                             let mut handled = false;
-                            if let Some(internal) = &obj_data.internal {
-                                if let Ok(gen_data) =
-                                    internal.clone().downcast::<RefCell<GeneratorData>>()
-                                {
-                                    let mut data = gen_data.borrow_mut();
-                                    match &data.state {
-                                        GeneratorState::Created(frame) => {
-                                            let mut frame = frame.clone();
-                                            frame.generator = Some(iterable_handle);
-                                            self.push_frame(frame);
-                                            data.state = GeneratorState::Running;
-
-                                            // Push dummy index to maintain [Iterable, Index] stack shape
-                                            let idx_handle = self.arena.alloc(Val::Int(0));
-                                            self.operand_stack.push(idx_handle);
-                                        }
-                                        GeneratorState::Finished => {
-                                            self.operand_stack.pop(); // Pop iterable
-                                            let frame = self.frames.last_mut().unwrap();
-                                            frame.ip = target as usize;
-                                        }
-                                        _ => {
-                                            return Err(VmError::RuntimeError(
-                                                "Cannot rewind generator".into(),
-                                            ));
-                                        }
-                                    }
-                                    handled = true;
-                                }
-                            }
 
                             if !handled {
                                 let iterator_sym = self.context.interner.intern(b"Iterator");
@@ -6486,36 +6456,18 @@ impl VM {
                     }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload.value {
-                            let mut handled = false;
-                            if let Some(internal) = &obj_data.internal {
-                                if let Ok(gen_data) =
-                                    internal.clone().downcast::<RefCell<GeneratorData>>()
-                                {
-                                    let data = gen_data.borrow();
-                                    if let GeneratorState::Finished = data.state {
-                                        self.operand_stack.pop(); // Pop Index
-                                        self.operand_stack.pop(); // Pop Iterable
-                                        let frame = self.frames.last_mut().unwrap();
-                                        frame.ip = target as usize;
-                                    }
-                                    handled = true;
-                                }
-                            }
+                        if let Val::ObjPayload(_) = &payload.value {
+                            let iterator_sym = self.context.interner.intern(b"Iterator");
+                            if self.is_instance_of(iterable_handle, iterator_sym) {
+                                let valid_sym = self.context.interner.intern(b"valid");
+                                let is_valid =
+                                    self.call_method_simple(iterable_handle, valid_sym)?;
 
-                            if !handled {
-                                let iterator_sym = self.context.interner.intern(b"Iterator");
-                                if self.is_instance_of(iterable_handle, iterator_sym) {
-                                    let valid_sym = self.context.interner.intern(b"valid");
-                                    let is_valid =
-                                        self.call_method_simple(iterable_handle, valid_sym)?;
-
-                                    if let Val::Bool(false) = self.arena.get(is_valid).value {
-                                        self.operand_stack.pop(); // Pop Index
-                                        self.operand_stack.pop(); // Pop Iterable
-                                        let frame = self.frames.last_mut().unwrap();
-                                        frame.ip = target as usize;
-                                    }
+                                if let Val::Bool(false) = self.arena.get(is_valid).value {
+                                    self.operand_stack.pop(); // Pop Index
+                                    self.operand_stack.pop(); // Pop Iterable
+                                    let frame = self.frames.last_mut().unwrap();
+                                    frame.ip = target as usize;
                                 }
                             }
                         }
@@ -6561,46 +6513,8 @@ impl VM {
                     }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload.value {
+                        if let Val::ObjPayload(_) = &payload.value {
                             let mut handled = false;
-                            if let Some(internal) = &obj_data.internal {
-                                if let Ok(gen_data) =
-                                    internal.clone().downcast::<RefCell<GeneratorData>>()
-                                {
-                                    let mut data = gen_data.borrow_mut();
-                                    if let GeneratorState::Suspended(frame) = &data.state {
-                                        let mut frame = frame.clone();
-                                        frame.generator = Some(iterable_handle);
-                                        self.push_frame(frame);
-                                        data.state = GeneratorState::Running;
-                                        // Push dummy index
-                                        let idx_handle = self.arena.alloc(Val::Null);
-                                        self.operand_stack.push(idx_handle);
-                                        // Store sent value (null) for generator
-                                        let sent_handle = self.arena.alloc(Val::Null);
-                                        data.sent_val = Some(sent_handle);
-                                    } else if let GeneratorState::Delegating(frame) = &data.state {
-                                        let mut frame = frame.clone();
-                                        frame.generator = Some(iterable_handle);
-                                        self.push_frame(frame);
-                                        data.state = GeneratorState::Running;
-                                        // Push dummy index
-                                        let idx_handle = self.arena.alloc(Val::Null);
-                                        self.operand_stack.push(idx_handle);
-                                        // Store sent value (null) for generator
-                                        let sent_handle = self.arena.alloc(Val::Null);
-                                        data.sent_val = Some(sent_handle);
-                                    } else if let GeneratorState::Finished = data.state {
-                                        let idx_handle = self.arena.alloc(Val::Null);
-                                        self.operand_stack.push(idx_handle);
-                                    } else {
-                                        return Err(VmError::RuntimeError(
-                                            "Cannot resume an already running generator".into(),
-                                        ));
-                                    }
-                                    handled = true;
-                                }
-                            }
 
                             if !handled {
                                 let iterator_sym = self.context.interner.intern(b"Iterator");
@@ -6677,24 +6591,8 @@ impl VM {
                     }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload.value {
+                        if let Val::ObjPayload(_) = &payload.value {
                             let mut handled = false;
-                            if let Some(internal) = &obj_data.internal {
-                                if let Ok(gen_data) =
-                                    internal.clone().downcast::<RefCell<GeneratorData>>()
-                                {
-                                    let data = gen_data.borrow();
-                                    if let Some(val_handle) = data.current_val {
-                                        let frame = self.frames.last_mut().unwrap();
-                                        frame.locals.insert(sym, val_handle);
-                                    } else {
-                                        return Err(VmError::RuntimeError(
-                                            "Generator has no current value".into(),
-                                        ));
-                                    }
-                                    handled = true;
-                                }
-                            }
 
                             if !handled {
                                 let iterator_sym = self.context.interner.intern(b"Iterator");
@@ -6822,20 +6720,8 @@ impl VM {
                     }
                     Val::Object(payload_handle) => {
                         let payload = self.arena.get(*payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload.value {
+                        if let Val::ObjPayload(_) = &payload.value {
                             let mut handled = false;
-                            if let Some(internal) = &obj_data.internal {
-                                if let Ok(gen_data) =
-                                    internal.clone().downcast::<RefCell<GeneratorData>>()
-                                {
-                                    let data = gen_data.borrow();
-                                    let key =
-                                        data.current_key.unwrap_or(self.arena.alloc(Val::Null));
-                                    let frame = self.frames.last_mut().unwrap();
-                                    frame.locals.insert(sym, key);
-                                    handled = true;
-                                }
-                            }
 
                             if !handled {
                                 let iterator_sym = self.context.interner.intern(b"Iterator");
