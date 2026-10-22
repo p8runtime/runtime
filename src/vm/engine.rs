@@ -3195,7 +3195,7 @@ impl VM {
                 }
             }
             Err(e) => {
-                let text = format!("\nFatal error: {}\n", e);
+                let text = self.fatal_error_text(&e);
                 let _ = self.write_output(text.as_bytes());
                 255
             }
@@ -3204,6 +3204,17 @@ impl VM {
         self.end_output_buffers();
         let _ = self.output_writer.flush();
         status
+    }
+
+    /// "Fatal error: msg in FILE on line N" for an error that ended the script,
+    /// located where it happened (the frames are still in place).
+    fn fatal_error_text(&self, e: &VmError) -> String {
+        match self.current_location() {
+            (file, line) if !self.frames.is_empty() && file != "Unknown" => {
+                format!("\nFatal error: {} in {} on line {}\n", e, file, line)
+            }
+            _ => format!("\nFatal error: {}\n", e),
+        }
     }
 
     /// Run register_shutdown_function() callbacks in order; one may register
@@ -3226,7 +3237,8 @@ impl VM {
                 }
                 Err(VmError::Terminated) => return 255,
                 Err(e) => {
-                    let _ = self.write_output(format!("\nFatal error: {}\n", e).as_bytes());
+                    let text = self.fatal_error_text(&e);
+                    let _ = self.write_output(text.as_bytes());
                     return 255;
                 }
             }
