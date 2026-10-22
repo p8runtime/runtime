@@ -591,6 +591,111 @@ pub fn php_is_scalar(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Bool(is)))
 }
 
+pub fn php_is_resource(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("is_resource() expects exactly 1 parameter".into());
+    }
+    let is = matches!(vm.arena.get(args[0]).value, Val::Resource(_));
+    Ok(vm.arena.alloc(Val::Bool(is)))
+}
+
+/// strval($value): string — same conversion as echo/string interpolation.
+pub fn php_strval(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("strval() expects exactly 1 parameter".into());
+    }
+    let bytes = vm.convert_to_string(args[0]).map_err(|e| e.to_string())?;
+    Ok(vm.arena.alloc(Val::String(Rc::new(bytes))))
+}
+
+/// intval($value, $base = 10): int
+/// Reference: $PHP_SRC_PATH/ext/standard/type.c - PHP_FUNCTION(intval)
+pub fn php_intval(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("intval() expects 1 or 2 parameters".into());
+    }
+    let base = match args.get(1) {
+        Some(h) => vm.arena.get(*h).value.to_int(),
+        None => 10,
+    };
+    let val = &vm.arena.get(args[0]).value;
+    let int_val = match val {
+        Val::String(s) if base != 10 => strtol(s, base),
+        other => other.to_int(),
+    };
+    Ok(vm.arena.alloc(Val::Int(int_val)))
+}
+
+/// C strtol as PHP's intval() uses it for non-decimal bases: leading
+/// whitespace, optional sign, a 0x/0o/0b prefix (detected when base is 0),
+/// digits up to the first invalid one, saturating on overflow.
+fn strtol(s: &[u8], base: i64) -> i64 {
+    let mut i = s.iter().take_while(|b| b.is_ascii_whitespace()).count();
+    let negative = match s.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
+    };
+    let prefix = |c: u8| {
+        s.get(i) == Some(&b'0') && s.get(i + 1).map(|b| b.to_ascii_lowercase()) == Some(c)
+    };
+    let mut base = base;
+    if (base == 16 || base == 0) && prefix(b'x') {
+        base = 16;
+        i += 2;
+    } else if (base == 8 || base == 0) && prefix(b'o') {
+        base = 8;
+        i += 2;
+    } else if (base == 2 || base == 0) && prefix(b'b') {
+        base = 2;
+        i += 2;
+    } else if base == 0 {
+        base = if s.get(i) == Some(&b'0') { 8 } else { 10 };
+    }
+    if !(2..=36).contains(&base) {
+        return 0;
+    }
+    let mut acc: i64 = 0;
+    for &b in &s[i.min(s.len())..] {
+        let Some(d) = (b as char).to_digit(36).filter(|d| (*d as i64) < base) else {
+            break;
+        };
+        acc = match acc.checked_mul(base).and_then(|a| {
+            if negative {
+                a.checked_sub(d as i64)
+            } else {
+                a.checked_add(d as i64)
+            }
+        }) {
+            Some(a) => a,
+            None => return if negative { i64::MIN } else { i64::MAX },
+        };
+    }
+    acc
+}
+
+pub fn php_floatval(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("floatval() expects exactly 1 parameter".into());
+    }
+    let f = vm.arena.get(args[0]).value.to_float();
+    Ok(vm.arena.alloc(Val::Float(f)))
+}
+
+pub fn php_boolval(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("boolval() expects exactly 1 parameter".into());
+    }
+    let b = vm.arena.get(args[0]).value.to_bool();
+    Ok(vm.arena.alloc(Val::Bool(b)))
+}
+
 pub fn php_getenv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() {
         // Validation: php_getenv without args returns array of all env vars (not implemented here yet)

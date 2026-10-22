@@ -1962,3 +1962,81 @@ pub fn php_disk_total_space(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
     // This requires platform-specific syscalls
     Err("disk_total_space(): Not yet implemented".into())
 }
+
+/// Directory handle resource for opendir/readdir/closedir/rewinddir.
+/// Entries are read once at opendir, with "." and ".." first like PHP.
+#[derive(Debug)]
+pub struct DirHandle {
+    entries: Vec<Vec<u8>>,
+    position: RefCell<usize>,
+}
+
+fn dir_handle<'a>(vm: &'a VM, h: Handle, func: &str) -> Result<&'a DirHandle, String> {
+    match &vm.arena.get(h).value {
+        Val::Resource(rc) => rc.downcast_ref::<DirHandle>(),
+        _ => None,
+    }
+    .ok_or_else(|| format!("{}(): supplied argument is not a valid Directory resource", func))
+}
+
+/// opendir(path) - Open directory handle
+/// Reference: $PHP_SRC_PATH/ext/standard/dir.c - PHP_FUNCTION(opendir)
+pub fn php_opendir(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.is_empty() {
+        return Err("opendir() expects at least 1 parameter".into());
+    }
+    let path_bytes = handle_to_path(vm, args[0])?;
+    let path = bytes_to_path(&path_bytes)?;
+    let read = match fs::read_dir(&path) {
+        Ok(read) => read,
+        Err(e) => {
+            vm.trigger_error(
+                crate::vm::engine::ErrorLevel::Warning,
+                &format!(
+                    "opendir({}): Failed to open directory: {}",
+                    String::from_utf8_lossy(&path_bytes),
+                    e
+                ),
+            );
+            return Ok(vm.arena.alloc(Val::Bool(false)));
+        }
+    };
+    let mut entries = vec![b".".to_vec(), b"..".to_vec()];
+    entries.extend(
+        read.filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned().into_bytes()),
+    );
+    let handle = DirHandle {
+        entries,
+        position: RefCell::new(0),
+    };
+    Ok(vm.arena.alloc(Val::Resource(Rc::new(handle))))
+}
+
+/// readdir(dir) - Next entry name, or false at the end
+pub fn php_readdir(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let h = *args.first().ok_or("readdir() expects 1 parameter")?;
+    let dir = dir_handle(vm, h, "readdir")?;
+    let mut pos = dir.position.borrow_mut();
+    let entry = dir.entries.get(*pos).cloned();
+    *pos += 1;
+    drop(pos);
+    Ok(vm.arena.alloc(match entry {
+        Some(name) => Val::String(Rc::new(name)),
+        None => Val::Bool(false),
+    }))
+}
+
+/// rewinddir(dir)
+pub fn php_rewinddir(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let h = *args.first().ok_or("rewinddir() expects 1 parameter")?;
+    *dir_handle(vm, h, "rewinddir")?.position.borrow_mut() = 0;
+    Ok(vm.arena.alloc(Val::Null))
+}
+
+/// closedir(dir) - the entries are freed when the resource is collected
+pub fn php_closedir(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let h = *args.first().ok_or("closedir() expects 1 parameter")?;
+    dir_handle(vm, h, "closedir")?;
+    Ok(vm.arena.alloc(Val::Null))
+}

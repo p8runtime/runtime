@@ -1376,6 +1376,20 @@ pub fn php_microtime(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 }
 
+/// sleep(int $seconds): int
+/// Reference: $PHP_SRC_PATH/ext/standard/basic_functions.c - PHP_FUNCTION(sleep)
+pub fn php_sleep(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    if args.len() != 1 {
+        return Err("sleep() expects exactly 1 parameter".into());
+    }
+    let seconds = vm.arena.get(args[0]).value.to_int();
+    if seconds < 0 {
+        return Err("sleep(): Argument #1 ($seconds) must be greater than or equal to 0".into());
+    }
+    std::thread::sleep(std::time::Duration::from_secs(seconds as u64));
+    Ok(vm.arena.alloc(Val::Int(0)))
+}
+
 /// hrtime(bool $as_number = false): array|int
 /// Returns high resolution time
 /// Reference: $PHP_SRC_PATH/ext/standard/hrtime.c

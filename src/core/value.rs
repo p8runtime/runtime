@@ -217,7 +217,7 @@ impl Val {
             Val::Null => false,
             Val::Bool(b) => *b,
             Val::Int(i) => *i != 0,
-            Val::Float(f) => *f != 0.0 && !f.is_nan(),
+            Val::Float(f) => *f != 0.0,
             Val::String(s) => {
                 // Empty string or "0" is false
                 if s.is_empty() {
@@ -251,7 +251,7 @@ impl Val {
             Val::Float(f) => *f as i64,
             Val::String(s) => {
                 // Parse numeric string
-                Self::parse_numeric_string(s).0
+                Self::parse_numeric_string(s)
             }
             Val::Array(arr) => {
                 if arr.map.is_empty() {
@@ -289,17 +289,10 @@ impl Val {
             Val::Float(f) => *f,
             Val::String(s) => {
                 // Parse numeric string
-                let (int_val, is_float) = Self::parse_numeric_string(s);
-                if is_float {
-                    // Re-parse as float for precision
-                    if let Ok(s_str) = std::str::from_utf8(s) {
-                        s_str.trim().parse::<f64>().unwrap_or(int_val as f64)
-                    } else {
-                        int_val as f64
-                    }
-                } else {
-                    int_val as f64
-                }
+                std::str::from_utf8(Self::numeric_prefix(s))
+                    .ok()
+                    .and_then(|t| t.parse::<f64>().ok())
+                    .unwrap_or(0.0)
             }
             Val::Array(arr) => {
                 if arr.map.is_empty() {
@@ -323,35 +316,49 @@ impl Val {
 
     /// Parse numeric string to int, returning (value, is_float)
     /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - is_numeric_string_ex
-    fn parse_numeric_string(s: &[u8]) -> (i64, bool) {
-        if s.is_empty() {
-            return (0, false);
+    /// Leading-numeric parse as PHP's casts do it ("12abc" -> 12, " 1.5e3x" -> 1500):
+    /// whitespace, sign, digits, optional fraction and exponent; the rest is ignored.
+    /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - _zend_handle_numeric_str_ex
+    fn parse_numeric_string(s: &[u8]) -> i64 {
+        let Ok(text) = std::str::from_utf8(Self::numeric_prefix(s)) else {
+            return 0;
+        };
+        let is_float = text.contains(['.', 'e', 'E']);
+        if !is_float && let Ok(i) = text.parse::<i64>() {
+            return i;
         }
+        text.parse::<f64>().map_or(0, |f| f as i64)
+    }
 
-        // Trim leading whitespace
-        let trimmed = s
+    /// The numeric prefix of `s` after leading whitespace (may be empty).
+    fn numeric_prefix(s: &[u8]) -> &[u8] {
+        let start = s
             .iter()
-            .skip_while(|&&b| b == b' ' || b == b'\t' || b == b'\n' || b == b'\r')
-            .copied()
-            .collect::<Vec<u8>>();
-
-        if trimmed.is_empty() {
-            return (0, false);
-        }
-
-        if let Ok(s_str) = std::str::from_utf8(&trimmed) {
-            // Try parsing as int first
-            if let Ok(i) = s_str.parse::<i64>() {
-                return (i, false);
-            }
-            // Try as float
-            if let Ok(f) = s_str.parse::<f64>() {
-                return (f as i64, true);
+            .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c'))
+            .unwrap_or(s.len());
+        let s = &s[start..];
+        let digits = |from: usize| s[from..].iter().take_while(|b| b.is_ascii_digit()).count();
+        let mut end = usize::from(matches!(s.first(), Some(b'+' | b'-')));
+        let int_digits = digits(end);
+        end += int_digits;
+        let mut frac_digits = 0;
+        if s.get(end) == Some(&b'.') {
+            frac_digits = digits(end + 1);
+            if int_digits + frac_digits > 0 {
+                end += 1 + frac_digits;
             }
         }
-
-        // Non-numeric string
-        (0, false)
+        if int_digits + frac_digits == 0 {
+            return &s[..0];
+        }
+        if matches!(s.get(end), Some(b'e' | b'E')) {
+            let sign = usize::from(matches!(s.get(end + 1), Some(b'+' | b'-')));
+            let exp_digits = digits(end + 1 + sign);
+            if exp_digits > 0 {
+                end += 1 + sign + exp_digits;
+            }
+        }
+        &s[..end]
     }
 }
 

@@ -650,6 +650,8 @@ impl Extension for DateExtension {
         registry.register_function(b"gmdate", datetime::php_gmdate);
         registry.register_function(b"time", datetime::php_time);
         registry.register_function(b"microtime", datetime::php_microtime);
+        registry.register_function(b"sleep", datetime::php_sleep);
+        registry.register_function(b"hrtime", datetime::php_hrtime);
         registry.register_function(b"gettimeofday", datetime::php_gettimeofday);
         registry.register_function(b"localtime", datetime::php_localtime);
         registry.register_function(b"strtotime", datetime::php_strtotime);
