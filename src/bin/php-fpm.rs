@@ -471,17 +471,7 @@ impl BufferedErrorHandler {
 
 impl php_rs::vm::engine::ErrorHandler for BufferedErrorHandler {
     fn report(&mut self, level: php_rs::vm::engine::ErrorLevel, message: &str) {
-        use php_rs::vm::engine::ErrorLevel;
-        let level_str = match level {
-            ErrorLevel::Notice => "Notice",
-            ErrorLevel::Warning => "Warning",
-            ErrorLevel::Error => "Error",
-            ErrorLevel::ParseError => "Parse error",
-            ErrorLevel::UserNotice => "User notice",
-            ErrorLevel::UserWarning => "User warning",
-            ErrorLevel::UserError => "User error",
-            ErrorLevel::Deprecated => "Deprecated",
-        };
+        let level_str = level.label();
         let formatted = format!("PHP {}: {}\n", level_str, message);
         self.buffer
             .lock()

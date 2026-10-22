@@ -293,6 +293,8 @@ pub struct RequestContext {
     /// putenv() changes, layered over the process environment (None = unset).
     /// The real environment is never modified: it is shared by every thread.
     pub env_overrides: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    /// php.ini directives (ini_get/ini_set).
+    pub ini: crate::runtime::ini::IniSettings,
 }
 
 impl RequestContext {
@@ -320,6 +322,7 @@ impl RequestContext {
             resource_manager: ResourceManager::new(),
             locale: Default::default(),
             env_overrides: HashMap::new(),
+            ini: Default::default(),
         };
 
         // Copy constants from extension registry in bulk

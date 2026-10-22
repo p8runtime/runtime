@@ -92,6 +92,9 @@ pub enum VmError {
     RuntimeError(String),
     /// PHP exception object
     Exception(Handle),
+    /// The script ended on a fatal error that has already been displayed
+    /// (E_USER_ERROR, ...); nothing more is printed.
+    Terminated,
 }
 
 impl std::fmt::Display for VmError {
@@ -129,11 +132,23 @@ impl std::fmt::Display for VmError {
             VmError::Exception(_) => {
                 write!(f, "Uncaught exception")
             }
+            VmError::Terminated => write!(f, "Terminated"),
         }
     }
 }
 
 impl std::error::Error for VmError {}
+
+/// Collects diagnostics from helpers that report to an ErrorHandler, so they
+/// can be raised through VM::report_error afterwards.
+#[derive(Default)]
+struct DeferredDiagnostics(Vec<(ErrorLevel, String)>);
+
+impl ErrorHandler for DeferredDiagnostics {
+    fn report(&mut self, level: ErrorLevel, message: &str) {
+        self.0.push((level, message.to_string()));
+    }
+}
 
 /// PHP 8's warning for reading a missing array key: ints bare, strings quoted.
 fn undefined_key_message(key: &ArrayKey) -> String {
@@ -163,6 +178,7 @@ pub enum ErrorLevel {
     UserWarning, // E_USER_WARNING
     UserError,   // E_USER_ERROR
     Deprecated,  // E_DEPRECATED
+    UserDeprecated, // E_USER_DEPRECATED
 }
 
 impl ErrorLevel {
@@ -177,6 +193,35 @@ impl ErrorLevel {
             ErrorLevel::UserWarning => 512, // E_USER_WARNING
             ErrorLevel::UserNotice => 1024, // E_USER_NOTICE
             ErrorLevel::Deprecated => 8192, // E_DEPRECATED
+            ErrorLevel::UserDeprecated => 16384, // E_USER_DEPRECATED
+        }
+    }
+
+    /// The level for an E_* value, if it is one PHP code can raise.
+    pub fn from_bitmask(mask: i64) -> Option<Self> {
+        Some(match mask {
+            1 => ErrorLevel::Error,
+            2 => ErrorLevel::Warning,
+            4 => ErrorLevel::ParseError,
+            8 => ErrorLevel::Notice,
+            256 => ErrorLevel::UserError,
+            512 => ErrorLevel::UserWarning,
+            1024 => ErrorLevel::UserNotice,
+            8192 => ErrorLevel::Deprecated,
+            16384 => ErrorLevel::UserDeprecated,
+            _ => return None,
+        })
+    }
+
+    /// How PHP labels the level in displayed errors.
+    /// Reference: $PHP_SRC_PATH/main/main.c - php_error_cb
+    pub fn label(self) -> &'static str {
+        match self {
+            ErrorLevel::Error | ErrorLevel::UserError => "Fatal error",
+            ErrorLevel::ParseError => "Parse error",
+            ErrorLevel::Warning | ErrorLevel::UserWarning => "Warning",
+            ErrorLevel::Notice | ErrorLevel::UserNotice => "Notice",
+            ErrorLevel::Deprecated | ErrorLevel::UserDeprecated => "Deprecated",
         }
     }
 }
@@ -186,7 +231,16 @@ pub trait ErrorHandler {
     fn report(&mut self, level: ErrorLevel, message: &str);
 }
 
-/// Default error handler that writes to stderr
+/// An error log that keeps nothing: PHP 8's CLI default (log_errors=0).
+/// Errors are still displayed, through the output layer, by report_error.
+#[derive(Default)]
+pub struct NullErrorHandler;
+
+impl ErrorHandler for NullErrorHandler {
+    fn report(&mut self, _level: ErrorLevel, _message: &str) {}
+}
+
+/// Error log that writes to stderr
 pub struct StderrErrorHandler {
     stderr: io::Stderr,
 }
@@ -201,16 +255,7 @@ impl Default for StderrErrorHandler {
 
 impl ErrorHandler for StderrErrorHandler {
     fn report(&mut self, level: ErrorLevel, message: &str) {
-        let level_str = match level {
-            ErrorLevel::Notice => "Notice",
-            ErrorLevel::Warning => "Warning",
-            ErrorLevel::Error => "Error",
-            ErrorLevel::ParseError => "Parse error",
-            ErrorLevel::UserNotice => "User notice",
-            ErrorLevel::UserWarning => "User warning",
-            ErrorLevel::UserError => "User error",
-            ErrorLevel::Deprecated => "Deprecated",
-        };
+        let level_str = level.label();
         // Follow the same pattern as OutputWriter - write to stderr and handle errors gracefully
         let _ = writeln!(self.stderr, "{}: {}", level_str, message);
         let _ = self.stderr.flush();
@@ -341,6 +386,16 @@ pub struct VM {
     decl_counter: u64,
     /// Exit status set by exit(int).
     pub exit_status: i32,
+    /// set_error_handler() stack: (callable, E_* mask); None = no handler.
+    pub(crate) user_error_handlers: Vec<Option<(Handle, i64)>>,
+    /// set_exception_handler() stack.
+    pub(crate) user_exception_handlers: Vec<Option<Handle>>,
+    /// A user error handler is running (errors inside it are not re-dispatched).
+    in_error_handler: bool,
+    /// The last report_error was consumed by a user error handler.
+    last_error_handled: bool,
+    /// A builtin ended the script (VM::terminate); its error becomes Terminated.
+    pending_terminate: bool,
     pub silence_stack: Vec<u32>,
     pub pending_calls: Vec<PendingCall>,
     pub output_writer: Box<dyn OutputWriter>,
@@ -404,10 +459,15 @@ impl VM {
             pending_throw: None,
             decl_counter: 0,
             exit_status: 0,
+            user_error_handlers: Vec::new(),
+            user_exception_handlers: Vec::new(),
+            in_error_handler: false,
+            last_error_handled: false,
+            pending_terminate: false,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
-            error_handler: Box::new(StderrErrorHandler::default()),
+            error_handler: Box::new(NullErrorHandler),
             output_buffers: Vec::new(),
             implicit_flush: false,
             url_rewrite_vars: HashMap::new(),
@@ -817,10 +877,15 @@ impl VM {
             pending_throw: None,
             decl_counter: 0,
             exit_status: 0,
+            user_error_handlers: Vec::new(),
+            user_exception_handlers: Vec::new(),
+            in_error_handler: false,
+            last_error_handled: false,
+            pending_terminate: false,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
-            error_handler: Box::new(StderrErrorHandler::default()),
+            error_handler: Box::new(NullErrorHandler),
             output_buffers: Vec::new(),
             implicit_flush: false,
             url_rewrite_vars: HashMap::new(),
@@ -962,21 +1027,95 @@ impl VM {
 
     /// Report an error respecting the error_reporting level
     /// Also stores the error in context.last_error for error_get_last()
+    /// Raise a PHP diagnostic (php_error_docref / zend_error): remember it for
+    /// error_get_last(), give it to a set_error_handler() handler, or display
+    /// it as "\nWarning: message in FILE on line N\n" through the output layer.
+    /// An exception thrown by the handler is left in `pending_throw` and thrown
+    /// once the current opcode finishes.
     pub(crate) fn report_error(&mut self, level: ErrorLevel, message: &str) {
         let level_bitmask = level.to_bitmask();
+        let (file, line) = self.current_location();
+        self.last_error_handled = false;
 
-        // Store this as the last error regardless of error_reporting level
         self.context.last_error = Some(crate::runtime::context::ErrorInfo {
             error_type: level_bitmask as i64,
             message: message.to_string(),
-            file: "Unknown".to_string(),
-            line: 0,
+            file: file.clone(),
+            line: line as i64,
         });
 
-        // Only report if the error level is enabled in error_reporting
-        if (self.context.config.error_reporting & level_bitmask) != 0 {
-            self.error_handler.report(level, message);
+        // set_error_handler(): not for fatal errors, and not re-entrantly.
+        let handler = self.user_error_handlers.last().copied().flatten();
+        if let Some((handler, mask)) = handler
+            && !self.in_error_handler
+            && !matches!(level, ErrorLevel::Error | ErrorLevel::ParseError)
+            && mask & level_bitmask as i64 != 0
+        {
+            let args: ArgList = [
+                Val::Int(level_bitmask as i64),
+                Val::String(message.as_bytes().to_vec().into()),
+                Val::String(file.clone().into_bytes().into()),
+                Val::Int(line as i64),
+            ]
+            .into_iter()
+            .map(|v| self.arena.alloc(v))
+            .collect();
+            self.in_error_handler = true;
+            let result = self.call_callable(handler, args);
+            self.in_error_handler = false;
+            match result {
+                // Returning false falls through to the standard display.
+                Ok(h) if matches!(self.arena.get(h).value, Val::Bool(false)) => {}
+                Ok(_) => {
+                    self.last_error_handled = true;
+                    return;
+                }
+                Err(VmError::Exception(ex)) => {
+                    self.pending_throw = Some(ex);
+                    return;
+                }
+                Err(_) => return,
+            }
         }
+
+        if (self.context.config.error_reporting & level_bitmask) == 0 {
+            return;
+        }
+        self.error_handler.report(level, message);
+        if self.context.ini.is_on("display_errors") {
+            let text = format!(
+                "\n{}: {} in {} on line {}\n",
+                level.label(),
+                message,
+                file,
+                line
+            );
+            let _ = self.write_output(text.as_bytes());
+        }
+    }
+
+    /// Run an inc/dec helper, raising its diagnostics through report_error.
+    fn inc_dec(
+        &mut self,
+        op: fn(Val, &mut dyn ErrorHandler) -> Result<Val, VmError>,
+        val: Val,
+    ) -> Result<Val, VmError> {
+        let mut deferred = DeferredDiagnostics::default();
+        let result = op(val, &mut deferred);
+        for (level, message) in deferred.0 {
+            self.report_error(level, &message);
+        }
+        result
+    }
+
+    /// File and line of the code running now (the caller, for a builtin).
+    pub(crate) fn current_location(&self) -> (String, u32) {
+        self.frames
+            .iter()
+            .rev()
+            .find(|f| f.chunk.file_path.is_some() || !f.chunk.lines.is_empty())
+            .map(|f| (f.chunk.file_path.clone().unwrap_or_else(|| "Unknown".into()), frame_line(f)))
+            .unwrap_or_else(|| ("Unknown".into(), 0))
     }
 
     pub fn with_output_writer(mut self, writer: Box<dyn OutputWriter>) -> Self {
@@ -1137,8 +1276,8 @@ impl VM {
                 .lookup(sym)
                 .map(String::from_utf8_lossy)
                 .unwrap_or_else(|| "unknown".into());
-            let msg = format!("Undefined variable: ${}", var_name);
-            self.report_error(ErrorLevel::Notice, &msg);
+            let msg = format!("Undefined variable ${}", var_name);
+            self.report_error(ErrorLevel::Warning, &msg);
         }
     }
 
@@ -2961,9 +3100,31 @@ impl VM {
     pub fn run_request(&mut self, chunk: Rc<CodeChunk>) -> i32 {
         let status = match self.run(chunk) {
             Ok(()) => self.exit_status,
+            Err(VmError::Terminated) => 255,
             Err(VmError::Exception(ex)) => {
-                self.report_uncaught(ex);
-                255
+                // set_exception_handler(): the handler gets it instead.
+                match self.user_exception_handlers.last().copied().flatten() {
+                    Some(handler) => {
+                        self.frames.clear();
+                        self.operand_stack.truncate(0);
+                        self.push_frame(CallFrame::new(Rc::new(CodeChunk::default())));
+                        let args: ArgList = std::iter::once(ex).collect();
+                        let result = self.call_callable(handler, args);
+                        self.frames.clear();
+                        match result {
+                            Err(VmError::Exception(again)) => {
+                                self.report_uncaught(again);
+                                255
+                            }
+                            // Handled: the script ends normally.
+                            _ => self.exit_status,
+                        }
+                    }
+                    None => {
+                        self.report_uncaught(ex);
+                        255
+                    }
+                }
             }
             Err(e) => {
                 let text = format!("\nFatal error: {}\n", e);
@@ -3132,13 +3293,11 @@ impl VM {
                 }
             }
             Val::Array(_) => {
-                self.error_handler
-                    .report(ErrorLevel::Notice, "Array to string conversion");
+                self.report_error(ErrorLevel::Warning, "Array to string conversion");
                 Ok(b"Array".to_vec())
             }
             Val::Resource(_) => {
-                self.error_handler
-                    .report(ErrorLevel::Notice, "Resource to string conversion");
+                self.report_error(ErrorLevel::Warning, "Resource to string conversion");
                 // PHP outputs "Resource id #N" where N is the resource ID
                 // For now, just return "Resource"
                 Ok(b"Resource".to_vec())
@@ -3249,6 +3408,12 @@ impl VM {
         for h in &self.context.autoloaders {
             push(*h);
         }
+        for (h, _) in self.user_error_handlers.iter().flatten() {
+            push(*h);
+        }
+        for h in self.user_exception_handlers.iter().flatten() {
+            push(*h);
+        }
         for buf in &self.output_buffers {
             if let Some(h) = buf.handler {
                 push(h);
@@ -3336,7 +3501,14 @@ impl VM {
                 op
             };
 
-            let res = self.execute_opcode(op, target_depth);
+            let mut res = self.execute_opcode(op, target_depth);
+            // An error handler (or other PHP code a builtin called back into)
+            // threw while this opcode ran: throw it now.
+            if res.is_ok()
+                && let Some(ex) = self.pending_throw.take()
+            {
+                res = Err(self.throw_handle(ex));
+            }
 
             if let Err(e) = res {
                 match e {
@@ -3727,8 +3899,23 @@ impl VM {
         }
     }
 
+    /// Whether the last diagnostic was consumed by a set_error_handler() handler.
+    pub fn error_was_handled(&self) -> bool {
+        self.last_error_handled
+    }
+
+    /// End the script from a builtin after a fatal error it already displayed:
+    /// `return Err(vm.terminate())`.
+    pub fn terminate(&mut self) -> String {
+        self.pending_terminate = true;
+        "terminated".into()
+    }
+
     /// Turn a builtin's error into a VmError, throwing its pending Throwable if it raised one.
     pub(crate) fn native_error(&mut self, message: String) -> VmError {
+        if std::mem::take(&mut self.pending_terminate) {
+            return VmError::Terminated;
+        }
         match self.pending_throw.take() {
             Some(handle) => self.throw_handle(handle),
             None => VmError::RuntimeError(message),
@@ -8504,8 +8691,8 @@ impl VM {
                     let var_name = String::from_utf8_lossy(
                         self.context.interner.lookup(sym).unwrap_or(b"unknown"),
                     );
-                    let msg = format!("Undefined variable: ${}", var_name);
-                    self.report_error(ErrorLevel::Notice, &msg);
+                    let msg = format!("Undefined variable ${}", var_name);
+                    self.report_error(ErrorLevel::Warning, &msg);
                     let null = self.arena.alloc(Val::Null);
                     self.operand_stack.push(null);
                 }
@@ -8524,22 +8711,27 @@ impl VM {
                 }
             }
             OpCode::FetchRw(sym) => {
-                let frame = self
+                let existing = self
                     .frames
-                    .last_mut()
-                    .ok_or(VmError::RuntimeError("No active frame".into()))?;
-                if let Some(handle) = frame.locals.get(&sym) {
-                    self.operand_stack.push(*handle);
-                } else {
-                    // Release the mutable borrow before calling report_error
-                    let null = self.arena.alloc(Val::Null);
-                    let var_name = String::from_utf8_lossy(
-                        self.context.interner.lookup(sym).unwrap_or(b"unknown"),
-                    );
-                    let msg = format!("Undefined variable: ${}", var_name);
-                    self.error_handler.report(ErrorLevel::Notice, &msg);
-                    frame.locals.insert(sym, null);
-                    self.operand_stack.push(null);
+                    .last()
+                    .ok_or(VmError::RuntimeError("No active frame".into()))?
+                    .locals
+                    .get(&sym)
+                    .copied();
+                match existing {
+                    Some(handle) => self.operand_stack.push(handle),
+                    None => {
+                        let var_name = String::from_utf8_lossy(
+                            self.context.interner.lookup(sym).unwrap_or(b"unknown"),
+                        )
+                        .into_owned();
+                        self.report_error(ErrorLevel::Warning, &format!("Undefined variable ${}", var_name));
+                        let null = self.arena.alloc(Val::Null);
+                        if let Some(frame) = self.frames.last_mut() {
+                            frame.locals.insert(sym, null);
+                        }
+                        self.operand_stack.push(null);
+                    }
                 }
             }
             OpCode::FetchIs(sym) | OpCode::FetchUnset(sym) | OpCode::CheckFuncArg(sym) => {
@@ -9760,7 +9952,7 @@ impl VM {
 
                 // Use increment_value for proper PHP type handling
                 use crate::vm::inc_dec::increment_value;
-                let new_val = increment_value(current_val, &mut *self.error_handler)?;
+                let new_val = self.inc_dec(increment_value, current_val)?;
 
                 self.write_static_prop(defining_class, prop_name, new_val.clone());
 
@@ -9772,7 +9964,7 @@ impl VM {
 
                 // Use decrement_value for proper PHP type handling
                 use crate::vm::inc_dec::decrement_value;
-                let new_val = decrement_value(current_val, &mut *self.error_handler)?;
+                let new_val = self.inc_dec(decrement_value, current_val)?;
 
                 self.write_static_prop(defining_class, prop_name, new_val.clone());
 
@@ -9784,7 +9976,7 @@ impl VM {
 
                 // Use increment_value for proper PHP type handling
                 use crate::vm::inc_dec::increment_value;
-                let new_val = increment_value(current_val.clone(), &mut *self.error_handler)?;
+                let new_val = self.inc_dec(increment_value, current_val.clone())?;
 
                 self.write_static_prop(defining_class, prop_name, new_val);
 
@@ -9797,7 +9989,7 @@ impl VM {
 
                 // Use decrement_value for proper PHP type handling
                 use crate::vm::inc_dec::decrement_value;
-                let new_val = decrement_value(current_val.clone(), &mut *self.error_handler)?;
+                let new_val = self.inc_dec(decrement_value, current_val.clone())?;
 
                 self.write_static_prop(defining_class, prop_name, new_val);
 
@@ -10056,7 +10248,7 @@ impl VM {
 
                 // 2. Increment value
                 use crate::vm::inc_dec::increment_value;
-                let new_val = increment_value(current_val, &mut *self.error_handler)?;
+                let new_val = self.inc_dec(increment_value, current_val)?;
                 let res_handle = self.arena.alloc(new_val.clone());
 
                 // 3. Write back (with __set support)
@@ -10174,7 +10366,7 @@ impl VM {
 
                 // 2. Decrement value
                 use crate::vm::inc_dec::decrement_value;
-                let new_val = decrement_value(current_val, &mut *self.error_handler)?;
+                let new_val = self.inc_dec(decrement_value, current_val)?;
                 let res_handle = self.arena.alloc(new_val.clone());
 
                 // 3. Write back (with __set support)
@@ -10292,7 +10484,7 @@ impl VM {
 
                 // 2. Increment value
                 use crate::vm::inc_dec::increment_value;
-                let new_val = increment_value(current_val.clone(), &mut *self.error_handler)?;
+                let new_val = self.inc_dec(increment_value, current_val.clone())?;
 
                 let res_handle = self.arena.alloc(current_val); // Return old value
                 let new_val_handle = self.arena.alloc(new_val);
@@ -10412,7 +10604,7 @@ impl VM {
 
                 // 2. Decrement value
                 use crate::vm::inc_dec::decrement_value;
-                let new_val = decrement_value(current_val.clone(), &mut *self.error_handler)?;
+                let new_val = self.inc_dec(decrement_value, current_val.clone())?;
 
                 let res_handle = self.arena.alloc(current_val); // Return old value
                 let new_val_handle = self.arena.alloc(new_val);

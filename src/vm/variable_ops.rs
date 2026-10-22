@@ -219,8 +219,8 @@ impl VM {
     fn report_undefined_variable(&mut self, sym: Symbol) {
         if let Some(var_bytes) = self.context.interner.lookup(sym) {
             let var_name = String::from_utf8_lossy(var_bytes);
-            let msg = format!("Undefined variable: ${}", var_name);
-            self.report_error(ErrorLevel::Notice, &msg);
+            let msg = format!("Undefined variable ${}", var_name);
+            self.report_error(ErrorLevel::Warning, &msg);
         }
     }
 }
