@@ -7,7 +7,7 @@ use php_rs::{
     parser::lexer::Lexer,
     parser::parser::Parser as PhpParser,
     runtime::context::{EngineBuilder, EngineContext},
-    vm::engine::{VM, VmError},
+    vm::engine::VM,
 };
 use std::env;
 use std::fs;
@@ -24,8 +24,10 @@ pub fn create_engine() -> anyhow::Result<Arc<EngineContext>> {
         .map_err(|e| anyhow::anyhow!("Failed to build engine: {}", e))
 }
 
-pub fn run_script(script_path: &Path, args: &[String]) -> anyhow::Result<()> {
-    let source = fs::read_to_string(script_path)
+/// Run a script file as one request; returns the process exit status.
+pub fn run_script(script_path: &Path, args: &[String]) -> anyhow::Result<i32> {
+    // PHP source is bytes, not necessarily UTF-8.
+    let source = fs::read(script_path)
         .with_context(|| format!("Failed to read script: {}", script_path.display()))?;
 
     let canonical_path = script_path
@@ -131,39 +133,31 @@ pub fn run_script(script_path: &Path, args: &[String]) -> anyhow::Result<()> {
     vm.context.globals.insert(argv_symbol, argv_handle);
     vm.context.globals.insert(argc_symbol, argc_handle);
 
-    execute_source(&source, Some(&canonical_path), &mut vm)
-        .map_err(|e| anyhow::anyhow!("VM Error: {:?}", e))?;
-
-    Ok(())
+    Ok(execute_source(&source, Some(&canonical_path), &mut vm))
 }
 
-pub fn execute_source(
-    source: &str,
-    file_path: Option<&Path>,
-    vm: &mut VM,
-) -> std::result::Result<(), VmError> {
-    let source_bytes = source.as_bytes();
+/// Compile and run `source` as one request; returns the exit status
+/// (255 for a parse error, uncaught exception or fatal error, as PHP does).
+pub fn execute_source(source: &[u8], file_path: Option<&Path>, vm: &mut VM) -> i32 {
     let arena = Bump::new();
-    let lexer = Lexer::new(source_bytes);
+    let lexer = Lexer::new(source);
     let mut parser = PhpParser::new(lexer, &arena);
 
     let program = parser.parse_program();
 
     if !program.errors.is_empty() {
         for error in program.errors {
-            println!("{}", error.to_human_readable(source_bytes));
+            println!("{}", error.to_human_readable(source));
         }
-        return Ok(());
+        return 255;
     }
 
-    let mut emitter = Emitter::new(source_bytes, &mut vm.context.interner);
+    let mut emitter = Emitter::new(source, &mut vm.context.interner);
     if let Some(path) = file_path {
         let path_string = path.to_string_lossy().into_owned();
         emitter = emitter.with_file_path(path_string);
     }
 
     let (chunk, _has_error) = emitter.compile(program.statements);
-    vm.run(Rc::new(chunk))?;
-
-    Ok(())
+    vm.run_request(Rc::new(chunk))
 }

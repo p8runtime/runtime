@@ -174,79 +174,87 @@ pub fn exception_get_trace(vm: &mut VM, _args: &[Handle]) -> Result<Handle, Stri
         .alloc(Val::Array(crate::core::value::ArrayData::new().into())))
 }
 
-/// Exception::getTraceAsString() - Returns the stack trace as a string
+/// Exception::getTraceAsString(): "#0 file(line): Class->method(args)" per
+/// frame, then "#N {main}".
+/// Reference: $PHP_SRC_PATH/Zend/zend_exceptions.c - _build_trace_string
 pub fn exception_get_trace_as_string(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = vm
         .frames
         .last()
         .and_then(|f| f.this)
         .ok_or("getTraceAsString() called outside object context")?;
+    let text = trace_string(vm, this_handle);
+    Ok(vm.arena.alloc(Val::String(Rc::new(text.into_bytes()))))
+}
 
-    let trace_sym = vm.context.interner.intern(b"trace");
-
-    if let Val::Object(payload_handle) = &vm.arena.get(this_handle).value {
-        if let Val::ObjPayload(obj_data) = &vm.arena.get(*payload_handle).value {
-            if let Some(&trace_handle) = obj_data.properties.get(&trace_sym) {
-                if let Val::Array(arr) = &vm.arena.get(trace_handle).value {
-                    // Build trace string from array
-                    let mut trace_str = String::new();
-                    for (idx, (_key, val_handle)) in arr.map.iter().enumerate() {
-                        if let Val::Array(frame_arr) = &vm.arena.get(*val_handle).value {
-                            let file_key = Rc::new(b"file".to_vec());
-                            let line_key = Rc::new(b"line".to_vec());
-                            let function_key = Rc::new(b"function".to_vec());
-
-                            let file = if let Some(fh) = frame_arr
-                                .map
-                                .get(&crate::core::value::ArrayKey::Str(file_key.clone()))
-                            {
-                                if let Val::String(s) = &vm.arena.get(*fh).value {
-                                    String::from_utf8_lossy(s).to_string()
-                                } else {
-                                    "[unknown]".to_string()
-                                }
-                            } else {
-                                "[unknown]".to_string()
-                            };
-
-                            let line = if let Some(lh) = frame_arr
-                                .map
-                                .get(&crate::core::value::ArrayKey::Str(line_key.clone()))
-                            {
-                                if let Val::Int(i) = &vm.arena.get(*lh).value {
-                                    i.to_string()
-                                } else {
-                                    "0".to_string()
-                                }
-                            } else {
-                                "0".to_string()
-                            };
-
-                            let function = if let Some(fh) = frame_arr
-                                .map
-                                .get(&crate::core::value::ArrayKey::Str(function_key.clone()))
-                            {
-                                if let Val::String(s) = &vm.arena.get(*fh).value {
-                                    String::from_utf8_lossy(s).to_string()
-                                } else {
-                                    "[unknown]".to_string()
-                                }
-                            } else {
-                                "[unknown]".to_string()
-                            };
-
-                            trace_str
-                                .push_str(&format!("#{} {}({}): {}\n", idx, file, line, function));
-                        }
-                    }
-                    return Ok(vm.arena.alloc(Val::String(Rc::new(trace_str.into_bytes()))));
-                }
-            }
-        }
+/// A property of an exception object.
+fn prop(vm: &mut VM, ex: Handle, name: &[u8]) -> Option<Handle> {
+    let sym = vm.context.interner.intern(name);
+    if let Val::Object(payload) = vm.arena.get(ex).value
+        && let Val::ObjPayload(obj) = &vm.arena.get(payload).value
+    {
+        return obj.properties.get(&sym).copied();
     }
+    None
+}
 
-    // Return empty string if no trace
-    Ok(vm.arena.alloc(Val::String(Rc::new(Vec::new()))))
+fn trace_string(vm: &mut VM, ex: Handle) -> String {
+    let mut out = String::new();
+    let mut n = 0;
+    let frames: Vec<Handle> = match prop(vm, ex, b"trace").map(|h| vm.arena.get(h).value.clone()) {
+        Some(Val::Array(arr)) => arr.map.values().copied().collect(),
+        _ => Vec::new(),
+    };
+    for frame in frames {
+        let Val::Array(entry) = vm.arena.get(frame).value.clone() else { continue };
+        let get = |key: &[u8]| entry.map.get(&crate::core::value::ArrayKey::Str(Rc::new(key.to_vec()))).copied();
+        let text = |vm: &VM, h: Option<Handle>| h.map(|h| String::from_utf8_lossy(&vm.arena.get(h).value.to_php_string_bytes()).into_owned());
+        out.push_str(&format!("#{} ", n));
+        match text(vm, get(b"file")) {
+            Some(file) => out.push_str(&format!("{}({}): ", file, text(vm, get(b"line")).unwrap_or_default())),
+            None => out.push_str("[internal function]: "),
+        }
+        if let Some(class) = text(vm, get(b"class")) {
+            out.push_str(&class);
+            out.push_str(&text(vm, get(b"type")).unwrap_or_default());
+        }
+        out.push_str(&text(vm, get(b"function")).unwrap_or_default());
+        out.push('(');
+        if let Some(args) = get(b"args")
+            && let Val::Array(args) = vm.arena.get(args).value.clone()
+        {
+            let parts: Vec<String> = args.map.values().map(|h| trace_arg(vm, *h)).collect();
+            out.push_str(&parts.join(", "));
+        }
+        out.push_str(")\n");
+        n += 1;
+    }
+    out.push_str(&format!("#{} {{main}}", n));
+    out
+}
+
+/// An argument as a stack trace shows it.
+fn trace_arg(vm: &VM, h: Handle) -> String {
+    match &vm.arena.get(h).value {
+        Val::Null => "NULL".into(),
+        Val::Bool(b) => if *b { "true" } else { "false" }.into(),
+        Val::Int(i) => i.to_string(),
+        Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E'),
+        Val::String(s) => {
+            // zend.exception_string_param_max_len = 15
+            let shown = String::from_utf8_lossy(&s[..s.len().min(15)]).into_owned();
+            format!("'{}{}'", shown, if s.len() > 15 { "..." } else { "" })
+        }
+        Val::Array(_) | Val::ConstArray(_) => "Array".into(),
+        Val::Object(p) => match &vm.arena.get(*p).value {
+            Val::ObjPayload(o) => format!(
+                "Object({})",
+                String::from_utf8_lossy(vm.context.interner.lookup(o.class).unwrap_or(b""))
+            ),
+            _ => "Object".into(),
+        },
+        _ => String::new(),
+    }
 }
 
 /// Exception::getPrevious() - Returns previous exception
@@ -271,7 +279,9 @@ pub fn exception_get_previous(vm: &mut VM, _args: &[Handle]) -> Result<Handle, S
     Ok(vm.arena.alloc(Val::Null))
 }
 
-/// Exception::__toString() - String representation of the exception
+/// Exception::__toString(): "Class: message in file:line" and the stack
+/// trace, for this exception and each previous one ("Next ...").
+/// Reference: $PHP_SRC_PATH/Zend/zend_exceptions.c - ZEND_METHOD(Exception, __toString)
 pub fn exception_to_string(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
     let this_handle = vm
         .frames
@@ -279,73 +289,44 @@ pub fn exception_to_string(vm: &mut VM, _args: &[Handle]) -> Result<Handle, Stri
         .and_then(|f| f.this)
         .ok_or("__toString() called outside object context")?;
 
-    // Get exception details
-    let message_sym = vm.context.interner.intern(b"message");
-    let code_sym = vm.context.interner.intern(b"code");
-    let file_sym = vm.context.interner.intern(b"file");
-    let line_sym = vm.context.interner.intern(b"line");
-
-    let mut class_name = "Exception".to_string();
-    let mut message = String::new();
-    let mut _code = 0i64;
-    let mut file = "unknown".to_string();
-    let mut line = 0i64;
-
-    if let Val::Object(payload_handle) = &vm.arena.get(this_handle).value {
-        if let Val::ObjPayload(obj_data) = &vm.arena.get(*payload_handle).value {
-            class_name = String::from_utf8_lossy(
-                vm.context
-                    .interner
-                    .lookup(obj_data.class)
-                    .unwrap_or(b"Exception"),
-            )
-            .to_string();
-
-            if let Some(&msg_handle) = obj_data.properties.get(&message_sym) {
-                if let Val::String(s) = &vm.arena.get(msg_handle).value {
-                    message = String::from_utf8_lossy(s).to_string();
-                }
-            }
-
-            if let Some(&code_handle) = obj_data.properties.get(&code_sym) {
-                if let Val::Int(c) = &vm.arena.get(code_handle).value {
-                    _code = *c;
-                }
-            }
-
-            if let Some(&file_handle) = obj_data.properties.get(&file_sym) {
-                if let Val::String(s) = &vm.arena.get(file_handle).value {
-                    file = String::from_utf8_lossy(s).to_string();
-                }
-            }
-
-            if let Some(&line_handle) = obj_data.properties.get(&line_sym) {
-                if let Val::Int(l) = &vm.arena.get(line_handle).value {
-                    line = *l;
-                }
-            }
+    // Innermost (oldest previous) first, as PHP prints them.
+    let mut chain = Vec::new();
+    let mut current = Some(this_handle);
+    while let Some(ex) = current {
+        if chain.contains(&ex) || chain.len() > 64 {
+            break;
         }
+        chain.push(ex);
+        current = prop(vm, ex, b"previous").filter(|h| matches!(vm.arena.get(*h).value, Val::Object(_)));
     }
 
-    // Format: exception 'ClassName' with message 'message' in file:line
-    let result = if message.is_empty() {
-        format!("{} in {}:{}\nStack trace:\n", class_name, file, line)
-    } else {
-        format!(
-            "exception '{}' with message '{}' in {}:{}\nStack trace:\n",
-            class_name, message, file, line
-        )
-    };
-
-    // Get trace string
-    let trace_str = exception_get_trace_as_string(vm, _args)?;
-    let trace_str_val = &vm.arena.get(trace_str).value;
-    let trace_text = if let Val::String(s) = trace_str_val {
-        String::from_utf8_lossy(s).to_string()
-    } else {
-        String::new()
-    };
-
-    let final_str = format!("{}{}", result, trace_text);
-    Ok(vm.arena.alloc(Val::String(Rc::new(final_str.into_bytes()))))
+    let mut out = String::new();
+    for ex in chain.into_iter().rev() {
+        let class = match vm.arena.get(ex).value {
+            Val::Object(p) => match &vm.arena.get(p).value {
+                Val::ObjPayload(o) => String::from_utf8_lossy(vm.context.interner.lookup(o.class).unwrap_or(b"")).into_owned(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        let text = |vm: &mut VM, name: &[u8]| {
+            prop(vm, ex, name)
+                .map(|h| String::from_utf8_lossy(&vm.arena.get(h).value.to_php_string_bytes()).into_owned())
+                .unwrap_or_default()
+        };
+        let (message, file, line) = (text(vm, b"message"), text(vm, b"file"), text(vm, b"line"));
+        let trace = trace_string(vm, ex);
+        let this = if message.is_empty() {
+            format!("{} in {}:{}\nStack trace:\n{}", class, file, line, trace)
+        } else {
+            format!("{}: {} in {}:{}\nStack trace:\n{}", class, message, file, line, trace)
+        };
+        if out.is_empty() {
+            out = this;
+        } else {
+            out = format!("{}\n\nNext {}", out, this);
+        }
+    }
+    Ok(vm.arena.alloc(Val::String(Rc::new(out.into_bytes()))))
 }
+

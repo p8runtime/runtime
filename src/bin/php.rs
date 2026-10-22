@@ -31,7 +31,8 @@ fn main() -> anyhow::Result<()> {
     if cli.interactive {
         run_repl()?;
     } else if let Some(file) = cli.file {
-        run_script(&file, &cli.args)?;
+        let status = run_script(&file, &cli.args)?;
+        std::process::exit(status);
     } else {
         // If no arguments, show help
         use clap::CommandFactory;
@@ -69,9 +70,7 @@ fn run_repl() -> anyhow::Result<()> {
                     format!("<?php {}", line)
                 };
 
-                if let Err(e) = execute_source(&source_code, None, &mut vm) {
-                    println!("Error: {:?}", e);
-                }
+                execute_source(source_code.as_bytes(), None, &mut vm);
             }
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
