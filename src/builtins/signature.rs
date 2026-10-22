@@ -25,12 +25,25 @@ pub(crate) const T_VOID: u32 = 1 << 11;
 pub(crate) const T_NEVER: u32 = 1 << 12;
 pub(crate) const T_NULL: u32 = 1 << 13;
 
-/// A PHP function's declared signature.
+/// A PHP function's or built-in method's declared signature.
 pub(crate) struct Sig {
-    /// Lowercase name (namespaced functions as `ns\name`).
+    /// As declared: `strlen`, `ns\\name`, `ArrayAccess::offsetSet`.
     pub name: &'static str,
     pub params: &'static [Param],
+    pub ret_mask: u32,
+    pub ret_classes: &'static [&'static str],
+    /// `@tentative-return-type`: an override without it is only deprecated.
+    pub tentative: bool,
+    pub returns_ref: bool,
+    /// Method modifiers: SIG_FINAL | SIG_STATIC | SIG_ABSTRACT | SIG_PRIVATE | SIG_PROTECTED.
+    pub flags: u8,
 }
+
+pub(crate) const SIG_FINAL: u8 = 1;
+pub(crate) const SIG_STATIC: u8 = 2;
+pub(crate) const SIG_ABSTRACT: u8 = 4;
+pub(crate) const SIG_PRIVATE: u8 = 8;
+pub(crate) const SIG_PROTECTED: u8 = 16;
 
 /// One declared parameter. `mask` is the type's T_* bits plus the class
 /// names in `classes`; an untyped parameter has neither.
@@ -54,15 +67,27 @@ impl Param {
     }
 }
 
-/// The signature of the PHP function `name` (any case), if PHP has one.
+/// The signature of the PHP function `name`, or of `Class::method` (any
+/// case), if PHP has one.
 pub(crate) fn lookup(name: &[u8]) -> Option<&'static Sig> {
-    let lower = name.to_ascii_lowercase();
-    let lower = std::str::from_utf8(&lower).ok()?;
-    let lower = lower.strip_prefix('\\').unwrap_or(lower);
-    super::signatures::SIGNATURES
-        .binary_search_by(|s| s.name.cmp(lower))
+    let name = std::str::from_utf8(name).ok()?;
+    let name = name.strip_prefix('\\').unwrap_or(name);
+    let table = super::signatures::SIGNATURES;
+    table
+        .binary_search_by(|s| cmp_ignore_case(s.name, name))
         .ok()
-        .map(|i| &super::signatures::SIGNATURES[i])
+        .map(|i| &table[i])
+}
+
+fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes()
+        .map(|c| c.to_ascii_lowercase())
+        .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+}
+
+/// Every signature: functions, then `Class::method`s, by name.
+pub(crate) fn all() -> &'static [Sig] {
+    super::signatures::SIGNATURES
 }
 
 /// A declared type as PHP prints it (zend_type_to_string).
