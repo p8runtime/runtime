@@ -450,8 +450,17 @@ impl Extension for CoreExtension {
         registry.register_function(b"get_called_class", class::php_get_called_class);
 
         // PCRE functions
-        registry.register_function(b"preg_match", pcre::preg_match);
-        registry.register_function(b"preg_replace", pcre::preg_replace);
+        registry.register_function_with_by_ref(b"preg_match", pcre::preg_match, vec![2]);
+        registry.register_function_with_by_ref(b"preg_match_all", pcre::preg_match_all, vec![2]);
+        registry.register_function_with_by_ref(b"preg_replace", pcre::preg_replace, vec![4]);
+        registry.register_function(b"preg_replace_callback", pcre::preg_replace_callback);
+        registry.register_constant(b"PREG_PATTERN_ORDER", Val::Int(1));
+        registry.register_constant(b"PREG_SET_ORDER", Val::Int(2));
+        registry.register_constant(b"PREG_OFFSET_CAPTURE", Val::Int(1 << 8));
+        registry.register_constant(b"PREG_UNMATCHED_AS_NULL", Val::Int(1 << 9));
+        registry.register_constant(b"PREG_SPLIT_NO_EMPTY", Val::Int(1));
+        registry.register_constant(b"PREG_SPLIT_DELIM_CAPTURE", Val::Int(1 << 1));
+        registry.register_constant(b"PREG_SPLIT_OFFSET_CAPTURE", Val::Int(1 << 2));
         registry.register_function(b"preg_split", pcre::preg_split);
         registry.register_function(b"preg_quote", pcre::preg_quote);
 
