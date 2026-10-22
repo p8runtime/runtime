@@ -3230,6 +3230,11 @@ impl VM {
     fn exec_control_flow(&mut self, op: OpCode) -> Result<(), VmError> {
         match op {
             OpCode::Jmp(target) => self.set_ip(target as usize)?,
+            OpCode::DeclareAnonClass(name, target) => {
+                if self.context.classes.contains_key(&name) {
+                    self.set_ip(target as usize)?;
+                }
+            }
             OpCode::JmpIfFalse(target) => self.jump_if(target as usize, |v| !v.to_bool())?,
             OpCode::JmpIfTrue(target) => self.jump_if(target as usize, |v| v.to_bool())?,
             OpCode::JmpZEx(target) => self.jump_peek_or_pop(target as usize, |v| !v.to_bool())?,
@@ -3858,6 +3863,7 @@ impl VM {
             }
 
             OpCode::Jmp(_)
+            | OpCode::DeclareAnonClass(..)
             | OpCode::JmpIfFalse(_)
             | OpCode::JmpIfTrue(_)
             | OpCode::JmpZEx(_)
@@ -10783,7 +10789,6 @@ impl VM {
             // Class/function declaration opcodes that may need implementation
             OpCode::DeclareLambdaFunction
             | OpCode::DeclareClassDelayed
-            | OpCode::DeclareAnonClass
             | OpCode::DeclareAttributedConst => {
                 return Err(VmError::RuntimeError(format!(
                     "{:?} opcode not implemented - declaration semantics need modeling",

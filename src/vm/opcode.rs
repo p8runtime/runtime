@@ -57,6 +57,7 @@ pub enum OpCode {
 
     // Control Flow
     Jmp(u32),
+    DeclareAnonClass(Symbol, u32), // Jump to target when the class is already declared
     JmpIfFalse(u32),
     JmpIfTrue(u32),
     JmpZEx(u32),
@@ -270,7 +271,6 @@ pub enum OpCode {
     DeclareConst,
     DeclareClass,
     DeclareClassDelayed,
-    DeclareAnonClass,
     AddArrayUnpack,
     IssetIsemptyPropObj,
     HandleException,
