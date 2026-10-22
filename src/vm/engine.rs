@@ -1009,6 +1009,14 @@ impl VM {
         self.arena.len() * ZVAL_SIZE
     }
 
+    /// "Constant X is deprecated" for a built-in constant PHP 8.4 deprecates.
+    fn warn_if_deprecated_constant(&mut self, name: Symbol) {
+        if self.context.deprecated_constants.contains(&name) {
+            let text = String::from_utf8_lossy(self.context.interner.lookup(name).unwrap_or(b"")).into_owned();
+            self.report_error(ErrorLevel::Deprecated, &format!("Constant {} is deprecated", text));
+        }
+    }
+
     /// PHP 8: `$obj[...]` on an object that does not implement ArrayAccess.
     fn object_as_array_error(&self, class_name: Symbol) -> VmError {
         let name = self.context.interner.lookup(class_name).unwrap_or(b"Unknown");
@@ -7711,6 +7719,9 @@ impl VM {
                 }
             }
             OpCode::FetchNsConst(namespaced, global) => {
+                if !self.context.constants.contains_key(&namespaced) {
+                    self.warn_if_deprecated_constant(global);
+                }
                 let value = self
                     .context
                     .constants
@@ -7732,6 +7743,7 @@ impl VM {
                 }
             }
             OpCode::FetchGlobalConst(name) => {
+                self.warn_if_deprecated_constant(name);
                 if let Some(val) = self.context.constants.get(&name) {
                     let handle = self.arena.alloc(val.clone());
                     self.operand_stack.push(handle);

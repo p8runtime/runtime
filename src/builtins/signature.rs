@@ -85,6 +85,27 @@ fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
         .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
 }
 
+/// "Function f() is deprecated since 8.x, <message>" for a function or
+/// method PHP 8.4 declares #[\Deprecated] (zend_deprecated_function).
+pub(crate) fn deprecation(sig: &Sig) -> Option<String> {
+    let table = super::signatures::DEPRECATED;
+    let i = table
+        .binary_search_by(|(name, _, _)| cmp_ignore_case(name, sig.name))
+        .ok()?;
+    let (name, since, message) = table[i];
+    let mut text = match name.split_once("::") {
+        Some((class, method)) => format!("Method {}::{}() is deprecated", class, method),
+        None => format!("Function {}() is deprecated", name),
+    };
+    if let Some(since) = since {
+        text.push_str(&format!(" since {}", since));
+    }
+    if let Some(message) = message {
+        text.push_str(&format!(", {}", message));
+    }
+    Some(text)
+}
+
 /// Every signature: functions, then `Class::method`s, by name.
 pub(crate) fn all() -> &'static [Sig] {
     super::signatures::SIGNATURES
@@ -335,6 +356,9 @@ pub(crate) fn check_builtin_call(
     args: &mut [Handle],
     strict: bool,
 ) -> Result<(), VmError> {
+    if let Some(message) = deprecation(sig) {
+        vm.report_error(ErrorLevel::Deprecated, &message);
+    }
     let params = sig.params;
     let variadic = params.last().is_some_and(|p| p.variadic);
     let required = params

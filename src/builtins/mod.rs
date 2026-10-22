@@ -1,6 +1,7 @@
 pub mod array;
 pub mod bcmath;
 pub mod class;
+pub mod ctype;
 pub mod defaults;
 pub mod datetime;
 pub mod errors;
@@ -22,6 +23,7 @@ pub mod opcache;
 pub mod openssl;
 pub mod output_control;
 pub mod pcre;
+pub mod random;
 pub mod reflection;
 pub mod serialize;
 pub(crate) mod signature;

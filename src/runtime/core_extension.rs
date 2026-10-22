@@ -1,13 +1,12 @@
 use crate::builtins::{
     array, bcmath, class, exception, exec, filesystem, function, http, math, output_control, pcre,
-    reflection, spl, string, url, variable,
+    random, reflection, spl, string, url, variable,
 };
 use crate::core::value::{Handle, Val, Visibility};
 use crate::runtime::context::RequestContext;
 use crate::runtime::extension::{Extension, ExtensionInfo, ExtensionResult};
 use crate::runtime::registry::{ExtensionRegistry, NativeClassDef, NativeMethodEntry};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Core extension runtime state
 #[derive(Debug, Default)]
@@ -15,100 +14,8 @@ pub struct CoreExtensionData {
     pub strtok_string: Option<Vec<u8>>,
     pub strtok_pos: usize,
     pub array_pointers: HashMap<Handle, usize>,
-    pub rng: Mt19937,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Mt19937 {
-    mt: [u32; 624],
-    index: usize,
-    seeded: bool,
-}
-
-impl Default for Mt19937 {
-    fn default() -> Self {
-        Self {
-            mt: [0; 624],
-            index: 624,
-            seeded: false,
-        }
-    }
-}
-
-impl Mt19937 {
-    fn seed(&mut self, seed: u32) {
-        self.mt[0] = seed;
-        for i in 1..624 {
-            let prev = self.mt[i - 1];
-            self.mt[i] = 1812433253u32
-                .wrapping_mul(prev ^ (prev >> 30))
-                .wrapping_add(i as u32);
-        }
-        self.index = 624;
-        self.seeded = true;
-    }
-
-    fn next_u32(&mut self) -> u32 {
-        if self.index >= 624 {
-            self.twist();
-        }
-
-        let mut y = self.mt[self.index];
-        self.index += 1;
-
-        y ^= y >> 11;
-        y ^= (y << 7) & 0x9d2c5680;
-        y ^= (y << 15) & 0xefc60000;
-        y ^= y >> 18;
-
-        y
-    }
-
-    fn twist(&mut self) {
-        const N: usize = 624;
-        const M: usize = 397;
-        const MATRIX_A: u32 = 0x9908b0df;
-        const UPPER_MASK: u32 = 0x80000000;
-        const LOWER_MASK: u32 = 0x7fffffff;
-
-        for i in 0..N {
-            let y = (self.mt[i] & UPPER_MASK) | (self.mt[(i + 1) % N] & LOWER_MASK);
-            let mut val = self.mt[(i + M) % N] ^ (y >> 1);
-            if y & 1 != 0 {
-                val ^= MATRIX_A;
-            }
-            self.mt[i] = val;
-        }
-        self.index = 0;
-    }
-}
-
-impl CoreExtensionData {
-    pub fn rng_seed(&mut self, seed: u32) {
-        self.rng.seed(seed);
-    }
-
-    pub fn rng_next_u31(&mut self) -> u32 {
-        self.ensure_rng_seeded();
-        self.rng.next_u32() >> 1
-    }
-
-    pub fn rng_next_u32(&mut self) -> u32 {
-        self.ensure_rng_seeded();
-        self.rng.next_u32()
-    }
-
-    fn ensure_rng_seeded(&mut self) {
-        if self.rng.seeded {
-            return;
-        }
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        self.rng.seed(seed as u32);
-    }
-}
 
 /// Core extension providing built-in PHP functions
 pub struct CoreExtension;
@@ -401,9 +308,15 @@ impl Extension for CoreExtension {
         registry.register_function(b"pi", math::php_pi);
         registry.register_function(b"pow", math::php_pow);
         registry.register_function(b"fpow", math::php_fpow);
-        registry.register_function(b"srand", math::php_srand);
-        registry.register_function(b"rand", math::php_rand);
-        registry.register_function(b"getrandmax", math::php_getrandmax);
+        registry.register_function(b"srand", random::php_mt_srand);
+        registry.register_function(b"mt_srand", random::php_mt_srand);
+        registry.register_function(b"rand", random::php_rand);
+        registry.register_function(b"mt_rand", random::php_mt_rand);
+        registry.register_function(b"getrandmax", random::php_mt_getrandmax);
+        registry.register_function(b"mt_getrandmax", random::php_mt_getrandmax);
+        registry.register_function(b"random_int", random::php_random_int);
+        registry.register_function(b"random_bytes", random::php_random_bytes);
+        registry.register_function(b"lcg_value", random::php_lcg_value);
         registry.register_function(b"ceil", math::php_ceil);
         registry.register_function(b"floor", math::php_floor);
         registry.register_function(b"round", math::php_round);
@@ -488,6 +401,17 @@ impl Extension for CoreExtension {
         registry.register_function(b"is_callable", function::php_is_callable);
         registry.register_function(b"call_user_func", function::php_call_user_func);
         registry.register_function(b"call_user_func_array", function::php_call_user_func_array);
+        registry.register_function(b"ctype_alnum", crate::builtins::ctype::php_ctype_alnum);
+        registry.register_function(b"ctype_alpha", crate::builtins::ctype::php_ctype_alpha);
+        registry.register_function(b"ctype_cntrl", crate::builtins::ctype::php_ctype_cntrl);
+        registry.register_function(b"ctype_digit", crate::builtins::ctype::php_ctype_digit);
+        registry.register_function(b"ctype_lower", crate::builtins::ctype::php_ctype_lower);
+        registry.register_function(b"ctype_graph", crate::builtins::ctype::php_ctype_graph);
+        registry.register_function(b"ctype_print", crate::builtins::ctype::php_ctype_print);
+        registry.register_function(b"ctype_punct", crate::builtins::ctype::php_ctype_punct);
+        registry.register_function(b"ctype_space", crate::builtins::ctype::php_ctype_space);
+        registry.register_function(b"ctype_upper", crate::builtins::ctype::php_ctype_upper);
+        registry.register_function(b"ctype_xdigit", crate::builtins::ctype::php_ctype_xdigit);
         registry.register_function(b"extension_loaded", function::php_extension_loaded);
         registry.register_function(b"get_loaded_extensions", function::php_get_loaded_extensions);
         registry.register_function(b"spl_autoload_register", spl::php_spl_autoload_register);
