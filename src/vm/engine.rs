@@ -2494,10 +2494,13 @@ impl VM {
                             self.execute_finally_blocks(&finally_blocks);
                             finally_blocks.clear();
 
-                            // Found matching catch block
+                            // Found matching catch block; drop the temporaries of the
+                            // interrupted expression (e.g. a half-built call).
                             self.frames.truncate(frame_idx + 1);
                             let frame = &mut self.frames[frame_idx];
                             frame.ip = entry.target as usize;
+                            let depth = frame.stack_base.unwrap_or(0) + entry.stack_depth as usize;
+                            self.operand_stack.truncate(depth);
                             self.operand_stack.push(ex_handle);
 
                             // Mark finally for execution after catch completes
@@ -3253,6 +3256,30 @@ impl VM {
             _ => unreachable!("Not a control flow op"),
         }
         Ok(())
+    }
+
+    /// Raise a built-in Throwable as if by `throw new $class($message)`, from
+    /// inside an opcode or builtin: `return Err(vm.throw_error(b"TypeError", msg))`.
+    pub(crate) fn throw_error(&mut self, class: &[u8], message: &str) -> VmError {
+        let class_sym = self.context.interner.intern(class);
+        let properties = self.collect_properties(class_sym, PropertyCollectionMode::All);
+        let payload = self.arena.alloc(Val::ObjPayload(ObjectData {
+            class: class_sym,
+            properties,
+            internal: None,
+            dynamic_properties: std::collections::HashSet::new(),
+        }));
+        let ex_handle = self.arena.alloc(Val::Object(payload));
+        let message_sym = self.context.interner.intern(b"message");
+        let message_val = self.arena.alloc(Val::String(message.as_bytes().to_vec().into()));
+        if let Val::ObjPayload(obj) = &mut self.arena.get_mut(payload).value {
+            obj.properties.insert(message_sym, message_val);
+        }
+        self.operand_stack.push(ex_handle);
+        match self.exec_throw() {
+            Err(e) => e,
+            Ok(()) => VmError::RuntimeError(message.to_string()),
+        }
     }
 
     fn exec_throw(&mut self) -> Result<(), VmError> {

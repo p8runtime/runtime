@@ -77,6 +77,9 @@ fn unescape_string(s: &[u8]) -> Vec<u8> {
 struct LoopInfo {
     break_jumps: Vec<usize>,
     continue_jumps: Vec<usize>,
+    /// Operand-stack values the loop keeps while its body runs (foreach: iterable and
+    /// position; switch: the subject).
+    stack_slots: u32,
 }
 
 #[derive(Clone)]
@@ -1140,6 +1143,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 0,
                 });
 
                 for stmt in *body {
@@ -1167,6 +1171,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 0,
                 });
 
                 for stmt in *body {
@@ -1216,6 +1221,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 0,
                 });
 
                 for stmt in *body {
@@ -1321,6 +1327,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 2, // iterable + position
                 });
 
                 // Body
@@ -1367,6 +1374,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 1,
                 });
 
                 for case in *cases {
@@ -1430,6 +1438,7 @@ impl<'src> Emitter<'src> {
                 ..
             } => {
                 let try_start = self.chunk.code.len() as u32;
+                let stack_depth: u32 = self.loop_stack.iter().map(|l| l.stack_slots).sum();
 
                 // If there's a finally block, we need to track it BEFORE emitting the try body
                 // so that break/continue inside the try body know they're inside a final context
@@ -1467,6 +1476,7 @@ impl<'src> Emitter<'src> {
                         let type_sym = self.interner.intern(type_name);
 
                         self.chunk.catch_table.push(CatchEntry {
+                            stack_depth,
                             start: try_start,
                             end: try_end,
                             target: catch_start,
@@ -1541,6 +1551,7 @@ impl<'src> Emitter<'src> {
                     // Add a finally-only entry for the try block
                     // This ensures finally executes even on uncaught exceptions
                     self.chunk.catch_table.push(CatchEntry {
+                        stack_depth,
                         start: try_start,
                         end: try_end,
                         target: finally_start,
@@ -1552,6 +1563,7 @@ impl<'src> Emitter<'src> {
                     // Also add entries for catch blocks to ensure finally runs during their unwinding
                     for (catch_start, catch_end) in catch_ranges {
                         self.chunk.catch_table.push(CatchEntry {
+                            stack_depth,
                             start: catch_start,
                             end: catch_end,
                             target: finally_start,
@@ -1917,12 +1929,14 @@ impl<'src> Emitter<'src> {
                             self.chunk.code.push(OpCode::MakeRef);
                         }
                     }
-                    UnaryOp::Minus => {
-                        // 0 - expr
-                        let idx = self.add_constant(Val::Int(0));
-                        self.chunk.code.push(OpCode::Const(idx as u16));
+                    UnaryOp::Minus | UnaryOp::Plus => {
+                        // expr * -1 / expr * 1, as Zend compiles them (keeps -0.0,
+                        // converts numeric strings, operand order in errors)
                         self.emit_expr(expr);
-                        self.chunk.code.push(OpCode::Sub);
+                        let factor = if matches!(op, UnaryOp::Minus) { -1 } else { 1 };
+                        let idx = self.add_constant(Val::Int(factor));
+                        self.chunk.code.push(OpCode::Const(idx as u16));
+                        self.chunk.code.push(OpCode::Mul);
                     }
                     UnaryOp::Not => {
                         self.emit_expr(expr);

@@ -33,8 +33,6 @@ use crate::core::value::Val;
 use crate::vm::engine::{ErrorLevel, VM, VmError};
 use std::rc::Rc;
 
-/// Arithmetic operation types
-/// Reference: $PHP_SRC_PATH/Zend/zend_operators.c
 #[derive(Debug, Clone, Copy)]
 enum ArithOp {
     Add,
@@ -46,79 +44,181 @@ enum ArithOp {
 }
 
 impl ArithOp {
-    fn apply_int(&self, a: i64, b: i64) -> Option<i64> {
+    fn symbol(self) -> &'static str {
         match self {
-            ArithOp::Add => Some(a.wrapping_add(b)),
-            ArithOp::Sub => Some(a.wrapping_sub(b)),
-            ArithOp::Mul => Some(a.wrapping_mul(b)),
-            ArithOp::Mod if b != 0 => Some(a % b),
-            _ => None, // Div/Pow always use float, Mod checks zero
+            ArithOp::Add => "+",
+            ArithOp::Sub => "-",
+            ArithOp::Mul => "*",
+            ArithOp::Div => "/",
+            ArithOp::Mod => "%",
+            ArithOp::Pow => "**",
         }
-    }
-
-    fn apply_float(&self, a: f64, b: f64) -> f64 {
-        match self {
-            ArithOp::Add => a + b,
-            ArithOp::Sub => a - b,
-            ArithOp::Mul => a * b,
-            ArithOp::Div => a / b,
-            ArithOp::Pow => a.powf(b),
-            ArithOp::Mod => unreachable!(), // Mod uses int only
-        }
-    }
-
-    fn always_float(&self) -> bool {
-        matches!(self, ArithOp::Div | ArithOp::Pow)
     }
 }
 
-impl VM {
-    /// Generic binary arithmetic operation
-    /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c
-    fn binary_arithmetic(&mut self, op: ArithOp) -> Result<(), VmError> {
-        let (a_handle, b_handle) = self.pop_binary_operands()?;
-        let a_val = &self.arena.get(a_handle).value;
-        let b_val = &self.arena.get(b_handle).value;
+/// An arithmetic operand after zendi_smart_str-style conversion.
+#[derive(Debug, Clone, Copy)]
+enum Num {
+    Int(i64),
+    Float(f64),
+}
 
-        // Special case: Array + Array = union (only for Add)
-        if matches!(op, ArithOp::Add) {
-            if let (Val::Array(a_arr), Val::Array(b_arr)) = (a_val, b_val) {
-                let mut result = (**a_arr).clone();
-                for (k, v) in b_arr.map.iter() {
-                    result.map.entry(k.clone()).or_insert(*v);
+impl Num {
+    fn float(self) -> f64 {
+        match self {
+            Num::Int(i) => i as f64,
+            Num::Float(f) => f,
+        }
+    }
+
+    fn into_val(self) -> Val {
+        match self {
+            Num::Int(i) => Val::Int(i),
+            Num::Float(f) => Val::Float(f),
+        }
+    }
+}
+
+/// `base ** exp` for a non-negative exponent, or None on overflow.
+fn int_pow(base: i64, exp: i64) -> Option<i64> {
+    u32::try_from(exp).ok().and_then(|e| base.checked_pow(e))
+}
+
+impl VM {
+    /// PHP's type name for an operand in "Unsupported operand types" errors.
+    fn operand_type_name(&self, val: &Val) -> String {
+        match val {
+            Val::Object(payload) => match &self.arena.get(*payload).value {
+                Val::ObjPayload(obj) => String::from_utf8_lossy(
+                    self.context.interner.lookup(obj.class).unwrap_or(b"object"),
+                )
+                .into_owned(),
+                _ => "object".into(),
+            },
+            other => other.type_name().into(),
+        }
+    }
+
+    /// Convert an operand to a number, or None when PHP throws a TypeError for it.
+    /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - zendi_try_convert_scalar_to_number
+    fn arith_operand(&mut self, val: &Val) -> Option<Num> {
+        match val {
+            Val::Null => Some(Num::Int(0)),
+            Val::Bool(b) => Some(Num::Int(i64::from(*b))),
+            Val::Int(i) => Some(Num::Int(*i)),
+            Val::Float(f) => Some(Num::Float(*f)),
+            Val::String(s) => {
+                let num = match Val::numeric_string(s) {
+                    Some(n) => n,
+                    // Leading-numeric ("12abc") works with a warning; anything else throws.
+                    None => {
+                        let (n, _) = Val::leading_numeric(s)?;
+                        self.report_error(ErrorLevel::Warning, "A non-numeric value encountered");
+                        n
+                    }
+                };
+                match num {
+                    Val::Int(i) => Some(Num::Int(i)),
+                    Val::Float(f) => Some(Num::Float(f)),
+                    _ => None,
                 }
-                self.operand_stack
-                    .push(self.arena.alloc(Val::Array(Rc::new(result))));
-                return Ok(());
+            }
+            _ => None,
+        }
+    }
+
+    /// An operand of `%`, converted to int as zval_get_long does (with the
+    /// PHP 8.1 deprecation for floats that lose precision).
+    fn mod_operand(&mut self, num: Num) -> i64 {
+        match num {
+            Num::Int(i) => i,
+            Num::Float(f) => {
+                if f.fract() != 0.0 && f.is_finite() {
+                    let msg = format!(
+                        "Implicit conversion from float {} to int loses precision",
+                        crate::core::value::php_float_to_string(
+                            f,
+                            crate::core::value::FloatPrecision::Shortest,
+                            'E'
+                        )
+                    );
+                    self.report_error(ErrorLevel::Deprecated, &msg);
+                }
+                f as i64
             }
         }
+    }
 
-        // Check for division/modulo by zero
-        if matches!(op, ArithOp::Div) && b_val.to_float() == 0.0 {
-            self.report_error(ErrorLevel::Warning, "Division by zero");
+    /// Generic binary arithmetic operation
+    /// Reference: $PHP_SRC_PATH/Zend/zend_operators.c - add_function, mul_function, ...
+    fn binary_arithmetic(&mut self, op: ArithOp) -> Result<(), VmError> {
+        let (a_handle, b_handle) = self.pop_binary_operands()?;
+        let a_val = self.arena.get(a_handle).value.clone();
+        let b_val = self.arena.get(b_handle).value.clone();
+
+        // Array + Array = union
+        if let (ArithOp::Add, Val::Array(a_arr), Val::Array(b_arr)) = (op, &a_val, &b_val) {
+            let mut result = (**a_arr).clone();
+            for (k, v) in b_arr.map.iter() {
+                result.map.entry(k.clone()).or_insert(*v);
+            }
             self.operand_stack
-                .push(self.arena.alloc(Val::Float(f64::INFINITY)));
-            return Ok(());
-        }
-        if matches!(op, ArithOp::Mod) && b_val.to_int() == 0 {
-            self.report_error(ErrorLevel::Warning, "Modulo by zero");
-            self.operand_stack.push(self.arena.alloc(Val::Bool(false)));
+                .push(self.arena.alloc(Val::Array(Rc::new(result))));
             return Ok(());
         }
 
-        // Determine result type and compute
-        let needs_float =
-            op.always_float() || matches!(a_val, Val::Float(_)) || matches!(b_val, Val::Float(_));
-
-        let result = if needs_float {
-            Val::Float(op.apply_float(a_val.to_float(), b_val.to_float()))
-        } else if let Some(int_result) = op.apply_int(a_val.to_int(), b_val.to_int()) {
-            Val::Int(int_result)
-        } else {
-            Val::Float(op.apply_float(a_val.to_float(), b_val.to_float()))
+        let unsupported = |vm: &mut VM| {
+            let msg = format!(
+                "Unsupported operand types: {} {} {}",
+                vm.operand_type_name(&a_val),
+                op.symbol(),
+                vm.operand_type_name(&b_val)
+            );
+            vm.throw_error(b"TypeError", &msg)
+        };
+        // Both operands are checked before either is converted, as Zend does.
+        let numeric_type = |v: &Val| !matches!(v, Val::Array(_) | Val::ConstArray(_) | Val::Object(_) | Val::Resource(_));
+        if !numeric_type(&a_val) || !numeric_type(&b_val) {
+            return Err(unsupported(self));
+        }
+        let (Some(a), Some(b)) = (self.arith_operand(&a_val), self.arith_operand(&b_val)) else {
+            return Err(unsupported(self));
         };
 
-        self.operand_stack.push(self.arena.alloc(result));
+        let result = match (op, a, b) {
+            (ArithOp::Add, Num::Int(x), Num::Int(y)) => x.checked_add(y).map_or(Num::Float(x as f64 + y as f64), Num::Int),
+            (ArithOp::Sub, Num::Int(x), Num::Int(y)) => x.checked_sub(y).map_or(Num::Float(x as f64 - y as f64), Num::Int),
+            (ArithOp::Mul, Num::Int(x), Num::Int(y)) => x.checked_mul(y).map_or(Num::Float(x as f64 * y as f64), Num::Int),
+            (ArithOp::Add, _, _) => Num::Float(a.float() + b.float()),
+            (ArithOp::Sub, _, _) => Num::Float(a.float() - b.float()),
+            (ArithOp::Mul, _, _) => Num::Float(a.float() * b.float()),
+            (ArithOp::Div, _, _) => {
+                if b.float() == 0.0 {
+                    return Err(self.throw_error(b"DivisionByZeroError", "Division by zero"));
+                }
+                match (a, b) {
+                    (Num::Int(x), Num::Int(y)) if x.checked_rem(y) == Some(0) => {
+                        x.checked_div(y).map_or(Num::Float(x as f64 / y as f64), Num::Int)
+                    }
+                    _ => Num::Float(a.float() / b.float()),
+                }
+            }
+            (ArithOp::Mod, _, _) => {
+                let x = self.mod_operand(a);
+                let y = self.mod_operand(b);
+                if y == 0 {
+                    return Err(self.throw_error(b"DivisionByZeroError", "Modulo by zero"));
+                }
+                // i64::MIN % -1 overflows in Rust; PHP defines it as 0.
+                Num::Int(x.checked_rem(y).unwrap_or(0))
+            }
+            (ArithOp::Pow, Num::Int(x), Num::Int(y)) if y >= 0 => {
+                int_pow(x, y).map_or(Num::Float((x as f64).powf(y as f64)), Num::Int)
+            }
+            (ArithOp::Pow, _, _) => Num::Float(a.float().powf(b.float())),
+        };
+
+        self.operand_stack.push(self.arena.alloc(result.into_val()));
         Ok(())
     }
 
@@ -286,12 +386,8 @@ mod tests {
 
         let result = vm.operand_stack.pop().unwrap();
         let result_val = vm.arena.get(result);
-        // Division always returns float in PHP
-        if let Val::Float(f) = result_val.value {
-            assert!((f - 42.0).abs() < 0.0001);
-        } else {
-            panic!("Expected float for division");
-        }
+        // An exact integer division stays an int (84 / 2 === 42 in PHP)
+        assert!(matches!(result_val.value, Val::Int(42)));
     }
 
     #[test]
@@ -350,12 +446,8 @@ mod tests {
 
         let result = vm.operand_stack.pop().unwrap();
         let result_val = vm.arena.get(result);
-        // Power always returns float in PHP
-        if let Val::Float(f) = result_val.value {
-            assert!((f - 1024.0).abs() < 0.0001);
-        } else {
-            panic!("Expected float for power operation");
-        }
+        // int ** non-negative int is an int unless it overflows (2 ** 10 === 1024)
+        assert!(matches!(result_val.value, Val::Int(1024)));
     }
 
     #[test]
