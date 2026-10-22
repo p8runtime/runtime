@@ -11087,7 +11087,10 @@ impl VM {
                             return Err(VmError::RuntimeError("Invalid object payload".into()));
                         }
                     } else {
-                        return Err(VmError::RuntimeError("Isset on non-object".into()));
+                        // isset() of a property of a non-object is false.
+                        let res_handle = self.arena.alloc(Val::Bool(false));
+                        self.operand_stack.push(res_handle);
+                        return Ok(());
                     }
                 };
 
