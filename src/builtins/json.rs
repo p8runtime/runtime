@@ -442,18 +442,6 @@ impl<'a> EncodeContext<'a> {
 
 /// json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false
 ///
-/// Returns the JSON representation of a value
-///
-/// # Arguments
-/// * `args[0]` - The value to encode
-/// * `args[1]` - (Optional) Bitmask of JSON_* constants (default: 0)
-/// * `args[2]` - (Optional) Maximum depth (default: 512)
-///
-/// # Returns
-/// * JSON string on success, `false` on error (unless JSON_THROW_ON_ERROR)
-///
-/// # Reference
-/// - $PHP_SRC_PATH/ext/json/json.c - PHP_FUNCTION(json_encode)
 /// The value json_encode() encodes: JsonSerializable objects replaced by
 /// jsonSerialize()'s result, other objects by their properties visible from
 /// the calling scope (php_json_encode_array's zend_check_property_access).
@@ -518,6 +506,18 @@ fn public_view(vm: &mut VM, _obj: Handle, payload: Handle, depth: usize) -> Resu
     Ok(vm.arena.alloc(Val::Object(view)))
 }
 
+/// Returns the JSON representation of a value
+///
+/// # Arguments
+/// * `args[0]` - The value to encode
+/// * `args[1]` - (Optional) Bitmask of JSON_* constants (default: 0)
+/// * `args[2]` - (Optional) Maximum depth (default: 512)
+///
+/// # Returns
+/// * JSON string on success, `false` on error (unless JSON_THROW_ON_ERROR)
+///
+/// # Reference
+/// - $PHP_SRC_PATH/ext/json/json.c - PHP_FUNCTION(json_encode)
 pub fn php_json_encode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() {
         return Err("json_encode() expects at least 1 parameter, 0 given".into());
