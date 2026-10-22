@@ -4096,10 +4096,13 @@ impl VM {
             return Ok(());
         }
 
-        // Undefined variable
+        // Undefined variable. The warning is raised when the value is used;
+        // under @ it is decided now, while the silence is in effect.
         let null = self.arena.alloc(Val::Null);
         self.var_handle_map.insert(null, sym);
-        self.pending_undefined.insert(null, sym);
+        if self.silence_stack.is_empty() {
+            self.pending_undefined.insert(null, sym);
+        }
         self.operand_stack.push(null);
         Ok(())
     }
@@ -4169,7 +4172,9 @@ impl VM {
                 } else {
                     let null = self.arena.alloc(Val::Null);
                     self.var_handle_map.insert(null, sym);
-                    self.pending_undefined.insert(null, sym);
+                    if self.silence_stack.is_empty() {
+                        self.pending_undefined.insert(null, sym);
+                    }
                     self.operand_stack.push(null);
                 }
             }
@@ -5942,18 +5947,11 @@ impl VM {
                         }
                     }
                     _ => {
-                        let type_str = match array_val {
-                            Val::Null => "null",
-                            Val::Bool(_) => "bool",
-                            Val::Int(_) => "int",
-                            Val::Float(_) => "float",
-                            Val::String(_) => "string",
-                            _ => "value",
-                        };
+                        let type_str = crate::vm::error_formatting::scalar_value_name(array_val);
                         self.report_error(
                             ErrorLevel::Warning,
                             &format!(
-                                "Trying to access array offset on value of type {}",
+                                "Trying to access array offset on {}",
                                 type_str
                             ),
                         );
@@ -9171,11 +9169,11 @@ impl VM {
                         // PHP 7.4+: Trying to use scalar types as arrays produces a warning
                         // Reference: $PHP_SRC_PATH/Zend/zend_execute.c
                         if is_fetch_r {
-                            let type_str = container.type_name();
+                            let type_str = crate::vm::error_formatting::scalar_value_name(container);
                             self.report_error(
                                 ErrorLevel::Warning,
                                 &format!(
-                                    "Trying to access array offset on value of type {}",
+                                    "Trying to access array offset on {}",
                                     type_str
                                 ),
                             );
@@ -9188,7 +9186,7 @@ impl VM {
                         if is_fetch_r {
                             self.report_error(
                                 ErrorLevel::Warning,
-                                "Trying to access array offset on value of type null",
+                                "Trying to access array offset on null",
                             );
                         }
                         let null = self.arena.alloc(Val::Null);
@@ -9244,11 +9242,11 @@ impl VM {
                     }
                     _ => {
                         if is_fetch_r {
-                            let type_str = container.type_name();
+                            let type_str = crate::vm::error_formatting::scalar_value_name(container);
                             self.report_error(
                                 ErrorLevel::Warning,
                                 &format!(
-                                    "Trying to access array offset on value of type {}",
+                                    "Trying to access array offset on {}",
                                     type_str
                                 ),
                             );
@@ -11832,17 +11830,11 @@ impl VM {
                 }
                 _ => {
                     // Trying to access dim on scalar (non-array, non-string)
-                    let type_str = match current_val {
-                        Val::Null => "null",
-                        Val::Bool(_) => "bool",
-                        Val::Int(_) => "int",
-                        Val::Float(_) => "float",
-                        _ => "value",
-                    };
+                    let type_str = crate::vm::error_formatting::scalar_value_name(current_val);
                     self.report_error(
                         ErrorLevel::Warning,
                         &format!(
-                            "Trying to access array offset on value of type {}",
+                            "Trying to access array offset on {}",
                             type_str
                         ),
                     );

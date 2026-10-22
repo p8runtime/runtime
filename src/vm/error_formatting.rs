@@ -15,6 +15,24 @@ pub(crate) enum MemberKind {
     Property,
 }
 
+/// How PHP names a non-object value in diagnostics such as "Trying to access
+/// array offset on null": null, true, false, int, float, string, array, resource.
+/// Reference: $PHP_SRC_PATH/Zend/zend_API.c - zend_zval_value_name
+pub(crate) fn scalar_value_name(val: &crate::core::value::Val) -> &'static str {
+    use crate::core::value::Val;
+    match val {
+        Val::Null => "null",
+        Val::Bool(true) => "true",
+        Val::Bool(false) => "false",
+        Val::Int(_) => "int",
+        Val::Float(_) => "float",
+        Val::String(_) => "string",
+        Val::Array(_) => "array",
+        Val::Resource(_) => "resource",
+        _ => "value",
+    }
+}
+
 impl VM {
     /// Get human-readable string for a symbol (for error messages)
     /// Reference: $PHP_SRC_PATH/Zend/zend_string.h - ZSTR_VAL
