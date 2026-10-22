@@ -319,12 +319,17 @@ impl RequestContext {
 
         #[cfg(unix)]
         {
-            // Match PHP defaults: only LC_CTYPE follows environment.
-            if let Ok(c_locale) = CString::new("") {
-                unsafe {
-                    libc::setlocale(libc::LC_CTYPE, c_locale.as_ptr());
+            // Match PHP defaults: only LC_CTYPE follows environment. The locale
+            // is process-wide and setlocale is not thread-safe (parallel tests
+            // aborted in libc), so it is set once per process.
+            static LOCALE: std::sync::Once = std::sync::Once::new();
+            LOCALE.call_once(|| {
+                if let Ok(c_locale) = CString::new("") {
+                    unsafe {
+                        libc::setlocale(libc::LC_CTYPE, c_locale.as_ptr());
+                    }
                 }
-            }
+            });
         }
 
         // Copy constants from extension registry in bulk
