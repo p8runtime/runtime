@@ -14,6 +14,10 @@ struct ReflectionClassData {
 struct ReflectionAttributeData {
     name: crate::core::value::Symbol,
     args: Vec<AttributeArg>,
+    /// What the attribute is attached to (VM::ATTR_TARGET_*).
+    target: i64,
+    /// Whether the same attribute appears more than once there.
+    repeated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -110,11 +114,15 @@ fn resolve_class_symbol(vm: &mut VM, arg: Handle) -> Result<crate::core::value::
 fn create_reflection_attribute(
     vm: &mut VM,
     attr: &AttributeInstance,
+    target: i64,
+    repeated: bool,
 ) -> Result<Handle, String> {
     let class_sym = vm.context.interner.intern(b"ReflectionAttribute");
     let data = ReflectionAttributeData {
         name: attr.name,
         args: attr.args.clone(),
+        target,
+        repeated,
     };
 
     let obj_data = ObjectData {
@@ -131,6 +139,7 @@ fn build_attribute_array(
     vm: &mut VM,
     attrs: &[AttributeInstance],
     filter: Option<&[u8]>,
+    target: i64,
 ) -> Result<Handle, String> {
     let filter_lower = filter.map(|n| n.to_ascii_lowercase());
     let mut array = ArrayData::new();
@@ -144,7 +153,8 @@ fn build_attribute_array(
             }
         }
 
-        let attr_obj = create_reflection_attribute(vm, attr)?;
+        let repeated = attrs.iter().filter(|a| a.name == attr.name).count() > 1;
+        let attr_obj = create_reflection_attribute(vm, attr, target, repeated)?;
         array.insert(ArrayKey::Int(index), attr_obj);
         index += 1;
     }
@@ -337,7 +347,7 @@ pub fn reflection_class_get_attributes(vm: &mut VM, args: &[Handle]) -> Result<H
         .ok_or_else(|| "ReflectionClass::getAttributes(): Class not found".to_string())?;
 
     let attributes = class_def.attributes.clone();
-    build_attribute_array(vm, &attributes, filter_name.as_deref())
+    build_attribute_array(vm, &attributes, filter_name.as_deref(), VM::ATTR_TARGET_CLASS)
 }
 
 pub fn reflection_attribute_get_name(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
@@ -427,6 +437,18 @@ pub fn reflection_attribute_new_instance(
     .ok_or_else(|| {
         "ReflectionAttribute::newInstance() called on invalid reflection object".to_string()
     })?;
+
+    // User attributes are validated here, not where they are declared.
+    if !vm.context.classes.contains_key(&data.name) {
+        let _ = vm.trigger_autoload(data.name);
+    }
+    if let Err(err) = vm.check_attribute_use(data.name, data.target, data.repeated) {
+        let msg = match err {
+            crate::vm::engine::VmError::RuntimeError(msg) => msg,
+            other => format!("{:?}", other),
+        };
+        return Err(vm.throw_from_native(b"Error", &msg));
+    }
 
     let mut args = Vec::new();
     for arg in data.args {
@@ -537,7 +559,7 @@ pub fn reflection_method_get_attributes(vm: &mut VM, args: &[Handle]) -> Result<
         .map(|entry| entry.attributes.clone())
         .unwrap_or_default();
 
-    build_attribute_array(vm, &attributes, filter_name.as_deref())
+    build_attribute_array(vm, &attributes, filter_name.as_deref(), VM::ATTR_TARGET_METHOD)
 }
 
 pub fn reflection_method_get_parameters(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
@@ -747,7 +769,7 @@ pub fn reflection_property_get_attributes(
             .unwrap_or_default()
     };
 
-    build_attribute_array(vm, &attributes, filter_name.as_deref())
+    build_attribute_array(vm, &attributes, filter_name.as_deref(), VM::ATTR_TARGET_PROPERTY)
 }
 
 pub fn reflection_property_has_type(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
@@ -952,7 +974,7 @@ pub fn reflection_class_const_get_attributes(
         .map(|entry| entry.attributes.clone())
         .unwrap_or_default();
 
-    build_attribute_array(vm, &attributes, filter_name.as_deref())
+    build_attribute_array(vm, &attributes, filter_name.as_deref(), VM::ATTR_TARGET_CLASS_CONSTANT)
 }
 
 pub fn reflection_parameter_get_name(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
@@ -1379,7 +1401,7 @@ pub fn reflection_function_get_attributes(
         .attributes
         .clone();
 
-    build_attribute_array(vm, &attrs, filter_name.as_deref())
+    build_attribute_array(vm, &attrs, filter_name.as_deref(), VM::ATTR_TARGET_FUNCTION)
 }
 
 pub fn reflection_function_get_parameters(

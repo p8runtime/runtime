@@ -359,12 +359,12 @@ pub struct VM {
 }
 
 impl VM {
-    const ATTR_TARGET_CLASS: i64 = 1;
-    const ATTR_TARGET_METHOD: i64 = 2;
-    const ATTR_TARGET_FUNCTION: i64 = 4;
-    const ATTR_TARGET_PROPERTY: i64 = 8;
-    const ATTR_TARGET_CLASS_CONSTANT: i64 = 16;
-    const ATTR_TARGET_PARAMETER: i64 = 32;
+    pub(crate) const ATTR_TARGET_CLASS: i64 = 1;
+    pub(crate) const ATTR_TARGET_METHOD: i64 = 2;
+    pub(crate) const ATTR_TARGET_FUNCTION: i64 = 4;
+    pub(crate) const ATTR_TARGET_PROPERTY: i64 = 8;
+    pub(crate) const ATTR_TARGET_CLASS_CONSTANT: i64 = 16;
+    pub(crate) const ATTR_TARGET_PARAMETER: i64 = 32;
     const ATTR_TARGET_ALL: i64 = 63;
     const ATTR_IS_REPEATABLE: i64 = 64;
 
@@ -2298,6 +2298,22 @@ impl VM {
         {
             return Ok(Self::ATTR_TARGET_CLASS);
         }
+        // The other attributes PHP declares itself, with their #[Attribute] flags.
+        let internal = [
+            (&b"Override"[..], Self::ATTR_TARGET_METHOD),
+            (b"ReturnTypeWillChange", Self::ATTR_TARGET_METHOD),
+            (b"SensitiveParameter", Self::ATTR_TARGET_PARAMETER),
+            (
+                b"Deprecated",
+                Self::ATTR_TARGET_METHOD | Self::ATTR_TARGET_FUNCTION | Self::ATTR_TARGET_CLASS_CONSTANT,
+            ),
+        ];
+        if let Some((_, flags)) = internal
+            .iter()
+            .find(|(n, _)| name_bytes.eq_ignore_ascii_case(n))
+        {
+            return Ok(*flags);
+        }
 
         let class_def = self.context.classes.get(&attr_name).ok_or_else(|| {
             VmError::RuntimeError(format!(
@@ -2335,12 +2351,41 @@ impl VM {
         }
     }
 
+    /// Declaration-time check. Zend validates only its own attributes
+    /// (#[Attribute], #[AllowDynamicProperties], ...) when code is compiled;
+    /// a user attribute is checked by ReflectionAttribute::newInstance().
     fn validate_attribute_use(
         &self,
         attr: &AttributeInstance,
         target_flag: i64,
         existing: &[AttributeInstance],
     ) -> Result<(), VmError> {
+        let name = self.context.interner.lookup(attr.name).unwrap_or(b"");
+        let name = name.rsplit(|b| *b == b'\\').next().unwrap_or(name);
+        let internal = [
+            &b"Attribute"[..],
+            b"AllowDynamicProperties",
+            b"ReturnTypeWillChange",
+            b"SensitiveParameter",
+            b"Override",
+            b"Deprecated",
+        ];
+        if !internal.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            return Ok(());
+        }
+        self.check_attribute_use(attr.name, target_flag, existing.iter().any(|e| e.name == attr.name))
+    }
+
+    /// Whether attribute `name` may be used on `target_flag` (and repeated):
+    /// the errors PHP raises from ReflectionAttribute::newInstance().
+    pub(crate) fn check_attribute_use(
+        &self,
+        name: Symbol,
+        target_flag: i64,
+        repeated: bool,
+    ) -> Result<(), VmError> {
+        let attr = AttributeInstance { name, args: Vec::new() };
+        let existing: Vec<AttributeInstance> = if repeated { vec![attr.clone()] } else { Vec::new() };
         let flags = self.resolve_attribute_flags(attr.name)?;
         let is_repeatable = (flags & Self::ATTR_IS_REPEATABLE) != 0;
         if !is_repeatable && existing.iter().any(|entry| entry.name == attr.name) {

@@ -588,6 +588,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
+                // #[\Foo] names the global class Foo
+                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
                 let attr_sym = self.interner.intern(attr_name);
                 let mut args = Vec::new();
 
@@ -613,6 +615,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
+                // #[\Foo] names the global class Foo
+                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
                 let attr_sym = self.interner.intern(attr_name);
                 let mut args = Vec::new();
 
@@ -640,6 +644,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
+                // #[\Foo] names the global class Foo
+                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
                 let attr_sym = self.interner.intern(attr_name);
                 let mut args = Vec::new();
 
