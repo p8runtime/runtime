@@ -2869,13 +2869,14 @@ impl<'src> Emitter<'src> {
                     target, property, ..
                 } => {
                     self.emit_expr(target);
-                    self.emit_expr(expr);
-                    if let Expr::Variable { span, .. } = property {
-                        let name = self.get_text(*span);
-                        if !name.starts_with(b"$") {
-                            let sym = self.interner.intern(name);
-                            self.chunk.code.push(OpCode::AssignProp(sym));
-                        }
+                    if let Some(sym) = self.static_prop_name(property) {
+                        self.emit_expr(expr);
+                        self.chunk.code.push(OpCode::AssignProp(sym));
+                    } else {
+                        // $obj->$name = v, $obj->{expr} = v
+                        self.emit_expr(property);
+                        self.emit_expr(expr);
+                        self.chunk.code.push(OpCode::AssignPropDynamic);
                     }
                 }
                 Expr::ClassConstFetch {
@@ -2903,68 +2904,7 @@ impl<'src> Emitter<'src> {
                         }
                     }
                 }
-                Expr::ArrayDimFetch { .. } => {
-                    let (base, keys) = Self::flatten_dim_fetch(var);
-
-                    if let Expr::PropertyFetch {
-                        target, property, ..
-                    } = base
-                    {
-                        self.emit_expr(target);
-                        self.chunk.code.push(OpCode::Dup);
-
-                        if let Expr::Variable { span, .. } = property {
-                            let name = self.get_text(*span);
-                            if !name.starts_with(b"$") {
-                                let sym = self.interner.intern(name);
-                                self.chunk.code.push(OpCode::FetchProp(sym));
-
-                                for key in &keys {
-                                    if let Some(k) = key {
-                                        self.emit_expr(k);
-                                    } else {
-                                        let idx = self.add_constant(Val::AppendPlaceholder);
-                                        self.chunk.code.push(OpCode::Const(idx as u16));
-                                    }
-                                }
-
-                                self.emit_expr(expr);
-
-                                self.chunk
-                                    .code
-                                    .push(OpCode::StoreNestedDim(keys.len() as u8));
-
-                                self.chunk.code.push(OpCode::AssignProp(sym));
-                            }
-                        }
-                    } else {
-                        self.emit_expr(base);
-                        for key in &keys {
-                            if let Some(k) = key {
-                                self.emit_expr(k);
-                            } else {
-                                let idx = self.add_constant(Val::AppendPlaceholder);
-                                self.chunk.code.push(OpCode::Const(idx as u16));
-                            }
-                        }
-
-                        self.emit_expr(expr);
-
-                        self.chunk
-                            .code
-                            .push(OpCode::StoreNestedDim(keys.len() as u8));
-
-                        if let Expr::Variable { span, .. } = base {
-                            let name = self.get_text(*span);
-                            if name.starts_with(b"$") {
-                                let var_name = &name[1..];
-                                let sym = self.interner.intern(var_name);
-                                self.chunk.code.push(OpCode::StoreVar(sym));
-                                self.chunk.code.push(OpCode::LoadVar(sym));
-                            }
-                        }
-                    }
-                }
+                Expr::ArrayDimFetch { .. } => self.emit_assign_dim(var, expr),
                 Expr::Array { items, .. } => {
                     // list($a, $b, $c) = expr
                     // Emit the right-hand side expression (should be an array)
@@ -3011,7 +2951,7 @@ impl<'src> Emitter<'src> {
                         }
 
                         if !handled {
-                            self.emit_expr(expr);
+                            self.emit_expr_for_write(expr);
                             self.chunk.code.push(OpCode::MakeRef);
                         }
 
@@ -3047,7 +2987,7 @@ impl<'src> Emitter<'src> {
                         }
 
                         if !handled {
-                            self.emit_expr(expr);
+                            self.emit_expr_for_write(expr);
                             self.chunk.code.push(OpCode::MakeRef);
                         }
 
@@ -3066,8 +3006,38 @@ impl<'src> Emitter<'src> {
                             self.chunk.code.push(OpCode::Pop);
                         }
                     }
+                    Expr::PropertyFetch {
+                        target, property, ..
+                    } => {
+                        // $obj->p = &source
+                        self.emit_expr(target);
+                        if let Some(sym) = self.static_prop_name(property) {
+                            let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                            let idx = self.add_constant(Val::String(name.into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        } else {
+                            self.emit_expr(property);
+                        }
+                        self.emit_ref_source(expr);
+                        self.chunk.code.push(OpCode::AssignObjRef);
+                    }
+                    Expr::ClassConstFetch {
+                        class, constant, ..
+                    } if self.static_member(class, constant).is_some() => {
+                        // A::$p = &source
+                        let (class_sym, prop_sym) = self.static_member(class, constant).unwrap();
+                        for sym in [class_sym, prop_sym] {
+                            let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                            let idx = self.add_constant(Val::String(name.into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        }
+                        self.emit_ref_source(expr);
+                        self.chunk.code.push(OpCode::AssignStaticPropRef);
+                    }
                     _ => {
-                        // TODO: Support other targets for reference assignment
+                        // Unsupported target: evaluate the source so the expression
+                        // still leaves one value.
+                        self.emit_expr(expr);
                     }
                 }
             }
@@ -3181,6 +3151,30 @@ impl<'src> Emitter<'src> {
                         target, property, ..
                     } => {
                         self.emit_expr(target);
+
+                        if self.static_prop_name(property).is_none() {
+                            // $obj->$name op= expr
+                            self.emit_expr(property);
+                            self.chunk.code.push(OpCode::Dup2);
+                            if let AssignOp::Coalesce = op {
+                                // $obj->$name = $obj->$name ?? expr
+                                self.chunk.code.push(OpCode::FetchPropDynamic);
+                                let skip = self.chunk.code.len();
+                                self.chunk.code.push(OpCode::Coalesce(0));
+                                self.emit_expr(expr);
+                                let assign = self.chunk.code.len();
+                                self.patch_jump(skip, assign);
+                                self.chunk.code.push(OpCode::AssignPropDynamic);
+                            } else {
+                                self.chunk.code.push(OpCode::FetchPropDynamic);
+                                self.emit_expr(expr);
+                                if let Some(code) = Self::assign_op_opcode(op) {
+                                    self.chunk.code.push(code);
+                                }
+                                self.chunk.code.push(OpCode::AssignPropDynamic);
+                            }
+                            return;
+                        }
                         self.chunk.code.push(OpCode::Dup);
 
                         if let Expr::Variable { span, .. } = property {
@@ -3527,6 +3521,204 @@ impl<'src> Emitter<'src> {
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
             _ => {}
+        }
+    }
+
+    /// Push the right-hand side of `= &expr` as a reference.
+    fn emit_ref_source(&mut self, expr: &Expr) {
+        if let Expr::Variable { span, .. } = expr
+            && self.get_text(*span).starts_with(b"$")
+        {
+            let sym = self.interner.intern(&self.get_text(*span)[1..]);
+            self.chunk.code.push(OpCode::MakeVarRef(sym));
+        } else {
+            self.emit_expr_for_write(expr);
+            self.chunk.code.push(OpCode::MakeRef);
+        }
+    }
+
+    /// Push the slot an lvalue lives in (not a copy of its value), creating it
+    /// when missing, as Zend's FETCH_*_W opcodes do: `&$a['k']`, `&$o->p`,
+    /// `&A::$p`. Anything else is evaluated normally.
+    fn emit_expr_for_write(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Variable { span, .. } if self.get_text(*span).starts_with(b"$") => {
+                let name = &self.get_text(*span)[1..];
+                if name == b"this" || name == b"GLOBALS" {
+                    self.emit_expr(expr);
+                } else {
+                    let sym = self.interner.intern(name);
+                    self.chunk.code.push(OpCode::FetchW(sym));
+                }
+            }
+            Expr::ArrayDimFetch { array, dim, .. } => {
+                self.emit_expr_for_write(array);
+                match dim {
+                    Some(d) => self.emit_expr(d),
+                    None => {
+                        let idx = self.add_constant(Val::AppendPlaceholder);
+                        self.chunk.code.push(OpCode::Const(idx as u16));
+                    }
+                }
+                self.chunk.code.push(OpCode::FetchDimW);
+            }
+            Expr::PropertyFetch {
+                target, property, ..
+            } => {
+                self.emit_expr(target);
+                if let Some(sym) = self.static_prop_name(property) {
+                    let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                    let idx = self.add_constant(Val::String(name.into()));
+                    self.chunk.code.push(OpCode::Const(idx as u16));
+                } else {
+                    self.emit_expr(property);
+                }
+                self.chunk.code.push(OpCode::FetchObjW);
+            }
+            Expr::ClassConstFetch {
+                class, constant, ..
+            } if self.static_member(class, constant).is_some() => {
+                let (class_sym, prop_sym) = self.static_member(class, constant).unwrap();
+                for sym in [class_sym, prop_sym] {
+                    let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                    let idx = self.add_constant(Val::String(name.into()));
+                    self.chunk.code.push(OpCode::Const(idx as u16));
+                }
+                self.chunk.code.push(OpCode::FetchStaticPropW);
+            }
+            _ => self.emit_expr(expr),
+        }
+    }
+
+    /// The binary opcode behind a compound assignment (`+=` -> Add); None for `??=`.
+    fn assign_op_opcode(op: &AssignOp) -> Option<OpCode> {
+        Some(match op {
+            AssignOp::Plus => OpCode::Add,
+            AssignOp::Minus => OpCode::Sub,
+            AssignOp::Mul => OpCode::Mul,
+            AssignOp::Div => OpCode::Div,
+            AssignOp::Mod => OpCode::Mod,
+            AssignOp::Concat => OpCode::Concat,
+            AssignOp::Pow => OpCode::Pow,
+            AssignOp::BitAnd => OpCode::BitwiseAnd,
+            AssignOp::BitOr => OpCode::BitwiseOr,
+            AssignOp::BitXor => OpCode::BitwiseXor,
+            AssignOp::ShiftLeft => OpCode::ShiftLeft,
+            AssignOp::ShiftRight => OpCode::ShiftRight,
+            _ => return None,
+        })
+    }
+
+    /// The name of `$obj->name` when it is a literal identifier.
+    fn static_prop_name(&mut self, property: &Expr) -> Option<Symbol> {
+        if let Expr::Variable { span, .. } = property {
+            let name = self.get_text(*span);
+            if !name.starts_with(b"$") {
+                return Some(self.interner.intern(name));
+            }
+        }
+        None
+    }
+
+    /// `Class::$prop` with a literal class name, as (class, prop).
+    fn static_member(&mut self, class: &Expr, constant: &Expr) -> Option<(Symbol, Symbol)> {
+        let (Expr::Variable { span: class_span, .. }, Expr::Variable { span: prop_span, .. }) =
+            (class, constant)
+        else {
+            return None;
+        };
+        let class_name = self.get_text(*class_span);
+        let prop_name = self.get_text(*prop_span);
+        if class_name.starts_with(b"$") || !prop_name.starts_with(b"$") {
+            return None;
+        }
+        Some((self.interner.intern(class_name), self.interner.intern(&prop_name[1..])))
+    }
+
+    /// `$base[k1]..[kN] = expr`: read the base, update a copy, store it back
+    /// into the base, and leave the assigned value as the result.
+    fn emit_assign_dim(&mut self, var: &Expr, expr: &Expr) {
+        enum StoreBack {
+            Var(Symbol),
+            Prop(Symbol),
+            PropDynamic,
+            StaticProp(Symbol, Symbol),
+            Discard,
+        }
+        let (base, keys) = Self::flatten_dim_fetch(var);
+
+        // Push the operands the store-back needs, then the current array.
+        let (store, extras) = match base {
+            Expr::Variable { span, .. } if self.get_text(*span).starts_with(b"$") => {
+                let name = &self.get_text(*span)[1..];
+                let sym = self.interner.intern(name);
+                if name == b"GLOBALS" || name == b"this" {
+                    self.emit_expr(base);
+                } else {
+                    // Writing creates the variable without an "undefined" notice.
+                    self.chunk.code.push(OpCode::FetchW(sym));
+                }
+                (StoreBack::Var(sym), 0)
+            }
+            Expr::PropertyFetch {
+                target, property, ..
+            } => {
+                self.emit_expr(target);
+                if let Some(sym) = self.static_prop_name(property) {
+                    self.chunk.code.push(OpCode::Dup);
+                    self.chunk.code.push(OpCode::FetchProp(sym));
+                    (StoreBack::Prop(sym), 1)
+                } else {
+                    self.emit_expr(property);
+                    self.chunk.code.push(OpCode::Dup2);
+                    self.chunk.code.push(OpCode::FetchPropDynamic);
+                    (StoreBack::PropDynamic, 2)
+                }
+            }
+            Expr::ClassConstFetch {
+                class, constant, ..
+            } if self.static_member(class, constant).is_some() => {
+                let (class_sym, prop_sym) = self.static_member(class, constant).unwrap();
+                self.emit_expr(base);
+                (StoreBack::StaticProp(class_sym, prop_sym), 0)
+            }
+            _ => {
+                self.emit_expr(base);
+                (StoreBack::Discard, 0)
+            }
+        };
+
+        for key in &keys {
+            if let Some(k) = key {
+                self.emit_expr(k);
+            } else {
+                let idx = self.add_constant(Val::AppendPlaceholder);
+                self.chunk.code.push(OpCode::Const(idx as u16));
+            }
+        }
+        self.emit_expr(expr);
+        self.chunk
+            .code
+            .push(OpCode::AssignNestedDim(keys.len() as u8, extras));
+
+        // Stack: [value, extras.., new array]; store back, leaving [value].
+        match store {
+            StoreBack::Var(sym) => self.chunk.code.push(OpCode::StoreVar(sym)),
+            StoreBack::Prop(sym) => {
+                self.chunk.code.push(OpCode::AssignProp(sym));
+                self.chunk.code.push(OpCode::Pop);
+            }
+            StoreBack::PropDynamic => {
+                self.chunk.code.push(OpCode::AssignPropDynamic);
+                self.chunk.code.push(OpCode::Pop);
+            }
+            StoreBack::StaticProp(class_sym, prop_sym) => {
+                self.chunk
+                    .code
+                    .push(OpCode::AssignStaticProp(class_sym, prop_sym));
+                self.chunk.code.push(OpCode::Pop);
+            }
+            StoreBack::Discard => self.chunk.code.push(OpCode::Pop),
         }
     }
 

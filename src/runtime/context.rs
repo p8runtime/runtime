@@ -119,7 +119,8 @@ pub struct PropertyEntry {
 
 #[derive(Debug, Clone)]
 pub struct StaticPropertyEntry {
-    pub value: Val,
+    /// The property's slot in the VM heap, so references to it (`$r = &A::$p`) share it.
+    pub handle: Handle,
     pub visibility: Visibility,
     pub type_hint: Option<TypeHint>,
     pub attributes: Vec<AttributeInstance>,

@@ -57,6 +57,11 @@ pub enum OpCode {
 
     // Control Flow
     Jmp(u32),
+    Dup2, // [A, B] -> [A, B, A, B]
+    /// $base[k1]..[kN] = val, keeping the assigned value for the expression result:
+    /// [E1..Ee, Array, K1..KN, Val] -> [Val, E1..Ee, NewArray]
+    /// (E = operands the store-back needs, e.g. the object for a property base)
+    AssignNestedDim(u8, u8),
     DeclareAnonClass(Symbol, u32), // Jump to target when the class is already declared
     JmpIfFalse(u32),
     JmpIfTrue(u32),
@@ -144,6 +149,7 @@ pub enum OpCode {
     NewDynamic(u8),     // [ClassName] -> Create instance, call constructor with N args
     FetchProp(Symbol),  // [Obj] -> [Val]
     FetchPropDynamic,   // [Obj, Name] -> [Val]
+    AssignPropDynamic,  // [Obj, Name, Val] -> [Val]
     AssignProp(Symbol), // [Obj, Val] -> [Val]
     CallMethod(Symbol, u8), // [Obj, Arg1...ArgN] -> [RetVal]
     CallMethodDynamic(u8), // [Obj, MethodName, Arg1...ArgN] -> [RetVal]
