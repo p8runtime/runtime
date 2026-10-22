@@ -202,7 +202,12 @@ pub fn php_get_loaded_extensions(vm: &mut VM, args: &[Handle]) -> Result<Handle,
         .first()
         .is_some_and(|&h| vm.arena.get(h).value.to_bool());
     let names: Vec<Vec<u8>> = if zend_extensions {
-        Vec::new()
+        // OPcache is the one Zend extension (zend_extension=) PHP loads here
+        let opcache = crate::runtime::opcache_extension::NAME;
+        match vm.context.engine.registry.extension_loaded(opcache) {
+            true => vec![opcache.as_bytes().to_vec()],
+            false => Vec::new(),
+        }
     } else {
         vm.context
             .engine
