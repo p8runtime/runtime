@@ -82,6 +82,37 @@ fn unescape_string(s: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The value of an integer literal: decimal, 0x hex, 0b binary, 0o or
+/// leading-0 octal, with `_` separators; too large for an int, it is a float.
+/// Reference: $PHP_SRC_PATH/Zend/zend_language_scanner.l - LNUM/HNUM/BNUM/ONUM
+fn integer_literal(value: &[u8]) -> Val {
+    let digits: Vec<u8> = value.iter().copied().filter(|b| *b != b'_').collect();
+    let (radix, body) = match digits.as_slice() {
+        [b'0', b'x' | b'X', rest @ ..] => (16, rest),
+        [b'0', b'b' | b'B', rest @ ..] => (2, rest),
+        [b'0', b'o' | b'O', rest @ ..] => (8, rest),
+        [b'0', rest @ ..] if !rest.is_empty() => (8, rest),
+        all => (10, all),
+    };
+    let text = std::str::from_utf8(body).unwrap_or("0");
+    match i64::from_str_radix(text, radix) {
+        Ok(i) => Val::Int(i),
+        Err(_) => {
+            let f = text
+                .bytes()
+                .filter_map(|b| char::from(b).to_digit(radix))
+                .fold(0.0, |acc, d| acc * f64::from(radix) + f64::from(d));
+            Val::Float(f)
+        }
+    }
+}
+
+/// The value of a float literal (`_` separators allowed).
+fn float_literal(value: &[u8]) -> f64 {
+    let text: String = value.iter().filter(|b| **b != b'_').map(|b| char::from(*b)).collect();
+    text.parse().unwrap_or(0.0)
+}
+
 /// The value of a string literal token: '...' (only \\ and \' are escapes),
 /// "..." (full escapes) or an unquoted interpolation/heredoc part.
 fn string_literal(value: &[u8]) -> Vec<u8> {
@@ -675,19 +706,7 @@ impl<'src> Emitter<'src> {
                     let key = self.get_text(item.key.span);
                     if key.eq_ignore_ascii_case(b"strict_types") {
                         if let Expr::Integer { value, .. } = item.value {
-                            // Integers may contain '_' separators.
-                            let mut num: u64 = 0;
-                            for b in *value {
-                                if *b == b'_' {
-                                    continue;
-                                }
-                                if !b.is_ascii_digit() {
-                                    num = 0;
-                                    break;
-                                }
-                                num = num.saturating_mul(10).saturating_add((b - b'0') as u64);
-                            }
-                            self.chunk.strict_types = num == 1;
+                            self.chunk.strict_types = integer_literal(value) == Val::Int(1);
                         }
                     }
                 }
@@ -1686,11 +1705,7 @@ impl<'src> Emitter<'src> {
 
     fn get_literal_value(&self, expr: &Expr) -> Option<Val> {
         match expr {
-            Expr::Integer { value, .. } => {
-                let s = std::str::from_utf8(value).ok()?;
-                let i: i64 = s.parse().ok()?;
-                Some(Val::Int(i))
-            }
+            Expr::Integer { value, .. } => Some(integer_literal(value)),
             Expr::String { value, .. } => {
                 let s = string_literal(value);
                 Some(Val::String(s.into()))
@@ -1711,14 +1726,11 @@ impl<'src> Emitter<'src> {
     fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Integer { value, .. } => {
-                let s = std::str::from_utf8(value).unwrap_or("0");
-                let i: i64 = s.parse().unwrap_or(0);
-                let idx = self.add_constant(Val::Int(i));
+                let idx = self.add_constant(integer_literal(value));
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
             Expr::Float { value, .. } => {
-                let s = std::str::from_utf8(value).unwrap_or("0.0");
-                let f: f64 = s.parse().unwrap_or(0.0);
+                let f = float_literal(value);
                 let idx = self.add_constant(Val::Float(f));
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
@@ -3742,22 +3754,8 @@ impl<'src> Emitter<'src> {
 
     fn eval_constant_expr(&self, expr: &Expr) -> Val {
         match expr {
-            Expr::Integer { value, .. } => {
-                let s_str = std::str::from_utf8(value).unwrap_or("0");
-                if let Ok(i) = s_str.parse::<i64>() {
-                    Val::Int(i)
-                } else {
-                    Val::Int(0)
-                }
-            }
-            Expr::Float { value, .. } => {
-                let s_str = std::str::from_utf8(value).unwrap_or("0.0");
-                if let Ok(f) = s_str.parse::<f64>() {
-                    Val::Float(f)
-                } else {
-                    Val::Float(0.0)
-                }
-            }
+            Expr::Integer { value, .. } => integer_literal(value),
+            Expr::Float { value, .. } => Val::Float(float_literal(value)),
             Expr::String { value, .. } => Val::String(string_literal(value).into()),
             Expr::Boolean { value, .. } => Val::Bool(*value),
             Expr::Null { .. } => Val::Null,
