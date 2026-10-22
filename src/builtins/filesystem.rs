@@ -220,10 +220,15 @@ pub fn php_fread(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         let val = vm.arena.get(args[1]);
         match &val.value {
             Val::Int(i) => {
-                if *i < 0 {
-                    return Err("fread(): Length must be greater than or equal to zero".into());
+                if *i <= 0 {
+                    return Err(vm.throw_from_native(
+                        b"ValueError",
+                        "fread(): Argument #2 ($length) must be greater than 0",
+                    ));
                 }
-                *i as usize
+                // One read returns at most what is there: no buffer the size
+                // of an arbitrary length.
+                (*i as usize).min(8 * 1024 * 1024)
             }
             _ => return Err("fread(): Length must be integer".into()),
         }

@@ -937,7 +937,13 @@ pub fn php_gzread(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let length = match &vm.arena.get(args[1]).value {
-        Val::Int(i) => *i as usize,
+        Val::Int(i) if *i > 0 => *i as usize,
+        Val::Int(_) => {
+            return Err(vm.throw_from_native(
+                b"ValueError",
+                "gzread(): Argument #2 ($length) must be greater than 0",
+            ));
+        }
         _ => return Err("gzread(): Argument #2 ($length) must be of type int".into()),
     };
 
@@ -950,7 +956,8 @@ pub fn php_gzread(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         .downcast_ref::<GzFile>()
         .ok_or("gzread(): Invalid resource")?;
 
-    let mut buffer = vec![0u8; length];
+    // Read what is there, not a buffer of whatever size was asked for.
+    let mut buffer = vec![0u8; length.min(8 * 1024 * 1024)];
     let n = gz_file
         .inner
         .borrow_mut()
