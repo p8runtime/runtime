@@ -135,6 +135,14 @@ impl std::fmt::Display for VmError {
 
 impl std::error::Error for VmError {}
 
+/// PHP 8's warning for reading a missing array key: ints bare, strings quoted.
+fn undefined_key_message(key: &ArrayKey) -> String {
+    match key {
+        ArrayKey::Int(i) => format!("Undefined array key {}", i),
+        ArrayKey::Str(s) => format!("Undefined array key \"{}\"", String::from_utf8_lossy(s)),
+    }
+}
+
 /// The source line a frame is executing.
 fn frame_line(frame: &CallFrame) -> u32 {
     if frame.ip > 0 && frame.ip <= frame.chunk.lines.len() {
@@ -5547,18 +5555,13 @@ impl VM {
                         let key_val = &self.arena.get(key_handle).value;
                         let key = self.array_key_from_value(key_val)?;
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             // Emit notice for undefined array key
-                            let key_str = match &key {
-                                ArrayKey::Int(i) => i.to_string(),
-                                ArrayKey::Str(s) => String::from_utf8_lossy(s).to_string(),
-                            };
-                            self.report_error(
-                                ErrorLevel::Notice,
-                                &format!("Undefined array key \"{}\"", key_str),
-                            );
+                            let msg = undefined_key_message(&key);
+                            self.report_error(ErrorLevel::Warning, &msg);
                             let null_handle = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null_handle);
                         }
@@ -8711,8 +8714,9 @@ impl VM {
                             _ => ArrayKey::Str(Rc::new(Vec::<u8>::new())),
                         };
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             let null = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null);
@@ -8744,8 +8748,9 @@ impl VM {
                             _ => ArrayKey::Str(Rc::new(Vec::<u8>::new())),
                         };
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             let null = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null);
@@ -8778,19 +8783,14 @@ impl VM {
                         let dim_val = &self.arena.get(dim).value;
                         let key = self.array_key_from_value(dim_val)?;
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             // Emit notice for FetchDimR, but not for isset/empty (FetchDimIs) or unset
                             if is_fetch_r {
-                                let key_str = match &key {
-                                    ArrayKey::Int(i) => i.to_string(),
-                                    ArrayKey::Str(s) => String::from_utf8_lossy(s).to_string(),
-                                };
-                                self.report_error(
-                                    ErrorLevel::Notice,
-                                    &format!("Undefined array key \"{}\"", key_str),
-                                );
+                                let msg = undefined_key_message(&key);
+                                self.report_error(ErrorLevel::Warning, &msg);
                             }
                             let null = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null);
@@ -11415,6 +11415,27 @@ impl VM {
         array_handle: Handle,
         keys: &[Handle],
     ) -> Result<Handle, VmError> {
+        let slot = self.fetch_nested_dim_slot(array_handle, keys)?;
+        Ok(self.read_slot(slot))
+    }
+
+    /// A value read for use as an operand: a reference slot is copied, so a
+    /// later write in the same expression cannot change it (FETCH_*_R's
+    /// ZVAL_COPY_DEREF).
+    pub(crate) fn read_slot(&mut self, slot: Handle) -> Handle {
+        if self.arena.get(slot).is_ref {
+            let val = self.arena.get(slot).value.clone();
+            self.arena.alloc(val)
+        } else {
+            slot
+        }
+    }
+
+    fn fetch_nested_dim_slot(
+        &mut self,
+        array_handle: Handle,
+        keys: &[Handle],
+    ) -> Result<Handle, VmError> {
         let mut current_handle = array_handle;
 
         for key_handle in keys {
@@ -11429,14 +11450,8 @@ impl VM {
                         current_handle = *val;
                     } else {
                         // Undefined index: emit notice and return NULL
-                        let key_str = match &key {
-                            ArrayKey::Int(i) => i.to_string(),
-                            ArrayKey::Str(s) => String::from_utf8_lossy(s).to_string(),
-                        };
-                        self.report_error(
-                            ErrorLevel::Notice,
-                            &format!("Undefined array key \"{}\"", key_str),
-                        );
+                        let msg = undefined_key_message(&key);
+                        self.report_error(ErrorLevel::Warning, &msg);
                         return Ok(self.arena.alloc(Val::Null));
                     }
                 }
