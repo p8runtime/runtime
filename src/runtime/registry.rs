@@ -144,8 +144,13 @@ impl ExtensionRegistry {
     }
 
     /// Names of all loaded extensions, in PHP's spelling: the registered
-    /// ones in load order, then those built into the core extension.
+    /// ones in load order, then those built into the core extension (when
+    /// it is loaded).
     pub fn get_extensions(&self) -> Vec<&str> {
+        let built_in = match self.extension_map.contains_key("Core") {
+            true => BUILT_IN_EXTENSIONS,
+            false => &[],
+        };
         let mut names: Vec<(usize, &str)> = self
             .extension_map
             .iter()
@@ -155,7 +160,7 @@ impl ExtensionRegistry {
         names
             .into_iter()
             .map(|(_, name)| name)
-            .chain(BUILT_IN_EXTENSIONS.iter().copied())
+            .chain(built_in.iter().copied())
             .collect()
     }
 
