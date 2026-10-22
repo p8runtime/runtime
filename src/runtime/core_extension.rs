@@ -1959,6 +1959,8 @@ impl Extension for CoreExtension {
         registry.register_constant(b"ENT_SUBSTITUTE", Val::Int(string::ENT_SUBSTITUTE));
         registry.register_constant(b"ENT_HTML401", Val::Int(string::ENT_HTML401));
         registry.register_constant(b"ENT_XML1", Val::Int(string::ENT_XML1));
+        registry.register_constant(b"ENT_IGNORE", Val::Int(4));
+        registry.register_constant(b"ENT_DISALLOWED", Val::Int(128));
         registry.register_constant(b"ENT_XHTML", Val::Int(string::ENT_XHTML));
         registry.register_constant(b"ENT_HTML5", Val::Int(string::ENT_HTML5));
 

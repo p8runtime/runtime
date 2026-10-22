@@ -1770,12 +1770,20 @@ pub fn php_htmlspecialchars(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
     let flags = if args.len() >= 2 {
         vm.arena.get(args[1]).value.to_int()
     } else {
-        ENT_QUOTES
+        // PHP 8.1+ default: ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401
+        ENT_QUOTES | ENT_SUBSTITUTE
     };
     let double_encode = if args.len() == 4 {
         vm.arena.get(args[3]).value.to_bool()
     } else {
         true
+    };
+    let utf8 = match args.get(2).map(|h| vm.arena.get(*h).value.clone()) {
+        None | Some(Val::Null) => true,
+        Some(v) => html_charset_is_utf8(&v.to_php_string_bytes()),
+    };
+    let Some(input) = (if utf8 { validate_utf8_for_html(&input, flags) } else { Some(input) }) else {
+        return Ok(vm.arena.alloc(Val::String(Rc::new(Vec::new()))));
     };
     let out = html_encode(&input, flags, false, double_encode);
     Ok(vm.arena.alloc(Val::String(out.into())))
@@ -1803,12 +1811,20 @@ pub fn php_htmlentities(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
     let flags = if args.len() >= 2 {
         vm.arena.get(args[1]).value.to_int()
     } else {
-        ENT_QUOTES
+        // PHP 8.1+ default: ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401
+        ENT_QUOTES | ENT_SUBSTITUTE
     };
     let double_encode = if args.len() == 4 {
         vm.arena.get(args[3]).value.to_bool()
     } else {
         true
+    };
+    let utf8 = match args.get(2).map(|h| vm.arena.get(*h).value.clone()) {
+        None | Some(Val::Null) => true,
+        Some(v) => html_charset_is_utf8(&v.to_php_string_bytes()),
+    };
+    let Some(input) = (if utf8 { validate_utf8_for_html(&input, flags) } else { Some(input) }) else {
+        return Ok(vm.arena.alloc(Val::String(Rc::new(Vec::new()))));
     };
     let out = html_encode(&input, flags, true, double_encode);
     Ok(vm.arena.alloc(Val::String(out.into())))
@@ -1898,6 +1914,32 @@ fn build_html_translation_table(vm: &mut VM, table: i64, flags: i64) -> Result<A
         );
     }
     Ok(map)
+}
+
+const ENT_IGNORE: i64 = 4;
+
+fn html_charset_is_utf8(charset: &[u8]) -> bool {
+    charset.is_empty() || charset.eq_ignore_ascii_case(b"UTF-8") || charset.eq_ignore_ascii_case(b"utf8")
+}
+
+/// Invalid UTF-8 makes htmlspecialchars()/htmlentities() return "", unless
+/// ENT_IGNORE drops the bad bytes or ENT_SUBSTITUTE replaces them with U+FFFD.
+/// None means "return an empty string".
+fn validate_utf8_for_html(input: &[u8], flags: i64) -> Option<Vec<u8>> {
+    if std::str::from_utf8(input).is_ok() {
+        return Some(input.to_vec());
+    }
+    if flags & (ENT_IGNORE | ENT_SUBSTITUTE) == 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(input.len());
+    for chunk in input.utf8_chunks() {
+        out.extend_from_slice(chunk.valid().as_bytes());
+        if !chunk.invalid().is_empty() && flags & ENT_SUBSTITUTE != 0 {
+            out.extend_from_slice("\u{FFFD}".as_bytes());
+        }
+    }
+    Some(out)
 }
 
 fn html_encode(input: &[u8], flags: i64, encode_all: bool, double_encode: bool) -> Vec<u8> {
