@@ -8,7 +8,7 @@ pub enum Number {
     Float(f64),
 }
 
-const WHITESPACE: [u8; 6] = [b' ', b'\t', b'\n', b'\r', b'\x0b', b'\x0c'];
+const WHITESPACE: &[u8] = b" \t\n\r\x0b\x0c";
 
 /// The numeric prefix of `s` after leading whitespace (may be empty).
 pub fn numeric_prefix(s: &[u8]) -> &[u8] {

@@ -178,9 +178,9 @@ impl Value {
 fn dval_to_lval_cap(d: f64) -> i64 {
     if !d.is_finite() {
         0
-    } else if d >= 9.223_372_036_854_775_807e18 {
+    } else if d >= i64::MAX as f64 {
         i64::MAX
-    } else if d < -9.223_372_036_854_775_808e18 {
+    } else if d < i64::MIN as f64 {
         i64::MIN
     } else {
         d as i64

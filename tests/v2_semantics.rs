@@ -34,7 +34,7 @@ fn values() -> Vec<Value> {
         Value::Float(f64::INFINITY),
         Value::Float(f64::NAN),
         Value::Int(i64::MAX),
-        Value::Float(9.223_372_036_854_775_8e18),
+        Value::Float(i64::MAX as f64),
         s(""),
         s("0"),
         s("1"),

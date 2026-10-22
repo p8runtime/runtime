@@ -30,7 +30,7 @@ pub enum KeyIssue {
 impl Key {
     /// The key a string names: a canonical decimal integer is an int key
     /// (ZEND_HANDLE_NUMERIC_STR: no leading zeros, no "-0", fits in i64).
-    pub fn from_str(s: PhpStr) -> Key {
+    pub fn from_string(s: PhpStr) -> Key {
         match canonical_int(s.as_bytes()) {
             Some(i) => Key::Int(i),
             None => Key::Str(s),
@@ -41,7 +41,7 @@ impl Key {
     pub fn from_value(value: &Value) -> Result<(Key, Option<KeyIssue>), KeyIssue> {
         Ok(match value {
             Value::Int(i) => (Key::Int(*i), None),
-            Value::Str(s) => (Key::from_str(s.clone()), None),
+            Value::Str(s) => (Key::from_string(s.clone()), None),
             Value::Null => (Key::Str(PhpStr::empty()), None),
             Value::Bool(b) => (Key::Int(i64::from(*b)), None),
             Value::Float(f) => {
@@ -81,6 +81,11 @@ fn canonical_int(b: &[u8]) -> Option<i64> {
     }
     std::str::from_utf8(b).ok()?.parse().ok()
 }
+
+/// `$a[] = v` when the next key would overflow: "Cannot add element to the
+/// array as the next element is already occupied".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NextKeyOccupied;
 
 #[derive(Debug, Clone)]
 enum Storage {
@@ -225,7 +230,7 @@ impl PhpArray {
     }
 
     fn note_int_key(&mut self, k: i64) {
-        let next = k.checked_add(1).unwrap_or(i64::MAX);
+        let next = k.saturating_add(1);
         self.next_free = Some(match self.next_free {
             Some(n) if n >= next => n,
             _ => next,
@@ -239,18 +244,11 @@ impl PhpArray {
         }
         match &mut self.storage {
             Storage::Packed(v) => match key {
-                Key::Int(i) if i >= 0 && (i as usize) < v.len() => {
-                    v[i as usize] = value;
-                    return;
-                }
-                Key::Int(i) if i >= 0 && i as usize == v.len() => {
-                    v.push(value);
-                    return;
-                }
+                Key::Int(i) if i >= 0 && (i as usize) < v.len() => v[i as usize] = value,
+                Key::Int(i) if i >= 0 && i as usize == v.len() => v.push(value),
                 key => {
-                    self.to_hashed();
+                    self.make_hashed();
                     self.insert(key, value);
-                    return;
                 }
             },
             Storage::Hashed(h) => match h.find(&key) {
@@ -265,8 +263,8 @@ impl PhpArray {
     }
 
     /// `$a[] = value`; Err when the next key is taken.
-    pub fn push(&mut self, value: Value) -> Result<(), ()> {
-        let key = self.next_key().ok_or(())?;
+    pub fn push(&mut self, value: Value) -> Result<(), NextKeyOccupied> {
+        let key = self.next_key().ok_or(NextKeyOccupied)?;
         self.insert(Key::Int(key), value);
         Ok(())
     }
@@ -275,7 +273,7 @@ impl PhpArray {
     pub fn remove(&mut self, key: &Key) -> Option<Value> {
         if let Storage::Packed(v) = &self.storage {
             match key {
-                Key::Int(i) if *i >= 0 && (*i as usize) < v.len() => self.to_hashed(),
+                Key::Int(i) if *i >= 0 && (*i as usize) < v.len() => self.make_hashed(),
                 _ => return None,
             }
         }
@@ -285,7 +283,7 @@ impl PhpArray {
         }
     }
 
-    fn to_hashed(&mut self) {
+    fn make_hashed(&mut self) {
         if let Storage::Packed(v) = &mut self.storage {
             let mut h = Hashed::default();
             for (i, value) in std::mem::take(v).into_iter().enumerate() {
@@ -346,7 +344,7 @@ mod tests {
 
     #[test]
     fn keys_normalize_like_php() {
-        let k = |s: &str| Key::from_str(PhpStr::from(s));
+        let k = |s: &str| Key::from_string(PhpStr::from(s));
         assert_eq!(k("123"), Key::Int(123));
         assert_eq!(k("-5"), Key::Int(-5));
         assert_eq!(k("0"), Key::Int(0));
@@ -384,7 +382,7 @@ mod tests {
         assert!(b.contains_key(&Key::Int(2)) && !b.contains_key(&Key::Int(1)));
         let mut c = PhpArray::new();
         c.insert(Key::Int(i64::MAX), int(1));
-        assert_eq!(c.push(int(2)), Err(()));
+        assert_eq!(c.push(int(2)), Err(NextKeyOccupied));
     }
 
     #[test]
