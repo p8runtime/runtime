@@ -7,6 +7,7 @@ use crate::parser::ast::{
 };
 use crate::parser::lexer::token::{Token, TokenKind};
 use crate::runtime::context::{AttributeArg, AttributeInstance};
+use crate::vm::engine::ErrorLevel;
 use crate::vm::opcode::OpCode;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -173,6 +174,9 @@ pub struct Emitter<'src> {
     inherited_strict_types: Option<bool>,
     // Counter for anonymous classes
     anonymous_class_counter: usize,
+    /// Set while emitting the object of a property write, where `$a[]`
+    /// fetches a new element for writing instead of being read.
+    append_fetch_ok: bool,
     /// Open short-circuit chains: the `?->` jumps to patch at each end.
     nullsafe_jumps: Vec<Vec<usize>>,
     /// Source line of the statement or expression being emitted; every opcode
@@ -182,11 +186,44 @@ pub struct Emitter<'src> {
     line_starts: Option<Rc<Vec<usize>>>,
     /// The file's first compile error, shared with child emitters.
     compile_error: Rc<RefCell<Option<CompileError>>>,
+    /// The file's compile-time warnings, shared with child emitters.
+    compile_warnings: Rc<RefCell<Vec<(ErrorLevel, CompileError)>>>,
     /// `use` imports of the current namespace, shared with child emitters.
     imports: Rc<Imports>,
     /// Start offsets of the top-level declarations already emitted by
     /// hoisting; the in-order pass skips them.
     hoisted: std::collections::HashSet<usize>,
+}
+
+/// Type bits for the magic method checks (zend_type MAY_BE_*).
+mod magic_types {
+    pub const NULL: u32 = 1 << 0;
+    pub const FALSE: u32 = 1 << 1;
+    pub const TRUE: u32 = 1 << 2;
+    pub const BOOL: u32 = FALSE | TRUE;
+    pub const INT: u32 = 1 << 3;
+    pub const FLOAT: u32 = 1 << 4;
+    pub const STRING: u32 = 1 << 5;
+    pub const ARRAY: u32 = 1 << 6;
+    pub const OBJECT: u32 = 1 << 7;
+    pub const CALLABLE: u32 = 1 << 8;
+    pub const VOID: u32 = 1 << 9;
+    pub const STATIC: u32 = 1 << 10;
+    pub const NEVER: u32 = 1 << 11;
+    pub const ANY: u32 = NULL | BOOL | INT | FLOAT | STRING | ARRAY | OBJECT;
+
+    /// zend_type_to_string of the masks the checks name.
+    pub fn mask_name(mask: u32) -> &'static str {
+        match mask {
+            STRING => "string",
+            ARRAY => "array",
+            BOOL => "bool",
+            VOID => "void",
+            OBJECT => "object",
+            m if m == ARRAY | NULL => "?array",
+            _ => "mixed",
+        }
+    }
 }
 
 /// The names a namespace imports with `use` (zend_compile.c FC(imports),
@@ -223,10 +260,12 @@ impl<'src> Emitter<'src> {
             current_namespace: None,
             inherited_strict_types: None,
             anonymous_class_counter: 0,
+            append_fetch_ok: false,
             nullsafe_jumps: Vec::new(),
             current_line: 1,
             line_starts: None,
             compile_error: Rc::default(),
+            compile_warnings: Rc::default(),
             imports: Rc::default(),
             hoisted: Default::default(),
         }
@@ -360,25 +399,80 @@ impl<'src> Emitter<'src> {
         text
     }
 
-    /// `use A\\B [as C]`, `use function ...`, `use const ...`.
-    fn add_imports(&mut self, uses: &[crate::parser::ast::UseItem], kind: crate::parser::ast::UseKind) {
+    /// `use A\\B [as C]`, `use function ...`, `use const ...`, with
+    /// zend_compile_use's checks.
+    /// `report` is false in the hoisting pass, which sees every `use`
+    /// before the in-order pass does.
+    fn add_imports(
+        &mut self,
+        uses: &[crate::parser::ast::UseItem],
+        kind: crate::parser::ast::UseKind,
+        report: bool,
+    ) {
         use crate::parser::ast::UseKind;
         for item in uses {
             let mut full = self.name_parts_text(&item.name);
             if full.first() == Some(&b'\\') {
                 full.remove(0);
             }
+            let compound = full.contains(&b'\\');
             let alias = match item.alias {
                 Some(alias) => self.raw_text(alias.span).to_vec(),
                 None => full.rsplit(|&b| b == b'\\').next().unwrap_or(&full).to_vec(),
             };
             // A group use item carries its own kind (`use A\{function f}`).
             let kind = if item.kind != UseKind::Normal { item.kind } else { kind };
+            if report && item.alias.is_none() && !compound && self.namespace_name().is_empty() {
+                self.compile_warning(
+                    ErrorLevel::Warning,
+                    item.span.start,
+                    format!(
+                        "The use statement with non-compound name '{}' has no effect",
+                        String::from_utf8_lossy(&alias)
+                    ),
+                );
+            }
+            if report && kind == UseKind::Normal && Self::is_reserved_class_name(&alias) {
+                self.compile_error(
+                    item.span.start,
+                    format!(
+                        "Cannot use {} as {} because '{}' is a special class name",
+                        String::from_utf8_lossy(&full),
+                        String::from_utf8_lossy(&alias),
+                        String::from_utf8_lossy(&alias)
+                    ),
+                );
+            }
+            let (key, type_str) = match kind {
+                UseKind::Normal => (alias.to_ascii_lowercase(), ""),
+                UseKind::Function => (alias.to_ascii_lowercase(), " function"),
+                UseKind::Const => (alias.clone(), " const"),
+            };
+            let in_use = match kind {
+                UseKind::Normal => self.imports.classes.contains_key(&key),
+                UseKind::Function => self.imports.functions.contains_key(&key),
+                UseKind::Const => self.imports.constants.contains_key(&key),
+            };
+            if in_use {
+                if !report {
+                    continue;
+                }
+                self.compile_error(
+                    item.span.start,
+                    format!(
+                        "Cannot use{} {} as {} because the name is already in use",
+                        type_str,
+                        String::from_utf8_lossy(&full),
+                        String::from_utf8_lossy(&alias)
+                    ),
+                );
+                continue;
+            }
             let imports = Rc::make_mut(&mut self.imports);
             match kind {
-                UseKind::Normal => imports.classes.insert(alias.to_ascii_lowercase(), full),
-                UseKind::Function => imports.functions.insert(alias.to_ascii_lowercase(), full),
-                UseKind::Const => imports.constants.insert(alias, full),
+                UseKind::Normal => imports.classes.insert(key, full),
+                UseKind::Function => imports.functions.insert(key, full),
+                UseKind::Const => imports.constants.insert(key, full),
             };
         }
     }
@@ -394,6 +488,19 @@ impl<'src> Emitter<'src> {
                 line,
             });
         }
+    }
+
+    /// A compile-time warning or deprecation at `offset` (E_COMPILE_WARNING
+    /// and friends): shown when the file is loaded, before it runs.
+    fn compile_warning(&mut self, level: ErrorLevel, offset: usize, message: impl Into<String>) {
+        let line = self.line_at(offset);
+        self.compile_warnings.borrow_mut().push((
+            level,
+            CompileError {
+                message: message.into(),
+                line,
+            },
+        ));
     }
 
     /// The 1-based source line of a byte offset.
@@ -506,7 +613,7 @@ impl<'src> Emitter<'src> {
                         self.enter_namespace(None);
                     }
                 }
-                Stmt::Use { uses, kind, .. } => self.add_imports(uses, *kind),
+                Stmt::Use { uses, kind, .. } => self.add_imports(uses, *kind, false),
                 Stmt::Function { span, .. } => {
                     self.emit_stmt(stmt);
                     self.hoisted.insert(span.start);
@@ -564,6 +671,7 @@ impl<'src> Emitter<'src> {
         // own emitter finishes: only it holds the error then, and reports it.
         if Rc::strong_count(&self.compile_error) == 1 {
             self.chunk.compile_error = self.compile_error.borrow_mut().take();
+            self.chunk.compile_warnings = std::mem::take(&mut *self.compile_warnings.borrow_mut());
         }
 
         (self.chunk, self.is_generator)
@@ -587,6 +695,7 @@ impl<'src> Emitter<'src> {
                     let visibility = self.get_visibility(modifiers);
                     let is_static = modifiers.iter().any(|t| t.kind == TokenKind::Static);
                     let is_abstract = modifiers.iter().any(|t| t.kind == TokenKind::Abstract);
+                    self.check_magic_method(class_sym, name, params, is_static, visibility, *return_type);
 
                     // 1. Collect param info
                     struct ParamInfo<'a> {
@@ -615,6 +724,7 @@ impl<'src> Emitter<'src> {
                     let compile_error = self.compile_error.clone();
                     let mut method_emitter = Emitter::new(self.source, self.interner);
                     method_emitter.compile_error = compile_error;
+                    method_emitter.compile_warnings = self.compile_warnings.clone();
                     method_emitter.imports = self.imports.clone();
                     method_emitter.current_line = child_line;
                     method_emitter.line_starts = child_line_starts;
@@ -637,6 +747,9 @@ impl<'src> Emitter<'src> {
                     let mut param_syms = Vec::new();
                     for (i, info) in param_infos.iter().enumerate() {
                         let p_name = method_emitter.get_text(info.name_span);
+                        if p_name == b"$this" {
+                            method_emitter.compile_error(info.name_span.start, "Cannot use $this as parameter");
+                        }
                         if p_name.starts_with(b"$") {
                             let sym = method_emitter.interner.intern(&p_name[1..]);
                             let param_type = info.ty.and_then(|ty| method_emitter.convert_type(ty));
@@ -1046,10 +1159,38 @@ impl<'src> Emitter<'src> {
     }
 
     fn emit_stmt_inner(&mut self, stmt: &Stmt) {
+        if let Some((offset, message)) = self.stmt_this_misuse(stmt) {
+            self.compile_error(offset, message);
+            return;
+        }
         if matches!(stmt, Stmt::Function { .. } | Stmt::Class { .. })
             && self.hoisted.contains(&stmt.span().start)
         {
             return;
+        }
+        let declared = match stmt {
+            Stmt::Class { name, .. } => Some((name, "a class name")),
+            Stmt::Interface { name, .. } => Some((name, "an interface name")),
+            Stmt::Trait { name, .. } => Some((name, "a trait name")),
+            Stmt::Enum { name, .. } => Some((name, "an enum name")),
+            _ => None,
+        };
+        if let Some((name, kind)) = declared {
+            // zend_assert_valid_class_name
+            let text = self.get_text(name.span);
+            if Self::is_reserved_class_name(text) {
+                let message = format!(
+                    "Cannot use \"{}\" as {} as it is reserved",
+                    String::from_utf8_lossy(text),
+                    kind
+                );
+                self.compile_error(name.span.start, message);
+                return;
+            }
+            if text == b"_" {
+                let message = format!("Using \"_\" as {} is deprecated since 8.4", kind);
+                self.compile_warning(ErrorLevel::Deprecated, name.span.start, message);
+            }
         }
         match stmt {
             Stmt::Namespace { name, body, .. } => {
@@ -1061,7 +1202,7 @@ impl<'src> Emitter<'src> {
                     self.enter_namespace(None);
                 }
             }
-            Stmt::Use { uses, kind, .. } => self.add_imports(uses, *kind),
+            Stmt::Use { uses, kind, .. } => self.add_imports(uses, *kind, true),
             Stmt::Declare { declares, body, .. } => {
                 // PHP: declare(strict_types=1) is per-file and affects calls made from this file.
                 // The parser already validates strict_types is an integer literal 0/1.
@@ -1237,7 +1378,7 @@ impl<'src> Emitter<'src> {
                                     };
 
                                     // Emit target (obj)
-                                    self.emit_expr(target); // [obj]
+                                    self.emit_write_base(target); // [obj]
                                     self.chunk.code.push(OpCode::Dup); // [obj, obj]
 
                                     // Fetch the property
@@ -1267,7 +1408,7 @@ impl<'src> Emitter<'src> {
                         Expr::PropertyFetch {
                             target, property, ..
                         } => {
-                            self.emit_expr(target);
+                            self.emit_write_base(target);
                             if let Expr::Variable { span, .. } = property {
                                 let name = self.get_text(*span);
                                 let idx = self.add_constant(Val::String(name.to_vec().into()));
@@ -1452,6 +1593,7 @@ impl<'src> Emitter<'src> {
                     let compile_error = self.compile_error.clone();
                     let mut func_emitter = Emitter::new(self.source, self.interner);
                     func_emitter.compile_error = compile_error;
+                    func_emitter.compile_warnings = self.compile_warnings.clone();
                     func_emitter.imports = self.imports.clone();
                     func_emitter.current_line = child_line;
                     func_emitter.line_starts = child_line_starts;
@@ -1464,6 +1606,9 @@ impl<'src> Emitter<'src> {
                 let mut param_syms = Vec::new();
                 for (i, info) in param_infos.iter().enumerate() {
                     let p_name = func_emitter.get_text(info.name_span);
+                    if p_name == b"$this" {
+                        func_emitter.compile_error(info.name_span.start, "Cannot use $this as parameter");
+                    }
                     if p_name.starts_with(b"$") {
                         let sym = func_emitter.interner.intern(&p_name[1..]);
                         let param_type = info.ty.and_then(|ty| func_emitter.convert_type(ty));
@@ -2119,6 +2264,14 @@ impl<'src> Emitter<'src> {
         });
     }
 
+    /// The object of a property write (`$base->p = ...`, `$base->p++`):
+    /// fetched for writing, so `$a[]->p = 1` is allowed.
+    fn emit_write_base(&mut self, base: &Expr) {
+        self.append_fetch_ok = true;
+        self.emit_expr(base);
+        self.append_fetch_ok = false;
+    }
+
     /// The base of a chain link (`$a` in `$a->b`, `$a[1]`, `$a::$b`): part
     /// of the same short-circuit chain, so a `?->` inside it skips the
     /// rest of the chain.
@@ -2203,6 +2356,248 @@ impl<'src> Emitter<'src> {
         }
     }
 
+    /// Whether `expr` is the variable `$this`.
+    fn is_this(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Variable { span, .. } if self.get_text(*span) == b"$this")
+    }
+
+    /// `$this`, or a list() / [] destructuring pattern that assigns to it.
+    fn assigns_this(&self, target: &Expr) -> bool {
+        match target {
+            Expr::Array { items, .. } => items.iter().any(|item| self.assigns_this(item.value)),
+            _ => self.is_this(target),
+        }
+    }
+
+    /// Compile errors of an expression: writing to `$this`, reading `$a[]`.
+    fn this_misuse(&self, expr: &Expr) -> Option<&'static str> {
+        let target = match expr {
+            Expr::Assign { var, .. }
+            | Expr::AssignOp { var, .. }
+            | Expr::AssignRef { var, .. }
+            | Expr::PostInc { var, .. }
+            | Expr::PostDec { var, .. } => var,
+            Expr::Unary {
+                op: UnaryOp::PreInc | UnaryOp::PreDec,
+                expr,
+                ..
+            } => expr,
+            Expr::ArrayDimFetch { dim: None, .. } => return Some("Cannot use [] for reading"),
+            _ => return None,
+        };
+        self.assigns_this(target).then_some("Cannot re-assign $this")
+    }
+
+    /// `self::`, `parent::` or `static::` in a free function, where PHP
+    /// knows at compile time that there is no class (zend_is_scope_known:
+    /// not at file level, which an include may run inside a class, and not
+    /// in a closure, which may be bound to one).
+    fn class_scope_misuse(&self, expr: &Expr) -> Option<String> {
+        let class = match expr {
+            Expr::New { class, .. } | Expr::StaticCall { class, .. } | Expr::ClassConstFetch { class, .. } => class,
+            _ => return None,
+        };
+        let Expr::Variable { span, .. } = class else { return None };
+        let name = self.get_text(*span).to_ascii_lowercase();
+        if !matches!(name.as_slice(), b"self" | b"parent" | b"static") {
+            return None;
+        }
+        let function = self.current_function.and_then(|f| self.interner.lookup(f))?;
+        if self.current_class.is_some() || self.current_trait.is_some() || function == b"{closure}" {
+            return None;
+        }
+        Some(format!(
+            "Cannot use \"{}\" when no class scope is active",
+            String::from_utf8_lossy(&name)
+        ))
+    }
+
+    /// Compile errors of a statement that binds `$this`.
+    fn stmt_this_misuse(&self, stmt: &Stmt) -> Option<(usize, &'static str)> {
+        match stmt {
+            Stmt::Foreach {
+                key_var, value_var, ..
+            } => key_var
+                .iter()
+                .chain([value_var])
+                .find(|v| self.assigns_this(v))
+                .map(|v| (v.span().start, "Cannot re-assign $this")),
+            Stmt::Global { vars, .. } => vars
+                .iter()
+                .find(|v| self.is_this(v))
+                .map(|v| (v.span().start, "Cannot use $this as global variable")),
+            Stmt::Static { vars, .. } => vars
+                .iter()
+                .find(|v| self.is_this(v.var))
+                .map(|v| (v.span.start, "Cannot use $this as static variable")),
+            Stmt::Unset { vars, .. } => vars
+                .iter()
+                .find(|v| self.is_this(v))
+                .map(|v| (v.span().start, "Cannot unset $this")),
+            Stmt::Try { catches, .. } => catches
+                .iter()
+                .find(|c| c.var.is_some_and(|t| self.get_text(t.span) == b"$this"))
+                .map(|c| (c.span.start, "Cannot re-assign $this")),
+            _ => None,
+        }
+    }
+
+    /// zend_check_magic_method_implementation: the signature rules of
+    /// __get, __set, __toString and the other magic methods.
+    fn check_magic_method(
+        &mut self,
+        class_sym: Symbol,
+        name: &Token,
+        params: &[crate::parser::ast::Param],
+        is_static: bool,
+        visibility: Visibility,
+        return_type: Option<&Type>,
+    ) {
+        use magic_types::*;
+        let method = self.get_text(name.span);
+        if !method.starts_with(b"__") {
+            return;
+        }
+        let lower = method.to_ascii_lowercase();
+        // (arguments, static: Some(required), public, argument types, return type)
+        let (args, must_be_static, public, arg_types, ret): (Option<usize>, Option<bool>, bool, &[u32], Option<u32>) =
+            match lower.as_slice() {
+                b"__construct" => (None, Some(false), false, &[], None),
+                b"__destruct" => (Some(0), Some(false), false, &[], None),
+                b"__clone" => (Some(0), Some(false), false, &[], Some(VOID)),
+                b"__get" => (Some(1), Some(false), true, &[STRING], None),
+                b"__set" => (Some(2), Some(false), true, &[STRING], Some(VOID)),
+                b"__unset" => (Some(1), Some(false), true, &[STRING], Some(VOID)),
+                b"__isset" => (Some(1), Some(false), true, &[STRING], Some(BOOL)),
+                b"__call" => (Some(2), Some(false), true, &[STRING, ARRAY], None),
+                b"__callstatic" => (Some(2), Some(true), true, &[STRING, ARRAY], None),
+                b"__tostring" => (Some(0), Some(false), true, &[], Some(STRING)),
+                b"__debuginfo" => (Some(0), Some(false), true, &[], Some(ARRAY | NULL)),
+                b"__serialize" => (Some(0), Some(false), true, &[], Some(ARRAY)),
+                b"__unserialize" => (Some(1), Some(false), true, &[ARRAY], Some(VOID)),
+                b"__set_state" => (Some(1), Some(true), true, &[ARRAY], Some(OBJECT)),
+                b"__invoke" => (None, Some(false), true, &[], None),
+                b"__sleep" => (Some(0), Some(false), true, &[], Some(ARRAY)),
+                b"__wakeup" => (Some(0), Some(false), true, &[], Some(VOID)),
+                _ => return,
+            };
+        let class = String::from_utf8_lossy(self.interner.lookup(class_sym).unwrap_or(b"")).into_owned();
+        let method = String::from_utf8_lossy(method).into_owned();
+        let at = name.span.start;
+        if let Some(expected) = args {
+            let count = params.iter().filter(|p| !p.variadic).count();
+            if count != expected {
+                let message = match expected {
+                    0 => format!("Method {}::{}() cannot take arguments", class, method),
+                    1 => format!("Method {}::{}() must take exactly 1 argument", class, method),
+                    n => format!("Method {}::{}() must take exactly {} arguments", class, method, n),
+                };
+                return self.compile_error(at, message);
+            }
+            if params.iter().take(expected).any(|p| p.by_ref) {
+                let message = format!("Method {}::{}() cannot take arguments by reference", class, method);
+                return self.compile_error(at, message);
+            }
+        }
+        match must_be_static {
+            Some(false) if is_static => {
+                return self.compile_error(at, format!("Method {}::{}() cannot be static", class, method));
+            }
+            Some(true) if !is_static => {
+                return self.compile_error(at, format!("Method {}::{}() must be static", class, method));
+            }
+            _ => {}
+        }
+        if public && visibility != Visibility::Public {
+            let message = format!("The magic method {}::{}() must have public visibility", class, method);
+            self.compile_warning(ErrorLevel::Warning, at, message);
+        }
+        for (i, &allowed) in arg_types.iter().enumerate() {
+            let Some(param) = params.get(i) else { break };
+            if let Some(ty) = param.ty
+                && self.type_mask(ty).0 & allowed == 0
+            {
+                let message = format!(
+                    "{}::{}(): Parameter #{} ({}) must be of type {} when declared",
+                    class,
+                    method,
+                    i + 1,
+                    String::from_utf8_lossy(self.get_text(param.name.span)),
+                    mask_name(allowed)
+                );
+                return self.compile_error(at, message);
+            }
+        }
+        if lower == b"__construct" || lower == b"__destruct" {
+            if return_type.is_some() {
+                let message = format!("Method {}::{}() cannot declare a return type", class, method);
+                self.compile_error(at, message);
+            }
+            return;
+        }
+        if let (Some(allowed), Some(ty)) = (ret, return_type) {
+            let (mask, mut complex) = self.type_mask(ty);
+            if mask & NEVER != 0 {
+                return;
+            }
+            let mut extra = mask & !allowed;
+            if extra & STATIC != 0 {
+                extra &= !STATIC;
+                complex = true;
+            }
+            if extra != 0 || (complex && allowed != OBJECT) {
+                let message = format!(
+                    "{}::{}(): Return type must be {} when declared",
+                    class,
+                    method,
+                    mask_name(allowed)
+                );
+                self.compile_error(at, message);
+            }
+        }
+    }
+
+    /// A declared type as zend type bits, and whether it names classes.
+    fn type_mask(&self, ty: &Type) -> (u32, bool) {
+        use magic_types::*;
+        let single = match ty {
+            Type::Simple(token) => Some(token.span),
+            Type::Name(name) if name.parts.len() == 1 => Some(name.parts[0].span),
+            _ => None,
+        };
+        if let Some(span) = single {
+            return match self.get_text(span).to_ascii_lowercase().as_slice() {
+                b"null" => (NULL, false),
+                b"false" => (FALSE, false),
+                b"true" => (TRUE, false),
+                b"bool" => (BOOL, false),
+                b"int" => (INT, false),
+                b"float" => (FLOAT, false),
+                b"string" => (STRING, false),
+                b"array" => (ARRAY, false),
+                b"object" => (OBJECT, false),
+                b"void" => (VOID, false),
+                b"never" => (NEVER, false),
+                b"static" => (STATIC, false),
+                b"mixed" => (ANY, false),
+                b"iterable" => (ARRAY, true),
+                b"callable" => (CALLABLE, false),
+                _ => (0, true),
+            };
+        }
+        match ty {
+            Type::Simple(_) | Type::Name(_) | Type::Intersection(_) => (0, true),
+            Type::Nullable(inner) => {
+                let (mask, complex) = self.type_mask(inner);
+                (mask | NULL, complex)
+            }
+            Type::Union(types) => types.iter().fold((0, false), |(mask, complex), t| {
+                let (m, c) = self.type_mask(t);
+                (mask | m, complex || c)
+            }),
+        }
+    }
+
     /// PHP rejects a `?->` chain as something to write to or reference.
     fn nullsafe_misuse(expr: &Expr) -> Option<&'static str> {
         let target = match expr {
@@ -2237,7 +2632,18 @@ impl<'src> Emitter<'src> {
     }
 
     fn emit_expr_inner(&mut self, expr: &Expr) {
+        let append_fetch_ok = std::mem::take(&mut self.append_fetch_ok);
         if let Some(message) = Self::nullsafe_misuse(expr) {
+            self.compile_error(expr.span().start, message);
+            return;
+        }
+        if let Some(message) = self.this_misuse(expr)
+            && !(append_fetch_ok && matches!(expr, Expr::ArrayDimFetch { dim: None, .. }))
+        {
+            self.compile_error(expr.span().start, message);
+            return;
+        }
+        if let Some(message) = self.class_scope_misuse(expr) {
             self.compile_error(expr.span().start, message);
             return;
         }
@@ -2494,7 +2900,7 @@ impl<'src> Emitter<'src> {
                                 target, property, ..
                             } => {
                                 // ++$obj->prop
-                                self.emit_expr(target);
+                                self.emit_write_base(target);
                                 // Property name (could be identifier or expression)
                                 let prop_name = self.get_text(property.span());
                                 let const_idx =
@@ -2537,7 +2943,7 @@ impl<'src> Emitter<'src> {
                                 target, property, ..
                             } => {
                                 // --$obj->prop
-                                self.emit_expr(target);
+                                self.emit_write_base(target);
                                 let prop_name = self.get_text(property.span());
                                 let const_idx =
                                     self.add_constant(Val::String(Rc::new(prop_name.to_vec())));
@@ -2587,7 +2993,7 @@ impl<'src> Emitter<'src> {
                         target, property, ..
                     } => {
                         // $obj->prop++
-                        self.emit_expr(target);
+                        self.emit_write_base(target);
                         let prop_name = self.get_text(property.span());
                         let const_idx = self.add_constant(Val::String(Rc::new(prop_name.to_vec())));
                         self.chunk.code.push(OpCode::Const(const_idx as u16));
@@ -2628,7 +3034,7 @@ impl<'src> Emitter<'src> {
                         target, property, ..
                     } => {
                         // $obj->prop--
-                        self.emit_expr(target);
+                        self.emit_write_base(target);
                         let prop_name = self.get_text(property.span());
                         let const_idx = self.add_constant(Val::String(Rc::new(prop_name.to_vec())));
                         self.chunk.code.push(OpCode::Const(const_idx as u16));
@@ -2739,14 +3145,13 @@ impl<'src> Emitter<'src> {
                                 self.emit_expr(name);
                                 self.chunk.code.push(OpCode::IssetVarDynamic);
                             }
-                            Expr::ArrayDimFetch { array, dim, .. } => {
+                            Expr::ArrayDimFetch { array, dim, span } => {
                                 self.emit_expr_quiet(array);
                                 if let Some(d) = dim {
                                     self.emit_expr(d);
                                     self.chunk.code.push(OpCode::IssetDim);
                                 } else {
-                                    let idx = self.add_constant(Val::Bool(false));
-                                    self.chunk.code.push(OpCode::Const(idx as u16));
+                                    self.compile_error(span.start, "Cannot use [] for reading");
                                 }
                             }
                             Expr::PropertyFetch {
@@ -2995,6 +3400,7 @@ impl<'src> Emitter<'src> {
                     let compile_error = self.compile_error.clone();
                     let mut func_emitter = Emitter::new(self.source, self.interner);
                     func_emitter.compile_error = compile_error;
+                    func_emitter.compile_warnings = self.compile_warnings.clone();
                     func_emitter.imports = self.imports.clone();
                     func_emitter.current_line = child_line;
                     func_emitter.line_starts = child_line_starts;
@@ -3008,6 +3414,9 @@ impl<'src> Emitter<'src> {
                 let mut param_syms = Vec::new();
                 for (i, info) in param_infos.iter().enumerate() {
                     let p_name = func_emitter.get_text(info.name_span);
+                    if p_name == b"$this" {
+                        func_emitter.compile_error(info.name_span.start, "Cannot use $this as parameter");
+                    }
                     if p_name.starts_with(b"$") {
                         let sym = func_emitter.interner.intern(&p_name[1..]);
                         let param_type = info.ty.and_then(|ty| func_emitter.convert_type(ty));
@@ -3049,6 +3458,9 @@ impl<'src> Emitter<'src> {
                 let mut use_syms = Vec::new();
                 for use_var in *uses {
                     let u_name = self.get_text(use_var.var.span);
+                    if u_name == b"$this" {
+                        self.compile_error(use_var.var.span.start, "Cannot use $this as lexical variable");
+                    }
                     if u_name.starts_with(b"$") {
                         let sym = self.interner.intern(&u_name[1..]);
                         use_syms.push(sym);
@@ -3100,6 +3512,7 @@ impl<'src> Emitter<'src> {
                 let compile_error = self.compile_error.clone();
                 let mut func_emitter = Emitter::new(self.source, self.interner);
                 func_emitter.compile_error = compile_error;
+                func_emitter.compile_warnings = self.compile_warnings.clone();
                 func_emitter.imports = self.imports.clone();
                 func_emitter.current_line = child_line;
                 func_emitter.line_starts = child_line_starts;
@@ -3113,6 +3526,9 @@ impl<'src> Emitter<'src> {
                 let mut param_syms = Vec::new();
                 for (i, param) in params.iter().enumerate() {
                     let p_name = func_emitter.get_text(param.name.span);
+                    if p_name == b"$this" {
+                        func_emitter.compile_error(param.name.span.start, "Cannot use $this as parameter");
+                    }
                     let Some(p_name) = p_name.strip_prefix(b"$") else {
                         continue;
                     };
@@ -3505,7 +3921,7 @@ impl<'src> Emitter<'src> {
                 Expr::PropertyFetch {
                     target, property, ..
                 } => {
-                    self.emit_expr(target);
+                    self.emit_write_base(target);
                     if let Some(sym) = self.static_prop_name(property) {
                         self.emit_expr(expr);
                         self.chunk.code.push(OpCode::AssignProp(sym));
@@ -3657,7 +4073,7 @@ impl<'src> Emitter<'src> {
                         target, property, ..
                     } => {
                         // $obj->p = &source
-                        self.emit_expr(target);
+                        self.emit_write_base(target);
                         if let Some(sym) = self.static_prop_name(property) {
                             let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
                             let idx = self.add_constant(Val::String(name.into()));
@@ -3797,7 +4213,7 @@ impl<'src> Emitter<'src> {
                     Expr::PropertyFetch {
                         target, property, ..
                     } => {
-                        self.emit_expr(target);
+                        self.emit_write_base(target);
 
                         if self.static_prop_name(property).is_none() {
                             // $obj->$name op= expr
@@ -4208,7 +4624,11 @@ impl<'src> Emitter<'src> {
             let sym = self.interner.intern(&self.get_text(*span)[1..]);
             self.at_line(span.start, |this| this.chunk.code.push(OpCode::LoadVarArg(sym)));
         } else {
+            // `f($a[])` may pass by reference: whether `[]` reads is only
+            // known when the call runs.
+            self.append_fetch_ok = true;
             self.emit_expr(value);
+            self.append_fetch_ok = false;
         }
     }
 
@@ -4418,7 +4838,7 @@ impl<'src> Emitter<'src> {
             Expr::PropertyFetch {
                 target, property, ..
             } => {
-                self.emit_expr(target);
+                self.emit_write_base(target);
                 if let Some(sym) = self.static_prop_name(property) {
                     let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
                     let idx = self.add_constant(Val::String(name.into()));
@@ -4518,7 +4938,7 @@ impl<'src> Emitter<'src> {
             } => {
                 // The current value is read as a write fetch (FETCH_OBJ_W): a
                 // missing property is created, not reported as undefined.
-                self.emit_expr(target);
+                self.emit_write_base(target);
                 if let Some(sym) = self.static_prop_name(property) {
                     self.chunk.code.push(OpCode::Dup);
                     let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();

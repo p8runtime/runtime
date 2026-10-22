@@ -3413,8 +3413,11 @@ impl VM {
     /// A file that failed to compile: "Fatal error: msg in FILE on line N" is
     /// shown and the request ends (E_COMPILE_ERROR).
     pub(crate) fn compile_failure(&mut self, chunk: &CodeChunk) -> Option<VmError> {
-        let error = chunk.compile_error.as_ref()?;
         let file = chunk.file_path.as_deref().unwrap_or("Unknown");
+        for (level, warning) in &chunk.compile_warnings {
+            self.report_error_at(*level, &warning.message, file.to_string(), warning.line);
+        }
+        let error = chunk.compile_error.as_ref()?;
         let text = format!(
             "\nFatal error: {} in {} on line {}\n",
             error.message, file, error.line
