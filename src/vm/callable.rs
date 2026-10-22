@@ -129,6 +129,7 @@ impl VM {
 
         // Check extension registry
         if let Some(handler) = self.context.engine.registry.get_function(&lower_name) {
+            let mut args = args;
             let by_ref = self
                 .context
                 .engine
@@ -149,6 +150,14 @@ impl VM {
                         }
                     }
                 }
+            }
+            if let Some(sig) = crate::builtins::signature::lookup(&lower_name) {
+                crate::builtins::signature::check_builtin_call(
+                    self,
+                    sig,
+                    &mut args,
+                    callsite_strict_types,
+                )?;
             }
             // Set caller's strict_types mode for builtin parameter validation
             // Reference: $PHP_SRC_PATH/Zend/zend_compile.h - ZEND_ARG_USES_STRICT_TYPES()
