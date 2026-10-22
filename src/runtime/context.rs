@@ -509,11 +509,12 @@ impl RequestContext {
     /// - Error reporting levels (E_ERROR, E_WARNING, etc.)
     fn register_builtin_constants(&mut self) {
         // PHP version constants
-        const PHP_VERSION_STR: &str = "8.2.0";
-        const PHP_VERSION_ID_VALUE: i64 = 80200;
+        // The release whose php-src test suite this runtime is measured against.
+        const PHP_VERSION_STR: &str = "8.4.27";
+        const PHP_VERSION_ID_VALUE: i64 = 80427;
         const PHP_MAJOR: i64 = 8;
-        const PHP_MINOR: i64 = 2;
-        const PHP_RELEASE: i64 = 0;
+        const PHP_MINOR: i64 = 4;
+        const PHP_RELEASE: i64 = 27;
 
         self.insert_builtin_constant(
             b"PHP_VERSION",
@@ -529,6 +530,42 @@ impl RequestContext {
         self.insert_builtin_constant(b"PHP_OS", Val::String(Rc::new(b"Darwin".to_vec())));
         self.insert_builtin_constant(b"PHP_SAPI", Val::String(Rc::new(b"cli".to_vec())));
         self.insert_builtin_constant(b"PHP_EOL", Val::String(Rc::new(b"\n".to_vec())));
+        let os_family: &[u8] = match std::env::consts::OS {
+            "macos" => b"Darwin",
+            "windows" => b"Windows",
+            "linux" => b"Linux",
+            "freebsd" | "openbsd" | "netbsd" | "dragonfly" => b"BSD",
+            "solaris" | "illumos" => b"Solaris",
+            _ => b"Unknown",
+        };
+        self.insert_builtin_constant(b"PHP_OS_FAMILY", Val::String(Rc::new(os_family.to_vec())));
+        self.insert_builtin_constant(b"PHP_INT_MAX", Val::Int(i64::MAX));
+        self.insert_builtin_constant(b"PHP_INT_MIN", Val::Int(i64::MIN));
+        self.insert_builtin_constant(b"PHP_INT_SIZE", Val::Int(8));
+        self.insert_builtin_constant(b"PHP_FLOAT_DIG", Val::Int(f64::DIGITS as i64));
+        self.insert_builtin_constant(b"PHP_FLOAT_EPSILON", Val::Float(f64::EPSILON));
+        self.insert_builtin_constant(b"PHP_FLOAT_MAX", Val::Float(f64::MAX));
+        self.insert_builtin_constant(b"PHP_FLOAT_MIN", Val::Float(f64::MIN_POSITIVE));
+        self.insert_builtin_constant(b"PHP_MAXPATHLEN", Val::Int(4096));
+        self.insert_builtin_constant(b"PHP_FD_SETSIZE", Val::Int(1024));
+        self.insert_builtin_constant(b"PHP_ZTS", Val::Bool(false));
+        self.insert_builtin_constant(b"PHP_DEBUG", Val::Bool(false));
+        self.insert_builtin_constant(b"ZEND_THREAD_SAFE", Val::Bool(false));
+        self.insert_builtin_constant(b"ZEND_DEBUG_BUILD", Val::Bool(false));
+        self.insert_builtin_constant(b"DEBUG_BACKTRACE_PROVIDE_OBJECT", Val::Int(1));
+        self.insert_builtin_constant(b"DEBUG_BACKTRACE_IGNORE_ARGS", Val::Int(2));
+        for (name, code) in [
+            (&b"UPLOAD_ERR_OK"[..], 0),
+            (b"UPLOAD_ERR_INI_SIZE", 1),
+            (b"UPLOAD_ERR_FORM_SIZE", 2),
+            (b"UPLOAD_ERR_PARTIAL", 3),
+            (b"UPLOAD_ERR_NO_FILE", 4),
+            (b"UPLOAD_ERR_NO_TMP_DIR", 6),
+            (b"UPLOAD_ERR_CANT_WRITE", 7),
+            (b"UPLOAD_ERR_EXTENSION", 8),
+        ] {
+            self.insert_builtin_constant(name, Val::Int(code));
+        }
         self.insert_builtin_constant(b"INF", Val::Float(f64::INFINITY));
         self.insert_builtin_constant(b"NAN", Val::Float(f64::NAN));
         self.insert_builtin_constant(b"M_E", Val::Float(std::f64::consts::E));
