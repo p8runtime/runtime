@@ -20,6 +20,19 @@ pub fn php_count(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("count() expects exactly 1 parameter".into());
     }
 
+    let countable = vm.context.interner.intern(b"Countable");
+    if let Val::Object(payload) = vm.arena.get(args[0]).value
+        && let Val::ObjPayload(obj) = &vm.arena.get(payload).value
+        && vm.is_subclass_of(obj.class, countable)
+    {
+        let count_sym = vm.context.interner.intern(b"count");
+        let result = vm
+            .call_method_simple(args[0], count_sym)
+            .map_err(|e| e.to_string())?;
+        let n = vm.arena.get(result).value.to_int();
+        return Ok(vm.arena.alloc(Val::Int(n)));
+    }
+
     let val = vm.arena.get(args[0]);
     let count = match &val.value {
         Val::Array(arr) => arr.map.len(),
