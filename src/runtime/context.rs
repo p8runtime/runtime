@@ -191,6 +191,12 @@ pub struct EngineContext {
     pub registry: ExtensionRegistry,
 }
 
+impl Default for EngineContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EngineContext {
     pub fn new() -> Self {
         let mut registry = ExtensionRegistry::new();
