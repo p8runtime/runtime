@@ -134,6 +134,7 @@ fn create_reflection_attribute(
         properties: IndexMap::new(),
         internal: Some(Rc::new(data)),
         dynamic_properties: std::collections::HashSet::new(),
+        id: 0,
     };
     let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
     Ok(vm.arena.alloc(Val::Object(payload_handle)))
@@ -225,6 +226,7 @@ fn create_reflection_type(vm: &mut VM, hint: TypeHint) -> Handle {
                 properties: IndexMap::new(),
                 internal: Some(Rc::new(data)),
                 dynamic_properties: std::collections::HashSet::new(),
+                id: 0,
             };
             let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
             vm.arena.alloc(Val::Object(payload_handle))
@@ -242,6 +244,7 @@ fn create_reflection_type(vm: &mut VM, hint: TypeHint) -> Handle {
                 properties: IndexMap::new(),
                 internal: Some(Rc::new(data)),
                 dynamic_properties: std::collections::HashSet::new(),
+                id: 0,
             };
             let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
             vm.arena.alloc(Val::Object(payload_handle))
@@ -256,6 +259,7 @@ fn create_reflection_type(vm: &mut VM, hint: TypeHint) -> Handle {
                 properties: IndexMap::new(),
                 internal: Some(Rc::new(data)),
                 dynamic_properties: std::collections::HashSet::new(),
+                id: 0,
             };
             let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
             vm.arena.alloc(Val::Object(payload_handle))
@@ -1308,6 +1312,7 @@ fn create_reflection_parameter(
         properties: IndexMap::new(),
         internal: Some(Rc::new(data)),
         dynamic_properties: std::collections::HashSet::new(),
+        id: 0,
     };
     let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
     Ok(vm.arena.alloc(Val::Object(payload_handle)))
@@ -1584,6 +1589,7 @@ fn new_reflection<T: 'static>(vm: &mut VM, class: &[u8], data: T) -> Handle {
         properties: IndexMap::new(),
         internal: Some(Rc::new(data)),
         dynamic_properties: std::collections::HashSet::new(),
+        id: 0,
     }));
     vm.arena.alloc(Val::Object(payload))
 }
@@ -2208,6 +2214,7 @@ pub fn reflection_class_new_instance_without_constructor(vm: &mut VM, _args: &[H
         properties,
         internal: None,
         dynamic_properties: std::collections::HashSet::new(),
+        id: 0,
     }));
     Ok(vm.arena.alloc(Val::Object(payload)))
 }

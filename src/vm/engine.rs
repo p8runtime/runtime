@@ -541,6 +541,7 @@ impl VM {
                 properties,
                 internal: None,
                 dynamic_properties: std::collections::HashSet::new(),
+                id: 0,
             };
 
             let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
@@ -1339,6 +1340,47 @@ impl VM {
         self.throw_error(b"ArgumentCountError", &msg)
     }
 
+    /// The reference slots among `slots` that more than one place holds,
+    /// counted from the VM's roots and `container` (PHP's refcount > 1).
+    pub(crate) fn shared_references(
+        &self,
+        container: Handle,
+        slots: impl Iterator<Item = Handle>,
+    ) -> std::collections::HashSet<Handle> {
+        let targets: std::collections::HashSet<Handle> =
+            slots.filter(|&h| self.arena.get(h).is_ref).collect();
+        if targets.is_empty() {
+            return targets;
+        }
+        let mut roots = self.collect_gc_roots();
+        roots.push(container);
+        self.arena
+            .count_holders(&roots, &targets)
+            .into_iter()
+            .filter(|&(_, n)| n > 1)
+            .map(|(h, _)| h)
+            .collect()
+    }
+
+    /// A by-value copy of a value for storing into a container: never the
+    /// source slot itself (a variable's, another element's), which the
+    /// source could later change in place.
+    pub(crate) fn copy_value(&mut self, handle: Handle) -> Handle {
+        let val = self.arena.get(handle).value.clone();
+        let is_array = matches!(val, Val::Array(_));
+        let copy = self.arena.alloc(val);
+        // An array's copy keeps its internal pointer (current(), next(), ...).
+        if is_array
+            && let Some(core) = self
+                .context
+                .get_extension_data_mut::<crate::runtime::core_extension::CoreExtensionData>()
+            && let Some(&pos) = core.array_pointers.get(&handle)
+        {
+            core.array_pointers.insert(copy, pos);
+        }
+        copy
+    }
+
     /// A Generator object for a generator function's (not yet started) frame.
     pub(crate) fn new_generator(&mut self, frame: CallFrame) -> Handle {
         let gen_data = GeneratorData {
@@ -1356,6 +1398,7 @@ impl VM {
             properties: IndexMap::new(),
             internal: Some(Rc::new(RefCell::new(gen_data))),
             dynamic_properties: HashSet::new(),
+            id: 0,
         };
         let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
         self.arena.alloc(Val::Object(payload_handle))
@@ -3219,13 +3262,10 @@ impl VM {
             }
             ret_val
         } else {
-            // Function returns by value: if ret_val is a ref, dereference (copy) it.
-            if self.arena.get(ret_val).is_ref {
-                let val = self.arena.get(ret_val).value.clone();
-                self.arena.alloc(val)
-            } else {
-                ret_val
-            }
+            // Function returns by value: a copy, never the slot itself (a
+            // variable, a static, an array element the caller could alias).
+            let val = self.arena.get(ret_val).value.clone();
+            self.arena.alloc(val)
         };
 
         if let Some(gen_handle) = gen_handle {
@@ -3644,7 +3684,7 @@ impl VM {
     }
 
     /// Collect every handle reachable from VM state outside the heap.
-    fn collect_gc_roots(&self) -> Vec<Handle> {
+    pub(crate) fn collect_gc_roots(&self) -> Vec<Handle> {
         let mut roots = Vec::with_capacity(
             self.operand_stack.len() + self.frames.len() * 16 + self.context.globals.len() + 32,
         );
@@ -4028,6 +4068,7 @@ impl VM {
             properties,
             internal: None,
             dynamic_properties: std::collections::HashSet::new(),
+            id: 0,
         }));
         let message_sym = self.context.interner.intern(b"message");
         let message_val = self.arena.alloc(Val::String(message.as_bytes().to_vec().into()));
@@ -4649,77 +4690,27 @@ impl VM {
                     return Err(VmError::RuntimeError("AssignOp on non-reference".into()));
                 }
             }
-            OpCode::PreInc => {
+            OpCode::PreInc | OpCode::PreDec | OpCode::PostInc | OpCode::PostDec => {
+                // [slot] -> [result]: the slot (a variable, an array element)
+                // changes in place.
+                // Reference: $PHP_SRC_PATH/Zend/zend_operators.c - increment_function
                 let handle = self
                     .operand_stack
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-                if self.arena.get(handle).is_ref {
-                    let val = &self.arena.get(handle).value;
-                    let new_val = match val {
-                        Val::Int(i) => Val::Int(i + 1),
-                        _ => Val::Null,
-                    };
-                    self.arena.get_mut(handle).value = new_val.clone();
-                    let res_handle = self.arena.alloc(new_val);
-                    self.operand_stack.push(res_handle);
-                } else {
-                    return Err(VmError::RuntimeError("PreInc on non-reference".into()));
-                }
-            }
-            OpCode::PreDec => {
-                let handle = self
-                    .operand_stack
-                    .pop()
-                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-                if self.arena.get(handle).is_ref {
-                    let val = &self.arena.get(handle).value;
-                    let new_val = match val {
-                        Val::Int(i) => Val::Int(i - 1),
-                        _ => Val::Null,
-                    };
-                    self.arena.get_mut(handle).value = new_val.clone();
-                    let res_handle = self.arena.alloc(new_val);
-                    self.operand_stack.push(res_handle);
-                } else {
-                    return Err(VmError::RuntimeError("PreDec on non-reference".into()));
-                }
-            }
-            OpCode::PostInc => {
-                let handle = self
-                    .operand_stack
-                    .pop()
-                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-                if self.arena.get(handle).is_ref {
-                    let val = self.arena.get(handle).value.clone();
-                    let new_val = match &val {
-                        Val::Int(i) => Val::Int(i + 1),
-                        _ => Val::Null,
-                    };
-                    self.arena.get_mut(handle).value = new_val;
-                    let res_handle = self.arena.alloc(val); // Return OLD value
-                    self.operand_stack.push(res_handle);
-                } else {
-                    return Err(VmError::RuntimeError("PostInc on non-reference".into()));
-                }
-            }
-            OpCode::PostDec => {
-                let handle = self
-                    .operand_stack
-                    .pop()
-                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-                if self.arena.get(handle).is_ref {
-                    let val = self.arena.get(handle).value.clone();
-                    let new_val = match &val {
-                        Val::Int(i) => Val::Int(i - 1),
-                        _ => Val::Null,
-                    };
-                    self.arena.get_mut(handle).value = new_val;
-                    let res_handle = self.arena.alloc(val); // Return OLD value
-                    self.operand_stack.push(res_handle);
-                } else {
-                    return Err(VmError::RuntimeError("PostDec on non-reference".into()));
-                }
+                let old = self.arena.get(handle).value.clone();
+                let op_fn = match op {
+                    OpCode::PreInc | OpCode::PostInc => crate::vm::inc_dec::increment_value,
+                    _ => crate::vm::inc_dec::decrement_value,
+                };
+                let new = self.inc_dec(op_fn, old.clone())?;
+                self.arena.get_mut(handle).value = new.clone();
+                let result = match op {
+                    OpCode::PreInc | OpCode::PreDec => new,
+                    _ => old,
+                };
+                let res_handle = self.arena.alloc(result);
+                self.operand_stack.push(res_handle);
             }
             OpCode::MakeVarRef(sym) => {
                 let frame = self.frames.last_mut().unwrap();
@@ -4838,6 +4829,35 @@ impl VM {
                         "BindStatic called outside of function".into(),
                     ));
                 }
+            }
+            OpCode::BindStaticCheck(sym, end) => {
+                let frame = self.current_frame()?;
+                let statics = frame
+                    .func
+                    .as_ref()
+                    .ok_or_else(|| VmError::RuntimeError("static outside a function".into()))?
+                    .statics
+                    .clone();
+                let existing = statics.borrow().get(&sym).copied();
+                if let Some(handle) = existing {
+                    let frame = self.current_frame_mut()?;
+                    frame.locals.insert(sym, handle);
+                    frame.ip = end as usize;
+                }
+            }
+            OpCode::BindStaticSet(sym) => {
+                let value = self.pop_operand_required()?;
+                let val = self.arena.get(value).value.clone();
+                let handle = match val {
+                    Val::ConstArray(_) => self.deep_clone_val(&val),
+                    other => self.arena.alloc(other),
+                };
+                self.arena.get_mut(handle).is_ref = true;
+                let frame = self.current_frame_mut()?;
+                if let Some(func) = &frame.func {
+                    func.statics.borrow_mut().insert(sym, handle);
+                }
+                frame.locals.insert(sym, handle);
             }
             OpCode::MakeRef => {
                 let handle = self
@@ -4983,6 +5003,7 @@ impl VM {
                                 properties: props,
                                 internal: None,
                                 dynamic_properties: std::collections::HashSet::new(),
+                                id: 0,
                             };
                             let payload = self.arena.alloc(Val::ObjPayload(obj_data));
                             Val::Object(payload)
@@ -4993,6 +5014,7 @@ impl VM {
                                 properties: IndexMap::new(),
                                 internal: None,
                                 dynamic_properties: std::collections::HashSet::new(),
+                                id: 0,
                             };
                             let payload = self.arena.alloc(Val::ObjPayload(obj_data));
                             Val::Object(payload)
@@ -5006,6 +5028,7 @@ impl VM {
                                 properties: props,
                                 internal: None,
                                 dynamic_properties: std::collections::HashSet::new(),
+                                id: 0,
                             };
                             let payload = self.arena.alloc(Val::ObjPayload(obj_data));
                             Val::Object(payload)
@@ -5282,6 +5305,7 @@ impl VM {
                     properties: IndexMap::new(),
                     internal: Some(Rc::new(closure_data)),
                     dynamic_properties: std::collections::HashSet::new(),
+                    id: 0,
                 };
 
                 let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
@@ -6131,6 +6155,22 @@ impl VM {
                     }
                 };
 
+                // Unpacking copies values; a reference stays one only while
+                // something else still holds it (ZEND_ADD_ARRAY_UNPACK).
+                let entries: Vec<(ArrayKey, Handle)> =
+                    src_map.map.iter().map(|(k, &v)| (k.clone(), v)).collect();
+                let shared = self.shared_references(src_handle, entries.iter().map(|(_, v)| *v));
+                let copies: Vec<(ArrayKey, Handle)> = entries
+                    .into_iter()
+                    .map(|(k, v)| {
+                        if shared.contains(&v) {
+                            (k, v)
+                        } else {
+                            (k, self.copy_value(v))
+                        }
+                    })
+                    .collect();
+
                 let dest_map = {
                     let dest_val = self.arena.get_mut(dest_handle);
                     match &mut dest_val.value {
@@ -6142,16 +6182,16 @@ impl VM {
                 // Get the starting next_key from ArrayData (O(1))
                 let mut next_key = dest_map.next_index();
 
-                for (key, val_handle) in src_map.map.iter() {
+                for (key, val_handle) in copies {
                     match key {
                         ArrayKey::Int(_) => {
                             // Reindex numeric keys using ArrayData::insert (maintains next_free)
-                            Rc::make_mut(dest_map).insert(ArrayKey::Int(next_key), *val_handle);
+                            Rc::make_mut(dest_map).insert(ArrayKey::Int(next_key), val_handle);
                             next_key += 1;
                         }
                         ArrayKey::Str(s) => {
                             // Preserve string keys
-                            Rc::make_mut(dest_map).insert(ArrayKey::Str(s.clone()), *val_handle);
+                            Rc::make_mut(dest_map).insert(ArrayKey::Str(s), val_handle);
                         }
                     }
                 }
@@ -7512,6 +7552,7 @@ impl VM {
                     properties,
                     internal: None,
                     dynamic_properties: HashSet::new(),
+                    id: 0,
                 };
                 let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
                 let obj_handle = self.arena.alloc(Val::Object(payload_handle));
@@ -7791,6 +7832,7 @@ impl VM {
                         properties,
                         internal: None,
                         dynamic_properties: std::collections::HashSet::new(),
+                        id: 0,
                     };
 
                     let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
@@ -7957,6 +7999,7 @@ impl VM {
                         properties,
                         internal: None,
                         dynamic_properties: std::collections::HashSet::new(),
+                        id: 0,
                     };
 
                     let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
@@ -8572,7 +8615,14 @@ impl VM {
                     .get(&sym)
                     .copied();
                 match existing {
-                    Some(handle) => self.operand_stack.push(handle),
+                    Some(handle) if self.arena.get(handle).is_ref => self.operand_stack.push(handle),
+                    Some(handle) => {
+                        // Changed in place by ++/--: rebind the variable to a slot
+                        // of its own first (its old one may be stored elsewhere).
+                        let fresh = self.copy_value(handle);
+                        self.current_frame_mut()?.locals.insert(sym, fresh);
+                        self.operand_stack.push(fresh);
+                    }
                     None => {
                         let var_name = String::from_utf8_lossy(
                             self.context.interner.lookup(sym).unwrap_or(b"unknown"),
@@ -9036,8 +9086,13 @@ impl VM {
 
                 // An element shared with another copy of the array is separated
                 // first, unless it is already a reference (those stay shared).
+                // A read-write fetch (++, --) changes the element in place, so
+                // it always gets a slot of its own: a stored value may still be
+                // another variable's slot.
+                let rw = matches!(op, OpCode::FetchDimRw);
                 let element = match existing {
-                    Some(h) if !shared || self.arena.get(h).is_ref => h,
+                    Some(h) if self.arena.get(h).is_ref => h,
+                    Some(h) if !shared && !rw => h,
                     Some(h) => {
                         let val = self.arena.get(h).value.clone();
                         self.arena.alloc(val)
@@ -10652,6 +10707,35 @@ impl VM {
             OpCode::SpreadArg => self.spread_arg()?,
             OpCode::NamedArg(name) => self.named_arg(name)?,
             OpCode::EndArgs => self.end_args()?,
+            OpCode::StoreToSlot => {
+                let value = self.pop_operand_required()?;
+                let slot = self.pop_operand_required()?;
+                let val = self.arena.get(value).value.clone();
+                self.arena.get_mut(slot).value = val;
+                self.operand_stack.push(value);
+            }
+            OpCode::ArrayItemRef(has_key) => {
+                let reference = self.pop_operand_required()?;
+                let key = if has_key {
+                    let k = self.pop_operand_required()?;
+                    let kv = self.arena.get(k).value.clone();
+                    Some(self.array_key_from_value(&kv)?)
+                } else {
+                    None
+                };
+                let array = self.pop_operand_required()?;
+                self.arena.get_mut(reference).is_ref = true;
+                if let Val::Array(map) = &mut self.arena.get_mut(array).value {
+                    let map = Rc::make_mut(map);
+                    match key {
+                        Some(k) => {
+                            map.insert(k, reference);
+                        }
+                        None => map.push(reference),
+                    }
+                }
+                self.operand_stack.push(array);
+            }
             OpCode::PushFrameArg(i) => {
                 let handle = *self
                     .current_frame()?
@@ -13182,7 +13266,10 @@ mod tests {
         assert_eq!(vm.frames.len(), 0);
         assert_eq!(vm.operand_stack.len(), 1);
         assert_eq!(vm.operand_stack.peek(), Some(caller_sentinel));
-        assert_eq!(vm.last_return_value, Some(return_handle));
+        // A by-value return hands back a copy of the value, not the slot.
+        let returned = vm.last_return_value.expect("return value");
+        assert_ne!(returned, return_handle);
+        assert_eq!(vm.arena.get(returned).value, Val::String(b"ok".to_vec().into()));
     }
 
     #[test]

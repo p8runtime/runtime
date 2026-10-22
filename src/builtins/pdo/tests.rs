@@ -35,6 +35,7 @@ fn setup_pdo_object(vm: &mut VM) -> crate::core::value::Handle {
         properties,
         internal: None,
         dynamic_properties: std::collections::HashSet::new(),
+        id: 0,
     };
     let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
     let pdo_obj_handle = vm.arena.alloc(Val::Object(payload_handle));

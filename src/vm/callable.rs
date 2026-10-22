@@ -206,6 +206,7 @@ impl VM {
                     properties: IndexMap::new(),
                     internal: Some(Rc::new(RefCell::new(gen_data))),
                     dynamic_properties: HashSet::new(),
+                    id: 0,
                 };
                 let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
                 let obj_handle = self.arena.alloc(Val::Object(payload_handle));

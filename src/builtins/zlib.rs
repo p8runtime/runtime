@@ -580,6 +580,7 @@ pub fn php_deflate_init(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         properties: indexmap::IndexMap::new(),
         internal: Some(Rc::new(context)),
         dynamic_properties: std::collections::HashSet::new(),
+        id: 0,
     };
 
     Ok(vm.arena.alloc(Val::ObjPayload(obj)))
@@ -744,6 +745,7 @@ pub fn php_inflate_init(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         properties: indexmap::IndexMap::new(),
         internal: Some(Rc::new(context)),
         dynamic_properties: std::collections::HashSet::new(),
+        id: 0,
     };
 
     Ok(vm.arena.alloc(Val::ObjPayload(obj)))

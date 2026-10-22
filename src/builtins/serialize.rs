@@ -699,6 +699,7 @@ impl Unserializer<'_> {
             properties,
             internal: None,
             dynamic_properties: Default::default(),
+            id: 0,
         }));
         (vm.arena.alloc(Val::Object(payload)), payload, complete)
     }

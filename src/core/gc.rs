@@ -164,6 +164,8 @@ pub struct GcHeap {
     gc_threshold: usize,
     /// Number of live values
     live_count: usize,
+    /// Ids handed to objects so far (PHP numbers them from 1).
+    objects_created: u32,
 }
 
 impl GcHeap {
@@ -176,10 +178,18 @@ impl GcHeap {
             alloc_debt: 0,
             gc_threshold: 1024,
             live_count: 0,
+            objects_created: 0,
         }
     }
 
-    pub fn alloc(&mut self, val: Val) -> Handle {
+    pub fn alloc(&mut self, mut val: Val) -> Handle {
+        // Every object allocated is a new object: the next id. PHP reuses
+        // the ids of freed objects; without reference counts we cannot know
+        // when that happens, so ids only grow.
+        if let Val::ObjPayload(data) = &mut val {
+            self.objects_created += 1;
+            data.id = self.objects_created;
+        }
         let zval = Zval {
             value: val,
             is_ref: false,
@@ -252,6 +262,41 @@ impl GcHeap {
 
     /// Mark from `roots`, sweep everything unmarked. Returns the number of
     /// values collected.
+    /// How many places hold each of `targets`: the roots themselves, and
+    /// every value reachable from them that points at one (each container
+    /// counted once). This is PHP's refcount for those values, which
+    /// var_dump needs to decide whether a reference is still shared.
+    pub fn count_holders(
+        &self,
+        roots: &[Handle],
+        targets: &std::collections::HashSet<Handle>,
+    ) -> std::collections::HashMap<Handle, usize> {
+        let mut counts: std::collections::HashMap<Handle, usize> = std::collections::HashMap::new();
+        for r in roots {
+            if targets.contains(r) {
+                *counts.entry(*r).or_default() += 1;
+            }
+        }
+        let mut seen = vec![false; self.storage.len()];
+        let mut worklist: Vec<Handle> = roots.to_vec();
+        while let Some(h) = worklist.pop() {
+            let Some(idx) = self.live_index(h) else { continue };
+            if seen[idx] {
+                continue;
+            }
+            seen[idx] = true;
+            if let Some(zval) = &self.storage[idx] {
+                zval.trace_handles(&mut |child| {
+                    if targets.contains(&child) {
+                        *counts.entry(child).or_default() += 1;
+                    }
+                    worklist.push(child);
+                });
+            }
+        }
+        counts
+    }
+
     pub fn collect(&mut self, roots: &[Handle]) -> usize {
         for mark in self.marks.iter_mut() {
             *mark = false;
@@ -407,6 +452,7 @@ mod tests {
             properties: props,
             internal: None,
             dynamic_properties: HashSet::new(),
+            id: 0,
         };
         let obj_handle = heap.alloc(Val::ObjPayload(obj));
 
@@ -481,6 +527,7 @@ mod tests {
             properties: IndexMap::new(),
             internal: Some(Rc::new(RefCell::new(generator_data))),
             dynamic_properties: HashSet::new(),
+            id: 0,
         };
         let obj_handle = heap.alloc(Val::ObjPayload(obj));
 
@@ -533,6 +580,7 @@ mod tests {
             properties: IndexMap::new(),
             internal: Some(Rc::new(closure)),
             dynamic_properties: HashSet::new(),
+            id: 0,
         };
         let obj_handle = heap.alloc(Val::ObjPayload(obj));
 

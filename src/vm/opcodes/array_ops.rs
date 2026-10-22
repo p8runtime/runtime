@@ -67,6 +67,7 @@ impl VM {
         let val_handle = self.pop_operand_required()?;
         let key_handle = self.pop_operand_required()?;
         let array_handle = self.pop_operand_required()?;
+        let val_handle = self.copy_value(val_handle);
 
         self.assign_dim_value(array_handle, key_handle, val_handle)?;
         Ok(())
@@ -80,6 +81,7 @@ impl VM {
         let val_handle = self.pop_operand_required()?;
         let key_handle = self.pop_operand_required()?;
         let array_handle = self.pop_operand_required()?;
+        let val_handle = self.copy_value(val_handle);
 
         // assign_dim pushes the result array to the stack
         self.assign_dim(array_handle, key_handle, val_handle)?;
@@ -92,6 +94,7 @@ impl VM {
     pub(crate) fn exec_append_array(&mut self) -> Result<(), VmError> {
         let val_handle = self.pop_operand_required()?;
         let array_handle = self.pop_operand_required()?;
+        let val_handle = self.copy_value(val_handle);
 
         self.append_array(array_handle, val_handle)?;
         Ok(())
@@ -116,6 +119,7 @@ impl VM {
         let val_handle = self.pop_operand_required()?;
         let keys = self.pop_n_operands(key_count as usize)?;
         let array_handle = self.pop_operand_required()?;
+        let val_handle = self.copy_value(val_handle);
 
         self.assign_nested_dim(array_handle, &keys, val_handle)?;
         Ok(())

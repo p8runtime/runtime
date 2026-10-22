@@ -450,6 +450,9 @@ pub struct ObjectData {
     pub properties: IndexMap<Symbol, Handle>,
     pub internal: Option<Rc<dyn Any>>, // For internal classes like Closure
     pub dynamic_properties: HashSet<Symbol>, // Track which properties are dynamic (created at runtime)
+    /// The object's id (var_dump's #N, spl_object_id), numbered from 1 in
+    /// creation order; set by the heap when the object is allocated.
+    pub id: u32,
 }
 
 impl PartialEq for ObjectData {

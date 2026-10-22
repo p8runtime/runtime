@@ -315,6 +315,7 @@ pub fn php_hash_init(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         properties,
         internal: None,
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
 
     let payload_handle = vm.arena.alloc(Val::ObjPayload(obj));
@@ -746,6 +747,7 @@ pub fn php_hash_copy(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         properties,
         internal: None,
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
 
     let new_payload_handle = vm.arena.alloc(Val::ObjPayload(new_obj));
