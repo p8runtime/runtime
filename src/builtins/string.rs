@@ -6,29 +6,17 @@ use crc32fast::Hasher;
 use digest::Digest;
 use md5::Md5;
 use sha1::Sha1;
-use libc;
 use regex::Regex;
 use rphonetic::{Encoder, Metaphone};
 use rust_decimal::{Decimal, RoundingStrategy};
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::ffi::{CStr, CString};
+
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str;
 use std::str::FromStr;
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn strfmon(
-        s: *mut libc::c_char,
-        max: libc::size_t,
-        format: *const libc::c_char,
-        ...
-    ) -> libc::ssize_t;
-    fn crypt(key: *const libc::c_char, salt: *const libc::c_char) -> *mut libc::c_char;
-}
 
 pub const HTML_SPECIALCHARS: i64 = 0;
 pub const HTML_ENTITIES: i64 = 1;
@@ -968,37 +956,28 @@ pub fn php_convert_uudecode(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
     }
 }
 
-#[cfg(unix)]
+/// crypt(string $string, string $salt): string
+///
+/// PHP ships its own crypt implementations rather than using the system's;
+/// this uses pwhash (pure Rust): standard and extended DES, MD5 ($1$),
+/// Blowfish ($2a$/$2b$/$2y$) and SHA-256/512 ($5$/$6$). On failure PHP
+/// returns "*0", or "*1" when the salt itself starts with "*0".
 pub fn php_crypt(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() || args.len() > 2 {
-        return Err("crypt() expects 1 or 2 parameters".into());
+    if args.len() != 2 {
+        return Err(vm.throw_from_native(
+            b"ArgumentCountError",
+            &format!("crypt() expects exactly 2 arguments, {} given", args.len()),
+        ));
     }
-
     let input = vm.value_to_string(args[0])?;
-    let salt = if args.len() == 2 {
-        vm.value_to_string(args[1])?
-    } else {
-        Vec::new()
-    };
-
-    let input_c = CString::new(input)
-        .map_err(|_| "crypt(): Argument #1 must not contain null bytes".to_string())?;
-    let salt_c = CString::new(salt)
-        .map_err(|_| "crypt(): Argument #2 must not contain null bytes".to_string())?;
-
-    unsafe {
-        let hashed = crypt(input_c.as_ptr(), salt_c.as_ptr());
-        if hashed.is_null() {
-            return Ok(vm.arena.alloc(Val::Bool(false)));
-        }
-        let bytes = CStr::from_ptr(hashed).to_bytes().to_vec();
-        Ok(vm.arena.alloc(Val::String(bytes.into())))
-    }
-}
-
-#[cfg(not(unix))]
-pub fn php_crypt(_vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Err("crypt() is not supported on this platform".into())
+    let salt = vm.value_to_string(args[1])?;
+    let hashed = std::str::from_utf8(&salt)
+        .ok()
+        .and_then(|salt| pwhash::unix::crypt(&input, salt).ok());
+    let result = hashed.map(String::into_bytes).unwrap_or_else(|| {
+        if salt.starts_with(b"*0") { b"*1".to_vec() } else { b"*0".to_vec() }
+    });
+    Ok(vm.arena.alloc(Val::String(result.into())))
 }
 
 pub fn php_crc32(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -4428,263 +4407,6 @@ pub fn php_metaphone(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::String(result.into_bytes().into())))
 }
 
-pub fn php_setlocale(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() < 2 {
-        return Err("setlocale() expects at least 2 parameters".into());
-    }
-
-    let category = vm.check_builtin_param_int(args[0], 1, "setlocale")? as libc::c_int;
-    let mut locales = Vec::new();
-
-    if args.len() == 2 {
-        match &vm.arena.get(args[1]).value {
-            Val::Int(i) if *i == 0 => {
-                let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
-                if ptr.is_null() {
-                    return Ok(vm.arena.alloc(Val::Bool(false)));
-                }
-                let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
-                return Ok(vm.arena.alloc(Val::String(bytes.into())));
-            }
-            Val::Null => {
-                let ptr = unsafe { libc::setlocale(category, std::ptr::null()) };
-                if ptr.is_null() {
-                    return Ok(vm.arena.alloc(Val::Bool(false)));
-                }
-                let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
-                return Ok(vm.arena.alloc(Val::String(bytes.into())));
-            }
-            Val::Array(arr) => {
-                let entries: Vec<_> = arr.map.values().copied().collect();
-                for entry in entries {
-                    locales.push(vm.value_to_string(entry)?);
-                }
-            }
-            _ => {
-                let locale = vm.check_builtin_param_string(args[1], 2, "setlocale")?;
-                locales.push(locale);
-            }
-        }
-    } else {
-        for (idx, handle) in args[1..].iter().enumerate() {
-            let locale = vm.check_builtin_param_string(*handle, idx + 2, "setlocale")?;
-            locales.push(locale);
-        }
-    }
-
-    if locales.is_empty() {
-        return Ok(vm.arena.alloc(Val::Bool(false)));
-    }
-
-    let mut result_ptr = std::ptr::null_mut();
-    for locale in locales {
-        let c_locale = CString::new(locale)
-            .map_err(|_| "setlocale(): Locale string contains null byte".to_string())?;
-        let ptr = unsafe { libc::setlocale(category, c_locale.as_ptr()) };
-        if !ptr.is_null() {
-            result_ptr = ptr;
-            break;
-        }
-    }
-
-    if result_ptr.is_null() {
-        return Ok(vm.arena.alloc(Val::Bool(false)));
-    }
-
-    let bytes = unsafe { CStr::from_ptr(result_ptr) }.to_bytes().to_vec();
-    Ok(vm.arena.alloc(Val::String(bytes.into())))
-}
-
-pub fn php_localeconv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if !args.is_empty() {
-        return Err("localeconv() expects exactly 0 parameters".into());
-    }
-
-    let lconv_ptr = unsafe { libc::localeconv() };
-    if lconv_ptr.is_null() {
-        return Ok(vm.arena.alloc(Val::Array(Rc::new(ArrayData::new()))));
-    }
-
-    let lconv = unsafe { &*lconv_ptr };
-    let mut data = ArrayData::new();
-
-    fn c_str_to_bytes(ptr: *const libc::c_char) -> Vec<u8> {
-        if ptr.is_null() {
-            Vec::new()
-        } else {
-            unsafe { CStr::from_ptr(ptr).to_bytes().to_vec() }
-        }
-    }
-
-    fn lconv_char_to_int(value: libc::c_char) -> i64 {
-        value as u8 as i64
-    }
-
-    fn insert_str(vm: &mut VM, data: &mut ArrayData, key: &str, val: Vec<u8>) {
-        let handle = vm.arena.alloc(Val::String(val.into()));
-        data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
-    }
-
-    fn insert_int(vm: &mut VM, data: &mut ArrayData, key: &str, val: i64) {
-        let handle = vm.arena.alloc(Val::Int(val));
-        data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
-    }
-
-    fn insert_grouping(vm: &mut VM, data: &mut ArrayData, key: &str, ptr: *const libc::c_char) {
-        let bytes = c_str_to_bytes(ptr);
-        let mut grouping = ArrayData::new();
-        let mut idx = 0i64;
-        for byte in bytes {
-            let val = byte as i64;
-            if val == 0 || val == 127 {
-                break;
-            }
-            let handle = vm.arena.alloc(Val::Int(val));
-            grouping.insert(ArrayKey::Int(idx), handle);
-            idx += 1;
-        }
-        let handle = vm.arena.alloc(Val::Array(Rc::new(grouping)));
-        data.insert(ArrayKey::Str(Rc::new(key.as_bytes().to_vec())), handle);
-    }
-
-    insert_str(
-        vm,
-        &mut data,
-        "decimal_point",
-        c_str_to_bytes(lconv.decimal_point),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "thousands_sep",
-        c_str_to_bytes(lconv.thousands_sep),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "int_curr_symbol",
-        c_str_to_bytes(lconv.int_curr_symbol),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "currency_symbol",
-        c_str_to_bytes(lconv.currency_symbol),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "mon_decimal_point",
-        c_str_to_bytes(lconv.mon_decimal_point),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "mon_thousands_sep",
-        c_str_to_bytes(lconv.mon_thousands_sep),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "positive_sign",
-        c_str_to_bytes(lconv.positive_sign),
-    );
-    insert_str(
-        vm,
-        &mut data,
-        "negative_sign",
-        c_str_to_bytes(lconv.negative_sign),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "int_frac_digits",
-        lconv_char_to_int(lconv.int_frac_digits),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "frac_digits",
-        lconv_char_to_int(lconv.frac_digits),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "p_cs_precedes",
-        lconv_char_to_int(lconv.p_cs_precedes),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "p_sep_by_space",
-        lconv_char_to_int(lconv.p_sep_by_space),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "n_cs_precedes",
-        lconv_char_to_int(lconv.n_cs_precedes),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "n_sep_by_space",
-        lconv_char_to_int(lconv.n_sep_by_space),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "p_sign_posn",
-        lconv_char_to_int(lconv.p_sign_posn),
-    );
-    insert_int(
-        vm,
-        &mut data,
-        "n_sign_posn",
-        lconv_char_to_int(lconv.n_sign_posn),
-    );
-    insert_grouping(vm, &mut data, "grouping", lconv.grouping);
-    insert_grouping(vm, &mut data, "mon_grouping", lconv.mon_grouping);
-
-    Ok(vm.arena.alloc(Val::Array(Rc::new(data))))
-}
-
-pub fn php_nl_langinfo(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() != 1 {
-        return Err("nl_langinfo() expects exactly 1 parameter".into());
-    }
-
-    let item = vm.check_builtin_param_int(args[0], 1, "nl_langinfo")? as libc::c_int;
-    #[cfg(unix)]
-    {
-        let ptr = unsafe { libc::nl_langinfo(item) };
-        if ptr.is_null() {
-            return Ok(vm.arena.alloc(Val::Bool(false)));
-        }
-        let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
-        return Ok(vm.arena.alloc(Val::String(bytes.into())));
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(vm.arena.alloc(Val::Bool(false)))
-    }
-}
-
-pub fn php_strcoll(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() != 2 {
-        return Err("strcoll() expects exactly 2 parameters".into());
-    }
-
-    let a = vm.check_builtin_param_string(args[0], 1, "strcoll")?;
-    let b = vm.check_builtin_param_string(args[1], 2, "strcoll")?;
-
-    let a_c = CString::new(a).map_err(|_| "strcoll(): Invalid string".to_string())?;
-    let b_c = CString::new(b).map_err(|_| "strcoll(): Invalid string".to_string())?;
-    let cmp = unsafe { libc::strcoll(a_c.as_ptr(), b_c.as_ptr()) };
-
-    Ok(vm.arena.alloc(Val::Int(cmp as i64)))
-}
-
 pub fn php_number_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() || args.len() > 4 {
         return Err("number_format() expects between 1 and 4 parameters".into());
@@ -4751,60 +4473,6 @@ pub fn php_number_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
     Ok(vm.arena.alloc(Val::String(output.into())))
 }
 
-pub fn php_money_format(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() != 2 {
-        return Err("money_format() expects exactly 2 parameters".into());
-    }
-
-    let format = vm.check_builtin_param_string(args[0], 1, "money_format")?;
-    let value = number_format_float(vm, args[1], 2)?;
-
-    #[cfg(unix)]
-    {
-        let c_format = CString::new(format)
-            .map_err(|_| "money_format(): Format string contains null byte".to_string())?;
-        let mut buf_len = 128usize;
-        loop {
-            let mut buffer = vec![0u8; buf_len];
-            let written = unsafe {
-                strfmon(
-                    buffer.as_mut_ptr() as *mut libc::c_char,
-                    buffer.len(),
-                    c_format.as_ptr(),
-                    value as libc::c_double,
-                )
-            };
-            if written < 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::ERANGE) {
-                    buf_len = buf_len.saturating_mul(2);
-                    if buf_len > 1024 * 1024 {
-                        break;
-                    }
-                    continue;
-                }
-                break;
-            }
-            buffer.truncate(written as usize);
-            return Ok(vm.arena.alloc(Val::String(buffer.into())));
-        }
-        vm.report_error(
-            crate::vm::engine::ErrorLevel::Warning,
-            "money_format(): strfmon failed",
-        );
-        return Ok(vm.arena.alloc(Val::Bool(false)));
-    }
-
-    #[cfg(not(unix))]
-    {
-        vm.report_error(
-            crate::vm::engine::ErrorLevel::Warning,
-            "money_format(): not supported on this platform",
-        );
-        Ok(vm.arena.alloc(Val::Bool(false)))
-    }
-}
-
 fn number_format_decimal(vm: &VM, arg: Handle, param_num: usize) -> Result<Decimal, String> {
     let val = &vm.arena.get(arg).value;
     match val {
@@ -4853,40 +4521,6 @@ fn number_format_decimal(vm: &VM, arg: Handle, param_num: usize) -> Result<Decim
         }
         _ => Err(format!(
             "number_format(): Argument #{} must be of type float, {} given",
-            param_num,
-            val.type_name()
-        )),
-    }
-}
-
-fn number_format_float(vm: &VM, arg: Handle, param_num: usize) -> Result<f64, String> {
-    let val = &vm.arena.get(arg).value;
-    match val {
-        Val::Int(i) => Ok(*i as f64),
-        Val::Float(f) => Ok(*f),
-        Val::String(_) => {
-            if vm.builtin_call_strict {
-                Err(format!(
-                    "money_format(): Argument #{} must be of type float, string given",
-                    param_num
-                ))
-            } else {
-                Ok(val.to_float())
-            }
-        }
-        Val::Bool(_) | Val::Null => {
-            if vm.builtin_call_strict {
-                Err(format!(
-                    "money_format(): Argument #{} must be of type float, {} given",
-                    param_num,
-                    val.type_name()
-                ))
-            } else {
-                Ok(val.to_float())
-            }
-        }
-        _ => Err(format!(
-            "money_format(): Argument #{} must be of type float, {} given",
             param_num,
             val.type_name()
         )),

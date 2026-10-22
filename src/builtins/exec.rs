@@ -31,17 +31,19 @@ pub struct PipeResource {
 // Helper Functions
 // ============================================================================
 
-/// Create a platform-appropriate shell command
-fn create_shell_command(cmd_str: &str) -> Command {
-    if cfg!(target_os = "windows") {
+/// Create a platform-appropriate shell command with the request's environment
+fn create_shell_command(vm: &VM, cmd_str: &str) -> Command {
+    let mut cmd = if cfg!(target_os = "windows") {
         let mut cmd = Command::new("cmd");
-        cmd.args(&["/C", cmd_str]);
+        cmd.args(["/C", cmd_str]);
         cmd
     } else {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(cmd_str);
         cmd
-    }
+    };
+    vm.context.apply_env(&mut cmd);
+    cmd
 }
 
 /// Extract command string from VM handle
@@ -141,7 +143,7 @@ pub fn php_exec(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let cmd_str = get_command_string(vm, args[0])?;
-    let output = create_shell_command(&cmd_str)
+    let output = create_shell_command(vm, &cmd_str)
         .output()
         .map_err(|e| format!("exec(): {}", e))?;
 
@@ -181,7 +183,7 @@ pub fn php_passthru(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     // Note: passthru() should inherit stdout/stderr, but we use .status()
     // which doesn't capture output. For true passthru behavior, we'd need
     // to use .spawn() with inherited stdio.
-    let status = create_shell_command(&cmd_str)
+    let status = create_shell_command(vm, &cmd_str)
         .status()
         .map_err(|e| format!("passthru(): {}", e))?;
 
@@ -199,7 +201,7 @@ pub fn php_shell_exec(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
     let cmd_str = get_command_string(vm, args[0])?;
 
-    match create_shell_command(&cmd_str).output() {
+    match create_shell_command(vm, &cmd_str).output() {
         Ok(output) => Ok(vm.arena.alloc(Val::String(Rc::new(output.stdout)))),
         Err(_) => Ok(vm.arena.alloc(Val::Null)),
     }
@@ -215,7 +217,7 @@ pub fn php_system(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 
     let cmd_str = get_command_string(vm, args[0])?;
 
-    let mut cmd = create_shell_command(&cmd_str);
+    let mut cmd = create_shell_command(vm, &cmd_str);
     cmd.stdout(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| format!("system(): {}", e))?;
@@ -312,7 +314,7 @@ pub fn php_proc_open(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     };
 
     // Build command with appropriate stdio configuration
-    let mut command = create_shell_command(&cmd_str);
+    let mut command = create_shell_command(vm, &cmd_str);
 
     for &fd in &requested_pipes {
         match fd {

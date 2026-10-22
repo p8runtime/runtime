@@ -6,10 +6,8 @@ use crate::runtime::registry::ExtensionRegistry;
 use crate::runtime::resource_manager::ResourceManager;
 use crate::vm::engine::VM;
 use indexmap::IndexMap;
-use libc;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
-use std::ffi::CString;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -290,6 +288,11 @@ pub struct RequestContext {
     pub extension_data: HashMap<TypeId, Box<dyn Any>>,
     /// Unified resource manager for type-safe resource handling
     pub resource_manager: ResourceManager,
+    /// setlocale() state (PHP 8 starts each request in the C locale).
+    pub locale: crate::builtins::locale::LocaleState,
+    /// putenv() changes, layered over the process environment (None = unset).
+    /// The real environment is never modified: it is shared by every thread.
+    pub env_overrides: HashMap<Vec<u8>, Option<Vec<u8>>>,
 }
 
 impl RequestContext {
@@ -315,22 +318,9 @@ impl RequestContext {
             next_resource_id: 1,
             extension_data: HashMap::new(),
             resource_manager: ResourceManager::new(),
+            locale: Default::default(),
+            env_overrides: HashMap::new(),
         };
-
-        #[cfg(unix)]
-        {
-            // Match PHP defaults: only LC_CTYPE follows environment. The locale
-            // is process-wide and setlocale is not thread-safe (parallel tests
-            // aborted in libc), so it is set once per process.
-            static LOCALE: std::sync::Once = std::sync::Once::new();
-            LOCALE.call_once(|| {
-                if let Ok(c_locale) = CString::new("") {
-                    unsafe {
-                        libc::setlocale(libc::LC_CTYPE, c_locale.as_ptr());
-                    }
-                }
-            });
-        }
 
         // Copy constants from extension registry in bulk
         ctx.copy_engine_constants();
@@ -716,5 +706,52 @@ impl Drop for EngineContext {
     fn drop(&mut self) {
         // Call MSHUTDOWN for all extensions in reverse order (LIFO)
         self.registry.module_shutdown_all();
+    }
+}
+
+impl RequestContext {
+    /// An environment variable as this request sees it (putenv() included).
+    pub fn env_var(&self, name: &[u8]) -> Option<Vec<u8>> {
+        match self.env_overrides.get(name) {
+            Some(value) => value.clone(),
+            None => std::str::from_utf8(name)
+                .ok()
+                .and_then(std::env::var_os)
+                .map(|v| v.to_string_lossy().into_owned().into_bytes()),
+        }
+    }
+
+    /// The whole environment as this request sees it.
+    pub fn env_vars(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut vars: Vec<(Vec<u8>, Vec<u8>)> = std::env::vars_os()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned().into_bytes(),
+                    v.to_string_lossy().into_owned().into_bytes(),
+                )
+            })
+            .filter(|(k, _)| !self.env_overrides.contains_key(k))
+            .collect();
+        vars.extend(
+            self.env_overrides
+                .iter()
+                .filter_map(|(k, v)| v.as_ref().map(|v| (k.clone(), v.clone()))),
+        );
+        vars
+    }
+
+    /// Give a child process this request's environment.
+    pub fn apply_env(&self, cmd: &mut std::process::Command) {
+        for (key, value) in &self.env_overrides {
+            let key = String::from_utf8_lossy(key).into_owned();
+            match value {
+                Some(v) => {
+                    cmd.env(key, String::from_utf8_lossy(v).into_owned());
+                }
+                None => {
+                    cmd.env_remove(key);
+                }
+            }
+        }
     }
 }

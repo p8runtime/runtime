@@ -24,6 +24,7 @@
 pub mod driver;
 pub mod drivers;
 #[cfg(test)]
+#[cfg(feature = "pdo-sqlite")] // the PDO tests run against in-memory SQLite
 mod tests;
 pub mod types;
 

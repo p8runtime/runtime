@@ -25,7 +25,6 @@ pcre2 = "0.2.11"
 encoding_rs = "0.8"
 chrono = "0.4"
 chrono-tz = "0.10"
-libc = "0.2"
 num-format = "0.4"
 rphonetic = "3.0.4"
 
@@ -50,7 +49,9 @@ pbkdf2 = "0.12"
 hkdf = "0.12"
 
 # MySQLi extension dependencies
-mysql = { version = "24.0", optional = true }
+# default-features off: the defaults pull native-tls and C zlib. Compression
+# uses flate2's Rust backend (our own flate2 dependency enables it).
+mysql = { version = "24.0", optional = true, default-features = false, features = ["derive", "buffer-pool"] }
 
 # PDO extension dependencies
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
@@ -61,7 +62,7 @@ oracle = { version = "0.6", optional = true }
 flate2 = "1.0"
 
 # Zip extension dependencies
-zip = { version = "2.2.2", optional = true }
+zip = { version = "2.2.2", optional = true, default-features = false, features = ["aes-crypto", "deflate", "deflate64", "lzma", "time"] }
 
 # OpenSSL extension dependencies
 openssl = { version = "0.10.75", optional = true }
@@ -90,6 +91,7 @@ thiserror = { version = "1.0", optional = true }
 wasmtime = { version = "27", optional = true }
 wasmtime-wasi = { version = "27", optional = true }
 walkdir = "2.4"
+pwhash = "1"
 
 [[bin]]
 name = "php"
@@ -117,15 +119,23 @@ path = "src/bin/php-test.rs"
 required-features = ["cli"]
 
 [features]
+# The default build is pure Rust: no C library is compiled or linked
+# (SECURITY.md). Features that need C are opt-in and listed below it.
 default = ["native-extensions", "cli", "fpm", "pthreads", "zip"]
-native-extensions = ["mysqli", "pdo", "openssl"]
+native-extensions = ["mysqli", "pdo"]
 cli = ["dep:clap", "dep:rustyline"]
 fpm = ["dep:tokio", "dep:tokio-fastcgi", "dep:multipart", "dep:ctrlc"]
 mysqli = ["dep:mysql"]
-pdo = ["dep:rusqlite", "dep:postgres", "dep:oracle", "dep:mysql"]
-openssl = ["dep:openssl"]
+pdo = ["dep:postgres", "dep:mysql"]
 pthreads = []
 zip = ["dep:zip"]
+# --- opt-in, C-backed ---
+openssl = ["dep:openssl"]
+pdo-sqlite = ["pdo", "dep:rusqlite"]
+pdo-oci = ["pdo", "dep:oracle"]
+# TLS for the MySQL driver (rustls over ring, which contains C and assembly)
+mysql-tls = ["mysqli", "mysql/rustls-tls"]
+zip-c-codecs = ["zip", "zip/bzip2", "zip/zstd", "zip/xz"]
 wasm-target = []
 router = [
     "dep:axum",

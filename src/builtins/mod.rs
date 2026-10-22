@@ -10,6 +10,7 @@ pub mod hash;
 pub mod html_entities;
 pub mod http;
 pub mod json;
+pub mod locale;
 pub mod math;
 pub mod mbstring;
 #[cfg(feature = "mysqli")]
