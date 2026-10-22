@@ -173,6 +173,11 @@ pub struct Emitter<'src> {
     inherited_strict_types: Option<bool>,
     // Counter for anonymous classes
     anonymous_class_counter: usize,
+    /// Source line of the statement or expression being emitted; every opcode
+    /// is tagged with it (CodeChunk::lines), for errors, exceptions and traces.
+    current_line: u32,
+    /// Byte offsets where each source line starts, shared with child emitters.
+    line_starts: Option<Rc<Vec<usize>>>,
 }
 
 impl<'src> Emitter<'src> {
@@ -191,7 +196,51 @@ impl<'src> Emitter<'src> {
             current_namespace: None,
             inherited_strict_types: None,
             anonymous_class_counter: 0,
+            current_line: 1,
+            line_starts: None,
         }
+    }
+
+    /// The 1-based source line of a byte offset.
+    fn line_at(&mut self, offset: usize) -> u32 {
+        let starts = self
+            .line_starts
+            .get_or_insert_with(|| {
+                let mut starts = vec![0];
+                starts.extend(
+                    self.source
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| **b == b'\n')
+                        .map(|(i, _)| i + 1),
+                );
+                Rc::new(starts)
+            })
+            .clone();
+        starts.partition_point(|start| *start <= offset) as u32
+    }
+
+    /// Tag every opcode emitted since the last call with the current line.
+    fn sync_lines(&mut self) {
+        let missing = self.chunk.code.len().saturating_sub(self.chunk.lines.len());
+        self.chunk
+            .lines
+            .extend(std::iter::repeat_n(self.current_line, missing));
+    }
+
+    /// Emit with `offset`'s line as the current line, restoring it after.
+    fn at_line(&mut self, offset: usize, emit: impl FnOnce(&mut Self)) {
+        self.sync_lines();
+        let saved = self.current_line;
+        self.current_line = self.line_at(offset);
+        emit(self);
+        self.sync_lines();
+        self.current_line = saved;
+    }
+
+    /// Line state for a child emitter (a function or method body) starting at `offset`.
+    fn child_lines(&mut self, offset: usize) -> (u32, Option<Rc<Vec<usize>>>) {
+        (self.line_at(offset), self.line_starts.clone())
     }
 
     /// Create an emitter with a file path for accurate __FILE__ and __DIR__
@@ -249,6 +298,8 @@ impl<'src> Emitter<'src> {
         }
         // Note: Top-level scripts don't get implicit return null
 
+        self.sync_lines();
+
         let chunk_name = if let Some(func_sym) = self.current_function {
             func_sym
         } else if let Some(path) = &self.file_path {
@@ -303,7 +354,10 @@ impl<'src> Emitter<'src> {
                     }
 
                     // 2. Create emitter with inherited context
+                    let (child_line, child_line_starts) = self.child_lines(name.span.start);
                     let mut method_emitter = Emitter::new(self.source, self.interner);
+                    method_emitter.current_line = child_line;
+                    method_emitter.line_starts = child_line_starts;
                     method_emitter.file_path = self.file_path.clone();
                     method_emitter.current_class = Some(class_sym);
                     method_emitter.current_namespace = self.current_namespace;
@@ -698,6 +752,10 @@ impl<'src> Emitter<'src> {
     }
 
     fn emit_stmt(&mut self, stmt: &Stmt) {
+        self.at_line(stmt.span().start, |this| this.emit_stmt_inner(stmt));
+    }
+
+    fn emit_stmt_inner(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Declare { declares, body, .. } => {
                 // PHP: declare(strict_types=1) is per-file and affects calls made from this file.
@@ -1077,7 +1135,10 @@ impl<'src> Emitter<'src> {
                 }
 
                 // 2. Create emitter with inherited context
-                let mut func_emitter = Emitter::new(self.source, self.interner);
+                let (child_line, child_line_starts) = self.child_lines(name.span.start);
+                    let mut func_emitter = Emitter::new(self.source, self.interner);
+                    func_emitter.current_line = child_line;
+                    func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
                 func_emitter.current_function = Some(func_sym);
                 func_emitter.current_namespace = self.current_namespace;
@@ -1724,6 +1785,10 @@ impl<'src> Emitter<'src> {
     }
 
     fn emit_expr(&mut self, expr: &Expr) {
+        self.at_line(expr.span().start, |this| this.emit_expr_inner(expr));
+    }
+
+    fn emit_expr_inner(&mut self, expr: &Expr) {
         match expr {
             Expr::Integer { value, .. } => {
                 let idx = self.add_constant(integer_literal(value));
@@ -2424,6 +2489,7 @@ impl<'src> Emitter<'src> {
                 by_ref,
                 is_static,
                 return_type,
+                span,
                 ..
             } => {
                 // 1. Collect param info
@@ -2450,7 +2516,10 @@ impl<'src> Emitter<'src> {
 
                 // 2. Create emitter with inherited context (closures inherit context)
                 let closure_sym = self.interner.intern(b"{closure}");
-                let mut func_emitter = Emitter::new(self.source, self.interner);
+                let (child_line, child_line_starts) = self.child_lines(span.start);
+                    let mut func_emitter = Emitter::new(self.source, self.interner);
+                    func_emitter.current_line = child_line;
+                    func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
                 func_emitter.current_class = self.current_class;
                 func_emitter.current_function = Some(closure_sym);
