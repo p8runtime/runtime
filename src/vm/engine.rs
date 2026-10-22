@@ -2089,7 +2089,7 @@ impl VM {
                 match &val {
                     Val::String(_) => Ok(None), // Already string
                     Val::Int(i) => Ok(Some(Val::String(i.to_string().into_bytes().into()))),
-                    Val::Float(f) => Ok(Some(Val::String(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes().into()))),
+                    Val::Float(f) => Ok(Some(Val::String(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::echo(), 'E').into_bytes().into()))),
                     Val::Bool(b) => Ok(Some(Val::String(
                         (if *b { "1" } else { "" }).as_bytes().to_vec().into(),
                     ))),
@@ -3537,7 +3537,7 @@ impl VM {
         match val {
             Val::String(s) => Ok(s.to_vec()),
             Val::Int(i) => Ok(i.to_string().into_bytes()),
-            Val::Float(f) => Ok(crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes()),
+            Val::Float(f) => Ok(crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::echo(), 'E').into_bytes()),
             Val::Bool(b) => Ok(if b { b"1".to_vec() } else { vec![] }),
             Val::Null => Ok(vec![]),
             Val::Object(h) => {

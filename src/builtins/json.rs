@@ -225,7 +225,7 @@ impl<'a> EncodeContext<'a> {
             return Err(JsonError::InfOrNan);
         }
 
-        let mut repr = crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::Shortest, 'e');
+        let mut repr = crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::serialize(), 'e');
         if self.options.preserve_zero_fraction && repr.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
             repr.push_str(".0");
         }

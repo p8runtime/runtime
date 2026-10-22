@@ -106,7 +106,7 @@ impl Dumper<'_> {
             Val::Float(f) => {
                 let text = crate::core::value::php_float_to_string(
                     f,
-                    crate::core::value::FloatPrecision::Shortest,
+                    crate::core::value::FloatPrecision::serialize(),
                     'E',
                 );
                 self.line(indent, format!("float({})", text).as_bytes());
@@ -298,7 +298,7 @@ fn export_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
             output.push_str(&i.to_string());
         }
         Val::Float(f) => {
-            let repr = crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::Shortest, 'E');
+            let repr = crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::serialize(), 'E');
             let integral = repr.bytes().all(|b| b.is_ascii_digit() || b == b'-');
             output.push_str(&repr);
             if integral {
@@ -429,7 +429,7 @@ fn print_r_inner(vm: &VM, handle: Handle, depth: usize, output: &mut String, vis
             output.push_str(&i.to_string());
         }
         Val::Float(f) => {
-            output.push_str(&crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E'));
+            output.push_str(&crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::echo(), 'E'));
         }
         Val::Bool(b) => {
             output.push_str(if *b { "1" } else { "" });

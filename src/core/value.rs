@@ -170,9 +170,49 @@ pub enum FloatPrecision {
     Shortest,
 }
 
+thread_local! {
+    /// The `precision` and `serialize_precision` ini values of the request
+    /// running on this thread.
+    static PRECISION_INI: std::cell::Cell<(i64, i64)> = const { std::cell::Cell::new((14, -1)) };
+}
+
 impl FloatPrecision {
     /// The `precision` ini default.
     pub const ECHO: FloatPrecision = FloatPrecision::Digits(14);
+
+    /// From an ini value: -1 means the shortest round-trip form, 0 one digit.
+    fn from_ini(value: i64) -> FloatPrecision {
+        if value < 0 {
+            FloatPrecision::Shortest
+        } else {
+            FloatPrecision::Digits((value as usize).clamp(1, 40))
+        }
+    }
+
+    /// The current `precision` ini: echo, string casts, print_r.
+    pub fn echo() -> FloatPrecision {
+        Self::from_ini(PRECISION_INI.with(|p| p.get().0))
+    }
+
+    /// The current `serialize_precision` ini: var_dump, var_export,
+    /// json_encode, serialize.
+    pub fn serialize() -> FloatPrecision {
+        Self::from_ini(PRECISION_INI.with(|p| p.get().1))
+    }
+
+    /// Record a change of `precision` or `serialize_precision` (other names
+    /// are ignored); the value is read as PHP reads an int ini.
+    pub fn set_ini(name: &str, value: &[u8]) {
+        let parsed = Val::String(Rc::new(value.to_vec())).to_int();
+        PRECISION_INI.with(|p| {
+            let (precision, serialize) = p.get();
+            match name {
+                "precision" => p.set((parsed, serialize)),
+                "serialize_precision" => p.set((precision, parsed)),
+                _ => {}
+            }
+        });
+    }
 }
 
 /// Format a float the way zend_gcvt does: `precision` significant digits,
@@ -256,7 +296,7 @@ impl Val {
                 }
             }
             Val::Int(i) => i.to_string().into_bytes(),
-            Val::Float(f) => php_float_to_string(*f, FloatPrecision::ECHO, 'E').into_bytes(),
+            Val::Float(f) => php_float_to_string(*f, FloatPrecision::echo(), 'E').into_bytes(),
             Val::String(s) => s.to_vec(),
             Val::Array(_) | Val::ConstArray(_) => b"Array".to_vec(),
             Val::Object(_) | Val::ObjPayload(_) => b"Object".to_vec(),

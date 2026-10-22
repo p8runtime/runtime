@@ -141,7 +141,7 @@ impl Serializer {
             Val::Float(f) => {
                 self.out.extend_from_slice(b"d:");
                 self.out
-                    .extend_from_slice(php_float_to_string(f, FloatPrecision::Shortest, 'E').as_bytes());
+                    .extend_from_slice(php_float_to_string(f, FloatPrecision::serialize(), 'E').as_bytes());
                 self.out.push(b';');
             }
             Val::String(s) => self.string(&s),
