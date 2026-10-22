@@ -164,18 +164,18 @@ pub fn openssl_pkey_get_public(vm: &mut VM, args: &[Handle]) -> Result<Handle, S
         }
         Err(_) => {
             // Also try to read it as a certificate and extract public key
-            if let Ok(x509) = X509::from_pem(&key_data) {
-                if let Ok(pkey) = x509.public_key() {
-                    let class_name = vm.context.interner.intern(b"OpenSSLAsymmetricKey");
-                    let obj = ObjectData {
-                        class: class_name,
-                        properties: IndexMap::new(),
-                        internal: Some(Rc::new(pkey)),
-                        dynamic_properties: HashSet::new(),
-                        id: 0,
-                    };
-                    return Ok(vm.arena.alloc(Val::ObjPayload(obj)));
-                }
+            if let Ok(x509) = X509::from_pem(&key_data)
+                && let Ok(pkey) = x509.public_key()
+            {
+                let class_name = vm.context.interner.intern(b"OpenSSLAsymmetricKey");
+                let obj = ObjectData {
+                    class: class_name,
+                    properties: IndexMap::new(),
+                    internal: Some(Rc::new(pkey)),
+                    dynamic_properties: HashSet::new(),
+                    id: 0,
+                };
+                return Ok(vm.arena.alloc(Val::ObjPayload(obj)));
             }
             Ok(vm.arena.alloc(Val::Bool(false)))
         }
