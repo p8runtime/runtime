@@ -286,7 +286,20 @@ impl<'src> Emitter<'src> {
         for stmt in stmts {
             self.emit_stmt(stmt);
         }
+        self.finish()
+    }
 
+    /// Compile an arrow function's body: `return <expr>;`.
+    fn compile_arrow_body(mut self, expr: &Expr) -> (CodeChunk, bool) {
+        if let Some(inherited) = self.inherited_strict_types {
+            self.chunk.strict_types = inherited;
+        }
+        self.emit_expr(expr);
+        self.chunk.code.push(OpCode::Return);
+        self.finish()
+    }
+
+    fn finish(mut self) -> (CodeChunk, bool) {
         // Implicit return:
         // - Functions/methods: return null if no explicit return
         // - Top-level scripts: NO implicit return (PHP returns 1 for include, or the last statement result)
@@ -401,7 +414,11 @@ impl<'src> Emitter<'src> {
                                     .code
                                     .push(OpCode::RecvInit(i as u32, idx as u16));
                             } else {
-                                method_emitter.chunk.code.push(OpCode::Recv(i as u32));
+                                method_emitter.chunk.code.push(if info.variadic {
+                                    OpCode::RecvVariadic(i as u32)
+                                } else {
+                                    OpCode::Recv(i as u32)
+                                });
                             }
                         }
                     }
@@ -1198,7 +1215,11 @@ impl<'src> Emitter<'src> {
                                 .code
                                 .push(OpCode::RecvInit(i as u32, idx as u16));
                         } else {
-                            func_emitter.chunk.code.push(OpCode::Recv(i as u32));
+                            func_emitter.chunk.code.push(if info.variadic {
+                                OpCode::RecvVariadic(i as u32)
+                            } else {
+                                OpCode::Recv(i as u32)
+                            });
                         }
                     }
                 }
@@ -2580,7 +2601,11 @@ impl<'src> Emitter<'src> {
                                 .code
                                 .push(OpCode::RecvInit(i as u32, idx as u16));
                         } else {
-                            func_emitter.chunk.code.push(OpCode::Recv(i as u32));
+                            func_emitter.chunk.code.push(if info.variadic {
+                                OpCode::RecvVariadic(i as u32)
+                            } else {
+                                OpCode::Recv(i as u32)
+                            });
                         }
                     }
                 }
@@ -2623,6 +2648,87 @@ impl<'src> Emitter<'src> {
                 let func_res = Val::Resource(Rc::new(user_func));
                 let const_idx = self.add_constant(func_res);
 
+                self.chunk
+                    .code
+                    .push(OpCode::Closure(const_idx as u32, use_syms.len() as u32));
+            }
+            Expr::ArrowFunction {
+                params,
+                expr,
+                by_ref,
+                is_static,
+                return_type,
+                span,
+                ..
+            } => {
+                let closure_sym = self.interner.intern(b"{closure}");
+                let (child_line, child_line_starts) = self.child_lines(span.start);
+                let mut func_emitter = Emitter::new(self.source, self.interner);
+                func_emitter.current_line = child_line;
+                func_emitter.line_starts = child_line_starts;
+                func_emitter.file_path = self.file_path.clone();
+                func_emitter.current_class = self.current_class;
+                func_emitter.current_function = Some(closure_sym);
+                func_emitter.current_namespace = self.current_namespace;
+                func_emitter.chunk.strict_types = self.chunk.strict_types;
+                func_emitter.inherited_strict_types = Some(self.chunk.strict_types);
+
+                let mut param_syms = Vec::new();
+                for (i, param) in params.iter().enumerate() {
+                    let p_name = func_emitter.get_text(param.name.span);
+                    let Some(p_name) = p_name.strip_prefix(b"$") else {
+                        continue;
+                    };
+                    let sym = func_emitter.interner.intern(p_name);
+                    let param_type = param.ty.and_then(|ty| func_emitter.convert_type(ty));
+                    let default_value = param.default.map(|e| func_emitter.eval_constant_expr(e));
+                    param_syms.push(FuncParam {
+                        name: sym,
+                        by_ref: param.by_ref,
+                        param_type,
+                        is_variadic: param.variadic,
+                        default_value: default_value.clone(),
+                        attributes: func_emitter.build_attribute_instances(param.attributes),
+                    });
+                    match default_value {
+                        Some(val) => {
+                            let idx = func_emitter.add_constant(val);
+                            func_emitter.chunk.code.push(OpCode::RecvInit(i as u32, idx as u16));
+                        }
+                        None if param.variadic => {
+                            func_emitter.chunk.code.push(OpCode::RecvVariadic(i as u32))
+                        }
+                        None => func_emitter.chunk.code.push(OpCode::Recv(i as u32)),
+                    }
+                }
+
+                let (mut func_chunk, is_generator) = func_emitter.compile_arrow_body(expr);
+                func_chunk.returns_ref = *by_ref;
+
+                // Every variable the body names is captured by value, except
+                // the parameters and $this (zend_compile.c: find_implicit_binds).
+                let mut use_syms: Vec<Symbol> = Vec::new();
+                for name in self.variables_in(expr.span()) {
+                    let sym = self.interner.intern(&name);
+                    if name == b"this" || param_syms.iter().any(|p| p.name == sym) || use_syms.contains(&sym) {
+                        continue;
+                    }
+                    use_syms.push(sym);
+                    self.chunk.code.push(OpCode::CaptureImplicit(sym));
+                }
+
+                let ret_type = return_type.and_then(|rt| self.convert_type(rt));
+                let user_func = UserFunc {
+                    params: param_syms,
+                    uses: use_syms.clone(),
+                    chunk: Rc::new(func_chunk),
+                    is_static: *is_static,
+                    is_generator,
+                    statics: Rc::new(RefCell::new(HashMap::new())),
+                    return_type: ret_type,
+                    attributes: Vec::new(),
+                };
+                let const_idx = self.add_constant(Val::Resource(Rc::new(user_func)));
                 self.chunk
                     .code
                     .push(OpCode::Closure(const_idx as u32, use_syms.len() as u32));
@@ -3666,6 +3772,33 @@ impl<'src> Emitter<'src> {
         } else {
             self.emit_expr(value);
         }
+    }
+
+    /// The `$name`s written in a span of source, in order of first use. An
+    /// arrow function captures these; a name that only appears inside a
+    /// string is captured too, which is harmless (it is never read).
+    fn variables_in(&self, span: crate::parser::span::Span) -> Vec<Vec<u8>> {
+        let text = &self.source[span.start..span.end.min(self.source.len())];
+        let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        let mut i = 0;
+        while i < text.len() {
+            if text[i] == b'$' && i + 1 < text.len() && (ident(text[i + 1]) && !text[i + 1].is_ascii_digit()) {
+                let start = i + 1;
+                let mut end = start;
+                while end < text.len() && ident(text[end]) {
+                    end += 1;
+                }
+                let name = text[start..end].to_vec();
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+        out
     }
 
     /// Push an expression's value the way isset(), empty() and `??` read
