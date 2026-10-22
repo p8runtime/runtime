@@ -67,6 +67,8 @@ fn main() -> anyhow::Result<()> {
         None => std::env::current_exe()?.with_file_name("php"),
     };
     anyhow::ensure!(php.is_file(), "php binary not found: {}", php.display());
+    // Tests run from their own directory, so a relative path would break.
+    let php = std::path::absolute(php)?;
 
     let files = collect_phpt_files(&cli.path, cli.recursive, cli.filter.as_deref());
     anyhow::ensure!(!files.is_empty(), "no .phpt files in {}", cli.path.display());
