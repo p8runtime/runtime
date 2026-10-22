@@ -112,6 +112,40 @@ fn ini_name(vm: &VM, h: Handle) -> String {
     String::from_utf8_lossy(&vm.arena.get(h).value.to_php_string_bytes()).into_owned()
 }
 
+/// Change a directive and whatever reads it; returns the old value, or None
+/// for a directive that does not exist. ini_set(), ini_restore() and the
+/// `-d` options all go through here.
+pub fn set_ini(vm: &mut VM, name: &str, value: Vec<u8>) -> Option<Vec<u8>> {
+    if name == "error_reporting" {
+        let old = vm.context.config.error_reporting.to_string().into_bytes();
+        vm.context.config.error_reporting = Val::String(Rc::new(value)).to_int() as u32;
+        return Some(old);
+    }
+    let old = vm.context.ini.set(name, value.clone())?;
+    match name {
+        "precision" | "serialize_precision" => {
+            crate::core::value::FloatPrecision::set_ini(name, &value);
+        }
+        "date.timezone" if !value.is_empty() => {
+            vm.context.config.timezone = String::from_utf8_lossy(&value).into_owned();
+        }
+        _ => {}
+    }
+    Some(old)
+}
+
+/// Apply `-d name=value` options before a script runs: values are read as
+/// php.ini reads them, unknown directives are ignored.
+pub fn apply_startup_ini(vm: &mut VM, settings: &[(String, String)]) {
+    for (name, raw) in settings {
+        let value = crate::runtime::ini::parse_value(raw, |constant| {
+            let sym = vm.context.interner.find(constant.as_bytes())?;
+            vm.context.constants.get(&sym).map(Val::to_php_string_bytes)
+        });
+        set_ini(vm, name.trim(), value);
+    }
+}
+
 /// ini_get(string $option): string|false
 pub fn php_ini_get(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let Some(&name) = args.first() else {
@@ -140,13 +174,7 @@ pub fn php_ini_set(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         Val::Null => Vec::new(),
         other => other.to_php_string_bytes(),
     };
-    if name == "error_reporting" {
-        let old = vm.context.config.error_reporting.to_string().into_bytes();
-        let new = Val::String(Rc::new(value)).to_int();
-        vm.context.config.error_reporting = new as u32;
-        return Ok(vm.arena.alloc(Val::String(Rc::new(old))));
-    }
-    Ok(match vm.context.ini.set(&name, value) {
+    Ok(match set_ini(vm, &name, value) {
         Some(old) => vm.arena.alloc(Val::String(Rc::new(old))),
         None => vm.arena.alloc(Val::Bool(false)),
     })
@@ -156,10 +184,13 @@ pub fn php_ini_set(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 pub fn php_ini_restore(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if let Some(&name) = args.first() {
         let name = ini_name(vm, name);
+        vm.context.ini.restore(&name);
         if name == "error_reporting" {
             vm.context.config.error_reporting = E_ALL as u32;
+        } else if let Some(value) = vm.context.ini.get(&name) {
+            set_ini(vm, &name, value);
+            vm.context.ini.restore(&name);
         }
-        vm.context.ini.restore(&name);
     }
     Ok(vm.arena.alloc(Val::Null))
 }

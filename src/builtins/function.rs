@@ -1,4 +1,4 @@
-use crate::core::value::{ArrayKey, Handle, Val};
+use crate::core::value::{ArrayData, ArrayKey, Handle, Val};
 use crate::vm::engine::{ErrorLevel, VM};
 use std::rc::Rc;
 
@@ -172,8 +172,6 @@ fn function_exists_case_insensitive(vm: &VM, name_bytes: &[u8]) -> bool {
 
 /// extension_loaded() - Find out whether an extension is loaded
 ///
-/// For now we only report "core" and "standard" as available since this VM
-/// doesn't ship other extensions yet.
 pub fn php_extension_loaded(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err(format!(
@@ -190,20 +188,36 @@ pub fn php_extension_loaded(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
         }
     };
 
-    // Normalize to lowercase for case-insensitive comparison
-    let ext_name_str = String::from_utf8_lossy(ext_name).to_lowercase();
-
-    // Check extension registry first
-    let is_loaded = vm.context.engine.registry.extension_loaded(&ext_name_str);
-
-    // Fallback to hardcoded always-on extensions
-    let is_loaded = is_loaded || {
-        // Built into the core extension rather than registered separately.
-        const ALWAYS_ON: [&str; 4] = ["core", "standard", "pcre", "bcmath"];
-        ALWAYS_ON.contains(&ext_name_str.as_str())
-    };
-
+    let is_loaded = vm
+        .context
+        .engine
+        .registry
+        .extension_loaded(&String::from_utf8_lossy(ext_name));
     Ok(vm.arena.alloc(Val::Bool(is_loaded)))
+}
+
+/// get_loaded_extensions(bool $zend_extensions = false): array
+pub fn php_get_loaded_extensions(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let zend_extensions = args
+        .first()
+        .is_some_and(|&h| vm.arena.get(h).value.to_bool());
+    let names: Vec<Vec<u8>> = if zend_extensions {
+        Vec::new()
+    } else {
+        vm.context
+            .engine
+            .registry
+            .get_extensions()
+            .iter()
+            .map(|name| name.as_bytes().to_vec())
+            .collect()
+    };
+    let mut array = ArrayData::new();
+    for name in names {
+        let handle = vm.arena.alloc(Val::String(Rc::new(name)));
+        array.push(handle);
+    }
+    Ok(vm.arena.alloc(Val::Array(Rc::new(array))))
 }
 
 /// assert() - Checks an assertion and reports a warning when it fails

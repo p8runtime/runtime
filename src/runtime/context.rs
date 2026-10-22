@@ -1,3 +1,4 @@
+use crate::builtins::defaults::ConstValue;
 use crate::compiler::chunk::UserFunc;
 use crate::core::interner::Interner;
 use crate::core::value::{Handle, Symbol, Val, Visibility};
@@ -323,8 +324,15 @@ impl RequestContext {
             resource_manager: ResourceManager::new(),
             locale: Default::default(),
             env_overrides: HashMap::new(),
-            ini: Default::default(),
+            ini: crate::runtime::ini::IniSettings::new(&engine.registry.get_extensions()),
         };
+
+        // Float formatting follows this request's precision directives
+        for name in ["precision", "serialize_precision"] {
+            if let Some(value) = ctx.ini.get(name) {
+                crate::core::value::FloatPrecision::set_ini(name, &value);
+            }
+        }
 
         // Copy constants from extension registry in bulk
         ctx.copy_engine_constants();
@@ -351,6 +359,23 @@ impl RequestContext {
     ///
     /// Performance: O(n) where n = number of engine constants
     fn copy_engine_constants(&mut self) {
+        // Phase 0: the constants real PHP defines in the loaded extensions
+        let registry = &self.engine.registry;
+        for (ext, name, value) in crate::builtins::defaults::CONSTANTS {
+            if !registry.extension_loaded(ext) {
+                continue;
+            }
+            let value = match value {
+                ConstValue::Int(i) => Val::Int(*i),
+                ConstValue::Float(bits) => Val::Float(f64::from_bits(*bits)),
+                ConstValue::Str(s) => Val::String(Rc::new(s.to_vec())),
+                ConstValue::Bool(b) => Val::Bool(*b),
+                ConstValue::Null => Val::Null,
+            };
+            let sym = self.interner.intern(name);
+            self.constants.insert(sym, value);
+        }
+
         // Phase 1: Copy all extension constants (O(n) bulk operation)
         for (name, val) in self.engine.registry.constants() {
             let sym = self.interner.intern(name);
@@ -534,6 +559,11 @@ impl RequestContext {
 
         // System constants
         self.insert_builtin_constant(b"PHP_OS", Val::String(Rc::new(b"Darwin".to_vec())));
+        // The running binary, so scripts that spawn PHP_BINARY run this runtime
+        let binary = std::env::current_exe()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.insert_builtin_constant(b"PHP_BINARY", Val::String(Rc::new(binary.into_bytes())));
         self.insert_builtin_constant(b"PHP_SAPI", Val::String(Rc::new(b"cli".to_vec())));
         self.insert_builtin_constant(b"PHP_EOL", Val::String(Rc::new(b"\n".to_vec())));
         let os_family: &[u8] = match std::env::consts::OS {
