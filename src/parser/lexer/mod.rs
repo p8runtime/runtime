@@ -1560,6 +1560,15 @@ impl<'src> Iterator for Lexer<'src> {
             b'?' => {
                 if self.peek() == Some(b'>') {
                     self.advance();
+                    // A single newline right after ?> belongs to the tag.
+                    if self.peek() == Some(b'\n') {
+                        self.advance();
+                    } else if self.peek() == Some(b'\r') {
+                        self.advance();
+                        if self.peek() == Some(b'\n') {
+                            self.advance();
+                        }
+                    }
                     self.state_stack.pop();
                     self.state_stack.push(LexerState::Initial);
                     TokenKind::CloseTag

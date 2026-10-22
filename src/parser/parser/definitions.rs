@@ -742,6 +742,15 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
         if self.current_token.kind == TokenKind::Function {
             self.bump();
+            let by_ref = matches!(
+                self.current_token.kind,
+                TokenKind::Ampersand
+                    | TokenKind::AmpersandFollowedByVarOrVararg
+                    | TokenKind::AmpersandNotFollowedByVarOrVararg
+            );
+            if by_ref {
+                self.bump();
+            }
             let name = if self.current_token.kind == TokenKind::Identifier
                 || self.current_token.kind.is_semi_reserved()
             {
@@ -917,6 +926,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             ClassMember::Method {
                 attributes,
                 modifiers: self.arena.alloc_slice_copy(&modifiers),
+                by_ref,
                 name,
                 params,
                 return_type,

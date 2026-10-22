@@ -712,6 +712,8 @@ pub enum ClassMember<'ast> {
     Method {
         attributes: &'ast [AttributeGroup<'ast>],
         modifiers: &'ast [Token],
+        /// `function &name()`: returns by reference.
+        by_ref: bool,
         name: &'ast Token,
         params: &'ast [Param<'ast>],
         return_type: Option<&'ast Type<'ast>>,
