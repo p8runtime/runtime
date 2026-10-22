@@ -824,6 +824,48 @@ impl Extension for CoreExtension {
                 is_static: false,
             },
         );
+        add_methods(
+            &mut reflection_class_methods,
+            &[
+            (b"getShortName", reflection::reflection_class_get_short_name),
+            (b"getNamespaceName", reflection::reflection_class_get_namespace_name),
+            (b"inNamespace", reflection::reflection_class_in_namespace),
+            (b"isInterface", reflection::reflection_class_is_interface),
+            (b"isTrait", reflection::reflection_class_is_trait),
+            (b"isEnum", reflection::reflection_class_is_enum),
+            (b"isAbstract", reflection::reflection_class_is_abstract),
+            (b"isFinal", reflection::reflection_class_is_final),
+            (b"isInternal", reflection::reflection_class_is_internal),
+            (b"isUserDefined", reflection::reflection_class_is_user_defined),
+            (b"isAnonymous", reflection::reflection_class_is_anonymous),
+            (b"isInstantiable", reflection::reflection_class_is_instantiable),
+            (b"isCloneable", reflection::reflection_class_is_cloneable),
+            (b"getModifiers", reflection::reflection_class_get_modifiers),
+            (b"getParentClass", reflection::reflection_class_get_parent_class),
+            (b"isSubclassOf", reflection::reflection_class_is_subclass_of),
+            (b"implementsInterface", reflection::reflection_class_implements_interface),
+            (b"isInstance", reflection::reflection_class_is_instance),
+            (b"getInterfaceNames", reflection::reflection_class_get_interface_names),
+            (b"getInterfaces", reflection::reflection_class_get_interfaces),
+            (b"getMethods", reflection::reflection_class_get_methods),
+            (b"getMethod", reflection::reflection_class_get_method),
+            (b"hasMethod", reflection::reflection_class_has_method),
+            (b"getConstructor", reflection::reflection_class_get_constructor),
+            (b"getProperties", reflection::reflection_class_get_properties),
+            (b"getProperty", reflection::reflection_class_get_property),
+            (b"hasProperty", reflection::reflection_class_has_property),
+            (b"hasConstant", reflection::reflection_class_has_constant),
+            (b"getConstant", reflection::reflection_class_get_constant),
+            (b"getConstants", reflection::reflection_class_get_constants),
+            (b"newInstance", reflection::reflection_class_new_instance),
+            (b"newInstanceArgs", reflection::reflection_class_new_instance_args),
+            (b"newInstanceWithoutConstructor", reflection::reflection_class_new_instance_without_constructor),
+            (b"getStaticProperties", reflection::reflection_class_get_static_properties),
+            (b"getStaticPropertyValue", reflection::reflection_class_get_static_property_value),
+            (b"setStaticPropertyValue", reflection::reflection_class_set_static_property_value),
+            (b"getDocComment", reflection::reflection_class_get_doc_comment),
+            ],
+        );
         registry.register_class(NativeClassDef {
             name: b"ReflectionClass".to_vec(),
             parent: None,
@@ -831,8 +873,57 @@ impl Extension for CoreExtension {
             is_trait: false,
             interfaces: vec![],
             methods: reflection_class_methods,
+            constants: reflection_class_constants(),
+            constructor: None,
+        });
+
+        // Reflection (static helpers)
+        let mut reflection_static_methods = HashMap::new();
+        reflection_static_methods.insert(
+            b"getModifierNames".to_vec(),
+            NativeMethodEntry {
+                handler: reflection::reflection_get_modifier_names,
+                visibility: Visibility::Public,
+                is_static: true,
+            },
+        );
+        registry.register_class(NativeClassDef {
+            name: b"Reflection".to_vec(),
+            parent: None,
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_static_methods,
             constants: HashMap::new(),
             constructor: None,
+        });
+
+        // ReflectionObject: a ReflectionClass built from an instance
+        let mut reflection_object_methods = HashMap::new();
+        add_methods(
+            &mut reflection_object_methods,
+            &[(b"__construct", reflection::reflection_object_construct)],
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionObject".to_vec(),
+            parent: Some(b"ReflectionClass".to_vec()),
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: reflection_object_methods,
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        registry.register_class(NativeClassDef {
+            name: b"ReflectionException".to_vec(),
+            parent: Some(b"Exception".to_vec()),
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: HashMap::new(),
+            constants: HashMap::new(),
+            constructor: Some(exception::exception_construct),
         });
 
         // ReflectionAttribute
@@ -914,6 +1005,30 @@ impl Extension for CoreExtension {
                 is_static: false,
             },
         );
+        add_methods(
+            &mut reflection_method_methods,
+            &[
+            (b"isPublic", reflection::reflection_method_is_public),
+            (b"isProtected", reflection::reflection_method_is_protected),
+            (b"isPrivate", reflection::reflection_method_is_private),
+            (b"isStatic", reflection::reflection_method_is_static),
+            (b"isAbstract", reflection::reflection_method_is_abstract),
+            (b"isConstructor", reflection::reflection_method_is_constructor),
+            (b"isDestructor", reflection::reflection_method_is_destructor),
+            (b"isUserDefined", reflection::reflection_method_is_user_defined),
+            (b"isInternal", reflection::reflection_method_is_internal),
+            (b"isVariadic", reflection::reflection_method_is_variadic),
+            (b"isGenerator", reflection::reflection_method_is_generator),
+            (b"getModifiers", reflection::reflection_method_get_modifiers),
+            (b"getDeclaringClass", reflection::reflection_method_get_declaring_class),
+            (b"getNumberOfParameters", reflection::reflection_method_get_number_of_parameters),
+            (b"getNumberOfRequiredParameters", reflection::reflection_method_get_number_of_required_parameters),
+            (b"invoke", reflection::reflection_method_invoke),
+            (b"invokeArgs", reflection::reflection_method_invoke_args),
+            (b"setAccessible", reflection::reflection_method_set_accessible),
+            (b"getDocComment", reflection::reflection_method_get_doc_comment),
+            ],
+        );
         registry.register_class(NativeClassDef {
             name: b"ReflectionMethod".to_vec(),
             parent: None,
@@ -921,7 +1036,7 @@ impl Extension for CoreExtension {
             is_trait: false,
             interfaces: vec![],
             methods: reflection_method_methods,
-            constants: HashMap::new(),
+            constants: reflection_modifier_constants(),
             constructor: None,
         });
 
@@ -967,6 +1082,26 @@ impl Extension for CoreExtension {
                 is_static: false,
             },
         );
+        add_methods(
+            &mut reflection_prop_methods,
+            &[
+            (b"isPublic", reflection::reflection_property_is_public),
+            (b"isProtected", reflection::reflection_property_is_protected),
+            (b"isPrivate", reflection::reflection_property_is_private),
+            (b"isStatic", reflection::reflection_property_is_static),
+            (b"isReadOnly", reflection::reflection_property_is_readonly),
+            (b"isDefault", reflection::reflection_property_is_default),
+            (b"getModifiers", reflection::reflection_property_get_modifiers),
+            (b"getDeclaringClass", reflection::reflection_property_get_declaring_class),
+            (b"setAccessible", reflection::reflection_property_set_accessible),
+            (b"getValue", reflection::reflection_property_get_value),
+            (b"setValue", reflection::reflection_property_set_value),
+            (b"isInitialized", reflection::reflection_property_is_initialized),
+            (b"hasDefaultValue", reflection::reflection_property_has_default_value),
+            (b"getDefaultValue", reflection::reflection_property_get_default_value),
+            (b"getDocComment", reflection::reflection_property_get_doc_comment),
+            ],
+        );
         registry.register_class(NativeClassDef {
             name: b"ReflectionProperty".to_vec(),
             parent: None,
@@ -974,7 +1109,7 @@ impl Extension for CoreExtension {
             is_trait: false,
             interfaces: vec![],
             methods: reflection_prop_methods,
-            constants: HashMap::new(),
+            constants: reflection_modifier_constants(),
             constructor: None,
         });
 
@@ -1056,6 +1191,16 @@ impl Extension for CoreExtension {
                 visibility: Visibility::Public,
                 is_static: false,
             },
+        );
+        add_methods(
+            &mut reflection_param_methods,
+            &[
+            (b"getPosition", reflection::reflection_parameter_get_position),
+            (b"isOptional", reflection::reflection_parameter_is_optional),
+            (b"isDefaultValueAvailable", reflection::reflection_parameter_is_default_value_available),
+            (b"getDefaultValue", reflection::reflection_parameter_get_default_value),
+            (b"allowsNull", reflection::reflection_parameter_allows_null),
+            ],
         );
         registry.register_class(NativeClassDef {
             name: b"ReflectionParameter".to_vec(),
@@ -1204,6 +1349,20 @@ impl Extension for CoreExtension {
                 visibility: Visibility::Public,
                 is_static: false,
             },
+        );
+        add_methods(
+            &mut reflection_function_methods,
+            &[
+            (b"getNumberOfParameters", reflection::reflection_function_get_number_of_parameters),
+            (b"getNumberOfRequiredParameters", reflection::reflection_function_get_number_of_required_parameters),
+            (b"isVariadic", reflection::reflection_function_is_variadic),
+            (b"isGenerator", reflection::reflection_function_is_generator),
+            (b"isUserDefined", reflection::reflection_function_is_user_defined),
+            (b"isInternal", reflection::reflection_function_is_internal),
+            (b"invoke", reflection::reflection_function_invoke),
+            (b"invokeArgs", reflection::reflection_function_invoke_args),
+            (b"getDocComment", reflection::reflection_function_get_doc_comment),
+            ],
         );
         registry.register_class(NativeClassDef {
             name: b"ReflectionFunction".to_vec(),
@@ -1965,4 +2124,51 @@ impl Extension for CoreExtension {
     fn module_shutdown(&self) -> ExtensionResult {
         ExtensionResult::Success
     }
+}
+
+/// Add public instance methods to a native class's method table.
+fn add_methods(
+    methods: &mut HashMap<Vec<u8>, NativeMethodEntry>,
+    entries: &[(&[u8], crate::runtime::context::NativeHandler)],
+) {
+    for (name, handler) in entries {
+        methods.insert(
+            name.to_vec(),
+            NativeMethodEntry {
+                handler: *handler,
+                visibility: Visibility::Public,
+                is_static: false,
+            },
+        );
+    }
+}
+
+/// ReflectionMethod and ReflectionProperty IS_* constants.
+fn reflection_modifier_constants() -> HashMap<Vec<u8>, (Val, Visibility)> {
+    int_constants(&[
+        (b"IS_STATIC", 16),
+        (b"IS_PUBLIC", 1),
+        (b"IS_PROTECTED", 2),
+        (b"IS_PRIVATE", 4),
+        (b"IS_ABSTRACT", 64),
+        (b"IS_FINAL", 32),
+        (b"IS_READONLY", 128),
+    ])
+}
+
+/// ReflectionClass IS_* constants.
+fn reflection_class_constants() -> HashMap<Vec<u8>, (Val, Visibility)> {
+    int_constants(&[
+        (b"IS_IMPLICIT_ABSTRACT", 16),
+        (b"IS_EXPLICIT_ABSTRACT", 64),
+        (b"IS_FINAL", 32),
+        (b"IS_READONLY", 65536),
+    ])
+}
+
+fn int_constants(items: &[(&[u8], i64)]) -> HashMap<Vec<u8>, (Val, Visibility)> {
+    items
+        .iter()
+        .map(|(name, v)| (name.to_vec(), (Val::Int(*v), Visibility::Public)))
+        .collect()
 }

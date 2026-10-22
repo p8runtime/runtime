@@ -320,6 +320,8 @@ pub struct VM {
     pub last_return_value: Option<Handle>,
     /// A Throwable raised by a builtin via `throw_from_native`, thrown when the builtin returns.
     pub(crate) pending_throw: Option<Handle>,
+    /// Counter giving each declared method and property its declaration order.
+    decl_counter: u64,
     pub silence_stack: Vec<u32>,
     pub pending_calls: Vec<PendingCall>,
     pub output_writer: Box<dyn OutputWriter>,
@@ -381,6 +383,7 @@ impl VM {
             context: RequestContext::new(engine_context),
             last_return_value: None,
             pending_throw: None,
+            decl_counter: 0,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -792,6 +795,7 @@ impl VM {
             context,
             last_return_value: None,
             pending_throw: None,
+            decl_counter: 0,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -7052,7 +7056,9 @@ impl VM {
                         }
 
                         if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                            self.decl_counter += 1;
                             let entry = MethodEntry {
+                                decl_order: self.decl_counter,
                                 name: method_name,
                                 func,
                                 visibility,
@@ -7097,10 +7103,13 @@ impl VM {
                         None
                     }
                 };
+                self.decl_counter += 1;
+                let decl_order = self.decl_counter;
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.properties.insert(
                         prop_name,
                         PropertyEntry {
+                            decl_order,
                             default_value: val,
                             visibility,
                             type_hint,
@@ -7256,10 +7265,13 @@ impl VM {
                 };
                 // Materialize constant-array defaults into a real heap array.
                 let handle = self.deep_clone_val(&val);
+                self.decl_counter += 1;
+                let decl_order = self.decl_counter;
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.static_properties.insert(
                         prop_name,
                         StaticPropertyEntry {
+                            decl_order,
                             handle,
                             visibility,
                             type_hint,

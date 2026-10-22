@@ -77,6 +77,8 @@ pub struct MethodSignature {
 
 #[derive(Debug, Clone)]
 pub struct MethodEntry {
+    /// Order of declaration across the request (reflection lists methods in this order).
+    pub decl_order: u64,
     pub name: Symbol,
     pub func: Rc<UserFunc>,
     pub visibility: Visibility,
@@ -110,6 +112,8 @@ pub struct NativeMethodEntry {
 
 #[derive(Debug, Clone)]
 pub struct PropertyEntry {
+    /// Order of declaration across the request (shared with static properties).
+    pub decl_order: u64,
     pub default_value: Val,
     pub visibility: Visibility,
     pub type_hint: Option<TypeHint>,
@@ -119,6 +123,8 @@ pub struct PropertyEntry {
 
 #[derive(Debug, Clone)]
 pub struct StaticPropertyEntry {
+    /// Order of declaration across the request (shared with instance properties).
+    pub decl_order: u64,
     /// The property's slot in the VM heap, so references to it (`$r = &A::$p`) share it.
     pub handle: Handle,
     pub visibility: Visibility,
