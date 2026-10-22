@@ -1,7 +1,6 @@
 use crate::compiler::chunk::{CodeChunk, UserFunc};
 use crate::core::value::{Handle, Symbol};
 use smallvec::SmallVec;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 pub const INLINE_ARG_CAPACITY: usize = 8;
@@ -12,7 +11,8 @@ pub struct CallFrame {
     pub chunk: Rc<CodeChunk>,
     pub func: Option<Rc<UserFunc>>,
     pub ip: usize,
-    pub locals: HashMap<Symbol, Handle>,
+    /// Insertion-ordered, as PHP's symbol table is (get_defined_vars(), $GLOBALS).
+    pub locals: indexmap::IndexMap<Symbol, Handle>,
     pub this: Option<Handle>,
     pub is_constructor: bool,
     pub class_scope: Option<Symbol>,
@@ -33,7 +33,7 @@ impl CallFrame {
             chunk,
             func: None,
             ip: 0,
-            locals: HashMap::new(),
+            locals: indexmap::IndexMap::new(),
             this: None,
             is_constructor: false,
             class_scope: None,

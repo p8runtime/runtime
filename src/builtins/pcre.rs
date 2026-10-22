@@ -69,7 +69,10 @@ pub fn preg_match(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
             // Match found
             Ok(vm.arena.alloc(Val::Int(1)))
         } else {
-            // No match
+            // No match: $matches becomes an empty array
+            if vm.arena.get(matches_handle).is_ref {
+                vm.arena.get_mut(matches_handle).value = Val::Array(Rc::new(ArrayData::new()));
+            }
             Ok(vm.arena.alloc(Val::Int(0)))
         }
     } else {

@@ -1234,10 +1234,40 @@ impl VM {
 
     #[inline]
     pub(super) fn push_frame(&mut self, mut frame: CallFrame) {
+        if !self.pending_undefined.is_empty() {
+            self.settle_undefined_args(&frame);
+        }
         if frame.stack_base.is_none() {
             frame.stack_base = Some(self.operand_stack.len());
         }
         self.frames.push(frame);
+    }
+
+    /// An undefined variable passed to a user function (LoadVarArg): a
+    /// by-reference parameter creates it in the caller, a by-value one warns.
+    /// Runs before the callee's frame is pushed, so the warning carries the
+    /// caller's line. Reference: $PHP_SRC_PATH/Zend/zend_vm_def.h - ZEND_FETCH_FUNC_ARG
+    fn settle_undefined_args(&mut self, frame: &CallFrame) {
+        let Some(func) = frame.func.as_ref() else {
+            return;
+        };
+        for (idx, &handle) in frame.args.iter().enumerate() {
+            let Some(sym) = self.pending_undefined.remove(&handle) else {
+                continue;
+            };
+            let by_ref = match func.params.get(idx) {
+                Some(param) => param.by_ref,
+                None => func.params.last().is_some_and(|p| p.is_variadic && p.by_ref),
+            };
+            if by_ref {
+                self.arena.get_mut(handle).is_ref = true;
+                if let Some(caller) = self.frames.last_mut() {
+                    caller.locals.entry(sym).or_insert(handle);
+                }
+            } else {
+                self.report_undefined_variable(sym);
+            }
+        }
     }
 
     #[inline]
@@ -3586,6 +3616,13 @@ impl VM {
                 res = Err(self.throw_handle(ex));
             }
 
+            if let Err(VmError::RuntimeError(msg)) = &res
+                && let Some(class) = crate::vm::error_construction::thrown_class_for(msg)
+            {
+                let msg = msg.clone();
+                res = Err(self.throw_error(class, &msg));
+            }
+
             if let Err(e) = res {
                 match e {
                     VmError::Exception(h) => {
@@ -4048,7 +4085,7 @@ impl VM {
         Err(VmError::Exception(ex_handle))
     }
 
-    fn exec_load_var(&mut self, sym: Symbol) -> Result<(), VmError> {
+    fn exec_load_var(&mut self, sym: Symbol, as_arg: bool) -> Result<(), VmError> {
         // Special handling for $GLOBALS
         if self.is_globals_symbol(sym) {
             if let Some(handle) = self.ensure_superglobal_handle(sym) {
@@ -4065,19 +4102,14 @@ impl VM {
             return Ok(());
         }
 
-        let name = self.context.interner.lookup(sym);
-        if let Some(name_bytes) = name {
-            if name_bytes == b"this" {
-                let frame = self.current_frame()?;
-                if let Some(this_val) = frame.this {
-                    self.var_handle_map.insert(this_val, sym);
-                    self.operand_stack.push(this_val);
-                    return Ok(());
-                }
-                return Err(VmError::RuntimeError(
-                    "Using $this when not in object context".into(),
-                ));
+        if self.context.interner.lookup(sym) == Some(b"this") {
+            let frame = self.current_frame()?;
+            if let Some(this_val) = frame.this {
+                self.var_handle_map.insert(this_val, sym);
+                self.operand_stack.push(this_val);
+                return Ok(());
             }
+            return Err(self.throw_error(b"Error", "Using $this when not in object context"));
         }
 
         if self.is_superglobal(sym) {
@@ -4096,14 +4128,118 @@ impl VM {
             return Ok(());
         }
 
-        // Undefined variable. The warning is raised when the value is used;
-        // under @ it is decided now, while the silence is in effect.
+        // Undefined variable. A read warns now (ZEND_FETCH_R); a call argument
+        // waits for the call, which knows whether the parameter is by
+        // reference (ZEND_FETCH_FUNC_ARG). Under @ that is decided now, while
+        // the silence is in effect.
         let null = self.arena.alloc(Val::Null);
         self.var_handle_map.insert(null, sym);
-        if self.silence_stack.is_empty() {
+        if !as_arg {
+            self.report_undefined_variable(sym);
+        } else if self.silence_stack.is_empty() {
             self.pending_undefined.insert(null, sym);
         }
         self.operand_stack.push(null);
+        Ok(())
+    }
+
+    /// `$obj->prop` read (ZEND_FETCH_OBJ_R): the property, or __get, or a
+    /// warning and null. Reference: $PHP_SRC_PATH/Zend/zend_object_handlers.c
+    /// - zend_std_read_property
+    fn read_property(&mut self, obj_handle: Handle, prop_name: Symbol) -> Result<(), VmError> {
+        // Extract needed data to avoid holding borrow
+        let (class_name, prop_handle_opt) = {
+            let obj_zval = self.arena.get(obj_handle);
+            if let Val::Object(payload_handle) = obj_zval.value {
+                let payload_zval = self.arena.get(payload_handle);
+                if let Val::ObjPayload(obj_data) = &payload_zval.value {
+                    (obj_data.class, obj_data.properties.get(&prop_name).copied())
+                } else {
+                    return Err(VmError::RuntimeError("Invalid object payload".into()));
+                }
+            } else {
+                let msg = format!(
+                    "Attempt to read property \"{}\" on {}",
+                    self.symbol_to_string(prop_name),
+                    crate::vm::error_formatting::scalar_value_name(&obj_zval.value)
+                );
+                self.report_error(ErrorLevel::Warning, &msg);
+                let null = self.arena.alloc(Val::Null);
+                self.operand_stack.push(null);
+                return Ok(());
+            }
+        };
+
+        // Check visibility
+        let current_scope = self.get_current_class();
+        let visibility_check =
+            self.check_prop_visibility(class_name, prop_name, current_scope);
+
+        let mut use_magic = false;
+
+        if let Some(prop_handle) = prop_handle_opt {
+            if visibility_check.is_ok() {
+                if matches!(self.arena.get(prop_handle).value, Val::Uninitialized) {
+                    return Err(self.throw_error(
+                        b"Error",
+                        &format!(
+                            "Typed property {}::${} must not be accessed before initialization",
+                            self.symbol_to_string(self.declaring_class_of(class_name, prop_name)),
+                            self.symbol_to_string(prop_name)
+                        ),
+                    ));
+                }
+                self.operand_stack.push(prop_handle);
+            } else {
+                use_magic = true;
+            }
+        } else {
+            use_magic = true;
+        }
+
+        if use_magic {
+            let magic_get = self.context.interner.intern(b"__get");
+            if let Some((method, _, _, defined_class)) =
+                self.find_method(class_name, magic_get)
+            {
+                let prop_name_bytes = self
+                    .context
+                    .interner
+                    .lookup(prop_name)
+                    .unwrap_or(b"")
+                    .to_vec();
+                let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
+
+                let mut frame = CallFrame::new(method.chunk.clone());
+                frame.func = Some(method.clone());
+                frame.this = Some(obj_handle);
+                frame.class_scope = Some(defined_class);
+                frame.called_scope = Some(class_name);
+
+                if let Some(param) = method.params.first() {
+                    frame.locals.insert(param.name, name_handle);
+                }
+
+                self.push_frame(frame);
+            } else {
+                visibility_check?;
+                // A declared property with no slot (hooked or virtual) reads as
+                // null without a warning.
+                if self.declares_property(class_name, prop_name) {
+                    let null = self.arena.alloc(Val::Null);
+                    self.operand_stack.push(null);
+                    return Ok(());
+                }
+                let msg = format!(
+                    "Undefined property: {}::${}",
+                    self.symbol_to_string(class_name),
+                    self.symbol_to_string(prop_name)
+                );
+                self.report_error(ErrorLevel::Warning, &msg);
+                let null = self.arena.alloc(Val::Null);
+                self.operand_stack.push(null);
+            }
+        }
         Ok(())
     }
 
@@ -4140,7 +4276,8 @@ impl VM {
             OpCode::BitwiseNot => self.exec_bitwise_not()?,
             OpCode::BoolNot => self.exec_bool_not()?,
 
-            OpCode::LoadVar(sym) => self.exec_load_var(sym)?,
+            OpCode::LoadVar(sym) => self.exec_load_var(sym, false)?,
+            OpCode::LoadVarArg(sym) => self.exec_load_var(sym, true)?,
             OpCode::LoadVarDynamic => {
                 let name_handle = self
                     .operand_stack
@@ -4172,9 +4309,7 @@ impl VM {
                 } else {
                     let null = self.arena.alloc(Val::Null);
                     self.var_handle_map.insert(null, sym);
-                    if self.silence_stack.is_empty() {
-                        self.pending_undefined.insert(null, sym);
-                    }
+                    self.report_undefined_variable(sym);
                     self.operand_stack.push(null);
                 }
             }
@@ -4487,7 +4622,7 @@ impl VM {
 
                 if !self.is_superglobal(sym) {
                     let frame = self.frames.last_mut().unwrap();
-                    frame.locals.remove(&sym);
+                    frame.locals.shift_remove(&sym);
                 }
             }
             OpCode::UnsetVarDynamic => {
@@ -4507,7 +4642,7 @@ impl VM {
 
                 if !self.is_superglobal(sym) {
                     let frame = self.frames.last_mut().unwrap();
-                    frame.locals.remove(&sym);
+                    frame.locals.shift_remove(&sym);
                 }
             }
             OpCode::BindGlobal(sym) => {
@@ -6254,9 +6389,9 @@ impl VM {
                         if let ArrayKey::Str(key_bytes) = &key {
                             let sym = self.context.interner.intern(key_bytes);
                             if key_bytes.as_ref() != b"GLOBALS" {
-                                self.context.globals.remove(&sym);
+                                self.context.globals.shift_remove(&sym);
                                 if let Some(frame) = self.frames.first_mut() {
-                                    frame.locals.remove(&sym);
+                                    frame.locals.shift_remove(&sym);
                                 }
                             }
                         }
@@ -8173,73 +8308,7 @@ impl VM {
                     .operand_stack
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-
-                // Extract needed data to avoid holding borrow
-                let (class_name, prop_handle_opt) = {
-                    let obj_zval = self.arena.get(obj_handle);
-                    if let Val::Object(payload_handle) = obj_zval.value {
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                            (obj_data.class, obj_data.properties.get(&prop_name).copied())
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
-                    } else {
-                        return Err(VmError::RuntimeError(
-                            "Attempt to fetch property on non-object".into(),
-                        ));
-                    }
-                };
-
-                // Check visibility
-                let current_scope = self.get_current_class();
-                let visibility_check =
-                    self.check_prop_visibility(class_name, prop_name, current_scope);
-
-                let mut use_magic = false;
-
-                if let Some(prop_handle) = prop_handle_opt {
-                    if visibility_check.is_ok() {
-                        self.operand_stack.push(prop_handle);
-                    } else {
-                        use_magic = true;
-                    }
-                } else {
-                    use_magic = true;
-                }
-
-                if use_magic {
-                    let magic_get = self.context.interner.intern(b"__get");
-                    if let Some((method, _, _, defined_class)) =
-                        self.find_method(class_name, magic_get)
-                    {
-                        let prop_name_bytes = self
-                            .context
-                            .interner
-                            .lookup(prop_name)
-                            .unwrap_or(b"")
-                            .to_vec();
-                        let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
-
-                        let mut frame = CallFrame::new(method.chunk.clone());
-                        frame.func = Some(method.clone());
-                        frame.this = Some(obj_handle);
-                        frame.class_scope = Some(defined_class);
-                        frame.called_scope = Some(class_name);
-
-                        if let Some(param) = method.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
-                        }
-
-                        self.push_frame(frame);
-                    } else {
-                        if let Err(e) = visibility_check {
-                            return Err(e);
-                        }
-                        let null = self.arena.alloc(Val::Null);
-                        self.operand_stack.push(null);
-                    }
-                }
+                self.read_property(obj_handle, prop_name)?;
             }
             OpCode::FetchPropDynamic => {
                 let name_handle = self
@@ -8257,73 +8326,9 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                // Extract needed data to avoid holding borrow
-                let (class_name, prop_handle_opt) = {
-                    let obj_zval = self.arena.get(obj_handle);
-                    if let Val::Object(payload_handle) = obj_zval.value {
-                        let payload_zval = self.arena.get(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                            (obj_data.class, obj_data.properties.get(&prop_name).copied())
-                        } else {
-                            return Err(VmError::RuntimeError("Invalid object payload".into()));
-                        }
-                    } else {
-                        return Err(VmError::RuntimeError(
-                            "Attempt to fetch property on non-object".into(),
-                        ));
-                    }
-                };
-
-                // Check visibility
-                let current_scope = self.get_current_class();
-                let visibility_check =
-                    self.check_prop_visibility(class_name, prop_name, current_scope);
-
-                let mut use_magic = false;
-
-                if let Some(prop_handle) = prop_handle_opt {
-                    if visibility_check.is_ok() {
-                        self.operand_stack.push(prop_handle);
-                    } else {
-                        use_magic = true;
-                    }
-                } else {
-                    use_magic = true;
-                }
-
-                if use_magic {
-                    let magic_get = self.context.interner.intern(b"__get");
-                    if let Some((method, _, _, defined_class)) =
-                        self.find_method(class_name, magic_get)
-                    {
-                        let prop_name_bytes = self
-                            .context
-                            .interner
-                            .lookup(prop_name)
-                            .unwrap_or(b"")
-                            .to_vec();
-                        let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
-
-                        let mut frame = CallFrame::new(method.chunk.clone());
-                        frame.func = Some(method.clone());
-                        frame.this = Some(obj_handle);
-                        frame.class_scope = Some(defined_class);
-                        frame.called_scope = Some(class_name);
-
-                        if let Some(param) = method.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
-                        }
-
-                        self.push_frame(frame);
-                    } else {
-                        if let Err(e) = visibility_check {
-                            return Err(e);
-                        }
-                        let null = self.arena.alloc(Val::Null);
-                        self.operand_stack.push(null);
-                    }
-                }
+                self.read_property(obj_handle, prop_name)?;
             }
+
             OpCode::AssignProp(prop_name) => {
                 let val_handle = self.pop_operand_required()?;
                 let obj_handle = self.pop_operand_required()?;
@@ -9210,6 +9215,14 @@ impl VM {
 
                         if let Some(cls) = class_name {
                             if self.implements_array_access(cls) {
+                                // isset/?? asks offsetExists first (zend_std_read_dimension, BP_VAR_IS)
+                                if matches!(op, OpCode::FetchDimIs)
+                                    && !self.call_array_access_offset_exists(container_handle, dim)?
+                                {
+                                    let null = self.arena.alloc(Val::Null);
+                                    self.operand_stack.push(null);
+                                    return Ok(());
+                                }
                                 // Call ArrayAccess::offsetGet($offset)
                                 match self.call_array_access_offset_get(container_handle, dim) {
                                     Ok(result) => {
@@ -9515,9 +9528,12 @@ impl VM {
                         call.class_name = Some(class_name);
                     }
                 } else {
-                    return Err(VmError::RuntimeError(
-                        "Call to a member function on a non-object".into(),
-                    ));
+                    let msg = format!(
+                        "Call to a member function {}() on {}",
+                        self.symbol_to_string(name_sym),
+                        crate::vm::error_formatting::scalar_value_name(&obj_val.value)
+                    );
+                    return Err(self.throw_error(b"Error", &msg));
                 }
             }
             OpCode::InitStaticMethodCall => {
@@ -12124,7 +12140,7 @@ impl VM {
                         if let ArrayKey::Str(key_bytes) = &key {
                             let sym = self.context.interner.intern(key_bytes);
                             if key_bytes.as_ref() != b"GLOBALS" {
-                                self.context.globals.remove(&sym);
+                                self.context.globals.shift_remove(&sym);
                             }
                         }
                     }
@@ -12834,9 +12850,20 @@ impl VM {
                 return Err(VmError::RuntimeError("Invalid object payload".into()));
             }
         } else {
-            return Err(VmError::RuntimeError(
-                "Call to member function on non-object".into(),
-            ));
+            let name = if is_dynamic {
+                self.operand_stack
+                    .peek_at(arg_count as usize)
+                    .map(|h| String::from_utf8_lossy(&self.arena.get(h).value.to_php_string_bytes()).into_owned())
+                    .unwrap_or_default()
+            } else {
+                self.symbol_to_string(method_name)
+            };
+            let msg = format!(
+                "Call to a member function {}() on {}",
+                name,
+                crate::vm::error_formatting::scalar_value_name(&self.arena.get(obj_handle).value)
+            );
+            return Err(self.throw_error(b"Error", &msg));
         };
 
         // Check for native method first

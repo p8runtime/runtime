@@ -162,7 +162,6 @@ impl VM {
         // User-defined function
         let func_opt = self.context.user_functions.get(&name).cloned();
         if let Some(func) = func_opt {
-            self.handle_pending_undefined_for_call(&args, None);
             let mut frame = CallFrame::new(func.chunk.clone());
             frame.func = Some(func.clone());
             frame.args = args;
