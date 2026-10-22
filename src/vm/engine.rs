@@ -6996,87 +6996,85 @@ impl VM {
                     let frame = self.frames.last().unwrap();
                     frame.chunk.constants[func_idx as usize].clone()
                 };
-                if let Val::Resource(rc) = val {
-                    if let Ok(func) = rc.downcast::<UserFunc>() {
-                        for param in &func.params {
-                            let mut seen = Vec::new();
-                            for attr in &param.attributes {
-                                self.validate_attribute_use(
-                                    attr,
-                                    Self::ATTR_TARGET_PARAMETER,
-                                    &seen,
-                                )?;
-                                seen.push(attr.clone());
-                            }
+                if let Val::Resource(rc) = val
+                    && let Ok(func) = rc.downcast::<UserFunc>()
+                {
+                    for param in &func.params {
+                        let mut seen = Vec::new();
+                        for attr in &param.attributes {
+                            self.validate_attribute_use(
+                                attr,
+                                Self::ATTR_TARGET_PARAMETER,
+                                &seen,
+                            )?;
+                            seen.push(attr.clone());
                         }
+                    }
 
-                        let lower_key = self.intern_lowercase_symbol(method_name)?;
+                    let lower_key = self.intern_lowercase_symbol(method_name)?;
 
-                        // Build signature from UserFunc data
-                        let signature = MethodSignature {
-                            parameters: func
-                                .params
-                                .iter()
-                                .map(|p| ParameterInfo {
-                                    name: p.name,
-                                    type_hint: p
-                                        .param_type
-                                        .clone()
-                                        .and_then(|rt| self.return_type_to_type_hint(&rt)),
-                                    is_reference: p.by_ref,
-                                    is_variadic: p.is_variadic,
-                                    default_value: p.default_value.clone(),
-                                    attributes: p.attributes.clone(),
-                                })
-                                .collect(),
-                            return_type: func
-                                .return_type
-                                .as_ref()
-                                .and_then(|rt| self.return_type_to_type_hint(rt)),
+                    // Build signature from UserFunc data
+                    let signature = MethodSignature {
+                        parameters: func
+                            .params
+                            .iter()
+                            .map(|p| ParameterInfo {
+                                name: p.name,
+                                type_hint: p
+                                    .param_type
+                                    .clone()
+                                    .and_then(|rt| self.return_type_to_type_hint(&rt)),
+                                is_reference: p.by_ref,
+                                is_variadic: p.is_variadic,
+                                default_value: p.default_value.clone(),
+                                attributes: p.attributes.clone(),
+                            })
+                            .collect(),
+                        return_type: func
+                            .return_type
+                            .as_ref()
+                            .and_then(|rt| self.return_type_to_type_hint(rt)),
+                    };
+
+                    // Check if parent class has this method - validate override compatibility
+                    if let Some(class_def) = self.context.classes.get(&class_name)
+                        && let Some(parent_sym) = class_def.parent
+                        && let Some((parent_method, parent_vis, parent_static, _)) =
+                            self.find_method(parent_sym, lower_key)
+                    {
+                        self.validate_method_override(
+                            class_name,
+                            method_name,
+                            &signature,
+                            is_static,
+                            visibility,
+                            &parent_method,
+                            parent_static,
+                            parent_vis,
+                        )?;
+                    }
+
+                    if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                        self.decl_counter += 1;
+                        let entry = MethodEntry {
+                            decl_order: self.decl_counter,
+                            name: method_name,
+                            func,
+                            visibility,
+                            is_static,
+                            declaring_class: class_name,
+                            is_abstract,
+                            signature,
+                            attributes: Vec::new(),
                         };
+                        class_def.methods.insert(lower_key, entry.clone());
 
-                        // Check if parent class has this method - validate override compatibility
-                        if let Some(class_def) = self.context.classes.get(&class_name) {
-                            if let Some(parent_sym) = class_def.parent {
-                                if let Some((parent_method, parent_vis, parent_static, _)) =
-                                    self.find_method(parent_sym, lower_key)
-                                {
-                                    self.validate_method_override(
-                                        class_name,
-                                        method_name,
-                                        &signature,
-                                        is_static,
-                                        visibility,
-                                        &parent_method,
-                                        parent_static,
-                                        parent_vis,
-                                    )?;
-                                }
-                            }
-                        }
-
-                        if let Some(class_def) = self.context.classes.get_mut(&class_name) {
-                            self.decl_counter += 1;
-                            let entry = MethodEntry {
-                                decl_order: self.decl_counter,
-                                name: method_name,
-                                func,
-                                visibility,
-                                is_static,
-                                declaring_class: class_name,
-                                is_abstract,
-                                signature,
-                                attributes: Vec::new(),
-                            };
-                            class_def.methods.insert(lower_key, entry.clone());
-
-                            // Track abstract methods or remove from inherited abstract methods if implemented
-                            if is_abstract {
-                                class_def.abstract_methods.insert(lower_key);
-                            } else {
-                                // If this method implements an inherited abstract method, remove it
-                                class_def.abstract_methods.remove(&lower_key);
-                            }
+                        // Track abstract methods or remove from inherited abstract methods if implemented
+                        if is_abstract {
+                            class_def.abstract_methods.insert(lower_key);
+                        } else {
+                            // If this method implements an inherited abstract method, remove it
+                            class_def.abstract_methods.remove(&lower_key);
                         }
                     }
                 }

@@ -1615,7 +1615,7 @@ fn reflection_error(vm: &mut VM, msg: &str) -> String {
     vm.throw_from_native(b"ReflectionException", msg)
 }
 
-fn class_of<'a>(vm: &'a VM, class: Symbol) -> Result<&'a ClassDef, String> {
+fn class_of(vm: &VM, class: Symbol) -> Result<&ClassDef, String> {
     vm.context
         .classes
         .get(&class)
