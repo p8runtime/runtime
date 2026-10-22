@@ -26,7 +26,7 @@ impl std::fmt::Display for PhptError {
 
 impl std::error::Error for PhptError {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PhptTest {
     pub file_path: PathBuf,
     pub description: String,
@@ -44,11 +44,18 @@ pub struct PhptSections {
     pub env: Vec<(String, String)>,
     pub args: Option<String>,
     pub clean: Option<String>,
+    /// `--XFAIL--` reason: php-src expects this test to fail.
+    pub xfail: Option<String>,
+    /// `--EXTENSIONS--`: extensions the test needs loaded.
+    pub extensions: Vec<String>,
+    /// Sections this runner can't honour (CGI requests, stdin, external
+    /// files); a test with any of them is skipped, not failed.
+    pub unsupported: Vec<String>,
 }
 
 impl PhptTest {
     pub fn from_file(path: &Path) -> Result<Self, PhptError> {
-        let content = fs::read_to_string(path)?;
+        let content = String::from_utf8_lossy(&fs::read(path)?).into_owned();
         Self::from_string(&content, path.to_path_buf())
     }
 
@@ -60,7 +67,13 @@ impl PhptTest {
 
         for line in content.lines() {
             // Check if this is a section marker
-            if line.starts_with("--") && line.ends_with("--") && line.len() > 4 {
+            let is_marker = line.len() > 4
+                && line.starts_with("--")
+                && line.ends_with("--")
+                && line[2..line.len() - 2]
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b == b'_');
+            if is_marker {
                 // Save previous section
                 if let Some(section_name) = current_section.take() {
                     Self::save_section(&section_name, &current_content, &mut sections, &mut description)?;
@@ -91,7 +104,11 @@ impl PhptTest {
         if sections.file.is_empty() {
             return Err(PhptError::MissingSection("FILE".to_string()));
         }
-        if sections.expect.is_none() && sections.expectf.is_none() && sections.expectregex.is_none() {
+        if sections.unsupported.is_empty()
+            && sections.expect.is_none()
+            && sections.expectf.is_none()
+            && sections.expectregex.is_none()
+        {
             return Err(PhptError::MissingSection("EXPECT/EXPECTF/EXPECTREGEX".to_string()));
         }
 
@@ -114,7 +131,7 @@ impl PhptTest {
             "TEST" => {
                 *description = trimmed_content.to_string();
             }
-            "FILE" => {
+            "FILE" | "FILEEOF" => {
                 sections.file = trimmed_content.to_string();
             }
             "EXPECT" => {
@@ -153,13 +170,18 @@ impl PhptTest {
             "CLEAN" => {
                 sections.clean = Some(trimmed_content.to_string());
             }
-            "XLEAK" | "CREDITS" => {
-                // Ignored sections
+            "XFAIL" => {
+                sections.xfail = Some(trimmed_content.trim().to_string());
             }
-            _ => {
-                // Unknown section, ignore with warning
-                eprintln!("Warning: Unknown section --{}--", name);
+            "EXTENSIONS" => {
+                sections.extensions = trimmed_content
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
             }
+            "XLEAK" | "CREDITS" | "DESCRIPTION" | "CONFLICTS" | "FLAKY"
+            | "CAPTURE_STDIO" | "WHITESPACE_SENSITIVE" => {}
+            other => sections.unsupported.push(other.to_string()),
         }
 
         Ok(())

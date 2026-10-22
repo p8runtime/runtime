@@ -1,211 +1,217 @@
-use crate::compiler::emitter::Emitter;
-use crate::parser::lexer::Lexer;
-use crate::parser::parser::Parser as PhpParser;
-use crate::phpt::matcher::{match_output, ExpectationType};
-use crate::phpt::output_writer::BufferedOutputWriter;
+//! Runs a parsed .phpt test the way php-src's run-tests.php does: each
+//! section is written next to the test as `<name>.php` / `.skip.php` /
+//! `.clean.php` and executed by the `php` binary in a child process, so a
+//! crash or hang fails one test instead of the whole run.
+
+use crate::phpt::matcher::{ExpectationType, match_output};
 use crate::phpt::parser::PhptTest;
-use crate::runtime::context::{EngineBuilder, EngineContext};
-use crate::vm::engine::VM;
-use bumpalo::Bump;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum TestResult {
     Passed,
     Failed { expected: String, actual: String },
+    /// Failed, but the test is marked `--XFAIL--` in php-src.
+    ExpectedFailure { reason: String },
     Skipped { reason: String },
     Error { error: String },
 }
 
+/// Output kept per test run; anything past this is discarded.
+const MAX_OUTPUT: usize = 1 << 20;
+
 pub struct PhptExecutor {
-    engine_context: Arc<EngineContext>,
+    php: PathBuf,
+    timeout: Duration,
+    loaded_extensions: HashSet<String>,
+}
+
+struct Output {
+    text: String,
+    timed_out: bool,
 }
 
 impl PhptExecutor {
-    pub fn new() -> Result<Self, String> {
-        let builder = EngineBuilder::new();
-        let engine_context = builder
-            .with_core_extensions()
-            .build()
-            .map_err(|e| format!("Failed to build engine: {}", e))?;
+    pub fn new(php: PathBuf, timeout: Duration) -> Self {
+        Self {
+            php,
+            timeout,
+            loaded_extensions: HashSet::new(),
+        }
+    }
 
-        Ok(Self { engine_context })
+    /// Ask the binary which of `names` it has loaded (one `extension_loaded`
+    /// probe), so tests needing missing extensions are skipped, not failed.
+    pub fn probe_extensions<'a>(
+        &mut self,
+        names: impl IntoIterator<Item = &'a str>,
+        scratch: &Path,
+    ) -> Result<(), String> {
+        let names: Vec<&str> = names.into_iter().collect();
+        let mut code = String::from("<?php\n");
+        for name in &names {
+            code.push_str(&format!("if (extension_loaded('{}')) echo '{}', \"\\n\";\n", name, name));
+        }
+        let probe = scratch.join("php-test-extensions.php");
+        let out = self.run_section(&PhptTest::default(), &probe, &code)?;
+        self.loaded_extensions = out.text.lines().map(str::to_string).collect();
+        Ok(())
     }
 
     pub fn run_test(&self, test: &PhptTest) -> TestResult {
-        // Check SKIPIF first
-        if let Some(ref skipif_code) = test.sections.skipif {
-            match self.execute_skipif(skipif_code) {
-                Ok(Some(reason)) => return TestResult::Skipped { reason },
-                Err(e) => return TestResult::Error {
-                    error: format!("SKIPIF error: {}", e),
-                },
-                Ok(None) => {
-                    // Continue with test
+        if let Some(section) = test.sections.unsupported.first() {
+            return TestResult::Skipped {
+                reason: format!("needs --{}--", section),
+            };
+        }
+        if let Some(ext) = test
+            .sections
+            .extensions
+            .iter()
+            .find(|e| !self.loaded_extensions.contains(e.as_str()))
+        {
+            return TestResult::Skipped {
+                reason: format!("extension {} not loaded", ext),
+            };
+        }
+        let base = match std::path::absolute(&test.file_path) {
+            Ok(path) => path.with_extension(""),
+            Err(e) => return TestResult::Error { error: e.to_string() },
+        };
+
+        if let Some(code) = &test.sections.skipif {
+            let path = sibling(&base, "skip.php");
+            match self.run_section(test, &path, code) {
+                Ok(out) => {
+                    let trimmed = out.text.trim_start();
+                    if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("skip") {
+                        return TestResult::Skipped {
+                            reason: trimmed[4..].trim().to_string(),
+                        };
+                    }
                 }
+                Err(e) => return TestResult::Error { error: e },
             }
         }
 
-        // Apply environment variables
-        for (key, value) in &test.sections.env {
-            unsafe {
-                std::env::set_var(key, value);
-            }
+        let path = sibling(&base, "php");
+        let result = match self.run_section(test, &path, &test.sections.file) {
+            Ok(out) if out.timed_out => TestResult::Failed {
+                expected: "(completion)".into(),
+                actual: format!("timed out after {:?}\n{}", self.timeout, out.text),
+            },
+            Ok(out) => self.judge(test, out.text),
+            Err(e) => TestResult::Error { error: e },
+        };
+
+        if let Some(code) = &test.sections.clean {
+            let _ = self.run_section(test, &sibling(&base, "clean.php"), code);
         }
-
-        // Execute the test
-        let result = self.execute_test_code(test);
-
-        // Clean up environment variables
-        for (key, _) in &test.sections.env {
-            unsafe {
-                std::env::remove_var(key);
-            }
-        }
-
-        // Run CLEAN section if present
-        if let Some(ref clean_code) = test.sections.clean {
-            if let Err(e) = self.execute_clean(clean_code) {
-                eprintln!("Warning: CLEAN section failed: {}", e);
-            }
-        }
-
         result
     }
 
-    fn execute_skipif(&self, skipif_code: &str) -> Result<Option<String>, String> {
-        let mut vm = VM::new_with_sapi(self.engine_context.clone(), crate::sapi::SapiMode::Cli);
-        let output_writer = BufferedOutputWriter::new();
-        vm.set_output_writer(Box::new(output_writer.clone()));
-
-        if let Err(e) = self.execute_source(skipif_code, &mut vm) {
-            return Err(format!("Failed to execute SKIPIF: {}", e));
-        }
-
-        let output = output_writer.get_output();
-
-        // Check if output contains "skip"
-        if output.to_lowercase().contains("skip") {
-            // Extract reason (everything after "skip")
-            let reason = output
-                .lines()
-                .find(|line| line.to_lowercase().contains("skip"))
-                .and_then(|line| {
-                    let lower = line.to_lowercase();
-                    lower.find("skip").map(|pos| {
-                        let after = &line[pos + 4..];
-                        after.trim().to_string()
-                    })
-                })
-                .unwrap_or_else(|| "Test skipped".to_string());
-
-            Ok(Some(reason))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn execute_test_code(&self, test: &PhptTest) -> TestResult {
-        let mut vm = VM::new_with_sapi(self.engine_context.clone(), crate::sapi::SapiMode::Cli);
-
-        // TODO: Apply INI settings (when INI handling is available)
-        // For now, we'll skip INI settings
-
-        // TODO: Set up $argv and $argc from ARGS section
-        // For now, we'll skip command-line arguments
-
-        let output_writer = BufferedOutputWriter::new();
-        vm.set_output_writer(Box::new(output_writer.clone()));
-
-        if let Err(e) = self.execute_source(&test.sections.file, &mut vm) {
-            return TestResult::Error {
-                error: format!("Execution error: {}", e),
-            };
-        }
-
-        let actual_output = output_writer.get_output();
-
-        // Determine expected output type
-        let expected = if let Some(ref expect) = test.sections.expect {
-            ExpectationType::Exact(expect.clone())
-        } else if let Some(ref expectf) = test.sections.expectf {
-            ExpectationType::Format(expectf.clone())
-        } else if let Some(ref expectregex) = test.sections.expectregex {
-            ExpectationType::Regex(expectregex.clone())
+    fn judge(&self, test: &PhptTest, actual: String) -> TestResult {
+        let s = &test.sections;
+        let expected = if let Some(e) = &s.expect {
+            ExpectationType::Exact(e.clone())
+        } else if let Some(e) = &s.expectf {
+            ExpectationType::Format(e.clone())
+        } else if let Some(e) = &s.expectregex {
+            ExpectationType::Regex(e.clone())
         } else {
             return TestResult::Error {
-                error: "No EXPECT/EXPECTF/EXPECTREGEX section found".to_string(),
+                error: "no EXPECT/EXPECTF/EXPECTREGEX section".into(),
             };
         };
-
-        if match_output(&actual_output, expected.clone()) {
-            TestResult::Passed
-        } else {
-            let expected_str = match expected {
-                ExpectationType::Exact(s) => s,
-                ExpectationType::Format(s) => format!("EXPECTF: {}", s),
-                ExpectationType::Regex(s) => format!("EXPECTREGEX: {}", s),
+        if match_output(&actual, expected.clone()) {
+            return TestResult::Passed;
+        }
+        if let Some(reason) = &s.xfail {
+            return TestResult::ExpectedFailure {
+                reason: reason.clone(),
             };
-
-            TestResult::Failed {
-                expected: expected_str,
-                actual: actual_output,
-            }
         }
+        let expected = match expected {
+            ExpectationType::Exact(s) | ExpectationType::Format(s) | ExpectationType::Regex(s) => s,
+        };
+        TestResult::Failed { expected, actual }
     }
 
-    fn execute_clean(&self, clean_code: &str) -> Result<(), String> {
-        let mut vm = VM::new_with_sapi(self.engine_context.clone(), crate::sapi::SapiMode::Cli);
-        let output_writer = BufferedOutputWriter::new();
-        vm.set_output_writer(Box::new(output_writer));
-
-        self.execute_source(clean_code, &mut vm)
-            .map_err(|e| format!("CLEAN failed: {}", e))
+    /// Write `code` to `path`, run it, delete it; stdout and stderr are merged
+    /// in order, like a terminal would show them.
+    fn run_section(&self, test: &PhptTest, path: &Path, code: &str) -> Result<Output, String> {
+        std::fs::write(path, code).map_err(|e| format!("write {}: {}", path.display(), e))?;
+        let out = self.spawn(test, path);
+        let _ = std::fs::remove_file(path);
+        out
     }
 
-    fn execute_source(&self, source: &str, vm: &mut VM) -> Result<(), String> {
-        let source_bytes = source.as_bytes();
-        let arena = Bump::new();
-        let lexer = Lexer::new(source_bytes);
-        let mut parser = PhpParser::new(lexer, &arena);
+    fn spawn(&self, test: &PhptTest, path: &Path) -> Result<Output, String> {
+        let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
+        let mut cmd = Command::new(&self.php);
+        cmd.arg(path)
+            .stdin(Stdio::null())
+            .stdout(writer.try_clone().map_err(|e| e.to_string())?)
+            .stderr(writer);
+        if let Some(dir) = path.parent() {
+            cmd.current_dir(dir);
+        }
+        if let Some(args) = &test.sections.args {
+            cmd.args(args.split_whitespace());
+        }
+        for (key, value) in &test.sections.env {
+            cmd.env(key, value);
+        }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("spawn {}: {}", self.php.display(), e))?;
+        // `cmd` holds the write ends; drop it so EOF arrives when the child exits.
+        drop(cmd);
 
-        let program = parser.parse_program();
-
-        if !program.errors.is_empty() {
-            let mut error_msg = String::new();
-            for error in program.errors {
-                error_msg.push_str(&error.to_human_readable(source_bytes));
-                error_msg.push('\n');
+        // Keep at most MAX_OUTPUT bytes but keep draining, so a runaway test
+        // can't fill memory or disk; the timeout still ends it.
+        let collector = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 64 * 1024];
+            while let Ok(n) = reader.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                let room = MAX_OUTPUT.saturating_sub(buf.len());
+                buf.extend_from_slice(&chunk[..n.min(room)]);
             }
-            return Err(error_msg);
+            buf
+        });
+        let deadline = Instant::now() + self.timeout;
+        let mut timed_out = false;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    timed_out = true;
+                    break;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Err(e) => return Err(e.to_string()),
+            }
         }
-
-        // Compile
-        let emitter = Emitter::new(source_bytes, &mut vm.context.interner);
-        let (chunk, has_error) = emitter.compile(program.statements);
-
-        if has_error {
-            return Err("Compilation errors occurred".to_string());
-        }
-
-        // Execute
-        if let Err(e) = vm.run(Rc::new(chunk)) {
-            return Err(format!("Runtime error: {:?}", e));
-        }
-
-        // Flush output buffers
-        crate::builtins::output_control::flush_all_output_buffers(vm)
-            .map_err(|e| format!("Failed to flush output: {:?}", e))?;
-        vm.flush_output()
-            .map_err(|e| format!("Failed to flush output: {:?}", e))?;
-
-        Ok(())
+        let bytes = collector.join().unwrap_or_default();
+        Ok(Output {
+            text: String::from_utf8_lossy(&bytes).into_owned(),
+            timed_out,
+        })
     }
 }
 
-impl Default for PhptExecutor {
-    fn default() -> Self {
-        Self::new().expect("Failed to create PhptExecutor")
-    }
+fn sibling(base: &Path, ext: &str) -> PathBuf {
+    let mut name = base.as_os_str().to_owned();
+    name.push(".");
+    name.push(ext);
+    PathBuf::from(name)
 }

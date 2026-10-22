@@ -1,133 +1,148 @@
+//! Run php-src style .phpt tests against the `php` binary.
+//!
+//!   php-test path/to/php-src/Zend/tests -r --by-dir 2 --list results.txt
+
 use clap::Parser;
-use php_rs::phpt::{PhptExecutor, PhptTest};
+use php_rs::phpt::executor::TestResult;
 use php_rs::phpt::results::TestResults;
+use php_rs::phpt::{PhptExecutor, PhptTest};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
-#[command(name = "php-test")]
-#[command(about = "Run .phpt test files for php-rs", long_about = None)]
+#[command(name = "php-test", about = "Run .phpt test files against php-rs")]
 struct Cli {
-    /// Path to .phpt file or directory
-    #[arg(name = "PATH")]
+    /// .phpt file or directory
     path: PathBuf,
 
-    /// Recursively search for .phpt files in directories
+    /// Recurse into subdirectories
     #[arg(short = 'r', long)]
     recursive: bool,
 
-    /// Filter tests by name pattern
+    /// Only tests whose path contains this text
     #[arg(short = 'f', long)]
     filter: Option<String>,
 
-    /// Show all tests including passed ones
+    /// The php binary under test (default: `php` next to this binary)
+    #[arg(long)]
+    php: Option<PathBuf>,
+
+    /// Per-test timeout in seconds
+    #[arg(long, default_value_t = 10)]
+    timeout: u64,
+
+    /// Parallel test processes (default: available cores)
+    #[arg(short = 'j', long)]
+    jobs: Option<usize>,
+
+    /// Print every test, not only failures
     #[arg(short = 's', long)]
     show_all: bool,
 
-    /// Verbose output (show full diffs)
+    /// Print full expected/actual output for failures
     #[arg(short = 'v', long)]
     verbose: bool,
+
+    /// Only print the summary (and --by-dir table)
+    #[arg(short = 'q', long)]
+    quiet: bool,
+
+    /// Group counts by this many directory levels under PATH
+    #[arg(long)]
+    by_dir: Option<usize>,
+
+    /// Write `STATUS path` per test to this file
+    #[arg(long)]
+    list: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let php = match cli.php.clone() {
+        Some(p) => p,
+        None => std::env::current_exe()?.with_file_name("php"),
+    };
+    anyhow::ensure!(php.is_file(), "php binary not found: {}", php.display());
 
-    let test_files = collect_phpt_files(&cli.path, cli.recursive, cli.filter.as_deref())?;
+    let files = collect_phpt_files(&cli.path, cli.recursive, cli.filter.as_deref());
+    anyhow::ensure!(!files.is_empty(), "no .phpt files in {}", cli.path.display());
+    eprintln!("Running {} test(s) with {}", files.len(), php.display());
 
-    if test_files.is_empty() {
-        eprintln!("No .phpt files found in {}", cli.path.display());
-        return Ok(());
-    }
+    let tests: Vec<Result<PhptTest, String>> = files
+        .iter()
+        .map(|f| PhptTest::from_file(f).map_err(|e| e.to_string()))
+        .collect();
+    let mut executor = PhptExecutor::new(php, Duration::from_secs(cli.timeout));
+    let wanted: BTreeSet<&str> = tests
+        .iter()
+        .flatten()
+        .flat_map(|t| t.sections.extensions.iter().map(String::as_str))
+        .collect();
+    executor
+        .probe_extensions(wanted, &std::env::temp_dir())
+        .map_err(|e| anyhow::anyhow!("extension probe failed: {}", e))?;
 
-    println!("Running {} test(s) from: {}", test_files.len(), cli.path.display());
-    println!();
-
-    let executor = PhptExecutor::new()
-        .map_err(|e| anyhow::anyhow!("Failed to create executor: {}", e))?;
+    let jobs = cli
+        .jobs
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<TestResult>>> = files.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.max(1) {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(test) = tests.get(i) else { break };
+                    let result = match test {
+                        Ok(test) => executor.run_test(test),
+                        Err(e) => TestResult::Error {
+                            error: format!("unparseable test: {}", e),
+                        },
+                    };
+                    *slots[i].lock().unwrap() = Some(result);
+                }
+            });
+        }
+    });
 
     let mut results = TestResults::new();
-
-    for test_file in test_files {
-        match PhptTest::from_file(&test_file) {
-            Ok(test) => {
-                let result = executor.run_test(&test);
-                results.add(test_file, result);
-            }
-            Err(e) => {
-                use php_rs::phpt::executor::TestResult;
-                results.add(
-                    test_file,
-                    TestResult::Error {
-                        error: format!("Failed to parse test file: {}", e),
-                    },
-                );
-            }
+    for (file, slot) in files.into_iter().zip(slots) {
+        if let Some(result) = slot.into_inner().unwrap() {
+            results.add(file, result);
         }
     }
-
-    results.print_summary(cli.show_all, cli.verbose);
-
+    if !cli.quiet {
+        results.print_details(cli.show_all, cli.verbose);
+    }
+    if let Some(depth) = cli.by_dir {
+        let root = if cli.path.is_dir() { cli.path.as_path() } else { Path::new("") };
+        results.print_by_dir(root, depth);
+    }
+    results.print_summary();
+    if let Some(list) = &cli.list {
+        results.write_list(&mut std::fs::File::create(list)?)?;
+    }
+    if results.has_failures() {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
-fn collect_phpt_files(
-    path: &Path,
-    recursive: bool,
-    filter: Option<&str>,
-) -> anyhow::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-
-    if path.is_file() {
-        if path.extension().and_then(|s| s.to_str()) == Some("phpt") {
-            files.push(path.to_path_buf());
-        }
-    } else if path.is_dir() {
-        if recursive {
-            for entry in WalkDir::new(path)
-                .follow_links(true)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                let entry_path = entry.path();
-                if entry_path.is_file()
-                    && entry_path.extension().and_then(|s| s.to_str()) == Some("phpt")
-                {
-                    if let Some(filter_pattern) = filter {
-                        if entry_path
-                            .to_string_lossy()
-                            .contains(filter_pattern)
-                        {
-                            files.push(entry_path.to_path_buf());
-                        }
-                    } else {
-                        files.push(entry_path.to_path_buf());
-                    }
-                }
-            }
-        } else {
-            for entry in std::fs::read_dir(path)? {
-                let entry = entry?;
-                let entry_path = entry.path();
-                if entry_path.is_file()
-                    && entry_path.extension().and_then(|s| s.to_str()) == Some("phpt")
-                {
-                    if let Some(filter_pattern) = filter {
-                        if entry_path
-                            .to_string_lossy()
-                            .contains(filter_pattern)
-                        {
-                            files.push(entry_path);
-                        }
-                    } else {
-                        files.push(entry_path);
-                    }
-                }
-            }
-        }
-    }
-
-    // Sort files for consistent ordering
+fn collect_phpt_files(path: &Path, recursive: bool, filter: Option<&str>) -> Vec<PathBuf> {
+    let walker = WalkDir::new(path)
+        .follow_links(true)
+        .max_depth(if recursive { usize::MAX } else { 1 });
+    let mut files: Vec<PathBuf> = walker
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .map(|e| e.into_path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "phpt"))
+        .filter(|p| filter.is_none_or(|f| p.to_string_lossy().contains(f)))
+        .collect();
     files.sort();
-
-    Ok(files)
+    files
 }
