@@ -7694,6 +7694,40 @@ impl VM {
                 };
                 self.context.constants.insert(name, val);
             }
+            OpCode::NsFunctionFallback(global_idx) => {
+                let handle = self.peek_operand()?;
+                let exists = match &self.arena.get(handle).value {
+                    Val::String(name) => crate::builtins::function::function_exists_case_insensitive(self, name),
+                    _ => true,
+                };
+                if !exists {
+                    let global = self.current_frame()?.chunk.constants[global_idx as usize].clone();
+                    let replacement = self.arena.alloc(global);
+                    self.operand_stack.pop();
+                    self.operand_stack.push(replacement);
+                }
+            }
+            OpCode::FetchNsConst(namespaced, global) => {
+                let value = self
+                    .context
+                    .constants
+                    .get(&namespaced)
+                    .or_else(|| self.context.constants.get(&global))
+                    .cloned();
+                match value {
+                    Some(val) => {
+                        let handle = self.arena.alloc(val);
+                        self.operand_stack.push(handle);
+                    }
+                    None => {
+                        let name = self.context.interner.lookup(namespaced).unwrap_or(b"???");
+                        return Err(VmError::RuntimeError(format!(
+                            "Undefined constant \"{}\"",
+                            String::from_utf8_lossy(name)
+                        )));
+                    }
+                }
+            }
             OpCode::FetchGlobalConst(name) => {
                 if let Some(val) = self.context.constants.get(&name) {
                     let handle = self.arena.alloc(val.clone());

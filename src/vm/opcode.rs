@@ -342,6 +342,13 @@ pub enum OpCode {
     SwitchLong,
     SwitchString,
     CaseStrict,
+    /// An unqualified function call inside a namespace: if no function has
+    /// the namespaced name on top of the stack, call the global one
+    /// (constant index) instead.
+    NsFunctionFallback(u16),
+    /// An unqualified constant inside a namespace: the namespaced one if
+    /// defined, else the global one.
+    FetchNsConst(Symbol, Symbol),
     /// `?->`: if the value on top is null, jump to the end of the chain
     /// keeping it (the chain's result); otherwise keep it and go on.
     JmpNull(u32),
