@@ -645,6 +645,18 @@ impl Extension for CoreExtension {
             constructor: None,
         });
 
+        // JsonSerializable interface (json_encode calls jsonSerialize())
+        registry.register_class(NativeClassDef {
+            name: b"JsonSerializable".to_vec(),
+            parent: None,
+            is_interface: true,
+            is_trait: false,
+            interfaces: vec![],
+            methods: HashMap::new(),
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
         // Countable interface
         registry.register_class(NativeClassDef {
             name: b"Countable".to_vec(),

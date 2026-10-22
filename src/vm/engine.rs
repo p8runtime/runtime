@@ -7999,7 +7999,11 @@ impl VM {
                         }
                     }
                 } else {
-                    return Err(VmError::RuntimeError("Class not found".into()));
+                    let name = String::from_utf8_lossy(
+                        self.context.interner.lookup(resolved_class).unwrap_or(b""),
+                    )
+                    .into_owned();
+                    return Err(self.throw_error(b"Error", &format!("Class \"{}\" not found", name)));
                 }
             }
             OpCode::NewDynamic(arg_count) => {
@@ -8010,10 +8014,21 @@ impl VM {
                     .operand_stack
                     .pop()
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-                let class_name = match &self.arena.get(class_handle).value {
-                    Val::String(s) => self.context.interner.intern(s),
-                    _ => return Err(VmError::RuntimeError("Class name must be string".into())),
+                // new $name, new $object (its class); a leading "\\" names the global class
+                let class_name = match self.arena.get(class_handle).value.clone() {
+                    Val::String(s) => {
+                        let name = s.strip_prefix(b"\\").unwrap_or(&s);
+                        self.context.interner.intern(name)
+                    }
+                    Val::Object(payload) => match &self.arena.get(payload).value {
+                        Val::ObjPayload(obj) => obj.class,
+                        _ => return Err(VmError::RuntimeError("Invalid object payload".into())),
+                    },
+                    _ => return Err(self.throw_error(b"Error", "Cannot instantiate a non-class value")),
                 };
+                if !self.context.classes.contains_key(&class_name) {
+                    self.trigger_autoload(class_name)?;
+                }
 
                 if self.context.classes.contains_key(&class_name) {
                     let properties =
@@ -8097,7 +8112,11 @@ impl VM {
                         self.operand_stack.push(obj_handle);
                     }
                 } else {
-                    return Err(VmError::RuntimeError("Class not found".into()));
+                    let name = String::from_utf8_lossy(
+                        self.context.interner.lookup(class_name).unwrap_or(b""),
+                    )
+                    .into_owned();
+                    return Err(self.throw_error(b"Error", &format!("Class \"{}\" not found", name)));
                 }
             }
             OpCode::FetchProp(prop_name) => {
