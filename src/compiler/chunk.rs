@@ -84,6 +84,22 @@ pub struct CatchEntry {
     pub stack_depth: u32,
 }
 
+/// A constant expression that is not a plain literal (`self::A + 1`,
+/// `PHP_INT_MAX`, `[A, B]`): compiled to code that returns its value, and
+/// evaluated when the value is needed, in the declaring class's scope.
+#[derive(Debug)]
+pub struct ConstExpr(pub std::rc::Rc<CodeChunk>);
+
+impl ConstExpr {
+    /// The thunk inside a value, if it is one.
+    pub fn of(val: &crate::core::value::Val) -> Option<std::rc::Rc<CodeChunk>> {
+        match val {
+            crate::core::value::Val::Resource(rc) => rc.downcast_ref::<ConstExpr>().map(|c| c.0.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// A compile-time error (E_COMPILE_ERROR): the file does not run.
 #[derive(Debug, Clone)]
 pub struct CompileError {

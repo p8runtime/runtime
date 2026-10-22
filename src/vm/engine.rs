@@ -466,6 +466,8 @@ pub struct VM {
     pub(crate) function_calls: u64,
     /// Memory limit in bytes (0 = unlimited)
     pub(crate) memory_limit: usize,
+    /// Classes whose constant-expression property defaults are evaluated.
+    pub(crate) defaults_resolved: std::collections::HashSet<Symbol>,
     /// Sandboxing: allow file I/O operations
     pub(crate) allow_file_io: bool,
     /// Sandboxing: allow network operations
@@ -534,6 +536,7 @@ impl VM {
             opcodes_executed: 0,
             function_calls: 0,
             memory_limit: 0,         // Unlimited by default
+            defaults_resolved: Default::default(),
             allow_file_io: true,     // Allow by default
             allow_network: true,     // Allow by default
             allowed_functions: None, // All functions allowed by default
@@ -560,6 +563,7 @@ impl VM {
         }
 
         if let Some(_class_def) = self.context.classes.get(&resolved_class) {
+            self.ensure_class_defaults(resolved_class).map_err(|e| format!("{:?}", e))?;
             let properties = self.collect_properties(resolved_class, PropertyCollectionMode::All);
 
             let obj_data = ObjectData {
@@ -960,6 +964,7 @@ impl VM {
             opcodes_executed: 0,
             function_calls: 0,
             memory_limit: 0,         // Unlimited by default
+            defaults_resolved: Default::default(),
             allow_file_io: true,     // Allow by default
             allow_network: true,     // Allow by default
             allowed_functions: None, // All functions allowed by default
@@ -1007,6 +1012,62 @@ impl VM {
         // This includes the Val enum discriminant and typical payloads
         const ZVAL_SIZE: usize = 64;
         self.arena.len() * ZVAL_SIZE
+    }
+
+    /// The value of a constant expression: a thunk (ConstExpr) runs in
+    /// `scope`'s class scope (self::, static props) and yields its value;
+    /// anything else is already a value.
+    pub(crate) fn resolve_const_value(&mut self, val: Val, scope: Option<Symbol>) -> Result<Val, VmError> {
+        let Some(chunk) = crate::compiler::chunk::ConstExpr::of(&val) else {
+            return Ok(val);
+        };
+        let mut frame = CallFrame::new(chunk);
+        frame.class_scope = scope;
+        frame.called_scope = scope;
+        let handle = self.run_frame(frame)?;
+        Ok(self.arena.get(handle).value.clone())
+    }
+
+    /// A class constant's value, evaluating (once) a constant expression
+    /// declared for it; a constant whose evaluation needs itself is an
+    /// Error, as in PHP.
+    pub(crate) fn class_constant_value(
+        &mut self,
+        defining_class: Symbol,
+        const_name: Symbol,
+        val: Val,
+    ) -> Result<Val, VmError> {
+        if matches!(val, Val::Uninitialized) {
+            let name = self.symbol_to_string(const_name);
+            return Err(self.throw_error(
+                b"Error",
+                &format!("Cannot declare self-referencing constant self::{}", name),
+            ));
+        }
+        if crate::compiler::chunk::ConstExpr::of(&val).is_none() {
+            return Ok(val);
+        }
+        let set = |vm: &mut VM, v: Val| {
+            if let Some(entry) = vm
+                .context
+                .classes
+                .get_mut(&defining_class)
+                .and_then(|def| def.constants.get_mut(&const_name))
+            {
+                entry.value = v;
+            }
+        };
+        set(self, Val::Uninitialized);
+        match self.resolve_const_value(val.clone(), Some(defining_class)) {
+            Ok(resolved) => {
+                set(self, resolved.clone());
+                Ok(resolved)
+            }
+            Err(e) => {
+                set(self, val);
+                Err(e)
+            }
+        }
     }
 
     /// "Constant X is deprecated" for a built-in constant PHP 8.4 deprecates.
@@ -2503,6 +2564,7 @@ impl VM {
         };
 
         let resolved_class = self.resolve_class_name(class_name)?;
+        self.ensure_class_defaults(resolved_class)?;
         let (current_val, visibility, defining_class) =
             self.find_static_prop(resolved_class, prop_name)?;
         self.check_const_visibility(defining_class, visibility)?;
@@ -2530,6 +2592,7 @@ impl VM {
         prop_name: Symbol,
     ) -> Result<Handle, VmError> {
         let resolved_class = self.resolve_class_name(class_name)?;
+        self.ensure_class_defaults(resolved_class)?;
         let (_, visibility, defining_class) = self.find_static_prop(resolved_class, prop_name)?;
         self.check_const_visibility(defining_class, visibility)?;
         self.context
@@ -5593,12 +5656,14 @@ impl VM {
                             frame.locals.insert(param.name, final_handle);
                         }
                     } else {
-                        // Use default value
-                        let frame = self.frames.last_mut().unwrap();
-                        let default_val =
-                            frame.chunk.constants[default_val_idx as usize].clone();
+                        // Use default value (a constant expression is evaluated per call)
+                        let (default_val, scope) = {
+                            let frame = self.frames.last().unwrap();
+                            (frame.chunk.constants[default_val_idx as usize].clone(), frame.class_scope)
+                        };
+                        let default_val = self.resolve_const_value(default_val, scope)?;
                         let default_handle = self.arena.alloc(default_val);
-                        frame.locals.insert(param.name, default_handle);
+                        self.frames.last_mut().unwrap().locals.insert(param.name, default_handle);
                     }
                 }
             }
@@ -7686,10 +7751,11 @@ impl VM {
                 }
             }
             OpCode::DefGlobalConst(name, val_idx) => {
-                let val = {
+                let (val, scope) = {
                     let frame = self.frames.last().unwrap();
-                    frame.chunk.constants[val_idx as usize].clone()
+                    (frame.chunk.constants[val_idx as usize].clone(), frame.class_scope)
                 };
+                let val = self.resolve_const_value(val, scope)?;
                 self.context.constants.insert(name, val);
             }
             OpCode::NsFunctionFallback(global_idx) => {
@@ -7787,6 +7853,7 @@ impl VM {
                 let (val, visibility, defining_class) =
                     self.find_class_constant(resolved_class, const_name)?;
                 self.check_const_visibility(defining_class, visibility)?;
+                let val = self.class_constant_value(defining_class, const_name, val)?;
                 let handle = self.arena.alloc(val);
                 self.operand_stack.push(handle);
             }
@@ -7817,11 +7884,13 @@ impl VM {
                 let (val, visibility, defining_class) =
                     self.find_class_constant(resolved_class, const_name)?;
                 self.check_const_visibility(defining_class, visibility)?;
+                let val = self.class_constant_value(defining_class, const_name, val)?;
                 let handle = self.arena.alloc(val);
                 self.operand_stack.push(handle);
             }
             OpCode::FetchStaticProp(class_name, prop_name) => {
                 let resolved_class = self.resolve_class_name(class_name)?;
+                self.ensure_class_defaults(resolved_class)?;
                 let (val, visibility, defining_class) =
                     self.find_static_prop(resolved_class, prop_name)?;
                 self.check_const_visibility(defining_class, visibility)?;
@@ -7835,6 +7904,7 @@ impl VM {
                     .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
 
                 let resolved_class = self.resolve_class_name(class_name)?;
+                self.ensure_class_defaults(resolved_class)?;
                 let (_, visibility, defining_class) =
                     self.find_static_prop(resolved_class, prop_name)?;
                 self.check_const_visibility(defining_class, visibility)?;
@@ -7877,6 +7947,7 @@ impl VM {
                 // Rebind the property's slot to the referenced value (A::$p = &$x).
                 self.arena.get_mut(ref_handle).is_ref = true;
                 let resolved_class = self.resolve_class_name(class_name)?;
+                self.ensure_class_defaults(resolved_class)?;
                 let (_, visibility, defining_class) =
                     self.find_static_prop(resolved_class, prop_name)?;
                 self.check_const_visibility(defining_class, visibility)?;
@@ -7927,6 +7998,7 @@ impl VM {
                     self.operand_stack.push(handle);
                 } else {
                     let resolved_class = self.resolve_class_name(class_name)?;
+                    self.ensure_class_defaults(resolved_class)?;
                     let (val, visibility, defining_class) =
                         self.find_static_prop(resolved_class, prop_name)?;
                     self.check_const_visibility(defining_class, visibility)?;
@@ -7974,6 +8046,7 @@ impl VM {
                 }
 
                 if self.context.classes.contains_key(&resolved_class) {
+                    self.ensure_class_defaults(resolved_class)?;
                     let properties =
                         self.collect_properties(resolved_class, PropertyCollectionMode::All);
 
@@ -8141,6 +8214,7 @@ impl VM {
                 }
 
                 if self.context.classes.contains_key(&class_name) {
+                    self.ensure_class_defaults(class_name)?;
                     let properties =
                         self.collect_properties(class_name, PropertyCollectionMode::All);
 
@@ -9926,6 +10000,7 @@ impl VM {
                 };
 
                 let val_opt = if let Ok(resolved_class) = self.resolve_class_name(class_name) {
+                    self.ensure_class_defaults(resolved_class)?;
                     if let Ok((val, _, _)) = self.find_static_prop(resolved_class, prop_name) {
                         Some(val)
                     } else {
@@ -9987,6 +10062,7 @@ impl VM {
                 };
 
                 let resolved_class = self.resolve_class_name(class_name)?;
+                self.ensure_class_defaults(resolved_class)?;
                 let (current_val, visibility, defining_class) =
                     self.find_static_prop(resolved_class, prop_name)?;
                 self.check_const_visibility(defining_class, visibility)?;
@@ -11096,6 +11172,7 @@ impl VM {
 
                 let resolved_class = self.resolve_class_name(class_name)?;
 
+                self.ensure_class_defaults(resolved_class)?;
                 let is_set = match self.find_static_prop(resolved_class, prop_name) {
                     Ok((val, _, _)) => !matches!(val, Val::Null),
                     Err(_) => false,
