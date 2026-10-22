@@ -169,19 +169,13 @@ pub fn dval_to_lval(d: f64) -> i64 {
     if (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&d) {
         return d as i64;
     }
+    // zend_dval_to_lval_slow (64-bit): the value modulo 2^64, as unsigned
     let two_pow_64 = 18_446_744_073_709_551_616.0_f64;
     let mut dmod = d % two_pow_64;
     if dmod < 0.0 {
-        // -2^63 stays itself; anything else becomes positive first
-        if dmod == -9.223_372_036_854_776e18 {
-            return i64::MIN;
-        }
         dmod += two_pow_64;
     }
-    if dmod > 9.223_372_036_854_775_807e18 {
-        dmod -= two_pow_64;
-    }
-    dmod as i64
+    dmod as u64 as i64
 }
 
 /// How many significant digits a float is printed with.
