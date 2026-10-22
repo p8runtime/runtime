@@ -288,7 +288,44 @@ impl<'src> Emitter<'src> {
                         }
                     }
 
+                    // Constructor promotion: `__construct(public $x)` declares the
+                    // property and assigns it before the body runs.
+                    let is_constructor = method_name_str.eq_ignore_ascii_case(b"__construct");
+                    let this_sym = method_emitter.interner.intern(b"this");
+                    for param in params.iter().filter(|p| is_constructor && !p.modifiers.is_empty()) {
+                        let prop_sym = method_emitter.interner.intern(&method_emitter.get_text(param.name.span)[1..]);
+                        method_emitter.chunk.code.push(OpCode::LoadVar(this_sym));
+                        method_emitter.chunk.code.push(OpCode::LoadVar(prop_sym));
+                        method_emitter.chunk.code.push(OpCode::AssignProp(prop_sym));
+                        method_emitter.chunk.code.push(OpCode::Pop);
+                    }
+
                     let (method_chunk, is_generator) = method_emitter.compile(body);
+
+                    for param in params.iter().filter(|p| is_constructor && !p.modifiers.is_empty()) {
+                        let prop_sym = self.interner.intern(&self.get_text(param.name.span)[1..]);
+                        let is_readonly = param.modifiers.iter().any(|t| t.kind == TokenKind::Readonly);
+                        let type_hint = param.ty.and_then(|t| self.convert_type(t));
+                        // A typed (or readonly) promoted property is uninitialized until the constructor runs.
+                        let default = if type_hint.is_some() || is_readonly {
+                            Val::Uninitialized
+                        } else {
+                            Val::Null
+                        };
+                        let default_idx = self.add_constant(default);
+                        let type_hint_idx = match type_hint {
+                            Some(th) => self.add_constant(Val::Resource(Rc::new(th))),
+                            None => self.add_constant(Val::Null),
+                        };
+                        self.chunk.code.push(OpCode::DefProp(
+                            class_sym,
+                            prop_sym,
+                            default_idx as u16,
+                            self.get_visibility(param.modifiers),
+                            type_hint_idx as u32,
+                            is_readonly,
+                        ));
+                    }
 
                     // Convert return type
                     let ret_type = return_type.and_then(|rt| self.convert_type(rt));
