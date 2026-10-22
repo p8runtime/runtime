@@ -2,5 +2,6 @@
 //! the current engine and replaces it at php-src parity.
 
 pub mod array;
+pub mod ops;
 pub mod string;
 pub mod value;

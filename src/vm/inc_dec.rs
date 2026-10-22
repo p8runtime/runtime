@@ -136,56 +136,7 @@ fn increment_string(s: Rc<Vec<u8>>, error_handler: &mut dyn ErrorHandler) -> Res
     }
 
     let mut result = (*s).clone();
-
-    // Find the last alphanumeric character
-    let mut pos = result.len();
-    while pos > 0 {
-        pos -= 1;
-        let ch = result[pos];
-
-        // Check if alphanumeric
-        if (ch >= b'0' && ch <= b'9') || (ch >= b'a' && ch <= b'z') || (ch >= b'A' && ch <= b'Z') {
-            // Increment this character
-            if ch == b'9' {
-                result[pos] = b'0';
-                // Carry to next position
-            } else if ch == b'z' {
-                result[pos] = b'a';
-                // Carry to next position
-            } else if ch == b'Z' {
-                result[pos] = b'A';
-                // Carry to next position
-            } else if ch >= b'0' && ch < b'9' {
-                result[pos] = ch + 1;
-                return Ok(Val::String(Rc::new(result)));
-            } else if ch >= b'a' && ch < b'z' {
-                result[pos] = ch + 1;
-                return Ok(Val::String(Rc::new(result)));
-            } else if ch >= b'A' && ch < b'Z' {
-                result[pos] = ch + 1;
-                return Ok(Val::String(Rc::new(result)));
-            }
-
-            // If we got here, we need to carry
-            if pos == 0 {
-                // Need to prepend
-                if ch == b'9' || (ch >= b'0' && ch <= b'9') {
-                    result.insert(0, b'1');
-                } else if ch >= b'a' && ch <= b'z' {
-                    result.insert(0, b'a');
-                } else if ch >= b'A' && ch <= b'Z' {
-                    result.insert(0, b'A');
-                }
-                return Ok(Val::String(Rc::new(result)));
-            }
-        } else {
-            // Non-alphanumeric, break and append
-            break;
-        }
-    }
-
-    // If we reach here and pos was decremented to 0, we've carried all the way
-    // This should have been handled above, but as a fallback:
+    crate::core::numeric::increment_alphanumeric(&mut result);
     Ok(Val::String(Rc::new(result)))
 }
 

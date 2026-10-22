@@ -62,6 +62,31 @@ pub fn numeric_string(s: &[u8]) -> Option<Number> {
     s[end..].iter().all(|b| WHITESPACE.contains(b)).then_some(value)
 }
 
+/// Perl-style increment of an alphanumeric string ("a" -> "b", "Az" ->
+/// "Ba", "zz" -> "aaa"), as zend_operators.c increment_string does after
+/// ruling out numeric strings. Bytes after the last alphanumeric are kept.
+pub fn increment_alphanumeric(s: &mut Vec<u8>) {
+    let mut pos = s.len();
+    while pos > 0 {
+        pos -= 1;
+        let (next, carry, first) = match s[pos] {
+            b'0'..=b'8' | b'a'..=b'y' | b'A'..=b'Y' => (s[pos] + 1, false, 0),
+            b'9' => (b'0', true, b'1'),
+            b'z' => (b'a', true, b'a'),
+            b'Z' => (b'A', true, b'A'),
+            _ => return,
+        };
+        s[pos] = next;
+        if !carry {
+            return;
+        }
+        if pos == 0 {
+            s.insert(0, first);
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +103,14 @@ mod tests {
         assert_eq!(numeric_string(b"-"), None);
         assert_eq!(numeric_string(b"1e"), None);
         assert_eq!(leading_numeric(b"1e"), Some((Number::Int(1), 1)));
+    }
+
+    #[test]
+    fn alphanumeric_increment() {
+        for (from, to) in [("a", "b"), ("z", "aa"), ("Az", "Ba"), ("zZ9", "aaA0"), ("a9", "b0"), ("a-", "a-")] {
+            let mut s = from.as_bytes().to_vec();
+            increment_alphanumeric(&mut s);
+            assert_eq!(s, to.as_bytes(), "{from}");
+        }
     }
 }
