@@ -163,3 +163,54 @@ pub fn php_ini_restore(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
     Ok(vm.arena.alloc(Val::Null))
 }
+
+/// register_shutdown_function(callable $callback, mixed ...$args): void
+pub fn php_register_shutdown_function(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let Some(&callback) = args.first() else {
+        return Err(vm.throw_from_native(
+            b"ArgumentCountError",
+            "register_shutdown_function() expects at least 1 argument, 0 given",
+        ));
+    };
+    vm.shutdown_functions.push((callback, args[1..].to_vec()));
+    Ok(vm.arena.alloc(Val::Null))
+}
+
+/// error_log(string $message, int $message_type = 0, ?string $destination = null): bool
+///
+/// Type 0 goes to the error_log ini file if set, else stderr (the CLI's
+/// default); type 3 appends to the destination file.
+pub fn php_error_log(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    use std::io::Write;
+    let Some(&message) = args.first() else {
+        return Err("error_log() expects at least 1 argument, 0 given".into());
+    };
+    let mut message = vm.arena.get(message).value.to_php_string_bytes();
+    let kind = args.get(1).map_or(0, |h| vm.arena.get(*h).value.to_int());
+    let destination = args
+        .get(2)
+        .map(|h| vm.arena.get(*h).value.to_php_string_bytes())
+        .filter(|d| !d.is_empty());
+    let target = match kind {
+        3 => destination,
+        _ => vm.context.ini.get("error_log").filter(|d| !d.is_empty()),
+    };
+    let ok = match target {
+        Some(path) => {
+            if kind != 3 {
+                message.push(b'\n');
+            }
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(String::from_utf8_lossy(&path).as_ref())
+                .and_then(|mut f| f.write_all(&message))
+                .is_ok()
+        }
+        None => {
+            message.push(b'\n');
+            std::io::stderr().write_all(&message).is_ok()
+        }
+    };
+    Ok(vm.arena.alloc(Val::Bool(ok)))
+}

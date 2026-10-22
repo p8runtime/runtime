@@ -390,6 +390,8 @@ pub struct VM {
     pub(crate) user_error_handlers: Vec<Option<(Handle, i64)>>,
     /// set_exception_handler() stack.
     pub(crate) user_exception_handlers: Vec<Option<Handle>>,
+    /// register_shutdown_function() calls, run in order at request end.
+    pub(crate) shutdown_functions: Vec<(Handle, Vec<Handle>)>,
     /// A user error handler is running (errors inside it are not re-dispatched).
     in_error_handler: bool,
     /// The last report_error was consumed by a user error handler.
@@ -461,6 +463,7 @@ impl VM {
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
+            shutdown_functions: Vec::new(),
             in_error_handler: false,
             last_error_handled: false,
             pending_terminate: false,
@@ -879,6 +882,7 @@ impl VM {
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
+            shutdown_functions: Vec::new(),
             in_error_handler: false,
             last_error_handled: false,
             pending_terminate: false,
@@ -3132,8 +3136,40 @@ impl VM {
                 255
             }
         };
+        let status = self.run_shutdown_functions(status);
         self.end_output_buffers();
         let _ = self.output_writer.flush();
+        status
+    }
+
+    /// Run register_shutdown_function() callbacks in order; one may register
+    /// more. An uncaught exception in one is reported and ends the rest.
+    fn run_shutdown_functions(&mut self, mut status: i32) -> i32 {
+        let mut i = 0;
+        while i < self.shutdown_functions.len() {
+            let (func, args) = self.shutdown_functions[i].clone();
+            i += 1;
+            self.frames.clear();
+            self.operand_stack.truncate(0);
+            self.push_frame(CallFrame::new(Rc::new(CodeChunk::default())));
+            let result = self.call_callable(func, args.into_iter().collect());
+            self.frames.clear();
+            match result {
+                Ok(_) => {}
+                Err(VmError::Exception(ex)) => {
+                    self.report_uncaught(ex);
+                    return 255;
+                }
+                Err(VmError::Terminated) => return 255,
+                Err(e) => {
+                    let _ = self.write_output(format!("\nFatal error: {}\n", e).as_bytes());
+                    return 255;
+                }
+            }
+            if self.exit_status != 0 {
+                status = self.exit_status;
+            }
+        }
         status
     }
 
@@ -3413,6 +3449,12 @@ impl VM {
         }
         for h in self.user_exception_handlers.iter().flatten() {
             push(*h);
+        }
+        for (f, args) in &self.shutdown_functions {
+            push(*f);
+            for a in args {
+                push(*a);
+            }
         }
         for buf in &self.output_buffers {
             if let Some(h) = buf.handler {

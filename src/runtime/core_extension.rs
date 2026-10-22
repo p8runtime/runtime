@@ -369,6 +369,8 @@ impl Extension for CoreExtension {
             registry.register_function(b"trigger_error", errors::php_trigger_error);
             registry.register_function(b"user_error", errors::php_trigger_error);
             registry.register_function(b"error_clear_last", errors::php_error_clear_last);
+            registry.register_function(b"register_shutdown_function", errors::php_register_shutdown_function);
+            registry.register_function(b"error_log", errors::php_error_log);
         }
         registry.register_function(b"error_reporting", variable::php_error_reporting);
         registry.register_function(b"error_get_last", variable::php_error_get_last);
