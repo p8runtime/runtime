@@ -1353,7 +1353,10 @@ pub fn php_date(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     };
 
     let tz = parse_timezone(&vm.context.config.timezone)?;
-    let dt = Utc.timestamp_opt(timestamp, 0).unwrap().with_timezone(&tz);
+    let Some(utc) = Utc.timestamp_opt(timestamp, 0).single() else {
+        return Ok(vm.arena.alloc(Val::Bool(false)));
+    };
+    let dt = utc.with_timezone(&tz);
 
     let formatted = format_php_date(&dt, &format);
     Ok(vm.arena.alloc(Val::String(formatted.into_bytes().into())))

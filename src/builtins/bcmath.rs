@@ -22,7 +22,11 @@ pub fn bcadd(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let left = get_op(vm, args[0])?;
     let right = get_op(vm, args[1])?;
 
-    let result = left + right;
+    // rust_decimal holds 28 digits; PHP's bcmath has no limit. Past it, an
+    // error instead of a panic.
+    let Some(result) = left.checked_add(right) else {
+        return Err(vm.throw_from_native(b"ValueError", "bcadd(): result exceeds the supported precision"));
+    };
     let result_str = result.to_string();
 
     Ok(vm
@@ -38,7 +42,11 @@ pub fn bcsub(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let left = get_op(vm, args[0])?;
     let right = get_op(vm, args[1])?;
 
-    let result = left - right;
+    // rust_decimal holds 28 digits; PHP's bcmath has no limit. Past it, an
+    // error instead of a panic.
+    let Some(result) = left.checked_sub(right) else {
+        return Err(vm.throw_from_native(b"ValueError", "bcsub(): result exceeds the supported precision"));
+    };
     let result_str = result.to_string();
 
     Ok(vm
@@ -54,7 +62,11 @@ pub fn bcmul(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let left = get_op(vm, args[0])?;
     let right = get_op(vm, args[1])?;
 
-    let result = left * right;
+    // rust_decimal holds 28 digits; PHP's bcmath has no limit. Past it, an
+    // error instead of a panic.
+    let Some(result) = left.checked_mul(right) else {
+        return Err(vm.throw_from_native(b"ValueError", "bcmul(): result exceeds the supported precision"));
+    };
     let result_str = result.to_string();
 
     Ok(vm
@@ -84,7 +96,10 @@ pub fn bcdiv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         }
     }
 
-    let result = (left / right).trunc_with_scale(scale);
+    let Some(quotient) = left.checked_div(right) else {
+        return Err(vm.throw_from_native(b"ValueError", "bcdiv(): result exceeds the supported precision"));
+    };
+    let result = quotient.trunc_with_scale(scale);
     let result_str = result.to_string();
 
     Ok(vm

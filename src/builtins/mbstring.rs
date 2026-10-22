@@ -237,13 +237,27 @@ pub fn php_mb_convert_variables(vm: &mut VM, args: &[Handle]) -> Result<Handle, 
     let from_str = String::from_utf8_lossy(&from).to_string();
 
     for handle in &args[2..] {
-        convert_value_in_place(vm, *handle, &from_str, &to_str)?;
+        if !convert_value_in_place(vm, *handle, &from_str, &to_str, &mut Vec::new())? {
+            vm.report_error(
+                ErrorLevel::Warning,
+                "mb_convert_variables(): Cannot handle recursive references",
+            );
+            return Ok(vm.arena.alloc(Val::Bool(false)));
+        }
     }
 
     Ok(vm.arena.alloc(Val::Bool(true)))
 }
 
-fn convert_value_in_place(vm: &mut VM, handle: Handle, from: &str, to: &str) -> Result<(), String> {
+/// Convert strings in place, through arrays. False on a cycle: an array that
+/// contains itself (through a reference).
+fn convert_value_in_place(
+    vm: &mut VM,
+    handle: Handle,
+    from: &str,
+    to: &str,
+    path: &mut Vec<*const crate::core::value::ArrayData>,
+) -> Result<bool, String> {
     let value = vm.arena.get(handle).value.clone();
     match value {
         Val::String(bytes) => {
@@ -251,13 +265,21 @@ fn convert_value_in_place(vm: &mut VM, handle: Handle, from: &str, to: &str) -> 
             vm.arena.get_mut(handle).value = Val::String(converted.into());
         }
         Val::Array(array) => {
-            for child in array.map.values() {
-                convert_value_in_place(vm, *child, from, to)?;
+            let ptr = std::rc::Rc::as_ptr(&array);
+            if path.contains(&ptr) {
+                return Ok(false);
             }
+            path.push(ptr);
+            for child in array.map.values() {
+                if !convert_value_in_place(vm, *child, from, to, path)? {
+                    return Ok(false);
+                }
+            }
+            path.pop();
         }
         _ => {}
     }
-    Ok(())
+    Ok(true)
 }
 
 pub fn php_mb_detect_encoding(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
@@ -561,6 +583,12 @@ pub fn php_mb_strpos(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Ok(vm.arena.alloc(Val::Bool(false)));
     }
 
+    if start_idx > hay_chars.len() || (offset < 0 && offset.unsigned_abs() as usize > hay_chars.len()) {
+        return Err(vm.throw_from_native(
+            b"ValueError",
+            "mb_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)",
+        ));
+    }
     let pos = find_subsequence(&hay_chars[start_idx..], &needle_chars).map(|idx| idx + start_idx);
 
     match pos {

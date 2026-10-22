@@ -1174,6 +1174,13 @@ pub fn php_array_pad(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let pad_size = vm.check_builtin_param_int(args[1], 2, "array_pad")?;
+    // HT_MAX_SIZE on 64-bit builds.
+    if !(-0x4000_0000..=0x4000_0000).contains(&pad_size) {
+        return Err(vm.throw_from_native(
+            b"ValueError",
+            "array_pad(): Argument #2 ($length) must not exceed the maximum allowed array size",
+        ));
+    }
     let pad_value = args[2];
     let arr = match &vm.arena.get(args[0]).value {
         Val::Array(arr) => arr,
@@ -1527,8 +1534,8 @@ pub fn php_array_splice(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
     let length = length.max(0);
 
     let mut values: Vec<Handle> = arr_data.map.values().copied().collect();
-    let start = offset as usize;
-    let end = (offset + length).min(len) as usize;
+    let start = offset.clamp(0, len) as usize;
+    let end = (offset.saturating_add(length)).clamp(start as i64, len) as usize;
 
     let removed_values = values[start..end].to_vec();
     values.splice(start..end, replacement_values(vm, args.get(3).copied()));
@@ -3051,6 +3058,36 @@ fn replacement_values(vm: &VM, replacement: Option<Handle>) -> Vec<Handle> {
 }
 
 fn merge_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<Handle, String> {
+    merge_recursive_inner(vm, left, right, &mut Vec::new())
+}
+
+/// `path`: the source arrays being merged from, outermost first; meeting one
+/// again is a cycle (PHP: "Recursion detected").
+fn merge_recursive_inner(
+    vm: &mut VM,
+    left: Handle,
+    right: Handle,
+    path: &mut Vec<*const crate::core::value::ArrayData>,
+) -> Result<Handle, String> {
+    if let Val::Array(arr) = &vm.arena.get(right).value {
+        let ptr = Rc::as_ptr(arr);
+        if path.contains(&ptr) {
+            return Err(vm.throw_from_native(b"Error", "Recursion detected"));
+        }
+        path.push(ptr);
+        let result = merge_recursive_step(vm, left, right, path);
+        path.pop();
+        return result;
+    }
+    merge_recursive_step(vm, left, right, path)
+}
+
+fn merge_recursive_step(
+    vm: &mut VM,
+    left: Handle,
+    right: Handle,
+    path: &mut Vec<*const crate::core::value::ArrayData>,
+) -> Result<Handle, String> {
     let left_entries: Vec<(ArrayKey, Handle)> = match &vm.arena.get(left).value {
         Val::Array(arr) => arr.map.iter().map(|(k, v)| (k.clone(), *v)).collect(),
         _ => {
@@ -3098,7 +3135,7 @@ fn merge_recursive_values(vm: &mut VM, left: Handle, right: Handle) -> Result<Ha
             ArrayKey::Str(s) => {
                 let key_clone = ArrayKey::Str(s.clone());
                 if let Some(existing_handle) = out.get(&key_clone).copied() {
-                    let merged = merge_recursive_values(vm, existing_handle, value_handle)?;
+                    let merged = merge_recursive_inner(vm, existing_handle, value_handle, path)?;
                     out.insert(key_clone, merged);
                 } else {
                     out.insert(key_clone, value_handle);

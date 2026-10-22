@@ -649,8 +649,7 @@ fn do_substr_replace(
             let e = str_len + len;
             if e < start { start } else { e }
         } else {
-            let e = start + len;
-            if e > str_len { str_len } else { e }
+            start.saturating_add(len).min(str_len)
         }
     } else {
         str_len
@@ -1370,15 +1369,30 @@ pub fn php_str_pad(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("str_pad() expects between 2 and 4 parameters".into());
     }
     let s = vm.value_to_string(args[0])?;
-    let pad_len = vm.arena.get(args[1]).value.to_int() as usize;
+    let pad_len = vm.arena.get(args[1]).value.to_int();
     let pad_str = if args.len() >= 3 {
         vm.value_to_string(args[2])?
     } else {
         b" ".to_vec()
     };
-    if pad_str.is_empty() {
-        return Err("str_pad(): Padding string cannot be empty".into());
+    // A negative length leaves the string as it is.
+    if pad_len < 0 || pad_len as usize <= s.len() {
+        return Ok(vm.arena.alloc(Val::String(s.into())));
     }
+    if pad_str.is_empty() {
+        return Err(vm.throw_from_native(
+            b"ValueError",
+            "str_pad(): Argument #3 ($pad_string) must be a non-empty string",
+        ));
+    }
+    // memory_limit (128M) before allocating, as PHP would fail there.
+    if pad_len > 128 * 1024 * 1024 {
+        return Err(format!(
+            "Allowed memory size of 134217728 bytes exhausted (tried to allocate {} bytes)",
+            pad_len.saturating_add(25)
+        ));
+    }
+    let pad_len = pad_len as usize;
     let pad_type = if args.len() == 4 {
         vm.arena.get(args[3]).value.to_int()
     } else {
@@ -3217,6 +3231,10 @@ pub fn php_strpos(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let search_area = &haystack[offset as usize..];
+    // PHP 8: the empty string is found right at the offset.
+    if needle.is_empty() {
+        return Ok(vm.arena.alloc(Val::Int(offset)));
+    }
 
     // Simple byte search
     if let Some(pos) = search_area
