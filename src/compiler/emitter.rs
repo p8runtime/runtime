@@ -2616,7 +2616,7 @@ impl<'src> Emitter<'src> {
                 }
 
                 for arg in *args {
-                    self.emit_expr(&arg.value);
+                    self.emit_arg(arg.value);
                 }
 
                 self.chunk.code.push(OpCode::Call(args.len() as u8));
@@ -2699,7 +2699,7 @@ impl<'src> Emitter<'src> {
                     self.patch_jump(skip, end);
 
                     for arg in *args {
-                        self.emit_expr(arg.value);
+                        self.emit_arg(arg.value);
                     }
                     self.chunk
                         .code
@@ -2710,7 +2710,7 @@ impl<'src> Emitter<'src> {
                         let class_sym = self.interner.intern(name);
 
                         for arg in *args {
-                            self.emit_expr(arg.value);
+                            self.emit_arg(arg.value);
                         }
 
                         self.chunk
@@ -2722,7 +2722,7 @@ impl<'src> Emitter<'src> {
                         self.emit_expr(class);
 
                         for arg in *args {
-                            self.emit_expr(arg.value);
+                            self.emit_arg(arg.value);
                         }
 
                         self.chunk.code.push(OpCode::NewDynamic(args.len() as u8));
@@ -2732,7 +2732,7 @@ impl<'src> Emitter<'src> {
                     self.emit_expr(class);
 
                     for arg in *args {
-                        self.emit_expr(arg.value);
+                        self.emit_arg(arg.value);
                     }
 
                     self.chunk.code.push(OpCode::NewDynamic(args.len() as u8));
@@ -2770,7 +2770,7 @@ impl<'src> Emitter<'src> {
                     let name = self.get_text(*span);
                     if !name.starts_with(b"$") {
                         for arg in *args {
-                            self.emit_expr(arg.value);
+                            self.emit_arg(arg.value);
                         }
                         let sym = self.interner.intern(name);
                         self.chunk
@@ -2780,7 +2780,7 @@ impl<'src> Emitter<'src> {
                         // Dynamic method call: $obj->$method()
                         self.emit_expr(method);
                         for arg in *args {
-                            self.emit_expr(arg.value);
+                            self.emit_arg(arg.value);
                         }
                         self.chunk
                             .code
@@ -2790,7 +2790,7 @@ impl<'src> Emitter<'src> {
                     // Dynamic method call with expression: $obj->{$expr}()
                     self.emit_expr(method);
                     for arg in *args {
-                        self.emit_expr(arg.value);
+                        self.emit_arg(arg.value);
                     }
                     self.chunk
                         .code
@@ -2816,7 +2816,7 @@ impl<'src> Emitter<'src> {
                             let method_name = self.get_text(*method_span);
                             if !method_name.starts_with(b"$") {
                                 for arg in *args {
-                                    self.emit_expr(arg.value);
+                                    self.emit_arg(arg.value);
                                 }
                                 let method_sym = self.interner.intern(method_name);
                                 self.chunk.code.push(OpCode::CallStaticMethod(
@@ -2834,7 +2834,7 @@ impl<'src> Emitter<'src> {
                             self.chunk.code.push(OpCode::Const(idx as u16));
                             self.emit_expr(method);
                             for arg in *args {
-                                self.emit_expr(arg.value);
+                                self.emit_arg(arg.value);
                             }
                             self.chunk
                                 .code
@@ -2849,7 +2849,7 @@ impl<'src> Emitter<'src> {
                     self.emit_expr(class);
                     self.emit_expr(method);
                     for arg in *args {
-                        self.emit_expr(arg.value);
+                        self.emit_arg(arg.value);
                     }
                     self.chunk
                         .code
@@ -3603,6 +3603,26 @@ impl<'src> Emitter<'src> {
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
             _ => {}
+        }
+    }
+
+    /// A call argument. `$a[k]` keeps the element's own slot (not a copy), so
+    /// a by-reference parameter binds to it; the compiler cannot see whether
+    /// the parameter is by-reference (Zend's FETCH_DIM_FUNC_ARG).
+    fn emit_arg(&mut self, value: &Expr) {
+        if let Expr::ArrayDimFetch {
+            array,
+            dim: Some(dim),
+            span,
+        } = value
+        {
+            self.at_line(span.start, |this| {
+                this.emit_expr(array);
+                this.emit_expr(dim);
+                this.chunk.code.push(OpCode::FetchDimArg);
+            });
+        } else {
+            self.emit_expr(value);
         }
     }
 

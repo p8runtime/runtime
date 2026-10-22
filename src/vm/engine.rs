@@ -5539,6 +5539,27 @@ impl VM {
             // Array operations - delegated to opcodes::array_ops
             OpCode::InitArray(size) => self.exec_init_array(size)?,
 
+            OpCode::FetchDimArg => {
+                let key = self.peek_operand_at(0)?;
+                let array = self.peek_operand_at(1)?;
+                let slot = match &self.arena.get(array).value {
+                    Val::Array(map) => {
+                        let key_val = self.arena.get(key).value.clone();
+                        self.array_key_from_value(&key_val)
+                            .ok()
+                            .and_then(|k| map.map.get(&k).copied())
+                    }
+                    _ => None,
+                };
+                match slot {
+                    Some(slot) => {
+                        self.operand_stack.pop();
+                        self.operand_stack.pop();
+                        self.operand_stack.push(slot);
+                    }
+                    None => self.execute_opcode(OpCode::FetchDim, target_depth)?,
+                }
+            }
             OpCode::FetchDim => {
                 let key_handle = self
                     .operand_stack
