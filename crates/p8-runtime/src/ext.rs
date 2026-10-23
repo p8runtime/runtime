@@ -17,6 +17,9 @@ pub enum Throw {
     Error { class: &'static str, message: String, file: Rc<str>, line: u32 },
     /// A fatal error: not an exception, nothing catches it.
     Fatal { message: String, file: Rc<str>, line: u32 },
+    /// A class that is not declared, which autoloaders may declare: the
+    /// engine runs them and the instruction again.
+    Autoload(PhpStr),
     /// A file that does not parse (an included one).
     Parse { message: String, file: Rc<str>, line: u32 },
     Exit(i32),
@@ -74,6 +77,25 @@ pub trait Ctx {
     fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
     /// Closure::fromCallable: a Closure calling `callable`.
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw>;
+    /// The class `name`, after the autoloaders had their go (an Err of
+    /// Throw::Autoload asks the engine to run them and the call again).
+    fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw>;
+    /// The class `static::` names in the running code.
+    fn called_class(&self) -> Option<Rc<Class>>;
+    /// set_error_handler / restore_error_handler (`handler` None): the
+    /// handler before.
+    fn error_handler(&mut self, handler: Option<(Value, i64)>) -> Value;
+    /// set_exception_handler / restore_exception_handler (None).
+    fn exception_handler(&mut self, handler: Option<Value>) -> Value;
+    /// spl_autoload_register (`Some(prepend)`) or unregister (None):
+    /// whether it was done.
+    fn autoloader(&mut self, callable: Value, register: Option<bool>) -> bool;
+    /// spl_autoload_functions()
+    fn autoloaders(&self) -> Vec<Value>;
+    /// register_shutdown_function()
+    fn on_shutdown(&mut self, callable: Value, args: Vec<Value>);
+    /// class_alias(): false when the alias is taken.
+    fn class_alias(&mut self, class: Rc<Class>, alias: &[u8]) -> bool;
     /// Every (key, value) going through `v` gives (an array, a generator,
     /// an Iterator or IteratorAggregate), as foreach does.
     fn iterate(&mut self, v: &Value) -> Result<Vec<(Value, Value)>, Throw>;

@@ -5,6 +5,7 @@
 mod builtin_classes;
 mod callable;
 mod classes;
+mod handlers;
 mod generators;
 mod include;
 mod refs;
@@ -791,6 +792,13 @@ impl Isolate {
             loader: None,
             included: std::collections::HashSet::new(),
             ids: Rc::new(Ids::default()),
+            autoloaders: Vec::new(),
+            autoload_tried: std::collections::HashSet::new(),
+            error_handlers: Vec::new(),
+            exception_handlers: Vec::new(),
+            shutdown: Vec::new(),
+            pending_errors: Vec::new(),
+            in_handler: false,
             arg_buf: Vec::new(),
             lambdas: HashMap::new(),
             natives: Vec::new(),
@@ -843,6 +851,18 @@ pub struct Context<'i> {
     ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
     arg_buf: Vec<Value>,
+    /// spl_autoload_register's callables, and the classes they were asked
+    /// for (once each).
+    autoloaders: Vec<Value>,
+    autoload_tried: std::collections::HashSet<Vec<u8>>,
+    /// set_error_handler's (callable, levels), innermost last.
+    error_handlers: Vec<(Value, i64)>,
+    exception_handlers: Vec<Value>,
+    /// register_shutdown_function's (callable, arguments).
+    shutdown: Vec<(Value, Vec<Value>)>,
+    /// Diagnostics for the error handler, raised by the running instruction.
+    pending_errors: Vec<(i64, String, Rc<str>, u32)>,
+    in_handler: bool,
     /// The closure of each function a Closure object runs (by its code).
     lambdas: HashMap<usize, Rc<Closure>>,
     /// Builtins running that may call back into PHP, innermost last.
@@ -900,15 +920,36 @@ impl Context<'_> {
         self.frames.push(&Closure::new(main), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
         let defs = std::mem::take(&mut self.class_defs);
-        let result = match self.early_bind(&defs) {
+        let mut result = match self.early_bind(&defs) {
             Ok(()) => self.execute(&mut regs),
             Err(e) => Err(self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), e)),
         };
+        if let Err(t) = result {
+            result = Err(self.handle_uncaught(&mut regs, t));
+        }
+        let mut status = self.report_end(result);
+        // Shutdown functions (when the main frame returned, they ran then).
+        if !self.shutdown.is_empty() {
+            self.frames.floor = 0;
+            let r = self.run_shutdown(&mut regs);
+            if let Err(t) = r {
+                let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
+                let t = self.handle_uncaught(&mut regs, t);
+                status = self.report_end(Err(t));
+            }
+        }
         // The request's variables go now (the isolate keeps the capacity).
         regs.clear();
         self.frames.clear();
         self.isolate.regs = regs;
-        let status = match result {
+        self.out.flush_all();
+        status
+    }
+
+    /// The exit status for how the code ended, with PHP's message for an
+    /// error nothing caught.
+    fn report_end(&mut self, result: Result<(), Throw>) -> i32 {
+        match result {
             Ok(()) => 0,
             Err(Throw::Exit(status)) => status,
             Err(Throw::Fatal { message, file, line }) => {
@@ -937,9 +978,13 @@ impl Context<'_> {
                 );
                 255
             }
-        };
-        self.out.flush_all();
-        status
+            Err(Throw::Autoload(name)) => {
+                let (file, line) = self.location();
+                let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
+                self.out.write(format!("\nFatal error: Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}\n").as_bytes());
+                255
+            }
+        }
     }
 
     /// The fatal error an interrupt ends the request with.
@@ -997,6 +1042,24 @@ impl Context<'_> {
     /// Print a diagnostic of PHP error `level` at the current line, as the
     /// CLI does, if error_reporting and display_errors let it through.
     fn show(&mut self, level: i64, message: &str) {
+        // A user error handler gets it (after the instruction), whatever
+        // error_reporting says.
+        if !self.in_handler
+            && let Some((_, mask)) = self.error_handlers.last()
+            && mask & level != 0
+            && !matches!(self.error_handlers.last(), Some((Value::Null, _)))
+        {
+            let (file, line) = self.location();
+            self.pending_errors.push((level, message.to_string(), file, line));
+            return;
+        }
+        let (file, line) = self.location();
+        self.print_diag(level, message, &file, line);
+    }
+
+    /// Print a diagnostic as the CLI does, if error_reporting and
+    /// display_errors let it through.
+    fn print_diag(&mut self, level: i64, message: &str, file: &str, line: u32) {
         if !self.display_errors || self.error_level & level == 0 {
             return;
         }
@@ -1006,7 +1069,6 @@ impl Context<'_> {
             E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
             _ => "Fatal error",
         };
-        let (file, line) = self.location();
         self.out.write(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
     }
 
@@ -1099,22 +1161,57 @@ impl Context<'_> {
             if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
                 && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
             {
+                let at = pc;
                 match self.call_builtin(regs, base, i, args, n, dst) {
                     Ok(()) => pc += 1,
+                    Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
                     Err(t) => pc = self.unwind(regs, t, pc)?,
+                }
+                if !self.pending_errors.is_empty() {
+                    pc = self.after_errors(regs, pc, at)?;
                 }
                 continue;
             }
+            let at = pc;
             match self.step(regs, &func, base, argc, pc) {
                 Ok(Next::Go(next)) => pc = next,
                 Ok(Next::Switch) => {
                     if self.frames.len() == self.frames.floor {
+                        if !self.pending_errors.is_empty() {
+                            self.dispatch_errors(regs)?;
+                        }
                         return Ok(());
                     }
                     pc = self.frames.last().expect("a frame").pc as usize;
                 }
+                // A class an autoloader may declare: run them, then this
+                // instruction again.
+                Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
                 Err(t) => pc = self.unwind(regs, t, pc)?,
             }
+            if !self.pending_errors.is_empty() {
+                pc = self.after_errors(regs, pc, at)?;
+            }
+        }
+    }
+
+    /// Run the autoloaders for `name`, then go on at `at` (the instruction
+    /// that wanted the class, again).
+    #[cold]
+    fn autoload_then(&mut self, regs: &mut Vec<Value>, name: PhpStr, at: usize) -> Result<usize, Throw> {
+        match self.run_autoload(regs, name) {
+            Ok(()) => Ok(at),
+            Err(t) => self.unwind(regs, t, at),
+        }
+    }
+
+    /// Call the error handler for the diagnostics the last instruction
+    /// raised; an exception it throws is raised there.
+    #[cold]
+    fn after_errors(&mut self, regs: &mut Vec<Value>, pc: usize, at: usize) -> Result<usize, Throw> {
+        match self.dispatch_errors(regs) {
+            Ok(()) => Ok(pc),
+            Err(t) => self.unwind(regs, t, at),
         }
     }
 
@@ -1947,6 +2044,10 @@ impl Context<'_> {
                 }
                 Instr::Return { src } => {
                     let v = self.operand(w, func, src);
+                    if self.frames.len() == 1 && self.frames.floor == 0 && !self.shutdown.is_empty() {
+                        // The script ends: shutdown functions, with its globals still there.
+                        self.run_shutdown(regs)?;
+                    }
                     if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
                         self.finish(&g, v);
                         leave(&mut self.frames, regs, Value::Null);
@@ -1957,6 +2058,9 @@ impl Context<'_> {
                 }
 
                 Instr::ReturnNull => {
+                    if self.frames.len() == 1 && self.frames.floor == 0 && !self.shutdown.is_empty() {
+                        self.run_shutdown(regs)?;
+                    }
                     if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
                         self.finish(&g, Value::Null);
                     }
@@ -2158,6 +2262,10 @@ impl Context<'_> {
             // The common case: the builtin works on the registers directly.
             let args = &mut regs[start..start + argc as usize];
             let r = self.run_builtin(i, args);
+            if let Err(Throw::Autoload(_)) = r {
+                // The call runs again after the autoloaders: its arguments stay.
+                return r.map(|_| ());
+            }
             for v in args {
                 clear(v);
             }
@@ -2173,6 +2281,11 @@ impl Context<'_> {
         let r = self.run_builtin(i, &mut buf);
         self.natives.pop();
         *regs = std::mem::take(&mut self.isolate.regs);
+        if let Err(Throw::Autoload(_)) = r {
+            for (slot, v) in regs[start..start + argc as usize].iter_mut().zip(buf.drain(..)) {
+                *slot = v;
+            }
+        }
         buf.clear();
         self.arg_buf = buf;
         regs[base + dst as usize] = r?;
@@ -2576,6 +2689,73 @@ impl Ctx for Context<'_> {
 
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw> {
         self.closure_from_callable(callable)
+    }
+
+    fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
+        self.class_if_loaded(name)
+    }
+
+    fn called_class(&self) -> Option<Rc<Class>> {
+        Context::scope(self).1
+    }
+
+    fn error_handler(&mut self, handler: Option<(Value, i64)>) -> Value {
+        let old = self.error_handlers.last().map(|(h, _)| h.clone()).unwrap_or(Value::Null);
+        match handler {
+            Some(h) => self.error_handlers.push(h),
+            None => {
+                self.error_handlers.pop();
+            }
+        }
+        old
+    }
+
+    fn exception_handler(&mut self, handler: Option<Value>) -> Value {
+        let old = self.exception_handlers.last().cloned().unwrap_or(Value::Null);
+        match handler {
+            Some(h) => self.exception_handlers.push(h),
+            None => {
+                self.exception_handlers.pop();
+            }
+        }
+        old
+    }
+
+    fn autoloader(&mut self, callable: Value, register: Option<bool>) -> bool {
+        let at = self.autoloaders.iter().position(|a| a.identical(&callable) || a.loose_eq(&callable));
+        match (register, at) {
+            (Some(_), Some(_)) => true,
+            (Some(true), None) => {
+                self.autoloaders.insert(0, callable);
+                true
+            }
+            (Some(false), None) => {
+                self.autoloaders.push(callable);
+                true
+            }
+            (None, Some(i)) => {
+                self.autoloaders.remove(i);
+                true
+            }
+            (None, None) => false,
+        }
+    }
+
+    fn autoloaders(&self) -> Vec<Value> {
+        self.autoloaders.clone()
+    }
+
+    fn on_shutdown(&mut self, callable: Value, args: Vec<Value>) {
+        self.shutdown.push((callable, args));
+    }
+
+    fn class_alias(&mut self, class: Rc<Class>, alias: &[u8]) -> bool {
+        let lower = alias.strip_prefix(b"\\").unwrap_or(alias).to_ascii_lowercase();
+        if self.classes.contains_key(&lower) {
+            return false;
+        }
+        self.classes.insert(lower, class);
+        true
     }
 
     fn iterate(&mut self, v: &Value) -> Result<Vec<(Value, Value)>, Throw> {

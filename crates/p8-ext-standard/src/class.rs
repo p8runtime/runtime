@@ -25,7 +25,133 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "is_subclass_of", run: is_subclass_of, by_ref: &[] },
     Builtin { name: "spl_object_id", run: spl_object_id, by_ref: &[] },
     Builtin { name: "spl_object_hash", run: spl_object_hash, by_ref: &[] },
+    Builtin { name: "get_called_class", run: get_called_class, by_ref: &[] },
+    Builtin { name: "class_alias", run: class_alias, by_ref: &[] },
+    Builtin { name: "constant", run: constant, by_ref: &[] },
+    Builtin { name: "set_error_handler", run: set_error_handler, by_ref: &[] },
+    Builtin { name: "restore_error_handler", run: restore_error_handler, by_ref: &[] },
+    Builtin { name: "set_exception_handler", run: set_exception_handler, by_ref: &[] },
+    Builtin { name: "restore_exception_handler", run: restore_exception_handler, by_ref: &[] },
+    Builtin { name: "spl_autoload_register", run: spl_autoload_register, by_ref: &[] },
+    Builtin { name: "spl_autoload_unregister", run: spl_autoload_unregister, by_ref: &[] },
+    Builtin { name: "spl_autoload_functions", run: spl_autoload_functions, by_ref: &[] },
+    Builtin { name: "register_shutdown_function", run: register_shutdown_function, by_ref: &[] },
 ];
+
+fn get_called_class(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    match ctx.called_class() {
+        Some(c) => Ok(name(&c)),
+        None => Err(ctx.throw("Error", "get_called_class() must be called from within a class".into())),
+    }
+}
+
+/// class_alias(string $class, string $alias, bool $autoload = true)
+fn class_alias(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let original = str_arg(args, 0);
+    let alias = str_arg(args, 1);
+    let class = if args.len() < 3 || arg(args, 2).to_bool() { ctx.class_load(original.as_bytes())? } else { ctx.class(original.as_bytes()) };
+    let Some(class) = class else {
+        ctx.warn(&format!("Class \"{}\" not found", String::from_utf8_lossy(original.as_bytes())));
+        return Ok(Value::Bool(false));
+    };
+    if !ctx.class_alias(class, alias.as_bytes()) {
+        ctx.warn(&format!("Cannot declare class {}, because the name is already in use", String::from_utf8_lossy(alias.as_bytes())));
+        return Ok(Value::Bool(false));
+    }
+    Ok(Value::Bool(true))
+}
+
+/// constant(string $name): a constant, or a class constant ("C::NAME").
+fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let full = str_arg(args, 0);
+    let text = full.as_bytes();
+    if let Some(at) = text.windows(2).position(|w| w == b"::") {
+        let (class_name, name) = (&text[..at], &text[at + 2..]);
+        let Some(class) = ctx.class_load(class_name)? else {
+            return Err(ctx.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(class_name))));
+        };
+        if name.eq_ignore_ascii_case(b"class") {
+            return Ok(Value::Str(class.name.clone()));
+        }
+        return match class.constants.get(name) {
+            Some(c) => {
+                let declaring = ctx.class(c.declaring_name.as_bytes()).unwrap_or_else(|| Rc::clone(&class));
+                if !visible(c.visibility, &declaring, ctx.scope().as_deref()) {
+                    return Err(ctx.throw(
+                        "Error",
+                        format!("Cannot access {} constant {}::{}", c.visibility.word(), class.name.to_lossy(), String::from_utf8_lossy(name)),
+                    ));
+                }
+                Ok(c.value.clone())
+            }
+            None => Err(ctx.throw("Error", format!("Undefined constant {}::{}", class.name.to_lossy(), String::from_utf8_lossy(name)))),
+        };
+    }
+    match ctx.constant(text) {
+        Some(v) => Ok(v),
+        None => Err(ctx.throw("Error", format!("Undefined constant \"{}\"", String::from_utf8_lossy(text)))),
+    }
+}
+
+trait Lossy {
+    fn to_lossy(&self) -> String;
+}
+
+impl Lossy for PhpStr {
+    fn to_lossy(&self) -> String {
+        String::from_utf8_lossy(self.as_bytes()).into_owned()
+    }
+}
+
+/// E_ALL
+const E_ALL: i64 = 30719;
+
+/// set_error_handler(?callable $callback, int $error_levels = E_ALL)
+fn set_error_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let levels = if args.len() > 1 { arg(args, 1).to_int() } else { E_ALL };
+    Ok(ctx.error_handler(Some((arg(args, 0), levels))))
+}
+
+fn restore_error_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.error_handler(None);
+    Ok(Value::Bool(true))
+}
+
+fn set_exception_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(ctx.exception_handler(Some(arg(args, 0))))
+}
+
+fn restore_exception_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.exception_handler(None);
+    Ok(Value::Bool(true))
+}
+
+/// spl_autoload_register(?callable $callback = null, bool $throw = true, bool $prepend = false)
+fn spl_autoload_register(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let callable = arg(args, 0);
+    if matches!(callable, Value::Null) {
+        // The default (spl_autoload: lowercase file names in include_path) is not here yet.
+        return Ok(Value::Bool(true));
+    }
+    let prepend = args.len() > 2 && arg(args, 2).to_bool();
+    Ok(Value::Bool(ctx.autoloader(callable, Some(prepend))))
+}
+
+fn spl_autoload_unregister(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(ctx.autoloader(arg(args, 0), None)))
+}
+
+fn spl_autoload_functions(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Array(Rc::new(PhpArray::from_list(ctx.autoloaders()))))
+}
+
+/// register_shutdown_function(callable $callback, mixed ...$args)
+fn register_shutdown_function(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let callable = arg(args, 0);
+    let rest = args[1..].iter().map(Value::deref).collect();
+    ctx.on_shutdown(callable, rest);
+    Ok(Value::Null)
+}
 
 /// The class an `$object_or_class` argument names: an object's, or a
 /// declared class's (None for an unknown name).
@@ -129,14 +255,20 @@ fn property_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     }))
 }
 
+/// The class `$class` names, autoloaded when `$autoload` (argument 1) is.
+fn lookup(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Option<Rc<Class>>, Throw> {
+    let name = str_arg(args, 0);
+    if args.len() < 2 || arg(args, 1).to_bool() { ctx.class_load(name.as_bytes()) } else { Ok(ctx.class(name.as_bytes())) }
+}
+
 /// class_exists($class, $autoload = true): a class (not an interface or trait).
 fn class_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let class = ctx.class(str_arg(args, 0).as_bytes());
+    let class = lookup(ctx, args)?;
     Ok(Value::Bool(class.is_some_and(|c| c.flags & (CLASS_INTERFACE | CLASS_TRAIT) == 0)))
 }
 
 fn interface_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let class = ctx.class(str_arg(args, 0).as_bytes());
+    let class = lookup(ctx, args)?;
     Ok(Value::Bool(class.is_some_and(|c| c.flags & CLASS_INTERFACE != 0)))
 }
 

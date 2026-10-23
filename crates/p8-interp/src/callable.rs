@@ -210,9 +210,7 @@ impl Context<'_> {
     /// `"Class::method"` or `['Class', 'method']`.
     fn static_by_name(&mut self, class: &[u8], lower: &[u8], display: &[u8]) -> Result<Target, Throw> {
         let class = class.strip_prefix(b"\\").unwrap_or(class);
-        let Some(target) = self.classes.get(&class.to_ascii_lowercase()).cloned() else {
-            return Err(self.throw("Error", format!("Class \"{}\" not found", text(class))));
-        };
+        let target = self.find_class(class)?;
         let Some(method) = target.method(lower).cloned() else {
             return Err(self.throw("Error", format!("Call to undefined method {}::{}()", target.name.to_string_lossy(), text(display))));
         };
@@ -258,24 +256,42 @@ impl Context<'_> {
     /// Call PHP code from a builtin (it holds the lent registers): run
     /// `callable` on `args` to its return, above the running frames.
     pub(crate) fn call_from_builtin(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let r = self.call_with_regs(&mut regs, callable, args);
+        self.isolate.regs = regs;
+        r
+    }
+
+    /// Call `callable` on `args` above the running frames, whose
+    /// registers `regs` is.
+    pub(crate) fn call_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
         let target = self.resolve_callable(callable)?;
         let m = match target {
-            Target::Builtin(i) => return self.run_builtin(i, args),
+            Target::Builtin(i) => {
+                // A builtin that calls back finds the registers lent.
+                std::mem::swap(&mut self.isolate.regs, regs);
+                let r = self.run_builtin(i, args);
+                std::mem::swap(&mut self.isolate.regs, regs);
+                return r;
+            }
             Target::Frame(MethodFrame { func: Code::Native(native), this, .. }) => {
                 let mut passed: Vec<Value> = args.iter().map(Value::deref).collect();
                 return self.run_native(native, this.as_ref(), &mut passed);
             }
             Target::Frame(m) => m,
         };
-        let mut regs = std::mem::take(&mut self.isolate.regs);
-        let r = self.run_nested(&mut regs, m, args);
-        self.isolate.regs = regs;
-        r
+        self.run_nested(regs, m, args)
     }
 
     pub(crate) fn run_nested(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
-        let top = self.frames.last().expect("a builtin's caller");
-        let at = top.base as usize + top.func.code.nregs as usize;
+        let at = match self.frames.last() {
+            Some(top) => top.base as usize + top.func.code.nregs as usize,
+            None => 0,
+        };
+        self.run_nested_at(regs, m, args, at)
+    }
+
+    fn run_nested_at(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value], at: usize) -> Result<Value, Throw> {
         if regs.len() < at + args.len() + 1 {
             regs.resize(at + args.len() + 1, Value::Undef);
         }
@@ -291,7 +307,7 @@ impl Context<'_> {
         }
         let argc = args.len() as u8;
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
-        let caller_pc = self.frames.last().expect("a frame").pc;
+        let caller_pc = self.frames.last().map_or(0, |f| f.pc);
         // The callee's result lands in its first register (written after
         // its window is cleared).
         let next = self.call_method(regs, m, at, argc, at as u32, caller_pc as usize)?;

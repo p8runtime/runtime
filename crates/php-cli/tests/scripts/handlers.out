@@ -1,0 +1,29 @@
+dflt
+Array
+(
+    [0] => 2: Undefined array key "nope" @9
+    [1] => 2: Undefined variable $undefinedVar @10
+    [2] => 512: custom @11
+)
+
+Warning: Undefined array key "shown" in %s on line 14
+handler: Undefined array key "both"
+
+Warning: Undefined array key "both" in %s on line 16
+caught: Undefined array key "thrown"
+autoload(Loaded)
+loaded
+hi from Loaded
+Loaded
+autoload(Nope)
+bool(false)
+bool(false)
+int(1)
+autoload(Missing)
+Class "Missing" not found
+loaded loaded 8
+Q
+end of script
+uncaught handler: final
+shutdown 1: arg, global value
+shutdown 2
