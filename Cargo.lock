@@ -2811,8 +2811,11 @@ dependencies = [
 name = "p8-interp"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "p8-bytecode",
+ "p8-compiler",
  "p8-runtime",
+ "p8-syntax",
 ]
 
 [[package]]
