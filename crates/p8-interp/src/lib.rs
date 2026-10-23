@@ -199,19 +199,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     _ => return pc,
                 },
                 Instr::Binary { op, dst, a, b } => {
-                    let r = match (&w[a as usize], &w[b as usize]) {
-                        (Value::Int(x), Value::Int(y)) => match op {
-                            BinOp::Add => x.checked_add(*y).map(Value::Int),
-                            BinOp::Sub => x.checked_sub(*y).map(Value::Int),
-                            BinOp::Mul => x.checked_mul(*y).map(Value::Int),
-                            _ => None,
-                        },
-                        (Value::Float(x), Value::Float(y)) => float_op(op, *x, *y),
-                        (Value::Int(x), Value::Float(y)) => float_op(op, *x as f64, *y),
-                        (Value::Float(x), Value::Int(y)) => float_op(op, *x, *y as f64),
-                        _ => None,
-                    };
-                    match r {
+                    match num_op(op, &w[a as usize], &w[b as usize]) {
                         Some(r) => {
                             w[dst as usize] = r;
                             pc += 1;
@@ -281,8 +269,17 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     w[dst as usize] = v;
                     pc += 1;
                 }
+                // $a[int] op= number, $a an array holding a number at
+                // that key
+                Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
+                    if !int_dim_op(w, op, var, keys, val, dst) {
+                        return pc;
+                    }
+                    pc += 1;
+                }
                 // Every other instruction (listed, so dispatch needs no range check).
                 Instr::AssignDim { .. }
+                | Instr::AssignDimOp { .. }
                 | Instr::LoadNull { .. }
                 | Instr::AssignOp { .. }
                 | Instr::Not { .. }
@@ -295,7 +292,6 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::NewArray { .. }
                 | Instr::ArrayPush { .. }
                 | Instr::ArraySet { .. }
-                | Instr::AssignDimOp { .. }
                 | Instr::IssetDim { .. }
                 | Instr::IssetVar { .. }
                 | Instr::UnsetVar { .. }
@@ -1628,6 +1624,44 @@ fn unset_path(target: &mut Value, keys: &[Value]) -> bool {
     }
     let Some(child) = Rc::make_mut(a).get_mut(&k) else { return false };
     unset_path(child, rest)
+}
+
+/// `$a[k] op= v` for an int `k`, `$a` an array holding a number there and
+/// `v` a number; false (nothing done) for anything else. Out of line, so
+/// the fast loop's registers stay its own.
+#[inline(never)]
+fn int_dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -> bool {
+    let Value::Int(k) = w[keys as usize] else { return false };
+    let r = match &w[var as usize] {
+        Value::Array(a) => a.get_int(k).and_then(|x| num_op(op, x, &w[val as usize])),
+        _ => None,
+    };
+    let Some(r) = r else { return false };
+    let Value::Array(a) = &mut w[var as usize] else { return false };
+    match Rc::make_mut(a).get_int_mut(k) {
+        Some(slot) => *slot = r.clone(),
+        None => return false,
+    }
+    w[dst as usize] = r;
+    true
+}
+
+/// +, -, * and / on two numbers, when no warning or overflow is involved
+/// (the fast path: anything else takes the slow one).
+#[inline(always)]
+fn num_op(op: BinOp, a: &Value, b: &Value) -> Option<Value> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => match op {
+            BinOp::Add => x.checked_add(*y).map(Value::Int),
+            BinOp::Sub => x.checked_sub(*y).map(Value::Int),
+            BinOp::Mul => x.checked_mul(*y).map(Value::Int),
+            _ => None,
+        },
+        (Value::Float(x), Value::Float(y)) => float_op(op, *x, *y),
+        (Value::Int(x), Value::Float(y)) => float_op(op, *x as f64, *y),
+        (Value::Float(x), Value::Int(y)) => float_op(op, *x, *y as f64),
+        _ => None,
+    }
 }
 
 /// +, -, * and / on two floats (the fast path; / by zero takes the slow one).
