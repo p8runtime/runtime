@@ -1,0 +1,12 @@
+[package]
+name = "p8-compiler"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's compiler: PHP AST to register bytecode"
+
+[dependencies]
+indexmap = "2.0"
+p8-bytecode = { path = "../p8-bytecode" }
+p8-runtime = { path = "../p8-runtime" }
+p8-syntax = { path = "../p8-syntax" }

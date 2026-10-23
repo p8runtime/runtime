@@ -1,0 +1,15 @@
+[package]
+name = "p8"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8: an embeddable PHP 8.4 engine"
+
+[dependencies]
+bumpalo = { version = "3.12", features = ["collections"] }
+p8-bytecode = { path = "../p8-bytecode" }
+p8-compiler = { path = "../p8-compiler" }
+p8-ext-standard = { path = "../p8-ext-standard" }
+p8-interp = { path = "../p8-interp" }
+p8-runtime = { path = "../p8-runtime" }
+p8-syntax = { path = "../p8-syntax" }

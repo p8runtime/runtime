@@ -1,0 +1,11 @@
+[package]
+name = "p8-syntax"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's PHP lexer, parser and AST"
+
+[dependencies]
+bumpalo = { version = "3.12", features = ["collections"] }
+serde = { version = "1.0", features = ["derive"] }
+memchr = "2.7"
