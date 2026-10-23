@@ -513,9 +513,12 @@ fn set_int_elem(a: &mut Rc<PhpArray>, k: i64, v: &Value) -> bool {
 /// reference (read through its cell).
 #[inline(always)]
 fn copied(v: &Value) -> Option<Value> {
-    match v {
+    match *v {
+        // The commonest cases first, without the general clone's dispatch.
+        Value::Int(i) => Some(Value::Int(i)),
+        Value::Float(f) => Some(Value::Float(f)),
         Value::Undef | Value::Ref(_) => None,
-        v => Some(v.clone()),
+        ref v => Some(v.clone()),
     }
 }
 

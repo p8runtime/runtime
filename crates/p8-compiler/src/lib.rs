@@ -1169,6 +1169,16 @@ impl<'src> Compiler<'src> {
         }
         let text = text.strip_prefix(b"\\").unwrap_or(text);
         let lower = text.to_ascii_lowercase();
+        // strlen of a literal string is a constant, as PHP compiles it
+        // (a builtin cannot be redeclared, so the name means strlen).
+        if lower == b"strlen"
+            && let [arg] = args
+            && !arg.unpack
+            && arg.name.is_none()
+            && let Some(Frozen::Str(s)) = self.literal(arg.value)
+        {
+            return Ok(f.constant(Frozen::Int(s.as_bytes().len() as i64)));
+        }
         // Whether argument n is passed by reference, when the callee is known now.
         let by_ref = |n: usize| -> Option<bool> {
             if let Some((modes, rest)) = self.by_ref.get(&lower) {
