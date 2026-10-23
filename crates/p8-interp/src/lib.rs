@@ -272,10 +272,13 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 // $a[int] op= number, $a an array holding a number at
                 // that key
                 Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
-                    if !int_dim_op(w, op, var, keys, val, dst) {
+                    if !dim_op(w, op, var, keys, val, dst) {
                         return pc;
                     }
                     pc += 1;
+                }
+                Instr::IterNext { iter, val, key, has_key, end } => {
+                    pc = if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize };
                 }
                 // Every other instruction (listed, so dispatch needs no range check).
                 Instr::AssignDim { .. }
@@ -297,7 +300,6 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::UnsetVar { .. }
                 | Instr::UnsetDim { .. }
                 | Instr::IterInit { .. }
-                | Instr::IterNext { .. }
                 | Instr::SendVar { .. }
                 | Instr::Echo { .. }
                 | Instr::FetchConst { .. }
@@ -1125,23 +1127,8 @@ impl Context<'_> {
                     }
                 }
                 Instr::IterNext { iter, val, key, has_key, end } => {
-                    let pos = match reg!(iter + 1) {
-                        Value::Int(p) => p as usize,
-                        _ => 0,
-                    };
-                    let next = match &reg!(iter) {
-                        Value::Array(a) => a.entry_at(pos).map(|(p, k, v)| (p, k, v.clone())),
-                        _ => None,
-                    };
-                    match next {
-                        Some((p, k, v)) => {
-                            reg!(iter + 1) = Value::Int(p as i64 + 1);
-                            assign(w, val, v);
-                            if has_key {
-                                assign(w, key, k.to_value());
-                            }
-                        }
-                        None => pc = end as usize,
+                    if !iter_next(w, iter, val, key, has_key) {
+                        pc = end as usize;
                     }
                 }
                 Instr::SendVar { site, n, arg, var } => {
@@ -1626,23 +1613,55 @@ fn unset_path(target: &mut Value, keys: &[Value]) -> bool {
     unset_path(child, rest)
 }
 
-/// `$a[k] op= v` for an int `k`, `$a` an array holding a number there and
-/// `v` a number; false (nothing done) for anything else. Out of line, so
-/// the fast loop's registers stay its own.
+/// `$a[k] op= v` for an int or string `k`, `$a` an array holding a number
+/// there and `v` a number; false (nothing done) for anything else. Out of
+/// line, so the fast loop's registers stay its own.
 #[inline(never)]
-fn int_dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -> bool {
-    let Value::Int(k) = w[keys as usize] else { return false };
-    let r = match &w[var as usize] {
-        Value::Array(a) => a.get_int(k).and_then(|x| num_op(op, x, &w[val as usize])),
+fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -> bool {
+    let r = match (&w[var as usize], &w[keys as usize]) {
+        (Value::Array(a), &Value::Int(k)) => {
+            let Some(r) = a.get_int(k).and_then(|x| num_op(op, x, &w[val as usize])) else { return false };
+            let Value::Array(a) = &mut w[var as usize] else { return false };
+            match Rc::make_mut(a).get_int_mut(k) {
+                Some(slot) => *slot = r.clone(),
+                None => return false,
+            }
+            r
+        }
+        (Value::Array(a), Value::Str(s)) => {
+            let key = Key::from_string(s.clone());
+            let Some(r) = a.get(&key).and_then(|x| num_op(op, x, &w[val as usize])) else { return false };
+            let Value::Array(a) = &mut w[var as usize] else { return false };
+            match Rc::make_mut(a).get_mut(&key) {
+                Some(slot) => *slot = r.clone(),
+                None => return false,
+            }
+            r
+        }
+        _ => return false,
+    };
+    w[dst as usize] = r;
+    true
+}
+
+/// foreach's next element: its value into `val` (and key into `key`), the
+/// position past it into the iterator. False when there is none.
+#[inline(never)]
+fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> bool {
+    let pos = match w[iter as usize + 1] {
+        Value::Int(p) => p as usize,
+        _ => 0,
+    };
+    let next = match &w[iter as usize] {
+        Value::Array(a) => a.entry_at(pos).map(|(p, k, v)| (p, k, v.clone())),
         _ => None,
     };
-    let Some(r) = r else { return false };
-    let Value::Array(a) = &mut w[var as usize] else { return false };
-    match Rc::make_mut(a).get_int_mut(k) {
-        Some(slot) => *slot = r.clone(),
-        None => return false,
+    let Some((p, k, v)) = next else { return false };
+    w[iter as usize + 1] = Value::Int(p as i64 + 1);
+    assign(w, val, v);
+    if has_key {
+        assign(w, key, k.to_value());
     }
-    w[dst as usize] = r;
     true
 }
 

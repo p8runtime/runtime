@@ -31,3 +31,17 @@ array(1) {
   int(1)
 }
 6
+
+Warning: Undefined array key "c" in %s on line 38
+array(4) {
+  ["a"]=>
+  int(11)
+  ["b"]=>
+  float(5)
+  [7]=>
+  int(102)
+  ["c"]=>
+  int(1)
+}
+int(11)
+int(12)

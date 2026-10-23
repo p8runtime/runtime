@@ -29,3 +29,14 @@ foreach ([1, 2, 3] as $v) {
     $sum[0] += $v;
 }
 echo $sum[0], "\n";
+// String keys, numeric-string keys (the same as int keys) and misses.
+$h = ["a" => 1, "b" => 2.5, "7" => 3];
+$h["a"] += 10;
+$h["b"] *= 2;
+$h["7"] -= 1;
+$h[7] += 100;
+$h["c"] += 1;
+var_dump($h);
+$copyh = $h;
+$copyh["a"] += 1;
+var_dump($h["a"], $copyh["a"]);
