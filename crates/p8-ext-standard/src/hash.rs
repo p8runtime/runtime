@@ -1,5 +1,7 @@
-//! Hashes: md5, sha1, crc32, hash() and hash_hmac() with the algorithms
-//! scripts use, hash_equals, hash_algos, and the _file forms.
+//! Hashes: md5, sha1, crc32, hash() and hash_hmac() with every algorithm
+//! PHP 8.4 has (the RustCrypto crates and xxhash where they agree with
+//! PHP, hash_algos.rs for the rest), hash_equals, hash_algos, and the
+//! _file forms.
 //!
 //! Reference: $PHP_SRC_PATH/ext/standard/md5.c, sha1.c, crc32.c,
 //! $PHP_SRC_PATH/ext/hash/hash.c
@@ -22,7 +24,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "hash_file", run: hash_file, by_ref: &[] },
     Builtin { name: "hash_hmac", run: hash_hmac, by_ref: &[] },
     Builtin { name: "hash_algos", run: hash_algos, by_ref: &[] },
-    Builtin { name: "hash_hmac_algos", run: hash_algos, by_ref: &[] },
+    Builtin { name: "hash_hmac_algos", run: hash_hmac_algos, by_ref: &[] },
     Builtin { name: "hash_equals", run: hash_equals, by_ref: &[] },
     Builtin { name: "hash_init", run: hash_init, by_ref: &[] },
     Builtin { name: "hash_update", run: hash_update, by_ref: &[] },
@@ -34,13 +36,65 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "hash_pbkdf2", run: hash_pbkdf2, by_ref: &[] },
 ];
 
-const ALGOS: &[&str] =
-    &["md5", "sha1", "sha224", "sha256", "sha384", "sha512/224", "sha512/256", "sha512", "adler32", "crc32b", "fnv132", "fnv1a32", "fnv164", "fnv1a64", "joaat"];
+/// hash_algos(), in PHP's order.
+#[rustfmt::skip]
+const ALGOS: &[&str] = &[
+    "md2", "md4", "md5", "sha1", "sha224", "sha256", "sha384", "sha512/224", "sha512/256", "sha512",
+    "sha3-224", "sha3-256", "sha3-384", "sha3-512", "ripemd128", "ripemd160", "ripemd256", "ripemd320",
+    "whirlpool", "tiger128,3", "tiger160,3", "tiger192,3", "tiger128,4", "tiger160,4", "tiger192,4",
+    "snefru", "snefru256", "gost", "gost-crypto", "adler32", "crc32", "crc32b", "crc32c", "fnv132",
+    "fnv1a32", "fnv164", "fnv1a64", "joaat", "murmur3a", "murmur3c", "murmur3f", "xxh32", "xxh64",
+    "xxh3", "xxh128", "haval128,3", "haval160,3", "haval192,3", "haval224,3", "haval256,3",
+    "haval128,4", "haval160,4", "haval192,4", "haval224,4", "haval256,4", "haval128,5", "haval160,5",
+    "haval192,5", "haval224,5", "haval256,5",
+];
 
 /// Algorithm `name`'s digest of `data`, or None for one not known.
 fn digest(name: &str, data: &[u8]) -> Option<Vec<u8>> {
+    digest_seeded(name, data, None)
+}
+
+/// "tiger192,4" / "haval256,5": the bits and passes.
+fn bits_passes(name: &str, prefix: &str) -> Option<(u32, usize)> {
+    let (bits, passes) = name.strip_prefix(prefix)?.split_once(',')?;
+    Some((bits.parse().ok()?, passes.parse().ok()?))
+}
+
+/// As digest, with the `seed` option murmur and xxhash take.
+fn digest_seeded(name: &str, data: &[u8], seed: Option<u64>) -> Option<Vec<u8>> {
+    use crate::hash_algos as alg;
     use sha2::Digest;
+    if let Some((bits, passes)) = bits_passes(name, "tiger") {
+        return Some(alg::tiger(data, bits as usize, passes));
+    }
+    if let Some((bits, passes)) = bits_passes(name, "haval") {
+        return Some(alg::haval(data, bits, passes));
+    }
+    let seed32 = seed.unwrap_or(0) as u32;
     Some(match name {
+        "md2" => md2::Md2::digest(data).to_vec(),
+        "md4" => md4::Md4::digest(data).to_vec(),
+        "sha3-224" => sha3::Sha3_224::digest(data).to_vec(),
+        "sha3-256" => sha3::Sha3_256::digest(data).to_vec(),
+        "sha3-384" => sha3::Sha3_384::digest(data).to_vec(),
+        "sha3-512" => sha3::Sha3_512::digest(data).to_vec(),
+        "ripemd128" => ripemd::Ripemd128::digest(data).to_vec(),
+        "ripemd160" => ripemd::Ripemd160::digest(data).to_vec(),
+        "ripemd256" => ripemd::Ripemd256::digest(data).to_vec(),
+        "ripemd320" => ripemd::Ripemd320::digest(data).to_vec(),
+        "whirlpool" => whirlpool::Whirlpool::digest(data).to_vec(),
+        "snefru" | "snefru256" => alg::snefru(data),
+        "gost" => gost94::Gost94Test::digest(data).to_vec(),
+        "gost-crypto" => gost94::Gost94CryptoPro::digest(data).to_vec(),
+        "crc32" => alg::crc32_bzip2(data),
+        "crc32c" => alg::crc32c(data),
+        "murmur3a" => alg::murmur3a(data, seed32),
+        "murmur3c" => alg::murmur3c(data, seed32),
+        "murmur3f" => alg::murmur3f(data, seed.unwrap_or(0)),
+        "xxh32" => xxhash_rust::xxh32::xxh32(data, seed32).to_be_bytes().to_vec(),
+        "xxh64" => xxhash_rust::xxh64::xxh64(data, seed.unwrap_or(0)).to_be_bytes().to_vec(),
+        "xxh3" => xxhash_rust::xxh3::xxh3_64_with_seed(data, seed.unwrap_or(0)).to_be_bytes().to_vec(),
+        "xxh128" => xxhash_rust::xxh3::xxh3_128_with_seed(data, seed.unwrap_or(0)).to_be_bytes().to_vec(),
         "md5" => md5::Md5::digest(data).to_vec(),
         "sha1" => sha1::Sha1::digest(data).to_vec(),
         "sha224" => sha2::Sha224::digest(data).to_vec(),
@@ -100,6 +154,13 @@ fn digest(name: &str, data: &[u8]) -> Option<Vec<u8>> {
 fn block_size(name: &str) -> usize {
     match name {
         "sha384" | "sha512" | "sha512/224" | "sha512/256" => 128,
+        "md2" => 16,
+        "sha3-224" => 144,
+        "sha3-256" => 136,
+        "sha3-384" => 104,
+        "sha3-512" => 72,
+        "snefru" | "snefru256" | "gost" | "gost-crypto" => 32,
+        n if n.starts_with("haval") => 128,
         _ => 64,
     }
 }
@@ -159,10 +220,18 @@ fn algo(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<String, Throw> 
     Ok(name)
 }
 
-/// hash(string $algo, string $data, bool $binary = false)
+/// The `seed` in an options array (murmur, xxhash).
+fn seed_option(args: &[Value], i: usize) -> Option<u64> {
+    match args.get(i).map(Value::deref) {
+        Some(Value::Array(a)) => a.get(&p8_runtime::array::Key::from_string(PhpStr::from("seed"))).map(|v| v.to_int() as u64),
+        _ => None,
+    }
+}
+
+/// hash(string $algo, string $data, bool $binary = false, array $options = [])
 fn hash(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = algo(ctx, "hash", args)?;
-    Ok(shown(digest(&name, str_arg(args, 1).as_bytes()).expect("a known algorithm"), binary(args, 2)))
+    Ok(shown(digest_seeded(&name, str_arg(args, 1).as_bytes(), seed_option(args, 3)).expect("a known algorithm"), binary(args, 2)))
 }
 
 fn hash_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -173,7 +242,10 @@ fn hash_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// Whether algorithm `name` is a checksum (no HMAC, HKDF or PBKDF2 with it).
 fn not_cryptographic(name: &str) -> bool {
-    matches!(name, "adler32" | "crc32b" | "fnv132" | "fnv1a32" | "fnv164" | "fnv1a64" | "joaat")
+    matches!(
+        name,
+        "adler32" | "crc32" | "crc32b" | "crc32c" | "fnv132" | "fnv1a32" | "fnv164" | "fnv1a64" | "joaat" | "murmur3a" | "murmur3c" | "murmur3f" | "xxh32" | "xxh64" | "xxh3" | "xxh128"
+    )
 }
 
 /// HMAC of `data` with `key` (RFC 2104).
@@ -404,6 +476,11 @@ fn hash_pbkdf2(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn hash_algos(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Array(Rc::new(PhpArray::from_list(ALGOS.iter().map(|a| Value::str(*a)).collect()))))
+}
+
+/// hash_hmac_algos(): the cryptographic ones.
+fn hash_hmac_algos(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Array(Rc::new(PhpArray::from_list(ALGOS.iter().filter(|a| !not_cryptographic(a)).map(|a| Value::str(*a)).collect()))))
 }
 
 /// hash_equals(string $known_string, string $user_string): compared in constant time.

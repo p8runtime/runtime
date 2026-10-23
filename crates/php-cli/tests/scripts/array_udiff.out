@@ -1,0 +1,112 @@
+array(3) {
+  ["c"]=>
+  string(4) "blue"
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  string(1) "1"
+}
+array(2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  string(1) "1"
+}
+array(5) {
+  ["b"]=>
+  string(5) "brown"
+  ["c"]=>
+  string(4) "blue"
+  [0]=>
+  string(3) "red"
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  string(1) "1"
+}
+array(4) {
+  ["c"]=>
+  string(4) "blue"
+  [0]=>
+  string(3) "red"
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  string(1) "1"
+}
+array(2) {
+  ["c"]=>
+  string(4) "blue"
+  ["y"]=>
+  string(1) "1"
+}
+array(5) {
+  ["a"]=>
+  string(5) "green"
+  ["c"]=>
+  string(4) "blue"
+  [0]=>
+  string(3) "red"
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  string(1) "1"
+}
+array(3) {
+  ["a"]=>
+  string(5) "green"
+  ["b"]=>
+  string(5) "brown"
+  [0]=>
+  string(3) "red"
+}
+array(2) {
+  ["a"]=>
+  string(5) "green"
+  [0]=>
+  string(3) "red"
+}
+array(1) {
+  ["a"]=>
+  string(5) "green"
+}
+array(2) {
+  ["a"]=>
+  string(5) "green"
+  ["b"]=>
+  string(5) "brown"
+}
+array(4) {
+  ["a"]=>
+  string(5) "green"
+  ["b"]=>
+  string(5) "brown"
+  [0]=>
+  string(3) "red"
+  ["x"]=>
+  int(1)
+}
+array(1) {
+  ["b"]=>
+  string(5) "brown"
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(5)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [2]=>
+  int(3)
+  [3]=>
+  int(10)
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [2]=>
+  string(1) "c"
+}

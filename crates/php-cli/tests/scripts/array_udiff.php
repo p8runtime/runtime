@@ -1,0 +1,21 @@
+<?php
+$a = ['a' => 'green', 'b' => 'brown', 'c' => 'blue', 'red', 'x' => 1, 'y' => '1'];
+$b = ['a' => 'GREEN', 'B' => 'brown', 'yellow', 'red', 'x' => '01'];
+$c = ['red', 'c' => 'blue', 'a' => 'green'];
+$ci = fn($x, $y) => strcasecmp((string)$x, (string)$y);
+$num = fn($x, $y) => $x <=> $y;
+var_dump(array_udiff($a, $b, $ci));
+var_dump(array_udiff($a, $b, $c, $ci));
+var_dump(array_udiff_assoc($a, $b, $ci));
+var_dump(array_udiff_uassoc($a, $b, $ci, $ci));
+var_dump(array_diff_ukey($a, $b, $ci));
+var_dump(array_diff_uassoc($a, $b, $ci));
+var_dump(array_uintersect($a, $b, $ci));
+var_dump(array_uintersect($a, $b, $c, $ci));
+var_dump(array_uintersect_assoc($a, $b, $ci));
+var_dump(array_uintersect_uassoc($a, $b, $ci, $ci));
+var_dump(array_intersect_ukey($a, $b, $ci));
+var_dump(array_intersect_uassoc($a, $b, $ci));
+var_dump(array_udiff([1, 5, 3, 10], [3, 10], $num));
+var_dump(array_uintersect([1, 5, 3, 10], [3, 10, 1], $num));
+var_dump(array_diff_ukey([0 => 'a', 1 => 'b', 2 => 'c'], [1 => 'x'], $num));

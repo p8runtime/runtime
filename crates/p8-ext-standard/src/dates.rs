@@ -18,6 +18,8 @@ use std::rc::Rc;
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "date", run: date, by_ref: &[] },
     Builtin { name: "gmdate", run: gmdate, by_ref: &[] },
+    Builtin { name: "strftime", run: strftime, by_ref: &[] },
+    Builtin { name: "gmstrftime", run: gmstrftime, by_ref: &[] },
     Builtin { name: "idate", run: idate, by_ref: &[] },
     Builtin { name: "mktime", run: mktime, by_ref: &[] },
     Builtin { name: "gmmktime", run: gmmktime, by_ref: &[] },
@@ -235,6 +237,163 @@ fn gmdate(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut l = Zone::Named(Tz::UTC).at(ts);
     l.abbr = "GMT".into();
     Ok(Value::Str(PhpStr::new(format(str_arg(args, 0).as_bytes(), ts, &l, "UTC"))))
+}
+
+/// strftime's format as glibc's strftime gives it in the C locale (which
+/// is what PHP prints on Linux), for a moment in a zone. glibc's flags
+/// (`_` `-` `0` `^` `#`) and field widths are honoured.
+pub(crate) fn strftime_format(fmt: &[u8], ts: i64, l: &Local) -> Vec<u8> {
+    let d = l.dt;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < fmt.len() {
+        if fmt[i] != b'%' {
+            out.push(fmt[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        let (mut pad, mut upper, mut swap) = (None, false, false);
+        while let Some(&c) = fmt.get(i) {
+            match c {
+                b'_' => pad = Some(b' '),
+                b'-' => pad = Some(0),
+                b'0' => pad = Some(b'0'),
+                b'^' => upper = true,
+                b'#' => swap = true,
+                _ => break,
+            }
+            i += 1;
+        }
+        let mut width = None;
+        while let Some(&c) = fmt.get(i).filter(|c| c.is_ascii_digit()) {
+            width = Some(width.unwrap_or(0) * 10 + usize::from(c - b'0'));
+            i += 1;
+        }
+        // E and O modifiers change nothing in the C locale.
+        while matches!(fmt.get(i), Some(b'E' | b'O')) {
+            i += 1;
+        }
+        let Some(&conv) = fmt.get(i) else {
+            out.extend_from_slice(&fmt[start..]);
+            break;
+        };
+        i += 1;
+        // A number: its digits, its default padding and width.
+        let num = |n: i64, fill: u8, w: usize| (n, fill, w);
+        let iso = d.iso_week();
+        let wday = d.weekday().num_days_from_sunday();
+        let text: Result<String, (i64, u8, usize)> = match conv {
+            b'a' => Ok(DAYS[wday as usize][..3].to_string()),
+            b'A' => Ok(DAYS[wday as usize].to_string()),
+            b'b' | b'h' => Ok(MONTHS[d.month0() as usize][..3].to_string()),
+            b'B' => Ok(MONTHS[d.month0() as usize].to_string()),
+            b'c' => Ok(String::from_utf8_lossy(&strftime_format(b"%a %b %e %H:%M:%S %Y", ts, l)).into_owned()),
+            b'C' => Err(num(i64::from(d.year()).div_euclid(100), b'0', 2)),
+            b'd' => Err(num(i64::from(d.day()), b'0', 2)),
+            b'D' | b'x' => Ok(String::from_utf8_lossy(&strftime_format(b"%m/%d/%y", ts, l)).into_owned()),
+            b'e' => Err(num(i64::from(d.day()), b' ', 2)),
+            b'F' => Ok(String::from_utf8_lossy(&strftime_format(b"%Y-%m-%d", ts, l)).into_owned()),
+            b'g' => Err(num(i64::from(iso.year()).rem_euclid(100), b'0', 2)),
+            b'G' => Err(num(i64::from(iso.year()), b'0', 1)),
+            b'H' => Err(num(i64::from(d.hour()), b'0', 2)),
+            b'I' => Err(num(i64::from(hour12(d.hour())), b'0', 2)),
+            b'j' => Err(num(i64::from(d.ordinal()), b'0', 3)),
+            b'k' => Err(num(i64::from(d.hour()), b' ', 2)),
+            b'l' => Err(num(i64::from(hour12(d.hour())), b' ', 2)),
+            b'm' => Err(num(i64::from(d.month()), b'0', 2)),
+            b'M' => Err(num(i64::from(d.minute()), b'0', 2)),
+            b'n' => Ok("\n".into()),
+            b'p' => Ok(if d.hour() < 12 { "AM" } else { "PM" }.into()),
+            b'P' => Ok(if d.hour() < 12 { "am" } else { "pm" }.into()),
+            b'r' => Ok(String::from_utf8_lossy(&strftime_format(b"%I:%M:%S %p", ts, l)).into_owned()),
+            b'R' => Ok(String::from_utf8_lossy(&strftime_format(b"%H:%M", ts, l)).into_owned()),
+            // PHP hands glibc's mktime the local time, flagged DST or not,
+            // in the C library's zone (UTC, which has no DST: an hour back).
+            b's' => Err(num(ts + i64::from(l.offset) - if l.dst { 3600 } else { 0 }, b'0', 1)),
+            b'S' => Err(num(i64::from(d.second()), b'0', 2)),
+            b't' => Ok("\t".into()),
+            b'T' | b'X' => Ok(String::from_utf8_lossy(&strftime_format(b"%H:%M:%S", ts, l)).into_owned()),
+            b'u' => Err(num(i64::from(d.weekday().number_from_monday()), b'0', 1)),
+            b'U' => Err(num((i64::from(d.ordinal0()) + 7 - i64::from(wday)) / 7, b'0', 2)),
+            b'V' => Err(num(i64::from(iso.week()), b'0', 2)),
+            b'w' => Err(num(i64::from(wday), b'0', 1)),
+            b'W' => Err(num((i64::from(d.ordinal0()) + 7 - (i64::from(wday) + 6) % 7) / 7, b'0', 2)),
+            b'y' => Err(num(i64::from(d.year()).rem_euclid(100), b'0', 2)),
+            b'Y' => Err(num(i64::from(d.year()), b'0', 1)),
+            b'z' => {
+                let a = l.offset.abs();
+                Ok(format!("{}{:02}{:02}", if l.offset < 0 { '-' } else { '+' }, a / 3600, a / 60 % 60))
+            }
+            b'Z' => Ok(l.abbr.clone()),
+            b'%' => Ok("%".into()),
+            _ => {
+                // Not a conversion: copied as written.
+                out.extend_from_slice(&fmt[start..i]);
+                continue;
+            }
+        };
+        let field = match text {
+            Ok(mut t) => {
+                if upper || (swap && matches!(conv, b'a' | b'A' | b'b' | b'B' | b'h' | b'p' | b'Z')) {
+                    t = if swap && conv == b'Z' { t.to_ascii_lowercase() } else { t.to_ascii_uppercase() };
+                }
+                if swap && conv == b'P' {
+                    t = t.to_ascii_uppercase();
+                }
+                let fill = if pad == Some(b'0') { b'0' } else { b' ' };
+                // glibc pads text to its width even with `-`.
+                let w = width.unwrap_or(0);
+                let mut f = vec![fill; w.saturating_sub(t.len())];
+                f.extend_from_slice(t.as_bytes());
+                f
+            }
+            Err((n, default_fill, default_width)) => {
+                let digits = n.unsigned_abs().to_string();
+                let fill = match pad {
+                    Some(0) => None,
+                    Some(c) => Some(c),
+                    None => Some(default_fill),
+                };
+                let w = width.unwrap_or(default_width).saturating_sub(usize::from(n < 0));
+                let mut f = Vec::new();
+                if n < 0 {
+                    f.push(b'-');
+                }
+                if let Some(c) = fill {
+                    f.resize(f.len() + w.saturating_sub(digits.len()), c);
+                }
+                f.extend_from_slice(digits.as_bytes());
+                f
+            }
+        };
+        out.extend_from_slice(&field);
+    }
+    out
+}
+
+/// strftime(string $format, ?int $timestamp = null), in the default zone.
+fn strftime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let fmt = str_arg(args, 0);
+    if fmt.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    let ts = timestamp_arg(args, 1);
+    let (zone, _) = default_zone(ctx);
+    Ok(Value::Str(PhpStr::new(strftime_format(fmt.as_bytes(), ts, &zone.at(ts)))))
+}
+
+/// gmstrftime(string $format, ?int $timestamp = null), in GMT.
+fn gmstrftime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let fmt = str_arg(args, 0);
+    if fmt.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    let ts = timestamp_arg(args, 1);
+    let mut l = Zone::Named(Tz::UTC).at(ts);
+    l.abbr = "GMT".into();
+    Ok(Value::Str(PhpStr::new(strftime_format(fmt.as_bytes(), ts, &l))))
 }
 
 /// idate(string $format, ?int $timestamp = null): one part, as an int.

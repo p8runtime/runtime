@@ -17,6 +17,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "get_class", run: get_class, by_ref: &[] },
     Builtin { name: "get_parent_class", run: get_parent_class, by_ref: &[] },
     Builtin { name: "get_object_vars", run: get_object_vars, by_ref: &[] },
+    Builtin { name: "get_class_vars", run: get_class_vars, by_ref: &[] },
     Builtin { name: "method_exists", run: method_exists, by_ref: &[] },
     Builtin { name: "property_exists", run: property_exists, by_ref: &[] },
     Builtin { name: "class_exists", run: class_exists, by_ref: &[] },
@@ -240,6 +241,53 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     }
     for (k, v) in o.dynamic.borrow().iter() {
         out.insert(k, v.deref());
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+/// get_class_vars(string $class): the default values of the properties
+/// the calling code can see (the class's own first, then each parent's;
+/// a typed one with no default as null), then the static ones' values
+/// (by name, as Reflection lists them).
+fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let name = str_arg(args, 0);
+    let Some(class) = ctx.class_load(name.as_bytes())? else {
+        return Err(ctx.throw("TypeError", format!("get_class_vars(): Argument #1 ($class) must be a valid class name, {} given", String::from_utf8_lossy(name.as_bytes()))));
+    };
+    let defaults = ctx.class_defaults(&class)?;
+    let scope = ctx.scope();
+    // The declaring classes, the class itself first.
+    let mut chain = Vec::new();
+    let mut c = Some(&*class);
+    while let Some(k) = c {
+        chain.push(k.lower.clone());
+        c = k.parent.as_deref();
+    }
+    let mut out = PhpArray::new();
+    for lower in &chain {
+        for (i, p) in class.properties.iter().enumerate() {
+            if &p.declaring != lower || p.is_internal() || p.hooks & p8_runtime::object::HOOK_VIRTUAL != 0 {
+                continue;
+            }
+            if !visible(p.visibility, declaring(&class, &p.declaring), scope.as_deref()) {
+                continue;
+            }
+            if class.slot(p.name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) != Some(i) {
+                continue;
+            }
+            let v = match &defaults[i] {
+                Value::Undef => Value::Null,
+                v => v.clone(),
+            };
+            out.insert(Key::from_string(p.name.clone()), v);
+        }
+    }
+    let mut statics: Vec<_> = class.statics.iter().collect();
+    statics.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, (cell, vis, decl)) in statics {
+        if visible(*vis, declaring(&class, decl), scope.as_deref()) {
+            out.insert(Key::from_string(PhpStr::from(name.as_slice())), cell.borrow().deref());
+        }
     }
     Ok(Value::Array(Rc::new(out)))
 }

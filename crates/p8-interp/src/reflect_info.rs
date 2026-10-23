@@ -180,6 +180,23 @@ impl Context<'_> {
         Ok(object)
     }
 
+    /// Each property slot's starting value, its default computed.
+    pub(crate) fn class_defaults_of(&mut self, class: &Rc<Class>) -> Result<Vec<Value>, Throw> {
+        if self.unresolved(class) {
+            let mut regs = std::mem::take(&mut self.isolate.regs);
+            let r = self.resolve_class(&mut regs, class);
+            self.isolate.regs = regs;
+            r?;
+        }
+        let mut values: Vec<Value> = class.properties.iter().map(|p| p.default.clone()).collect();
+        if let Some(defaults) = self.class_defaults.get(&(Rc::as_ptr(class) as usize)) {
+            for (i, v) in defaults.iter() {
+                values[*i] = v.clone();
+            }
+        }
+        Ok(values)
+    }
+
     pub(crate) fn closure_of_callee(&mut self, callee: &Callee, this: Option<Rc<Object>>) -> Result<Value, Throw> {
         match callee {
             Callee::Function(name) => self.closure_from_callable(&Value::Str(name.clone())),

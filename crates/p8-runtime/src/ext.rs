@@ -137,6 +137,9 @@ pub trait Ctx {
     /// `new C(...args)` as the engine makes it (the instantiation checks,
     /// computed defaults), its constructor run when `construct`.
     fn new_instance(&mut self, class: &Rc<Class>, args: &mut [Value], construct: bool) -> Result<Rc<crate::object::Object>, Throw>;
+    /// The value each property slot of `class` starts with in a new
+    /// object, constant-expression defaults computed (Undef: none).
+    fn class_defaults(&mut self, class: &Rc<Class>) -> Result<Vec<Value>, Throw>;
     /// Reflection: a Closure of it (bound to `this` for a method).
     fn closure_of(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>) -> Result<Value, Throw>;
     /// The class `static::` names in the running code.
