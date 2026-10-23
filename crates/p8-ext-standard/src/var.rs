@@ -9,7 +9,8 @@ use crate::{arg, str_arg};
 use p8_runtime::array::Key;
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{CLASS_ENUM, Object, Visibility};
+use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Object, Visibility};
+use p8_runtime::stream::resource;
 use std::rc::Rc;
 use p8_runtime::numeric::numeric_string;
 use p8_runtime::string::PhpStr;
@@ -17,6 +18,10 @@ use p8_runtime::value::Value;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "gettype", run: gettype, by_ref: &[] },
+    Builtin { name: "is_object", run: is_object, by_ref: &[] },
+    Builtin { name: "is_resource", run: is_resource, by_ref: &[] },
+    Builtin { name: "get_resource_type", run: get_resource_type, by_ref: &[] },
+    Builtin { name: "get_resource_id", run: get_resource_id, by_ref: &[] },
     Builtin { name: "get_debug_type", run: get_debug_type, by_ref: &[] },
     Builtin { name: "is_null", run: is_null, by_ref: &[] },
     Builtin { name: "is_bool", run: is_bool, by_ref: &[] },
@@ -49,15 +54,57 @@ fn gettype(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Value::Float(_) => "double",
         Value::Str(_) => "string",
         Value::Array(_) => "array",
+        Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => {
+            if closed(&o) { "resource (closed)" } else { "resource" }
+        }
         Value::Object(_) => "object",
         Value::Ref(_) => unreachable!("arg() looks through references"),
     }))
+}
+
+/// Whether a resource has been closed (its type is "Unknown" then).
+fn closed(o: &Object) -> bool {
+    resource(o).is_some_and(|r| r.closed.get())
+}
+
+fn is_object(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(matches!(arg(args, 0), Value::Object(o) if o.class.flags & CLASS_RESOURCE == 0)))
+}
+
+/// is_resource: an open resource.
+fn is_resource(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(matches!(arg(args, 0), Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 && !closed(&o))))
+}
+
+fn get_resource_type(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    match arg(args, 0) {
+        Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => {
+            Ok(Value::Str(if closed(&o) { PhpStr::from("Unknown") } else { o.class.name.clone() }))
+        }
+        other => Err(ctx.throw(
+            "TypeError",
+            format!("get_resource_type(): Argument #1 ($resource) must be of type resource, {} given", other.type_name()),
+        )),
+    }
+}
+
+fn get_resource_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    match arg(args, 0) {
+        Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => Ok(Value::Int(i64::from(o.id))),
+        other => Err(ctx.throw(
+            "TypeError",
+            format!("get_resource_id(): Argument #1 ($resource) must be of type resource, {} given", other.type_name()),
+        )),
+    }
 }
 
 fn get_debug_type(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = match arg(args, 0) {
         Value::Null | Value::Undef => "null".into(),
         Value::Bool(_) => "bool".into(),
+        Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => {
+            if closed(&o) { "resource (closed)".into() } else { format!("resource ({})", String::from_utf8_lossy(o.class.name.as_bytes())).into() }
+        }
         other => other.type_name(),
     };
     Ok(Value::str(name.into_owned()))
@@ -211,6 +258,9 @@ fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Obj
             out.extend_from_slice(b")\n");
         }
         Value::Ref(cell) => print_r_to(&cell.borrow(), indent, out, seen),
+        Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => {
+            out.extend_from_slice(format!("Resource id #{}", o.id).as_bytes());
+        }
         Value::Object(o) => {
             out.extend_from_slice(o.class.name.as_bytes());
             // An enum: "Suit Enum" (":string" when backed).
@@ -275,7 +325,9 @@ fn var_export(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// php_var_export_ex
 fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
     match v {
+        // PHP also warns "var_export does not handle resources".
         Value::Null | Value::Undef => out.extend_from_slice(b"NULL"),
+        Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => out.extend_from_slice(b"NULL"),
         Value::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
         // PHP_INT_MIN has no literal: written as an expression.
         Value::Int(i64::MIN) => out.extend_from_slice(b"-9223372036854775807-1"),
@@ -439,6 +491,10 @@ fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>)
             out.extend_from_slice(format!("{pad}}}\n").as_bytes());
         }
         Value::Ref(cell) => dump(&cell.borrow(), indent, out, seen),
+        Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => {
+            let kind = if closed(o) { "Unknown".to_string() } else { String::from_utf8_lossy(o.class.name.as_bytes()).into_owned() };
+            out.extend_from_slice(format!("{pad}resource({}) of type ({kind})\n", o.id).as_bytes());
+        }
         Value::Object(o) if o.class.flags & CLASS_ENUM != 0 => {
             out.extend_from_slice(format!("{pad}enum(").as_bytes());
             out.extend_from_slice(o.class.name.as_bytes());

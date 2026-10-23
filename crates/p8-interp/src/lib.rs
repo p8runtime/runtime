@@ -793,6 +793,8 @@ impl Isolate {
             included: std::collections::HashSet::new(),
             ids: Rc::new(Ids::default()),
             native_class: None,
+            resource_classes: HashMap::new(),
+            resource_ids: Rc::new(Ids::monotonic()),
             enum_objects: HashMap::new(),
             autoloaders: Vec::new(),
             autoload_tried: std::collections::HashSet::new(),
@@ -853,6 +855,9 @@ pub struct Context<'i> {
     ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
     arg_buf: Vec<Value>,
+    /// The class of each kind of resource, and their numbers.
+    resource_classes: HashMap<&'static str, Rc<Class>>,
+    resource_ids: Rc<Ids>,
     /// The class a static builtin method runs for (an enum's cases()).
     native_class: Option<Rc<Class>>,
     /// Enum case objects, one per (enum, case) in a request.
@@ -922,6 +927,7 @@ impl Context<'_> {
         if let Ok(path) = std::fs::canonicalize(&*main.file) {
             self.included.insert(path);
         }
+        self.standard_streams();
         let mut regs = std::mem::take(&mut self.isolate.regs);
         self.frames.push(&Closure::new(main), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
@@ -2237,6 +2243,47 @@ impl Context<'_> {
         Ok((old, new))
     }
 
+    /// A resource object (numbered by the resources' own counter).
+    fn make_resource(&mut self, resource: p8_runtime::stream::Resource) -> Rc<Object> {
+        let class = self
+            .resource_classes
+            .entry(resource.kind)
+            .or_insert_with(|| {
+                Rc::new(Class {
+                    name: PhpStr::from(resource.kind),
+                    lower: resource.kind.as_bytes().to_vec(),
+                    flags: p8_runtime::object::CLASS_RESOURCE | p8_runtime::object::CLASS_FINAL,
+                    parent: None,
+                    interfaces: Vec::new(),
+                    properties: Vec::new(),
+                    slots: HashMap::new(),
+                    methods: HashMap::new(),
+                    constants: HashMap::new(),
+                    statics: HashMap::new(),
+                    debug_info: None,
+                    enum_cases: Vec::new(),
+                    enum_backing: None,
+                })
+            })
+            .clone();
+        Object::with_data(class, &self.resource_ids, Some(Rc::new(resource)))
+    }
+
+    /// STDIN, STDOUT, STDERR (resources 1 to 3; the next one is 5, as in the CLI).
+    fn standard_streams(&mut self) {
+        use p8_runtime::stream::{Resource, Stream, Target};
+        for (name, target, path, mode) in [
+            ("STDIN", Target::Stdin, "php://stdin", "r"),
+            ("STDOUT", Target::Stdout, "php://stdout", "w"),
+            ("STDERR", Target::Stderr, "php://stderr", "w"),
+        ] {
+            let r = Resource { kind: "stream", closed: std::cell::Cell::new(false), stream: RefCell::new(Stream::new(target, path, mode)) };
+            let v = Value::Object(self.make_resource(r));
+            self.constants.insert(name.as_bytes().to_vec(), v);
+        }
+        self.resource_ids.take();
+    }
+
     /// Run a builtin class's method.
     pub(crate) fn run_native(&mut self, native: p8_runtime::object::Native, this: Option<&Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
         let r = match (native, this) {
@@ -2705,6 +2752,14 @@ impl Ctx for Context<'_> {
 
     fn called_class(&self) -> Option<Rc<Class>> {
         Context::scope(self).1
+    }
+
+    fn new_resource(&mut self, resource: p8_runtime::stream::Resource) -> Value {
+        Value::Object(self.make_resource(resource))
+    }
+
+    fn write_stdout(&mut self, bytes: &[u8]) {
+        self.out.host.write(bytes);
     }
 
     fn native_class(&self) -> Option<Rc<Class>> {

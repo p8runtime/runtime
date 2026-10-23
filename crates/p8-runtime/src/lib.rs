@@ -11,5 +11,6 @@ pub mod number;
 pub mod numeric;
 pub mod object;
 pub mod ops;
+pub mod stream;
 pub mod string;
 pub mod value;

@@ -1,0 +1,36 @@
+<?php
+chdir(__DIR__);
+$dir = 'files_tmp';
+@mkdir($dir);
+$file = "$dir/data.txt";
+var_dump(file_put_contents($file, "line1\nline2\nline3\n"));
+var_dump(file_get_contents($file));
+var_dump(file($file), file($file, FILE_IGNORE_NEW_LINES));
+var_dump(file_put_contents($file, "more\n", FILE_APPEND), filesize($file));
+$h = fopen($file, 'r');
+var_dump(fgets($h), fgetc($h), fread($h, 3), ftell($h), feof($h));
+while (($line = fgets($h)) !== false) echo "[", rtrim($line), "]";
+echo "\n"; var_dump(feof($h)); rewind($h); var_dump(fgets($h)); fseek($h, -5, SEEK_END); var_dump(fread($h, 100));
+fclose($h);
+var_dump(is_resource($h));
+try { fgets($h); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$w = fopen("$dir/out.txt", 'w'); fwrite($w, "abc"); fputs($w, "def", 2); fprintf($w, "%05d|%s", 42, "x"); fclose($w);
+echo file_get_contents("$dir/out.txt"), "\n";
+$m = fopen('php://memory', 'w+'); fwrite($m, "hello world"); rewind($m); var_dump(stream_get_contents($m)); ftruncate($m, 5); rewind($m); var_dump(fread($m, 100));
+var_dump(file_exists($file), is_file($file), is_dir($dir), is_dir($file), file_exists("$dir/nope"));
+var_dump(@file_get_contents("$dir/nope"));
+echo file_get_contents("$dir/nope") === false ? "false\n" : "?\n";
+var_dump(copy($file, "$dir/copy.txt"), rename("$dir/copy.txt", "$dir/moved.txt"), file_exists("$dir/moved.txt"));
+var_dump(array_values(array_diff(scandir($dir), ['.', '..'])));
+var_dump(array_map('basename', glob("$dir/*.txt")));
+@mkdir("$dir/sub/deep", 0777, true); var_dump(is_dir("$dir/sub/deep"));
+var_dump(mkdir($dir));
+$d = opendir($dir); $names = []; while (($n = readdir($d)) !== false) $names[] = $n; closedir($d); sort($names); echo implode(",", $names), "\n";
+print_r(pathinfo('/a/b/file.tar.gz')); echo pathinfo('x/y.php', PATHINFO_EXTENSION), pathinfo('noext', PATHINFO_FILENAME), "\n";
+print_r(pathinfo('file')); print_r(pathinfo('/dir/'));
+foreach (['out.txt', 'data.txt', 'moved.txt'] as $f) unlink("$dir/$f");
+var_dump(unlink("$dir/gone"));
+rmdir("$dir/sub/deep"); rmdir("$dir/sub"); var_dump(rmdir($dir), file_exists($dir));
+fwrite(STDOUT, "via STDOUT\n");
+$t = tmpfile(); fwrite($t, "tmp"); fseek($t, 0); echo fread($t, 10), "\n";
+var_dump(realpath(__DIR__) === __DIR__, is_string(sys_get_temp_dir()), getcwd() !== false);

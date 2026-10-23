@@ -71,6 +71,7 @@ impl Value {
             Value::Float(_) => "float",
             Value::Str(_) => "string",
             Value::Array(_) => "array",
+            Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => "resource",
             Value::Object(o) => return Cow::Owned(String::from_utf8_lossy(o.class.name.as_bytes()).into_owned()),
             Value::Ref(cell) => return cell.borrow().type_name(),
         })
@@ -104,6 +105,8 @@ impl Value {
                 None => 0,
             },
             Value::Array(a) => i64::from(!a.is_empty()),
+            // A resource is its number.
+            Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => i64::from(o.id),
             // PHP warns "could not be converted to int" (the engine reports it).
             Value::Object(_) => 1,
             Value::Ref(cell) => cell.borrow().to_int(),
@@ -123,6 +126,7 @@ impl Value {
                 None => 0.0,
             },
             Value::Array(a) => f64::from(u8::from(!a.is_empty())),
+            Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => f64::from(o.id),
             Value::Object(_) => 1.0,
             Value::Ref(cell) => cell.borrow().to_float(),
         }
@@ -141,6 +145,7 @@ impl Value {
             }
             Value::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Value::Str(s) => s.clone(),
+            Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
             // An object's string comes from __toString, which the engine
             // calls; neither converts here.
             Value::Array(_) | Value::Object(_) => return None,

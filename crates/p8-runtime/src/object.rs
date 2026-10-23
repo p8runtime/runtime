@@ -46,6 +46,8 @@ pub const CLASS_INTERFACE: u32 = 4;
 pub const CLASS_TRAIT: u32 = 8;
 pub const CLASS_ENUM: u32 = 16;
 pub const CLASS_READONLY: u32 = 32;
+/// A resource's class (see `stream::Resource`): not a PHP class.
+pub const CLASS_RESOURCE: u32 = 64;
 
 /// An instance property's declaration, at its slot.
 #[derive(Debug, Clone)]
@@ -221,9 +223,16 @@ pub fn ancestor<'c>(class: &'c Class, lower: &[u8]) -> Option<&'c Class> {
 pub struct Ids {
     next: Cell<u32>,
     free: RefCell<Vec<u32>>,
+    /// Never reuse a number (resources: PHP numbers them up only).
+    monotonic: bool,
 }
 
 impl Ids {
+    /// Numbers that only go up.
+    pub fn monotonic() -> Ids {
+        Ids { monotonic: true, ..Ids::default() }
+    }
+
     pub fn take(&self) -> u32 {
         if let Some(id) = self.free.borrow_mut().pop() {
             return id;
@@ -234,7 +243,9 @@ impl Ids {
     }
 
     fn give_back(&self, id: u32) {
-        self.free.borrow_mut().push(id);
+        if !self.monotonic {
+            self.free.borrow_mut().push(id);
+        }
     }
 }
 
