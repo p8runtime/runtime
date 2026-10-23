@@ -28,6 +28,7 @@ pub mod defaults;
 mod math;
 mod misc;
 mod process;
+mod csv;
 mod string;
 mod string2;
 mod var;
@@ -106,6 +107,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(file::BUILTINS);
     registry.add_functions(json::BUILTINS);
     registry.add_functions(hash::BUILTINS);
+    registry.add_classes(hash::CLASSES);
     registry.add_functions(info::BUILTINS);
     registry.add_functions(string2::BUILTINS);
     registry.add_functions(random::BUILTINS);
@@ -123,6 +125,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(math::BUILTINS);
     registry.add_functions(misc::BUILTINS);
     registry.add_functions(process::BUILTINS);
+    registry.add_functions(csv::BUILTINS);
     // The binary running this script (PHP_BINARY), for tests that run PHP again.
     let binary = std::env::current_exe().map(|p| p.into_os_string().into_encoded_bytes()).unwrap_or_default();
     registry.add_constant(b"PHP_BINARY", Constant::Str(Box::leak(binary.into_boxed_slice())));

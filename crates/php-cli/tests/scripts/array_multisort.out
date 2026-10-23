@@ -1,0 +1,102 @@
+bool(true)
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+  [3]=>
+  int(3)
+}
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "z"
+  [2]=>
+  string(1) "b"
+  [3]=>
+  string(1) "c"
+}
+array(4) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(10)
+  [2]=>
+  int(100)
+  [3]=>
+  int(100)
+}
+array(4) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+  [3]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  array(5) {
+    [0]=>
+    string(2) "10"
+    [1]=>
+    int(100)
+    [2]=>
+    int(100)
+    [3]=>
+    int(11)
+    [4]=>
+    string(1) "a"
+  }
+  [1]=>
+  array(5) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(3)
+    [2]=>
+    string(1) "2"
+    [3]=>
+    int(2)
+    [4]=>
+    int(1)
+  }
+}
+array(4) {
+  ["x"]=>
+  int(3)
+  [0]=>
+  int(2)
+  ["y"]=>
+  int(1)
+  [1]=>
+  int(0)
+}
+array(4) {
+  [0]=>
+  string(4) "img1"
+  [1]=>
+  string(4) "IMG2"
+  [2]=>
+  string(5) "img10"
+  [3]=>
+  string(5) "img12"
+}
+array(3) {
+  [0]=>
+  string(4) "img2"
+  [1]=>
+  string(5) "img10"
+  [2]=>
+  string(5) "img12"
+}
+TypeError: array_multisort(): Argument #3 must be an array or a sort flag that has not already been specified
+ValueError: array_multisort(): Argument #2 must be a valid sort flag
+TypeError: array_multisort(): Argument #2 must be an array or a sort flag
+ValueError: Array sizes are inconsistent
+bool(true)
