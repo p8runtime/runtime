@@ -1715,14 +1715,15 @@ fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -
             }
             r
         }
-        (Value::Array(a), Value::Str(s)) => {
+        (Value::Array(_), Value::Str(s)) => {
+            // One lookup: the array is made writable first (a copy, if it is
+            // shared, is invisible to PHP code even when nothing is written).
             let key = Key::from_string(s.clone());
-            let Some(r) = a.get(&key).and_then(|x| num_op(op, x, &w[val as usize])) else { return false };
+            let v = w[val as usize].clone();
             let Value::Array(a) = &mut w[var as usize] else { return false };
-            match Rc::make_mut(a).get_mut(&key) {
-                Some(slot) => *slot = r.clone(),
-                None => return false,
-            }
+            let Some(slot) = Rc::make_mut(a).get_mut(&key) else { return false };
+            let Some(r) = num_op(op, slot, &v) else { return false };
+            *slot = r.clone();
             r
         }
         _ => return false,
@@ -1846,7 +1847,7 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
     w[iter as usize + 1] = Value::Int(p as i64 + 1);
     assign(w, val, v);
     if has_key {
-        assign(w, key, k.to_value());
+        assign(w, key, k.into_value());
     }
     true
 }

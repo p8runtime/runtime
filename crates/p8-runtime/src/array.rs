@@ -53,6 +53,14 @@ impl Key {
         })
     }
 
+    /// The key as a value, without a copy of a string key's handle.
+    pub fn into_value(self) -> Value {
+        match self {
+            Key::Int(i) => Value::Int(i),
+            Key::Str(s) => Value::Str(s),
+        }
+    }
+
     /// The key as a value (what foreach and array_keys give).
     pub fn to_value(&self) -> Value {
         match self {
