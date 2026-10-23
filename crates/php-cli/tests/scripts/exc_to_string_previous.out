@@ -1,0 +1,18 @@
+LogicException: in method in %s:2
+Stack trace:
+#0 %s(2): A->m(1.5)
+#1 %s(3): A::s()
+#2 {main}
+int(4)
+bool(true)
+array(0) {
+}
+
+Fatal error: Uncaught Exception: one in %s:6
+Stack trace:
+#0 {main}
+
+Next Exception: two in %s:7
+Stack trace:
+#0 {main}
+  thrown in %s on line 7

@@ -1,0 +1,6 @@
+
+Fatal error: Uncaught Error: Using $this when not in object context in %s:2
+Stack trace:
+#0 %s(3): A::f()
+#1 {main}
+  thrown in %s on line 2

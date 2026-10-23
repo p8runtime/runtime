@@ -1,0 +1,7 @@
+
+Fatal error: Uncaught RuntimeException: deep error in %s:3
+Stack trace:
+#0 %s(2): b(Array, 'a long string a...')
+#1 %s(4): a(Array)
+#2 {main}
+  thrown in %s on line 3

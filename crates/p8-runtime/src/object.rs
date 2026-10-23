@@ -15,6 +15,7 @@
 //! $PHP_SRC_PATH/Zend/zend_objects_API.c
 
 use crate::array::PhpArray;
+use crate::ext::{Ctx, Throw};
 use crate::string::PhpStr;
 use crate::value::Value;
 use std::cell::{Cell, RefCell};
@@ -63,13 +64,18 @@ pub struct Property {
     pub ty: Option<PhpStr>,
 }
 
+/// A method written in Rust (a builtin class's): `$this`, the arguments.
+pub type NativeMethod = fn(&mut dyn Ctx, &Rc<Object>, &mut [Value]) -> Result<Value, Throw>;
+
 /// A method in a class's table.
 #[derive(Debug, Clone)]
 pub struct Method {
     /// As declared.
     pub name: PhpStr,
-    /// What runs: the context's closure of the method's code.
+    /// What runs: the context's closure of the method's code (unused for
+    /// a native or abstract builtin method).
     pub func: u32,
+    pub native: Option<NativeMethod>,
     pub visibility: Visibility,
     pub is_static: bool,
     pub is_abstract: bool,
@@ -147,6 +153,22 @@ impl Class {
 
     pub fn method(&self, lower: &[u8]) -> Option<&Method> {
         self.methods.get(lower)
+    }
+
+    /// The value of the property `name` as code in class `scope` sees it
+    /// (Undef when there is none).
+    pub fn read(&self, object: &Object, name: &[u8], scope: &[u8]) -> Value {
+        match self.slot(name, Some(scope)) {
+            Some(i) => object.slots.borrow()[i].deref(),
+            None => Value::Undef,
+        }
+    }
+
+    /// Set property `name` (as code in class `scope` sees it), if declared.
+    pub fn write(&self, object: &Object, name: &[u8], scope: &[u8], value: Value) {
+        if let Some(i) = self.slot(name, Some(scope)) {
+            object.slots.borrow_mut()[i] = value;
+        }
     }
 }
 

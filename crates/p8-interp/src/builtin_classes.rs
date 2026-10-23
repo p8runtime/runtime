@@ -1,0 +1,403 @@
+//! The classes every request starts with: stdClass, the core interfaces,
+//! and the Throwable hierarchy with its methods (in Rust). An isolate
+//! builds them once; each context starts from them.
+//!
+//! Reference: $PHP_SRC_PATH/Zend/zend_exceptions.c (+ .stub.php),
+//! $PHP_SRC_PATH/Zend/zend_interfaces.c, $PHP_SRC_PATH/ext/spl/spl_exceptions.c
+
+use p8_runtime::array::{Key, PhpArray};
+use p8_runtime::ext::{Ctx, Throw};
+use p8_runtime::number::{Precision, float_to_string};
+use p8_runtime::object::{CLASS_INTERFACE, Class, Method, NativeMethod, Object, Property, Visibility};
+use p8_runtime::string::PhpStr;
+use p8_runtime::value::Value;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+pub(crate) type Classes = HashMap<Vec<u8>, Rc<Class>>;
+
+/// A class: `parent` and `interfaces` already in `classes`.
+fn declare(
+    classes: &mut Classes,
+    name: &str,
+    flags: u32,
+    parent: Option<&str>,
+    interfaces: &[&str],
+    properties: Vec<Property>,
+    methods: &[(&str, Option<NativeMethod>, bool)],
+) {
+    let lower = name.to_ascii_lowercase().into_bytes();
+    let parent = parent.map(|p| Rc::clone(&classes[p.to_ascii_lowercase().as_bytes()]));
+    let mut all_interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+    let mut table: HashMap<Vec<u8>, Method> = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
+    for i in interfaces {
+        let iface = &classes[i.to_ascii_lowercase().as_bytes()];
+        for x in std::iter::once(iface.lower.clone()).chain(iface.interfaces.iter().cloned()) {
+            if !all_interfaces.contains(&x) {
+                all_interfaces.push(x);
+            }
+        }
+        for (k, m) in &iface.methods {
+            table.entry(k.clone()).or_insert_with(|| m.clone());
+        }
+    }
+    let mut props: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
+    for p in properties {
+        match props.iter().position(|q| q.name == p.name && q.visibility != Visibility::Private) {
+            Some(at) => props[at] = p,
+            None => props.push(p),
+        }
+    }
+    let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    for (i, p) in props.iter().enumerate() {
+        slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
+    }
+    for (m, native, is_final) in methods {
+        table.insert(
+            m.to_ascii_lowercase().into_bytes(),
+            Method {
+                name: PhpStr::from(*m),
+                func: u32::MAX,
+                native: *native,
+                visibility: Visibility::Public,
+                is_static: false,
+                is_abstract: native.is_none(),
+                is_final: *is_final,
+                declaring: lower.clone(),
+                declaring_name: PhpStr::from(name),
+            },
+        );
+    }
+    let class = Class {
+        name: PhpStr::from(name),
+        lower: lower.clone(),
+        flags,
+        parent,
+        interfaces: all_interfaces,
+        properties: props,
+        slots,
+        methods: table,
+        constants: HashMap::new(),
+        statics: HashMap::new(),
+    };
+    classes.insert(lower, Rc::new(class));
+}
+
+fn interface(classes: &mut Classes, name: &str, extends: &[&str], methods: &[&str]) {
+    let methods: Vec<(&str, Option<NativeMethod>, bool)> = methods.iter().map(|m| (*m, None, false)).collect();
+    declare(classes, name, CLASS_INTERFACE, None, extends, Vec::new(), &methods);
+}
+
+fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty: Option<&str>) -> Property {
+    Property {
+        name: PhpStr::from(name),
+        default,
+        visibility,
+        declaring: declaring.to_ascii_lowercase().into_bytes(),
+        declaring_name: PhpStr::from(declaring),
+        readonly: false,
+        ty: ty.map(PhpStr::from),
+    }
+}
+
+/// Exception's and Error's properties, in PHP's order.
+fn throwable_props(root: &str) -> Vec<Property> {
+    use Visibility::{Private, Protected};
+    let empty = || Value::Str(PhpStr::empty());
+    vec![
+        prop("message", empty(), Protected, root, None),
+        prop("string", empty(), Private, root, Some("string")),
+        prop("code", Value::Int(0), Protected, root, None),
+        prop("file", empty(), Protected, root, Some("string")),
+        prop("line", Value::Int(0), Protected, root, Some("int")),
+        prop("trace", Value::Array(Rc::new(PhpArray::new())), Private, root, Some("array")),
+        prop("previous", Value::Null, Private, root, Some("?Throwable")),
+    ]
+}
+
+const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
+    ("__construct", Some(construct), false),
+    ("__wakeup", Some(wakeup), false),
+    ("getMessage", Some(get_message), true),
+    ("getCode", Some(get_code), true),
+    ("getFile", Some(get_file), true),
+    ("getLine", Some(get_line), true),
+    ("getTrace", Some(get_trace), true),
+    ("getPrevious", Some(get_previous), true),
+    ("getTraceAsString", Some(get_trace_as_string), true),
+    ("__toString", Some(to_string), false),
+];
+
+pub(crate) fn build() -> Classes {
+    let mut c = Classes::new();
+    declare(&mut c, "stdClass", 0, None, &[], Vec::new(), &[]);
+    interface(&mut c, "Stringable", &[], &["__toString"]);
+    interface(&mut c, "Traversable", &[], &[]);
+    interface(&mut c, "Iterator", &["Traversable"], &["current", "next", "key", "valid", "rewind"]);
+    interface(&mut c, "IteratorAggregate", &["Traversable"], &["getIterator"]);
+    interface(&mut c, "ArrayAccess", &[], &["offsetExists", "offsetGet", "offsetSet", "offsetUnset"]);
+    interface(&mut c, "Countable", &[], &["count"]);
+    interface(&mut c, "JsonSerializable", &[], &["jsonSerialize"]);
+    interface(
+        &mut c,
+        "Throwable",
+        &["Stringable"],
+        &["getMessage", "getCode", "getFile", "getLine", "getTrace", "getPrevious", "getTraceAsString"],
+    );
+    declare(&mut c, "Exception", 0, None, &["Throwable"], throwable_props("Exception"), THROWABLE_METHODS);
+    declare(&mut c, "Error", 0, None, &["Throwable"], throwable_props("Error"), THROWABLE_METHODS);
+    declare(
+        &mut c,
+        "ErrorException",
+        0,
+        Some("Exception"),
+        &[],
+        vec![prop("severity", Value::Int(1), Visibility::Protected, "ErrorException", Some("int"))],
+        &[("__construct", Some(error_exception_construct), false), ("getSeverity", Some(get_severity), true)],
+    );
+    for (name, parent) in [
+        ("CompileError", "Error"),
+        ("ParseError", "CompileError"),
+        ("TypeError", "Error"),
+        ("ArgumentCountError", "TypeError"),
+        ("ValueError", "Error"),
+        ("ArithmeticError", "Error"),
+        ("DivisionByZeroError", "ArithmeticError"),
+        ("AssertionError", "Error"),
+        ("UnhandledMatchError", "Error"),
+        ("LogicException", "Exception"),
+        ("BadFunctionCallException", "LogicException"),
+        ("BadMethodCallException", "BadFunctionCallException"),
+        ("DomainException", "LogicException"),
+        ("InvalidArgumentException", "LogicException"),
+        ("LengthException", "LogicException"),
+        ("OutOfRangeException", "LogicException"),
+        ("RuntimeException", "Exception"),
+        ("OutOfBoundsException", "RuntimeException"),
+        ("OverflowException", "RuntimeException"),
+        ("RangeException", "RuntimeException"),
+        ("UnderflowException", "RuntimeException"),
+        ("UnexpectedValueException", "RuntimeException"),
+        ("JsonException", "Exception"),
+    ] {
+        declare(&mut c, name, 0, Some(parent), &[], Vec::new(), &[]);
+    }
+    c
+}
+
+/// The class Throwable's private properties belong to: Exception or Error.
+fn root(o: &Object) -> &'static [u8] {
+    if o.class.is_a(b"exception") { b"exception" } else { b"error" }
+}
+
+fn read(o: &Object, name: &[u8]) -> Value {
+    match o.class.read(o, name, root(o)) {
+        Value::Undef => Value::Null,
+        v => v,
+    }
+}
+
+fn write(o: &Object, name: &[u8], value: Value) {
+    o.class.write(o, name, root(o), value);
+}
+
+/// Exception::__construct(string $message = "", int $code = 0, ?Throwable $previous = null)
+fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let class = String::from_utf8_lossy(this.class.name.as_bytes()).into_owned();
+    if args.len() > 3 {
+        return Err(ctx.throw("ArgumentCountError", format!("{class}::__construct() expects at most 3 arguments, {} given", args.len())));
+    }
+    if let Some(m) = args.first().map(Value::deref) {
+        let message = match m {
+            Value::Array(_) | Value::Object(_) => {
+                return Err(ctx.throw(
+                    "TypeError",
+                    format!("{class}::__construct(): Argument #1 ($message) must be of type string, {} given", m.type_name()),
+                ));
+            }
+            v => Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty)),
+        };
+        write(this, b"message", message);
+    }
+    if let Some(c) = args.get(1).map(Value::deref) {
+        let code = match c {
+            Value::Int(i) => i,
+            Value::Bool(b) => i64::from(b),
+            Value::Float(f) if f.fract() == 0.0 => f as i64,
+            other => {
+                return Err(ctx.throw(
+                    "TypeError",
+                    format!("{class}::__construct(): Argument #2 ($code) must be of type int, {} given", other.type_name()),
+                ));
+            }
+        };
+        write(this, b"code", Value::Int(code));
+    }
+    if let Some(p) = args.get(2).map(Value::deref) {
+        match &p {
+            Value::Null => {}
+            Value::Object(o) if o.class.is_a(b"throwable") => write(this, b"previous", p.clone()),
+            other => {
+                return Err(ctx.throw(
+                    "TypeError",
+                    format!("{class}::__construct(): Argument #3 ($previous) must be of type ?Throwable, {} given", other.type_name()),
+                ));
+            }
+        }
+    }
+    Ok(Value::Null)
+}
+
+/// ErrorException::__construct($message = "", $code = 0, $severity = E_ERROR,
+/// $filename = null, $line = null, $previous = null)
+fn error_exception_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let mut base: Vec<Value> = args.iter().take(2).cloned().collect();
+    if let Some(p) = args.get(5) {
+        base.resize(2, Value::Int(0));
+        base.push(p.clone());
+    }
+    construct(ctx, this, &mut base)?;
+    if let Some(s) = args.get(2) {
+        this.class.write(this, b"severity", b"errorexception", Value::Int(s.to_int()));
+    }
+    if let Some(f) = args.get(3).map(Value::deref).filter(|v| !matches!(v, Value::Null)) {
+        write(this, b"file", Value::Str(f.to_php_string().unwrap_or_else(PhpStr::empty)));
+    }
+    if let Some(l) = args.get(4).map(Value::deref).filter(|v| !matches!(v, Value::Null)) {
+        write(this, b"line", Value::Int(l.to_int()));
+    }
+    Ok(Value::Null)
+}
+
+fn get_severity(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(this.class.read(this, b"severity", b"errorexception"))
+}
+
+fn wakeup(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Null)
+}
+
+fn get_message(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(read(this, b"message"))
+}
+
+fn get_code(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(read(this, b"code"))
+}
+
+fn get_file(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(read(this, b"file"))
+}
+
+fn get_line(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(read(this, b"line"))
+}
+
+fn get_trace(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(read(this, b"trace"))
+}
+
+fn get_previous(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(read(this, b"previous"))
+}
+
+fn get_trace_as_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Str(PhpStr::from(trace_string(&read(this, b"trace")))))
+}
+
+fn to_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Str(PhpStr::from(describe(this))))
+}
+
+/// What Exception::__toString gives: the exception and its previous ones,
+/// the innermost first, each with its trace (zend_exceptions.c).
+pub(crate) fn describe(this: &Rc<Object>) -> String {
+    let mut out = String::new();
+    let mut current = Some(Rc::clone(this));
+    while let Some(e) = current {
+        let class = String::from_utf8_lossy(e.class.name.as_bytes()).into_owned();
+        let message = text(&read(&e, b"message"));
+        let file = text(&read(&e, b"file"));
+        let line = read(&e, b"line").to_int();
+        let trace = trace_string(&read(&e, b"trace"));
+        let next = if out.is_empty() { String::new() } else { format!("\n\nNext {out}") };
+        out = if message.is_empty() {
+            format!("{class} in {file}:{line}\nStack trace:\n{trace}{next}")
+        } else {
+            format!("{class}: {message} in {file}:{line}\nStack trace:\n{trace}{next}")
+        };
+        current = match read(&e, b"previous") {
+            Value::Object(p) => Some(p),
+            _ => None,
+        };
+    }
+    out
+}
+
+fn text(v: &Value) -> String {
+    String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned()
+}
+
+/// getTraceAsString: one line per frame, then {main}.
+pub(crate) fn trace_string(trace: &Value) -> String {
+    let mut out = String::new();
+    let mut n = 0;
+    if let Value::Array(frames) = trace {
+        for (_, frame) in frames.iter() {
+            let Value::Array(f) = frame.deref() else { continue };
+            let get = |k: &str| f.get(&Key::from_string(PhpStr::from(k))).map(Value::deref);
+            out.push_str(&format!("#{n} "));
+            match (get("file"), get("line")) {
+                (Some(file), Some(line)) => out.push_str(&format!("{}({}): ", text(&file), line.to_int())),
+                _ => out.push_str("[internal function]: "),
+            }
+            if let Some(class) = get("class") {
+                out.push_str(&text(&class));
+                out.push_str(&get("type").map(|t| text(&t)).unwrap_or_default());
+            }
+            out.push_str(&get("function").map(|f| text(&f)).unwrap_or_default());
+            out.push('(');
+            if let Some(Value::Array(args)) = get("args") {
+                let shown: Vec<String> = args.iter().map(|(_, a)| trace_arg(&a.deref())).collect();
+                out.push_str(&shown.join(", "));
+            }
+            out.push_str(")\n");
+            n += 1;
+        }
+    }
+    out.push_str(&format!("#{n} {{main}}"));
+    out
+}
+
+/// An argument as a trace shows it (_build_trace_args): strings cut at
+/// 15 bytes.
+fn trace_arg(v: &Value) -> String {
+    match v {
+        Value::Null | Value::Undef => "NULL".into(),
+        Value::Bool(b) => if *b { "true" } else { "false" }.into(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => float_to_string(*f, Precision::ECHO, 'E'),
+        Value::Str(s) => {
+            let bytes = s.as_bytes();
+            let mut out = String::from("'");
+            for &c in &bytes[..bytes.len().min(15)] {
+                match c {
+                    b'\n' => out.push_str("\\n"),
+                    b'\r' => out.push_str("\\r"),
+                    b'\t' => out.push_str("\\t"),
+                    0x0c => out.push_str("\\f"),
+                    0x0b => out.push_str("\\v"),
+                    b'\\' => out.push_str("\\\\"),
+                    0x1b => out.push_str("\\e"),
+                    c if !(0x20..0x7f).contains(&c) => out.push_str(&format!("\\x{c:02X}")),
+                    c => out.push(c as char),
+                }
+            }
+            out.push_str(if bytes.len() > 15 { "...'" } else { "'" });
+            out
+        }
+        Value::Array(_) => "Array".into(),
+        Value::Object(o) => format!("Object({})", String::from_utf8_lossy(o.class.name.as_bytes())),
+        Value::Ref(cell) => trace_arg(&cell.borrow()),
+    }
+}

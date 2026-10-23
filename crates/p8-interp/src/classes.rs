@@ -11,7 +11,7 @@ use p8_bytecode::{ClassDef, ClassRef, Function};
 use p8_runtime::array::Key;
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, Class, Constant, Method, Object, Property, Visibility, visible,
+    CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, Class, Constant, Method, NativeMethod, Object, Property, Visibility, visible,
 };
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -21,8 +21,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 /// A method call to make: the frame to push.
+/// What a method runs: user code, or Rust.
+pub(crate) enum Code {
+    User(Rc<Closure>),
+    Native(NativeMethod),
+}
+
 pub(crate) struct MethodFrame {
-    pub func: Rc<Closure>,
+    pub func: Code,
     pub this: Option<Rc<Object>>,
     pub scope: Rc<Class>,
     pub called: Rc<Class>,
@@ -33,6 +39,14 @@ fn text(s: &PhpStr) -> String {
 }
 
 impl Context<'_> {
+    /// What method `m` runs.
+    fn code_of(&self, m: &Method) -> Code {
+        match m.native {
+            Some(f) => Code::Native(f),
+            None => Code::User(Rc::clone(&self.closures[m.func as usize])),
+        }
+    }
+
     /// The class the running frame's code belongs to (for visibility and
     /// self), and the called class (for static::).
     pub(crate) fn scope(&self) -> (Option<Rc<Class>>, Option<Rc<Class>>) {
@@ -54,7 +68,6 @@ impl Context<'_> {
     /// in order, before the file runs (PHP's early binding); the others
     /// link when their declaration runs.
     pub(crate) fn early_bind(&mut self) -> Result<(), Throw> {
-        self.builtin_classes();
         for i in 0..self.class_defs.len() {
             let def = Arc::clone(&self.class_defs[i]);
             let known = |n: &p8_runtime::frozen::Text| self.classes.contains_key(&n.as_bytes().to_ascii_lowercase());
@@ -67,25 +80,6 @@ impl Context<'_> {
             }
         }
         Ok(())
-    }
-
-    /// The classes every request starts with.
-    fn builtin_classes(&mut self) {
-        let name = "stdClass";
-        let lower = name.to_ascii_lowercase().into_bytes();
-        let class = Class {
-            name: PhpStr::from(name),
-            lower: lower.clone(),
-            flags: 0,
-            parent: None,
-            interfaces: Vec::new(),
-            properties: Vec::new(),
-            slots: HashMap::new(),
-            methods: HashMap::new(),
-            constants: HashMap::new(),
-            statics: HashMap::new(),
-        };
-        self.classes.insert(lower, Rc::new(class));
     }
 
     /// DeclareClass: link class `i` of the script (once).
@@ -221,6 +215,7 @@ impl Context<'_> {
                 Method {
                     name: PhpStr::from(m.func.name.as_bytes()),
                     func,
+                    native: None,
                     visibility: m.visibility,
                     is_static: m.is_static,
                     is_abstract: m.is_abstract,
@@ -276,7 +271,7 @@ impl Context<'_> {
     }
 
     /// `new C(args)`: the object, and its constructor's frame (if any).
-    pub(crate) fn instantiate(&mut self, class: Rc<Class>) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
+    pub(crate) fn instantiate(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
         if class.flags & CLASS_INTERFACE != 0 {
             return Err(self.throw("Error", format!("Cannot instantiate interface {}", text(&class.name))));
         }
@@ -284,6 +279,15 @@ impl Context<'_> {
             return Err(self.throw("Error", format!("Cannot instantiate abstract class {}", text(&class.name))));
         }
         let object = Object::new(Rc::clone(&class), &self.ids);
+        if class.is_a(b"throwable") {
+            // Where it was made, and the calls that led there.
+            let (file, line) = self.location();
+            let root: &[u8] = if class.is_a(b"exception") { b"exception" } else { b"error" };
+            class.write(&object, b"file", root, Value::Str(PhpStr::from(&*file)));
+            class.write(&object, b"line", root, Value::Int(i64::from(line)));
+            let trace = self.trace(regs);
+            class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
+        }
         let Some(ctor) = class.method(b"__construct").cloned() else { return Ok((object, None)) };
         let declaring = self.declaring(&class, &ctor.declaring);
         if !visible(ctor.visibility, &declaring, self.scope().0.as_deref()) {
@@ -292,7 +296,7 @@ impl Context<'_> {
                 format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()),
             ));
         }
-        let func = Rc::clone(&self.closures[ctor.func as usize]);
+        let func = self.code_of(&ctor);
         Ok((Rc::clone(&object), Some(MethodFrame { func, this: Some(object), scope: declaring, called: class })))
     }
 
@@ -337,7 +341,7 @@ impl Context<'_> {
         if method.is_abstract {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
-        let func = Rc::clone(&self.closures[method.func as usize]);
+        let func = self.code_of(&method);
         let this = (!method.is_static).then_some(object);
         Ok(MethodFrame { func, this, scope: declaring, called: class })
     }
@@ -366,7 +370,7 @@ impl Context<'_> {
         }
         let this = self.frames.last().and_then(|f| f.this.clone());
         let forward = matches!(func.classes[class as usize], ClassRef::Forward(..) | ClassRef::Static);
-        let fframe = Rc::clone(&self.closures[method.func as usize]);
+        let fframe = self.code_of(&method);
         if method.is_static {
             let called = match called {
                 Some(c) if forward && c.is_a(&target.lower) => c,
@@ -665,7 +669,7 @@ impl Context<'_> {
                 format!("Call to {} {}::__clone() from {}", method.visibility.word(), text(&o.class.name), self.scope_name()),
             ));
         }
-        let func = Rc::clone(&self.closures[method.func as usize]);
+        let func = self.code_of(&method);
         Ok((Rc::clone(&copy), Some(MethodFrame { func, this: Some(copy), scope: declaring, called: Rc::clone(&o.class) })))
     }
 }

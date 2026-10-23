@@ -1,0 +1,6 @@
+2 file.php 12
+
+Fatal error: Uncaught TypeError: strlen(): Argument #1 ($string) must be of type string, array given in %s:4
+Stack trace:
+#0 {main}
+  thrown in %s on line 4
