@@ -330,3 +330,57 @@ pub fn exception_to_string(vm: &mut VM, _args: &[Handle]) -> Result<Handle, Stri
     Ok(vm.arena.alloc(Val::String(Rc::new(out.into_bytes()))))
 }
 
+
+/// ErrorException::__construct(string $message = "", int $code = 0,
+///     int $severity = E_ERROR, ?string $filename = null, ?int $line = null,
+///     ?Throwable $previous = null)
+pub fn error_exception_construct(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let previous = args.get(5).copied();
+    let base_args: Vec<Handle> = args.iter().take(2).copied().chain(previous).collect();
+    exception_construct(vm, &base_args)?;
+    let this = vm
+        .frames
+        .last()
+        .and_then(|f| f.this)
+        .ok_or("ErrorException::__construct() called outside object context")?;
+    let severity = args.get(2).map_or(1, |h| vm.arena.get(*h).value.to_int());
+    let mut props = vec![(b"severity".as_slice(), Val::Int(severity))];
+    if let Some(&file) = args.get(3)
+        && !matches!(vm.arena.get(file).value, Val::Null)
+    {
+        props.push((b"file", Val::String(Rc::new(vm.arena.get(file).value.to_php_string_bytes()))));
+    }
+    if let Some(&line) = args.get(4)
+        && !matches!(vm.arena.get(line).value, Val::Null)
+    {
+        props.push((b"line", Val::Int(vm.arena.get(line).value.to_int())));
+    }
+    for (name, value) in props {
+        let sym = vm.context.interner.intern(name);
+        let h = vm.arena.alloc(value);
+        if let Val::Object(payload) = vm.arena.get(this).value
+            && let Val::ObjPayload(obj) = &mut vm.arena.get_mut(payload).value
+        {
+            obj.properties.insert(sym, h);
+        }
+    }
+    Ok(vm.arena.alloc(Val::Null))
+}
+
+/// ErrorException::getSeverity(): int
+pub fn error_exception_get_severity(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
+    let this = vm
+        .frames
+        .last()
+        .and_then(|f| f.this)
+        .ok_or("getSeverity() called outside object context")?;
+    let sym = vm.context.interner.intern(b"severity");
+    let severity = match vm.arena.get(this).value {
+        Val::Object(payload) => match &vm.arena.get(payload).value {
+            Val::ObjPayload(obj) => obj.properties.get(&sym).map(|h| vm.arena.get(*h).value.to_int()),
+            _ => None,
+        },
+        _ => None,
+    };
+    Ok(vm.arena.alloc(Val::Int(severity.unwrap_or(1))))
+}

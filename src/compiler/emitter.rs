@@ -3952,8 +3952,15 @@ impl<'src> Emitter<'src> {
         }
     }
 
+    /// The source text of a span. A fully qualified name (`\Foo\Bar`) loses its
+    /// leading backslash: it names the same global symbol, and every lookup
+    /// keys on the unqualified form.
     fn get_text(&self, span: crate::parser::span::Span) -> &'src [u8] {
-        &self.source[span.start..span.end]
+        let text = &self.source[span.start..span.end];
+        match text {
+            [b'\\', next, ..] if next.is_ascii_alphabetic() || *next == b'_' || *next >= 0x80 => &text[1..],
+            _ => text,
+        }
     }
 
     /// Emit constants for static property access (Class::$property)

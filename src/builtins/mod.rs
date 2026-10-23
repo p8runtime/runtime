@@ -2,6 +2,7 @@ pub mod array;
 pub mod bcmath;
 pub mod class;
 pub mod datetime;
+pub mod errors;
 pub mod exception;
 pub mod exec;
 pub mod filesystem;

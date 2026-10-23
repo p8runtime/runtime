@@ -385,9 +385,6 @@ impl<'a> EncodeContext<'a> {
             _ => return Err(JsonError::UnsupportedType),
         };
 
-        // TODO: Check for JsonSerializable interface
-        // If implemented, call $obj->jsonSerialize() and encode its return value
-
         let mut result = String::from("{");
 
         if self.options.pretty_print && !obj_data.properties.is_empty() {
@@ -445,6 +442,70 @@ impl<'a> EncodeContext<'a> {
 
 /// json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false
 ///
+/// The value json_encode() encodes: JsonSerializable objects replaced by
+/// jsonSerialize()'s result, other objects by their properties visible from
+/// the calling scope (php_json_encode_array's zend_check_property_access).
+fn prepare_for_json(vm: &mut VM, handle: Handle, depth: usize) -> Result<Handle, String> {
+    if depth > 4096 {
+        return Ok(handle);
+    }
+    match vm.arena.get(handle).value.clone() {
+        Val::Array(arr) => {
+            let mut changed = false;
+            let mut out = crate::core::value::ArrayData::new();
+            for (k, &v) in arr.map.iter() {
+                let nv = prepare_for_json(vm, v, depth + 1)?;
+                changed |= nv != v;
+                out.insert(k.clone(), nv);
+            }
+            Ok(if changed { vm.arena.alloc(Val::Array(Rc::new(out))) } else { handle })
+        }
+        Val::Object(payload) => {
+            let serializable = vm.context.interner.intern(b"JsonSerializable");
+            if vm.is_instance_of(handle, serializable) {
+                let method = vm.context.interner.intern(b"jsonSerialize");
+                let result = vm.call_method(handle, method, &[]).map_err(|e| vm.callback_error(e))?;
+                // A JsonSerializable returning itself is encoded as a plain object.
+                if result == handle || vm.arena.get(result).value == Val::Object(payload) {
+                    return public_view(vm, handle, payload, depth);
+                }
+                return prepare_for_json(vm, result, depth + 1);
+            }
+            public_view(vm, handle, payload, depth)
+        }
+        _ => Ok(handle),
+    }
+}
+
+/// An object as json_encode sees it: initialized properties visible from the
+/// calling scope, each prepared in turn.
+fn public_view(vm: &mut VM, _obj: Handle, payload: Handle, depth: usize) -> Result<Handle, String> {
+    let (class, props) = match &vm.arena.get(payload).value {
+        Val::ObjPayload(o) => (o.class, o.properties.clone()),
+        _ => return Err("json_encode(): invalid object".into()),
+    };
+    let scope = vm.get_current_class();
+    let mut kept = indexmap::IndexMap::new();
+    for (name, value) in props {
+        if matches!(vm.arena.get(value).value, Val::Uninitialized) {
+            continue;
+        }
+        if vm.check_prop_visibility(class, name, scope).is_err() {
+            continue;
+        }
+        let v = prepare_for_json(vm, value, depth + 1)?;
+        kept.insert(name, v);
+    }
+    let std_class = vm.context.interner.intern(b"stdClass");
+    let view = vm.arena.alloc(Val::ObjPayload(crate::core::value::ObjectData {
+        class: std_class,
+        properties: kept,
+        internal: None,
+        dynamic_properties: Default::default(),
+    }));
+    Ok(vm.arena.alloc(Val::Object(view)))
+}
+
 /// Returns the JSON representation of a value
 ///
 /// # Arguments
@@ -490,9 +551,12 @@ pub fn php_json_encode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         512
     };
 
+    // Resolve JsonSerializable and property visibility first (needs &mut VM)
+    let value = prepare_for_json(vm, args[0], 0)?;
+
     // Encode
     let mut ctx = EncodeContext::new(vm, options, max_depth);
-    match ctx.encode_value(args[0]) {
+    match ctx.encode_value(value) {
         Ok(json_str) => Ok(vm.arena.alloc(Val::String(json_str.into_bytes().into()))),
         Err(err) => {
             vm.context

@@ -356,8 +356,22 @@ impl Extension for CoreExtension {
         registry.register_function(b"getenv", variable::php_getenv);
         registry.register_function(b"putenv", variable::php_putenv);
         registry.register_function(b"getopt", variable::php_getopt);
-        registry.register_function(b"ini_get", variable::php_ini_get);
-        registry.register_function(b"ini_set", variable::php_ini_set);
+        {
+            use crate::builtins::errors;
+            registry.register_function(b"ini_get", errors::php_ini_get);
+            registry.register_function(b"ini_set", errors::php_ini_set);
+            registry.register_function(b"ini_alter", errors::php_ini_set);
+            registry.register_function(b"ini_restore", errors::php_ini_restore);
+            registry.register_function(b"set_error_handler", errors::php_set_error_handler);
+            registry.register_function(b"restore_error_handler", errors::php_restore_error_handler);
+            registry.register_function(b"set_exception_handler", errors::php_set_exception_handler);
+            registry.register_function(b"restore_exception_handler", errors::php_restore_exception_handler);
+            registry.register_function(b"trigger_error", errors::php_trigger_error);
+            registry.register_function(b"user_error", errors::php_trigger_error);
+            registry.register_function(b"error_clear_last", errors::php_error_clear_last);
+            registry.register_function(b"register_shutdown_function", errors::php_register_shutdown_function);
+            registry.register_function(b"error_log", errors::php_error_log);
+        }
         registry.register_function(b"error_reporting", variable::php_error_reporting);
         registry.register_function(b"error_get_last", variable::php_error_get_last);
         registry.register_function(b"serialize", crate::builtins::serialize::php_serialize);
@@ -626,6 +640,18 @@ impl Extension for CoreExtension {
             is_interface: true,
             is_trait: false,
             interfaces: vec![b"Traversable".to_vec()],
+            methods: HashMap::new(),
+            constants: HashMap::new(),
+            constructor: None,
+        });
+
+        // JsonSerializable interface (json_encode calls jsonSerialize())
+        registry.register_class(NativeClassDef {
+            name: b"JsonSerializable".to_vec(),
+            parent: None,
+            is_interface: true,
+            is_trait: false,
+            interfaces: vec![],
             methods: HashMap::new(),
             constants: HashMap::new(),
             constructor: None,
@@ -1790,6 +1816,26 @@ impl Extension for CoreExtension {
             methods: exception_methods.clone(),
             constants: HashMap::new(),
             constructor: Some(exception::exception_construct),
+        });
+
+        // ErrorException
+        let mut error_exception_methods = HashMap::new();
+        add_methods(
+            &mut error_exception_methods,
+            &[
+                (b"__construct", exception::error_exception_construct),
+                (b"getSeverity", exception::error_exception_get_severity),
+            ],
+        );
+        registry.register_class(NativeClassDef {
+            name: b"ErrorException".to_vec(),
+            parent: Some(b"Exception".to_vec()),
+            is_interface: false,
+            is_trait: false,
+            interfaces: vec![],
+            methods: error_exception_methods,
+            constants: HashMap::new(),
+            constructor: Some(exception::error_exception_construct),
         });
 
         // RuntimeException

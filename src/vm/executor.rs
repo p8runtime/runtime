@@ -21,7 +21,7 @@
 use crate::compiler::emitter::Emitter;
 use crate::core::value::Val;
 use crate::runtime::context::RequestContext;
-use crate::vm::engine::{CapturingErrorHandler, CapturingOutputWriter, ErrorLevel, VM, VmError};
+use crate::vm::engine::{CapturingErrorHandler, CapturingOutputWriter, VM, VmError};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -201,16 +201,7 @@ pub fn execute_code_with_config(
         let stderr_clone = captured_stderr.clone();
         vm.set_error_handler(Box::new(CapturingErrorHandler::new(
             move |level, message| {
-                let level_str = match level {
-                    ErrorLevel::Notice => "Notice",
-                    ErrorLevel::Warning => "Warning",
-                    ErrorLevel::Error => "Error",
-                    ErrorLevel::ParseError => "Parse error",
-                    ErrorLevel::UserNotice => "User notice",
-                    ErrorLevel::UserWarning => "User warning",
-                    ErrorLevel::UserError => "User error",
-                    ErrorLevel::Deprecated => "Deprecated",
-                };
+                let level_str = level.label();
                 let formatted = format!("{}: {}\n", level_str, message);
                 stderr_clone
                     .borrow_mut()

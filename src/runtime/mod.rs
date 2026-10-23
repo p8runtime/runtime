@@ -3,6 +3,7 @@ pub mod core_extension;
 pub mod date_extension;
 pub mod extension;
 pub mod hash_extension;
+pub mod ini;
 pub mod json_extension;
 pub mod mb;
 pub mod mb_extension;
