@@ -84,14 +84,21 @@ impl PhptExecutor {
         scratch: &Path,
     ) -> Result<(), String> {
         let names: Vec<&str> = names.into_iter().map(Self::module_name).collect();
-        let mut code = String::from("<?php\n");
+        let mut code = String::from("<?php\necho 'Core', \"\\n\";\n");
         for name in &names {
             code.push_str(&format!("if (extension_loaded('{}')) echo '{}', \"\\n\";\n", name, name));
         }
         let probe = scratch.join("php-test-extensions.php");
-        let out = self.run_section(&PhptTest::default(), &probe, &code)?;
-        self.loaded_extensions = out.text.lines().map(str::to_string).collect();
-        Ok(())
+        // Every run loads Core: an empty answer means the probe did not
+        // finish (a loaded machine), and would skip every --EXTENSIONS-- test.
+        for _ in 0..3 {
+            let out = self.run_section(&PhptTest::default(), &probe, &code)?;
+            if !out.timed_out && !out.text.trim().is_empty() {
+                self.loaded_extensions = out.text.lines().map(str::to_string).collect();
+                return Ok(());
+            }
+        }
+        Err("the extension probe produced no output".into())
     }
 
     /// The module name an --EXTENSIONS-- entry stands for: run-tests.php

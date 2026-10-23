@@ -98,6 +98,8 @@ fn integer_literal(value: &[u8]) -> Val {
     let text = std::str::from_utf8(body).unwrap_or("0");
     match i64::from_str_radix(text, radix) {
         Ok(i) => Val::Int(i),
+        // Too large for an int: a float, correctly rounded for decimals
+        Err(_) if radix == 10 => Val::Float(text.parse().unwrap_or(0.0)),
         Err(_) => {
             let f = text
                 .bytes()
@@ -145,6 +147,9 @@ struct LoopInfo {
     /// Operand-stack values the loop keeps while its body runs (foreach: iterable and
     /// position; switch: the subject).
     stack_slots: u32,
+    /// Whether the code at the loop's end pops those slots (a switch does;
+    /// a foreach's exhausted iterator pops them itself, so `break` must).
+    end_pops: bool,
 }
 
 #[derive(Clone)]
@@ -520,6 +525,24 @@ impl<'src> Emitter<'src> {
             })
             .clone();
         starts.partition_point(|start| *start <= offset) as u32
+    }
+
+    /// Before `break`/`continue` to `loop_stack[target]`: pop what the loops
+    /// and switches being left keep on the operand stack. A `continue`
+    /// keeps the target's own slots (it goes on iterating), except a
+    /// switch's, whose end pops them; a `break` drops them unless the
+    /// target's end pops them.
+    fn emit_loop_exit_pops(&mut self, target: usize, is_break: bool) {
+        let inner: u32 = self.loop_stack[target + 1..].iter().map(|l| l.stack_slots).sum();
+        let own = &self.loop_stack[target];
+        let own_pops = match (is_break, own.end_pops) {
+            (_, true) => 0,
+            (true, false) => own.stack_slots,
+            (false, false) => 0,
+        };
+        for _ in 0..inner + own_pops {
+            self.chunk.code.push(OpCode::Pop);
+        }
     }
 
     /// Tag every opcode emitted since the last call with the current line.
@@ -1472,6 +1495,7 @@ impl<'src> Emitter<'src> {
                     // Calculate which loop to target (from the end of the stack)
                     let target_loop_idx = loop_depth - break_level;
 
+                    self.emit_loop_exit_pops(target_loop_idx, true);
                     let idx = self.chunk.code.len();
                     // Check if we're inside try-finally blocks
                     if !self.try_finally_stack.is_empty() {
@@ -1506,6 +1530,7 @@ impl<'src> Emitter<'src> {
                     // Calculate which loop to target (from the end of the stack)
                     let target_loop_idx = loop_depth - continue_level;
 
+                    self.emit_loop_exit_pops(target_loop_idx, false);
                     let idx = self.chunk.code.len();
                     // Check if we're inside try-finally blocks
                     if !self.try_finally_stack.is_empty() {
@@ -1768,6 +1793,7 @@ impl<'src> Emitter<'src> {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
                     stack_slots: 0,
+                    end_pops: false,
                 });
 
                 for stmt in *body {
@@ -1796,6 +1822,7 @@ impl<'src> Emitter<'src> {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
                     stack_slots: 0,
+                    end_pops: false,
                 });
 
                 for stmt in *body {
@@ -1846,6 +1873,7 @@ impl<'src> Emitter<'src> {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
                     stack_slots: 0,
+                    end_pops: false,
                 });
 
                 for stmt in *body {
@@ -1952,6 +1980,7 @@ impl<'src> Emitter<'src> {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
                     stack_slots: 2, // iterable + position
+                    end_pops: false,
                 });
 
                 // Body
@@ -1999,6 +2028,7 @@ impl<'src> Emitter<'src> {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
                     stack_slots: 1,
+                    end_pops: true,
                 });
 
                 for case in *cases {
@@ -2032,9 +2062,8 @@ impl<'src> Emitter<'src> {
                     }
                 }
 
-                // Pop switch cond
-                self.chunk.code.push(OpCode::Pop);
-
+                // The subject stays on the stack while a case body runs (it
+                // is the switch's one stack slot); it is popped at the end.
                 if let Some(def_lbl) = default_label {
                     self.chunk.code.push(OpCode::Jmp(def_lbl as u32));
                 } else {
@@ -2045,6 +2074,7 @@ impl<'src> Emitter<'src> {
 
                 let end_label = self.chunk.code.len();
                 self.patch_jump(jump_over_dispatch, end_label);
+                self.chunk.code.push(OpCode::Pop);
 
                 let loop_info = self.loop_stack.pop().unwrap();
                 for idx in loop_info.break_jumps {

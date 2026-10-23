@@ -25,6 +25,7 @@ pub mod output_control;
 pub mod pcre;
 pub mod random;
 pub mod reflection;
+pub mod runtime;
 pub mod serialize;
 pub(crate) mod signature;
 mod signatures;
