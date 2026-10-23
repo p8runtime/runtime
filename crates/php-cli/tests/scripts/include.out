@@ -1,0 +1,21 @@
+string(13) "helper result"
+int(40)
+string(11) "from helper"
+string(9) "helper(1)"
+int(7)
+once body
+int(1)
+bool(true)
+no return, line 2 in include_noreturn.inc
+int(1)
+no return, line 2 in include_noreturn.inc
+2
+bool(false)
+
+Warning: include(missing.inc): Failed to open stream: No such file or directory in %s on line 16
+
+Warning: include(): Failed opening 'missing.inc' for inclusion (include_path='.:/usr/local/lib/php') in %s on line 16
+
+Warning: require(missing.inc): Failed to open stream: No such file or directory in %s on line 17
+Error: Failed opening required 'missing.inc' (include_path='.:/usr/local/lib/php')
+bool(true)

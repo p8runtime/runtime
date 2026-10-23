@@ -4,9 +4,11 @@
 
 mod builtin_classes;
 mod classes;
+mod include;
 mod throw;
 
 use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg};
+pub use include::{LoadError, Loader};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Registry};
 pub use p8_runtime::ext::Throw;
@@ -407,6 +409,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::Exit { .. }
                 | Instr::MatchError { .. }
                 | Instr::DeclareClass { .. }
+                | Instr::Include { .. }
+                | Instr::Silence { .. }
+                | Instr::Unsilence { .. }
                 | Instr::New { .. }
                 | Instr::This { .. }
                 | Instr::FetchProp { .. }
@@ -741,7 +746,9 @@ impl Isolate {
             classes,
             failed_call: None,
             class_defs: Vec::new(),
-            declared: Vec::new(),
+            declared: std::collections::HashSet::new(),
+            loader: None,
+            included: std::collections::HashSet::new(),
             ids: Rc::new(Ids::default()),
         }
     }
@@ -782,7 +789,11 @@ pub struct Context<'i> {
     /// The script's class declarations (DeclareClass indexes them), and
     /// which are linked.
     class_defs: Vec<Arc<ClassDef>>,
-    declared: Vec<bool>,
+    declared: std::collections::HashSet<usize>,
+    /// Compiles the files `include` runs (the embedder's compiler).
+    loader: Option<Rc<dyn Loader>>,
+    /// Files included so far, for `_once` (resolved paths).
+    included: std::collections::HashSet<std::path::PathBuf>,
     /// Object ids (handles), reused as PHP reuses them.
     ids: Rc<Ids>,
 }
@@ -809,7 +820,11 @@ impl Context<'_> {
     /// when their declaration runs.
     pub fn declare_classes(&mut self, classes: &[Arc<ClassDef>]) {
         self.class_defs.extend(classes.iter().cloned());
-        self.declared.resize(self.class_defs.len(), false);
+    }
+
+    /// What compiles the files the script includes.
+    pub fn set_loader(&mut self, loader: Rc<dyn Loader>) {
+        self.loader = Some(loader);
     }
 
     pub fn function_exists(&self, name: &[u8]) -> bool {
@@ -825,10 +840,14 @@ impl Context<'_> {
 
     /// Run a file's top-level code; returns the exit status.
     pub fn run_main(&mut self, main: Arc<Function>) -> i32 {
+        if let Ok(path) = std::fs::canonicalize(&*main.file) {
+            self.included.insert(path);
+        }
         let mut regs = std::mem::take(&mut self.isolate.regs);
         self.frames.push(&Closure::new(main), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
-        let result = match self.early_bind() {
+        let defs = std::mem::take(&mut self.class_defs);
+        let result = match self.early_bind(&defs) {
             Ok(()) => self.execute(&mut regs),
             Err(e) => Err(self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), e)),
         };
@@ -841,6 +860,10 @@ impl Context<'_> {
             Err(Throw::Exit(status)) => status,
             Err(Throw::Fatal { message, file, line }) => {
                 self.out.write(format!("\nFatal error: {message} in {file} on line {line}\n").as_bytes());
+                255
+            }
+            Err(Throw::Parse { message, file, line }) => {
+                self.out.write(format!("\nParse error: {message} in {file} on line {line}\n").as_bytes());
                 255
             }
             Err(Throw::Object(e)) => {
@@ -1460,7 +1483,65 @@ impl Context<'_> {
                     };
                     return Err(Throw::Exit(status));
                 }
-                Instr::DeclareClass { class } => self.declare_class(class as usize)?,
+                Instr::DeclareClass { class } => {
+                    let def = Arc::clone(&func.decls[class as usize]);
+                    self.declare_class(&def)?;
+                }
+                Instr::Silence { saved } => {
+                    reg!(saved) = Value::Int(self.error_level);
+                    // E_ERROR | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR | E_PARSE
+                    self.error_level &= 4437;
+                }
+                Instr::Unsilence { saved } => {
+                    // A level the silenced code set stays (as in PHP),
+                    // unless it only narrowed it to the silenced one.
+                    if let Value::Int(level) = reg!(saved)
+                        && self.error_level == level & 4437
+                    {
+                        self.error_level = level;
+                    }
+                }
+                Instr::Include { dst, src, kind } => {
+                    let v = self.operand(w, func, src);
+                    let Some(program) = self.load_include(&v, kind, &func.file)? else {
+                        reg!(dst) = Value::Bool(kind.once());
+                        return Ok(Next::Go(pc));
+                    };
+                    let program = match program {
+                        Ok(p) => p,
+                        Err(()) => {
+                            reg!(dst) = Value::Bool(false);
+                            return Ok(Next::Go(pc));
+                        }
+                    };
+                    // The file's variables are the includer's.
+                    let cells: Vec<Rc<RefCell<Value>>> = program
+                        .main
+                        .cv_names
+                        .iter()
+                        .map(|name| match func.cv_names.iter().position(|n| n == name) {
+                            Some(r) => make_ref(w, r as Reg),
+                            None if in_main => self.global_cell(w, name.as_bytes()),
+                            None => Rc::new(RefCell::new(Value::Null)),
+                        })
+                        .collect();
+                    let (this, scope, called) = match self.frames.last() {
+                        Some(f) => (f.this.clone(), f.scope.clone(), f.called.clone()),
+                        None => (None, None, None),
+                    };
+                    if let Some(caller) = self.frames.last_mut() {
+                        caller.pc = pc as u32;
+                    }
+                    let at = base + func.nregs as usize;
+                    self.frames.push(&Closure::new(Arc::clone(&program.main)), at, 0, (base + dst as usize) as u32);
+                    enter(&mut self.frames, regs);
+                    for (i, cell) in cells.into_iter().enumerate() {
+                        regs[at + i] = Value::Ref(cell);
+                    }
+                    let frame = self.frames.last_mut().expect("the file's frame");
+                    (frame.this, frame.scope, frame.called) = (this, scope, called);
+                    return Ok(Next::Switch);
+                }
                 Instr::New { dst, class, base: args, argc } => {
                     let class = self.class_of(func, class)?;
                     let (object, ctor) = {

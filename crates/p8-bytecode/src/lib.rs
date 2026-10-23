@@ -155,8 +155,14 @@ pub enum Instr {
     // function's `classes`; a property name is a register (a constant for
     // `$o->name`, any value for `$o->$name`).
     /// A class declaration runs here (one linked at the file's start is
-    /// already there).
+    /// already there): `class` indexes the function's `decls`.
     DeclareClass { class: u16 },
+    /// `@`: the error level goes into `saved`, and only fatal errors are
+    /// reported until `Unsilence` puts it back.
+    Silence { saved: Reg },
+    Unsilence { saved: Reg },
+    /// `include`, `require` (and `_once`): dst gets the file's result.
+    Include { dst: Reg, src: Reg, kind: IncludeKind },
     /// `new C(args)`: dst gets the new object; its constructor runs with
     /// the `argc` arguments at `base`.
     New { dst: Reg, class: u16, base: Reg, argc: u8 },
@@ -287,6 +293,33 @@ impl Instr {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncludeKind {
+    Include,
+    IncludeOnce,
+    Require,
+    RequireOnce,
+}
+
+impl IncludeKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            IncludeKind::Include => "include",
+            IncludeKind::IncludeOnce => "include_once",
+            IncludeKind::Require => "require",
+            IncludeKind::RequireOnce => "require_once",
+        }
+    }
+
+    pub fn once(self) -> bool {
+        matches!(self, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+    }
+
+    pub fn required(self) -> bool {
+        matches!(self, IncludeKind::Require | IncludeKind::RequireOnce)
+    }
+}
+
 /// A class a function names. `self` and `parent` are resolved when the
 /// code is compiled; `static` (late static binding) when it runs.
 #[derive(Debug, Clone)]
@@ -407,6 +440,17 @@ pub struct Function {
     /// Protected ranges (`try`), any order: an exception thrown in one
     /// goes to the deepest that covers it.
     pub handlers: Vec<Handler>,
+    /// The classes this code declares, in order (`DeclareClass` indexes them).
+    pub decls: Vec<Arc<ClassDef>>,
+}
+
+/// A compiled file: its top-level code, every function it declares, and
+/// every class (in order), for linking them when it runs.
+#[derive(Debug)]
+pub struct Program {
+    pub main: Arc<Function>,
+    pub functions: Vec<Arc<Function>>,
+    pub classes: Vec<Arc<ClassDef>>,
 }
 
 /// A range of code `try` protects: an exception thrown by an instruction
