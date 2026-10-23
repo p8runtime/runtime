@@ -449,15 +449,25 @@ pub struct TraitRule {
 pub struct ConstDef {
     pub name: Text,
     pub value: Frozen,
+    /// A value that needs other constants: the code computing it (run
+    /// when the constant is first read; `value` is unused then).
+    pub code: Option<Arc<Function>>,
     pub visibility: Visibility,
     pub is_final: bool,
 }
+
+/// The name of the code a constant expression compiles to (never shown
+/// in a trace: PHP evaluates it in place).
+pub const CONST_EXPR: &str = "{constant expression}";
 
 #[derive(Debug)]
 pub struct PropDef {
     pub name: Text,
     /// None: a typed property with no default (uninitialized until set).
     pub default: Option<Frozen>,
+    /// A default that needs other constants: the code computing it (run
+    /// before the class is first used).
+    pub code: Option<Arc<Function>>,
     pub visibility: Visibility,
     pub is_static: bool,
     pub readonly: bool,

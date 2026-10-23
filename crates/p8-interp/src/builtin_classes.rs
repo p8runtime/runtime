@@ -81,6 +81,7 @@ fn declare(
         debug_info: None,
         enum_cases: Vec::new(),
         enum_backing: None,
+        static_inits: Vec::new(),
     };
     classes.insert(lower, Rc::new(class));
 }
@@ -98,6 +99,7 @@ fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty:
         declaring: declaring.to_ascii_lowercase().into_bytes(),
         declaring_name: PhpStr::from(declaring),
         readonly: false,
+        init: None,
         ty: ty.map(PhpStr::from),
     }
 }
@@ -246,7 +248,7 @@ pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
         for (n, value) in spec.constants {
             class.constants.insert(
                 n.as_bytes().to_vec(),
-                p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false },
+                p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None },
             );
         }
         for (n, m) in spec.methods {

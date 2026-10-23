@@ -11,6 +11,7 @@
 
 use p8_bytecode::{
     CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
+    CONST_EXPR,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, Visibility};
 use p8_runtime::ext::Registry;
@@ -1485,6 +1486,7 @@ impl<'src> Compiler<'src> {
             self.promoted.push(PropDef {
                 name: name.clone(),
                 default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
+                code: None,
                 visibility,
                 is_static: false,
                 readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
@@ -1698,14 +1700,18 @@ impl<'src> Compiler<'src> {
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
                     for e in *entries {
                         let text = self.text(e.name.span);
-                        let default = match e.default {
-                            Some(x) => Some(self.const_value(x)?),
-                            None if ty.is_some() => None,
-                            None => Some(Frozen::Null),
+                        let (default, code) = match e.default {
+                            Some(x) => {
+                                let (v, code) = self.const_init(x)?;
+                                (Some(v), code)
+                            }
+                            None if ty.is_some() => (None, None),
+                            None => (Some(Frozen::Null), None),
                         };
                         properties.push(PropDef {
                             name: Text::from(text.strip_prefix(b"$").unwrap_or(text)),
                             default,
+                            code,
                             visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
                             is_static: has(b"static"),
                             readonly: has(b"readonly") || flags & CLASS_READONLY != 0,
@@ -1715,9 +1721,11 @@ impl<'src> Compiler<'src> {
                 }
                 ClassMember::Const { modifiers, consts, .. } => {
                     for c in *consts {
+                        let (value, code) = self.const_init(c.value)?;
                         constants.push(ConstDef {
                             name: Text::from(self.text(c.name.span)),
-                            value: self.const_value(c.value)?,
+                            value,
+                            code,
                             visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
                             is_final: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")),
                         });
@@ -1788,6 +1796,20 @@ impl<'src> Compiler<'src> {
 
     /// A constant expression in a declaration (a property default, a class
     /// constant): literals, and arrays of them, so far.
+    /// A declaration's constant expression: its value now when it is a
+    /// literal; otherwise the code computing it (`self` is this class),
+    /// run when PHP evaluates it.
+    fn const_init(&mut self, e: &Expr) -> Result<(Frozen, Option<Arc<Function>>)> {
+        if let Ok(v) = self.const_value(e) {
+            return Ok((v, None));
+        }
+        let line = self.line(e.span());
+        let method = self.method.take();
+        let r = self.function_with(Text::from(CONST_EXPR), line, &[], Body::Expr(e), false, &[]);
+        self.method = method;
+        Ok((Frozen::Null, Some(Arc::new(r?.0))))
+    }
+
     fn const_value(&self, e: &Expr) -> Result<Frozen> {
         if let Some(v) = self.literal(e) {
             return Ok(v);
@@ -1812,6 +1834,28 @@ impl<'src> Compiler<'src> {
                     entries.push((key, self.const_value(item.value)?));
                 }
                 Ok(Frozen::Array(entries.into()))
+            }
+            Expr::Binary { left, op, right, .. } => {
+                let op = match op {
+                    BinaryOp::Plus => BinOp::Add,
+                    BinaryOp::Minus => BinOp::Sub,
+                    BinaryOp::Mul => BinOp::Mul,
+                    BinaryOp::Concat => BinOp::Concat,
+                    BinaryOp::BitAnd => BinOp::BitAnd,
+                    BinaryOp::BitOr => BinOp::BitOr,
+                    BinaryOp::BitXor => BinOp::BitXor,
+                    BinaryOp::ShiftLeft => BinOp::Shl,
+                    BinaryOp::ShiftRight => BinOp::Shr,
+                    _ => return Err(self.unsupported(e.span(), "this constant expression")),
+                };
+                let (a, b) = (self.const_value(left)?.to_value(), self.const_value(right)?.to_value());
+                let mut diags = Vec::new();
+                match p8_runtime::ops::binary(op, &a, &b, &mut diags) {
+                    Ok(p8_runtime::value::Value::Int(i)) if diags.is_empty() => Ok(Frozen::Int(i)),
+                    Ok(p8_runtime::value::Value::Float(x)) if diags.is_empty() => Ok(Frozen::Float(x)),
+                    Ok(p8_runtime::value::Value::Str(s)) if diags.is_empty() => Ok(Frozen::Str(Text::from(s.as_bytes()))),
+                    _ => Err(self.unsupported(e.span(), "this constant expression")),
+                }
             }
             _ => Err(self.unsupported(e.span(), "this constant expression")),
         }
