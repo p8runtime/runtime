@@ -167,6 +167,12 @@ pub struct Context<'i> {
 }
 
 impl Context<'_> {
+    /// Set an ini setting for this request (`php -d name=value`); false
+    /// when p8 has no such setting.
+    pub fn set_ini(&mut self, name: &str, value: &str) -> bool {
+        self.inner.set_ini(name.as_bytes(), value)
+    }
+
     /// Run a script's top-level code; returns the exit status.
     pub fn run(&mut self, script: &Script) -> i32 {
         for f in &script.program.functions {

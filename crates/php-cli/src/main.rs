@@ -5,7 +5,7 @@
 use std::io::Write;
 
 fn main() {
-    let Some(Cli { dump, path, .. }) = Cli::parse(std::env::args().skip(1)) else {
+    let Some(Cli { dump, path, ini }) = Cli::parse(std::env::args().skip(1)) else {
         eprintln!("usage: php2 [--dump] [-d name=value]... <file> [args...]");
         std::process::exit(64);
     };
@@ -35,6 +35,9 @@ fn main() {
             let mut isolate = platform.new_isolate();
             let mut stdout = Stdout(std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()));
             let mut context = isolate.new_context(&mut stdout);
+            for (name, value) in &ini {
+                context.set_ini(name, value);
+            }
             match platform.compile(&source, &file) {
                 Ok(script) => context.run(&script),
                 Err(error) => context.fail(&error),
@@ -51,25 +54,28 @@ fn main() {
 struct Cli {
     dump: bool,
     path: String,
+    /// `-d name=value` settings, in order (unknown names are ignored).
+    ini: Vec<(String, String)>,
 }
 
 impl Cli {
     fn parse(args: impl Iterator<Item = String>) -> Option<Cli> {
         let mut args = args.peekable();
         let mut dump = false;
+        let mut ini = Vec::new();
+        let mut setting = |text: &str| {
+            let (name, value) = text.split_once('=').unwrap_or((text, "1"));
+            ini.push((name.trim().to_string(), value.trim().trim_matches('"').to_string()));
+        };
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 "--dump" => dump = true,
-                // `-d name=value`: p8 has no ini settings yet, so these are
-                // accepted (php-src's runner passes several) and not applied.
-                "-d" => {
-                    args.next()?;
-                }
-                other if other.starts_with("-d") => {}
+                "-d" => setting(&args.next()?),
+                other if other.starts_with("-d") => setting(&other[2..]),
                 _ => return None,
             }
         }
-        Some(Cli { dump, path: args.next()? })
+        Some(Cli { dump, path: args.next()?, ini })
     }
 }
 
@@ -99,6 +105,9 @@ mod tests {
     fn takes_the_runners_command_line() {
         let ran = parse(&["-d", "display_errors=1", "-dprecision=14", "-d", "x", "t.php", "a", "-b"]);
         assert_eq!(ran, Some((false, "t.php".to_string())));
+        let cli = Cli::parse(["-d", "error_reporting=0", "-dprecision=14", "-d", "x", "t.php"].iter().map(|a| a.to_string())).expect("parsed");
+        let ini: Vec<(&str, &str)> = cli.ini.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        assert_eq!(ini, [("error_reporting", "0"), ("precision", "14"), ("x", "1")]);
         assert_eq!(parse(&["--dump", "t.php"]), Some((true, "t.php".to_string())));
         // An unknown option or a missing file is a usage error.
         assert_eq!(parse(&["-x", "t.php"]), None);
