@@ -60,10 +60,22 @@ pub enum Instr {
     /// `++$var`/`--$var` (dst gets the new value) or `$var++`/`$var--`
     /// (dst gets the old one)
     IncDec { var: Reg, dst: Reg, inc: bool, post: bool },
-    /// `++$var`/`--$var` whose value is not used
-    IncVar { var: Reg, inc: bool },
-    /// Jump when `a cmp b` is `when` (a comparison and its branch in one)
-    JumpCmp { cmp: Cmp, a: Reg, b: Reg, when: bool, target: u32 },
+    /// `++$var` whose value is not used
+    IncVar { var: Reg },
+    /// `--$var` whose value is not used
+    DecVar { var: Reg },
+    /// A comparison and its branch in one, one instruction per test (so
+    /// the interpreter dispatches once): jump when `a < b` holds as PHP's
+    /// `<` decides it, or for the `Not` forms when it does not. `>` and
+    /// `>=` swap their operands, as PHP compiles them. See `jump_cmp`.
+    JumpLt { a: Reg, b: Reg, target: u32 },
+    JumpNotLt { a: Reg, b: Reg, target: u32 },
+    JumpLe { a: Reg, b: Reg, target: u32 },
+    JumpNotLe { a: Reg, b: Reg, target: u32 },
+    JumpEq { a: Reg, b: Reg, target: u32 },
+    JumpNotEq { a: Reg, b: Reg, target: u32 },
+    JumpIdentical { a: Reg, b: Reg, target: u32 },
+    JumpNotIdentical { a: Reg, b: Reg, target: u32 },
     Jump { target: u32 },
     JumpIf { cond: Reg, target: u32 },
     JumpIfNot { cond: Reg, target: u32 },
@@ -114,6 +126,71 @@ pub enum Instr {
     ArgDefault { n: u8, target: u32 },
     /// exit/die with status or message in src (or none)
     Exit { src: Reg, has: bool },
+}
+
+impl Instr {
+    /// The compare-and-branch that jumps to `target` when `a cmp b` is
+    /// `when`. `<=>` is not a branch condition.
+    pub fn jump_cmp(cmp: Cmp, a: Reg, b: Reg, when: bool, target: u32) -> Instr {
+        let (cmp, a, b) = match cmp {
+            Cmp::Gt => (Cmp::Lt, b, a),
+            Cmp::Ge => (Cmp::Le, b, a),
+            other => (other, a, b),
+        };
+        let (cmp, when) = match cmp {
+            Cmp::NotEq => (Cmp::Eq, !when),
+            Cmp::NotIdentical => (Cmp::Identical, !when),
+            other => (other, when),
+        };
+        match (cmp, when) {
+            (Cmp::Lt, true) => Instr::JumpLt { a, b, target },
+            (Cmp::Lt, false) => Instr::JumpNotLt { a, b, target },
+            (Cmp::Le, true) => Instr::JumpLe { a, b, target },
+            (Cmp::Le, false) => Instr::JumpNotLe { a, b, target },
+            (Cmp::Eq, true) => Instr::JumpEq { a, b, target },
+            (Cmp::Eq, false) => Instr::JumpNotEq { a, b, target },
+            (Cmp::Identical, true) => Instr::JumpIdentical { a, b, target },
+            (Cmp::Identical, false) => Instr::JumpNotIdentical { a, b, target },
+            (other, _) => unreachable!("{other:?} is not a branch condition"),
+        }
+    }
+
+    /// What a compare-and-branch tests: (cmp, a, b, when, target).
+    pub fn as_jump_cmp(&self) -> Option<(Cmp, Reg, Reg, bool, u32)> {
+        Some(match *self {
+            Instr::JumpLt { a, b, target } => (Cmp::Lt, a, b, true, target),
+            Instr::JumpNotLt { a, b, target } => (Cmp::Lt, a, b, false, target),
+            Instr::JumpLe { a, b, target } => (Cmp::Le, a, b, true, target),
+            Instr::JumpNotLe { a, b, target } => (Cmp::Le, a, b, false, target),
+            Instr::JumpEq { a, b, target } => (Cmp::Eq, a, b, true, target),
+            Instr::JumpNotEq { a, b, target } => (Cmp::Eq, a, b, false, target),
+            Instr::JumpIdentical { a, b, target } => (Cmp::Identical, a, b, true, target),
+            Instr::JumpNotIdentical { a, b, target } => (Cmp::Identical, a, b, false, target),
+            _ => return None,
+        })
+    }
+
+    /// The jump target of any instruction that has one.
+    pub fn target_mut(&mut self) -> Option<&mut u32> {
+        match self {
+            Instr::Jump { target: t }
+            | Instr::JumpIf { target: t, .. }
+            | Instr::JumpIfNot { target: t, .. }
+            | Instr::JumpIfSet { target: t, .. }
+            | Instr::JumpLt { target: t, .. }
+            | Instr::JumpNotLt { target: t, .. }
+            | Instr::JumpLe { target: t, .. }
+            | Instr::JumpNotLe { target: t, .. }
+            | Instr::JumpEq { target: t, .. }
+            | Instr::JumpNotEq { target: t, .. }
+            | Instr::JumpIdentical { target: t, .. }
+            | Instr::JumpNotIdentical { target: t, .. }
+            | Instr::IterInit { end: t, .. }
+            | Instr::IterNext { end: t, .. }
+            | Instr::ArgDefault { target: t, .. } => Some(t),
+            _ => None,
+        }
+    }
 }
 
 /// A name a call or constant fetch resolves (each context caches what it

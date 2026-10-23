@@ -75,6 +75,21 @@ fn fast(w: &mut [Value], code: &[Instr], mut pc: usize, stop: &AtomicU64) -> usi
     // A loop's backward branch is where an interrupt is noticed: `step`
     // then raises it.
     let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
+    // A compare-and-branch on two numbers (anything else goes to `step`).
+    macro_rules! jump_if {
+        ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {
+            match num_test($cmp, &w[$a as usize], &w[$b as usize]) {
+                Some(t) if t == $when => {
+                    if back($target, pc) {
+                        return pc;
+                    }
+                    pc = $target as usize;
+                }
+                Some(_) => pc += 1,
+                None => return pc,
+            }
+        };
+    }
     loop {
         match code[pc] {
             Instr::Jump { target } => {
@@ -83,16 +98,14 @@ fn fast(w: &mut [Value], code: &[Instr], mut pc: usize, stop: &AtomicU64) -> usi
                 }
                 pc = target as usize;
             }
-            Instr::JumpCmp { cmp, a, b, when, target } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
-                Some(t) if t == when => {
-                    if back(target, pc) {
-                        return pc;
-                    }
-                    pc = target as usize;
-                }
-                Some(_) => pc += 1,
-                None => return pc,
-            },
+            Instr::JumpLt { a, b, target } => jump_if!(Cmp::Lt, true, a, b, target),
+            Instr::JumpNotLt { a, b, target } => jump_if!(Cmp::Lt, false, a, b, target),
+            Instr::JumpLe { a, b, target } => jump_if!(Cmp::Le, true, a, b, target),
+            Instr::JumpNotLe { a, b, target } => jump_if!(Cmp::Le, false, a, b, target),
+            Instr::JumpEq { a, b, target } => jump_if!(Cmp::Eq, true, a, b, target),
+            Instr::JumpNotEq { a, b, target } => jump_if!(Cmp::Eq, false, a, b, target),
+            Instr::JumpIdentical { a, b, target } => jump_if!(Cmp::Identical, true, a, b, target),
+            Instr::JumpNotIdentical { a, b, target } => jump_if!(Cmp::Identical, false, a, b, target),
             Instr::Compare { cmp, dst, a, b } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
                 Some(t) if cmp != Cmp::Spaceship => {
                     w[dst as usize] = Value::Bool(t);
@@ -100,14 +113,18 @@ fn fast(w: &mut [Value], code: &[Instr], mut pc: usize, stop: &AtomicU64) -> usi
                 }
                 _ => return pc,
             },
-            Instr::IncVar { var, inc } => match w[var as usize] {
-                Value::Int(i) => match if inc { i.checked_add(1) } else { i.checked_sub(1) } {
-                    Some(n) => {
-                        w[var as usize] = Value::Int(n);
-                        pc += 1;
-                    }
-                    None => return pc,
-                },
+            Instr::IncVar { var } => match w[var as usize] {
+                Value::Int(i) if i != i64::MAX => {
+                    w[var as usize] = Value::Int(i + 1);
+                    pc += 1;
+                }
+                _ => return pc,
+            },
+            Instr::DecVar { var } => match w[var as usize] {
+                Value::Int(i) if i != i64::MIN => {
+                    w[var as usize] = Value::Int(i - 1);
+                    pc += 1;
+                }
                 _ => return pc,
             },
             Instr::Binary { op, dst, a, b } => {
@@ -193,8 +210,50 @@ fn fast(w: &mut [Value], code: &[Instr], mut pc: usize, stop: &AtomicU64) -> usi
                 w[dst as usize] = v;
                 pc += 1;
             }
-            _ => return pc,
+            // Every other instruction (listed, so dispatch needs no range check).
+            Instr::AssignDim { .. }
+            | Instr::LoadNull { .. }
+            | Instr::AssignOp { .. }
+            | Instr::Not { .. }
+            | Instr::Neg { .. }
+            | Instr::BitNot { .. }
+            | Instr::ToBool { .. }
+            | Instr::Cast { .. }
+            | Instr::IncDec { .. }
+            | Instr::JumpIfSet { .. }
+            | Instr::NewArray { .. }
+            | Instr::ArrayPush { .. }
+            | Instr::ArraySet { .. }
+            | Instr::AssignDimOp { .. }
+            | Instr::IssetDim { .. }
+            | Instr::IssetVar { .. }
+            | Instr::UnsetVar { .. }
+            | Instr::UnsetDim { .. }
+            | Instr::IterInit { .. }
+            | Instr::IterNext { .. }
+            | Instr::Call { .. }
+            | Instr::SendVar { .. }
+            | Instr::Return { .. }
+            | Instr::ReturnNull
+            | Instr::Echo { .. }
+            | Instr::FetchConst { .. }
+            | Instr::ConcatN { .. }
+            | Instr::BindGlobal { .. }
+            | Instr::ArgDefault { .. }
+            | Instr::Exit { .. } => return pc,
         }
+    }
+}
+
+/// Make a register undefined, releasing what it held. Scalars hold
+/// nothing to release, so they are only re-tagged.
+#[inline(always)]
+fn clear(r: &mut Value) {
+    if matches!(r, Value::Str(_) | Value::Array(_) | Value::Ref(_)) {
+        *r = Value::Undef;
+    } else {
+        // Nothing to drop: `forget` skips the drop check entirely.
+        std::mem::forget(std::mem::replace(r, Value::Undef));
     }
 }
 
@@ -454,7 +513,7 @@ impl Context<'_> {
         let extra = if argc > nparams { take_extra(regs, code, base, nparams, argc) } else { None };
         let consts_at = code.consts_at as usize;
         for r in &mut regs[base + argc.min(nparams)..base + consts_at] {
-            *r = Value::Undef;
+            clear(r);
         }
         regs[base + consts_at..base + consts_at + func.consts.len()].clone_from_slice(&func.consts);
         self.frames.push(Frame { func, pc: 0, base: base as u32, ret, argc: argc as u32, extra });
@@ -577,22 +636,53 @@ impl Context<'_> {
     /// switches frames.
     fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
         let stop = Arc::clone(&self.stop);
+        // The running frame, kept in locals (reloaded when frames change).
+        let frame = self.frames.last().expect("a frame");
+        let (mut func, mut base, mut argc, mut pc) = (frame.func.clone(), frame.base as usize, frame.argc as usize, frame.pc as usize);
         loop {
-            let frame = self.frames.last().expect("a frame");
-            let func = frame.func.clone();
-            let base = frame.base as usize;
-            let argc = frame.argc as usize;
-            let mut pc = frame.pc as usize;
-            loop {
-                pc = fast(&mut regs[base..base + func.code.nregs as usize], &func.code.code, pc, &stop);
-                self.pc = pc + 1;
-                match self.step(regs, &func, base, argc, pc)? {
-                    Next::Go(next) => pc = next,
-                    Next::Switch => break,
+            pc = fast(&mut regs[base..base + func.code.nregs as usize], &func.code.code, pc, &stop);
+            // A call to a user function this site already resolved, and a
+            // return of a value, switch frames here: the common case of a
+            // call never goes through `step`.
+            match func.code.code[pc] {
+                Instr::Call { site, base: args, argc: n, dst }
+                    if stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT =>
+                {
+                    if let Some(Callee::User(target)) = func.sites[site as usize].get()
+                        && n as usize >= target.code.required
+                    {
+                        let target = target.clone();
+                        if let Some(caller) = self.frames.last_mut() {
+                            caller.pc = (pc + 1) as u32;
+                        }
+                        self.enter(regs, target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                        let frame = self.frames.last().expect("the callee's frame");
+                        (func, base, argc, pc) = (frame.func.clone(), frame.base as usize, frame.argc as usize, 0);
+                        continue;
+                    }
                 }
+                Instr::Return { src } => {
+                    let value = match &regs[base + src as usize] {
+                        Value::Undef => None,
+                        Value::Ref(cell) => Some(cell.borrow().clone()),
+                        v => Some(v.clone()),
+                    };
+                    if let Some(value) = value {
+                        self.leave(regs, value);
+                        let Some(frame) = self.frames.last() else { return Ok(()) };
+                        (func, base, argc, pc) = (frame.func.clone(), frame.base as usize, frame.argc as usize, frame.pc as usize);
+                        continue;
+                    }
+                }
+                _ => {}
             }
-            if self.frames.is_empty() {
-                return Ok(());
+            self.pc = pc + 1;
+            match self.step(regs, &func, base, argc, pc)? {
+                Next::Go(next) => pc = next,
+                Next::Switch => {
+                    let Some(frame) = self.frames.last() else { return Ok(()) };
+                    (func, base, argc, pc) = (frame.func.clone(), frame.base as usize, frame.argc as usize, frame.pc as usize);
+                }
             }
         }
     }
@@ -680,12 +770,21 @@ impl Context<'_> {
                     };
                     reg!(dst) = v;
                 }
-                Instr::JumpCmp { cmp, a, b, when, target } => {
+                Instr::JumpLt { .. }
+                | Instr::JumpNotLt { .. }
+                | Instr::JumpLe { .. }
+                | Instr::JumpNotLe { .. }
+                | Instr::JumpEq { .. }
+                | Instr::JumpNotEq { .. }
+                | Instr::JumpIdentical { .. }
+                | Instr::JumpNotIdentical { .. } => {
+                    let Some((cmp, a, b, when, target)) = instr.as_jump_cmp() else { unreachable!("a compare-and-branch") };
                     if self.test_regs(w, func, cmp, a, b) == when {
                         pc = target as usize;
                     }
                 }
-                Instr::IncVar { var, inc } => {
+                Instr::IncVar { var } | Instr::DecVar { var } => {
+                    let inc = matches!(instr, Instr::IncVar { .. });
                     if let Value::Int(i) = reg!(var)
                         && let Some(n) = if inc { i.checked_add(1) } else { i.checked_sub(1) }
                     {
@@ -1101,14 +1200,18 @@ impl Context<'_> {
         // Locals die with the frame (before the result lands: the result
         // register may be inside the window).
         let base = frame.base as usize;
-        for r in &mut regs[base..base + frame.func.code.nregs as usize] {
-            *r = Value::Undef;
+        let code = &frame.func.code;
+        // Variables and temporaries; the constants' registers are left as
+        // they are (the next frame there overwrites them).
+        let consts = base + code.consts_at as usize..base + code.consts_at as usize + frame.func.consts.len();
+        for r in &mut regs[base..consts.start] {
+            clear(r);
+        }
+        for r in &mut regs[consts.end..base + code.nregs as usize] {
+            clear(r);
         }
         if frame.ret != NO_RET {
             regs[frame.ret as usize] = value;
-        }
-        if let Some(caller) = self.frames.last() {
-            self.pc = caller.pc as usize;
         }
     }
 

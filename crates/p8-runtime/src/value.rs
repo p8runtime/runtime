@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub enum Value {
     #[default]
     Null,
@@ -24,6 +24,23 @@ pub enum Value {
     Ref(Rc<RefCell<Value>>),
     /// A variable never assigned (only in registers; reads warn and give null).
     Undef,
+}
+
+impl Clone for Value {
+    /// Inline: copying a value is on every register move.
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        match self {
+            Value::Null => Value::Null,
+            Value::Bool(b) => Value::Bool(*b),
+            Value::Int(i) => Value::Int(*i),
+            Value::Float(f) => Value::Float(*f),
+            Value::Str(s) => Value::Str(s.clone()),
+            Value::Array(a) => Value::Array(Rc::clone(a)),
+            Value::Ref(r) => Value::Ref(Rc::clone(r)),
+            Value::Undef => Value::Undef,
+        }
+    }
 }
 
 impl Value {

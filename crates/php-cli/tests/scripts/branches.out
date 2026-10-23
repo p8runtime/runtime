@@ -1,0 +1,30 @@
+-L-Ge-i-000 lL---n-N101 --gG-n-N011 lL---n-N101 -----n-N001 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 --gG-n-N011 -L-Ge--N001 lL---n-N101 -L-Ge--N001 lL---n-N101 lL---n-N101 
+--gG-n-N011 -L-Ge-i-000 --gG-n-N011 lL---n-N101 -----n-N001 lL---n-N101 -L-Ge--N001 -L-Ge--N001 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 lL---n-N101 
+lL---n-N101 lL---n-N101 -L-Ge-i-000 lL---n-N101 -----n-N001 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 lL---n-N101 
+--gG-n-N011 --gG-n-N011 --gG-n-N011 -L-Ge-i-000 -----n-N001 lL---n-N101 --gG-n-N011 --gG-n-N011 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 lL---n-N101 
+-----n-N001 -----n-N001 -----n-N001 -----n-N001 -----n-N001 -----n-N001 -----n-N001 -----n-N001 -----n-N001 -----n-N001 --gG-n-N011 -L-Ge--N001 --gG-n-N011 -----n-N001 -----n-N001 
+--gG-n-N011 --gG-n-N011 --gG-n-N011 --gG-n-N011 -----n-N001 -L-Ge-i-000 --gG-n-N011 --gG-n-N011 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 --gG-n-N011 --gG-n-N011 
+--gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 -----n-N001 lL---n-N101 -L-Ge-i-000 -L-Ge--N001 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 lL---n-N101 
+--gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 -----n-N001 lL---n-N101 -L-Ge--N001 -L-Ge-i-000 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 lL---n-N101 
+--gG-n-N011 --gG-n-N011 --gG-n-N011 --gG-n-N011 -----n-N001 --gG-n-N011 --gG-n-N011 --gG-n-N011 -L-Ge-i-000 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 --gG-n-N011 --gG-n-N011 
+lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 -----n-N001 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 -L-Ge-i-000 -L-Ge--N001 lL---n-N101 -L-Ge--N001 lL---n-N101 lL---n-N101 
+-L-Ge--N001 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 -L-Ge--N001 -L-Ge-i-000 lL---n-N101 -L-Ge--N001 lL---n-N101 lL---n-N101 
+--gG-n-N011 -L-Ge--N001 -L-Ge--N001 -L-Ge--N001 -L-Ge--N001 -L-Ge--N001 -L-Ge--N001 -L-Ge--N001 -L-Ge--N001 --gG-n-N011 --gG-n-N011 -L-Ge-i-000 --gG-n-N011 -L-Ge--N001 -L-Ge--N001 
+-L-Ge--N001 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 -L-Ge--N001 -L-Ge--N001 lL---n-N101 -L-Ge-i-000 lL---n-N101 lL---n-N101 
+--gG-n-N011 --gG-n-N011 --gG-n-N011 --gG-n-N011 -----n-N001 lL---n-N101 --gG-n-N011 --gG-n-N011 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 -L-Ge-i-000 --gG-n-N011 
+--gG-n-N011 --gG-n-N011 --gG-n-N011 --gG-n-N011 -----n-N001 lL---n-N101 --gG-n-N011 --gG-n-N011 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 -L-Ge-i-000 
+01233210 0.25 0.5 0.75 4
+e
+int(9223372036854775807)
+float(9.223372036854776E+18)
+int(-9223372036854775808)
+float(-9.223372036854776E+18)
+
+Warning: Undefined variable $undefined_right in %s on line 29
+
+Warning: Undefined variable $undefined_left in %s on line 29
+
+Warning: Undefined variable $undefined_a in %s on line 30
+
+Warning: Undefined variable $undefined_b in %s on line 30
+done
