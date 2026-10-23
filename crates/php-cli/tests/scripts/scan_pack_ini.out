@@ -1,0 +1,155 @@
+array(2) {
+  [0]=>
+  int(25)
+  [1]=>
+  string(3) "Bob"
+}
+array(3) {
+  [0]=>
+  int(12)
+  [1]=>
+  string(6) "apples"
+  [2]=>
+  NULL
+}
+NULL
+array(1) {
+  [0]=>
+  NULL
+}
+int(3)
+int(2024)
+int(1)
+int(15)
+array(5) {
+  [0]=>
+  int(255)
+  [1]=>
+  int(26)
+  [2]=>
+  int(15)
+  [3]=>
+  float(-350)
+  [4]=>
+  string(1) "x"
+}
+array(2) {
+  [0]=>
+  string(5) "hello"
+  [1]=>
+  string(4) "worl"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+array(1) {
+  [0]=>
+  int(12)
+}
+array(3) {
+  [0]=>
+  string(3) "abc"
+  [1]=>
+  int(4)
+  [2]=>
+  int(5)
+}
+array(1) {
+  [0]=>
+  NULL
+}
+array(1) {
+  [0]=>
+  int(42)
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(10)
+  [1]=>
+  int(20)
+}
+int(2)
+string(4) "name"
+string(2) "Al"
+123478564142 0000000101000000 616200006364202065660000 abc121 0000000000000001 8
+Array
+(
+    [first] => 4660
+    [second] => 22136
+    [chars1] => 65
+    [chars2] => -66
+)
+Array
+(
+    [1] => 256
+)
+Array
+(
+    [x] => abc
+    [y] => de
+    [hex] => 20ff
+)
+Array
+(
+    [1] => 1
+    [2] => 2
+    [3] => 3
+)
+Array
+(
+    [1] => -5
+)
+
+Warning: unpack(): Type N: not enough input values, need 4 values but only 2 were provided in %s on line 14
+bool(false)
+Array
+(
+    [name] => Bob
+    [enabled] => 1
+    [flag] => 
+    [num] => 42
+    [quoted] => a = b
+    [list] => Array
+        (
+            [0] => x
+            [1] => y
+        )
+
+    [map] => Array
+        (
+            [k] => v
+        )
+
+    [inside] => 1
+)
+Array
+(
+    [one] => Array
+        (
+            [a] => 1
+        )
+
+    [two] => Array
+        (
+            [b] => 1
+            [c] => 
+            [d] => 1.5
+        )
+
+)
+bool(true)
+AssertionError: assert(1 > 2)
+custom msg
+RuntimeExceptionrt
+bool(true)

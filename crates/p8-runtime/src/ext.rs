@@ -252,6 +252,16 @@ impl Registry {
         self.reenters[i]
     }
 
+    /// Builtins whose stub signature is not checked (assert: the compiler
+    /// passes it the assertion's source as an extra argument).
+    pub fn unchecked(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(&i) = self.index.get(n) {
+                self.sigs[i] = None;
+            }
+        }
+    }
+
     /// Builtins that run PHP code or reach the caller's variables though
     /// they take no callable (serialize, compact): the registers are lent.
     pub fn mark_reenters(&mut self, names: &[&str]) {

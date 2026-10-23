@@ -16,6 +16,7 @@ mod file;
 mod hash;
 mod info;
 mod random;
+mod scan;
 mod json;
 mod serial;
 mod class;
@@ -93,6 +94,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(info::BUILTINS);
     registry.add_functions(string2::BUILTINS);
     registry.add_functions(random::BUILTINS);
+    registry.add_functions(scan::BUILTINS);
     registry.add_functions(serial::BUILTINS);
     registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);
@@ -104,6 +106,7 @@ fn register(registry: &mut Registry) {
     // jsonSerialize) though they take no callable.
     registry.mark_reenters(array2::REENTER);
     registry.mark_reenters(info::REENTER);
+    registry.unchecked(&["assert"]);
     registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode"]);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
