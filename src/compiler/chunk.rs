@@ -103,4 +103,7 @@ pub struct CodeChunk {
     pub catch_table: Vec<CatchEntry>,
     /// Set on a file's top-level chunk when compiling it failed.
     pub compile_error: Option<CompileError>,
+    /// Compile-time warnings and deprecations of the file, shown before it
+    /// runs (or before its compile error).
+    pub compile_warnings: Vec<(crate::vm::engine::ErrorLevel, CompileError)>,
 }

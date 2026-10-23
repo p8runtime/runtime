@@ -27,6 +27,30 @@ pub(super) enum ClassMemberCtx {
 }
 
 impl<'src, 'ast> Parser<'src, 'ast> {
+    /// A token that can name a class, interface, trait or enum: also the
+    /// type names PHP lexes as plain identifiers (`class int {}` parses and
+    /// is then rejected as reserved, at compile time).
+    fn is_declaration_name(kind: TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::Identifier
+                | TokenKind::Enum
+                | TokenKind::Match
+                | TokenKind::TypeBool
+                | TokenKind::TypeFalse
+                | TokenKind::TypeFloat
+                | TokenKind::TypeInt
+                | TokenKind::TypeIterable
+                | TokenKind::TypeMixed
+                | TokenKind::TypeNever
+                | TokenKind::TypeNull
+                | TokenKind::TypeObject
+                | TokenKind::TypeString
+                | TokenKind::TypeTrue
+                | TokenKind::TypeVoid
+        )
+    }
+
     pub(super) fn parse_class(
         &mut self,
         attributes: &'ast [AttributeGroup<'ast>],
@@ -44,10 +68,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
         self.bump(); // Eat class
 
-        let name = if matches!(
-            self.current_token.kind,
-            TokenKind::Identifier | TokenKind::Enum | TokenKind::Match
-        ) {
+        let name = if Self::is_declaration_name(self.current_token.kind) {
             let token = self.arena.alloc(self.current_token);
             self.bump();
             token
@@ -284,10 +305,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
         self.bump(); // Eat interface
 
-        let name = if matches!(
-            self.current_token.kind,
-            TokenKind::Identifier | TokenKind::Match
-        ) {
+        let name = if Self::is_declaration_name(self.current_token.kind) {
             let token = self.arena.alloc(self.current_token);
             self.bump();
             token
@@ -388,10 +406,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
         self.bump(); // Eat trait
 
-        let name = if matches!(
-            self.current_token.kind,
-            TokenKind::Identifier | TokenKind::Match
-        ) {
+        let name = if Self::is_declaration_name(self.current_token.kind) {
             let token = self.arena.alloc(self.current_token);
             self.bump();
             token
@@ -460,7 +475,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
         self.bump(); // Eat enum
 
-        let name = if self.current_token.kind == TokenKind::Identifier {
+        let name = if Self::is_declaration_name(self.current_token.kind) {
             let token = self.arena.alloc(self.current_token);
             self.bump();
             token
