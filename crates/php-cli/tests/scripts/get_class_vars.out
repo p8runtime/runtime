@@ -1,0 +1,53 @@
+array(7) {
+  ["c1"]=>
+  NULL
+  ["typed"]=>
+  NULL
+  ["typedDefault"]=>
+  int(5)
+  ["fromConst"]=>
+  int(6)
+  ["p1"]=>
+  int(1)
+  ["cs"]=>
+  string(2) "cs"
+  ["ps"]=>
+  string(6) "static"
+}
+array(9) {
+  ["c1"]=>
+  NULL
+  ["typed"]=>
+  NULL
+  ["typedDefault"]=>
+  int(5)
+  ["p3"]=>
+  string(3) "own"
+  ["fromConst"]=>
+  int(6)
+  ["p1"]=>
+  int(1)
+  ["p2"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  ["cs"]=>
+  string(2) "cs"
+  ["ps"]=>
+  string(6) "static"
+}
+array(2) {
+  ["p1"]=>
+  int(1)
+  ["ps"]=>
+  string(6) "static"
+}
+
+Fatal error: Uncaught TypeError: get_class_vars(): Argument #1 ($class) must be a valid class name, Nope given in %s:11
+Stack trace:
+#0 %s(11): get_class_vars('Nope')
+#1 {main}
+  thrown in %s on line 11

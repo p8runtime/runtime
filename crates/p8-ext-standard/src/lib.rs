@@ -16,6 +16,8 @@ mod dates;
 mod datetime;
 mod file;
 mod hash;
+mod hash_algos;
+mod hash_tables;
 mod info;
 mod random;
 mod scan;
@@ -135,6 +137,7 @@ fn register(registry: &mut Registry) {
     // jsonSerialize) though they take no callable.
     registry.mark_reenters(array2::REENTER);
     registry.mark_reenters(info::REENTER);
+    registry.mark_reenters(callback::REENTER);
     registry.unchecked(&["assert"]);
     // (count: a Countable's count() is PHP code.)
     // (The ob_* functions run output handlers, PHP code.)

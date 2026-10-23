@@ -1491,6 +1491,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "gost94"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f960e0ba8eb5e47a7d45097dc4159b5ef63d82e62dc85894bfcfd8e6b85526c"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "groupable"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2808,10 +2817,17 @@ dependencies = [
  "chrono-tz",
  "crc32fast",
  "getrandom 0.2.16",
+ "gost94",
  "md-5 0.10.6",
+ "md2",
+ "md4",
  "p8-runtime",
+ "ripemd",
  "sha1",
  "sha2 0.10.9",
+ "sha3",
+ "whirlpool",
+ "xxhash-rust",
 ]
 
 [[package]]

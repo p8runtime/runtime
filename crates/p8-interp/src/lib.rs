@@ -3541,6 +3541,10 @@ impl Ctx for Context<'_> {
         self.new_instance_of(class, args, construct)
     }
 
+    fn class_defaults(&mut self, class: &Rc<Class>) -> Result<Vec<Value>, Throw> {
+        self.class_defaults_of(class)
+    }
+
     fn closure_of(&mut self, callee: &p8_runtime::reflect::Callee, this: Option<Rc<Object>>) -> Result<Value, Throw> {
         self.closure_of_callee(callee, this)
     }

@@ -22,6 +22,16 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_reduce", run: array_reduce, by_ref: &[] },
     Builtin { name: "array_walk", run: array_walk, by_ref: &[0] },
     Builtin { name: "usort", run: usort, by_ref: &[0] },
+    Builtin { name: "array_udiff", run: array_udiff, by_ref: &[] },
+    Builtin { name: "array_udiff_assoc", run: array_udiff_assoc, by_ref: &[] },
+    Builtin { name: "array_udiff_uassoc", run: array_udiff_uassoc, by_ref: &[] },
+    Builtin { name: "array_diff_ukey", run: array_diff_ukey, by_ref: &[] },
+    Builtin { name: "array_diff_uassoc", run: array_diff_uassoc, by_ref: &[] },
+    Builtin { name: "array_uintersect", run: array_uintersect, by_ref: &[] },
+    Builtin { name: "array_uintersect_assoc", run: array_uintersect_assoc, by_ref: &[] },
+    Builtin { name: "array_uintersect_uassoc", run: array_uintersect_uassoc, by_ref: &[] },
+    Builtin { name: "array_intersect_ukey", run: array_intersect_ukey, by_ref: &[] },
+    Builtin { name: "array_intersect_uassoc", run: array_intersect_uassoc, by_ref: &[] },
     Builtin { name: "uasort", run: uasort, by_ref: &[0] },
     Builtin { name: "uksort", run: uksort, by_ref: &[0] },
     Builtin { name: "iterator_to_array", run: iterator_to_array, by_ref: &[] },
@@ -226,4 +236,118 @@ fn uasort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn uksort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     user_sort(ctx, args, true, true)
+}
+
+/// The callback variants take their callbacks in `...$rest`, which their
+/// stubs do not type as callable: they are marked as calling back.
+pub(crate) const REENTER: &[&str] = &[
+    "array_udiff", "array_udiff_assoc", "array_udiff_uassoc", "array_diff_ukey", "array_diff_uassoc",
+    "array_uintersect", "array_uintersect_assoc", "array_uintersect_uassoc", "array_intersect_ukey", "array_intersect_uassoc",
+];
+
+/// How an array_*diff / array_*intersect variant compares one part of an
+/// entry (its value or its key).
+enum Compare {
+    /// Not compared.
+    Ignored,
+    /// As strings (the plain variants).
+    Strings,
+    /// With the callback at this argument (0 means equal).
+    User(usize),
+}
+
+/// The callback variants of array_diff/array_intersect: each entry of the
+/// first array is kept when (diff) no other array, or (intersect) every
+/// other array, has an entry equal to it in its value and key as
+/// `values` and `keys` compare them.
+fn user_set(ctx: &mut dyn Ctx, args: &[Value], callbacks: usize, values: Compare, keys: Compare, intersect: bool) -> Result<Value, Throw> {
+    let arrays = args.len().saturating_sub(callbacks);
+    let list: Vec<Rc<PhpArray>> = (0..arrays)
+        .map(|i| match args[i].deref() {
+            Value::Array(a) => a,
+            _ => Rc::new(PhpArray::new()),
+        })
+        .collect();
+    let text = |v: &Value| v.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty);
+    let same = |ctx: &mut dyn Ctx, how: &Compare, a: Value, b: Value| -> Result<bool, Throw> {
+        match how {
+            Compare::Ignored => Ok(true),
+            Compare::Strings => Ok(text(&a) == text(&b)),
+            Compare::User(i) => {
+                let mut pair = [a, b];
+                Ok(ctx.call(&args[*i].deref(), &mut pair)?.to_int() == 0)
+            }
+        }
+    };
+    let mut out = PhpArray::new();
+    let Some(first) = list.first() else { return Ok(Value::Array(Rc::new(out))) };
+    for (k, v) in first.iter() {
+        let mut found_in_all = true;
+        let mut found_in_any = false;
+        for other in &list[1..] {
+            let mut found = false;
+            for (ok, ov) in other.iter() {
+                if same(ctx, &keys, k.to_value(), ok.to_value())? && same(ctx, &values, v.deref(), ov.deref())? {
+                    found = true;
+                    break;
+                }
+            }
+            found_in_all &= found;
+            found_in_any |= found;
+        }
+        if if intersect { found_in_all } else { !found_in_any } {
+            out.insert(k, v.clone());
+        }
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn array_udiff(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::User(n - 1), Compare::Ignored, false)
+}
+
+fn array_udiff_assoc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::User(n - 1), Compare::Strings, false)
+}
+
+fn array_udiff_uassoc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 2, Compare::User(n - 2), Compare::User(n - 1), false)
+}
+
+fn array_diff_ukey(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::Ignored, Compare::User(n - 1), false)
+}
+
+fn array_diff_uassoc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::Strings, Compare::User(n - 1), false)
+}
+
+fn array_uintersect(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::User(n - 1), Compare::Ignored, true)
+}
+
+fn array_uintersect_assoc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::User(n - 1), Compare::Strings, true)
+}
+
+fn array_uintersect_uassoc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 2, Compare::User(n - 2), Compare::User(n - 1), true)
+}
+
+fn array_intersect_ukey(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::Ignored, Compare::User(n - 1), true)
+}
+
+fn array_intersect_uassoc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = args.len();
+    user_set(ctx, args, 1, Compare::Strings, Compare::User(n - 1), true)
 }
