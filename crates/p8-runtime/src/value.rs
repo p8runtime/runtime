@@ -4,9 +4,9 @@
 //! resources join with the class model (milestone M4).
 
 use crate::array::PhpArray;
-use crate::number::{Precision, dval_to_lval, float_to_string};
-use crate::numeric::{Number, leading_numeric, numeric_string};
 use crate::string::PhpStr;
+use crate::numeric::{Number, leading_numeric, numeric_string};
+use crate::number::{Precision, dval_to_lval, float_to_string};
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
@@ -179,20 +179,8 @@ impl Value {
             (Null, Bool(b)) | (Bool(false), Bool(b)) => false.cmp(b),
             (Bool(a), Null) => a.cmp(&false),
             (Bool(true), Bool(b)) => true.cmp(b),
-            (Null, Str(s)) => {
-                if s.is_empty() {
-                    Ordering::Equal
-                } else {
-                    Ordering::Less
-                }
-            }
-            (Str(s), Null) => {
-                if s.is_empty() {
-                    Ordering::Equal
-                } else {
-                    Ordering::Greater
-                }
-            }
+            (Null, Str(s)) => if s.is_empty() { Ordering::Equal } else { Ordering::Less },
+            (Str(s), Null) => if s.is_empty() { Ordering::Equal } else { Ordering::Greater },
             (Str(a), Str(b)) => smart_strcmp(a, b),
             (Bool(a), x) => a.cmp(&x.to_bool()),
             (x, Bool(b)) => x.to_bool().cmp(b),

@@ -32,10 +32,7 @@ fn request(platform: &p8::Platform, isolate: &mut p8::Isolate, source: &str) -> 
 fn output_goes_to_the_host() {
     let platform = platform();
     let mut isolate = platform.new_isolate();
-    assert_eq!(
-        request(&platform, &mut isolate, "<?php echo 1 + 2, \"\\n\";"),
-        (0, "3\n".into())
-    );
+    assert_eq!(request(&platform, &mut isolate, "<?php echo 1 + 2, \"\\n\";"), (0, "3\n".into()));
 }
 
 #[test]
@@ -57,12 +54,7 @@ fn requests_on_one_isolate_share_nothing() {
 fn a_script_compiled_once_runs_in_many_requests() {
     let platform = platform();
     let mut isolate = platform.new_isolate();
-    let script = platform
-        .compile(
-            b"<?php function f($n) { return $n * 2; } echo f(21);",
-            "t.php",
-        )
-        .expect("compiles");
+    let script = platform.compile(b"<?php function f($n) { return $n * 2; } echo f(21);", "t.php").expect("compiles");
     for _ in 0..3 {
         let mut host = Capture::default();
         let status = isolate.new_context(&mut host).run(&script);
@@ -74,24 +66,10 @@ fn a_script_compiled_once_runs_in_many_requests() {
 fn a_failed_request_leaves_the_isolate_usable() {
     let platform = platform();
     let mut isolate = platform.new_isolate();
-    let (status, out) = request(
-        &platform,
-        &mut isolate,
-        "<?php $a = [1, 2]; echo intdiv_missing(1);",
-    );
+    let (status, out) = request(&platform, &mut isolate, "<?php $a = [1, 2]; echo intdiv_missing(1);");
     assert_eq!(status, 255);
-    assert!(
-        out.contains("Call to undefined function intdiv_missing()"),
-        "{out}"
-    );
-    assert_eq!(
-        request(
-            &platform,
-            &mut isolate,
-            "<?php echo isset($a) ? 'leak' : 'clean';"
-        ),
-        (0, "clean".into())
-    );
+    assert!(out.contains("Call to undefined function intdiv_missing()"), "{out}");
+    assert_eq!(request(&platform, &mut isolate, "<?php echo isset($a) ? 'leak' : 'clean';"), (0, "clean".into()));
 }
 
 #[test]
@@ -100,10 +78,7 @@ fn compile_errors_are_reported_as_php_does() {
     let mut isolate = platform.new_isolate();
     let (status, out) = request(&platform, &mut isolate, "<?php echo 1 +;");
     assert_eq!(status, 255);
-    assert!(
-        out.starts_with("\nParse error: ") && out.ends_with(" in t.php on line 1\n"),
-        "{out:?}"
-    );
+    assert!(out.starts_with("\nParse error: ") && out.ends_with(" in t.php on line 1\n"), "{out:?}");
 }
 
 #[test]
@@ -114,12 +89,7 @@ fn a_script_is_shared_by_isolates_on_many_threads() {
 
     let platform = std::sync::Arc::new(platform());
     let script = std::sync::Arc::new(
-        platform
-            .compile(
-                b"<?php function f($n) { return $n < 2 ? $n : f($n - 1) + f($n - 2); } echo f(15);",
-                "t.php",
-            )
-            .expect("compiles"),
+        platform.compile(b"<?php function f($n) { return $n < 2 ? $n : f($n - 1) + f($n - 2); } echo f(15);", "t.php").expect("compiles"),
     );
     let threads: Vec<_> = (0..4)
         .map(|_| {
@@ -144,22 +114,14 @@ fn what_a_request_resolves_is_not_cached_for_the_next() {
     // hand the second request the first one's).
     let platform = platform();
     let mut isolate = platform.new_isolate();
-    let script = platform
-        .compile(
-            b"<?php define('C', hrtime(true)); echo C === hrtime(true) ? '' : C;",
-            "t.php",
-        )
-        .expect("compiles");
+    let script = platform.compile(b"<?php define('C', hrtime(true)); echo C === hrtime(true) ? '' : C;", "t.php").expect("compiles");
     let mut outputs = Vec::new();
     for _ in 0..2 {
         let mut host = Capture::default();
         assert_eq!(isolate.new_context(&mut host).run(&script), 0);
         outputs.push(host.0);
     }
-    assert_ne!(
-        outputs[0], outputs[1],
-        "the second request saw the first request's constant"
-    );
+    assert_ne!(outputs[0], outputs[1], "the second request saw the first request's constant");
 }
 
 /// Run `source` while another thread interrupts it after 50 ms.
@@ -167,9 +129,7 @@ fn interrupted(source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, Strin
     let platform = platform();
     let mut isolate = platform.new_isolate();
     let handle = isolate.interrupt_handle();
-    let script = platform
-        .compile(source.as_bytes(), "t.php")
-        .expect("compiles");
+    let script = platform.compile(source.as_bytes(), "t.php").expect("compiles");
     let watchdog = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(50));
         interrupt(&handle);
@@ -184,32 +144,18 @@ fn interrupted(source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, Strin
 fn a_watchdog_stops_a_loop_running_in_the_fast_path() {
     let (status, out, _) = interrupted("<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
     assert_eq!(status, 255);
-    assert_eq!(
-        out,
-        "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\n"
-    );
+    assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\n");
 }
 
 #[test]
 fn a_watchdog_stops_loops_and_recursion_outside_the_fast_path() {
-    let (status, out, _) = interrupted("<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| {
-        h.timeout(30)
-    });
-    assert_eq!(
-        (status, out.as_str()),
-        (
-            255,
-            "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\n"
-        )
-    );
+    let (status, out, _) = interrupted("<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
+    assert_eq!((status, out.as_str()), (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\n"));
 
     let source = "<?php\nfunction f($n) { return $n < 1 ? 0 : f($n - 1) + f($n - 1); }\nf(60);";
     let (status, out, _) = interrupted(source, |h| h.terminate());
     assert_eq!(status, 255);
-    assert!(
-        out.starts_with("\nFatal error: Execution was terminated by the host in t.php on line 2"),
-        "{out:?}"
-    );
+    assert!(out.starts_with("\nFatal error: Execution was terminated by the host in t.php on line 2"), "{out:?}");
 }
 
 #[test]
@@ -217,12 +163,5 @@ fn an_interrupted_isolate_runs_the_next_request() {
     let (status, _, mut isolate) = interrupted("<?php while (true) {}", |h| h.terminate());
     assert_eq!(status, 255);
     let platform = platform();
-    assert_eq!(
-        request(
-            &platform,
-            &mut isolate,
-            "<?php for ($i = 0; $i < 3; $i++) echo $i;"
-        ),
-        (0, "012".into())
-    );
+    assert_eq!(request(&platform, &mut isolate, "<?php for ($i = 0; $i < 3; $i++) echo $i;"), (0, "012".into()));
 }

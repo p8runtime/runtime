@@ -22,8 +22,7 @@ fn main() {
         }
     };
     let platform = p8::Platform::new(&[p8::extensions::STANDARD]);
-    let file =
-        std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned());
+    let file = std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned());
     if dump {
         match platform.compile(&source, &file) {
             Ok(script) => print!("{}", platform.disassemble(&script)),
@@ -39,10 +38,7 @@ fn main() {
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
             let mut isolate = platform.new_isolate();
-            let mut stdout = Stdout(std::io::BufWriter::with_capacity(
-                64 * 1024,
-                std::io::stdout(),
-            ));
+            let mut stdout = Stdout(std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()));
             let mut context = isolate.new_context(&mut stdout);
             match platform.compile(&source, &file) {
                 Ok(script) => context.run(&script),

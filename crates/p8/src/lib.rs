@@ -42,16 +42,12 @@ pub struct Platform {
 
 impl Platform {
     pub fn new(extensions: &[Extension]) -> Platform {
-        Platform {
-            registry: Arc::new(Registry::new(extensions)),
-        }
+        Platform { registry: Arc::new(Registry::new(extensions)) }
     }
 
     /// An engine for the calling thread.
     pub fn new_isolate(&self) -> Isolate {
-        Isolate {
-            inner: p8_interp::Isolate::new(Arc::clone(&self.registry)),
-        }
+        Isolate { inner: p8_interp::Isolate::new(Arc::clone(&self.registry)) }
     }
 
     /// Compile a file's source.
@@ -61,25 +57,12 @@ impl Platform {
         let mut parser = p8_syntax::parser::Parser::new(lexer, &arena);
         let program = parser.parse_program();
         if let Some(error) = program.errors.first() {
-            let line = error
-                .span
-                .line_info(source)
-                .map_or(1, |info| info.line as u32);
-            return Err(Error {
-                kind: ErrorKind::Parse,
-                message: error.message.to_string(),
-                file: file.into(),
-                line,
-            });
+            let line = error.span.line_info(source).map_or(1, |info| info.line as u32);
+            return Err(Error { kind: ErrorKind::Parse, message: error.message.to_string(), file: file.into(), line });
         }
         match p8_compiler::Compiler::new(source, file, &self.registry).compile(program.statements) {
             Ok(program) => Ok(Script { program }),
-            Err(e) => Err(Error {
-                kind: ErrorKind::Fatal,
-                message: e.message,
-                file: file.into(),
-                line: e.line,
-            }),
+            Err(e) => Err(Error { kind: ErrorKind::Fatal, message: e.message, file: file.into(), line: e.line }),
         }
     }
 
@@ -141,9 +124,7 @@ impl Isolate {
     /// Start a request whose output goes to `host`. The context borrows the
     /// isolate until it is dropped, which ends the request.
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
-        Context {
-            inner: self.inner.new_context(host),
-        }
+        Context { inner: self.inner.new_context(host) }
     }
 }
 
@@ -157,8 +138,7 @@ impl Context<'_> {
     pub fn run(&mut self, script: &Script) -> i32 {
         for f in &script.program.functions {
             if let Err(message) = self.inner.declare(Arc::clone(f)) {
-                self.inner
-                    .echo_and_flush(format!("\nFatal error: {message} in {}\n", f.file).as_bytes());
+                self.inner.echo_and_flush(format!("\nFatal error: {message} in {}\n", f.file).as_bytes());
                 return 255;
             }
         }
@@ -171,10 +151,7 @@ impl Context<'_> {
             ErrorKind::Parse => "Parse error",
             ErrorKind::Fatal => "Fatal error",
         };
-        let text = format!(
-            "\n{label}: {} in {} on line {}\n",
-            error.message, error.file, error.line
-        );
+        let text = format!("\n{label}: {} in {} on line {}\n", error.message, error.file, error.line);
         self.inner.echo_and_flush(text.as_bytes());
         255
     }

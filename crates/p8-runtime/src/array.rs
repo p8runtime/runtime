@@ -4,9 +4,9 @@
 //! kept. Arrays are values: `Rc<PhpArray>` is shared until written
 //! (`Rc::make_mut`). Key rules follow zend_hash.c / zend_operators.c.
 
-use crate::number::dval_to_lval;
 use crate::string::PhpStr;
 use crate::value::Value;
+use crate::number::dval_to_lval;
 use hashbrown::HashTable;
 use std::cmp::Ordering;
 
@@ -45,8 +45,7 @@ impl Key {
             Value::Null | Value::Undef => (Key::Str(PhpStr::empty()), None),
             Value::Bool(b) => (Key::Int(i64::from(*b)), None),
             Value::Float(f) => {
-                let issue =
-                    (f.fract() != 0.0 || !f.is_finite()).then_some(KeyIssue::LosesPrecision(*f));
+                let issue = (f.fract() != 0.0 || !f.is_finite()).then_some(KeyIssue::LosesPrecision(*f));
                 (Key::Int(dval_to_lval(*f)), issue)
             }
             Value::Array(_) => return Err(KeyIssue::Illegal("array")),
@@ -108,9 +107,7 @@ impl Hashed {
     fn find(&self, key: &Key) -> Option<usize> {
         let entries = &self.entries;
         self.index
-            .find(key.hash(), |&i| {
-                entries[i].as_ref().is_some_and(|(k, _)| k == key)
-            })
+            .find(key.hash(), |&i| entries[i].as_ref().is_some_and(|(k, _)| k == key))
             .copied()
     }
 
@@ -130,9 +127,7 @@ impl Hashed {
         let entries = &self.entries;
         let found = self
             .index
-            .find_entry(hash, |&i| {
-                entries[i].as_ref().is_some_and(|(k, _)| k == key)
-            })
+            .find_entry(hash, |&i| entries[i].as_ref().is_some_and(|(k, _)| k == key))
             .ok()?;
         let (i, _) = found.remove();
         self.live -= 1;
@@ -145,10 +140,7 @@ impl Hashed {
     }
 
     fn compact(&mut self) {
-        let entries: Vec<(Key, Value)> = std::mem::take(&mut self.entries)
-            .into_iter()
-            .flatten()
-            .collect();
+        let entries: Vec<(Key, Value)> = std::mem::take(&mut self.entries).into_iter().flatten().collect();
         *self = Hashed::default();
         for (k, v) in entries {
             self.insert_new(k, v);
@@ -172,19 +164,13 @@ impl Default for PhpArray {
 
 impl PhpArray {
     pub fn new() -> Self {
-        PhpArray {
-            storage: Storage::Packed(Vec::new()),
-            next_free: None,
-        }
+        PhpArray { storage: Storage::Packed(Vec::new()), next_free: None }
     }
 
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
-        PhpArray {
-            storage: Storage::Packed(values),
-            next_free,
-        }
+        PhpArray { storage: Storage::Packed(values), next_free }
     }
 
     pub fn len(&self) -> usize {
@@ -202,10 +188,7 @@ impl PhpArray {
     pub fn is_list(&self) -> bool {
         match &self.storage {
             Storage::Packed(_) => true,
-            Storage::Hashed(_) => self
-                .iter()
-                .enumerate()
-                .all(|(i, (k, _))| k == Key::Int(i as i64)),
+            Storage::Hashed(_) => self.iter().enumerate().all(|(i, (k, _))| k == Key::Int(i as i64)),
         }
     }
 
@@ -215,9 +198,7 @@ impl PhpArray {
                 Key::Int(i) if *i >= 0 => v.get(*i as usize),
                 _ => None,
             },
-            Storage::Hashed(h) => h
-                .find(key)
-                .and_then(|i| h.entries[i].as_ref().map(|(_, v)| v)),
+            Storage::Hashed(h) => h.find(key).and_then(|i| h.entries[i].as_ref().map(|(_, v)| v)),
         }
     }
 
@@ -226,9 +207,7 @@ impl PhpArray {
     pub fn get_int(&self, i: i64) -> Option<&Value> {
         match &self.storage {
             Storage::Packed(v) => usize::try_from(i).ok().and_then(|i| v.get(i)),
-            Storage::Hashed(h) => h
-                .find(&Key::Int(i))
-                .and_then(|i| h.entries[i].as_ref().map(|(_, v)| v)),
+            Storage::Hashed(h) => h.find(&Key::Int(i)).and_then(|i| h.entries[i].as_ref().map(|(_, v)| v)),
         }
     }
 
@@ -340,12 +319,9 @@ impl PhpArray {
     pub fn entry_at(&self, pos: usize) -> Option<(usize, Key, &Value)> {
         match &self.storage {
             Storage::Packed(v) => v.get(pos).map(|x| (pos, Key::Int(pos as i64), x)),
-            Storage::Hashed(h) => h
-                .entries
-                .get(pos..)?
-                .iter()
-                .enumerate()
-                .find_map(|(i, e)| e.as_ref().map(|(k, v)| (pos + i, k.clone(), v))),
+            Storage::Hashed(h) => h.entries.get(pos..)?.iter().enumerate().find_map(|(i, e)| {
+                e.as_ref().map(|(k, v)| (pos + i, k.clone(), v))
+            }),
         }
     }
 
@@ -355,9 +331,7 @@ impl PhpArray {
             Storage::Packed(v) => (Some(v), None),
             Storage::Hashed(h) => (None, Some(h)),
         };
-        let packed = packed
-            .into_iter()
-            .flat_map(|v| v.iter().enumerate().map(|(i, x)| (Key::Int(i as i64), x)));
+        let packed = packed.into_iter().flat_map(|v| v.iter().enumerate().map(|(i, x)| (Key::Int(i as i64), x)));
         let hashed = hashed
             .into_iter()
             .flat_map(|h| h.entries.iter().flatten().map(|(k, v)| (k.clone(), v)));
@@ -371,10 +345,7 @@ impl PhpArray {
     /// `===`: the same pairs in the same order, identical values.
     pub fn identical(&self, other: &PhpArray) -> bool {
         self.len() == other.len()
-            && self
-                .iter()
-                .zip(other.iter())
-                .all(|((ka, va), (kb, vb))| ka == kb && va.identical(vb))
+            && self.iter().zip(other.iter()).all(|((ka, va), (kb, vb))| ka == kb && va.identical(vb))
     }
 
     /// zend_compare_arrays: by count, then by the left's keys in order;
@@ -411,19 +382,10 @@ mod tests {
         assert_eq!(k("0"), Key::Int(0));
         assert_eq!(k("012"), Key::Str(PhpStr::from("012")));
         assert_eq!(k("-0"), Key::Str(PhpStr::from("-0")));
-        assert_eq!(
-            k("9223372036854775808"),
-            Key::Str(PhpStr::from("9223372036854775808"))
-        );
-        assert_eq!(
-            Key::from_value(&Value::Float(1.5)),
-            Ok((Key::Int(1), Some(KeyIssue::LosesPrecision(1.5))))
-        );
+        assert_eq!(k("9223372036854775808"), Key::Str(PhpStr::from("9223372036854775808")));
+        assert_eq!(Key::from_value(&Value::Float(1.5)), Ok((Key::Int(1), Some(KeyIssue::LosesPrecision(1.5)))));
         assert_eq!(Key::from_value(&Value::Bool(true)), Ok((Key::Int(1), None)));
-        assert_eq!(
-            Key::from_value(&Value::Null),
-            Ok((Key::Str(PhpStr::empty()), None))
-        );
+        assert_eq!(Key::from_value(&Value::Null), Ok((Key::Str(PhpStr::empty()), None)));
     }
 
     #[test]
@@ -435,10 +397,7 @@ mod tests {
         a.insert(Key::Str(PhpStr::from("x")), int(3));
         a.insert(Key::Int(0), int(9));
         let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
-        assert_eq!(
-            keys,
-            vec![Key::Int(0), Key::Int(1), Key::Str(PhpStr::from("x"))]
-        );
+        assert_eq!(keys, vec![Key::Int(0), Key::Int(1), Key::Str(PhpStr::from("x"))]);
         assert_eq!(a.get(&Key::Int(0)).map(Value::to_int), Some(9));
     }
 
