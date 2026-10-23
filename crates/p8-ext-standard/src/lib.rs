@@ -20,6 +20,7 @@ mod info;
 mod random;
 mod scan;
 mod spl;
+mod spl_iter;
 mod json;
 mod serial;
 mod class;
@@ -101,6 +102,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(datetime::BUILTINS);
     registry.add_functions(spl::BUILTINS);
     registry.add_classes(spl::CLASSES);
+    registry.add_classes(spl_iter::CLASSES);
     registry.mark_reenters(spl::REENTER);
     registry.add_classes(datetime::CLASSES);
     registry.add_functions(serial::BUILTINS);

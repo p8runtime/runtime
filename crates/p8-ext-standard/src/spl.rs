@@ -26,25 +26,25 @@ const PUBLIC: Visibility = Visibility::Public;
 // Helpers
 
 /// The slot of the property `name` (the class's own, or inherited).
-fn slot(o: &Object, name: &str) -> Option<usize> {
+pub(crate) fn slot(o: &Object, name: &str) -> Option<usize> {
     o.class.properties.iter().position(|p| p.name.as_bytes() == name.as_bytes())
 }
 
-fn get(o: &Object, name: &str) -> Value {
+pub(crate) fn get(o: &Object, name: &str) -> Value {
     slot(o, name).map_or(Value::Null, |i| o.slots.borrow()[i].deref())
 }
 
-fn set(o: &Object, name: &str, v: Value) {
+pub(crate) fn set(o: &Object, name: &str, v: Value) {
     if let Some(i) = slot(o, name) {
         o.slots.borrow_mut()[i] = v;
     }
 }
 
-fn int(o: &Object, name: &str) -> i64 {
+pub(crate) fn int(o: &Object, name: &str) -> i64 {
     get(o, name).to_int()
 }
 
-fn array_of(v: Value) -> PhpArray {
+pub(crate) fn array_of(v: Value) -> PhpArray {
     match v {
         Value::Array(a) => Rc::unwrap_or_clone(a),
         _ => PhpArray::new(),
@@ -68,7 +68,7 @@ fn shown_key(k: &Key) -> String {
 
 /// A method of `this` by name, through the engine and whatever its
 /// visibility (a subclass may override it: SplHeap::compare is protected).
-fn call_this(ctx: &mut dyn Ctx, this: &Rc<Object>, name: &str, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn call_this(ctx: &mut dyn Ctx, this: &Rc<Object>, name: &str, args: &mut [Value]) -> Result<Value, Throw> {
     let callee = p8_runtime::reflect::Callee::Method(Rc::clone(&this.class), PhpStr::from(name));
     ctx.invoke(&callee, Some(Rc::clone(this)), args)
 }

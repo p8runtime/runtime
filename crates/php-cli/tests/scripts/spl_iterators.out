@@ -1,0 +1,44 @@
+a=1 b=2 c=3 d=4 e=5 
+a=1 c=3 e=5 
+c=3 d=4 e=5 
+b=2 c=3 d=4 
+int(14)
+int(4)
+Cannot seek to 0 which is below the offset 2
+x, y, z
+array(2) {
+  ["p"]=>
+  int(1)
+  ["q"]=>
+  int(2)
+}
+int(2)
+int(2)
+23
+12121
+0=1(0) 1=2(0) 0=3(2) 
+Accessing the value of an EmptyIterator
+a=1 c=2 e=3 f=4 
+a=1
+b
+ c=2
+ d
+  e=3
+f=4
+a c e d b f 
+a b f 
+int(0)
+[begin]1<2<3>>4[end]
+b 
+c=2 e=3 f=4 
+g1=1 g2=2 
+array(2) {
+  [1]=>
+  int(6)
+  [2]=>
+  int(7)
+}
+IteratorIterator Object
+(
+)
+
