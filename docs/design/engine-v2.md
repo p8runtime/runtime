@@ -1,6 +1,7 @@
-# Engine v2: a correct, safe and fast core
+# p8: a correct, safe and fast PHP engine
 
-Status: proposed (decisions taken by Sami, 22 Oct 2026; details open for review)
+Status: proposed (decisions taken by Sami, 22 Oct 2026; details open for review).
+The new core was called "engine v2" while it was being built; its name is **p8**.
 
 ## Why
 
@@ -40,6 +41,13 @@ build, no JIT) and **fast** (at or better than PHP 8.4 without JIT on
    checks and name resolution, generated tables (signatures, constants, ini),
    builtin semantics, systemlib (SPL in PHP). Fixes inside the old engine's
    internals stop.
+4. **p8 is an embeddable engine, driven by hosts** (V8's model, and Simien's
+   split over V8): a backend of p8 crates behind one public API (Platform,
+   Isolate, Context, Script, Extension, Host), and frontends that drive it:
+   a drop-in `php` CLI and an HTTP server that needs nothing in front of it,
+   with warm isolates across cores. V8's names are used internally. No JIT
+   now; the design leaves room for one. See "p8: the engine, and the hosts
+   that drive it".
 
 ## Lessons taken, and from where
 
@@ -151,6 +159,8 @@ stateDiagram-v2
     AddIntInt --> Add: guard fails (overflow, other type)
 ```
 
+(Superseded by "Shared code, per-context state" below: a `Script` is
+shared across isolates, so instructions are not rewritten in place.)
 The instruction stream sits in `Cell`s, so rewriting needs no `unsafe`. A
 specialized instruction always checks its guard; correctness never depends on
 the specialization being right.
@@ -215,6 +225,130 @@ builtin's callback, which needs a separate native stack in C. Options (to be
 decided at that milestone): make callback-taking builtins resumable
 interpreter frames, or restrict suspension points with PHP's error when it
 cannot. No `unsafe` either way.
+
+## p8: the engine, and the hosts that drive it
+
+The new core is called **p8**, after V8. Like V8 it is an engine you embed:
+it knows nothing about sockets, terminals or files on its own. Programs that
+use it (the **hosts**) drive it through one public API. php-rs's own hosts
+are a drop-in `php` CLI and an HTTP server that needs nothing in front of it.
+
+The split is the one Simien already has over V8: the runtime is thousands of
+lines of hosting (accept loop, isolate pool, watchdog, metrics), and the
+engine's complexity stays behind a small API.
+
+```mermaid
+flowchart LR
+    subgraph front[hosts — php-rs]
+        cli[php<br/>drop-in CLI]
+        serve[php serve<br/>HTTP, warm isolate pool,<br/>watchdog, metrics]
+        test[php-test<br/>php-src runner]
+    end
+    subgraph p8[p8 — the engine]
+        api[p8<br/>public API]
+        subgraph internal[internal crates, not re-exported]
+            syntax[p8-syntax] --> compiler[p8-compiler] --> bytecode[p8-bytecode]
+            bytecode --> interp[p8-interp]
+            runtime[p8-runtime<br/>values, arrays, objects] --- interp
+            ext[p8-ext-*<br/>builtins]
+        end
+        api --> internal
+    end
+    cli --> api
+    serve --> api
+    test --> api
+```
+
+### Names
+
+We use V8's names internally, so the code says what it means.
+
+| p8 | is | V8 | PHP |
+|---|---|---|---|
+| **Platform** | process-wide: the script cache, the registered extensions, shared immutable tables | `v8::Platform` | the module startup (MINIT) |
+| **Isolate** | one engine on one thread: its limits, its interrupt handle, per-thread caches; runs one context at a time | `v8::Isolate` | one FPM worker, as a thread |
+| **Context** | one request: globals and superglobals, declared functions, classes and constants, output, headers, the feedback vectors; dropping it ends the request | `v8::Context` | request startup and shutdown (RINIT/RSHUTDOWN) |
+| **Script** | a compiled file: immutable bytecode, `Send + Sync`, compiled once per process | `v8::Script` / `UnboundScript` | an opcache entry |
+| **Feedback vector** | per function per context: call-site resolutions, type feedback, counts | `FeedbackVector` | runtime cache slots |
+| **Snapshot** | a context after boot (framework loaded), cloned for each request | startup snapshot | preloading |
+| **Extension** | how builtins register functions, classes, constants and ini | `v8::Extension` | a PHP extension, in safe Rust |
+| **Host** | the embedder: I/O, request data, output, file access | the embedder | the SAPI |
+
+### The API
+
+```rust
+let platform = p8::Platform::new(p8::extensions::standard());   // once per process
+let mut isolate = p8::Isolate::new(&platform, limits);          // once per thread
+let stop = isolate.interrupt_handle();                          // Send: the watchdog's
+let script = platform.compile(path)?;                           // cached, Arc<Script>
+let mut ctx = isolate.new_context(&mut request);                // request: impl p8::Host
+ctx.run(&script)?;                                              // drop ctx = request over
+```
+
+- **Hosts see only `p8`.** The internal crates are not re-exported, so the
+  compiler stops a host from reaching into them. The interpreter can be
+  rewritten, or a JIT added, without touching a host.
+- **The engine does no I/O.** Output, headers, `$_SERVER`, includes, file and
+  network access go through the `Host` trait the embedder implements. The host
+  decides where output goes and which files a script may open, which is where
+  Simien-style permissions come in.
+- **Isolates are `!Send` by construction.** Values use `Rc`, so the compiler
+  refuses to move an isolate between threads or share it; V8 needs a runtime
+  `Locker` for the same guarantee.
+- **Interrupts.** `interrupt_handle()` is an `Arc<AtomicBool>` the
+  interpreter reads on backward jumps and calls. The host's watchdog sets it
+  to stop a request (`max_execution_time`, a stuck loop) without killing the
+  isolate. `memory_limit` is counted per context.
+
+### Hosts
+
+```mermaid
+flowchart LR
+    accept[accept thread] -- least queued --> q0[inbox] --> i0[isolate 0]
+    accept --> q1[inbox] --> i1[isolate 1]
+    accept --> qn[inbox] --> in[isolate N]
+    cache[(Platform:<br/>Script cache)] -.shared.-> i0 & i1 & in
+    wd[watchdog] -. interrupt .-> i0 & i1 & in
+```
+
+`php serve` follows Simien's server: an accept thread hands each connection
+to the least busy isolate; each isolate lives on its own thread; a watchdog
+interrupts requests that run too long. One difference matters: a Simien
+isolate serves many connections at once on its event loop, while PHP code
+blocks its thread (a database query, `sleep`). So `php serve` keeps **many
+warm isolates per core** (the php-fpm worker count, as threads: no fork, and
+compiled code shared safely). p8 isolates are small (no heap reservation),
+so hundreds stay warm. If async (fibers on an event loop) comes later, one
+isolate interleaves requests and fewer are needed; the API does not change.
+
+The hosts and Simien's will share more over time (one host crate that drives
+either engine). Not now: first a solid p8.
+
+### Shared code, per-context state
+
+A `Script` is shared by every isolate on every core, so it must not change
+after compiling. Two things in today's code change and move out:
+
+- **Call-site caches** (today a `OnceCell` in the `Site`) move into the
+  context's **feedback vector**, indexed by site. A resolution is per request
+  anyway: functions and classes are declared per request.
+- **Self-specializing instructions** (the `Cell`-rewritten stream above) are
+  dropped: rewriting shared code would need it copied per isolate. The
+  interpreter's fast loop checks operand types inline instead (measured on
+  `bench.php`), and type feedback goes into the feedback vector, where a
+  later tier can use it.
+
+Constants in a `Script` are stored frozen (`Send + Sync` forms of strings and
+arrays) and become `Value`s when a context first uses them.
+
+### Ready for a JIT later
+
+No JIT now, and not a single `unsafe` in p8. The design keeps the door open
+the way V8's tiers do: `p8-bytecode` is the contract (versioned and
+verified), feedback vectors carry the types and call counts a compiler tier
+would read, and frames are plain register windows a tier can share. A JIT
+would be its own optional crate behind the `p8` API, and its use of
+`unsafe` a decision for Sami.
 
 ## Gates
 
