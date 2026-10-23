@@ -1,0 +1,42 @@
+__call foo(1,2)
+__call hidden()
+__callStatic bar(5)
+__call viaSelf(1)
+__call viaStatic(2)
+__call viaName(3)
+string(3) "FOO"
+string(6) "HIDDEN"
+string(3) "bar"
+array(3) {
+  [0]=>
+  string(7) "VIASELF"
+  [1]=>
+  string(9) "VIASTATIC"
+  [2]=>
+  string(7) "VIANAME"
+}
+__call cb(x)
+__callStatic scb(y)
+__callStatic scb2()
+string(2) "CB"
+string(3) "scb"
+string(4) "scb2"
+__call mapped(1)
+__call mapped(2)
+array(2) {
+  [0]=>
+  string(6) "MAPPED"
+  [1]=>
+  string(6) "MAPPED"
+}
+bool(true)
+bool(true)
+__call missing(4)
+string(7) "MISSING"
+__call firstClass(9)
+string(10) "FIRSTCLASS"
+Call to undefined method N::nope()
+Call to undefined method N::nope()
+Call to undefined method OnlyCall::stat()
+string(1) "g"
+int(3)

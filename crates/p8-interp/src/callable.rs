@@ -28,6 +28,8 @@ pub(crate) struct ClosureData {
     pub called: Option<Rc<Class>>,
     /// `use` values (references for `&$x`), in the function's `bound` order.
     pub captured: RefCell<Vec<Value>>,
+    /// A Closure of a __call / __callStatic trampoline: the method name.
+    pub trampoline: Option<PhpStr>,
 }
 
 /// The closure data of a Closure object.
@@ -76,7 +78,7 @@ impl Context<'_> {
             Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called.clone()),
             None => (None, None, None),
         };
-        let data = ClosureData { func: Ok(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()) };
+        let data = ClosureData { func: Ok(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None };
         let class = Rc::clone(&self.classes[b"closure".as_slice()]);
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
@@ -91,6 +93,7 @@ impl Context<'_> {
                 scope: data.scope.clone(),
                 called: data.called.clone(),
                 captured: data.captured.borrow().clone(),
+                trampoline: data.trampoline.clone(),
             }),
             Err(builtin) => Target::Builtin(*builtin),
         })
@@ -140,6 +143,7 @@ impl Context<'_> {
             scope,
             called,
             captured: RefCell::new(data.captured.borrow().clone()),
+            trampoline: data.trampoline.clone(),
         };
         Ok(self.new_closure(copy))
     }
@@ -159,14 +163,16 @@ impl Context<'_> {
                 scope: None,
                 called: None,
                 captured: RefCell::new(Vec::new()),
+                trampoline: None,
             },
-            Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, captured }) => ClosureData {
+            Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, captured, trampoline }) => ClosureData {
                 func: Ok(func),
                 is_static: this.is_none(),
                 this,
                 scope,
                 called,
                 captured: RefCell::new(captured),
+                trampoline,
             },
             Target::Frame(MethodFrame { func: Code::Native(_), .. }) => {
                 return Err(self.throw("Error", "Cannot make a closure of a builtin class's method yet"));
@@ -214,7 +220,7 @@ impl Context<'_> {
         let lower = name.to_ascii_lowercase();
         if let Some(&f) = self.functions.get(&lower) {
             let func = Rc::clone(&self.closures[f as usize]);
-            return Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new() }));
+            return Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None }));
         }
         match self.isolate.registry.lookup(&lower) {
             Some(i) => Ok(Target::Builtin(i)),
@@ -227,6 +233,9 @@ impl Context<'_> {
         let class = class.strip_prefix(b"\\").unwrap_or(class);
         let target = self.find_class(class)?;
         let Some(method) = target.method(lower).cloned() else {
+            if let Some(m) = self.static_magic_call(&target, display) {
+                return Ok(Target::Frame(m));
+            }
             return Err(self.throw("Error", format!("Call to undefined method {}::{}()", target.name.to_string_lossy(), text(display))));
         };
         let this = self.frames.last().and_then(|f| f.this.clone()).filter(|t| t.class.is_a(&target.lower));
@@ -309,7 +318,13 @@ impl Context<'_> {
         self.run_nested_at(regs, m, args, at)
     }
 
-    fn run_nested_at(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value], at: usize) -> Result<Value, Throw> {
+    fn run_nested_at(&mut self, regs: &mut Vec<Value>, mut m: MethodFrame, args: &mut [Value], at: usize) -> Result<Value, Throw> {
+        // __call / __callStatic: the arguments become (name, [arguments]).
+        if let Some(name) = m.trampoline.take() {
+            let packed: Vec<Value> = args.iter().map(Value::deref).collect();
+            let mut repacked = [Value::Str(name), Value::Array(Rc::new(p8_runtime::array::PhpArray::from_list(packed)))];
+            return self.run_nested_at(regs, m, &mut repacked, at);
+        }
         // Each nested run takes native stack: stop before it runs out.
         let here = 0u8;
         let depth = self.stack_base.saturating_sub(std::ptr::addr_of!(here) as usize);

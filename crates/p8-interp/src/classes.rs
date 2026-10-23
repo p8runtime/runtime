@@ -36,11 +36,15 @@ pub(crate) struct MethodFrame {
     pub called: Option<Rc<Class>>,
     /// A closure's captured values, for its `bound` registers.
     pub captured: Vec<Value>,
+    /// A call of a method that is not there (or not callable from here)
+    /// going to __call / __callStatic: its name; the call's arguments are
+    /// handed over as (name, [arguments]).
+    pub trampoline: Option<PhpStr>,
 }
 
 impl MethodFrame {
     pub(crate) fn method(func: Code, this: Option<Rc<Object>>, scope: Rc<Class>, called: Rc<Class>) -> MethodFrame {
-        MethodFrame { func, this, scope: Some(scope), called: Some(called), captured: Vec::new() }
+        MethodFrame { func, this, scope: Some(scope), called: Some(called), captured: Vec::new(), trampoline: None }
     }
 }
 
@@ -605,6 +609,9 @@ impl Context<'_> {
         };
         let class = Rc::clone(&object.class);
         let Some(method) = class.method(lower).cloned() else {
+            if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
+                return Ok(m);
+            }
             return Err(self.throw(
                 "Error",
                 format!("Call to undefined method {}::{}()", text(&class.name), String::from_utf8_lossy(display)),
@@ -612,6 +619,9 @@ impl Context<'_> {
         };
         let declaring = self.declaring(&class, &method.declaring);
         if !visible(method.visibility, &declaring, self.scope().0.as_deref()) {
+            if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
+                return Ok(m);
+            }
             return Err(self.throw(
                 "Error",
                 format!("Call to {} method {}::{}() from {}", method.visibility.word(), text(&class.name), text(&method.name), self.scope_name()),
@@ -631,6 +641,9 @@ impl Context<'_> {
     pub(crate) fn static_frame(&mut self, func: &Function, class: u16, lower: &[u8], display: &[u8], w: &[Value]) -> Result<MethodFrame, Throw> {
         let target = self.class_of(func, class, w)?;
         let Some(method) = target.method(lower).cloned() else {
+            if let Some(m) = self.static_magic_call(&target, display) {
+                return Ok(m);
+            }
             return Err(self.throw(
                 "Error",
                 format!("Call to undefined method {}::{}()", text(&target.name), String::from_utf8_lossy(display)),
@@ -639,6 +652,9 @@ impl Context<'_> {
         let declaring = self.declaring(&target, &method.declaring);
         let (scope, called) = self.scope();
         if !visible(method.visibility, &declaring, scope.as_deref()) {
+            if let Some(m) = self.static_magic_call(&target, display) {
+                return Ok(m);
+            }
             return Err(self.throw(
                 "Error",
                 format!("Call to {} method {}::{}() from {}", method.visibility.word(), text(&target.name), text(&method.name), self.scope_name()),
@@ -667,6 +683,31 @@ impl Context<'_> {
                 format!("Non-static method {}::{}() cannot be called statically", text(&method.declaring_name), text(&method.name)),
             )),
         }
+    }
+
+    /// `C::name()` with no such method callable: __call when the caller's
+    /// `$this` is a C and C has it, else __callStatic.
+    pub(crate) fn static_magic_call(&self, target: &Rc<Class>, display: &[u8]) -> Option<MethodFrame> {
+        let this = self.frames.last().and_then(|f| f.this.clone()).filter(|t| t.class.is_a(&target.lower));
+        if let Some(this) = this
+            && let Some(m) = self.magic_call(target, Some(this), display, false)
+        {
+            return Some(m);
+        }
+        self.magic_call(target, None, display, true)
+    }
+
+    /// The __call (or, `is_static`, __callStatic) frame for a call of
+    /// `display` on `class`, if it has one.
+    pub(crate) fn magic_call(&self, class: &Rc<Class>, this: Option<Rc<Object>>, display: &[u8], is_static: bool) -> Option<MethodFrame> {
+        let name: &[u8] = if is_static { b"__callstatic" } else { b"__call" };
+        let method = class.method(name)?.clone();
+        let declaring = self.declaring(class, &method.declaring);
+        let called = this.as_ref().map(|t| Rc::clone(&t.class)).unwrap_or_else(|| Rc::clone(class));
+        let this = if is_static { None } else { this };
+        let mut m = MethodFrame::method(self.code_of(&method), this, declaring, called);
+        m.trampoline = Some(PhpStr::from(display));
+        Some(m)
     }
 
     /// The declared slot (or None: dynamic) of property `name` on
@@ -1020,7 +1061,7 @@ impl Context<'_> {
     /// Run a constant expression's code in `scope`.
     fn run_thunk(&mut self, regs: &mut Vec<Value>, thunk: &Thunk, scope: Rc<Class>) -> Result<Value, Throw> {
         let func = thunk.0.downcast_ref::<Arc<Function>>().expect("a constant expression's code");
-        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func))), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new() };
+        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func))), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None };
         // The caller is at the instruction that needs the value (its line
         // is where an error in the code is reported).
         let (pc, saved) = (self.pc, self.frames.last().map(|f| f.pc));
