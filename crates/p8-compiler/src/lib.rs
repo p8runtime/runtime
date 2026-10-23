@@ -113,6 +113,13 @@ impl FnBuilder {
         }
     }
 
+    /// Point every jump in `jumps` at `target`.
+    fn patch_all(&mut self, jumps: Vec<usize>, target: u32) {
+        for at in jumps {
+            self.patch(at, target);
+        }
+    }
+
     fn cv(&mut self, name: &[u8]) -> Reg {
         let next = self.cvs.len();
         let index = *self.cvs.entry(name.to_vec()).or_insert(next);
@@ -416,11 +423,11 @@ impl<'src> Compiler<'src> {
                 match else_block {
                     Some(else_block) => {
                         let end = f.emit(Instr::Jump { target: 0 });
-                        f.patch(skip, f.here());
+                        f.patch_all(skip, f.here());
                         self.stmts(f, else_block)?;
                         f.patch(end, f.here());
                     }
-                    None => f.patch(skip, f.here()),
+                    None => f.patch_all(skip, f.here()),
                 }
             }
             Stmt::While { condition, body, .. } => {
@@ -431,7 +438,7 @@ impl<'src> Compiler<'src> {
                 let cond_at = f.here();
                 f.patch(to_cond, cond_at);
                 let back = self.branch(f, condition, true)?;
-                f.patch(back, body_start);
+                f.patch_all(back, body_start);
                 f.temps = f.floor;
                 self.close_loop(f, cond_at);
             }
@@ -441,7 +448,7 @@ impl<'src> Compiler<'src> {
                 self.stmts(f, body)?;
                 let cont = f.here();
                 let back = self.branch(f, condition, true)?;
-                f.patch(back, start);
+                f.patch_all(back, start);
                 f.temps = f.floor;
                 self.close_loop(f, cont);
             }
@@ -470,7 +477,7 @@ impl<'src> Compiler<'src> {
                             self.discard(f, e)?;
                         }
                         let back = self.branch(f, last, true)?;
-                        f.patch(back, body_start);
+                        f.patch_all(back, body_start);
                     }
                 }
                 f.temps = f.floor;
@@ -600,18 +607,45 @@ impl<'src> Compiler<'src> {
         Ok(())
     }
 
-    /// Emit a jump taken when `cond` is `when`; returns it for patching.
-    /// A comparison becomes one compare-and-jump instruction.
-    fn branch(&mut self, f: &mut FnBuilder, cond: &Expr, when: bool) -> Result<usize> {
-        if let Expr::Binary { left, op, right, .. } = cond
-            && let Some(cmp) = comparison(*op)
-        {
-            let a = self.expr(f, left)?;
-            let b = self.expr(f, right)?;
-            return Ok(f.emit(Instr::jump_cmp(cmp, a, b, when, 0)));
+    /// Emit jumps taken when `cond` is `when`; returns them for patching
+    /// (to one target). A comparison becomes one compare-and-jump
+    /// instruction; `&&`, `||` and `!` become control flow, so no boolean
+    /// is built for a condition.
+    fn branch(&mut self, f: &mut FnBuilder, cond: &Expr, when: bool) -> Result<Vec<usize>> {
+        let mark = f.temps;
+        match cond {
+            Expr::Binary { left, op, right, .. } if comparison(*op).is_some() => {
+                let cmp = comparison(*op).expect("a comparison");
+                let a = self.expr(f, left)?;
+                let b = self.expr(f, right)?;
+                f.temps = mark;
+                Ok(vec![f.emit(Instr::jump_cmp(cmp, a, b, when, 0))])
+            }
+            Expr::Binary { left, op, right, .. }
+                if matches!(op, BinaryOp::And | BinaryOp::LogicalAnd | BinaryOp::Or | BinaryOp::LogicalOr) =>
+            {
+                let is_and = matches!(op, BinaryOp::And | BinaryOp::LogicalAnd);
+                if is_and != when {
+                    // `a && b` false, or `a || b` true: either side decides.
+                    let mut jumps = self.branch(f, left, when)?;
+                    jumps.extend(self.branch(f, right, when)?);
+                    Ok(jumps)
+                } else {
+                    // `a && b` true, or `a || b` false: the left side can
+                    // only rule it out, the right side decides.
+                    let past = self.branch(f, left, !when)?;
+                    let jumps = self.branch(f, right, when)?;
+                    f.patch_all(past, f.here());
+                    Ok(jumps)
+                }
+            }
+            Expr::Unary { op: UnaryOp::Not, expr, .. } => self.branch(f, expr, !when),
+            _ => {
+                let c = self.expr(f, cond)?;
+                f.temps = mark;
+                Ok(vec![f.emit(if when { Instr::JumpIf { cond: c, target: 0 } } else { Instr::JumpIfNot { cond: c, target: 0 } })])
+            }
         }
-        let c = self.expr(f, cond)?;
-        Ok(f.emit(if when { Instr::JumpIf { cond: c, target: 0 } } else { Instr::JumpIfNot { cond: c, target: 0 } }))
     }
 
     fn loop_body(&mut self, f: &mut FnBuilder, body: &[StmtId], _start: u32) -> Result<()> {
@@ -840,7 +874,7 @@ impl<'src> Compiler<'src> {
                         self.expr_into(f, t, dst)?;
                         f.temps = keep;
                         let end = f.emit(Instr::Jump { target: 0 });
-                        f.patch(else_at, f.here());
+                        f.patch_all(else_at, f.here());
                         self.expr_into(f, if_false, dst)?;
                         f.temps = keep;
                         f.patch(end, f.here());
