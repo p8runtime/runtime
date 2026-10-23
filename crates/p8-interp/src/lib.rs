@@ -791,6 +791,7 @@ impl Isolate {
             declared: std::collections::HashSet::new(),
             loader: None,
             included: std::collections::HashSet::new(),
+            included_order: Vec::new(),
             ids: Rc::new(Ids::default()),
             native_class: None,
             ext_state: HashMap::new(),
@@ -852,6 +853,8 @@ pub struct Context<'i> {
     loader: Option<Rc<dyn Loader>>,
     /// Files included so far, for `_once` (resolved paths).
     included: std::collections::HashSet<std::path::PathBuf>,
+    /// The files run so far, in order (get_included_files).
+    included_order: Vec<String>,
     /// Object ids (handles), reused as PHP reuses them.
     ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
@@ -928,6 +931,7 @@ impl Context<'_> {
     /// Run a file's top-level code; returns the exit status.
     pub fn run_main(&mut self, main: Arc<Function>) -> i32 {
         if let Ok(path) = std::fs::canonicalize(&*main.file) {
+            self.included_order.push(path.to_string_lossy().into_owned());
             self.included.insert(path);
         }
         self.standard_streams();
@@ -2823,6 +2827,15 @@ impl Ctx for Context<'_> {
             }
         }
         out
+    }
+
+    fn backtrace(&self) -> PhpArray {
+        let regs = &self.isolate.regs;
+        self.trace(&|i| regs.get(i).cloned().unwrap_or_default())
+    }
+
+    fn included_files(&self) -> Vec<String> {
+        self.included_order.clone()
     }
 
     fn state(&mut self, key: &'static str) -> &mut Value {

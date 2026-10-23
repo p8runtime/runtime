@@ -2804,7 +2804,12 @@ dependencies = [
 name = "p8-ext-standard"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "getrandom 0.2.16",
+ "md-5 0.10.6",
  "p8-runtime",
+ "sha1",
+ "sha2 0.10.9",
 ]
 
 [[package]]

@@ -1,0 +1,128 @@
+Hello World link|a<br/>b|<p>x</p>
+<p> &amp; "q" 's' é © € A  | &apos; &bogus;
+caf&eacute; &lt;b&gt; &quot;q&quot; &#039;s&#039; &copy; &euro; <b> &amp; " '
+array(8) {
+  ["scheme"]=>
+  string(5) "https"
+  ["host"]=>
+  string(11) "example.com"
+  ["port"]=>
+  int(8080)
+  ["user"]=>
+  string(4) "user"
+  ["pass"]=>
+  string(2) "pw"
+  ["path"]=>
+  string(8) "/path/to"
+  ["query"]=>
+  string(7) "x=1&y=2"
+  ["fragment"]=>
+  string(4) "frag"
+}
+array(2) {
+  ["host"]=>
+  string(11) "example.com"
+  ["path"]=>
+  string(2) "/p"
+}
+array(2) {
+  ["path"]=>
+  string(10) "/just/path"
+  ["query"]=>
+  string(1) "q"
+}
+array(2) {
+  ["scheme"]=>
+  string(6) "mailto"
+  ["path"]=>
+  string(5) "a@b.c"
+}
+bool(false)
+string(5) "x.com"
+array(3) {
+  ["host"]=>
+  string(5) "x.com"
+  ["port"]=>
+  int(80)
+  ["path"]=>
+  string(2) "/p"
+}
+a=1&b=x+y&c%5B0%5D=1&c%5B1%5D=2&d%5Bk%5D=v&f=1
+n_0=1&n_1=2 a=b%20c
+array(5) {
+  ["a"]=>
+  string(1) "1"
+  ["b"]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    string(1) "3"
+  }
+  ["c"]=>
+  array(1) {
+    ["x"]=>
+    array(1) {
+      ["y"]=>
+      string(1) "4"
+    }
+  }
+  ["d_e"]=>
+  string(1) "5"
+  ["f_g"]=>
+  string(1) "6"
+}
+a+b%26c%3Dd%2F%C3%A9%7E a%20b%26c%3Dd%2F%C3%A9~ a b c/ a+b c
+SGVsbG8sIFdvcmxkIQ==  YWI= Hello, World! false
+abc-def-g- The quick brown
+fox sat over
+the lazy dog
+A very
+long
+wooooooo
+ooooord.
+A very
+long
+woooooooooooord.
+22 s is a test 00
+4 88.89 3 R163T522 7
+Array
+(
+    [0] => Hello
+    [1] => World
+    [2] => again
+)
+Array
+(
+    [97] => 2
+    [98] => 1
+    [99] => 1
+)
+abc
+1\+1=2\? foo[bar]
+ 
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing in %s on line 17
+\zoo['\.'] a	bAA
+int(1)
+int(-1)
+int(1)
+int(1)
+Array
+(
+    [2] => IMG2.png
+    [3] => img1.png
+    [1] => img10.png
+    [0] => img12.png
+)
+Array
+(
+    [3] => img1.png
+    [2] => IMG2.png
+    [1] => img10.png
+    [0] => img12.png
+)
+'it'\''s' ls\; rm -rf \*
+string(1) "C"
+bool(false)
+string(1) "C"
+string(1) "."
