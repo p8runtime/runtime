@@ -181,7 +181,7 @@ fn register_shutdown_function(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<V
 
 /// The class an `$object_or_class` argument names: an object's, or a
 /// declared class's (None for an unknown name).
-fn class_of(ctx: &dyn Ctx, v: &Value) -> Option<Rc<Class>> {
+fn class_of(ctx: &mut dyn Ctx, v: &Value) -> Option<Rc<Class>> {
     match v {
         Value::Object(o) => Some(Rc::clone(&o.class)),
         Value::Str(s) => ctx.class(s.as_bytes()),
@@ -312,7 +312,7 @@ fn is_subclass_of(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     Ok(Value::Bool(instance(ctx, args, allow_string, true)))
 }
 
-fn instance(ctx: &dyn Ctx, args: &[Value], allow_string: bool, strict: bool) -> bool {
+fn instance(ctx: &mut dyn Ctx, args: &[Value], allow_string: bool, strict: bool) -> bool {
     let target = arg(args, 0);
     if matches!(target, Value::Str(_)) && !allow_string {
         return false;

@@ -70,13 +70,13 @@ fn declare(
     let class = Class {
         name: PhpStr::from(name),
         lower: lower.clone(),
-        flags,
+        flags: flags | p8_runtime::object::CLASS_INTERNAL,
         parent,
         interfaces: all_interfaces,
         properties: props,
         slots,
         methods: table,
-        constants: HashMap::new(),
+        constants: p8_runtime::object::Constants::new(),
         statics: HashMap::new(),
         debug_info: None,
         enum_cases: Vec::new(),
@@ -232,47 +232,51 @@ pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
     ] {
         declare(&mut c, name, 0, Some(parent), &[], Vec::new(), &[]);
     }
-    // The extensions' classes, after the core ones.
-    for spec in registry.classes() {
-        let props = spec.properties.iter().map(|(n, d, v)| prop(n, d.to_value(), *v, spec.name, None)).collect();
-        let methods: Vec<(&str, Option<NativeMethod>, bool)> = spec
-            .methods
-            .iter()
-            .filter_map(|(n, m)| match m {
-                Some(Native::Method(f)) => Some((*n, Some(*f), false)),
-                None => Some((*n, None, false)),
-                Some(Native::Static(_)) => None,
-            })
-            .collect();
-        declare(&mut c, spec.name, spec.flags, spec.parent, spec.interfaces, props, &methods);
-        let class = Rc::get_mut(c.get_mut(spec.name.to_ascii_lowercase().as_bytes()).expect("just declared")).expect("not shared yet");
-        class.debug_info = spec.debug_info;
-        for (n, value) in spec.constants {
-            class.constants.insert(
-                n.as_bytes().to_vec(),
-                p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None },
+    // Reflection's and the extensions' classes are declared when first
+    // wanted (Context::builtin_on_demand).
+    let _ = registry;
+    c
+}
+
+/// Declare a class an extension (or the engine's Reflection) specifies.
+pub(crate) fn declare_spec(c: &mut Classes, spec: &p8_runtime::ext::ClassSpec) {
+    let props = spec.properties.iter().map(|(n, d, v)| prop(n, d.to_value(), *v, spec.name, None)).collect();
+    let methods: Vec<(&str, Option<NativeMethod>, bool)> = spec
+        .methods
+        .iter()
+        .filter_map(|(n, m)| match m {
+            Some(Native::Method(f)) => Some((*n, Some(*f), false)),
+            None => Some((*n, None, false)),
+            Some(Native::Static(_)) => None,
+        })
+        .collect();
+    declare(c, spec.name, spec.flags, spec.parent, spec.interfaces, props, &methods);
+    let class = Rc::get_mut(c.get_mut(spec.name.to_ascii_lowercase().as_bytes()).expect("just declared")).expect("not shared yet");
+    class.debug_info = spec.debug_info;
+    for (n, value) in spec.constants {
+        class.constants.insert(
+            n.as_bytes().to_vec(),
+            p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None },
+        );
+    }
+    for (n, m) in spec.methods {
+        if let Some(Native::Static(f)) = m {
+            class.methods.insert(
+                n.to_ascii_lowercase().into_bytes(),
+                Method {
+                    name: PhpStr::from(*n),
+                    func: u32::MAX,
+                    native: Some(Native::Static(*f)),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    declaring: spec.name.to_ascii_lowercase().into_bytes(),
+                    declaring_name: PhpStr::from(spec.name),
+                },
             );
         }
-        for (n, m) in spec.methods {
-            if let Some(Native::Static(f)) = m {
-                class.methods.insert(
-                    n.to_ascii_lowercase().into_bytes(),
-                    Method {
-                        name: PhpStr::from(*n),
-                        func: u32::MAX,
-                        native: Some(Native::Static(*f)),
-                        visibility: Visibility::Public,
-                        is_static: true,
-                        is_abstract: false,
-                        is_final: false,
-                        declaring: spec.name.to_ascii_lowercase().into_bytes(),
-                        declaring_name: PhpStr::from(spec.name),
-                    },
-                );
-            }
-        }
     }
-    c
 }
 
 fn gen_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {

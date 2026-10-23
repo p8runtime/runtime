@@ -64,7 +64,7 @@ pub trait Ctx {
     /// A Throw with PHP's error `class` at the current line.
     fn throw(&self, class: &'static str, message: String) -> Throw;
     /// The class `name` (any case, optional leading `\`), if declared.
-    fn class(&self, name: &[u8]) -> Option<Rc<Class>>;
+    fn class(&mut self, name: &[u8]) -> Option<Rc<Class>>;
     /// The class the running code is in (None outside any class).
     fn scope(&self) -> Option<Rc<Class>>;
     /// Call a PHP callable (only from a builtin that takes a callable:
@@ -106,6 +106,15 @@ pub trait Ctx {
     /// through its get hook (from a builtin marked as reentering); None
     /// when it has none (unset, or virtual without a get hook).
     fn prop_value(&mut self, o: &Rc<crate::object::Object>, slot: usize) -> Result<Option<Value>, Throw>;
+    /// Reflection: a function's or method's declaration (None: none such).
+    fn function_info(&mut self, callee: &crate::reflect::Callee) -> Option<crate::reflect::FnInfo>;
+    /// Reflection: call it (whatever its visibility), with `this` for a method.
+    fn invoke(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>, args: &mut [Value]) -> Result<Value, Throw>;
+    /// `new C(...args)` as the engine makes it (the instantiation checks,
+    /// computed defaults), its constructor run when `construct`.
+    fn new_instance(&mut self, class: &Rc<Class>, args: &mut [Value], construct: bool) -> Result<Rc<crate::object::Object>, Throw>;
+    /// Reflection: a Closure of it (bound to `this` for a method).
+    fn closure_of(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>) -> Result<Value, Throw>;
     /// The class `static::` names in the running code.
     fn called_class(&self) -> Option<Rc<Class>>;
     /// The class a static builtin method (an enum's cases()) was called on.
