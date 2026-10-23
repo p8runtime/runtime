@@ -146,6 +146,13 @@ pub struct Class {
 }
 
 impl Class {
+    /// The name as PHP prints it with "%s": up to a NUL (an anonymous
+    /// class's name goes on with where it was declared).
+    pub fn shown(&self) -> &[u8] {
+        let n = self.name.as_bytes();
+        n.iter().position(|&b| b == 0).map_or(n, |i| &n[..i])
+    }
+
     /// Whether this class is `other` or extends or implements it
     /// (`other` lowercase).
     pub fn is_a(&self, other: &[u8]) -> bool {

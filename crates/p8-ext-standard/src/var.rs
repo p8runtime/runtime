@@ -105,6 +105,7 @@ fn get_debug_type(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => {
             if closed(&o) { "resource (closed)".into() } else { format!("resource ({})", String::from_utf8_lossy(o.class.name.as_bytes())).into() }
         }
+        Value::Object(o) => String::from_utf8_lossy(o.class.shown()).into_owned().into(),
         other => other.type_name(),
     };
     Ok(Value::str(name.into_owned()))
@@ -262,7 +263,7 @@ fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Obj
             out.extend_from_slice(format!("Resource id #{}", o.id).as_bytes());
         }
         Value::Object(o) => {
-            out.extend_from_slice(o.class.name.as_bytes());
+            out.extend_from_slice(o.class.shown());
             // An enum: "Suit Enum" (":string" when backed).
             if o.class.flags & CLASS_ENUM != 0 {
                 out.extend_from_slice(b" Enum");
@@ -511,7 +512,7 @@ fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>)
             let list = entries(o);
             let count = list.iter().filter(|e| e.value.is_some()).count();
             out.extend_from_slice(format!("{pad}object(").as_bytes());
-            out.extend_from_slice(o.class.name.as_bytes());
+            out.extend_from_slice(o.class.shown());
             out.extend_from_slice(format!(")#{} ({count}) {{\n", o.id).as_bytes());
             for e in list {
                 out.extend_from_slice(format!("{pad}  [\"").as_bytes());

@@ -43,8 +43,10 @@ impl MethodFrame {
     }
 }
 
+/// As PHP's "%s" prints it: up to a NUL (anonymous class names).
 fn text(s: &PhpStr) -> String {
-    String::from_utf8_lossy(s.as_bytes()).into_owned()
+    let b = s.as_bytes();
+    String::from_utf8_lossy(b.iter().position(|&c| c == 0).map_or(b, |i| &b[..i])).into_owned()
 }
 
 impl Context<'_> {
@@ -410,8 +412,16 @@ impl Context<'_> {
     }
 
     /// The class a code operand names.
-    pub(crate) fn class_of(&mut self, func: &Function, i: u16) -> Result<Rc<Class>, Throw> {
+    pub(crate) fn class_of(&mut self, func: &Function, i: u16, w: &[Value]) -> Result<Rc<Class>, Throw> {
         match &func.classes[i as usize] {
+            ClassRef::Dynamic(r) => match w[*r as usize].deref() {
+                Value::Object(o) => Ok(Rc::clone(&o.class)),
+                Value::Str(name) => match self.classes.get(&name.as_bytes().to_ascii_lowercase()) {
+                    Some(c) => Ok(Rc::clone(c)),
+                    None => self.find_class(name.as_bytes()),
+                },
+                _ => Err(self.throw("Error", "Class name must be a valid object or a string")),
+            },
             ClassRef::Named(lower, display) | ClassRef::Forward(lower, display) => match self.classes.get(lower.as_bytes()) {
                 Some(c) => Ok(Rc::clone(c)),
                 None => self.find_class(display.as_bytes()),
@@ -458,13 +468,23 @@ impl Context<'_> {
         let Some(ctor) = class.method(b"__construct").cloned() else { return Ok((object, None)) };
         let declaring = self.declaring(&class, &ctor.declaring);
         if !visible(ctor.visibility, &declaring, self.scope().0.as_deref()) {
-            return Err(self.throw(
-                "Error",
-                format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()),
-            ));
+            let t = self.throw("Error", format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()));
+            // Made while the object still is (PHP numbers the Error after it).
+            let e = self.exception(regs, t);
+            drop(object);
+            return Err(e);
         }
         let func = self.code_of(&ctor);
         Ok((Rc::clone(&object), Some(MethodFrame::method(func, Some(object), declaring, class))))
+    }
+
+    /// The constructor call of a new object (its visibility was checked
+    /// when the object was made).
+    pub(crate) fn constructor(&self, object: &Rc<Object>) -> Option<MethodFrame> {
+        let class = Rc::clone(&object.class);
+        let ctor = class.method(b"__construct")?;
+        let declaring = self.declaring(&class, &ctor.declaring);
+        Some(MethodFrame::method(self.code_of(ctor), Some(Rc::clone(object)), declaring, class))
     }
 
     /// An enum's case object (the same one each time in a request).
@@ -533,8 +553,8 @@ impl Context<'_> {
     /// `C::method(args)`: the frame to push. A non-static method gets the
     /// caller's `$this` when it is an instance of C; `self::` and
     /// `parent::` keep the caller's called class.
-    pub(crate) fn static_frame(&mut self, func: &Function, class: u16, lower: &[u8], display: &[u8]) -> Result<MethodFrame, Throw> {
-        let target = self.class_of(func, class)?;
+    pub(crate) fn static_frame(&mut self, func: &Function, class: u16, lower: &[u8], display: &[u8], w: &[Value]) -> Result<MethodFrame, Throw> {
+        let target = self.class_of(func, class, w)?;
         let Some(method) = target.method(lower).cloned() else {
             return Err(self.throw(
                 "Error",
@@ -790,8 +810,8 @@ impl Context<'_> {
     }
 
     /// `C::NAME`
-    pub(crate) fn class_constant(&mut self, func: &Function, class: u16, name: &Value) -> Result<Value, Throw> {
-        let class = self.class_of(func, class)?;
+    pub(crate) fn class_constant(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Value, Throw> {
+        let class = self.class_of(func, class, w)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
             return Ok(Value::Str(class.name.clone()));
@@ -815,8 +835,8 @@ impl Context<'_> {
     }
 
     /// The cell of static property `C::$name`.
-    pub(crate) fn static_cell(&mut self, func: &Function, class: u16, name: &Value) -> Result<Rc<RefCell<Value>>, Throw> {
-        let class = self.class_of(func, class)?;
+    pub(crate) fn static_cell(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Rc<RefCell<Value>>, Throw> {
+        let class = self.class_of(func, class, w)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         match class.statics.get(name.as_bytes()) {
             Some((cell, visibility, declaring)) => {
@@ -834,9 +854,14 @@ impl Context<'_> {
     }
 
     /// `$x instanceof C` (an unknown class: false).
-    pub(crate) fn instance_of(&self, func: &Function, v: &Value, class: u16) -> bool {
+    pub(crate) fn instance_of(&self, func: &Function, v: &Value, class: u16, w: &[Value]) -> bool {
         let Value::Object(o) = v.deref() else { return false };
         match &func.classes[class as usize] {
+            ClassRef::Dynamic(r) => match w[*r as usize].deref() {
+                Value::Object(c) => o.class.is_a(&c.class.lower),
+                Value::Str(name) => o.class.is_a(&name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase()),
+                _ => false,
+            },
             ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => o.class.is_a(lower.as_bytes()),
             ClassRef::Static => self.scope().1.is_some_and(|c| o.class.is_a(&c.lower)),
             ClassRef::Scope => self.scope().0.is_some_and(|c| o.class.is_a(&c.lower)),
