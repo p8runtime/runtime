@@ -12,6 +12,7 @@ use std::rc::Rc;
 mod array;
 mod array2;
 mod callback;
+mod dates;
 mod file;
 mod hash;
 mod info;
@@ -43,7 +44,6 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "function_exists", run: function_exists, by_ref: &[] },
     Builtin { name: "define", run: define, by_ref: &[] },
     Builtin { name: "defined", run: defined, by_ref: &[] },
-    Builtin { name: "date_default_timezone_set", run: date_default_timezone_set, by_ref: &[] },
     Builtin { name: "func_get_args", run: func_get_args, by_ref: &[] },
     Builtin { name: "array_keys", run: array_keys, by_ref: &[] },
     Builtin { name: "range", run: range, by_ref: &[] },
@@ -95,6 +95,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(string2::BUILTINS);
     registry.add_functions(random::BUILTINS);
     registry.add_functions(scan::BUILTINS);
+    registry.add_functions(dates::BUILTINS);
     registry.add_functions(serial::BUILTINS);
     registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);
@@ -347,9 +348,6 @@ fn defined(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(ctx.constant(str_arg(args, 0).as_bytes()).is_some()))
 }
 
-fn date_default_timezone_set(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(true))
-}
 
 fn func_get_args(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Array(Rc::new(PhpArray::from_list(ctx.call_args()))))

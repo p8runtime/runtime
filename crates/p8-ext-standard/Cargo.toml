@@ -14,3 +14,6 @@ sha2 = "0.10"
 crc32fast = "1.5"
 # random_bytes, random_int: the OS's randomness
 getrandom = "0.2"
+# Dates: time zones (the IANA database, built in)
+chrono = "0.4"
+chrono-tz = "0.10"
