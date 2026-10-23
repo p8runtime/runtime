@@ -1,0 +1,9 @@
+[package]
+name = "p8-bytecode"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's register bytecode: instructions, functions, call sites"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }

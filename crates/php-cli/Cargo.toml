@@ -1,0 +1,13 @@
+[package]
+name = "php-cli"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The php command-line host for p8"
+
+[[bin]]
+name = "php2"
+path = "src/main.rs"
+
+[dependencies]
+p8 = { path = "../p8" }

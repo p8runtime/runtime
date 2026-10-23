@@ -1,10 +1,14 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/` contains the Rust implementation of the PHP interpreter. Major areas include the parser (`src/parser/`), VM/executor (`src/vm/`), runtime extensions (`src/runtime/`), and builtins (`src/builtins/`).
-- `src/bin/` hosts the CLI entry points: `php` and `php-fpm`.
-- `tests/` holds integration tests organized by feature (for example, `tests/array_functions.rs`).
-- Parser-specific tests live under `src/parser/tests/`, with snapshot fixtures in `src/parser/tests/snapshots/`.
+- `crates/` holds **p8**, the new engine (docs/design/engine-v2.md), and its hosts:
+  - `p8`: the public embedding API; hosts use only this crate.
+  - `p8-syntax` (lexer, parser, AST; the legacy engine uses it too), `p8-compiler`, `p8-bytecode`, `p8-runtime` (values, operators, the extension ABI), `p8-interp`, `p8-ext-*` (builtins): p8's internals.
+  - `php-cli`: the command-line host (`php2` until p8 replaces the legacy engine).
+- `src/` is the legacy engine: VM/executor (`src/vm/`), runtime extensions (`src/runtime/`), builtins (`src/builtins/`). It is replaced by p8 at php-src parity; fixes go into p8.
+- `src/bin/` hosts the legacy CLI entry points: `php` and `php-fpm`.
+- `tests/` holds the legacy engine's integration tests; each p8 crate has its own `tests/`.
+- `crates/p8-syntax/src/tests/` and its snapshots are not compiled yet (they predate this repo's layout).
 
 ## Build, Test, and Development Commands
 - `cargo build`: compile the interpreter and binaries.
@@ -20,7 +24,6 @@
 
 ## Testing Guidelines
 - Add new integration tests under `tests/` using descriptive file names (for example, `tests/strict_types_eval.rs`).
-- Parser behavior changes should include or update snapshot files under `src/parser/tests/snapshots/`.
 - There is no explicit coverage target; keep tests representative of PHP compatibility behavior.
 
 ## Commit & Pull Request Guidelines

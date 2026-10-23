@@ -9,10 +9,16 @@ license = "MIT"
 exclude = ["tools/*", "tests/*", "bin/*"]
 repository = "https://github.com/wudi/php-rs"
 
+[workspace]
+members = ["crates/*"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+p8-ext-standard = { path = "crates/p8-ext-standard" }
+p8-runtime = { path = "crates/p8-runtime" }
+p8-syntax = { path = "crates/p8-syntax" }
 indexmap = "2.0"
 hashbrown = { version = "0.16", default-features = false }
 bumpalo = { version = "3.12", features = ["collections"] }

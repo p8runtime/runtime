@@ -2,7 +2,7 @@ pub mod array;
 pub mod bcmath;
 pub mod class;
 pub mod ctype;
-pub mod defaults;
+pub use p8_ext_standard::defaults;
 pub mod datetime;
 pub mod errors;
 pub mod exception;

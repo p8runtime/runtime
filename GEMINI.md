@@ -14,7 +14,7 @@
 
 The project follows a classic interpreter architecture:
 
-1.  **Parser (`src/parser`):** Lexes and parses PHP source code into an AST.
+1.  **Parser (`crates/p8-syntax`):** Lexes and parses PHP source code into an AST.
 2.  **Compiler (`src/compiler`):** Compiles the AST into bytecode chunks (`src/compiler/chunk.rs`).
 3.  **Virtual Machine (`src/vm`):** Executes the bytecode instructions.
 4.  **Runtime (`src/runtime`):** Manages memory, contexts, and extensions.
@@ -72,7 +72,7 @@ cargo test --test array_functions
 *   **Module Structure:**
     *   New built-in functions should be added to `src/builtins/` and registered in `src/builtins/mod.rs`.
     *   Integration tests go in `tests/` with descriptive filenames (e.g., `tests/strict_types_eval.rs`).
-    *   Parser tests are in `src/parser/tests/`.
+    *   Parser tests are in `crates/p8-syntax/src/tests/` (not compiled yet).
 *   **Dependencies:** New dependencies should be justified and scoped to their specific extension module (e.g., adding a crate only for `gd` support).
 
 ## Directory Overview

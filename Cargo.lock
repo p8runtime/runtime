@@ -2771,6 +2771,67 @@ dependencies = [
 ]
 
 [[package]]
+name = "p8"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "p8-bytecode",
+ "p8-compiler",
+ "p8-ext-standard",
+ "p8-interp",
+ "p8-runtime",
+ "p8-syntax",
+]
+
+[[package]]
+name = "p8-bytecode"
+version = "0.1.0"
+dependencies = [
+ "p8-runtime",
+]
+
+[[package]]
+name = "p8-compiler"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "p8-bytecode",
+ "p8-runtime",
+ "p8-syntax",
+]
+
+[[package]]
+name = "p8-ext-standard"
+version = "0.1.0"
+dependencies = [
+ "p8-runtime",
+]
+
+[[package]]
+name = "p8-interp"
+version = "0.1.0"
+dependencies = [
+ "p8-bytecode",
+ "p8-runtime",
+]
+
+[[package]]
+name = "p8-runtime"
+version = "0.1.0"
+dependencies = [
+ "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "p8-syntax"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2930,6 +2991,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-cli"
+version = "0.1.0"
+dependencies = [
+ "p8",
+]
+
+[[package]]
 name = "php-rs"
 version = "0.1.0"
 dependencies = [
@@ -2963,6 +3031,9 @@ dependencies = [
  "num-traits",
  "openssl",
  "oracle",
+ "p8-ext-standard",
+ "p8-runtime",
+ "p8-syntax",
  "pbkdf2",
  "pcre2",
  "postgres",

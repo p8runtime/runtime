@@ -1,9 +1,9 @@
 <?php
-// Generates `src/builtins/defaults.rs`: every constant and every ini
+// Generates `crates/p8-ext-standard/src/defaults.rs`: every constant and every ini
 // directive (with its built-in default) that PHP 8.4 defines in the
 // extensions this runtime ships.
 //
-//     docker run --rm -i php:8.4-cli php < examples/gen_defaults.php > src/builtins/defaults.rs
+//     docker run --rm -i php:8.4-cli php < examples/gen_defaults.php > crates/p8-ext-standard/src/defaults.rs
 //
 // Values come from a real PHP with no php.ini (on Linux, like the reference
 // test run), so they match exactly. Constants that describe the build or the
