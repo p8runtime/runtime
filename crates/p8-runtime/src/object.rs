@@ -98,6 +98,14 @@ pub struct Property {
     pub hooks: u8,
 }
 
+impl Property {
+    /// A builtin class's hidden state (a name starting with NUL): never
+    /// listed (var_dump, get_object_vars, foreach, serialize, (array), json).
+    pub fn is_internal(&self) -> bool {
+        self.name.as_bytes().first() == Some(&0)
+    }
+}
+
 /// A method written in Rust (a builtin class's): `$this`, the arguments.
 pub type NativeMethod = fn(&mut dyn Ctx, &Rc<Object>, &mut [Value]) -> Result<Value, Throw>;
 /// A static method written in Rust: the arguments.

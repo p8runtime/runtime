@@ -1,0 +1,156 @@
+object(ArrayObject)#1 (1) {
+  ["storage":"ArrayObject":private]=>
+  array(3) {
+    ["b"]=>
+    int(2)
+    ["a"]=>
+    int(1)
+    [0]=>
+    int(3)
+  }
+}
+int(3)
+int(1)
+bool(true)
+bool(false)
+a=1 0=3 c=5 1=appended 
+array(4) {
+  [0]=>
+  int(3)
+  [1]=>
+  string(8) "appended"
+  ["a"]=>
+  int(1)
+  ["c"]=>
+  int(5)
+}
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  int(0)
+  [2]=>
+  string(1) "c"
+  [3]=>
+  int(1)
+}
+
+Warning: Undefined array key "missing" in %s on line 9
+NULL
+int(4)
+array(1) {
+  [0]=>
+  int(9)
+}
+0:10 1:20 2:30 
+int(20)
+Seek position 10 is out of range
+0 false
+1 true
+2 false
+object(SplFixedArray)#5 (3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "c"
+}
+int(3)
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "c"
+}
+OutOfBoundsException: Index invalid or out of range
+0='a' 1=NULL 2='c' 
+array(4) {
+  [0]=>
+  NULL
+  [1]=>
+  string(1) "x"
+  [2]=>
+  NULL
+  [3]=>
+  string(1) "y"
+}
+int(2)
+bool(true)
+string(3) "two"
+object(SplObjectStorage)#7 (1) {
+  ["storage":"SplObjectStorage":private]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      ["obj"]=>
+      object(stdClass)#8 (0) {
+      }
+      ["inf"]=>
+      string(3) "one"
+    }
+    [1]=>
+    array(2) {
+      ["obj"]=>
+      object(stdClass)#9 (0) {
+      }
+      ["inf"]=>
+      string(3) "two"
+    }
+  }
+}
+0 one
+1 two
+int(1)
+int(3)
+int(2)
+int(2)
+1=>2 0=>1 
+object(SplStack)#10 (2) {
+  ["flags":"SplDoublyLinkedList":private]=>
+  int(6)
+  ["dllist":"SplDoublyLinkedList":private]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+string(1) "a"
+int(1)
+0=w 1=ins 2=x 3=y 
+SplDoublyLinkedList::offsetGet(): Argument #1 ($index) is out of range
+Can't pop from an empty datastructure
+int(1)
+int(4)
+1 2 3 5 
+int(9)
+int(2)
+string(2) "hi"
+array(2) {
+  ["data"]=>
+  string(3) "mid"
+  ["priority"]=>
+  int(5)
+}
+aaa aa a 
+array(5) {
+  ["IteratorAggregate"]=>
+  string(17) "IteratorAggregate"
+  ["Traversable"]=>
+  string(11) "Traversable"
+  ["ArrayAccess"]=>
+  string(11) "ArrayAccess"
+  ["Serializable"]=>
+  string(12) "Serializable"
+  ["Countable"]=>
+  string(9) "Countable"
+}
+array(1) {
+  ["SplDoublyLinkedList"]=>
+  string(19) "SplDoublyLinkedList"
+}
+int(3)

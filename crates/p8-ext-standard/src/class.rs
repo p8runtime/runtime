@@ -221,7 +221,7 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let scope = ctx.scope();
     let mut out = PhpArray::new();
     for (i, p) in o.class.properties.iter().enumerate() {
-        if p.hooks == 0 && matches!(o.slots.borrow()[i], Value::Undef) {
+        if p.is_internal() || p.hooks == 0 && matches!(o.slots.borrow()[i], Value::Undef) {
             continue;
         }
         let declaring = declaring(&o.class, &p.declaring);

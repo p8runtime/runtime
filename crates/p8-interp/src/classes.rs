@@ -1335,7 +1335,7 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     let mut out = p8_runtime::array::PhpArray::new();
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-        if matches!(v, Value::Undef) {
+        if matches!(v, Value::Undef) || p.is_internal() {
             continue;
         }
         let mut name = Vec::new();

@@ -52,6 +52,8 @@ const DATETIME_METHODS: &[(&str, Option<Native>)] = &[
     ("createFromImmutable", Some(Native::Static(create_from_interface))),
     ("createFromMutable", Some(Native::Static(create_from_interface))),
     ("getLastErrors", Some(Native::Static(get_last_errors))),
+    ("__serialize", Some(Native::Method(dt_serialize))),
+    ("__unserialize", Some(Native::Method(dt_unserialize))),
 ];
 
 const FORMATS: &[(&str, Constant)] = &[
@@ -113,6 +115,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getName", Some(Native::Method(zone_name))),
             ("getOffset", Some(Native::Method(zone_offset))),
             ("listIdentifiers", Some(Native::Static(list_identifiers))),
+            ("__serialize", Some(Native::Method(zone_serialize))),
+            ("__unserialize", Some(Native::Method(zone_unserialize))),
         ],
         constants: &[
             ("AFRICA", Constant::Int(1)),
@@ -296,6 +300,8 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
         Some(mut s) => {
             if text.trim().is_empty() || text.trim().eq_ignore_ascii_case("now") {
                 s.us = us;
+            } else if let Some(fraction) = seconds_fraction(&text) {
+                s.us = fraction;
             }
             put(this, &s);
             Ok(Value::Null)
@@ -305,6 +311,20 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
             format!("Failed to parse time string ({text}) at position 0 ({}): The timezone could not be found in the database", text.chars().next().unwrap_or(' ')),
         )),
     }
+}
+
+/// Microseconds written after a time's seconds (`12:34:56.789`).
+fn seconds_fraction(text: &str) -> Option<i64> {
+    let b = text.as_bytes();
+    for i in 0..b.len().saturating_sub(4) {
+        if b[i] == b':' && b[i + 1].is_ascii_digit() && b[i + 2].is_ascii_digit() && b[i + 3] == b'.' {
+            let digits: String = text[i + 4..].chars().take_while(char::is_ascii_digit).take(6).collect();
+            if !digits.is_empty() {
+                return format!("{digits:0<6}").parse().ok();
+            }
+        }
+    }
+    None
 }
 
 fn local_of(s: &State) -> crate::dates::Local {
@@ -755,6 +775,82 @@ fn datetime_info(o: &Object) -> PhpArray {
     out.insert(Key::from_string(PhpStr::from("timezone_type")), Value::Int(s.ztype));
     out.insert(Key::from_string(PhpStr::from("timezone")), Value::Str(PhpStr::from(s.zone.as_str())));
     out
+}
+
+/// The other properties of a date object (a subclass's), as serialize
+/// keeps them.
+fn own_props(o: &Object, out: &mut PhpArray) {
+    let slots = o.slots.borrow();
+    for (p, v) in o.class.properties.iter().zip(slots.iter()) {
+        if !p.is_internal() && !matches!(v, Value::Undef) {
+            out.insert(Key::from_string(p.name.clone()), v.deref());
+        }
+    }
+    for (k, v) in o.dynamic.borrow().iter() {
+        out.insert(k, v.deref());
+    }
+}
+
+/// Set the properties of `a` other than `skip` (a subclass's, back).
+fn restore_props(o: &Object, a: &PhpArray, skip: &[&str]) {
+    for (k, v) in a.iter() {
+        let Key::Str(name) = &k else { continue };
+        if skip.iter().any(|s| s.as_bytes() == name.as_bytes()) {
+            continue;
+        }
+        match o.class.slot(name.as_bytes(), None) {
+            Some(i) => o.slots.borrow_mut()[i] = v.deref(),
+            None => {
+                o.dynamic.borrow_mut().insert(k.clone(), v.deref());
+            }
+        }
+    }
+}
+
+/// DateTime::__serialize(): date, timezone_type, timezone, then any
+/// other properties (a subclass's).
+fn dt_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let mut out = datetime_info(this);
+    own_props(this, &mut out);
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn field(a: &PhpArray, name: &str) -> Value {
+    a.get(&Key::from_string(PhpStr::from(name))).map_or(Value::Null, Value::deref)
+}
+
+/// DateTime::__unserialize(array $data): back from date, timezone_type, timezone.
+fn dt_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Null) };
+    let date = String::from_utf8_lossy(field(&a, "date").to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned();
+    let ztype = field(&a, "timezone_type").to_int();
+    let zone = String::from_utf8_lossy(field(&a, "timezone").to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned();
+    let (whole, micro) = date.split_once('.').unwrap_or((date.as_str(), "0"));
+    match parse_state(whole, 0, ztype, &zone) {
+        Some(mut s) => {
+            s.ztype = ztype;
+            s.zone = zone;
+            s.us = format!("{micro:0<6}")[..6].parse().unwrap_or(0);
+            put(this, &s);
+            restore_props(this, &a, &["date", "timezone_type", "timezone"]);
+            Ok(Value::Null)
+        }
+        None => Err(ctx.throw("Error", format!("Invalid serialization data for {} object", class_name(this)))),
+    }
+}
+
+fn zone_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let mut out = zone_info(this);
+    own_props(this, &mut out);
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn zone_unserialize(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Null) };
+    write(this, ZTYPE, Value::Int(field(&a, "timezone_type").to_int()));
+    write(this, ZONE, field(&a, "timezone"));
+    restore_props(this, &a, &["timezone_type", "timezone"]);
+    Ok(Value::Null)
 }
 
 fn zone_info(o: &Object) -> PhpArray {

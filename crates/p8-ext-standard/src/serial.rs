@@ -132,7 +132,7 @@ impl Writer<'_> {
         let mut props: Vec<(Vec<u8>, Value)> = Vec::new();
         let slots = o.slots.borrow();
         for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-            if matches!(v, Value::Undef) || only.as_ref().is_some_and(|names| !names.iter().any(|n| n == &p.name)) {
+            if p.is_internal() || matches!(v, Value::Undef) || only.as_ref().is_some_and(|names| !names.iter().any(|n| n == &p.name)) {
                 continue;
             }
             let mangled = match p.visibility {
