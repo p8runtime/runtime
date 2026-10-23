@@ -1,0 +1,22 @@
+string(6) "ababab"
+string(1) "x"
+string(2) "xy"
+string(4) "hihi"
+string(7) "n=51.51"
+string(3) "10!"
+
+Warning: Undefined variable $f in %s on line 22
+string(3) "new"
+string(1) "v"
+string(2) "vw"
+210
+int(-1)
+01322
+int(1)
+int(9223372036854775807)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+NULL
+int(1)
+string(2) "a9"
+string(2) "b0"

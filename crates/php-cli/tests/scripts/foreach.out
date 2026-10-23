@@ -1,0 +1,26 @@
+x=1
+y=2
+5=3
+9=s
+10 20 30 
+array(2) {
+  ["a"]=>
+  int(6)
+  ["b"]=>
+  int(12)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(10)
+  [3]=>
+  int(20)
+}
+int(7)
+string(5) "seven"
+
+Warning: foreach() argument must be of type array|object, int given in %s on line 33
+after

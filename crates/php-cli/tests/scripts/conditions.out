@@ -1,0 +1,21 @@
+a b else
+a else
+a b then
+a then
+a b else
+a then
+a b c d then
+a c then
+1,2 both positive, differ
+3,2 both positive, differ
+0,0 has a zero
+-1,5 other
+5 3
+012
+2
+in
+b
+null: no
+str: yes
+arr: yes
+not: yes

@@ -1,0 +1,45 @@
+array(6) {
+  ["x"]=>
+  string(5) "again"
+  [10]=>
+  string(3) "ten"
+  ["010"]=>
+  string(7) "not ten"
+  [-5]=>
+  float(2.5)
+  ["y"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  ["z"]=>
+  NULL
+}
+string(3) "ten"
+string(3) "ten"
+string(7) "not ten"
+float(2.5)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+NULL
+string(5) "again"
+string(7) "changed"
+
+Warning: Undefined array key "missing" in %s on line 17
+NULL
+20 10 20
+array(2) {
+  ["k"]=>
+  int(1)
+  ["copy"]=>
+  array(1) {
+    ["k"]=>
+    int(1)
+  }
+}

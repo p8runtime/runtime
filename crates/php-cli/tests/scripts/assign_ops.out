@@ -1,0 +1,15 @@
+bool(true)
+int(12)
+bool(true)
+string(2) "8!"
+int(42)
+int(60)
+float(9.223372036854776E+18)
+int(1)
+int(1)
+string(3) "aba"
+bool(false)
+
+Warning: Undefined variable $undefined in %s on line 53
+int(1)
+string(4) "2.5x"

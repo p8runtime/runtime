@@ -87,6 +87,30 @@ pub fn increment_alphanumeric(s: &mut Vec<u8>) {
     }
 }
 
+/// An int's decimal digits, appended (what PHP prints for an int).
+pub fn push_int(out: &mut Vec<u8>, i: i64) {
+    push_digits(out, i.unsigned_abs(), 10, i < 0);
+}
+
+/// `n` in base `radix` (2 to 16, lowercase), appended, after a `-` if
+/// `negative`.
+pub fn push_digits(out: &mut Vec<u8>, mut n: u64, radix: u64, negative: bool) {
+    let mut buf = [0u8; 64];
+    let mut at = buf.len();
+    loop {
+        at -= 1;
+        buf[at] = b"0123456789abcdef"[(n % radix) as usize];
+        n /= radix;
+        if n == 0 {
+            break;
+        }
+    }
+    if negative {
+        out.push(b'-');
+    }
+    out.extend_from_slice(&buf[at..]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

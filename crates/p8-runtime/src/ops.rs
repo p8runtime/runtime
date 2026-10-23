@@ -9,7 +9,7 @@
 use crate::array::PhpArray;
 use crate::string::PhpStr;
 use crate::value::Value;
-use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string};
+use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string, push_int};
 use crate::number::{Precision, dval_to_lval, float_to_string};
 use std::rc::Rc;
 
@@ -300,13 +300,34 @@ pub fn to_string_lossy(v: &Value, diags: &mut Diags) -> PhpStr {
 }
 
 fn concat(a: &Value, b: &Value, diags: &mut Diags) -> Value {
-    let x = to_string_lossy(a, diags);
-    let y = to_string_lossy(b, diags);
-    let mut bytes = Vec::with_capacity(x.len() + y.len());
-    bytes.extend_from_slice(x.as_bytes());
-    bytes.extend_from_slice(y.as_bytes());
+    let mut bytes = Vec::with_capacity(string_len_hint(a) + string_len_hint(b));
+    push_string(&mut bytes, a, diags);
+    push_string(&mut bytes, b, diags);
     Value::Str(PhpStr::new(bytes))
 }
+
+/// Append `v` as a string (what `.` and interpolation do), the same text
+/// as `to_string_lossy` gives, without building a string for a number.
+pub fn push_string(out: &mut Vec<u8>, v: &Value, diags: &mut Diags) {
+    match v {
+        Value::Str(s) => out.extend_from_slice(s.as_bytes()),
+        Value::Int(i) => push_int(out, *i),
+        Value::Null | Value::Undef | Value::Bool(false) => {}
+        Value::Bool(true) => out.push(b'1'),
+        other => out.extend_from_slice(to_string_lossy(other, diags).as_bytes()),
+    }
+}
+
+/// Bytes `v` probably takes as a string (for reserving room).
+pub fn string_len_hint(v: &Value) -> usize {
+    match v {
+        Value::Str(s) => s.len(),
+        Value::Int(_) | Value::Float(_) => 20,
+        _ => 1,
+    }
+}
+
+
 
 /// `-$a` (as `$a * -1`, keeping -0.0 and int overflow rules).
 pub fn negate(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {

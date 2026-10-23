@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
-//! p8: an embeddable PHP 8.4 engine (docs/design/engine-v2.md, "p8: the
-//! engine, and the hosts that drive it"). Hosts use this crate only; the
+//! p8: an embeddable PHP 8.4 engine (APS 3 in p8runtime/aps: engine and
+//! hosts). Hosts use this crate only; the
 //! crates behind it (syntax, compiler, bytecode, runtime, interpreter,
 //! extensions) are not part of the API.
 //!

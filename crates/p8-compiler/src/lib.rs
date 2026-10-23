@@ -107,16 +107,16 @@ impl FnBuilder {
     }
 
     fn patch(&mut self, at: usize, target: u32) {
-        match &mut self.code[at] {
-            Instr::Jump { target: t }
-            | Instr::JumpIf { target: t, .. }
-            | Instr::JumpIfNot { target: t, .. }
-            | Instr::JumpIfSet { target: t, .. }
-            | Instr::JumpCmp { target: t, .. }
-            | Instr::IterInit { end: t, .. }
-            | Instr::IterNext { end: t, .. }
-            | Instr::ArgDefault { target: t, .. } => *t = target,
-            other => unreachable!("not a jump: {other:?}"),
+        match self.code[at].target_mut() {
+            Some(t) => *t = target,
+            None => unreachable!("not a jump: {:?}", self.code[at]),
+        }
+    }
+
+    /// Point every jump in `jumps` at `target`.
+    fn patch_all(&mut self, jumps: Vec<usize>, target: u32) {
+        for at in jumps {
+            self.patch(at, target);
         }
     }
 
@@ -162,6 +162,9 @@ impl FnBuilder {
 
     /// Lay the frame out and renumber every register.
     fn finish(mut self, file: Arc<str>) -> Function {
+        if !self.returns_ref {
+            thread_returns(&mut self.code);
+        }
         let ncv = self.cvs.len();
         let nconst = self.consts.len();
         let map = |r: Reg| -> Reg {
@@ -175,6 +178,7 @@ impl FnBuilder {
         for instr in &mut self.code {
             map_regs(instr, map);
         }
+        fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
         cv_names.sort_by_key(|(i, _)| *i);
@@ -187,12 +191,74 @@ impl FnBuilder {
             lines: self.lines,
             consts: self.consts,
             consts_at: ncv as Reg,
-            nregs: (ncv + nconst + self.max_temps + 1) as Reg,
+            nregs: (ncv + nconst + self.max_temps) as Reg,
             cv_names: cv_names.into_iter().map(|(_, n)| n).collect(),
             required,
             line: self.decl_line,
             sites: self.sites,
             file,
+        }
+    }
+}
+
+/// A loop's `$i++` (or `$i--`) followed by its test on `$i` becomes one
+/// instruction (see `Instr::IncJumpLt`). The test stays where it is, so the
+/// code keeps its length and every jump target.
+fn fuse_steps(code: &mut [Instr]) {
+    for i in 0..code.len().saturating_sub(1) {
+        code[i] = match (code[i], code[i + 1]) {
+            (Instr::IncVar { var }, Instr::JumpLt { a, b, target }) if a == var && b != var => Instr::IncJumpLt { var, b, target },
+            (Instr::IncVar { var }, Instr::JumpLe { a, b, target }) if a == var && b != var => Instr::IncJumpLe { var, b, target },
+            // `$i > b` and `$i >= b` are compiled with the operands swapped.
+            (Instr::DecVar { var }, Instr::JumpLt { a, b, target }) if b == var && a != var => Instr::DecJumpGt { var, b: a, target },
+            (Instr::DecVar { var }, Instr::JumpLe { a, b, target }) if b == var && a != var => Instr::DecJumpGe { var, b: a, target },
+            (other, _) => other,
+        };
+    }
+}
+
+/// Whether `a op b` compiles to one instruction that reads both operands
+/// and then writes its result (and nothing else), so the result can go
+/// straight to a variable.
+fn writes_once(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Plus
+            | BinaryOp::Minus
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Pow
+            | BinaryOp::Concat
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::ShiftLeft
+            | BinaryOp::ShiftRight
+            | BinaryOp::Spaceship
+    ) || comparison(op).is_some()
+}
+
+/// Returns reached by a jump are made where the jump is: `x ? a : b` in
+/// `return` position, for one, stores its result and jumps to the return.
+/// A temporary moved into a register only to be returned is returned
+/// directly when it is a constant. The code keeps its length (what is
+/// left behind is unreachable), so no jump target moves.
+fn thread_returns(code: &mut [Instr]) {
+    for i in 0..code.len() {
+        if let Instr::Jump { target } = code[i]
+            && let ret @ (Instr::Return { .. } | Instr::ReturnNull) = code[target as usize]
+        {
+            code[i] = ret;
+        }
+    }
+    for i in 0..code.len().saturating_sub(1) {
+        if let (Instr::Move { dst, src }, Instr::Return { src: ret }) = (code[i], code[i + 1])
+            && ret == dst
+            && dst >> KIND_SHIFT == TEMP
+            && src >> KIND_SHIFT == CONST
+        {
+            code[i] = Instr::Return { src };
         }
     }
 }
@@ -210,7 +276,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *src = f(*src);
         }
         LoadNull { dst } | NewArray { dst } => *dst = f(*dst),
-        Binary { dst, a, b, .. } | Compare { dst, a, b, .. } => {
+        Binary { dst, a, b, .. } | Add { dst, a, b } | Sub { dst, a, b } | Mul { dst, a, b } | Compare { dst, a, b, .. } => {
             *dst = f(*dst);
             *a = f(*a);
             *b = f(*b);
@@ -224,8 +290,19 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *dst = f(*dst);
         }
         Jump { .. } | ReturnNull | ArgDefault { .. } => {}
-        IncVar { var, .. } => *var = f(*var),
-        JumpCmp { a, b, .. } => {
+        IncVar { var } | DecVar { var } => *var = f(*var),
+        IncJumpLt { var, b, .. } | IncJumpLe { var, b, .. } | DecJumpGt { var, b, .. } | DecJumpGe { var, b, .. } => {
+            *var = f(*var);
+            *b = f(*b);
+        }
+        JumpLt { a, b, .. }
+        | JumpNotLt { a, b, .. }
+        | JumpLe { a, b, .. }
+        | JumpNotLe { a, b, .. }
+        | JumpEq { a, b, .. }
+        | JumpNotEq { a, b, .. }
+        | JumpIdentical { a, b, .. }
+        | JumpNotIdentical { a, b, .. } => {
             *a = f(*a);
             *b = f(*b);
         }
@@ -389,11 +466,11 @@ impl<'src> Compiler<'src> {
                 match else_block {
                     Some(else_block) => {
                         let end = f.emit(Instr::Jump { target: 0 });
-                        f.patch(skip, f.here());
+                        f.patch_all(skip, f.here());
                         self.stmts(f, else_block)?;
                         f.patch(end, f.here());
                     }
-                    None => f.patch(skip, f.here()),
+                    None => f.patch_all(skip, f.here()),
                 }
             }
             Stmt::While { condition, body, .. } => {
@@ -404,7 +481,7 @@ impl<'src> Compiler<'src> {
                 let cond_at = f.here();
                 f.patch(to_cond, cond_at);
                 let back = self.branch(f, condition, true)?;
-                f.patch(back, body_start);
+                f.patch_all(back, body_start);
                 f.temps = f.floor;
                 self.close_loop(f, cond_at);
             }
@@ -414,7 +491,7 @@ impl<'src> Compiler<'src> {
                 self.stmts(f, body)?;
                 let cont = f.here();
                 let back = self.branch(f, condition, true)?;
-                f.patch(back, start);
+                f.patch_all(back, start);
                 f.temps = f.floor;
                 self.close_loop(f, cont);
             }
@@ -443,7 +520,7 @@ impl<'src> Compiler<'src> {
                             self.discard(f, e)?;
                         }
                         let back = self.branch(f, last, true)?;
-                        f.patch(back, body_start);
+                        f.patch_all(back, body_start);
                     }
                 }
                 f.temps = f.floor;
@@ -560,11 +637,11 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::PostInc { var, .. } | Expr::PostDec { var, .. } => {
                 let var = self.inc_target(f, var)?;
-                f.emit(Instr::IncVar { var, inc: matches!(e, Expr::PostInc { .. }) });
+                f.emit(if matches!(e, Expr::PostInc { .. }) { Instr::IncVar { var } } else { Instr::DecVar { var } });
             }
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr, .. } => {
                 let var = self.inc_target(f, expr)?;
-                f.emit(Instr::IncVar { var, inc: matches!(op, UnaryOp::PreInc) });
+                f.emit(if matches!(op, UnaryOp::PreInc) { Instr::IncVar { var } } else { Instr::DecVar { var } });
             }
             _ => {
                 self.expr(f, e)?;
@@ -573,18 +650,45 @@ impl<'src> Compiler<'src> {
         Ok(())
     }
 
-    /// Emit a jump taken when `cond` is `when`; returns it for patching.
-    /// A comparison becomes one compare-and-jump instruction.
-    fn branch(&mut self, f: &mut FnBuilder, cond: &Expr, when: bool) -> Result<usize> {
-        if let Expr::Binary { left, op, right, .. } = cond
-            && let Some(cmp) = comparison(*op)
-        {
-            let a = self.expr(f, left)?;
-            let b = self.expr(f, right)?;
-            return Ok(f.emit(Instr::JumpCmp { cmp, a, b, when, target: 0 }));
+    /// Emit jumps taken when `cond` is `when`; returns them for patching
+    /// (to one target). A comparison becomes one compare-and-jump
+    /// instruction; `&&`, `||` and `!` become control flow, so no boolean
+    /// is built for a condition.
+    fn branch(&mut self, f: &mut FnBuilder, cond: &Expr, when: bool) -> Result<Vec<usize>> {
+        let mark = f.temps;
+        match cond {
+            Expr::Binary { left, op, right, .. } if comparison(*op).is_some() => {
+                let cmp = comparison(*op).expect("a comparison");
+                let a = self.expr(f, left)?;
+                let b = self.expr(f, right)?;
+                f.temps = mark;
+                Ok(vec![f.emit(Instr::jump_cmp(cmp, a, b, when, 0))])
+            }
+            Expr::Binary { left, op, right, .. }
+                if matches!(op, BinaryOp::And | BinaryOp::LogicalAnd | BinaryOp::Or | BinaryOp::LogicalOr) =>
+            {
+                let is_and = matches!(op, BinaryOp::And | BinaryOp::LogicalAnd);
+                if is_and != when {
+                    // `a && b` false, or `a || b` true: either side decides.
+                    let mut jumps = self.branch(f, left, when)?;
+                    jumps.extend(self.branch(f, right, when)?);
+                    Ok(jumps)
+                } else {
+                    // `a && b` true, or `a || b` false: the left side can
+                    // only rule it out, the right side decides.
+                    let past = self.branch(f, left, !when)?;
+                    let jumps = self.branch(f, right, when)?;
+                    f.patch_all(past, f.here());
+                    Ok(jumps)
+                }
+            }
+            Expr::Unary { op: UnaryOp::Not, expr, .. } => self.branch(f, expr, !when),
+            _ => {
+                let c = self.expr(f, cond)?;
+                f.temps = mark;
+                Ok(vec![f.emit(if when { Instr::JumpIf { cond: c, target: 0 } } else { Instr::JumpIfNot { cond: c, target: 0 } })])
+            }
         }
-        let c = self.expr(f, cond)?;
-        Ok(f.emit(if when { Instr::JumpIf { cond: c, target: 0 } } else { Instr::JumpIfNot { cond: c, target: 0 } }))
     }
 
     fn loop_body(&mut self, f: &mut FnBuilder, body: &[StmtId], _start: u32) -> Result<()> {
@@ -696,9 +800,11 @@ impl<'src> Compiler<'src> {
         Ok((var, keys, regs.len() as u8, append))
     }
 
-    /// Compile `e` into exactly `dst`.
+    /// Compile `e` into exactly `dst`, a temporary (never a variable: a
+    /// result written there directly would bypass a reference it holds).
     fn expr_into(&mut self, f: &mut FnBuilder, e: &Expr, dst: Reg) -> Result<()> {
-        let r = self.expr(f, e)?;
+        debug_assert_eq!(dst >> KIND_SHIFT, TEMP, "expr_into targets a temporary");
+        let r = self.expr_to(f, e, Some(dst))?;
         if r != dst {
             f.emit(Instr::Move { dst, src: r });
         }
@@ -708,6 +814,14 @@ impl<'src> Compiler<'src> {
     /// Compile `e`; returns the register holding its value (a variable's
     /// own register for a plain read).
     fn expr(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        self.expr_to(f, e, None)
+    }
+
+    /// Compile `e`, computing it straight into `hint` where the instruction
+    /// allows (else the caller moves it there). Temporaries the operands
+    /// used are free once the instruction that reads them is emitted.
+    fn expr_to(&mut self, f: &mut FnBuilder, e: &Expr, hint: Option<Reg>) -> Result<Reg> {
+        let mark = f.temps;
         if let Some(v) = self.literal(e) {
             return Ok(f.constant(v));
         }
@@ -726,6 +840,20 @@ impl<'src> Compiler<'src> {
             Expr::Assign { var, expr, .. } => match var {
                 Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
                     let target = f.cv(&self.text(*name)[1..]);
+                    // Arithmetic and comparisons are one instruction that
+                    // writes its result last: it can write the variable
+                    // itself (through a reference, if the variable is one).
+                    if let Expr::Binary { op, .. } = expr
+                        && writes_once(*op)
+                    {
+                        let mark = f.temps;
+                        let src = self.expr_to(f, expr, Some(target))?;
+                        f.temps = mark;
+                        if src != target {
+                            f.emit(Instr::Assign { var: target, src });
+                        }
+                        return Ok(target);
+                    }
                     let src = self.expr(f, expr)?;
                     f.emit(Instr::Assign { var: target, src });
                     target
@@ -761,7 +889,7 @@ impl<'src> Compiler<'src> {
                     other => return Err(self.unsupported(other.span(), "this compound assignment")),
                 }
             }
-            Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right)?,
+            Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
             Expr::Unary { op, expr, span } => match op {
                 UnaryOp::PreInc | UnaryOp::PreDec => {
                     let var = self.inc_target(f, expr)?;
@@ -771,7 +899,7 @@ impl<'src> Compiler<'src> {
                 }
                 UnaryOp::Not | UnaryOp::Minus | UnaryOp::BitNot | UnaryOp::Plus => {
                     let src = self.expr(f, expr)?;
-                    let dst = f.temp();
+                    let dst = out(f, hint, mark);
                     let instr = match op {
                         UnaryOp::Not => Instr::Not { dst, src },
                         UnaryOp::Minus => Instr::Neg { dst, src },
@@ -794,22 +922,27 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::Ternary { condition, if_true, if_false, .. } => {
-                let dst = f.temp();
+                let dst = hint.unwrap_or_else(|| f.temp());
+                let keep = f.temps;
                 match if_true {
                     Some(t) => {
-                        let c = self.expr(f, condition)?;
-                        let else_at = f.emit(Instr::JumpIfNot { cond: c, target: 0 });
+                        let else_at = self.branch(f, condition, false)?;
+                        f.temps = keep;
                         self.expr_into(f, t, dst)?;
+                        f.temps = keep;
                         let end = f.emit(Instr::Jump { target: 0 });
-                        f.patch(else_at, f.here());
+                        f.patch_all(else_at, f.here());
                         self.expr_into(f, if_false, dst)?;
+                        f.temps = keep;
                         f.patch(end, f.here());
                     }
                     None => {
                         // `a ?: b`
                         self.expr_into(f, condition, dst)?;
+                        f.temps = keep;
                         let end = f.emit(Instr::JumpIf { cond: dst, target: 0 });
                         self.expr_into(f, if_false, dst)?;
+                        f.temps = keep;
                         f.patch(end, f.here());
                     }
                 }
@@ -841,7 +974,7 @@ impl<'src> Compiler<'src> {
                 };
                 let arr = self.expr(f, array)?;
                 let key = self.expr(f, dim)?;
-                let dst = f.temp();
+                let dst = out(f, hint, mark);
                 f.emit(Instr::FetchDim { dst, arr, key, quiet: false });
                 dst
             }
@@ -858,7 +991,7 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::ConcatN { dst, start, n: parts.len() as u8 });
                 dst
             }
-            Expr::Call { func, args, span } => self.call(f, func, args, *span)?,
+            Expr::Call { func, args, span } => self.call(f, func, args, *span, hint, mark)?,
             Expr::Print { expr, .. } => {
                 let r = self.expr(f, expr)?;
                 f.emit(Instr::Echo { src: r });
@@ -875,7 +1008,7 @@ impl<'src> Compiler<'src> {
                     _ => return Err(self.unsupported(*span, "this cast")),
                 };
                 let src = self.expr(f, expr)?;
-                let dst = f.temp();
+                let dst = out(f, hint, mark);
                 f.emit(Instr::Cast { kind, dst, src });
                 dst
             }
@@ -941,7 +1074,7 @@ impl<'src> Compiler<'src> {
         dst
     }
 
-    fn binary(&mut self, f: &mut FnBuilder, left: &Expr, op: BinaryOp, right: &Expr) -> Result<Reg> {
+    fn binary(&mut self, f: &mut FnBuilder, left: &Expr, op: BinaryOp, right: &Expr, hint: Option<Reg>, mark: usize) -> Result<Reg> {
         let arith = |op: BinaryOp| -> Option<BinOp> {
             Some(match op {
                 BinaryOp::Plus => BinOp::Add,
@@ -962,8 +1095,8 @@ impl<'src> Compiler<'src> {
         if let Some(bin) = arith(op) {
             let a = self.expr(f, left)?;
             let b = self.expr(f, right)?;
-            let dst = f.temp();
-            f.emit(Instr::Binary { op: bin, dst, a, b });
+            let dst = out(f, hint, mark);
+            f.emit(Instr::binary(bin, dst, a, b));
             return Ok(dst);
         }
         let cmp = match op {
@@ -973,7 +1106,7 @@ impl<'src> Compiler<'src> {
         if let Some(cmp) = cmp {
             let a = self.expr(f, left)?;
             let b = self.expr(f, right)?;
-            let dst = f.temp();
+            let dst = out(f, hint, mark);
             f.emit(Instr::Compare { cmp, dst, a, b });
             return Ok(dst);
         }
@@ -1026,7 +1159,7 @@ impl<'src> Compiler<'src> {
         }
     }
 
-    fn call(&mut self, f: &mut FnBuilder, func: &Expr, args: &[p8_syntax::ast::Arg], span: Span) -> Result<Reg> {
+    fn call(&mut self, f: &mut FnBuilder, func: &Expr, args: &[p8_syntax::ast::Arg], span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
         let Expr::Variable { name, .. } = func else {
             return Err(self.unsupported(span, "this call"));
         };
@@ -1036,6 +1169,16 @@ impl<'src> Compiler<'src> {
         }
         let text = text.strip_prefix(b"\\").unwrap_or(text);
         let lower = text.to_ascii_lowercase();
+        // strlen of a literal string is a constant, as PHP compiles it
+        // (a builtin cannot be redeclared, so the name means strlen).
+        if lower == b"strlen"
+            && let [arg] = args
+            && !arg.unpack
+            && arg.name.is_none()
+            && let Some(Frozen::Str(s)) = self.literal(arg.value)
+        {
+            return Ok(f.constant(Frozen::Int(s.as_bytes().len() as i64)));
+        }
         // Whether argument n is passed by reference, when the callee is known now.
         let by_ref = |n: usize| -> Option<bool> {
             if let Some((modes, rest)) = self.by_ref.get(&lower) {
@@ -1067,11 +1210,21 @@ impl<'src> Compiler<'src> {
             }
         }
         let base = regs.first().copied().unwrap_or_else(|| f.temp());
-        let dst = f.temp();
+        // The arguments' registers are free again once the call has them:
+        // the result may land in the first (the callee's frame is cleared
+        // before its result is written).
+        let dst = out(f, hint, mark);
         f.emit(Instr::Call { site, base, argc: args.len() as u8, dst });
-        // The arguments' registers are free again; the result is above them.
         Ok(dst)
     }
+}
+
+/// Where an instruction's result goes: `hint`, or a temporary that reuses
+/// those of its operands (`mark` is where they start; every instruction
+/// reads its operands before it writes its result).
+fn out(f: &mut FnBuilder, hint: Option<Reg>, mark: usize) -> Reg {
+    f.temps = mark;
+    hint.unwrap_or_else(|| f.temp())
 }
 
 fn comparison(op: BinaryOp) -> Option<Cmp> {

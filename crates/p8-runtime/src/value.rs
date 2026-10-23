@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub enum Value {
     #[default]
     Null,
@@ -24,6 +24,23 @@ pub enum Value {
     Ref(Rc<RefCell<Value>>),
     /// A variable never assigned (only in registers; reads warn and give null).
     Undef,
+}
+
+impl Clone for Value {
+    /// Inline: copying a value is on every register move.
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        match self {
+            Value::Null => Value::Null,
+            Value::Bool(b) => Value::Bool(*b),
+            Value::Int(i) => Value::Int(*i),
+            Value::Float(f) => Value::Float(*f),
+            Value::Str(s) => Value::Str(s.clone()),
+            Value::Array(a) => Value::Array(Rc::clone(a)),
+            Value::Ref(r) => Value::Ref(Rc::clone(r)),
+            Value::Undef => Value::Undef,
+        }
+    }
 }
 
 impl Value {
@@ -106,7 +123,11 @@ impl Value {
         Some(match self {
             Value::Null | Value::Undef | Value::Bool(false) => PhpStr::empty(),
             Value::Bool(true) => PhpStr::from("1"),
-            Value::Int(i) => PhpStr::from(i.to_string()),
+            Value::Int(i) => {
+                let mut digits = Vec::with_capacity(20);
+                crate::numeric::push_int(&mut digits, *i);
+                PhpStr::new(digits)
+            }
             Value::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Value::Str(s) => s.clone(),
             Value::Array(_) => return None,

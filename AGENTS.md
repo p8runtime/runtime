@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `crates/` holds **p8**, the new engine (docs/design/engine-v2.md), and its hosts:
+- `crates/` holds **p8**, the new engine (design: the p8 APS, `p8runtime/aps`, cited as `APS N`), and its hosts:
   - `p8`: the public embedding API; hosts use only this crate.
   - `p8-syntax` (lexer, parser, AST; the legacy engine uses it too), `p8-compiler`, `p8-bytecode`, `p8-runtime` (values, operators, the extension ABI), `p8-interp`, `p8-ext-*` (builtins): p8's internals.
   - `php-cli`: the command-line host (`php2` until p8 replaces the legacy engine).
