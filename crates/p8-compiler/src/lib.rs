@@ -11,7 +11,7 @@
 
 use p8_bytecode::{
     CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
-    CONST_EXPR, RefOp,
+    CONST_EXPR, Rare,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
 use p8_runtime::ext::Registry;
@@ -509,7 +509,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *dst = f(*dst);
             *src = f(*src);
         }
-        Ref { a, b, c, .. } => {
+        Rare { a, b, c, .. } => {
             *a = f(*a);
             *b = f(*b);
             *c = f(*c);
@@ -936,7 +936,7 @@ impl<'src> Compiler<'src> {
                         } =>
                 {
                     let (r, _) = self.ref_source(f, e, e.span())?;
-                    f.emit(Instr::reference(RefOp::ReturnRef, r, 0, 0, 0));
+                    f.emit(Instr::rare(Rare::ReturnRef, r, 0, 0, 0));
                 }
                 Some(e) => {
                     let r = self.expr(f, e)?;
@@ -1242,12 +1242,16 @@ impl<'src> Compiler<'src> {
                             let var = f.cv(&self.text(*name)[1..]);
                             f.emit(Instr::UnsetVar { var });
                         }
+                        // (A property's dimensions: through a reference to it.)
                         Expr::ArrayDimFetch { .. } => {
-                            let (var, keys, n, append) = self.dim_path(f, v)?;
+                            let (var, keys, n, append, held) = self.ref_dim_path(f, v)?;
                             if append {
                                 return Err(CompileError { message: "Cannot use [] for unsetting".into(), line: f.line });
                             }
                             f.emit(Instr::UnsetDim { var, keys, n });
+                            if let Some(h) = held {
+                                f.emit(Instr::Free { reg: h });
+                            }
                         }
                         Expr::PropertyFetch { target, property, .. } => {
                             let obj = self.expr(f, target)?;
@@ -2182,14 +2186,14 @@ impl<'src> Compiler<'src> {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, property)?;
                 let dst = f.temp();
-                f.emit(Instr::reference(RefOp::PropRef, dst, obj, name, 0));
+                f.emit(Instr::rare(Rare::PropRef, dst, obj, name, 0));
                 Ok((dst, false))
             }
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let dst = f.temp();
-                f.emit(Instr::reference(RefOp::StaticRef, dst, name, 0, class));
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
                 Ok((dst, false))
             }
             Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => {
@@ -2201,7 +2205,7 @@ impl<'src> Compiler<'src> {
                     _ => false,
                 };
                 if writes_r {
-                    f.code.insert(last, Instr::reference(RefOp::WantRef, r, 0, 0, 0));
+                    f.code.insert(last, Instr::rare(Rare::WantRef, r, 0, 0, 0));
                     let line = f.lines[last];
                     f.lines.insert(last, line);
                 }
@@ -2216,7 +2220,7 @@ impl<'src> Compiler<'src> {
         Ok(match var {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
                 let var = f.cv(&self.text(*name)[1..]);
-                f.emit(if call { Instr::reference(RefOp::BindRefResult, var, src, 0, 0) } else { Instr::BindRef { var, src } });
+                f.emit(if call { Instr::rare(Rare::BindRefResult, var, src, 0, 0) } else { Instr::BindRef { var, src } });
                 var
             }
             Expr::ArrayDimFetch { .. } => {
@@ -2230,13 +2234,13 @@ impl<'src> Compiler<'src> {
             Expr::PropertyFetch { target, property, .. } => {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, property)?;
-                f.emit(Instr::reference(RefOp::AssignPropRef, obj, name, src, 0));
+                f.emit(Instr::rare(Rare::AssignPropRef, obj, name, src, 0));
                 src
             }
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
-                f.emit(Instr::reference(RefOp::AssignStaticRef, name, src, 0, class));
+                f.emit(Instr::rare(Rare::AssignStaticRef, name, src, 0, class));
                 src
             }
             _ => return Err(self.unsupported(span, "this assignment by reference")),
@@ -2714,7 +2718,18 @@ impl<'src> Compiler<'src> {
                         continue;
                     }
                     if item.by_ref {
-                        return Err(self.unsupported(item.span, "& in an array literal"));
+                        // `[&$x]`, `[k => &$x]`: the element is a reference.
+                        let (src, _) = self.ref_source(f, item.value, item.span)?;
+                        match item.key {
+                            Some(k) => {
+                                let key = self.expr(f, k)?;
+                                f.emit(Instr::rare(Rare::ArraySetRef, dst, key, src, 0));
+                            }
+                            None => {
+                                f.emit(Instr::rare(Rare::ArrayPushRef, dst, src, 0, 0));
+                            }
+                        }
+                        continue;
                     }
                     let val = self.expr(f, item.value)?;
                     match item.key {
@@ -2982,6 +2997,12 @@ impl<'src> Compiler<'src> {
                     AstCast::Bool => CastKind::Bool,
                     AstCast::Array => CastKind::Array,
                     AstCast::Unset => CastKind::Unset,
+                    AstCast::Object => {
+                        let src = self.expr(f, expr)?;
+                        let dst = out(f, hint, mark);
+                        f.emit(Instr::rare(Rare::ToObject, dst, src, 0, 0));
+                        return Ok(dst);
+                    }
                     _ => return Err(self.unsupported(*span, "this cast")),
                 };
                 let src = self.expr(f, expr)?;
@@ -3002,10 +3023,16 @@ impl<'src> Compiler<'src> {
                             let (var, keys, n, _) = self.dim_path(f, v)?;
                             f.emit(Instr::IssetDim { dst, var, keys, n });
                         }
-                        Expr::PropertyFetch { target, property, .. } => {
+                        // `?->` reads as `->` here: null has no property set.
+                        Expr::PropertyFetch { target, property, .. } | Expr::NullsafePropertyFetch { target, property, .. } => {
                             let obj = self.quiet(f, target)?;
                             let name = self.prop_name(f, property)?;
                             f.emit(Instr::IssetProp { dst, obj, name });
+                        }
+                        Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                            let class = self.class_ref(f, class)?;
+                            let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                            f.emit(Instr::rare(Rare::IssetStatic, dst, name, 0, class));
                         }
                         // isset($o->p[k]...): the dimensions of a quietly read root
                         Expr::ArrayDimFetch { dim: Some(dim), array, .. } => {
