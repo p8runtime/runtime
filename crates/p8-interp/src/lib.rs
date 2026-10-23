@@ -1848,15 +1848,26 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
     true
 }
 
-/// +, -, * and / on two numbers, when no warning or overflow is involved
-/// (the fast path: anything else takes the slow one).
+/// Arithmetic on two numbers (and the bit operators on two ints), when no
+/// warning, error or overflow is involved (the fast path: anything else
+/// takes the slow one).
 #[inline(always)]
 fn num_op(op: BinOp, a: &Value, b: &Value) -> Option<Value> {
     match (a, b) {
-        (Value::Int(x), Value::Int(y)) => match op {
-            BinOp::Add => x.checked_add(*y).map(Value::Int),
-            BinOp::Sub => x.checked_sub(*y).map(Value::Int),
-            BinOp::Mul => x.checked_mul(*y).map(Value::Int),
+        (&Value::Int(x), &Value::Int(y)) => match op {
+            BinOp::Add => x.checked_add(y).map(Value::Int),
+            BinOp::Sub => x.checked_sub(y).map(Value::Int),
+            BinOp::Mul => x.checked_mul(y).map(Value::Int),
+            // % by zero throws and PHP_INT_MIN % -1 is 0: both take `step`.
+            BinOp::Mod => x.checked_rem(y).filter(|_| y != 0).map(Value::Int),
+            BinOp::BitAnd => Some(Value::Int(x & y)),
+            BinOp::BitOr => Some(Value::Int(x | y)),
+            BinOp::BitXor => Some(Value::Int(x ^ y)),
+            // A negative shift throws (`step`); 64 or more shifts every bit out.
+            BinOp::Shl if (0..64).contains(&y) => Some(Value::Int(x << y)),
+            BinOp::Shl if y >= 64 => Some(Value::Int(0)),
+            BinOp::Shr if (0..64).contains(&y) => Some(Value::Int(x >> y)),
+            BinOp::Shr if y >= 64 => Some(Value::Int(if x < 0 { -1 } else { 0 })),
             _ => None,
         },
         (Value::Float(x), Value::Float(y)) => float_op(op, *x, *y),
