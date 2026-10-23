@@ -50,6 +50,20 @@ pub const CLASS_READONLY: u32 = 32;
 pub const CLASS_RESOURCE: u32 = 64;
 /// The class has a `__destruct` (its own or inherited).
 pub const CLASS_DESTRUCTOR: u32 = 128;
+/// Some property default is code to run before the class is first used
+/// (a constant expression naming other constants).
+pub const CLASS_LAZY: u32 = 256;
+
+/// The code a declaration's value comes from, run when PHP evaluates it
+/// (the interpreter's compiled function; opaque here).
+#[derive(Clone)]
+pub struct Thunk(pub Rc<dyn std::any::Any>);
+
+impl std::fmt::Debug for Thunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Thunk")
+    }
+}
 
 /// An instance property's declaration, at its slot.
 #[derive(Debug, Clone)]
@@ -66,6 +80,8 @@ pub struct Property {
     pub readonly: bool,
     /// The declared type as written (`int`, `?Foo`), if typed.
     pub ty: Option<PhpStr>,
+    /// The default is this code's value (computed once per class).
+    pub init: Option<Thunk>,
 }
 
 /// A method written in Rust (a builtin class's): `$this`, the arguments.
@@ -111,6 +127,8 @@ pub struct Constant {
     pub declaring_name: PhpStr,
     /// An enum case: the constant is the case's object (one per request).
     pub is_case: bool,
+    /// The value is this code's (computed when first read).
+    pub init: Option<Thunk>,
 }
 
 /// A static property: its cell (shared with subclasses that don't
@@ -145,6 +163,9 @@ pub struct Class {
     /// An enum: its cases in order, and its backing type ("int", "string").
     pub enum_cases: Vec<PhpStr>,
     pub enum_backing: Option<PhpStr>,
+    /// The class's own static properties whose default is code (run
+    /// before the class is first used).
+    pub static_inits: Vec<(Vec<u8>, Thunk)>,
 }
 
 impl Class {

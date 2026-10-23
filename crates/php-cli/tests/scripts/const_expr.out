@@ -1,0 +1,47 @@
+int(6)
+string(2) "z
+"
+array(2) {
+  [2]=>
+  string(3) "two"
+  ["k"]=>
+  string(3) "foo"
+}
+array(5) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+  [3]=>
+  int(3)
+  [4]=>
+  int(4)
+}
+int(7)
+int(6)
+object(A)#1 (5) {
+  ["p"]=>
+  string(3) "foo"
+  ["q"]=>
+  int(16)
+  ["max"]=>
+  int(9223372036854775807)
+  ["cls"]=>
+  string(1) "A"
+  ["magic"]=>
+  string(1) "A"
+}
+string(8) "2-static"
+string(8) "2-static"
+string(7) "changed"
+string(3) "foo"
+int(16)
+int(2)
+enum(E::Two)
+
+Fatal error: Uncaught Error: Undefined constant "UNDEFINED_THING" in %s:31
+Stack trace:
+#0 {main}
+  thrown in %s on line 31

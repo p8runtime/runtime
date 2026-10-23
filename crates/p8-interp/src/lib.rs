@@ -841,6 +841,10 @@ impl Isolate {
             resource_classes: HashMap::new(),
             resource_ids: Rc::new(Ids::monotonic()),
             enum_objects: HashMap::new(),
+            resolved: std::collections::HashSet::new(),
+            class_defaults: HashMap::new(),
+            const_cache: HashMap::new(),
+            const_evaluating: Vec::new(),
             autoloaders: Vec::new(),
             autoload_tried: std::collections::HashSet::new(),
             error_handlers: Vec::new(),
@@ -911,6 +915,14 @@ pub struct Context<'i> {
     native_class: Option<Rc<Class>>,
     /// Enum case objects, one per (enum, case) in a request.
     enum_objects: HashMap<(Vec<u8>, Vec<u8>), Rc<Object>>,
+    /// Lazy classes (CLASS_LAZY) whose default code has run, by address.
+    resolved: std::collections::HashSet<usize>,
+    /// A lazy class's computed instance defaults: (slot, value).
+    class_defaults: HashMap<usize, Rc<Vec<(usize, Value)>>>,
+    /// Class constants computed by code: (declaring class, name) → value.
+    const_cache: HashMap<(Vec<u8>, Vec<u8>), Value>,
+    /// The ones being computed (a constant that needs itself is an error).
+    const_evaluating: Vec<(Vec<u8>, Vec<u8>)>,
     /// spl_autoload_register's callables, and the classes they were asked
     /// for (once each).
     autoloaders: Vec<Value>,
@@ -1080,6 +1092,14 @@ impl Context<'_> {
 
     fn location(&self) -> (Rc<str>, u32) {
         match self.frames.last() {
+            // A constant expression's code: where it was needed.
+            Some(f) if f.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() => {
+                let n = self.frames.len();
+                match self.frames.slots[..n].iter().rev().find(|f| f.func.code.name.as_bytes() != p8_bytecode::CONST_EXPR.as_bytes()) {
+                    Some(f) => (Rc::from(&*f.func.code.file), f.func.code.lines.get((f.pc as usize).saturating_sub(1)).copied().unwrap_or(0)),
+                    None => (Rc::from(""), 0),
+                }
+            }
             Some(f) => (Rc::from(&*f.func.code.file), f.func.code.lines.get(self.pc.saturating_sub(1)).copied().unwrap_or(0)),
             None => (Rc::from(""), 0),
         }
@@ -1961,6 +1981,10 @@ impl Context<'_> {
                 }
                 Instr::New { dst, class } => {
                     let class = self.class_of(func, class, w)?;
+                    if self.unresolved(&class) {
+                        self.resolve_class(regs, &class)?;
+                        return Ok(Next::Go(at));
+                    }
                     let (object, ctor) = {
                         let read = |i: usize| if i < base { below[i].clone() } else { w[i - base].clone() };
                         self.instantiate(&read, class)?
@@ -2076,9 +2100,17 @@ impl Context<'_> {
                 }
                 Instr::ClassConst { dst, class, name } => {
                     let name = reg!(name).clone();
+                    if let Some((thunk, scope, key)) = self.pending_constant(func, class, &name, w)? {
+                        self.eval_constant(regs, &thunk, scope, key)?;
+                        return Ok(Next::Go(at));
+                    }
                     reg!(dst) = self.class_constant(func, class, &name, w)?;
                 }
                 Instr::FetchStaticProp { dst, class, name } => {
+                    if let Some(c) = self.lazy_class(func, class, w)? {
+                        self.resolve_class(regs, &c)?;
+                        return Ok(Next::Go(at));
+                    }
                     let name = reg!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = match cell.borrow().deref() {
@@ -2088,6 +2120,10 @@ impl Context<'_> {
                     reg!(dst) = v;
                 }
                 Instr::AssignStaticProp { class, name, val, dst } => {
+                    if let Some(c) = self.lazy_class(func, class, w)? {
+                        self.resolve_class(regs, &c)?;
+                        return Ok(Next::Go(at));
+                    }
                     let name = reg!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = self.operand(w, func, val);
@@ -2095,6 +2131,10 @@ impl Context<'_> {
                     reg!(dst) = v;
                 }
                 Instr::AssignStaticPropOp { op, class, name, val, dst } => {
+                    if let Some(c) = self.lazy_class(func, class, w)? {
+                        self.resolve_class(regs, &c)?;
+                        return Ok(Next::Go(at));
+                    }
                     let name = reg!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let y = self.operand(w, func, val);
@@ -2366,6 +2406,7 @@ impl Context<'_> {
                     debug_info: None,
                     enum_cases: Vec::new(),
                     enum_backing: None,
+                    static_inits: Vec::new(),
                 })
             })
             .clone();

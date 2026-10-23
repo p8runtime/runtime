@@ -27,6 +27,10 @@ impl Context<'_> {
         let frames = &self.frames.slots[..self.frames.len()];
         for k in (1..frames.len()).rev() {
             let (frame, caller) = (&frames[k], &frames[k - 1]);
+            // A constant expression's code runs in place: no frame of its own.
+            if frame.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() {
+                continue;
+            }
             let mut entry = PhpArray::new();
             let code = &caller.func.code;
             let line = code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);

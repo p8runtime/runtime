@@ -11,7 +11,8 @@ use p8_bytecode::{ClassDef, ClassRef, Function};
 use p8_runtime::array::Key;
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Visibility, visible,
+    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_LAZY, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Thunk, Visibility,
+    visible,
 };
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -159,10 +160,15 @@ impl Context<'_> {
         // replaces a visible parent one, and sits beside a private one.
         let mut properties: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
         let mut statics = parent.as_ref().map(|p| p.statics.clone()).unwrap_or_default();
+        let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
             let default = p.default.as_ref().map_or(Value::Undef, |d| d.to_value());
+            let init = p.code.as_ref().map(|c| Thunk(Rc::new(Arc::clone(c))));
             if p.is_static {
+                if let Some(t) = init {
+                    static_inits.push((pname.clone(), t));
+                }
                 statics.insert(pname, (Rc::new(RefCell::new(default)), p.visibility, lower.clone()));
                 continue;
             }
@@ -174,6 +180,7 @@ impl Context<'_> {
                 declaring_name: PhpStr::from(def.name.as_bytes()),
                 readonly: p.readonly,
                 ty: p.ty.as_ref().map(|t| PhpStr::from(t.as_bytes())),
+                init,
             };
             match properties.iter().position(|q| q.name.as_bytes() == pname.as_slice() && q.visibility != Visibility::Private) {
                 Some(at) => {
@@ -268,6 +275,11 @@ impl Context<'_> {
             }
             for (k, (cell, visibility, _)) in &t.statics {
                 let fresh = Rc::new(RefCell::new(cell.borrow().clone()));
+                if !statics.contains_key(k)
+                    && let Some((_, init)) = t.static_inits.iter().find(|(n, _)| n == k)
+                {
+                    static_inits.push((k.clone(), init.clone()));
+                }
                 statics.entry(k.clone()).or_insert((fresh, *visibility, lower.clone()));
             }
             for (k, c) in &t.constants {
@@ -290,6 +302,7 @@ impl Context<'_> {
                 declaring_name: PhpStr::from(def.name.as_bytes()),
                 readonly: true,
                 ty: Some(PhpStr::from(ty.unwrap_or("string"))),
+                init: None,
             };
             properties.insert(0, prop("name", None));
             if let Some(t) = &def.enum_backing {
@@ -303,6 +316,7 @@ impl Context<'_> {
                         visibility: Visibility::Public,
                         declaring_name: PhpStr::from(def.name.as_bytes()),
                         is_case: true,
+                        init: None,
                     },
                 );
             }
@@ -335,7 +349,13 @@ impl Context<'_> {
         for c in &def.constants {
             constants.insert(
                 c.name.as_bytes().to_vec(),
-                Constant { value: c.value.to_value(), visibility: c.visibility, declaring_name: PhpStr::from(def.name.as_bytes()), is_case: false },
+                Constant {
+                    value: c.value.to_value(),
+                    visibility: c.visibility,
+                    declaring_name: PhpStr::from(def.name.as_bytes()),
+                    is_case: false,
+                    init: c.code.as_ref().map(|code| Thunk(Rc::new(Arc::clone(code)))),
+                },
             );
         }
         for m in &def.methods {
@@ -395,6 +415,11 @@ impl Context<'_> {
         ordered.extend(traits);
         let methods = ordered;
         let destructor = if methods.contains_key(b"__destruct".as_slice()) { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
+        let lazy = properties.iter().any(|p| p.init.is_some())
+            || !static_inits.is_empty()
+            || constants.values().any(|c| c.init.is_some())
+            || parent.as_ref().is_some_and(|p| p.flags & CLASS_LAZY != 0);
+        let destructor = destructor | if lazy { CLASS_LAZY } else { 0 };
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,
@@ -409,6 +434,7 @@ impl Context<'_> {
             debug_info: None,
             enum_cases: def.cases.iter().map(|(n, _)| PhpStr::from(n.as_bytes())).collect(),
             enum_backing: def.enum_backing.as_ref().map(|t| PhpStr::from(t.as_bytes())),
+            static_inits,
         }))
     }
 
@@ -457,6 +483,14 @@ impl Context<'_> {
             return Err(self.throw("Error", format!("Cannot instantiate enum {}", text(&class.name))));
         }
         let object = Object::new(Rc::clone(&class), &self.ids);
+        if class.flags & CLASS_LAZY != 0
+            && let Some(defaults) = self.class_defaults.get(&(Rc::as_ptr(&class) as usize))
+        {
+            let mut slots = object.slots.borrow_mut();
+            for (i, v) in defaults.iter() {
+                slots[*i] = v.clone();
+            }
+        }
         if class.is_a(b"throwable") {
             // Where it was made, and the calls that led there.
             let (file, line) = self.location();
@@ -839,10 +873,119 @@ impl Context<'_> {
                 if c.is_case {
                     return Ok(Value::Object(self.enum_case(&class, name.as_bytes())));
                 }
+                if c.init.is_some() {
+                    let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.as_bytes().to_vec());
+                    return Ok(self.const_cache.get(&key).cloned().unwrap_or(Value::Null));
+                }
                 Ok(c.value.clone())
             }
             None => Err(self.throw("Error", format!("Undefined constant {}::{}", text(&class.name), text(&name)))),
         }
+    }
+
+    /// A class constant whose value is code not yet run: the code, the
+    /// class it runs in, and its cache key.
+    #[allow(clippy::type_complexity)] // reason: one use, the ClassConst instruction
+    pub(crate) fn pending_constant(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Option<(Thunk, Rc<Class>, (Vec<u8>, Vec<u8>))>, Throw> {
+        let class = self.class_of(func, class, w)?;
+        let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
+        let Some(c) = class.constants.get(name.as_bytes()) else { return Ok(None) };
+        let Some(init) = &c.init else { return Ok(None) };
+        let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.as_bytes().to_vec());
+        if self.const_cache.contains_key(&key) {
+            return Ok(None);
+        }
+        let scope = self.classes.get(&key.0).cloned().unwrap_or_else(|| Rc::clone(&class));
+        Ok(Some((init.clone(), scope, key)))
+    }
+
+    /// Compute a class constant from its code (once).
+    pub(crate) fn eval_constant(&mut self, regs: &mut Vec<Value>, thunk: &Thunk, scope: Rc<Class>, key: (Vec<u8>, Vec<u8>)) -> Result<(), Throw> {
+        if self.const_evaluating.contains(&key) {
+            let name = String::from_utf8_lossy(&key.1).into_owned();
+            return Err(self.throw("Error", format!("Cannot declare self-referencing constant self::{name}")));
+        }
+        self.const_evaluating.push(key.clone());
+        let r = self.run_thunk(regs, thunk, scope);
+        self.const_evaluating.retain(|k| k != &key);
+        self.const_cache.insert(key, r?);
+        Ok(())
+    }
+
+    /// Run a constant expression's code in `scope`.
+    fn run_thunk(&mut self, regs: &mut Vec<Value>, thunk: &Thunk, scope: Rc<Class>) -> Result<Value, Throw> {
+        let func = thunk.0.downcast_ref::<Arc<Function>>().expect("a constant expression's code");
+        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func))), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new() };
+        // The caller is at the instruction that needs the value (its line
+        // is where an error in the code is reported).
+        let (pc, saved) = (self.pc, self.frames.last().map(|f| f.pc));
+        if let Some(top) = self.frames.last_mut() {
+            top.pc = pc as u32;
+        }
+        let r = self.run_nested(regs, m, &mut []);
+        if let (Some(saved), Some(top)) = (saved, self.frames.last_mut()) {
+            top.pc = saved;
+        }
+        r
+    }
+
+    /// Whether a class has default code still to run.
+    pub(crate) fn unresolved(&self, class: &Rc<Class>) -> bool {
+        class.flags & CLASS_LAZY != 0 && !self.resolved.contains(&(Rc::as_ptr(class) as usize))
+    }
+
+    /// The class at `class`, if its defaults' code has not run yet.
+    pub(crate) fn lazy_class(&mut self, func: &Function, class: u16, w: &[Value]) -> Result<Option<Rc<Class>>, Throw> {
+        let c = self.class_of(func, class, w)?;
+        Ok(self.unresolved(&c).then_some(c))
+    }
+
+    /// Run a lazy class's default code (its parent's first): static
+    /// properties get their values, and its instance defaults are kept
+    /// for each new object.
+    pub(crate) fn resolve_class(&mut self, regs: &mut Vec<Value>, class: &Rc<Class>) -> Result<(), Throw> {
+        let key = Rc::as_ptr(class) as usize;
+        if !self.unresolved(class) {
+            return Ok(());
+        }
+        self.resolved.insert(key);
+        let r = self.resolve_now(regs, class);
+        if r.is_err() {
+            self.resolved.remove(&key);
+        }
+        r
+    }
+
+    fn resolve_now(&mut self, regs: &mut Vec<Value>, class: &Rc<Class>) -> Result<(), Throw> {
+        if let Some(parent) = &class.parent {
+            self.resolve_class(regs, parent)?;
+        }
+        // Its constants (PHP computes them all before the first use).
+        let mut pending: Vec<(&Vec<u8>, &p8_runtime::object::Constant)> = class.constants.iter().filter(|(_, c)| c.init.is_some()).collect();
+        pending.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, c) in pending {
+            let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.clone());
+            if !self.const_cache.contains_key(&key) {
+                let scope = self.classes.get(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
+                let thunk = c.init.clone().expect("filtered");
+                self.eval_constant(regs, &thunk, scope, key)?;
+            }
+        }
+        for (name, thunk) in &class.static_inits {
+            let v = self.run_thunk(regs, thunk, Rc::clone(class))?;
+            if let Some((cell, _, _)) = class.statics.get(name) {
+                *cell.borrow_mut() = v;
+            }
+        }
+        let mut defaults = Vec::new();
+        for (i, p) in class.properties.iter().enumerate() {
+            if let Some(thunk) = &p.init {
+                let scope = self.classes.get(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                defaults.push((i, self.run_thunk(regs, thunk, scope)?));
+            }
+        }
+        self.class_defaults.insert(Rc::as_ptr(class) as usize, Rc::new(defaults));
+        Ok(())
     }
 
     /// The cell of static property `C::$name`.
