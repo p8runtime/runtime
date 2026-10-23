@@ -1923,11 +1923,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
             token.span.end
         } else {
-            if end_token == TokenKind::EndHeredoc && self.current_token.kind == TokenKind::Eof {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "syntax error, unexpected end of file",
-                });
+            // The file ended inside the string (PHP names what a command
+            // in backticks still needs).
+            if self.current_token.kind == TokenKind::Eof {
+                let message = match end_token {
+                    TokenKind::Backtick => "syntax error, unexpected end of file, expecting \"`\"",
+                    _ => "syntax error, unexpected end of file",
+                };
+                self.errors.push(ParseError { span: self.current_token.span, message });
             }
             self.current_token.span.start
         };

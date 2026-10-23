@@ -2787,6 +2787,7 @@ dependencies = [
  "p8-bytecode",
  "p8-compiler",
  "p8-ext-standard",
+ "p8-ext-xml",
  "p8-interp",
  "p8-runtime",
  "p8-syntax",
@@ -2828,6 +2829,14 @@ dependencies = [
  "sha3",
  "whirlpool",
  "xxhash-rust",
+]
+
+[[package]]
+name = "p8-ext-xml"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "p8-runtime",
 ]
 
 [[package]]

@@ -10,6 +10,7 @@ bumpalo = { version = "3.12", features = ["collections"] }
 p8-bytecode = { path = "../p8-bytecode" }
 p8-compiler = { path = "../p8-compiler" }
 p8-ext-standard = { path = "../p8-ext-standard" }
+p8-ext-xml = { path = "../p8-ext-xml" }
 p8-interp = { path = "../p8-interp" }
 p8-runtime = { path = "../p8-runtime" }
 p8-syntax = { path = "../p8-syntax" }

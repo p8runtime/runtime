@@ -50,7 +50,9 @@ impl Context<'_> {
                 self.builtin_on_demand(&dep)?;
             }
         }
-        crate::builtin_classes::declare_spec(&mut self.classes, spec);
+        let make_data = self.isolate.registry.data_maker(spec.name);
+        let dtor = self.isolate.registry.native_dtor(spec.name);
+        crate::builtin_classes::declare_spec(&mut self.classes, spec, make_data, dtor);
         self.classes.get(lower).cloned()
     }
 
@@ -112,6 +114,12 @@ impl Context<'_> {
         }
         let mut r = Ok(());
         while let Some(object) = self.ids.next_pending() {
+            if let Some(dtor) = object.class.native_dtor {
+                r = dtor(self, &object, &mut []).map(|_| ());
+                if r.is_err() {
+                    break;
+                }
+            }
             if let Some(m) = self.destructor(&object) {
                 r = self.run_nested(regs, m, &mut []).map(|_| ());
                 if r.is_err() {
@@ -163,6 +171,9 @@ impl Context<'_> {
         for object in self.ids.undestructed() {
             if object.destructed.replace(true) {
                 continue;
+            }
+            if let Some(dtor) = object.class.native_dtor {
+                dtor(self, &object, &mut [])?;
             }
             if let Some(m) = self.destructor(&object) {
                 self.run_nested(regs, m, &mut [])?;

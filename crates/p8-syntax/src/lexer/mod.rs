@@ -531,8 +531,11 @@ impl<'src> Lexer<'src> {
     fn next_in_double_quotes(&mut self) -> Option<Token> {
         let start = self.cursor;
         if self.cursor >= self.input.len() {
+            // The string never closed: the file ends inside it (an empty
+            // Error token here, forever, hung the parser).
+            self.state_stack.pop();
             return Some(Token {
-                kind: TokenKind::Error,
+                kind: TokenKind::Eof,
                 span: Span::new(start, start),
             });
         }

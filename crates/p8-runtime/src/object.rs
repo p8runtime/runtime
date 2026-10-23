@@ -57,6 +57,8 @@ pub const CLASS_LAZY: u32 = 256;
 pub const CLASS_HOOKS: u32 = 512;
 /// A builtin class (not written in PHP).
 pub const CLASS_INTERNAL: u32 = 1024;
+/// `clone` throws (a native class with no clone handler; its subclasses too).
+pub const CLASS_UNCLONEABLE: u32 = 2048;
 
 /// A property's hooks (Property::hooks): a get hook, a set hook, and
 /// whether it is virtual (no stored value: no hook uses `$this->name`).
@@ -186,6 +188,13 @@ pub struct Class {
     /// What var_dump and print_r show of an object instead of its
     /// properties (a Closure's name, file, bindings).
     pub debug_info: Option<fn(&Object) -> PhpArray>,
+    /// A native class's per-object Rust state, made for each new object
+    /// (of it or a subclass): see [`Data`].
+    pub make_data: Option<MakeData>,
+    /// A native class's cleanup when an object is destroyed (before any
+    /// __destruct, as PHP's internal dtor_obj): what libxml flushes on
+    /// free, say.
+    pub native_dtor: Option<NativeMethod>,
     /// An enum: its cases in order, and its backing type ("int", "string").
     pub enum_cases: Vec<PhpStr>,
     pub enum_backing: Option<PhpStr>,
@@ -355,6 +364,9 @@ impl Ids {
 /// Closure's function and bindings), for the code that knows its type.
 pub struct Data(pub Rc<dyn std::any::Any>);
 
+/// Makes a new object's [`Data`] (a native class's state).
+pub type MakeData = fn() -> Rc<dyn std::any::Any>;
+
 impl std::fmt::Debug for Data {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Data")
@@ -379,7 +391,13 @@ pub struct Object {
 impl Object {
     /// A new object of `class` with its properties' defaults.
     pub fn new(class: Rc<Class>, ids: &Rc<Ids>) -> Rc<Object> {
-        Object::with_data(class, ids, None)
+        let data = class.make_data.map(|make| make());
+        Object::with_data(class, ids, data)
+    }
+
+    /// This object's native state, if it is a `T`.
+    pub fn native<T: 'static>(&self) -> Option<&T> {
+        self.data.as_ref().and_then(|d| d.0.downcast_ref::<T>())
     }
 
     /// A new object holding `data` (see [`Data`]).

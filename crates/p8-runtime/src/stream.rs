@@ -30,6 +30,10 @@ pub fn resource_of(v: &Value) -> Option<std::rc::Rc<Object>> {
     }
 }
 
+/// The host's MAXPATHLEN (PHP_MAXPATHLEN): realpath() and friends fail
+/// on a path this long or longer.
+pub const MAXPATHLEN: usize = if cfg!(target_os = "macos") { 1024 } else { 4096 };
+
 pub fn resource(o: &Object) -> Option<&Resource> {
     o.data.as_ref().and_then(|d| d.0.downcast_ref::<Resource>())
 }

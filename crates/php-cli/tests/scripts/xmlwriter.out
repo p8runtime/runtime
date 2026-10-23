@@ -1,0 +1,54 @@
+Error: Invalid or uninitialized XMLWriter object
+ValueError: XMLWriter::startElement(): Argument #2 must be a valid element name, "1bad" given
+ValueError: xmlwriter_start_element(): Argument #2 ($name) must be a valid element name, "1bad" given
+ValueError: XMLWriter::writeElementNs(): Argument #3 ($namespace) must be a valid element name, "1bad" given
+ValueError: xmlwriter_write_element_ns(): Argument #3 ($name) must be a valid element name, "1bad" given
+ValueError: XMLWriter::openUri(): Argument #1 ($uri) must not be empty
+
+Warning: XMLWriter::openUri(): Unable to resolve file path in %s on line 10
+bool(false)
+Error: Trying to clone an uncloneable object of class XMLWriter
+object(XMLWriter)#1 (0) {
+}
+object(XMLWriter)#3 (0) {
+}
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<a t="�&#9;&#10;&lt;&quot;&amp;&gt;'">� &#8364; &lt;&amp;&gt;&quot;'&#13;</a>
+string(67) "<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<é>ü</é>"
+string(67) "<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<é>ü</é>"
+<a t="&#xE9;&#x20AC;&#x1F600;�"/>
+bool(true)
+<?xml version="1.0" encoding="utf8"?>
+bool(true)
+<?xml version="1.0" encoding="UTF-8"?>
+bool(true)
+<?xml version="1.0" encoding="latin1"?>
+bool(true)
+<?xml version="1.0" encoding="ISO-8859-1"?>
+bool(true)
+<?xml version="1.0" encoding="ASCII"?>
+bool(true)
+<?xml version="1.0" encoding="US-ASCII"?>
+bool(true)
+<?xml version="1.0" encoding="shift_jis"?>
+bool(false)
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE root
+PUBLIC "-//X//DTD"
+       "x.dtd" [
+  <!ELEMENT root (item)*>
+  <!ATTLIST item id CDATA #IMPLIED>
+  <!ENTITY ent "value">
+]>
+<p:root q:attr="v" xmlns:q="urn:q" xmlns:p="urn:p"><?php echo 1;?>
+  <item><![CDATA[<raw>]]></item>
+  <empty/>
+  <full></full>
+  <!-- c -->
+</p:root>
+bool(true)
+bool(true)
+string(9) "<after/>
+"

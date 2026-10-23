@@ -444,7 +444,21 @@ impl Context<'_> {
                         .collect();
                     (name, params)
                 }
-                Code::Native(_) => (String::new(), Vec::new()),
+                Code::Native(native) => {
+                    // A builtin class's method: its stub signature, found by name.
+                    let Some(scope) = &m.scope else { return (String::new(), Vec::new()) };
+                    let same = |other: &Option<p8_runtime::object::Native>| match (other, native) {
+                        (Some(p8_runtime::object::Native::Method(a)), p8_runtime::object::Native::Method(b)) => std::ptr::fn_addr_eq(*a, *b),
+                        (Some(p8_runtime::object::Native::Static(a)), p8_runtime::object::Native::Static(b)) => std::ptr::fn_addr_eq(*a, *b),
+                        _ => false,
+                    };
+                    let Some(method) = scope.methods.values().find(|meth| same(&meth.native)) else { return (String::new(), Vec::new()) };
+                    let name = format!("{}::{}", text(method.declaring_name.as_bytes()), text(method.name.as_bytes()));
+                    let params = p8_runtime::stubs::lookup(name.as_bytes())
+                        .map(|s| s.params.iter().map(|p| NamedParam { name: p.name.to_string(), optional: p.optional(), variadic: p.variadic, default: p.default }).collect())
+                        .unwrap_or_default();
+                    (name, params)
+                }
             },
         }
     }
