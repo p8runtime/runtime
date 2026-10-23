@@ -139,7 +139,7 @@ pub fn php_is_callable(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Bool(callable)))
 }
 
-fn function_exists_case_insensitive(vm: &VM, name_bytes: &[u8]) -> bool {
+pub(crate) fn function_exists_case_insensitive(vm: &VM, name_bytes: &[u8]) -> bool {
     let stripped = if name_bytes.starts_with(b"\\") {
         &name_bytes[1..]
     } else {

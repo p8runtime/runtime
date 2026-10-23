@@ -182,6 +182,29 @@ pub struct Emitter<'src> {
     line_starts: Option<Rc<Vec<usize>>>,
     /// The file's first compile error, shared with child emitters.
     compile_error: Rc<RefCell<Option<CompileError>>>,
+    /// `use` imports of the current namespace, shared with child emitters.
+    imports: Rc<Imports>,
+    /// Start offsets of the top-level declarations already emitted by
+    /// hoisting; the in-order pass skips them.
+    hoisted: std::collections::HashSet<usize>,
+}
+
+/// The names a namespace imports with `use` (zend_compile.c FC(imports),
+/// FC(imports_function), FC(imports_const)). Class and function aliases
+/// are case-insensitive (keys are lowercase); constant aliases are not.
+#[derive(Debug, Clone, Default)]
+struct Imports {
+    classes: HashMap<Vec<u8>, Vec<u8>>,
+    functions: HashMap<Vec<u8>, Vec<u8>>,
+    constants: HashMap<Vec<u8>, Vec<u8>>,
+}
+
+/// A function or constant name after resolution: unqualified names inside
+/// a namespace try the namespaced name first, then the global one, at run
+/// time.
+enum ResolvedName {
+    Exact(Vec<u8>),
+    Fallback { namespaced: Vec<u8>, global: Vec<u8> },
 }
 
 impl<'src> Emitter<'src> {
@@ -204,6 +227,159 @@ impl<'src> Emitter<'src> {
             current_line: 1,
             line_starts: None,
             compile_error: Rc::default(),
+            imports: Rc::default(),
+            hoisted: Default::default(),
+        }
+    }
+
+    /// The source text of a name, keeping a leading `\\` (fully qualified).
+    fn raw_text(&self, span: crate::parser::span::Span) -> &'src [u8] {
+        &self.source[span.start..span.end]
+    }
+
+    /// The current namespace, without a trailing separator ("" if global).
+    fn namespace_name(&self) -> Vec<u8> {
+        self.current_namespace
+            .and_then(|ns| self.interner.lookup(ns))
+            .unwrap_or(b"")
+            .to_vec()
+    }
+
+    /// `name` inside the current namespace (a declaration's full name).
+    fn prefix_namespace(&self, name: &[u8]) -> Vec<u8> {
+        let ns = self.namespace_name();
+        if ns.is_empty() {
+            return name.to_vec();
+        }
+        [ns.as_slice(), b"\\", name].concat()
+    }
+
+    /// A qualified name whose first segment may be an imported alias:
+    /// `A\B` with `use X\Y as A` is `X\Y\B`; otherwise it is namespaced.
+    fn resolve_qualified(&self, name: &[u8]) -> Vec<u8> {
+        let (first, rest) = match name.iter().position(|&b| b == b'\\') {
+            Some(i) => (&name[..i], &name[i..]),
+            None => (name, &b""[..]),
+        };
+        match self.imports.classes.get(&first.to_ascii_lowercase()) {
+            Some(full) => [full.as_slice(), rest].concat(),
+            None => self.prefix_namespace(name),
+        }
+    }
+
+    /// A class name as written, resolved like zend_resolve_class_name: fully
+    /// qualified names lose the `\\`, `namespace\\X` is relative to the
+    /// current namespace, imports apply to the first segment, and
+    /// everything else is in the current namespace. self, parent, static
+    /// and the reserved type names stay as they are.
+    fn resolve_class_name(&self, name: &[u8]) -> Vec<u8> {
+        if name.starts_with(b"$") {
+            return name.to_vec();
+        }
+        if let Some(rest) = name.strip_prefix(b"\\") {
+            return rest.to_vec();
+        }
+        if let Some(rest) = Self::strip_namespace_keyword(name) {
+            return self.prefix_namespace(rest);
+        }
+        if !name.contains(&b'\\') && Self::is_reserved_class_name(name) {
+            return name.to_vec();
+        }
+        self.resolve_qualified(name)
+    }
+
+    /// The resolved class name of a span, interned.
+    fn class_sym(&mut self, span: crate::parser::span::Span) -> Symbol {
+        let name = self.resolve_class_name(self.raw_text(span));
+        self.interner.intern(&name)
+    }
+
+    /// `namespace\\X` (case-insensitive keyword) → `X`.
+    fn strip_namespace_keyword(name: &[u8]) -> Option<&[u8]> {
+        (name.len() > 10 && name[..10].eq_ignore_ascii_case(b"namespace\\")).then(|| &name[10..])
+    }
+
+    /// Names that are never resolved as classes (zend_is_reserved_class_name
+    /// plus the class fetch keywords).
+    fn is_reserved_class_name(name: &[u8]) -> bool {
+        const RESERVED: &[&[u8]] = &[
+            b"bool", b"false", b"float", b"int", b"null", b"parent", b"self", b"static",
+            b"string", b"true", b"void", b"never", b"iterable", b"object", b"mixed",
+            b"array", b"callable",
+        ];
+        RESERVED.iter().any(|r| r.eq_ignore_ascii_case(name))
+    }
+
+    /// A function (`constant` false) or constant name as written, resolved
+    /// like zend_resolve_function_name / zend_resolve_const_name.
+    fn resolve_function_or_constant(&self, name: &[u8], constant: bool) -> ResolvedName {
+        if let Some(rest) = name.strip_prefix(b"\\") {
+            return ResolvedName::Exact(rest.to_vec());
+        }
+        if let Some(rest) = Self::strip_namespace_keyword(name) {
+            return ResolvedName::Exact(self.prefix_namespace(rest));
+        }
+        if name.contains(&b'\\') {
+            return ResolvedName::Exact(self.resolve_qualified(name));
+        }
+        let imported = match constant {
+            true => self.imports.constants.get(name),
+            false => self.imports.functions.get(&name.to_ascii_lowercase()),
+        };
+        if let Some(full) = imported {
+            return ResolvedName::Exact(full.clone());
+        }
+        // true, false and null are never namespaced
+        let special = constant
+            && [&b"true"[..], b"false", b"null"].iter().any(|n| n.eq_ignore_ascii_case(name));
+        if self.namespace_name().is_empty() || special {
+            return ResolvedName::Exact(name.to_vec());
+        }
+        ResolvedName::Fallback {
+            namespaced: self.prefix_namespace(name),
+            global: name.to_vec(),
+        }
+    }
+
+    /// `namespace X;` / `namespace X { ... }`: a new namespace starts with
+    /// no imports.
+    fn enter_namespace(&mut self, name: Option<&crate::parser::ast::Name>) {
+        self.current_namespace = name.map(|n| {
+            let text = self.name_parts_text(n);
+            self.interner.intern(&text)
+        });
+        self.imports = Rc::default();
+    }
+
+    /// A Name's text from its tokens (group use builds names from parts).
+    fn name_parts_text(&self, name: &crate::parser::ast::Name) -> Vec<u8> {
+        let mut text = Vec::new();
+        for part in name.parts {
+            text.extend_from_slice(&self.source[part.span.start..part.span.end]);
+        }
+        text
+    }
+
+    /// `use A\\B [as C]`, `use function ...`, `use const ...`.
+    fn add_imports(&mut self, uses: &[crate::parser::ast::UseItem], kind: crate::parser::ast::UseKind) {
+        use crate::parser::ast::UseKind;
+        for item in uses {
+            let mut full = self.name_parts_text(&item.name);
+            if full.first() == Some(&b'\\') {
+                full.remove(0);
+            }
+            let alias = match item.alias {
+                Some(alias) => self.raw_text(alias.span).to_vec(),
+                None => full.rsplit(|&b| b == b'\\').next().unwrap_or(&full).to_vec(),
+            };
+            // A group use item carries its own kind (`use A\{function f}`).
+            let kind = if item.kind != UseKind::Normal { item.kind } else { kind };
+            let imports = Rc::make_mut(&mut self.imports);
+            match kind {
+                UseKind::Normal => imports.classes.insert(alias.to_ascii_lowercase(), full),
+                UseKind::Function => imports.functions.insert(alias.to_ascii_lowercase(), full),
+                UseKind::Const => imports.constants.insert(alias, full),
+            };
         }
     }
 
@@ -302,11 +478,54 @@ impl<'src> Emitter<'src> {
             }
         }
 
+        // Only a file's own top level is hoisted, not a function body.
+        if self.current_function.is_none() {
+            self.hoist_declarations(stmts);
+            self.enter_namespace(None);
+        }
         for stmt in stmts {
             self.emit_stmt(stmt);
         }
         self.finish()
     }
+
+    /// PHP declares a file's top-level functions, and the classes it can
+    /// bind early, when the file is compiled: they exist before the first
+    /// statement runs (zend_compile_func_decl, zend_compile_class_decl).
+    /// Emit those declarations first. Early binding here covers classes
+    /// with no parent, interfaces or traits; a class with a parent waits
+    /// for its statement, as PHP does when the parent's or the methods'
+    /// types are not all known yet.
+    fn hoist_declarations(&mut self, stmts: &[StmtId]) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Namespace { name, body, .. } => {
+                    self.enter_namespace(name.as_ref());
+                    if let Some(body) = body {
+                        self.hoist_declarations(body);
+                        self.enter_namespace(None);
+                    }
+                }
+                Stmt::Use { uses, kind, .. } => self.add_imports(uses, *kind),
+                Stmt::Function { span, .. } => {
+                    self.emit_stmt(stmt);
+                    self.hoisted.insert(span.start);
+                }
+                Stmt::Class {
+                    extends: None,
+                    implements: [],
+                    members,
+                    span,
+                    ..
+                } if !members.iter().any(|m| matches!(m, ClassMember::TraitUse { .. })) => {
+                    self.emit_stmt(stmt);
+                    self.hoisted.insert(span.start);
+                }
+                _ => {}
+            }
+        }
+    }
+
 
     /// Compile an arrow function's body: `return <expr>;`.
     fn compile_arrow_body(mut self, expr: &Expr) -> (CodeChunk, bool) {
@@ -396,6 +615,7 @@ impl<'src> Emitter<'src> {
                     let compile_error = self.compile_error.clone();
                     let mut method_emitter = Emitter::new(self.source, self.interner);
                     method_emitter.compile_error = compile_error;
+                    method_emitter.imports = self.imports.clone();
                     method_emitter.current_line = child_line;
                     method_emitter.line_starts = child_line_starts;
                     method_emitter.file_path = self.file_path.clone();
@@ -675,8 +895,7 @@ impl<'src> Emitter<'src> {
                 }
                 ClassMember::TraitUse { traits, .. } => {
                     for trait_name in *traits {
-                        let trait_str = self.get_text(trait_name.span);
-                        let trait_sym = self.interner.intern(trait_str);
+                        let trait_sym = self.class_sym(trait_name.span);
                         self.chunk.code.push(OpCode::UseTrait(class_sym, trait_sym));
                     }
                 }
@@ -697,7 +916,7 @@ impl<'src> Emitter<'src> {
         let class_line = self.current_line;
         let parent_sym = extends
             .as_ref()
-            .map(|parent| self.interner.intern(self.get_text(parent.span)));
+            .map(|parent| self.class_sym(parent.span));
         self.chunk
             .code
             .push(OpCode::DefClass(class_sym, parent_sym));
@@ -710,7 +929,7 @@ impl<'src> Emitter<'src> {
         }
 
         for interface in implements {
-            let interface_sym = self.interner.intern(self.get_text(interface.span));
+            let interface_sym = self.class_sym(interface.span);
             self.chunk
                 .code
                 .push(OpCode::AddInterface(class_sym, interface_sym));
@@ -752,10 +971,7 @@ impl<'src> Emitter<'src> {
     fn emit_class_attributes(&mut self, class_sym: Symbol, attributes: &[AttributeGroup]) {
         for attr_group in attributes {
             for attr in attr_group.attributes {
-                let attr_name = self.get_text(attr.name.span);
-                // #[\Foo] names the global class Foo
-                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
-                let attr_sym = self.interner.intern(attr_name);
+                let attr_sym = self.class_sym(attr.name.span);
                 let mut args = Vec::new();
 
                 for arg in attr.args {
@@ -779,10 +995,7 @@ impl<'src> Emitter<'src> {
         let mut indices = Vec::new();
         for attr_group in attributes {
             for attr in attr_group.attributes {
-                let attr_name = self.get_text(attr.name.span);
-                // #[\Foo] names the global class Foo
-                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
-                let attr_sym = self.interner.intern(attr_name);
+                let attr_sym = self.class_sym(attr.name.span);
                 let mut args = Vec::new();
 
                 for arg in attr.args {
@@ -808,10 +1021,7 @@ impl<'src> Emitter<'src> {
         let mut instances = Vec::new();
         for attr_group in attributes {
             for attr in attr_group.attributes {
-                let attr_name = self.get_text(attr.name.span);
-                // #[\Foo] names the global class Foo
-                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
-                let attr_sym = self.interner.intern(attr_name);
+                let attr_sym = self.class_sym(attr.name.span);
                 let mut args = Vec::new();
 
                 for arg in attr.args {
@@ -836,7 +1046,22 @@ impl<'src> Emitter<'src> {
     }
 
     fn emit_stmt_inner(&mut self, stmt: &Stmt) {
+        if matches!(stmt, Stmt::Function { .. } | Stmt::Class { .. })
+            && self.hoisted.contains(&stmt.span().start)
+        {
+            return;
+        }
         match stmt {
+            Stmt::Namespace { name, body, .. } => {
+                self.enter_namespace(name.as_ref());
+                if let Some(body) = body {
+                    for stmt in *body {
+                        self.emit_stmt(stmt);
+                    }
+                    self.enter_namespace(None);
+                }
+            }
+            Stmt::Use { uses, kind, .. } => self.add_imports(uses, *kind),
             Stmt::Declare { declares, body, .. } => {
                 // PHP: declare(strict_types=1) is per-file and affects calls made from this file.
                 // The parser already validates strict_types is an integer literal 0/1.
@@ -882,8 +1107,8 @@ impl<'src> Emitter<'src> {
             }
             Stmt::Const { consts, .. } => {
                 for c in *consts {
-                    let name_str = self.get_text(c.name.span);
-                    let sym = self.interner.intern(name_str);
+                    let name_full = self.prefix_namespace(self.get_text(c.name.span));
+                    let sym = self.interner.intern(&name_full);
 
                     // Value must be constant expression.
                     // For now, we only support literals or simple expressions we can evaluate at compile time?
@@ -1060,29 +1285,29 @@ impl<'src> Emitter<'src> {
                                 false
                             };
 
-                            if is_static_prop {
-                                if let Expr::Variable { span, .. } = class {
-                                    let name = self.get_text(*span);
-                                    if !name.starts_with(b"$") {
-                                        let idx =
-                                            self.add_constant(Val::String(name.to_vec().into()));
-                                        self.chunk.code.push(OpCode::Const(idx as u16));
-                                    } else {
-                                        let sym = self.interner.intern(&name[1..]);
-                                        self.chunk.code.push(OpCode::LoadVar(sym));
-                                    }
+                            if is_static_prop
+                                && let Expr::Variable { span, .. } = class
+                            {
+                                let name = &self.resolve_class_name(self.raw_text(*span));
+                                if !name.starts_with(b"$") {
+                                    let idx =
+                                        self.add_constant(Val::String(name.to_vec().into()));
+                                    self.chunk.code.push(OpCode::Const(idx as u16));
+                                } else {
+                                    let sym = self.interner.intern(&name[1..]);
+                                    self.chunk.code.push(OpCode::LoadVar(sym));
+                                }
 
-                                    if let Expr::Variable {
-                                        span: prop_span, ..
-                                    } = constant
-                                    {
-                                        let prop_name = self.get_text(*prop_span);
-                                        let idx = self.add_constant(Val::String(
-                                            prop_name[1..].to_vec().into(),
-                                        ));
-                                        self.chunk.code.push(OpCode::Const(idx as u16));
-                                        self.chunk.code.push(OpCode::UnsetStaticProp);
-                                    }
+                                if let Expr::Variable {
+                                    span: prop_span, ..
+                                } = constant
+                                {
+                                    let prop_name = self.get_text(*prop_span);
+                                    let idx = self.add_constant(Val::String(
+                                        prop_name[1..].to_vec().into(),
+                                    ));
+                                    self.chunk.code.push(OpCode::Const(idx as u16));
+                                    self.chunk.code.push(OpCode::UnsetStaticProp);
                                 }
                             }
                         }
@@ -1197,8 +1422,8 @@ impl<'src> Emitter<'src> {
                 return_type,
                 ..
             } => {
-                let func_name_str = self.get_text(name.span);
-                let func_sym = self.interner.intern(func_name_str);
+                let func_name = self.prefix_namespace(self.get_text(name.span));
+                let func_sym = self.interner.intern(&func_name);
 
                 // 1. Collect param info to avoid borrow issues
                     struct ParamInfo<'a> {
@@ -1227,6 +1452,7 @@ impl<'src> Emitter<'src> {
                     let compile_error = self.compile_error.clone();
                     let mut func_emitter = Emitter::new(self.source, self.interner);
                     func_emitter.compile_error = compile_error;
+                    func_emitter.imports = self.imports.clone();
                     func_emitter.current_line = child_line;
                     func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
@@ -1307,8 +1533,8 @@ impl<'src> Emitter<'src> {
                 modifiers,
                 ..
             } => {
-                let class_name_str = self.get_text(name.span);
-                let class_sym = self.interner.intern(class_name_str);
+                let class_name = self.prefix_namespace(self.get_text(name.span));
+                let class_sym = self.interner.intern(&class_name);
                 self.emit_class_decl(class_sym, extends, implements, attributes, modifiers, members);
             }
             Stmt::Interface {
@@ -1317,15 +1543,14 @@ impl<'src> Emitter<'src> {
                 extends,
                 ..
             } => {
-                let name_str = self.get_text(name.span);
-                let sym = self.interner.intern(name_str);
+                let name_full = self.prefix_namespace(self.get_text(name.span));
+                let sym = self.interner.intern(&name_full);
                 let interface_line = self.current_line;
 
                 self.chunk.code.push(OpCode::DefInterface(sym));
 
                 for interface in *extends {
-                    let interface_str = self.get_text(interface.span);
-                    let interface_sym = self.interner.intern(interface_str);
+                    let interface_sym = self.class_sym(interface.span);
                     self.chunk
                         .code
                         .push(OpCode::AddInterface(sym, interface_sym));
@@ -1344,8 +1569,8 @@ impl<'src> Emitter<'src> {
                 self.current_line = saved;
             }
             Stmt::Trait { name, members, .. } => {
-                let name_str = self.get_text(name.span);
-                let sym = self.interner.intern(name_str);
+                let name_full = self.prefix_namespace(self.get_text(name.span));
+                let sym = self.interner.intern(&name_full);
 
                 self.chunk.code.push(OpCode::DefTrait(sym));
 
@@ -1362,8 +1587,8 @@ impl<'src> Emitter<'src> {
                 attributes,
                 ..
             } => {
-                let enum_name_str = self.get_text(name.span);
-                let enum_sym = self.interner.intern(enum_name_str);
+                let enum_name = self.prefix_namespace(self.get_text(name.span));
+                let enum_sym = self.interner.intern(&enum_name);
 
                 let backed_flag = match backed_type {
                     Some(Type::Simple(tok)) if tok.kind == TokenKind::TypeInt => 1,
@@ -1374,8 +1599,7 @@ impl<'src> Emitter<'src> {
                 self.chunk.code.push(OpCode::DefEnum(enum_sym, backed_flag));
 
                 for interface in *implements {
-                    let interface_str = self.get_text(interface.span);
-                    let interface_sym = self.interner.intern(interface_str);
+                    let interface_sym = self.class_sym(interface.span);
                     self.chunk
                         .code
                         .push(OpCode::AddInterface(enum_sym, interface_sym));
@@ -1733,8 +1957,7 @@ impl<'src> Emitter<'src> {
                     let catch_start = self.chunk.code.len() as u32;
 
                     for ty in catch.types {
-                        let type_name = self.get_text(ty.span);
-                        let type_sym = self.interner.intern(type_name);
+                        let type_sym = self.class_sym(ty.span);
 
                         self.chunk.catch_table.push(CatchEntry {
                             stack_depth,
@@ -2097,10 +2320,11 @@ impl<'src> Emitter<'src> {
                                 let class_name_str = if name.starts_with(b"$") {
                                     // It's actually a variable, evaluate it normally
                                     self.emit_expr(right);
+                                    self.chunk.code.push(OpCode::InstanceOf);
                                     return;
                                 } else {
                                     // Bare class name - push as string constant
-                                    Val::String(name.to_vec().into())
+                                    Val::String(self.resolve_class_name(self.raw_text(*span)).into())
                                 };
                                 let const_idx = self.add_constant(class_name_str) as u16;
                                 self.chunk.code.push(OpCode::Const(const_idx));
@@ -2551,7 +2775,7 @@ impl<'src> Emitter<'src> {
 
                                 if is_static_prop {
                                     if let Expr::Variable { span, .. } = class {
-                                        let name = self.get_text(*span);
+                                        let name = &self.resolve_class_name(self.raw_text(*span));
                                         if !name.starts_with(b"$") {
                                             let idx = self
                                                 .add_constant(Val::String(name.to_vec().into()));
@@ -2647,7 +2871,7 @@ impl<'src> Emitter<'src> {
 
                         if is_static_prop {
                             if let Expr::Variable { span, .. } = class {
-                                let name = self.get_text(*span);
+                                let name = &self.resolve_class_name(self.raw_text(*span));
                                 if !name.starts_with(b"$") {
                                     let idx = self.add_constant(Val::String(name.to_vec().into()));
                                     self.chunk.code.push(OpCode::Const(idx as u16));
@@ -2771,6 +2995,7 @@ impl<'src> Emitter<'src> {
                     let compile_error = self.compile_error.clone();
                     let mut func_emitter = Emitter::new(self.source, self.interner);
                     func_emitter.compile_error = compile_error;
+                    func_emitter.imports = self.imports.clone();
                     func_emitter.current_line = child_line;
                     func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
@@ -2875,6 +3100,7 @@ impl<'src> Emitter<'src> {
                 let compile_error = self.compile_error.clone();
                 let mut func_emitter = Emitter::new(self.source, self.interner);
                 func_emitter.compile_error = compile_error;
+                func_emitter.imports = self.imports.clone();
                 func_emitter.current_line = child_line;
                 func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
@@ -2950,12 +3176,22 @@ impl<'src> Emitter<'src> {
             Expr::Call { func, args, .. } => {
                 match func {
                     Expr::Variable { span, .. } => {
-                        let name = self.get_text(*span);
+                        let name = self.raw_text(*span);
                         if name.starts_with(b"$") {
                             self.emit_expr(func);
                         } else {
-                            let idx = self.add_constant(Val::String(name.to_vec().into()));
-                            self.chunk.code.push(OpCode::Const(idx as u16));
+                            match self.resolve_function_or_constant(name, false) {
+                                ResolvedName::Exact(name) => {
+                                    let idx = self.add_constant(Val::String(name.into()));
+                                    self.chunk.code.push(OpCode::Const(idx as u16));
+                                }
+                                ResolvedName::Fallback { namespaced, global } => {
+                                    let idx = self.add_constant(Val::String(namespaced.into()));
+                                    self.chunk.code.push(OpCode::Const(idx as u16));
+                                    let global = self.add_constant(Val::String(global.into()));
+                                    self.chunk.code.push(OpCode::NsFunctionFallback(global as u16));
+                                }
+                            }
                         }
                     }
                     _ => self.emit_expr(func),
@@ -2973,8 +3209,17 @@ impl<'src> Emitter<'src> {
                     self.chunk.code.push(OpCode::LoadVar(sym));
                 } else {
                     // Constant fetch
-                    let sym = self.interner.intern(name);
-                    self.chunk.code.push(OpCode::FetchGlobalConst(sym));
+                    match self.resolve_function_or_constant(self.raw_text(*span), true) {
+                        ResolvedName::Exact(name) => {
+                            let sym = self.interner.intern(&name);
+                            self.chunk.code.push(OpCode::FetchGlobalConst(sym));
+                        }
+                        ResolvedName::Fallback { namespaced, global } => {
+                            let namespaced = self.interner.intern(&namespaced);
+                            let global = self.interner.intern(&global);
+                            self.chunk.code.push(OpCode::FetchNsConst(namespaced, global));
+                        }
+                    }
                 }
             }
             Expr::IndirectVariable { name, .. } => {
@@ -3053,7 +3298,7 @@ impl<'src> Emitter<'src> {
                         .code
                         .push(OpCode::New(class_sym, args.len() as u8));
                 } else if let Expr::Variable { span, .. } = class {
-                    let name = self.get_text(*span);
+                    let name = &self.resolve_class_name(self.raw_text(*span));
                     if !name.starts_with(b"$") {
                         let class_sym = self.interner.intern(name);
 
@@ -3120,7 +3365,7 @@ impl<'src> Emitter<'src> {
             } => {
                 let mut class_emitted = false;
                 if let Expr::Variable { span, .. } = class {
-                    let class_name = self.get_text(*span);
+                    let class_name = &self.resolve_class_name(self.raw_text(*span));
                     if !class_name.starts_with(b"$") {
                         let class_sym = self.interner.intern(class_name);
 
@@ -3180,7 +3425,7 @@ impl<'src> Emitter<'src> {
                 }
 
                 if let Expr::Variable { span, .. } = class {
-                    let class_name = self.get_text(*span);
+                    let class_name = &self.resolve_class_name(self.raw_text(*span));
                     if !class_name.starts_with(b"$") {
                         if is_class_keyword {
                             let idx = self.add_constant(Val::String(class_name.to_vec().into()));
@@ -3276,7 +3521,7 @@ impl<'src> Emitter<'src> {
                 } => {
                     self.emit_expr(expr);
                     if let Expr::Variable { span, .. } = class {
-                        let class_name = self.get_text(*span);
+                        let class_name = &self.resolve_class_name(self.raw_text(*span));
                         if !class_name.starts_with(b"$") {
                             let class_sym = self.interner.intern(class_name);
 
@@ -3632,90 +3877,90 @@ impl<'src> Emitter<'src> {
                         }
                     }
                     Expr::ClassConstFetch {
-                        class, constant, ..
+                        class: Expr::Variable { span, .. },
+                        constant,
+                        ..
                     } => {
-                        if let Expr::Variable { span, .. } = class {
-                            let class_name = self.get_text(*span);
-                            if !class_name.starts_with(b"$") {
-                                let class_sym = self.interner.intern(class_name);
+                        let class_name = &self.resolve_class_name(self.raw_text(*span));
+                        if !class_name.starts_with(b"$") {
+                            let class_sym = self.interner.intern(class_name);
 
-                                if let Expr::Variable {
-                                    span: const_span, ..
-                                } = constant
-                                {
-                                    let const_name = self.get_text(*const_span);
-                                    if const_name.starts_with(b"$") {
-                                        let prop_name = &const_name[1..];
-                                        let prop_sym = self.interner.intern(prop_name);
+                            if let Expr::Variable {
+                                span: const_span, ..
+                            } = constant
+                            {
+                                let const_name = self.get_text(*const_span);
+                                if const_name.starts_with(b"$") {
+                                    let prop_name = &const_name[1..];
+                                    let prop_sym = self.interner.intern(prop_name);
 
-                                        if let AssignOp::Coalesce = op {
-                                            let idx = self.add_constant(Val::String(
-                                                class_name.to_vec().into(),
-                                            ));
-                                            self.chunk.code.push(OpCode::Const(idx as u16));
-                                            self.chunk.code.push(OpCode::IssetStaticProp(prop_sym));
+                                    if let AssignOp::Coalesce = op {
+                                        let idx = self.add_constant(Val::String(
+                                            class_name.to_vec().into(),
+                                        ));
+                                        self.chunk.code.push(OpCode::Const(idx as u16));
+                                        self.chunk.code.push(OpCode::IssetStaticProp(prop_sym));
 
-                                            let jump_idx = self.chunk.code.len();
-                                            self.chunk.code.push(OpCode::JmpIfFalse(0));
-
-                                            self.chunk
-                                                .code
-                                                .push(OpCode::FetchStaticProp(class_sym, prop_sym));
-                                            let jump_end_idx = self.chunk.code.len();
-                                            self.chunk.code.push(OpCode::Jmp(0));
-
-                                            let label_assign = self.chunk.code.len();
-                                            self.chunk.code[jump_idx] =
-                                                OpCode::JmpIfFalse(label_assign as u32);
-
-                                            self.emit_expr(expr);
-                                            self.chunk.code.push(OpCode::AssignStaticProp(
-                                                class_sym, prop_sym,
-                                            ));
-
-                                            let label_end = self.chunk.code.len();
-                                            self.chunk.code[jump_end_idx] =
-                                                OpCode::Jmp(label_end as u32);
-                                            return;
-                                        }
+                                        let jump_idx = self.chunk.code.len();
+                                        self.chunk.code.push(OpCode::JmpIfFalse(0));
 
                                         self.chunk
                                             .code
                                             .push(OpCode::FetchStaticProp(class_sym, prop_sym));
+                                        let jump_end_idx = self.chunk.code.len();
+                                        self.chunk.code.push(OpCode::Jmp(0));
+
+                                        let label_assign = self.chunk.code.len();
+                                        self.chunk.code[jump_idx] =
+                                            OpCode::JmpIfFalse(label_assign as u32);
+
                                         self.emit_expr(expr);
+                                        self.chunk.code.push(OpCode::AssignStaticProp(
+                                            class_sym, prop_sym,
+                                        ));
 
-                                        match op {
-                                            AssignOp::Plus => self.chunk.code.push(OpCode::Add),
-                                            AssignOp::Minus => self.chunk.code.push(OpCode::Sub),
-                                            AssignOp::Mul => self.chunk.code.push(OpCode::Mul),
-                                            AssignOp::Div => self.chunk.code.push(OpCode::Div),
-                                            AssignOp::Mod => self.chunk.code.push(OpCode::Mod),
-                                            AssignOp::Concat => {
-                                                self.chunk.code.push(OpCode::Concat)
-                                            }
-                                            AssignOp::Pow => self.chunk.code.push(OpCode::Pow),
-                                            AssignOp::BitAnd => {
-                                                self.chunk.code.push(OpCode::BitwiseAnd)
-                                            }
-                                            AssignOp::BitOr => {
-                                                self.chunk.code.push(OpCode::BitwiseOr)
-                                            }
-                                            AssignOp::BitXor => {
-                                                self.chunk.code.push(OpCode::BitwiseXor)
-                                            }
-                                            AssignOp::ShiftLeft => {
-                                                self.chunk.code.push(OpCode::ShiftLeft)
-                                            }
-                                            AssignOp::ShiftRight => {
-                                                self.chunk.code.push(OpCode::ShiftRight)
-                                            }
-                                            _ => {}
-                                        }
-
-                                        self.chunk
-                                            .code
-                                            .push(OpCode::AssignStaticProp(class_sym, prop_sym));
+                                        let label_end = self.chunk.code.len();
+                                        self.chunk.code[jump_end_idx] =
+                                            OpCode::Jmp(label_end as u32);
+                                        return;
                                     }
+
+                                    self.chunk
+                                        .code
+                                        .push(OpCode::FetchStaticProp(class_sym, prop_sym));
+                                    self.emit_expr(expr);
+
+                                    match op {
+                                        AssignOp::Plus => self.chunk.code.push(OpCode::Add),
+                                        AssignOp::Minus => self.chunk.code.push(OpCode::Sub),
+                                        AssignOp::Mul => self.chunk.code.push(OpCode::Mul),
+                                        AssignOp::Div => self.chunk.code.push(OpCode::Div),
+                                        AssignOp::Mod => self.chunk.code.push(OpCode::Mod),
+                                        AssignOp::Concat => {
+                                            self.chunk.code.push(OpCode::Concat)
+                                        }
+                                        AssignOp::Pow => self.chunk.code.push(OpCode::Pow),
+                                        AssignOp::BitAnd => {
+                                            self.chunk.code.push(OpCode::BitwiseAnd)
+                                        }
+                                        AssignOp::BitOr => {
+                                            self.chunk.code.push(OpCode::BitwiseOr)
+                                        }
+                                        AssignOp::BitXor => {
+                                            self.chunk.code.push(OpCode::BitwiseXor)
+                                        }
+                                        AssignOp::ShiftLeft => {
+                                            self.chunk.code.push(OpCode::ShiftLeft)
+                                        }
+                                        AssignOp::ShiftRight => {
+                                            self.chunk.code.push(OpCode::ShiftRight)
+                                        }
+                                        _ => {}
+                                    }
+
+                                    self.chunk
+                                        .code
+                                        .push(OpCode::AssignStaticProp(class_sym, prop_sym));
                                 }
                             }
                         }
@@ -4235,7 +4480,7 @@ impl<'src> Emitter<'src> {
         else {
             return None;
         };
-        let class_name = self.get_text(*class_span);
+        let class_name = &self.resolve_class_name(self.raw_text(*class_span));
         let prop_name = self.get_text(*prop_span);
         if class_name.starts_with(b"$") || !prop_name.starts_with(b"$") {
             return None;
@@ -4486,7 +4731,7 @@ impl<'src> Emitter<'src> {
             },
         ) = (class, constant)
         {
-            let class_name = self.get_text(*class_span);
+            let class_name = &self.resolve_class_name(self.raw_text(*class_span));
             let prop_name = self.get_text(*prop_span);
 
             // Valid static property: Class::$property (class name without $, property with $)
@@ -4537,8 +4782,7 @@ impl<'src> Emitter<'src> {
                 _ => None,
             },
             Type::Name(name) => {
-                let name_str = self.get_text(name.span);
-                let sym = self.interner.intern(name_str);
+                let sym = self.class_sym(name.span);
                 Some(ReturnType::Named(sym))
             }
             Type::Union(types) => {
