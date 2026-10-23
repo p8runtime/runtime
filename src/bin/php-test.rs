@@ -1,6 +1,7 @@
 //! Run php-src style .phpt tests against the `php` binary.
 //!
 //!   php-test path/to/php-src/Zend/tests -r --by-dir 2 --list results.txt
+#![forbid(unsafe_code)] // memory safety is the point of this runtime; see SECURITY.md
 
 use clap::Parser;
 use php_rs::phpt::executor::TestResult;

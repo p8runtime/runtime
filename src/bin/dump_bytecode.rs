@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)] // memory safety is the point of this runtime; see SECURITY.md
 use bumpalo::Bump;
 use clap::Parser;
 use php_rs::compiler::emitter::Emitter;

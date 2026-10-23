@@ -3,8 +3,10 @@
 //! This module contains all PDO driver implementations and the driver registry.
 
 pub mod mysql;
+#[cfg(feature = "pdo-oci")]
 pub mod oci;
 pub mod pgsql;
+#[cfg(feature = "pdo-sqlite")]
 pub mod sqlite;
 
 use super::driver::PdoDriver;
@@ -51,9 +53,11 @@ impl DriverRegistry {
         };
 
         // Register built-in drivers
+        #[cfg(feature = "pdo-sqlite")]
         registry.register(Box::new(sqlite::SqliteDriver));
         registry.register(Box::new(mysql::MysqlDriver));
         registry.register(Box::new(pgsql::PgsqlDriver));
+        #[cfg(feature = "pdo-oci")]
         registry.register(Box::new(oci::OciDriver));
 
         registry
@@ -136,7 +140,11 @@ mod tests {
     #[test]
     fn test_driver_registry_initialization() {
         let registry = DriverRegistry::new();
-        assert!(registry.get("sqlite").is_some());
+        assert!(registry.get("mysql").is_some());
+        assert!(registry.get("pgsql").is_some());
+        // C-backed drivers exist only when their feature is enabled
+        assert_eq!(registry.get("sqlite").is_some(), cfg!(feature = "pdo-sqlite"));
+        assert_eq!(registry.get("oci").is_some(), cfg!(feature = "pdo-oci"));
     }
 
     #[test]
@@ -156,8 +164,8 @@ mod tests {
     #[test]
     fn test_case_insensitive_lookup() {
         let registry = DriverRegistry::new();
-        assert!(registry.get("SQLite").is_some());
-        assert!(registry.get("SQLITE").is_some());
-        assert!(registry.get("sqlite").is_some());
+        assert!(registry.get("MySQL").is_some());
+        assert!(registry.get("MYSQL").is_some());
+        assert!(registry.get("mysql").is_some());
     }
 }

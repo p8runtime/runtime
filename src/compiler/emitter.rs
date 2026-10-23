@@ -704,10 +704,10 @@ impl<'src> Emitter<'src> {
                 // The parser already validates strict_types is an integer literal 0/1.
                 for item in *declares {
                     let key = self.get_text(item.key.span);
-                    if key.eq_ignore_ascii_case(b"strict_types") {
-                        if let Expr::Integer { value, .. } = item.value {
-                            self.chunk.strict_types = integer_literal(value) == Val::Int(1);
-                        }
+                    if key.eq_ignore_ascii_case(b"strict_types")
+                        && let Expr::Integer { value, .. } = item.value
+                    {
+                        self.chunk.strict_types = integer_literal(value) == Val::Int(1);
                     }
                 }
 

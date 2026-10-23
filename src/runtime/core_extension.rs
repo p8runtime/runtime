@@ -174,12 +174,11 @@ impl Extension for CoreExtension {
         registry.register_function(b"str_getcsv", string::php_str_getcsv);
         registry.register_function(b"strrev", string::php_strrev);
         registry.register_function(b"metaphone", string::php_metaphone);
-        registry.register_function(b"setlocale", string::php_setlocale);
-        registry.register_function(b"localeconv", string::php_localeconv);
-        registry.register_function(b"nl_langinfo", string::php_nl_langinfo);
-        registry.register_function(b"strcoll", string::php_strcoll);
+        registry.register_function(b"setlocale", crate::builtins::locale::php_setlocale);
+        registry.register_function(b"localeconv", crate::builtins::locale::php_localeconv);
+        registry.register_function(b"nl_langinfo", crate::builtins::locale::php_nl_langinfo);
+        registry.register_function(b"strcoll", crate::builtins::locale::php_strcoll);
         registry.register_function(b"number_format", string::php_number_format);
-        registry.register_function(b"money_format", string::php_money_format);
         registry.register_function(b"strcmp", string::php_strcmp);
         registry.register_function(b"strcasecmp", string::php_strcasecmp);
         registry.register_function(b"strncmp", string::php_strncmp);
@@ -1960,79 +1959,28 @@ impl Extension for CoreExtension {
         registry.register_constant(b"ENT_SUBSTITUTE", Val::Int(string::ENT_SUBSTITUTE));
         registry.register_constant(b"ENT_HTML401", Val::Int(string::ENT_HTML401));
         registry.register_constant(b"ENT_XML1", Val::Int(string::ENT_XML1));
+        registry.register_constant(b"ENT_IGNORE", Val::Int(4));
+        registry.register_constant(b"ENT_DISALLOWED", Val::Int(128));
         registry.register_constant(b"ENT_XHTML", Val::Int(string::ENT_XHTML));
         registry.register_constant(b"ENT_HTML5", Val::Int(string::ENT_HTML5));
 
-        // Register locale category constants
-        #[cfg(unix)]
+        // Locale categories and nl_langinfo items, with glibc's values
         {
-            registry.register_constant(b"LC_ALL", Val::Int(libc::LC_ALL as i64));
-            registry.register_constant(b"LC_COLLATE", Val::Int(libc::LC_COLLATE as i64));
-            registry.register_constant(b"LC_CTYPE", Val::Int(libc::LC_CTYPE as i64));
-            registry.register_constant(b"LC_MONETARY", Val::Int(libc::LC_MONETARY as i64));
-            registry.register_constant(b"LC_NUMERIC", Val::Int(libc::LC_NUMERIC as i64));
-            registry.register_constant(b"LC_TIME", Val::Int(libc::LC_TIME as i64));
-            #[cfg(any(
-                target_os = "linux",
-                target_os = "android",
-                target_os = "freebsd",
-                target_os = "netbsd",
-                target_os = "openbsd",
-                target_os = "dragonfly"
-            ))]
-            registry.register_constant(b"LC_MESSAGES", Val::Int(libc::LC_MESSAGES as i64));
-        }
-
-        // Register nl_langinfo constants
-        #[cfg(unix)]
-        {
-            registry.register_constant(b"CODESET", Val::Int(libc::CODESET as i64));
-            registry.register_constant(b"D_T_FMT", Val::Int(libc::D_T_FMT as i64));
-            registry.register_constant(b"D_FMT", Val::Int(libc::D_FMT as i64));
-            registry.register_constant(b"T_FMT", Val::Int(libc::T_FMT as i64));
-            registry.register_constant(b"T_FMT_AMPM", Val::Int(libc::T_FMT_AMPM as i64));
-
-            registry.register_constant(b"DAY_1", Val::Int(libc::DAY_1 as i64));
-            registry.register_constant(b"DAY_2", Val::Int(libc::DAY_2 as i64));
-            registry.register_constant(b"DAY_3", Val::Int(libc::DAY_3 as i64));
-            registry.register_constant(b"DAY_4", Val::Int(libc::DAY_4 as i64));
-            registry.register_constant(b"DAY_5", Val::Int(libc::DAY_5 as i64));
-            registry.register_constant(b"DAY_6", Val::Int(libc::DAY_6 as i64));
-            registry.register_constant(b"DAY_7", Val::Int(libc::DAY_7 as i64));
-
-            registry.register_constant(b"ABDAY_1", Val::Int(libc::ABDAY_1 as i64));
-            registry.register_constant(b"ABDAY_2", Val::Int(libc::ABDAY_2 as i64));
-            registry.register_constant(b"ABDAY_3", Val::Int(libc::ABDAY_3 as i64));
-            registry.register_constant(b"ABDAY_4", Val::Int(libc::ABDAY_4 as i64));
-            registry.register_constant(b"ABDAY_5", Val::Int(libc::ABDAY_5 as i64));
-            registry.register_constant(b"ABDAY_6", Val::Int(libc::ABDAY_6 as i64));
-            registry.register_constant(b"ABDAY_7", Val::Int(libc::ABDAY_7 as i64));
-
-            registry.register_constant(b"MON_1", Val::Int(libc::MON_1 as i64));
-            registry.register_constant(b"MON_2", Val::Int(libc::MON_2 as i64));
-            registry.register_constant(b"MON_3", Val::Int(libc::MON_3 as i64));
-            registry.register_constant(b"MON_4", Val::Int(libc::MON_4 as i64));
-            registry.register_constant(b"MON_5", Val::Int(libc::MON_5 as i64));
-            registry.register_constant(b"MON_6", Val::Int(libc::MON_6 as i64));
-            registry.register_constant(b"MON_7", Val::Int(libc::MON_7 as i64));
-            registry.register_constant(b"MON_8", Val::Int(libc::MON_8 as i64));
-            registry.register_constant(b"MON_9", Val::Int(libc::MON_9 as i64));
-            registry.register_constant(b"MON_10", Val::Int(libc::MON_10 as i64));
-            registry.register_constant(b"MON_11", Val::Int(libc::MON_11 as i64));
-            registry.register_constant(b"MON_12", Val::Int(libc::MON_12 as i64));
-
-            registry.register_constant(b"ABMON_1", Val::Int(libc::ABMON_1 as i64));
-            registry.register_constant(b"ABMON_2", Val::Int(libc::ABMON_2 as i64));
-            registry.register_constant(b"ABMON_3", Val::Int(libc::ABMON_3 as i64));
-            registry.register_constant(b"ABMON_4", Val::Int(libc::ABMON_4 as i64));
-            registry.register_constant(b"ABMON_5", Val::Int(libc::ABMON_5 as i64));
-            registry.register_constant(b"ABMON_6", Val::Int(libc::ABMON_6 as i64));
-            registry.register_constant(b"ABMON_7", Val::Int(libc::ABMON_7 as i64));
-            registry.register_constant(b"ABMON_8", Val::Int(libc::ABMON_8 as i64));
-            registry.register_constant(b"ABMON_9", Val::Int(libc::ABMON_9 as i64));
-            registry.register_constant(b"ABMON_10", Val::Int(libc::ABMON_10 as i64));
-            registry.register_constant(b"ABMON_11", Val::Int(libc::ABMON_11 as i64));
-            registry.register_constant(b"ABMON_12", Val::Int(libc::ABMON_12 as i64));
+            use crate::builtins::locale;
+            for (name, value) in [
+                (&b"LC_CTYPE"[..], locale::LC_CTYPE),
+                (b"LC_NUMERIC", locale::LC_NUMERIC),
+                (b"LC_TIME", locale::LC_TIME),
+                (b"LC_COLLATE", locale::LC_COLLATE),
+                (b"LC_MONETARY", locale::LC_MONETARY),
+                (b"LC_MESSAGES", locale::LC_MESSAGES),
+                (b"LC_ALL", locale::LC_ALL),
+            ] {
+                registry.register_constant(name, Val::Int(value));
+            }
+            for (name, value) in locale::langinfo_constants() {
+                registry.register_constant(name.as_bytes(), Val::Int(value));
+            }
         }
 
         // Register URL constants

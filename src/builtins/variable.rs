@@ -756,56 +756,49 @@ pub fn php_boolval(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Bool(b)))
 }
 
+/// getenv(?string $name = null, bool $local_only = false): array|string|false
 pub fn php_getenv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() {
-        // Validation: php_getenv without args returns array of all env vars (not implemented here yet)
-        // or just returns false?
-        // PHP documentation says: string|false getenv(( string $name = null [, bool $local_only = false ] ))
-        // If name is null, returns array of all env vars.
-        return Err("getenv() expects at least 1 parameter".into());
-    }
-
-    let name_val = vm.arena.get(args[0]);
-    let name = match &name_val.value {
-        Val::String(s) => String::from_utf8_lossy(s).to_string(),
-        _ => return Err("getenv(): Parameter 1 must be string".into()),
+    let name = match args.first().map(|h| vm.arena.get(*h).value.clone()) {
+        None | Some(Val::Null) => None,
+        Some(v) => Some(v.to_php_string_bytes()),
     };
-
-    match std::env::var(&name) {
-        Ok(val) => Ok(vm.arena.alloc(Val::String(Rc::new(val.into_bytes())))),
-        Err(_) => Ok(vm.arena.alloc(Val::Bool(false))),
+    match name {
+        Some(name) => match vm.context.env_var(&name) {
+            Some(value) => Ok(vm.arena.alloc(Val::String(Rc::new(value)))),
+            None => Ok(vm.arena.alloc(Val::Bool(false))),
+        },
+        None => {
+            let mut arr = crate::core::value::ArrayData::new();
+            for (key, value) in vm.context.env_vars() {
+                let h = vm.arena.alloc(Val::String(Rc::new(value)));
+                arr.insert(crate::core::value::ArrayKey::Str(Rc::new(key)), h);
+            }
+            Ok(vm.arena.alloc(Val::Array(Rc::new(arr))))
+        }
     }
 }
 
+/// putenv(string $assignment): bool
+///
+/// "NAME=value" sets (an empty value included), "NAME" unsets. The change is
+/// kept per request and passed to child processes; the process environment
+/// itself is never written.
 pub fn php_putenv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() != 1 {
+    let Some(&arg) = args.first() else {
         return Err("putenv() expects exactly 1 parameter".into());
-    }
-
-    let setting_val = vm.arena.get(args[0]);
-    let setting = match &setting_val.value {
-        Val::String(s) => String::from_utf8_lossy(s).to_string(),
-        _ => return Err("putenv(): Parameter 1 must be string".into()),
     };
-
-    if let Some((key, val)) = setting.split_once('=') {
-        unsafe {
-            if val.is_empty() {
-                std::env::remove_var(key);
-            } else {
-                std::env::set_var(key, val);
-            }
-        }
-    } else {
-        // "KEY" without "=" -> unset? Or no-op?
-        // PHP manual: "setting - The setting, like "FOO=BAR""
-        // std implementation usually requires key=val.
-        // If just "KEY", PHP might unset it.
-        unsafe {
-            std::env::remove_var(&setting);
-        }
+    let setting = vm.arena.get(arg).value.to_php_string_bytes();
+    let (key, value) = match setting.iter().position(|b| *b == b'=') {
+        Some(eq) => (setting[..eq].to_vec(), Some(setting[eq + 1..].to_vec())),
+        None => (setting.clone(), None),
+    };
+    if key.is_empty() {
+        return Err(vm.throw_from_native(
+            b"ValueError",
+            "putenv(): Argument #1 ($assignment) must have a valid syntax",
+        ));
     }
-
+    vm.context.env_overrides.insert(key, value);
     Ok(vm.arena.alloc(Val::Bool(true)))
 }
 
