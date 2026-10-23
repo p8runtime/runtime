@@ -97,9 +97,12 @@ pub struct Method {
 /// A class constant.
 #[derive(Debug, Clone)]
 pub struct Constant {
+    /// For an enum case: its backing value (null for a pure enum's).
     pub value: Value,
     pub visibility: Visibility,
     pub declaring_name: PhpStr,
+    /// An enum case: the constant is the case's object (one per request).
+    pub is_case: bool,
 }
 
 /// A static property: its cell (shared with subclasses that don't
@@ -131,6 +134,9 @@ pub struct Class {
     /// What var_dump and print_r show of an object instead of its
     /// properties (a Closure's name, file, bindings).
     pub debug_info: Option<fn(&Object) -> PhpArray>,
+    /// An enum: its cases in order, and its backing type ("int", "string").
+    pub enum_cases: Vec<PhpStr>,
+    pub enum_backing: Option<PhpStr>,
 }
 
 impl Class {

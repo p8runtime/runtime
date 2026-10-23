@@ -199,7 +199,8 @@ impl Value {
                 if Rc::ptr_eq(a, b) {
                     return Some(Ordering::Equal);
                 }
-                if !Rc::ptr_eq(&a.class, &b.class) {
+                // Other classes, and enum cases, can't be compared.
+                if !Rc::ptr_eq(&a.class, &b.class) || a.class.flags & crate::object::CLASS_ENUM != 0 {
                     return None;
                 }
                 let (x, y) = (a.slots.borrow(), b.slots.borrow());

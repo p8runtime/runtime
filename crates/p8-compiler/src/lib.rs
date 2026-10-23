@@ -12,7 +12,7 @@
 use p8_bytecode::{
     CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
 };
-use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_READONLY, CLASS_TRAIT, Visibility};
+use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, Visibility};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
 use p8_runtime::frozen::{Frozen, Text};
@@ -689,6 +689,8 @@ pub struct Compiler<'src> {
     ns: Vec<u8>,
     /// eval()'s code: it returns null at its end, not 1.
     pub eval: bool,
+    /// The enum being declared's backing type (for class_decl).
+    enum_backing: Option<Text>,
     use_classes: HashMap<Vec<u8>, Vec<u8>>,
     use_functions: HashMap<Vec<u8>, Vec<u8>>,
     use_consts: HashMap<Vec<u8>, Vec<u8>>,
@@ -721,6 +723,7 @@ impl<'src> Compiler<'src> {
             promoted: Vec::new(),
             ns: Vec::new(),
             eval: false,
+            enum_backing: None,
             use_classes: HashMap::new(),
             use_functions: HashMap::new(),
             use_consts: HashMap::new(),
@@ -1181,6 +1184,10 @@ impl<'src> Compiler<'src> {
             Stmt::Trait { name, members, .. } => {
                 self.class_decl(f, name.span, &[], None, &[], members, CLASS_TRAIT)?;
             }
+            Stmt::Enum { name, backed_type, implements, members, .. } => {
+                self.enum_backing = backed_type.map(|t| Text::from(type_text(self, t).to_ascii_lowercase().as_slice()));
+                self.class_decl(f, name.span, &[], None, implements, members, CLASS_ENUM | CLASS_FINAL)?;
+            }
             Stmt::Nop { .. } => {}
             other => return Err(self.unsupported(other.span(), &format!("this statement ({})", kind(other)))),
         }
@@ -1593,6 +1600,8 @@ impl<'src> Compiler<'src> {
         let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT });
         let (mut constants, mut properties, mut methods) = (Vec::new(), Vec::new(), Vec::new());
         let (mut traits, mut trait_rules) = (Vec::new(), Vec::new());
+        let mut cases = Vec::new();
+        let enum_backing = self.enum_backing.take();
         for member in members {
             match member {
                 ClassMember::Property { modifiers, ty, entries, .. } => {
@@ -1640,6 +1649,13 @@ impl<'src> Compiler<'src> {
                         is_final: has(b"final"),
                     });
                 }
+                ClassMember::Case { name, value, .. } => {
+                    let value = match value {
+                        Some(v) => Some(self.const_value(v)?),
+                        None => None,
+                    };
+                    cases.push((Text::from(self.text(name.span)), value));
+                }
                 ClassMember::TraitUse { traits: used, adaptations, .. } => {
                     for t in *used {
                         traits.push(name_of(self, t));
@@ -1673,7 +1689,7 @@ impl<'src> Compiler<'src> {
             }
         }
         self.scope = saved;
-        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, line: self.line(name) };
+        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line: self.line(name) };
         let def = Arc::new(def);
         self.classes.push(Arc::clone(&def));
         f.decls.push(def);

@@ -11,7 +11,7 @@ use p8_bytecode::{ClassDef, ClassRef, Function};
 use p8_runtime::array::Key;
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Visibility, visible,
+    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Visibility, visible,
 };
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -270,6 +270,60 @@ impl Context<'_> {
                 constants.entry(k.clone()).or_insert_with(|| c.clone());
             }
         }
+        // An enum: its cases are constants (objects made when first used),
+        // `name` (and `value`) readonly properties, cases()/from()/tryFrom().
+        if def.flags & CLASS_ENUM != 0 {
+            for x in std::iter::once(b"unitenum".to_vec()).chain(def.enum_backing.is_some().then(|| b"backedenum".to_vec())) {
+                if !interfaces.contains(&x) {
+                    interfaces.push(x);
+                }
+            }
+            let prop = |n: &str, ty: Option<&str>| Property {
+                name: PhpStr::from(n),
+                default: Value::Undef,
+                visibility: Visibility::Public,
+                declaring: lower.clone(),
+                declaring_name: PhpStr::from(def.name.as_bytes()),
+                readonly: true,
+                ty: Some(PhpStr::from(ty.unwrap_or("string"))),
+            };
+            properties.insert(0, prop("name", None));
+            if let Some(t) = &def.enum_backing {
+                properties.insert(1, prop("value", Some(&text_of(t))));
+            }
+            for (case, value) in &def.cases {
+                constants.insert(
+                    case.as_bytes().to_vec(),
+                    Constant {
+                        value: value.as_ref().map_or(Value::Null, |v| v.to_value()),
+                        visibility: Visibility::Public,
+                        declaring_name: PhpStr::from(def.name.as_bytes()),
+                        is_case: true,
+                    },
+                );
+            }
+            let natives: &[(&str, p8_runtime::object::NativeStatic)] = if def.enum_backing.is_some() {
+                &[("cases", crate::builtin_classes::enum_cases), ("from", crate::builtin_classes::enum_from), ("tryFrom", crate::builtin_classes::enum_try_from)]
+            } else {
+                &[("cases", crate::builtin_classes::enum_cases)]
+            };
+            for (n, f) in natives {
+                methods.insert(
+                    n.to_ascii_lowercase().into_bytes(),
+                    Method {
+                        name: PhpStr::from(*n),
+                        func: u32::MAX,
+                        native: Some(p8_runtime::object::Native::Static(*f)),
+                        visibility: Visibility::Public,
+                        is_static: true,
+                        is_abstract: false,
+                        is_final: false,
+                        declaring: lower.clone(),
+                        declaring_name: PhpStr::from(def.name.as_bytes()),
+                    },
+                );
+            }
+        }
         let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
         for (i, p) in properties.iter().enumerate() {
             slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
@@ -277,7 +331,7 @@ impl Context<'_> {
         for c in &def.constants {
             constants.insert(
                 c.name.as_bytes().to_vec(),
-                Constant { value: c.value.to_value(), visibility: c.visibility, declaring_name: PhpStr::from(def.name.as_bytes()) },
+                Constant { value: c.value.to_value(), visibility: c.visibility, declaring_name: PhpStr::from(def.name.as_bytes()), is_case: false },
             );
         }
         for m in &def.methods {
@@ -336,6 +390,8 @@ impl Context<'_> {
             constants,
             statics,
             debug_info: None,
+            enum_cases: def.cases.iter().map(|(n, _)| PhpStr::from(n.as_bytes())).collect(),
+            enum_backing: def.enum_backing.as_ref().map(|t| PhpStr::from(t.as_bytes())),
         }))
     }
 
@@ -372,6 +428,9 @@ impl Context<'_> {
         if class.flags & CLASS_TRAIT != 0 {
             return Err(self.throw("Error", format!("Cannot instantiate trait {}", text(&class.name))));
         }
+        if class.flags & CLASS_ENUM != 0 {
+            return Err(self.throw("Error", format!("Cannot instantiate enum {}", text(&class.name))));
+        }
         let object = Object::new(Rc::clone(&class), &self.ids);
         if class.is_a(b"throwable") {
             // Where it was made, and the calls that led there.
@@ -392,6 +451,23 @@ impl Context<'_> {
         }
         let func = self.code_of(&ctor);
         Ok((Rc::clone(&object), Some(MethodFrame::method(func, Some(object), declaring, class))))
+    }
+
+    /// An enum's case object (the same one each time in a request).
+    pub(crate) fn enum_case(&mut self, class: &Rc<Class>, case: &[u8]) -> Rc<Object> {
+        let key = (class.lower.clone(), case.to_vec());
+        if let Some(o) = self.enum_objects.get(&key) {
+            return Rc::clone(o);
+        }
+        let object = Object::new(Rc::clone(class), &self.ids);
+        class.write(&object, b"name", &class.lower, Value::Str(PhpStr::from(case)));
+        if class.enum_backing.is_some()
+            && let Some(c) = class.constants.get(case)
+        {
+            class.write(&object, b"value", &class.lower, c.value.clone());
+        }
+        self.enum_objects.insert(key, Rc::clone(&object));
+        object
     }
 
     /// The class in `class`'s chain that declares a member (as linked).
@@ -714,6 +790,9 @@ impl Context<'_> {
                         "Error",
                         format!("Cannot access {} constant {}::{}", c.visibility.word(), text(&class.name), text(&name)),
                     ));
+                }
+                if c.is_case {
+                    return Ok(Value::Object(self.enum_case(&class, name.as_bytes())));
                 }
                 Ok(c.value.clone())
             }

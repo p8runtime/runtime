@@ -792,6 +792,8 @@ impl Isolate {
             loader: None,
             included: std::collections::HashSet::new(),
             ids: Rc::new(Ids::default()),
+            native_class: None,
+            enum_objects: HashMap::new(),
             autoloaders: Vec::new(),
             autoload_tried: std::collections::HashSet::new(),
             error_handlers: Vec::new(),
@@ -851,6 +853,10 @@ pub struct Context<'i> {
     ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
     arg_buf: Vec<Value>,
+    /// The class a static builtin method runs for (an enum's cases()).
+    native_class: Option<Rc<Class>>,
+    /// Enum case objects, one per (enum, case) in a request.
+    enum_objects: HashMap<(Vec<u8>, Vec<u8>), Rc<Object>>,
     /// spl_autoload_register's callables, and the classes they were asked
     /// for (once each).
     autoloaders: Vec<Value>,
@@ -2090,10 +2096,12 @@ impl Context<'_> {
             classes::Code::User(func) => func,
             classes::Code::Native(native) => {
                 let mut buf: Vec<Value> = regs[args..args + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)).collect();
+                let saved = std::mem::replace(&mut self.native_class, m.called.clone());
                 // Lent, as to a builtin: Closure::call runs PHP code.
                 self.isolate.regs = std::mem::take(regs);
                 let r = self.run_native(native, m.this.as_ref(), &mut buf);
                 *regs = std::mem::take(&mut self.isolate.regs);
+                self.native_class = saved;
                 drop(buf);
                 let v = r?;
                 if ret != NO_RET {
@@ -2697,6 +2705,14 @@ impl Ctx for Context<'_> {
 
     fn called_class(&self) -> Option<Rc<Class>> {
         Context::scope(self).1
+    }
+
+    fn native_class(&self) -> Option<Rc<Class>> {
+        self.native_class.clone()
+    }
+
+    fn enum_case(&mut self, class: &Rc<Class>, case: &[u8]) -> Value {
+        Value::Object(Context::enum_case(self, class, case))
     }
 
     fn error_handler(&mut self, handler: Option<(Value, i64)>) -> Value {

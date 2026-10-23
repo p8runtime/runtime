@@ -414,6 +414,9 @@ pub struct ClassDef {
     /// `use T1, T2 { … }`: the traits, and their conflict rules.
     pub traits: Vec<Text>,
     pub trait_rules: Vec<TraitRule>,
+    /// An enum's cases (name, backing value) in order, and backing type.
+    pub cases: Vec<(Text, Option<Frozen>)>,
+    pub enum_backing: Option<Text>,
     pub line: u32,
 }
 

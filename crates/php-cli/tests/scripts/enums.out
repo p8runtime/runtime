@@ -1,0 +1,45 @@
+enum(Suit::Hearts)
+enum(Pure::A)
+Suit Enum:string
+(
+    [name] => Hearts
+    [value] => H
+)
+
+Pure Enum
+(
+    [name] => B
+)
+
+\Suit::Hearts
+array(2) {
+  [0]=>
+  enum(Suit::Hearts)
+  [1]=>
+  enum(Suit::Spades)
+}
+"X" is not a valid backing value for enum Suit
+5 is not a valid backing value for enum N
+NULL
+bool(true)
+bool(true)
+bool(false)
+Cannot modify readonly property Suit::$name
+Cannot instantiate enum Pure
+bool(true)
+bool(false)
+bool(false)
+onInactiveActive
+0 2
+yesno
+bool(true)
+NULL
+array (
+  0 => 
+  \Pure::A,
+  'k' => 
+  \Suit::Spades,
+)
+bool(true)
+int(1)
+object Suit
