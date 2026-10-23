@@ -502,6 +502,7 @@ fn public_view(vm: &mut VM, _obj: Handle, payload: Handle, depth: usize) -> Resu
         properties: kept,
         internal: None,
         dynamic_properties: Default::default(),
+        id: 0,
     }));
     Ok(vm.arena.alloc(Val::Object(view)))
 }

@@ -56,6 +56,12 @@ pub enum OpCode {
     SpreadArg,
     NamedArg(Symbol),
     EndArgs,
+    /// `[.., &$x]` / `[k => &$x]` in an array literal: [Array, (Key,) Ref] ->
+    /// [Array], storing the reference itself (no copy).
+    ArrayItemRef(bool),
+    /// [Slot, Value] -> [Value]: write a computed value into a slot fetched
+    /// for update (compound assignment on an element).
+    StoreToSlot,
     /// Push the current frame's Nth argument (the stub frame that returns a
     /// freshly created Generator).
     PushFrameArg(u32),
@@ -71,6 +77,10 @@ pub enum OpCode {
     UnsetVarDynamic,
     BindGlobal(Symbol), // Bind local variable to global variable (by reference)
     BindStatic(Symbol, u16), // Bind local variable to static variable (name, default_val_idx)
+    /// `static $x = expr;`: if $x is initialized, bind it and jump past the
+    /// initializer; otherwise run it (BindStaticSet stores and binds).
+    BindStaticCheck(Symbol, u32),
+    BindStaticSet(Symbol),
 
     // Control Flow
     Jmp(u32),

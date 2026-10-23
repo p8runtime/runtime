@@ -117,35 +117,23 @@ pub fn decrement_value(val: Val, error_handler: &mut dyn ErrorHandler) -> Result
 fn increment_string(s: Rc<Vec<u8>>, error_handler: &mut dyn ErrorHandler) -> Result<Val, VmError> {
     // Empty string becomes "1"
     if s.is_empty() {
+        error_handler.report(ErrorLevel::Deprecated, "Increment on non-alphanumeric string is deprecated");
         return Ok(Val::String(Rc::new(b"1".to_vec())));
     }
 
-    // Try parsing as numeric
-    if let Ok(s_str) = std::str::from_utf8(&s) {
-        let trimmed = s_str.trim();
-
-        // Try as integer
-        if let Ok(i) = trimmed.parse::<i64>() {
-            if i == i64::MAX {
-                return Ok(Val::Float(i as f64 + 1.0));
-            } else {
-                return Ok(Val::Int(i + 1));
-            }
-        }
-
-        // Try as float
-        if let Ok(f) = trimmed.parse::<f64>() {
-            return Ok(Val::Float(f + 1.0));
-        }
+    // A numeric string increments as a number.
+    match crate::builtins::signature::numeric_string(&s) {
+        Some(Val::Int(i)) if i == i64::MAX => return Ok(Val::Float(i as f64 + 1.0)),
+        Some(Val::Int(i)) => return Ok(Val::Int(i + 1)),
+        Some(Val::Float(f)) => return Ok(Val::Float(f + 1.0)),
+        _ => {}
     }
 
-    // Non-numeric string: Perl-style alphanumeric increment
-    // Reference: $PHP_SRC_PATH/Zend/zend_operators.c - increment_string
-    // PHP 8.3+ emits deprecation warning for non-numeric string increment
-    error_handler.report(
-        ErrorLevel::Deprecated,
-        "Increment on non-numeric string is deprecated, use str_increment() instead",
-    );
+    // Otherwise Perl-style alphanumeric increment; anything but ASCII
+    // letters and digits is deprecated (PHP 8.3).
+    if !s.iter().all(u8::is_ascii_alphanumeric) {
+        error_handler.report(ErrorLevel::Deprecated, "Increment on non-alphanumeric string is deprecated");
+    }
 
     let mut result = (*s).clone();
 
@@ -213,28 +201,20 @@ fn decrement_string(s: Rc<Vec<u8>>, error_handler: &mut dyn ErrorHandler) -> Res
         return Ok(Val::Int(-1));
     }
 
-    // Try parsing as numeric
-    if let Ok(s_str) = std::str::from_utf8(&s) {
-        let trimmed = s_str.trim();
-
-        // Try as integer
-        if let Ok(i) = trimmed.parse::<i64>() {
-            if i == i64::MIN {
-                return Ok(Val::Float(i as f64 - 1.0));
-            } else {
-                return Ok(Val::Int(i - 1));
-            }
-        }
-
-        // Try as float
-        if let Ok(f) = trimmed.parse::<f64>() {
-            return Ok(Val::Float(f - 1.0));
+    // A numeric string decrements as a number.
+    match crate::builtins::signature::numeric_string(&s) {
+        Some(Val::Int(i)) if i == i64::MIN => Ok(Val::Float(i as f64 - 1.0)),
+        Some(Val::Int(i)) => Ok(Val::Int(i - 1)),
+        Some(Val::Float(f)) => Ok(Val::Float(f - 1.0)),
+        // Non-numeric: unchanged (decrement has no alphanumeric form).
+        _ => {
+            error_handler.report(
+                ErrorLevel::Deprecated,
+                "Decrement on non-numeric string has no effect and is deprecated",
+            );
+            Ok(Val::String(s))
         }
     }
-
-    // Non-numeric string: NO CHANGE (unlike increment)
-    // This is a key difference from increment - decrement doesn't do alphanumeric
-    Ok(Val::String(s))
 }
 
 #[cfg(test)]
@@ -333,8 +313,12 @@ mod tests {
         } else {
             panic!("Expected string");
         }
-        // Should have deprecation warning for non-numeric string increment
-        assert!(handler.has_warning("non-numeric string"));
+        // Letters and digits increment without a deprecation (PHP 8.4);
+        // only other characters are deprecated.
+        assert!(!handler.has_warning("deprecated"));
+        let mut handler3 = MockErrorHandler::new();
+        increment_value(Val::String(Rc::new(b"a-".to_vec())), &mut handler3).unwrap();
+        assert!(handler3.has_warning("non-alphanumeric string is deprecated"));
 
         // Test carry
         let mut handler2 = MockErrorHandler::new();
@@ -344,7 +328,7 @@ mod tests {
         } else {
             panic!("Expected string");
         }
-        assert!(handler2.has_warning("non-numeric string"));
+        assert!(!handler2.has_warning("deprecated"));
     }
 
     #[test]

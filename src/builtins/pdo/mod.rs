@@ -543,6 +543,7 @@ pub fn php_pdo_prepare(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         properties,
         internal: None,
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
     let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
     let stmt_obj_handle = vm.arena.alloc(Val::Object(payload_handle));
@@ -1144,6 +1145,7 @@ fn fetched_row_to_val(vm: &mut VM, row: types::FetchedRow) -> Handle {
                 properties,
                 internal: None,
                 dynamic_properties: HashSet::new(),
+                id: 0,
             };
             let payload_handle = vm.arena.alloc(Val::ObjPayload(obj_data));
             vm.arena.alloc(Val::Object(payload_handle))

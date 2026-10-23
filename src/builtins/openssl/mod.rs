@@ -128,6 +128,7 @@ pub fn openssl_pkey_get_private(vm: &mut VM, args: &[Handle]) -> Result<Handle, 
                 properties: IndexMap::new(),
                 internal: Some(Rc::new(pkey)),
                 dynamic_properties: HashSet::new(),
+                id: 0,
             };
             Ok(vm.arena.alloc(Val::ObjPayload(obj)))
         }
@@ -157,22 +158,24 @@ pub fn openssl_pkey_get_public(vm: &mut VM, args: &[Handle]) -> Result<Handle, S
                 properties: IndexMap::new(),
                 internal: Some(Rc::new(pkey)),
                 dynamic_properties: HashSet::new(),
+                id: 0,
             };
             Ok(vm.arena.alloc(Val::ObjPayload(obj)))
         }
         Err(_) => {
             // Also try to read it as a certificate and extract public key
-            if let Ok(x509) = X509::from_pem(&key_data) {
-                if let Ok(pkey) = x509.public_key() {
-                    let class_name = vm.context.interner.intern(b"OpenSSLAsymmetricKey");
-                    let obj = ObjectData {
-                        class: class_name,
-                        properties: IndexMap::new(),
-                        internal: Some(Rc::new(pkey)),
-                        dynamic_properties: HashSet::new(),
-                    };
-                    return Ok(vm.arena.alloc(Val::ObjPayload(obj)));
-                }
+            if let Ok(x509) = X509::from_pem(&key_data)
+                && let Ok(pkey) = x509.public_key()
+            {
+                let class_name = vm.context.interner.intern(b"OpenSSLAsymmetricKey");
+                let obj = ObjectData {
+                    class: class_name,
+                    properties: IndexMap::new(),
+                    internal: Some(Rc::new(pkey)),
+                    dynamic_properties: HashSet::new(),
+                    id: 0,
+                };
+                return Ok(vm.arena.alloc(Val::ObjPayload(obj)));
             }
             Ok(vm.arena.alloc(Val::Bool(false)))
         }
@@ -620,6 +623,7 @@ pub fn openssl_pkey_new(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String>
         properties: IndexMap::new(),
         internal: Some(Rc::new(pkey)),
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
 
     Ok(vm.arena.alloc(Val::ObjPayload(obj)))
@@ -729,6 +733,7 @@ pub fn openssl_x509_read(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
                 properties: IndexMap::new(),
                 internal: Some(Rc::new(cert)),
                 dynamic_properties: HashSet::new(),
+                id: 0,
             };
             Ok(vm.arena.alloc(Val::ObjPayload(obj)))
         }
@@ -1039,6 +1044,7 @@ pub fn openssl_csr_new(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         properties: IndexMap::new(),
         internal: Some(Rc::new(req)),
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
 
     Ok(vm.arena.alloc(Val::ObjPayload(obj)))
@@ -1186,6 +1192,7 @@ pub fn openssl_csr_sign(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> 
         properties: IndexMap::new(),
         internal: Some(Rc::new(cert)),
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
 
     Ok(vm.arena.alloc(Val::ObjPayload(obj)))
@@ -1229,6 +1236,7 @@ pub fn openssl_csr_get_public_key(vm: &mut VM, args: &[Handle]) -> Result<Handle
         properties: IndexMap::new(),
         internal: Some(Rc::new(pkey)),
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
 
     Ok(vm.arena.alloc(Val::ObjPayload(obj)))
@@ -1923,6 +1931,7 @@ fn pkey_to_array(array: &mut ArrayData, pkey: &PKey<Private>, vm: &mut VM) -> Re
         properties: IndexMap::new(),
         internal: Some(Rc::new(pkey.clone())),
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
     array.insert(
         ArrayKey::Str(Rc::new(b"pkey".to_vec())),
@@ -1989,6 +1998,7 @@ pub fn openssl_pkcs12_read(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         properties: IndexMap::new(),
         internal: Some(Rc::new(cert.clone())),
         dynamic_properties: HashSet::new(),
+        id: 0,
     };
     certs_array.insert(
         ArrayKey::Str(Rc::new(b"cert".to_vec())),
@@ -2005,6 +2015,7 @@ pub fn openssl_pkcs12_read(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
                 properties: IndexMap::new(),
                 internal: Some(Rc::new(c)),
                 dynamic_properties: HashSet::new(),
+                id: 0,
             };
             chain_array.insert(
                 ArrayKey::Int(i as i64),

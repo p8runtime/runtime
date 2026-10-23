@@ -5,7 +5,8 @@ use std::rc::Rc;
 pub fn php_var_dump(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     for &arg in args {
         let mut out = Vec::new();
-        let mut dumper = Dumper { out: &mut out, visiting: Vec::new() };
+        let holders = reference_holders(vm, arg);
+        let mut dumper = Dumper { out: &mut out, visiting: Vec::new(), reference: false, holders };
         dumper.value(vm, arg, 0)?;
         vm.print_bytes(&out)?;
     }
@@ -18,11 +19,66 @@ struct Dumper<'a> {
     out: &'a mut Vec<u8>,
     /// Arrays and objects being dumped, to print *RECURSION* on a cycle.
     visiting: Vec<Handle>,
+    /// The next value printed is an element that is a reference: "&" before
+    /// it.
+    reference: bool,
+    /// How many places hold each reference slot in the dumped value: PHP
+    /// prints "&" only for a reference that is still shared.
+    holders: std::collections::HashMap<Handle, usize>,
+}
+
+impl Dumper<'_> {
+    /// Whether `slot` is a reference something else still holds.
+    fn shared_reference(&self, vm: &VM, slot: Handle) -> bool {
+        vm.arena.get(slot).is_ref && self.holders.get(&slot).copied().unwrap_or(0) > 1
+    }
+}
+
+/// The reference slots inside a value about to be dumped, and how many
+/// places hold each (counted from the VM's roots and the value itself).
+fn reference_holders(vm: &VM, root: Handle) -> std::collections::HashMap<Handle, usize> {
+    let mut targets = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(h) = stack.pop() {
+        if !seen.insert(h) {
+            continue;
+        }
+        match &vm.arena.get(h).value {
+            Val::Array(arr) => {
+                for &e in arr.map.values() {
+                    if vm.arena.get(e).is_ref {
+                        targets.insert(e);
+                    }
+                    stack.push(e);
+                }
+            }
+            Val::Object(payload) => stack.push(*payload),
+            Val::ObjPayload(obj) => {
+                for &e in obj.properties.values() {
+                    if vm.arena.get(e).is_ref {
+                        targets.insert(e);
+                    }
+                    stack.push(e);
+                }
+            }
+            _ => {}
+        }
+    }
+    if targets.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    let mut roots = vm.collect_gc_roots();
+    roots.push(root);
+    vm.arena.count_holders(&roots, &targets)
 }
 
 impl Dumper<'_> {
     fn line(&mut self, indent: usize, text: &[u8]) {
         self.out.extend(std::iter::repeat_n(b' ', indent));
+        if std::mem::take(&mut self.reference) {
+            self.out.push(b'&');
+        }
         self.out.extend_from_slice(text);
         self.out.push(b'\n');
     }
@@ -72,6 +128,7 @@ impl Dumper<'_> {
                 self.visiting.push(handle);
                 for (key, &element) in arr.map.iter() {
                     self.key(indent + 2, key);
+                    self.reference = self.shared_reference(vm, element);
                     self.value(vm, element, indent + 2)?;
                 }
                 self.visiting.pop();
@@ -168,7 +225,11 @@ impl Dumper<'_> {
             .count();
         let mut header = b"object(".to_vec();
         header.extend_from_slice(&shown);
-        header.extend_from_slice(format!(")#{} ({}) {{", payload.index(), initialized).as_bytes());
+        let id = match &vm.arena.get(payload).value {
+            Val::ObjPayload(data) => data.id,
+            _ => 0,
+        };
+        header.extend_from_slice(format!(")#{} ({}) {{", id, initialized).as_bytes());
         self.line(indent, &header);
         self.visiting.push(payload);
         for (label, value, prop) in entries {
@@ -182,6 +243,7 @@ impl Dumper<'_> {
                     .unwrap_or_else(|| "mixed".into());
                 self.line(indent + 2, format!("uninitialized({})", ty).as_bytes());
             } else {
+                self.reference = self.shared_reference(vm, value);
                 self.value(vm, value, indent + 2)?;
             }
         }

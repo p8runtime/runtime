@@ -70,7 +70,13 @@ pub fn php_spl_object_id(vm: &mut VM, args: &[Handle]) -> Result<Handle, String>
         return Err("spl_object_id() expects exactly 1 argument, 0 given".to_string());
     };
     match vm.arena.get(target).value {
-        Val::Object(payload) => Ok(vm.arena.alloc(Val::Int(i64::from(payload.index())))),
+        Val::Object(payload) => {
+            let id = match &vm.arena.get(payload).value {
+                Val::ObjPayload(data) => data.id,
+                _ => 0,
+            };
+            Ok(vm.arena.alloc(Val::Int(i64::from(id))))
+        }
         ref other => {
             let msg = format!(
                 "spl_object_id(): Argument #1 ($object) must be of type object, {} given",
@@ -101,7 +107,11 @@ pub fn php_spl_object_hash(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
     };
 
     // PHP: the object id as 16 hex digits, then 16 zeros
-    let hash = format!("{:016x}{:016x}", object_handle.index(), 0);
+    let id = match &vm.arena.get(object_handle).value {
+        Val::ObjPayload(data) => data.id,
+        _ => 0,
+    };
+    let hash = format!("{:016x}{:016x}", id, 0);
     let hash_bytes = Rc::new(hash.into_bytes());
     Ok(vm.arena.alloc(Val::String(hash_bytes)))
 }

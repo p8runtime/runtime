@@ -912,14 +912,22 @@ impl<'src> Emitter<'src> {
                         continue;
                     };
 
-                    let val = if let Some(expr) = default_expr {
-                        self.eval_constant_expr(expr)
-                    } else {
-                        Val::Null
-                    };
-
-                    let idx = self.add_constant(val);
-                    self.chunk.code.push(OpCode::BindStatic(name, idx as u16));
+                    match default_expr {
+                        // The initializer runs once, the first time the
+                        // statement runs (any expression since PHP 8.3).
+                        Some(expr) => {
+                            let check = self.chunk.code.len();
+                            self.chunk.code.push(OpCode::BindStaticCheck(name, 0));
+                            self.emit_expr(expr);
+                            self.chunk.code.push(OpCode::BindStaticSet(name));
+                            let end = self.chunk.code.len() as u32;
+                            self.chunk.code[check] = OpCode::BindStaticCheck(name, end);
+                        }
+                        None => {
+                            let idx = self.add_constant(Val::Null);
+                            self.chunk.code.push(OpCode::BindStatic(name, idx as u16));
+                        }
+                    }
                 }
             }
             Stmt::Unset { vars, .. } => {
@@ -2102,7 +2110,7 @@ impl<'src> Emitter<'src> {
                                 let name = self.get_text(*span);
                                 if name.starts_with(b"$") {
                                     let sym = self.interner.intern(&name[1..]);
-                                    self.chunk.code.push(OpCode::MakeVarRef(sym));
+                                    self.chunk.code.push(OpCode::FetchRw(sym));
                                     self.chunk.code.push(OpCode::PreInc);
                                 }
                             }
@@ -2129,7 +2137,13 @@ impl<'src> Emitter<'src> {
                                 }
                             }
                             _ => {
-                                self.emit_expr(expr);
+                                if matches!(expr, Expr::ArrayDimFetch { .. }) {
+                                    // $a[k]++: the element's slot, created if missing.
+                                    self.emit_expr_for_update(expr);
+                                    self.chunk.code.push(OpCode::PreInc);
+                                } else {
+                                    self.emit_expr(expr);
+                                }
                             }
                         }
                     }
@@ -2139,7 +2153,7 @@ impl<'src> Emitter<'src> {
                                 let name = self.get_text(*span);
                                 if name.starts_with(b"$") {
                                     let sym = self.interner.intern(&name[1..]);
-                                    self.chunk.code.push(OpCode::MakeVarRef(sym));
+                                    self.chunk.code.push(OpCode::FetchRw(sym));
                                     self.chunk.code.push(OpCode::PreDec);
                                 }
                             }
@@ -2165,7 +2179,13 @@ impl<'src> Emitter<'src> {
                                 }
                             }
                             _ => {
-                                self.emit_expr(expr);
+                                if matches!(expr, Expr::ArrayDimFetch { .. }) {
+                                    // $a[k]++: the element's slot, created if missing.
+                                    self.emit_expr_for_update(expr);
+                                    self.chunk.code.push(OpCode::PreDec);
+                                } else {
+                                    self.emit_expr(expr);
+                                }
                             }
                         }
                     }
@@ -2183,7 +2203,7 @@ impl<'src> Emitter<'src> {
                         let name = self.get_text(*span);
                         if name.starts_with(b"$") {
                             let sym = self.interner.intern(&name[1..]);
-                            self.chunk.code.push(OpCode::MakeVarRef(sym));
+                            self.chunk.code.push(OpCode::FetchRw(sym));
                             self.chunk.code.push(OpCode::PostInc);
                         }
                     }
@@ -2208,8 +2228,13 @@ impl<'src> Emitter<'src> {
                         }
                     }
                     _ => {
-                        // Unsupported post-increment target
-                        self.emit_expr(var);
+                        if matches!(var, Expr::ArrayDimFetch { .. }) {
+                            // $a[k]++: the element's slot, created if missing.
+                            self.emit_expr_for_update(var);
+                            self.chunk.code.push(OpCode::PostInc);
+                        } else {
+                            self.emit_expr(var);
+                        }
                     }
                 }
             }
@@ -2219,7 +2244,7 @@ impl<'src> Emitter<'src> {
                         let name = self.get_text(*span);
                         if name.starts_with(b"$") {
                             let sym = self.interner.intern(&name[1..]);
-                            self.chunk.code.push(OpCode::MakeVarRef(sym));
+                            self.chunk.code.push(OpCode::FetchRw(sym));
                             self.chunk.code.push(OpCode::PostDec);
                         }
                     }
@@ -2244,8 +2269,13 @@ impl<'src> Emitter<'src> {
                         }
                     }
                     _ => {
-                        // Unsupported post-decrement target
-                        self.emit_expr(var);
+                        if matches!(var, Expr::ArrayDimFetch { .. }) {
+                            // $a[k]++: the element's slot, created if missing.
+                            self.emit_expr_for_update(var);
+                            self.chunk.code.push(OpCode::PostDec);
+                        } else {
+                            self.emit_expr(var);
+                        }
                     }
                 }
             }
@@ -2803,7 +2833,13 @@ impl<'src> Emitter<'src> {
                         self.chunk.code.push(OpCode::AddArrayUnpack);
                         continue;
                     }
-                    if let Some(key) = item.key {
+                    if item.by_ref {
+                        if let Some(key) = item.key {
+                            self.emit_expr(key);
+                        }
+                        self.emit_ref_source(item.value);
+                        self.chunk.code.push(OpCode::ArrayItemRef(item.key.is_some()));
+                    } else if let Some(key) = item.key {
                         self.emit_expr(key);
                         self.emit_expr(item.value);
                         self.chunk.code.push(OpCode::AssignDim);
@@ -3548,6 +3584,21 @@ impl<'src> Emitter<'src> {
                             }
                         }
                     }
+                    // $o->p[k] op= v, A::$p[k] op= v, ...: the element's own
+                    // slot, changed in place (a plain $var base keeps the path
+                    // below).
+                    Expr::ArrayDimFetch { .. }
+                        if !matches!(op, AssignOp::Coalesce)
+                            && !matches!(Self::flatten_dim_fetch(var).0, Expr::Variable { .. })
+                            && Self::assign_op_opcode(op).is_some() =>
+                    {
+                        let Some(bin) = Self::assign_op_opcode(op) else { unreachable!() };
+                        self.emit_expr_for_update(var);
+                        self.chunk.code.push(OpCode::Dup);
+                        self.emit_expr(expr);
+                        self.chunk.code.push(bin);
+                        self.chunk.code.push(OpCode::StoreToSlot);
+                    }
                     Expr::ArrayDimFetch { .. } => {
                         let (base, keys) = Self::flatten_dim_fetch(var);
 
@@ -3925,12 +3976,26 @@ impl<'src> Emitter<'src> {
     fn emit_ref_source(&mut self, expr: &Expr) {
         if let Expr::Variable { span, .. } = expr
             && self.get_text(*span).starts_with(b"$")
+            && self.get_text(*span) != b"$this"
         {
             let sym = self.interner.intern(&self.get_text(*span)[1..]);
             self.chunk.code.push(OpCode::MakeVarRef(sym));
         } else {
             self.emit_expr_for_write(expr);
             self.chunk.code.push(OpCode::MakeRef);
+        }
+    }
+
+    /// The slot ++/-- change in place: like emit_expr_for_write, but the last
+    /// step is a read-write fetch, which gives the element a slot of its own.
+    fn emit_expr_for_update(&mut self, expr: &Expr) {
+        match expr {
+            Expr::ArrayDimFetch { array, dim: Some(dim), .. } => {
+                self.emit_expr_for_write(array);
+                self.emit_expr(dim);
+                self.chunk.code.push(OpCode::FetchDimRw);
+            }
+            _ => self.emit_expr_for_write(expr),
         }
     }
 
