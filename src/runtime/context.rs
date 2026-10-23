@@ -272,7 +272,8 @@ impl EngineContext {
 pub struct RequestContext {
     pub engine: Arc<EngineContext>,
     pub config: PhpConfig,
-    pub globals: HashMap<Symbol, Handle>,
+    /// Insertion-ordered, as PHP's symbol table is ($GLOBALS, get_defined_vars()).
+    pub globals: indexmap::IndexMap<Symbol, Handle>,
     pub constants: HashMap<Symbol, Val>,
     pub user_functions: HashMap<Symbol, Rc<UserFunc>>,
     pub classes: HashMap<Symbol, ClassDef>,
@@ -306,7 +307,7 @@ impl RequestContext {
         let mut ctx = Self {
             engine: Arc::clone(&engine),
             config,
-            globals: HashMap::new(),
+            globals: indexmap::IndexMap::new(),
             constants: HashMap::new(),
             user_functions: HashMap::new(),
             classes: HashMap::new(),

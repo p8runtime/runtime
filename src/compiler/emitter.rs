@@ -549,6 +549,33 @@ impl<'src> Emitter<'src> {
                         }
                     }
                 }
+                // Hooks do not run yet (#26); the property itself is declared
+                // so it exists on instances. No backing value: null.
+                ClassMember::PropertyHook {
+                    modifiers, ty, name, default, ..
+                } => {
+                    let visibility = self.get_visibility(modifiers);
+                    let is_readonly = modifiers.iter().any(|t| t.kind == TokenKind::Readonly);
+                    let type_hint_idx = match ty.and_then(|t| self.convert_type(t)) {
+                        Some(th) => self.add_constant(Val::Resource(Rc::new(th))),
+                        None => self.add_constant(Val::Null),
+                    };
+                    let name_text = self.get_text(name.span);
+                    let prop_sym = self.interner.intern(name_text.strip_prefix(b"$").unwrap_or(name_text));
+                    let val = match default {
+                        Some(d) => self.eval_constant_expr(d),
+                        None => Val::Null,
+                    };
+                    let default_idx = self.add_constant(val);
+                    self.chunk.code.push(OpCode::DefProp(
+                        class_sym,
+                        prop_sym,
+                        default_idx as u16,
+                        visibility,
+                        type_hint_idx as u32,
+                        is_readonly,
+                    ));
+                }
                 ClassMember::Const {
                     consts,
                     modifiers,
@@ -605,7 +632,6 @@ impl<'src> Emitter<'src> {
                         self.chunk.code.push(OpCode::UseTrait(class_sym, trait_sym));
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -1848,7 +1874,7 @@ impl<'src> Emitter<'src> {
                         self.chunk.code.push(OpCode::Cast(1)); // Bool
                     }
                     BinaryOp::Coalesce => {
-                        self.emit_expr(left);
+                        self.emit_expr_quiet(left);
                         let end_jump = self.chunk.code.len();
                         self.chunk.code.push(OpCode::Coalesce(0));
                         self.emit_expr(right);
@@ -2265,7 +2291,7 @@ impl<'src> Emitter<'src> {
                                 self.chunk.code.push(OpCode::IssetVarDynamic);
                             }
                             Expr::ArrayDimFetch { array, dim, .. } => {
-                                self.emit_expr(array);
+                                self.emit_expr_quiet(array);
                                 if let Some(d) = dim {
                                     self.emit_expr(d);
                                     self.chunk.code.push(OpCode::IssetDim);
@@ -2277,7 +2303,7 @@ impl<'src> Emitter<'src> {
                             Expr::PropertyFetch {
                                 target, property, ..
                             } => {
-                                self.emit_expr(target);
+                                self.emit_expr_quiet(target);
                                 if let Expr::Variable { span, .. } = property {
                                     let name = self.get_text(*span);
                                     let sym = self.interner.intern(name);
@@ -2361,7 +2387,7 @@ impl<'src> Emitter<'src> {
                         }
                     }
                     Expr::ArrayDimFetch { array, dim, .. } => {
-                        self.emit_expr(array);
+                        self.emit_expr_quiet(array);
                         if let Some(d) = dim {
                             self.emit_expr(d);
                             self.chunk.code.push(OpCode::IssetDim);
@@ -2373,7 +2399,7 @@ impl<'src> Emitter<'src> {
                     Expr::PropertyFetch {
                         target, property, ..
                     } => {
-                        self.emit_expr(target);
+                        self.emit_expr_quiet(target);
                         if let Expr::Variable { span, .. } = property {
                             let name = self.get_text(*span);
                             let sym = self.interner.intern(name);
@@ -3050,7 +3076,17 @@ impl<'src> Emitter<'src> {
                         dim,
                         ..
                     } => {
-                        self.emit_expr(array_var);
+                        match array_var {
+                            // Writing creates the variable without an "undefined" notice.
+                            Expr::Variable { span, .. }
+                                if self.get_text(*span).starts_with(b"$")
+                                    && !matches!(self.get_text(*span), b"$this" | b"$GLOBALS") =>
+                            {
+                                let sym = self.interner.intern(&self.get_text(*span)[1..]);
+                                self.chunk.code.push(OpCode::FetchW(sym));
+                            }
+                            _ => self.emit_expr(array_var),
+                        }
                         if let Some(d) = dim {
                             self.emit_expr(d);
                         } else {
@@ -3621,8 +3657,54 @@ impl<'src> Emitter<'src> {
                 this.emit_expr(dim);
                 this.chunk.code.push(OpCode::FetchDimArg);
             });
+        } else if let Expr::Variable { span, .. } = value
+            && self.get_text(*span).starts_with(b"$")
+            && self.get_text(*span) != b"$this"
+        {
+            let sym = self.interner.intern(&self.get_text(*span)[1..]);
+            self.at_line(span.start, |this| this.chunk.code.push(OpCode::LoadVarArg(sym)));
         } else {
             self.emit_expr(value);
+        }
+    }
+
+    /// Push an expression's value the way isset(), empty() and `??` read
+    /// their operand (Zend's BP_VAR_IS fetches): an undefined variable, a
+    /// missing key or property, or a lookup on null is quietly null.
+    fn emit_expr_quiet(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Variable { span, .. }
+                if self.get_text(*span).starts_with(b"$") && self.get_text(*span) != b"$this" =>
+            {
+                let sym = self.interner.intern(&self.get_text(*span)[1..]);
+                self.chunk.code.push(OpCode::FetchIs(sym));
+            }
+            Expr::ArrayDimFetch {
+                array,
+                dim: Some(dim),
+                span,
+            } => {
+                self.emit_expr_quiet(array);
+                self.emit_expr(dim);
+                self.at_line(span.start, |this| this.chunk.code.push(OpCode::FetchDimIs));
+            }
+            Expr::PropertyFetch {
+                target, property, span, ..
+            } => {
+                self.emit_expr_quiet(target);
+                match property {
+                    Expr::Variable { span: name_span, .. }
+                        if !self.get_text(*name_span).starts_with(b"$") =>
+                    {
+                        let name = self.get_text(*name_span).to_vec();
+                        let idx = self.add_constant(Val::String(name.into()));
+                        self.chunk.code.push(OpCode::Const(idx as u16));
+                    }
+                    other => self.emit_expr(other),
+                }
+                self.at_line(span.start, |this| this.chunk.code.push(OpCode::FetchObjIs));
+            }
+            _ => self.emit_expr(expr),
         }
     }
 
@@ -3765,15 +3847,20 @@ impl<'src> Emitter<'src> {
             Expr::PropertyFetch {
                 target, property, ..
             } => {
+                // The current value is read as a write fetch (FETCH_OBJ_W): a
+                // missing property is created, not reported as undefined.
                 self.emit_expr(target);
                 if let Some(sym) = self.static_prop_name(property) {
                     self.chunk.code.push(OpCode::Dup);
-                    self.chunk.code.push(OpCode::FetchProp(sym));
+                    let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                    let idx = self.add_constant(Val::String(name.into()));
+                    self.chunk.code.push(OpCode::Const(idx as u16));
+                    self.chunk.code.push(OpCode::FetchObjIs);
                     (StoreBack::Prop(sym), 1)
                 } else {
                     self.emit_expr(property);
                     self.chunk.code.push(OpCode::Dup2);
-                    self.chunk.code.push(OpCode::FetchPropDynamic);
+                    self.chunk.code.push(OpCode::FetchObjIs);
                     (StoreBack::PropDynamic, 2)
                 }
             }

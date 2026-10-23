@@ -22,6 +22,8 @@ pub mod output_control;
 pub mod pcre;
 pub mod reflection;
 pub mod serialize;
+pub(crate) mod signature;
+mod signatures;
 #[cfg(feature = "pdo")]
 pub mod pdo;
 pub mod spl;

@@ -48,6 +48,9 @@ pub enum OpCode {
     StoreVarDynamic,    // [Val, Name] -> [Val] (Stores Val in Name, pushes Val)
     AssignRef(Symbol),  // Pop value (handle), mark as ref, store in local
     AssignDimRef,       // [Array, Index, ValueRef] -> Assigns ref to array index
+    /// LoadVar for a call argument: an undefined variable's warning waits for
+    /// the call, which knows whether the parameter is by reference.
+    LoadVarArg(Symbol),
     MakeVarRef(Symbol), // Convert local var to reference (COW if needed), push handle
     MakeRef,            // Convert top of stack to reference
     UnsetVar(Symbol),

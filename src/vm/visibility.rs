@@ -124,6 +124,21 @@ impl VM {
         self.is_visible_from(defining_class, visibility, caller_scope)
     }
 
+    /// The class that declares `prop_name` for an instance of `class_name`
+    /// (itself when nothing in the chain declares it).
+    pub(crate) fn declaring_class_of(&self, class_name: Symbol, prop_name: Symbol) -> Symbol {
+        self.walk_inheritance_chain(class_name, |def, cls| {
+            def.properties.get(&prop_name).map(|_| cls)
+        })
+        .unwrap_or(class_name)
+    }
+
+    /// Whether `class_name` or an ancestor declares `prop_name`.
+    pub(crate) fn declares_property(&self, class_name: Symbol, prop_name: Symbol) -> bool {
+        self.walk_inheritance_chain(class_name, |def, _| def.properties.get(&prop_name).map(|_| ()))
+            .is_some()
+    }
+
     /// Check property visibility with error on failure
     /// Reference: $PHP_SRC_PATH/Zend/zend_object_handlers.c - property access
     pub(crate) fn check_prop_visibility(

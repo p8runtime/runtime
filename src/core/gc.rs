@@ -432,7 +432,6 @@ mod tests {
     fn collect_traces_through_generator_internals() {
         use crate::vm::frame::{CallFrame, GeneratorData, GeneratorState};
         use std::cell::RefCell;
-        use std::collections::HashMap;
 
         let mut heap = GcHeap::new();
 
@@ -441,7 +440,7 @@ mod tests {
         let yielded_val = heap.alloc(Val::String(Rc::new(b"yielded".to_vec())));
 
         // Build a suspended CallFrame with a local variable
-        let mut locals = HashMap::new();
+        let mut locals = indexmap::IndexMap::new();
         locals.insert(Symbol(1), local_val);
         let frame = CallFrame {
             chunk: Rc::new(crate::compiler::chunk::CodeChunk::default()),

@@ -1970,6 +1970,40 @@ impl Extension for CoreExtension {
             constructor: Some(exception::exception_construct),
         });
 
+        // The rest of PHP's standard Throwable hierarchy (Zend, SPL, json,
+        // random), parents before children.
+        for (name, parent) in [
+            ("ArgumentCountError", "TypeError"),
+            ("ClosedGeneratorException", "Exception"),
+            ("FiberError", "Error"),
+            ("JsonException", "Exception"),
+            ("BadFunctionCallException", "LogicException"),
+            ("BadMethodCallException", "BadFunctionCallException"),
+            ("DomainException", "LogicException"),
+            ("InvalidArgumentException", "LogicException"),
+            ("LengthException", "LogicException"),
+            ("OutOfRangeException", "LogicException"),
+            ("OutOfBoundsException", "RuntimeException"),
+            ("OverflowException", "RuntimeException"),
+            ("RangeException", "RuntimeException"),
+            ("UnderflowException", "RuntimeException"),
+            ("UnexpectedValueException", "RuntimeException"),
+            ("Random\\RandomError", "Error"),
+            ("Random\\BrokenRandomEngineError", "Random\\RandomError"),
+            ("Random\\RandomException", "Exception"),
+        ] {
+            registry.register_class(NativeClassDef {
+                name: name.as_bytes().to_vec(),
+                parent: Some(parent.as_bytes().to_vec()),
+                is_interface: false,
+                is_trait: false,
+                interfaces: vec![],
+                methods: HashMap::new(),
+                constants: HashMap::new(),
+                constructor: Some(exception::exception_construct),
+            });
+        }
+
         // Output Control functions
         registry.register_function(b"ob_start", output_control::php_ob_start);
         registry.register_function(b"ob_end_clean", output_control::php_ob_end_clean);

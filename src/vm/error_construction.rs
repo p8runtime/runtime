@@ -108,3 +108,54 @@ mod tests {
         assert_eq!(err.to_string(), "Division by zero");
     }
 }
+
+/// The Throwable PHP raises for an engine error message, for the opcode
+/// handlers that still report a PHP runtime error as `RuntimeError`: the run
+/// loop throws it as that class so scripts can catch it. None for internal
+/// failures and for fatal errors PHP does not throw.
+/// Reference: $PHP_SRC_PATH/Zend/zend_execute.c, zend_object_handlers.c
+pub(crate) fn thrown_class_for(message: &str) -> Option<&'static [u8]> {
+    const ERRORS: &[&str] = &[
+        "Cannot access private property",
+        "Cannot access protected property",
+        "Cannot access self::",
+        "Cannot access parent::",
+        "Cannot access static::",
+        "Call to undefined method",
+        "Call to undefined function",
+        "Call to private method",
+        "Call to protected method",
+        "Call to private ",
+        "Call to protected ",
+        "Call to a member function",
+        "Cannot instantiate ",
+        "Using $this when not in object context",
+        "Cannot modify readonly property",
+        "Cannot use object of type",
+        "Cannot use a scalar value as an array",
+        "Undefined constant",
+        "Can only throw objects",
+        "Class \"",
+        "Access to undeclared static property",
+        "Non-static method",
+        "Attempt to assign property",
+        "Attempt to increment/decrement property",
+        "Cannot resume an already running generator",
+        "Object of class",
+        "Value of type",
+        "Cannot call abstract method",
+        "Cannot unset string offsets",
+        "[] operator not supported for strings",
+        "__clone method called on non-object",
+    ];
+    if message.starts_with("Modulo by zero") {
+        return Some(b"DivisionByZeroError");
+    }
+    if message.starts_with("Cannot assign ") && message.contains(" to property ") {
+        return Some(b"TypeError");
+    }
+    ERRORS
+        .iter()
+        .any(|p| message.starts_with(p))
+        .then_some(b"Error".as_slice())
+}

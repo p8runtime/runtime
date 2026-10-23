@@ -210,13 +210,13 @@ impl VM {
             .frames
             .last_mut()
             .ok_or_else(|| VmError::RuntimeError("No active frame".into()))?;
-        frame.locals.remove(&sym);
+        frame.locals.shift_remove(&sym);
         Ok(())
     }
 
     /// Report undefined variable notice
     /// Reference: $PHP_SRC_PATH/Zend/zend_execute.c - undefined variable notice
-    fn report_undefined_variable(&mut self, sym: Symbol) {
+    pub(crate) fn report_undefined_variable(&mut self, sym: Symbol) {
         if let Some(var_bytes) = self.context.interner.lookup(sym) {
             let var_name = String::from_utf8_lossy(var_bytes);
             let msg = format!("Undefined variable ${}", var_name);
