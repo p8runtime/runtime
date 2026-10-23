@@ -1,0 +1,94 @@
+<A []>cdata["x "]cdata["<"]cdata[" y "]cdata["&"]cdata[" z"]</A> => 1 0 No error line 1 byte 23
+<A []>cdata["x "]cdata["<"]cdata[" y"]</A> => 1 0 No error line 1 byte 15
+<A []>default["x "]default["&lt;"]default[" y"]</A> => 1 0 No error line 1 byte 15
+<A []>cdata["1 "]cdata["hello <b>bold<\/b>"]cdata[" 2 "]cdata["hello <b>bold<\/b>"]</A> => 1 0 No error line 1 byte 64
+<A []>cdata["1 "]default["&e;"]cdata[" 2"]</A> => 1 0 No error line 1 byte 48
+<A []> => 0 26 Undeclared entity error line 1 byte 10
+<A []>cdata["line1\nline2\n  "]<B {"AT":"1 < 2"}></B>cdata["\n"]</A> => 1 0 No error line 4 byte 40
+<A []><B []> => 0 76 Mismatched tag line 1 byte 10
+ => 0 42 Attribute redefined line 1 byte 16
+<A []>cdata["\u00e9"]</A> => 1 0 No error line 1 byte 11
+<A []> => 0 9 Invalid character line 1 byte 4
+ => 0 5 Invalid document end line 1 byte 0
+<A []>cdata["text"] => 0 5 Invalid document end line 1 byte 7
+default["<!-- c -->"]default["<?pi data?>"]<A []>cdata["<cd>"]</A> => 1 0 No error line 1 byte 44
+chunk 0
+open urn:a#r []
+int(1)
+chunk 1
+open urn:b#x {"urn:b#att":"1"}
+int(1)
+chunk 2
+text "hello"
+close urn:b#x
+int(1)
+chunk 3
+open urn:a#y []
+close urn:a#y
+close urn:a#r
+int(1)
+Array
+(
+    [0] => Array
+        (
+            [tag] => PARA
+            [type] => open
+            [level] => 1
+        )
+
+    [1] => Array
+        (
+            [tag] => NOTE
+            [type] => complete
+            [level] => 2
+            [value] => simple note
+        )
+
+    [2] => Array
+        (
+            [tag] => B
+            [type] => complete
+            [level] => 2
+            [value] => x
+        )
+
+    [3] => Array
+        (
+            [tag] => PARA
+            [value] => tail
+            [type] => cdata
+            [level] => 1
+        )
+
+    [4] => Array
+        (
+            [tag] => PARA
+            [type] => close
+            [level] => 1
+        )
+
+)
+Array
+(
+    [PARA] => Array
+        (
+            [0] => 0
+            [1] => 3
+            [2] => 4
+        )
+
+    [NOTE] => Array
+        (
+            [0] => 1
+        )
+
+    [B] => Array
+        (
+            [0] => 2
+        )
+
+)
+string(5) "UTF-8"
+string(14) "Mismatched tag"
+Cannot directly construct XMLParser, use xml_parser_create() or xml_parser_create_ns() instead
+Serialization of 'XMLParser' is not allowed
