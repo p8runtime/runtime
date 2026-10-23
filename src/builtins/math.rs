@@ -315,7 +315,13 @@ pub fn php_intdiv(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let numerator = vm.arena.get(args[0]).value.to_int();
     let denominator = vm.arena.get(args[1]).value.to_int();
     if denominator == 0 {
-        return Err("intdiv(): Division by zero".into());
+        return Err(vm.throw_from_native(b"DivisionByZeroError", "Division by zero"));
+    }
+    if numerator == i64::MIN && denominator == -1 {
+        return Err(vm.throw_from_native(
+            b"ArithmeticError",
+            "Division of PHP_INT_MIN by -1 is not an integer",
+        ));
     }
     Ok(vm.arena.alloc(Val::Int(numerator / denominator)))
 }

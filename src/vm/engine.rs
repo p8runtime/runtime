@@ -379,6 +379,29 @@ thread_local! {
     });
 }
 
+/// Stack size of the thread the `php` binary runs scripts on.
+pub const INTERPRETER_STACK_SIZE: usize = 256 * 1024 * 1024;
+
+thread_local! {
+    /// How much stack a request on this thread may use before nested
+    /// execution throws PHP's "Maximum call stack size" Error. 6 MiB suits a
+    /// default 8 MiB thread; `set_stack_budget` raises it for a bigger one.
+    static STACK_BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(6 * 1024 * 1024) };
+}
+
+/// Let requests on this thread use `bytes` of stack (leave a margin below
+/// the thread's real size for the code that unwinds).
+pub fn set_stack_budget(bytes: usize) {
+    STACK_BUDGET.with(|b| b.set(bytes));
+}
+
+/// The address of a local in the caller's frame: where the stack is now.
+#[inline(never)]
+fn stack_position() -> usize {
+    let marker = 0u8;
+    std::hint::black_box(&marker) as *const u8 as usize
+}
+
 pub struct VM {
     pub arena: GcHeap,
     /// Nesting depth of `run_loop`; garbage is collected only at depth 1,
@@ -396,6 +419,8 @@ pub struct VM {
     class_case_cache: std::cell::RefCell<HashMap<Symbol, Symbol>>,
     /// class_alias(): lowercase alias name -> the class it names.
     pub(crate) class_aliases: HashMap<Vec<u8>, Symbol>,
+    /// Stack position when the request started, to measure recursion.
+    stack_base: Option<usize>,
     /// Exit status set by exit(int).
     pub exit_status: i32,
     /// set_error_handler() stack: (callable, E_* mask); None = no handler.
@@ -479,6 +504,7 @@ impl VM {
             decl_counter: 0,
             class_case_cache: Default::default(),
             class_aliases: HashMap::new(),
+            stack_base: None,
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
@@ -904,6 +930,7 @@ impl VM {
             decl_counter: 0,
             class_case_cache: Default::default(),
             class_aliases: HashMap::new(),
+            stack_base: None,
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
@@ -3069,6 +3096,12 @@ impl VM {
                     // Execute the opcode, ignoring errors from finally itself
                     let _ = self.execute_opcode(op, *frame_idx);
 
+                    // A call inside the finally pushed frames: run them to
+                    // completion before taking the next opcode from this one.
+                    if self.frames.len() > *frame_idx + 1 {
+                        let _ = self.run_loop(*frame_idx + 1);
+                    }
+
                     // If the frame was popped (return happened), break out
                     if *frame_idx >= self.frames.len() {
                         break;
@@ -3323,6 +3356,7 @@ impl VM {
     /// reported (through the output layer, so into any open buffer), then
     /// every output buffer is flushed. Returns the process exit status.
     pub fn run_request(&mut self, chunk: Rc<CodeChunk>) -> i32 {
+        self.stack_base = Some(stack_position());
         let status = match self.run(chunk) {
             Ok(()) => self.exit_status,
             Err(VmError::Terminated) => 255,
@@ -3677,6 +3711,19 @@ impl VM {
     }
 
     fn run_loop(&mut self, target_depth: usize) -> Result<(), VmError> {
+        // Nested loops (callbacks, generators, magic methods) recurse on the
+        // native stack: stop before it runs out, as PHP 8.3 does.
+        // Reference: $PHP_SRC_PATH/Zend/zend_call_stack.c, zend_execute_API.c
+        if let Some(base) = self.stack_base {
+            let budget = STACK_BUDGET.with(|b| b.get());
+            if base.abs_diff(stack_position()) > budget {
+                let msg = format!(
+                    "Maximum call stack size of {} bytes reached. Infinite recursion?",
+                    budget
+                );
+                return Err(self.throw_error(b"Error", &msg));
+            }
+        }
         self.gc_run_depth += 1;
         let result = self.run_loop_inner(target_depth);
         self.gc_run_depth -= 1;

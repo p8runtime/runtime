@@ -31,7 +31,20 @@ fn main() -> anyhow::Result<()> {
     if cli.interactive {
         run_repl()?;
     } else if let Some(file) = cli.file {
-        let status = run_script(&file, &cli.args)?;
+        // The interpreter recurses (callbacks, nested generators, the
+        // parser on deep nesting): give it a large stack. The VM turns
+        // running out of it into PHP's "Maximum call stack size" Error.
+        let args = cli.args.clone();
+        let status = std::thread::Builder::new()
+            .stack_size(php_rs::vm::engine::INTERPRETER_STACK_SIZE)
+            .spawn(move || {
+                php_rs::vm::engine::set_stack_budget(
+                    php_rs::vm::engine::INTERPRETER_STACK_SIZE - 16 * 1024 * 1024,
+                );
+                run_script(&file, &args)
+            })?
+            .join()
+            .map_err(|_| anyhow::anyhow!("interpreter thread panicked"))??;
         std::process::exit(status);
     } else {
         // If no arguments, show help
