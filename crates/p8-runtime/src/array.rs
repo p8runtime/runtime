@@ -339,6 +339,20 @@ impl PhpArray {
         Ok(())
     }
 
+    /// array_pop: remove the last entry. If its key is the int just below
+    /// the next free key, the next free key comes back down to it, as
+    /// PHP's array_pop does (so `$a[] = x` reuses it).
+    pub fn pop(&mut self) -> Option<Value> {
+        let key = self.iter().last()?.0;
+        let value = self.remove(&key)?;
+        if let Key::Int(k) = key
+            && self.next_free == Some(k.saturating_add(1))
+        {
+            self.next_free = if k == 0 && self.is_empty() { None } else { Some(k) };
+        }
+        Some(value)
+    }
+
     /// unset($a[key])
     pub fn remove(&mut self, key: &Key) -> Option<Value> {
         match &mut self.storage {

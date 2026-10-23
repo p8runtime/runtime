@@ -1,0 +1,37 @@
+string(0) ""
+string(1) "1"
+string(2) "14"
+bool(false)
+int(30719)
+string(4) "128M"
+string(1) "0"
+string(2) "14"
+string(2) "10"
+bool(false)
+string(2) "10"
+int(30719)
+int(30717)
+string(5) "30717"
+
+Warning: Undefined variable $undefined2 in %s on line 8
+string(3) "cli"
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+string(1) "5"
+int(0)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+
+Notice: custom notice in %s on line 11
+
+Warning: custom warning in %s on line 12
+
+Deprecated: custom deprecated in %s on line 13
+
+Deprecated: Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead in %s on line 20
+
+Fatal error: fatal in %s on line 20

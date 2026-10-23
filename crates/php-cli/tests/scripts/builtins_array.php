@@ -1,0 +1,38 @@
+<?php
+// Array functions without callbacks, and the by-reference ones.
+$a = ["x" => 1, 3 => "b", 5 => 2.5, "y" => [1]];
+var_dump(array_values($a), sizeof($a), array_merge([5 => "a", "k" => 1], [7 => "b", "k" => 2]), array_merge());
+var_dump(array_key_exists("x", $a), array_key_exists(3, $a), key_exists("3", $a), array_key_exists(null, ["" => 1]));
+var_dump(in_array("1", [1, 2]), in_array("1", [1, 2], true), in_array(0, ["a"]), array_search(2.5, $a), array_search("z", $a));
+var_dump(array_slice([1, 2, 3, 4], 1, 2), array_slice([1, 2, 3, 4], -2), array_slice([5 => "a", "k" => "b", 9 => "c"], 1), array_slice([5 => "a", 9 => "c"], 0, 1, true), array_slice([1, 2], 5));
+var_dump(array_reverse([1, 2, "k" => 3]), array_reverse([5 => 1, 6 => 2], true), array_flip(["a" => 1, "b" => "x"]), array_unique([1, "1", 2, 2.0, "a", "A"]));
+var_dump(array_fill(5, 3, "v"), array_fill(-3, 2, 0), array_fill_keys(["a", 5, "b"], 0), array_combine(["a", "b"], [1, 2]));
+var_dump(array_sum([1, 2.5, "3"]), array_sum([]), array_product([2, "3", 4]), array_product([]), array_pad([1, 2], 4, 0), array_pad([1, 2], -4, 0));
+var_dump(array_key_first(["x" => 1, "y" => 2]), array_key_last([1, 2, 3]), array_key_first([]), array_count_values(["a", "b", "a", 1, "1"]));
+var_dump(array_chunk([1, 2, 3, 4, 5], 2), array_chunk(["a" => 1, "b" => 2, "c" => 3], 2, true));
+var_dump(array_diff([1, "2", 3, "a"], [2, "a"]), array_intersect(["x" => 1, "y" => 2, "z" => 3], [2, 3, 4]), array_diff_key(["a" => 1, "b" => 2, 0 => 3], ["a" => 9, 0 => 9]), array_intersect_key(["a" => 1, "b" => 2], ["b" => 0]));
+var_dump(array_replace([1, 2, 3], [1 => "b"], [3 => "d"]), array_is_list([1, 2]), array_is_list([1 => 1]));
+$s = [1, 2];
+var_dump(array_push($s, 3, 4), $s, array_pop($s), $s);
+$s[] = "after pop";
+var_dump($s, array_shift($s), $s, array_unshift($s, "z", "y"), $s);
+$q = [5 => "a", "k" => "b", 9 => "c"];
+array_shift($q);
+var_dump($q);
+$e = [];
+var_dump(array_pop($e), array_shift($e));
+$n = [3, "10", 1, "2", 2.5, true];
+sort($n); var_dump($n);
+rsort($n); var_dump($n);
+$w = ["banana" => 3, "apple" => 1, "cherry" => 2];
+asort($w); var_dump($w);
+arsort($w); var_dump($w);
+ksort($w); var_dump($w);
+krsort($w); var_dump($w);
+$m = ["10", 9, "9a", "1e1"];
+sort($m); var_dump($m);
+sort($m, SORT_STRING); var_dump($m);
+$c = ["b", "A", "a", "B"];
+sort($c, SORT_STRING | SORT_FLAG_CASE); var_dump($c);
+$k = [10 => "a", "9" => "b", "x" => "c", "1e1" => "d"];
+ksort($k); var_dump($k);

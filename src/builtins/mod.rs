@@ -28,7 +28,6 @@ pub mod reflection;
 pub mod runtime;
 pub mod serialize;
 pub(crate) mod signature;
-mod signatures;
 #[cfg(feature = "pdo")]
 pub mod pdo;
 pub mod spl;

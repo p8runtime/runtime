@@ -1,0 +1,89 @@
+int(5)
+float(5.5)
+float(9.223372036854776E+18)
+float(5)
+float(-4)
+float(5)
+float(4)
+float(-5)
+0 0.29 0 0.3 0 0
+2 1.96 0 2 2 2
+5 5.05 0 5 5 5
+5 5.06 0 5.1 5 5
+-1 -0.5 -0 -0.5 -0 -1
+3 2.5 0 2.5 2 3
+4 3.5 0 3.5 3 3
+1235 1234.57 1200 1234.6 1235 1235
+-1235 -1234.57 -1200 -1234.6 -1235 -1235
+1.0E+20 1.0E+20 1.0E+20 1.0E+20 1.0E+20 1.0E+20
+0 0.3 0 0.3 0 0
+float(5)
+float(10)
+float(20)
+float(-20)
+float(4)
+float(3)
+float(-3)
+float(2)
+float(3)
+int(3)
+int(-3)
+float(1.5)
+float(-1.5)
+float(INF)
+float(-INF)
+int(1024)
+float(0.5)
+float(9.223372036854776E+18)
+int(9)
+float(NAN)
+int(3)
+int(5)
+string(6) "banana"
+float(3.5)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+}
+int(-1)
+int(0)
+string(2) "10"
+string(3) "abc"
+int(0)
+float(3.141592653589793)
+bool(true)
+bool(false)
+bool(true)
+float(4)
+float(NAN)
+float(2.718281828459045)
+float(1)
+float(3)
+float(2)
+float(3)
+float(0)
+float(1)
+float(1)
+float(0.7853981633974483)
+float(5)
+float(3.141592653589793)
+float(180)
+string(4) "1010"
+string(64) "1111111111111111111111111111111111111111111111111111111111111111"
+string(2) "10"
+int(10)
+int(3)
+int(511)
+int(255)
+int(255)
+int(9223372036854775807)
+float(1.8446744073709552E+19)
+string(8) "11111111"
+string(2) "73"
+string(4) "1295"
+string(1) "0"
+
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored in %s on line 14
+int(15)

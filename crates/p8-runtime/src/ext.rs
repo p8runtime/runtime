@@ -29,6 +29,21 @@ pub trait Ctx {
     fn ob_end_clean(&mut self) -> bool;
     /// Report a warning at the current line.
     fn warn(&mut self, message: &str);
+    /// Report a deprecation at the current line.
+    fn deprecated(&mut self, message: &str);
+    /// Report a diagnostic of PHP error `level` (E_USER_NOTICE, E_WARNING,
+    /// ...) at the current line, if error_reporting includes it.
+    fn report(&mut self, level: i64, message: &str);
+    /// A fatal error at the current line: the request ends with it.
+    fn fatal(&self, message: String) -> Throw;
+    /// ini_get(): the setting's current value as a string (null when PHP
+    /// has no value for it), or None for an unknown directive.
+    fn ini_get(&self, name: &[u8]) -> Option<Value>;
+    /// ini_set(): set a known directive for this request; its old value,
+    /// or None for an unknown directive.
+    fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value>;
+    /// error_reporting(): the current level, after setting `new` if given.
+    fn error_level(&mut self, new: Option<i64>) -> i64;
     /// The constant `name` (as written), defined by the script or an extension.
     fn constant(&self, name: &[u8]) -> Option<Value>;
     /// define(): false when `name` is already defined.
@@ -84,7 +99,13 @@ pub struct Extension {
 /// Every builtin function and constant of the process's extensions.
 #[derive(Default)]
 pub struct Registry {
+    /// ini directives PHP knows, with their built-in defaults.
+    ini: HashMap<&'static [u8], Option<&'static [u8]>>,
     functions: Vec<&'static Builtin>,
+    /// Each function's stub signature (its argument checks), by index.
+    sigs: Vec<Option<&'static p8_stubs::Sig>>,
+    /// "Function f() is deprecated…" for the functions PHP deprecates.
+    deprecations: Vec<Option<String>>,
     index: HashMap<&'static str, usize>,
     constants: HashMap<&'static [u8], Constant>,
 }
@@ -102,8 +123,21 @@ impl Registry {
         for f in functions {
             let i = self.functions.len();
             self.functions.push(f);
+            let sig = p8_stubs::lookup(f.name.as_bytes());
+            self.sigs.push(sig);
+            self.deprecations.push(sig.and_then(p8_stubs::deprecation));
             self.index.insert(f.name, i);
         }
+    }
+
+    /// An ini directive and its default (None: PHP has no value for it).
+    pub fn add_ini(&mut self, name: &'static str, default: Option<&'static [u8]>) {
+        self.ini.insert(name.as_bytes(), default);
+    }
+
+    /// An ini directive's default: None if PHP has no such directive.
+    pub fn ini_default(&self, name: &[u8]) -> Option<Option<&'static [u8]>> {
+        self.ini.get(name).copied()
     }
 
     pub fn add_constant(&mut self, name: &'static [u8], value: Constant) {
@@ -118,6 +152,17 @@ impl Registry {
 
     pub fn function(&self, i: usize) -> &'static Builtin {
         self.functions[i]
+    }
+
+    /// Builtin `i`'s signature from PHP's stubs, which its arguments are
+    /// checked against before it runs.
+    pub fn sig(&self, i: usize) -> Option<&'static p8_stubs::Sig> {
+        self.sigs[i]
+    }
+
+    /// The deprecation PHP reports on every call of builtin `i`, if any.
+    pub fn deprecation(&self, i: usize) -> Option<&str> {
+        self.deprecations[i].as_deref()
     }
 
     /// Whether parameter `n` of builtin `i` is passed by reference.
