@@ -27,6 +27,7 @@ Zend/tests/and_001.phpt
 Zend/tests/anon/001.phpt
 Zend/tests/anon/002.phpt
 Zend/tests/anon/003.phpt
+Zend/tests/anon/004.phpt
 Zend/tests/anon/005.phpt
 Zend/tests/anon/006.phpt
 Zend/tests/anon/007.phpt
@@ -65,6 +66,7 @@ Zend/tests/assert/expect_004.phpt
 Zend/tests/assert/expect_005.phpt
 Zend/tests/assert/expect_006.phpt
 Zend/tests/assert/expect_empty_stmt_bug.phpt
+Zend/tests/assign_coalesce_003.phpt
 Zend/tests/assign_coalesce_006.phpt
 Zend/tests/assign_coalesce_007.phpt
 Zend/tests/assign_concat_array_empty_string.phpt
@@ -140,6 +142,7 @@ Zend/tests/bug29896.phpt
 Zend/tests/bug29944.phpt
 Zend/tests/bug30080.phpt
 Zend/tests/bug30140.phpt
+Zend/tests/bug30346.phpt
 Zend/tests/bug30407.phpt
 Zend/tests/bug30451.phpt
 Zend/tests/bug30702.phpt
@@ -153,6 +156,7 @@ Zend/tests/bug31177.phpt
 Zend/tests/bug31341.phpt
 Zend/tests/bug31525.phpt
 Zend/tests/bug32226.phpt
+Zend/tests/bug32252.phpt
 Zend/tests/bug32296.phpt
 Zend/tests/bug32322.phpt
 Zend/tests/bug32427.phpt
@@ -164,6 +168,7 @@ Zend/tests/bug33171.phpt
 Zend/tests/bug33277.phpt
 Zend/tests/bug33282.phpt
 Zend/tests/bug33318.phpt
+Zend/tests/bug33710.phpt
 Zend/tests/bug33732.phpt
 Zend/tests/bug33771.phpt
 Zend/tests/bug33802.phpt
@@ -308,6 +313,7 @@ Zend/tests/bug53971.phpt
 Zend/tests/bug54039.phpt
 Zend/tests/bug54305.phpt
 Zend/tests/bug54358.phpt
+Zend/tests/bug54367.phpt
 Zend/tests/bug54624.phpt
 Zend/tests/bug55007.phpt
 Zend/tests/bug55086.phpt
@@ -435,6 +441,7 @@ Zend/tests/bug71539_3.phpt
 Zend/tests/bug71539_4.phpt
 Zend/tests/bug71539_5.phpt
 Zend/tests/bug71724.phpt
+Zend/tests/bug71731.phpt
 Zend/tests/bug71756.phpt
 Zend/tests/bug71818.phpt
 Zend/tests/bug71859.phpt
@@ -498,6 +505,7 @@ Zend/tests/bug78151.phpt
 Zend/tests/bug78271.phpt
 Zend/tests/bug78335.phpt
 Zend/tests/bug78344.phpt
+Zend/tests/bug78356.phpt
 Zend/tests/bug78396.phpt
 Zend/tests/bug78502.phpt
 Zend/tests/bug78589.phpt
@@ -678,6 +686,8 @@ Zend/tests/dereference_001.phpt
 Zend/tests/dereference_002.phpt
 Zend/tests/dereference_003.phpt
 Zend/tests/dereference_004.phpt
+Zend/tests/dereference_005.phpt
+Zend/tests/dereference_010.phpt
 Zend/tests/dereference_011.phpt
 Zend/tests/dereference_014.phpt
 Zend/tests/dim_assign_001.phpt
@@ -752,6 +762,7 @@ Zend/tests/errmsg_020.phpt
 Zend/tests/errmsg_023.phpt
 Zend/tests/errmsg_024.phpt
 Zend/tests/errmsg_040.phpt
+Zend/tests/errmsg_044.phpt
 Zend/tests/error_reporting01.phpt
 Zend/tests/error_reporting02.phpt
 Zend/tests/error_reporting03.phpt
@@ -995,6 +1006,7 @@ Zend/tests/gh18907.phpt
 Zend/tests/gh19679.phpt
 Zend/tests/gh20177.phpt
 Zend/tests/gh20714.phpt
+Zend/tests/gh21605.phpt
 Zend/tests/gh8810_1.phpt
 Zend/tests/gh8810_3.phpt
 Zend/tests/gh9136.phpt
@@ -1045,6 +1057,7 @@ Zend/tests/in-de-crement/oss-fuzz-61469_predec_dynamic_property_unset_error_hand
 Zend/tests/in-de-crement/oss-fuzz-61865_postdec_declared_property_unset_error_handler.phpt
 Zend/tests/in-de-crement/oss-fuzz-61865_predec_declared_property_unset_error_handler.phpt
 Zend/tests/in-de-crement/oss-fuzz-62294_globals_unset_after_string_warning.phpt
+Zend/tests/in-de-crement/overloaded_access.phpt
 Zend/tests/in-de-crement/string_increment_various.phpt
 Zend/tests/in-de-crement/unset_globals_in_error_handler.phpt
 Zend/tests/in-de-crement/unset_object_property_in_error_handler.phpt
@@ -1080,7 +1093,9 @@ Zend/tests/list_001.phpt
 Zend/tests/list_002.phpt
 Zend/tests/list_003.phpt
 Zend/tests/list_004.phpt
+Zend/tests/list_005.phpt
 Zend/tests/list_006.phpt
+Zend/tests/list_007.phpt
 Zend/tests/list_keyed.phpt
 Zend/tests/list_keyed_evaluation_order_2.phpt
 Zend/tests/list_keyed_evaluation_order_3.phpt
@@ -1301,6 +1316,7 @@ Zend/tests/objects_035.phpt
 Zend/tests/oct_overflow.phpt
 Zend/tests/offset_long.phpt
 Zend/tests/offset_null.phpt
+Zend/tests/offset_object.phpt
 Zend/tests/oom_interrupt_unfinished_call_frame.phpt
 Zend/tests/or_001.phpt
 Zend/tests/oss-fuzz-391975641.phpt
@@ -1875,6 +1891,7 @@ ext/date/tests/DateInterval_days_prop1.phpt
 ext/date/tests/DateInterval_format_a.phpt
 ext/date/tests/DateInterval_write_property_return.phpt
 ext/date/tests/DateTimeImmutable_constants.phpt
+ext/date/tests/DateTimeImmutable_createFromInterface-001.phpt
 ext/date/tests/DateTimeImmutable_inherited_serialization.phpt
 ext/date/tests/DateTimeInterface_constants.phpt
 ext/date/tests/DateTimeInterval_inherited_serialization.phpt
@@ -1893,6 +1910,7 @@ ext/date/tests/DateTime_clone_basic1.phpt
 ext/date/tests/DateTime_clone_basic4.phpt
 ext/date/tests/DateTime_constants.phpt
 ext/date/tests/DateTime_construct_basic1.phpt
+ext/date/tests/DateTime_createFromInterface-001.phpt
 ext/date/tests/DateTime_days-absolute.phpt
 ext/date/tests/DateTime_days-dates.phpt
 ext/date/tests/DateTime_days-fall-type2-type2.phpt
@@ -1924,13 +1942,20 @@ ext/date/tests/DateTime_sub-fall-type2-type2.phpt
 ext/date/tests/DateTime_sub-february.phpt
 ext/date/tests/DateTime_sub-spring-type2-type2.phpt
 ext/date/tests/DateTime_sub-spring-type3-type2.phpt
+ext/date/tests/bug13142.phpt
 ext/date/tests/bug14561.phpt
+ext/date/tests/bug20382-1.phpt
+ext/date/tests/bug21966.phpt
 ext/date/tests/bug26320.phpt
 ext/date/tests/bug26694.phpt
 ext/date/tests/bug27780.phpt
+ext/date/tests/bug28024.phpt
 ext/date/tests/bug28599.phpt
 ext/date/tests/bug29595.phpt
 ext/date/tests/bug30096.phpt
+ext/date/tests/bug30532.phpt
+ext/date/tests/bug32270.phpt
+ext/date/tests/bug32555.phpt
 ext/date/tests/bug32588.phpt
 ext/date/tests/bug33452.phpt
 ext/date/tests/bug33536.phpt
@@ -1944,6 +1969,7 @@ ext/date/tests/bug34304.phpt
 ext/date/tests/bug34676.phpt
 ext/date/tests/bug34771.phpt
 ext/date/tests/bug35422.phpt
+ext/date/tests/bug35425.phpt
 ext/date/tests/bug35624.phpt
 ext/date/tests/bug35630.phpt
 ext/date/tests/bug35699.phpt
@@ -1962,6 +1988,7 @@ ext/date/tests/bug43003.phpt
 ext/date/tests/bug43075.phpt
 ext/date/tests/bug43527.phpt
 ext/date/tests/bug43960.phpt
+ext/date/tests/bug45081.phpt
 ext/date/tests/bug45529.phpt
 ext/date/tests/bug45543.phpt
 ext/date/tests/bug45554.phpt
@@ -1997,6 +2024,7 @@ ext/date/tests/bug64653.phpt
 ext/date/tests/bug64992.phpt
 ext/date/tests/bug65003.phpt
 ext/date/tests/bug65502.phpt
+ext/date/tests/bug66545.phpt
 ext/date/tests/bug66836.phpt
 ext/date/tests/bug67109.phpt
 ext/date/tests/bug68406.phpt
@@ -2048,6 +2076,7 @@ ext/date/tests/date_create-1.phpt
 ext/date/tests/date_create_basic.phpt
 ext/date/tests/date_create_from_format_basic2.phpt
 ext/date/tests/date_date_set_basic1.phpt
+ext/date/tests/date_default_timezone_get-3.phpt
 ext/date/tests/date_default_timezone_set_error.phpt
 ext/date/tests/date_diff1.phpt
 ext/date/tests/date_format_basic1.phpt
@@ -2055,6 +2084,8 @@ ext/date/tests/date_interval_format.phpt
 ext/date/tests/date_modify_basic1.phpt
 ext/date/tests/date_offset_get_basic1.phpt
 ext/date/tests/date_sub_basic.phpt
+ext/date/tests/date_time_immutable-inherited.phpt
+ext/date/tests/date_time_immutable.phpt
 ext/date/tests/date_time_immutable001.phpt
 ext/date/tests/date_time_set_basic1.phpt
 ext/date/tests/date_timestamp_get.phpt
@@ -2284,6 +2315,7 @@ ext/opcache/tests/jit/gh12509.phpt
 ext/opcache/tests/jit/gh12512.phpt
 ext/opcache/tests/jit/gh12512_2.phpt
 ext/opcache/tests/jit/gh12527.phpt
+ext/opcache/tests/jit/gh12723-B.phpt
 ext/opcache/tests/jit/gh12812.phpt
 ext/opcache/tests/jit/gh13232.phpt
 ext/opcache/tests/jit/gh15652.phpt
@@ -2575,6 +2607,7 @@ ext/reflection/tests/types/ReflectionType_possible_types.phpt
 ext/reflection/tests/types/intersection_types.phpt
 ext/reflection/tests/types/mixed_type.phpt
 ext/reflection/tests/types/union_types.phpt
+ext/spl/tests/bug31185.phpt
 ext/spl/tests/bug38325.phpt
 ext/spl/tests/bug44144.phpt
 ext/spl/tests/bug48023.phpt
@@ -2587,6 +2620,7 @@ ext/spl/tests/iterator_058.phpt
 ext/spl/tests/iterator_count_array.phpt
 ext/spl/tests/iterator_count_exception.phpt
 ext/spl/tests/iterator_to_array_array.phpt
+ext/spl/tests/spl_002.phpt
 ext/spl/tests/spl_autoload_003.phpt
 ext/spl/tests/spl_autoload_013.phpt
 ext/spl/tests/spl_autoload_014.phpt
@@ -2961,7 +2995,9 @@ ext/standard/tests/array/bug79930.phpt
 ext/standard/tests/array/compact_basic.phpt
 ext/standard/tests/array/compact_order.phpt
 ext/standard/tests/array/compact_variation2.phpt
+ext/standard/tests/array/count_basic.phpt
 ext/standard/tests/array/count_invalid.phpt
+ext/standard/tests/array/count_recursive.phpt
 ext/standard/tests/array/current_basic.phpt
 ext/standard/tests/array/current_variation2.phpt
 ext/standard/tests/array/current_variation3.phpt
@@ -3065,7 +3101,10 @@ ext/standard/tests/array/shuffle_variation2.phpt
 ext/standard/tests/array/shuffle_variation3.phpt
 ext/standard/tests/array/shuffle_variation4.phpt
 ext/standard/tests/array/sizeof_basic2.phpt
+ext/standard/tests/array/sizeof_object1.phpt
 ext/standard/tests/array/sizeof_object2.phpt
+ext/standard/tests/array/sizeof_variation2.phpt
+ext/standard/tests/array/sizeof_variation3.phpt
 ext/standard/tests/array/sort_object1.phpt
 ext/standard/tests/array/sort_object2.phpt
 ext/standard/tests/array/sort_variation10.phpt
@@ -3384,6 +3423,7 @@ ext/standard/tests/general_functions/001.phpt
 ext/standard/tests/general_functions/003.phpt
 ext/standard/tests/general_functions/005.phpt
 ext/standard/tests/general_functions/007.phpt
+ext/standard/tests/general_functions/008.phpt
 ext/standard/tests/general_functions/009.phpt
 ext/standard/tests/general_functions/array_is_list.phpt
 ext/standard/tests/general_functions/boolval.phpt
@@ -3585,6 +3625,7 @@ ext/standard/tests/serialize/bug23298.phpt
 ext/standard/tests/serialize/bug24063.phpt
 ext/standard/tests/serialize/bug28325.phpt
 ext/standard/tests/serialize/bug31442.phpt
+ext/standard/tests/serialize/bug37947.phpt
 ext/standard/tests/serialize/bug42919.phpt
 ext/standard/tests/serialize/bug43614.phpt
 ext/standard/tests/serialize/bug46882.phpt
@@ -3617,6 +3658,7 @@ ext/standard/tests/serialize/serialization_precision_001.phpt
 ext/standard/tests/serialize/shm_corruption_coercion_unserialize_options.phpt
 ext/standard/tests/serialize/sleep_deref.phpt
 ext/standard/tests/serialize/typed_property_ref_overwrite.phpt
+ext/standard/tests/serialize/unserializeS.phpt
 ext/standard/tests/serialize/unserialize_classes.phpt
 ext/standard/tests/serialize/unserialize_neg_iv_edge_cases.phpt
 ext/standard/tests/serialize/unserialize_ref_to_overwritten_declared_prop.phpt
@@ -4061,6 +4103,16 @@ tests/classes/abstract_derived.phpt
 tests/classes/abstract_inherit.phpt
 tests/classes/abstract_not_declared.phpt
 tests/classes/abstract_redeclare.phpt
+tests/classes/array_access_001.phpt
+tests/classes/array_access_002.phpt
+tests/classes/array_access_003.phpt
+tests/classes/array_access_004.phpt
+tests/classes/array_access_005.phpt
+tests/classes/array_access_006.phpt
+tests/classes/array_access_007.phpt
+tests/classes/array_access_008.phpt
+tests/classes/array_access_009.phpt
+tests/classes/array_access_013.phpt
 tests/classes/array_conversion_keys.phpt
 tests/classes/autoload_001.phpt
 tests/classes/autoload_002.phpt
@@ -4387,6 +4439,7 @@ tests/output/sapi_windows_vt100_support_notwindows.phpt
 tests/run-test/test001.phpt
 tests/run-test/test002.phpt
 tests/run-test/test003.phpt
+tests/run-test/test004.phpt
 tests/run-test/test006.phpt
 tests/run-test/test007.phpt
 tests/run-test/test009.phpt

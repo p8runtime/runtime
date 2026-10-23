@@ -111,7 +111,8 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(array2::REENTER);
     registry.mark_reenters(info::REENTER);
     registry.unchecked(&["assert"]);
-    registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export"]);
+    // (count: a Countable's count() is PHP code.)
+    registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
@@ -142,11 +143,26 @@ fn str_repeat(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Str(PhpStr::new(s.as_bytes().repeat(n))))
 }
 
-fn count(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let mode = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
     Ok(Value::Int(match arg(args, 0) {
+        Value::Array(a) if mode == 1 => count_recursive(&a),
         Value::Array(a) => a.len() as i64,
+        // A Countable: its count().
+        Value::Object(o) if o.class.is_a(b"countable") => {
+            let callable = Value::Array(std::rc::Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::str("count")])));
+            ctx.call(&callable, &mut [])?.to_int()
+        }
         _ => 1,
     }))
+}
+
+/// count($a, COUNT_RECURSIVE)
+fn count_recursive(a: &PhpArray) -> i64 {
+    a.values().map(|v| match v.deref() {
+        Value::Array(inner) => 1 + count_recursive(&inner),
+        _ => 1,
+    }).sum()
 }
 
 fn dechex(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

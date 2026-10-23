@@ -1,0 +1,61 @@
+set 'x'
+set NULL
+set 5
+get 'x'
+exists 'x'
+exists 'zz'
+exists 'x'
+get 'x'
+exists 'zz'
+int(1)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+int(3)
+get 'x'
+set 'x'
+get 'x'
+int(11)
+get 'x'
+
+Notice: Indirect modification of overloaded element of A has no effect in %s on line 14
+get 'x'
+
+Notice: Indirect modification of overloaded element of A has no effect in %s on line 14
+get 'x'
+int(11)
+set 'arr'
+get 'arr'
+
+Notice: Indirect modification of overloaded element of A has no effect in %s on line 16
+get 'arr'
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+set 'obj'
+get 'obj'
+set 'inner'
+get 'obj'
+array(1) {
+  ["inner"]=>
+  string(2) "in"
+}
+unset 'x'
+exists 'x'
+string(3) "def"
+get 0
+get 1
+int(2)
+NULL
+set 'w'
+string(9) "via array"
+exists 'w'
+exists 'nope'
+bool(true)
+bool(false)
+Cannot use object of type stdClass as array
+Cannot use object of type stdClass as array

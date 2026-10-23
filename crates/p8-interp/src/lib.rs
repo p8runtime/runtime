@@ -2,6 +2,7 @@
 //! The p8 interpreter: one loop over register instructions, all frames in
 //! one register file, calls resolved once per call site.
 
+mod arrayaccess;
 mod builtin_classes;
 mod callable;
 mod classes;
@@ -992,6 +993,60 @@ impl Context<'_> {
         self.functions.contains_key(&key) || self.isolate.registry.lookup(&key).is_some()
     }
 
+    /// An ini value that may be an expression (`E_ALL & ~E_NOTICE`):
+    /// integers and constants with | & ^ ~ (left to right, ~ binding tightest).
+    fn ini_bits(&self, text: &str) -> i64 {
+        let mut acc: Option<i64> = None;
+        let mut pending: Option<char> = None;
+        let mut not = false;
+        let mut chars = text.chars().peekable();
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+                chars.next();
+                continue;
+            }
+            if matches!(c, '|' | '&' | '^') {
+                pending = Some(c);
+                chars.next();
+                continue;
+            }
+            if c == '~' || c == '!' {
+                not = !not;
+                chars.next();
+                continue;
+            }
+            let mut word = String::new();
+            while let Some(&c) = chars.peek() {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' && word.is_empty() {
+                    word.push(c);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if word.is_empty() {
+                chars.next();
+                continue;
+            }
+            let mut v = word.parse::<i64>().ok().or_else(|| self.isolate.registry.constant(word.as_bytes()).map(|c| c.to_value().to_int())).unwrap_or(0);
+            if std::mem::take(&mut not) {
+                v = !v;
+            }
+            acc = Some(match (acc, pending.take()) {
+                (Some(a), Some('|')) => a | v,
+                (Some(a), Some('&')) => a & v,
+                (Some(a), Some('^')) => a ^ v,
+                _ => v,
+            });
+        }
+        acc.unwrap_or(0)
+    }
+
+    /// An ini setting from the host (`-d`); false when unknown.
+    pub fn set_ini(&mut self, name: &[u8], value: &str) -> bool {
+        Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some()
+    }
+
     /// Write to the output and flush it (messages the host shows as they come).
     pub fn echo_and_flush(&mut self, bytes: &[u8]) {
         self.out.write(bytes);
@@ -1620,20 +1675,48 @@ impl Context<'_> {
                     } else {
                         self.operand(w, func, arr)
                     };
+                    // An ArrayAccess object: its offsetGet.
+                    if let Value::Object(o) = &container {
+                        let k = self.operand(w, func, key);
+                        let v = self.aa_get(regs, o, k, quiet)?;
+                        regs[base + dst as usize] = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let v = self.fetch_dim(&container, w, func, key, quiet)?;
                     reg!(dst) = v;
                 }
                 Instr::AssignDim { var, keys, n, append, val, dst } => {
                     let v = self.operand(w, func, val);
+                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
+                    if arrayaccess::path_has_object(&reg!(var), &key_values, append) {
+                        let root = reg!(var).deref();
+                        let r = self.aa_write(regs, &root, &key_values, append, arrayaccess::DimOp::Set(v))?;
+                        regs[base + dst as usize] = r;
+                        return Ok(Next::Go(pc));
+                    }
                     self.assign_dim(w, func, var, keys, n, append, v.clone(), None)?;
                     reg!(dst) = v;
                 }
                 Instr::AssignDimOp { op, var, keys, n, val, dst } => {
                     let v = self.operand(w, func, val);
+                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
+                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                        let root = reg!(var).deref();
+                        let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::Op(op, v))?;
+                        regs[base + dst as usize] = r;
+                        return Ok(Next::Go(pc));
+                    }
                     let result = self.assign_dim(w, func, var, keys, n, false, v, Some(op))?;
                     reg!(dst) = result;
                 }
                 Instr::IssetDim { dst, var, keys, n } => {
+                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
+                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                        let root = reg!(var).deref();
+                        let set = self.aa_isset(regs, &root, &key_values)?;
+                        regs[base + dst as usize] = Value::Bool(set);
+                        return Ok(Next::Go(pc));
+                    }
                     let mut cur = match &reg!(var) {
                         Value::Ref(cell) => cell.borrow().clone(),
                         v => v.clone(),
@@ -1676,6 +1759,12 @@ impl Context<'_> {
                 Instr::UnsetVar { var } => reg!(var) = Value::Undef,
                 Instr::UnsetDim { var, keys, n } => {
                     let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).clone()).collect();
+                    let derefed: Vec<Value> = key_values.iter().map(Value::deref).collect();
+                    if arrayaccess::path_has_object(&reg!(var), &derefed, false) {
+                        let root = reg!(var).deref();
+                        self.aa_write(regs, &root, &derefed, false, arrayaccess::DimOp::Unset)?;
+                        return Ok(Next::Go(pc));
+                    }
                     let slot = &mut reg!(var);
                     let mut holder = match slot {
                         Value::Ref(cell) => cell.borrow().clone(),
@@ -2062,6 +2151,13 @@ impl Context<'_> {
                     };
                     reg!(dst) = match container {
                         Value::Array(_) => self.fetch_dim(&container, w, func, key, false)?,
+                        // An ArrayAccess object: its offsetGet.
+                        Value::Object(o) => {
+                            let k = self.operand(w, func, key);
+                            let v = self.aa_get(regs, &o, k, false)?;
+                            regs[base + dst as usize] = v;
+                            return Ok(Next::Go(pc));
+                        }
                         _ => Value::Null,
                     };
                 }
@@ -2115,6 +2211,13 @@ impl Context<'_> {
                     return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
                 }
                 Instr::DimIncDec { var, keys, n, dst, inc, post } => {
+                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
+                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                        let root = reg!(var).deref();
+                        let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::IncDec { inc, post })?;
+                        regs[base + dst as usize] = r;
+                        return Ok(Next::Go(pc));
+                    }
                     let mut path = Vec::with_capacity(n as usize);
                     for i in 0..n {
                         path.push(self.key(w, func, keys + i as Reg)?);
@@ -3076,7 +3179,8 @@ impl Ctx for Context<'_> {
         let old = self.ini_get(name)?;
         let text = value.to_php_string().unwrap_or_else(PhpStr::empty);
         match name {
-            b"error_reporting" => self.error_level = Value::Str(text.clone()).to_int(),
+            // An expression of E_* constants (`E_ALL & ~E_NOTICE`).
+            b"error_reporting" => self.error_level = self.ini_bits(&String::from_utf8_lossy(text.as_bytes())),
             b"display_errors" => {
                 let t = text.as_bytes().to_ascii_lowercase();
                 self.display_errors = !matches!(t.as_slice(), b"" | b"0" | b"off" | b"no" | b"false" | b"stderr");

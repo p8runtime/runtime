@@ -31,7 +31,8 @@ const RUN_TESTS_INI: &[(&str, &str)] = &[
     ("open_basedir", ""),
     ("disable_functions", ""),
     ("output_buffering", "Off"),
-    ("error_reporting", "32767"),
+    // run-tests.php passes E_ALL as the PHP running it has it: 30719 in 8.4.
+    ("error_reporting", "30719"),
     ("display_errors", "1"),
     ("display_startup_errors", "1"),
     ("log_errors", "0"),
