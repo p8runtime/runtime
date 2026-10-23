@@ -4,7 +4,7 @@
 //! php-src directories).
 
 use p8_runtime::array::PhpArray;
-use p8_runtime::ext::{Builtin, Constant, Ctx, Extension, Registry, Throw};
+use p8_runtime::ext::{Ob, Builtin, Constant, Ctx, Extension, Registry, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -27,6 +27,7 @@ mod class;
 pub mod defaults;
 mod math;
 mod misc;
+mod process;
 mod string;
 mod string2;
 mod var;
@@ -43,6 +44,17 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "sprintf", run: sprintf, by_ref: &[] },
     Builtin { name: "ob_start", run: ob_start, by_ref: &[] },
     Builtin { name: "ob_end_clean", run: ob_end_clean, by_ref: &[] },
+    Builtin { name: "ob_end_flush", run: ob_end_flush, by_ref: &[] },
+    Builtin { name: "ob_clean", run: ob_clean, by_ref: &[] },
+    Builtin { name: "ob_flush", run: ob_flush, by_ref: &[] },
+    Builtin { name: "ob_get_contents", run: ob_get_contents, by_ref: &[] },
+    Builtin { name: "ob_get_length", run: ob_get_length, by_ref: &[] },
+    Builtin { name: "ob_get_level", run: ob_get_level, by_ref: &[] },
+    Builtin { name: "ob_get_clean", run: ob_get_clean, by_ref: &[] },
+    Builtin { name: "ob_get_flush", run: ob_get_flush, by_ref: &[] },
+    Builtin { name: "ob_list_handlers", run: ob_list_handlers, by_ref: &[] },
+    Builtin { name: "ob_get_status", run: ob_get_status, by_ref: &[] },
+    Builtin { name: "ob_implicit_flush", run: ob_implicit_flush, by_ref: &[] },
     Builtin { name: "flush", run: flush, by_ref: &[] },
     Builtin { name: "function_exists", run: function_exists, by_ref: &[] },
     Builtin { name: "define", run: define, by_ref: &[] },
@@ -110,6 +122,10 @@ fn register(registry: &mut Registry) {
     registry.add_functions(class::BUILTINS);
     registry.add_functions(math::BUILTINS);
     registry.add_functions(misc::BUILTINS);
+    registry.add_functions(process::BUILTINS);
+    // The binary running this script (PHP_BINARY), for tests that run PHP again.
+    let binary = std::env::current_exe().map(|p| p.into_os_string().into_encoded_bytes()).unwrap_or_default();
+    registry.add_constant(b"PHP_BINARY", Constant::Str(Box::leak(binary.into_boxed_slice())));
     registry.add_functions(string::BUILTINS);
     registry.add_functions(var::BUILTINS);
     // These reach the caller's variables or run PHP code (__serialize,
@@ -118,6 +134,8 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(info::REENTER);
     registry.unchecked(&["assert"]);
     // (count: a Countable's count() is PHP code.)
+    // (The ob_* functions run output handlers, PHP code.)
+    registry.mark_reenters(&["ob_end_clean", "ob_end_flush", "ob_clean", "ob_flush", "ob_get_clean", "ob_get_flush"]);
     registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
@@ -339,17 +357,81 @@ fn sprintf(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Str(PhpStr::new(format(args))))
 }
 
-fn ob_start(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    ctx.ob_start();
-    Ok(Value::Bool(true))
+/// ob_start($callback = null, $chunk_size = 0, $flags = PHP_OUTPUT_HANDLER_STDFLAGS)
+fn ob_start(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let handler = arg(args, 0);
+    let chunk = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
+    ctx.ob(Ob::Start { handler, chunk })
+}
+
+/// An ob_* operation that needs a buffer: PHP's notice when there is none.
+fn ob_or_notice(ctx: &mut dyn Ctx, op: Ob, notice: &str) -> Result<Value, Throw> {
+    let r = ctx.ob(op)?;
+    if matches!(r, Value::Bool(false)) {
+        ctx.notice(notice);
+    }
+    Ok(r)
 }
 
 fn ob_end_clean(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    if ctx.ob_end_clean() {
-        return Ok(Value::Bool(true));
+    ob_or_notice(ctx, Ob::End { flush: false }, "ob_end_clean(): Failed to delete buffer. No buffer to delete")
+}
+
+fn ob_end_flush(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ob_or_notice(ctx, Ob::End { flush: true }, "ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush")
+}
+
+fn ob_clean(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ob_or_notice(ctx, Ob::Clean, "ob_clean(): Failed to delete buffer. No buffer to delete")
+}
+
+fn ob_flush(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ob_or_notice(ctx, Ob::Flush, "ob_flush(): Failed to flush buffer. No buffer to flush")
+}
+
+fn ob_get_contents(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.ob(Ob::Contents)
+}
+
+fn ob_get_length(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.ob(Ob::Length)
+}
+
+fn ob_get_level(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.ob(Ob::Level)
+}
+
+/// ob_get_clean(): the contents, and the buffer removed (false without one).
+fn ob_get_clean(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let contents = ctx.ob(Ob::Contents)?;
+    if matches!(contents, Value::Bool(false)) {
+        return Ok(contents);
     }
-    ctx.warn("ob_end_clean(): Failed to delete buffer. No buffer to delete");
-    Ok(Value::Bool(false))
+    ctx.ob(Ob::End { flush: false })?;
+    Ok(contents)
+}
+
+/// ob_get_flush(): the contents, and the buffer flushed and removed.
+fn ob_get_flush(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let contents = ctx.ob(Ob::Contents)?;
+    if matches!(contents, Value::Bool(false)) {
+        ctx.notice("ob_get_flush(): Failed to delete and flush buffer. No buffer to delete or flush");
+        return Ok(contents);
+    }
+    ctx.ob(Ob::End { flush: true })?;
+    Ok(contents)
+}
+
+fn ob_list_handlers(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.ob(Ob::Handlers)
+}
+
+fn ob_get_status(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    ctx.ob(Ob::Status { full: arg(args, 0).to_bool() })
+}
+
+fn ob_implicit_flush(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Null)
 }
 
 fn flush(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {

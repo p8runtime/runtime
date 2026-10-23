@@ -719,36 +719,74 @@ pub trait Host {
     fn flush(&mut self) {}
 }
 
+/// An output buffer (ob_start): its contents, and the handler (PHP code)
+/// that turns them into what is passed on.
+struct Buffer {
+    data: Vec<u8>,
+    handler: Option<Value>,
+    chunk: usize,
+    /// The handler was called (later calls lack the START phase).
+    started: bool,
+}
+
 /// Output, with output buffers (ob_start) stacked on top of the host.
 struct Output<'i> {
-    buffers: Vec<Vec<u8>>,
+    buffers: Vec<Buffer>,
     host: &'i mut dyn Host,
 }
 
 impl Output<'_> {
     fn write(&mut self, bytes: &[u8]) {
         match self.buffers.last_mut() {
-            Some(buffer) => buffer.extend_from_slice(bytes),
+            Some(buffer) => buffer.data.extend_from_slice(bytes),
             None => self.host.write(bytes),
         }
     }
 
-    fn start_buffer(&mut self) {
-        self.buffers.push(Vec::new());
+    /// Write to the level under the innermost buffer.
+    fn write_below(&mut self, bytes: &[u8]) {
+        let n = self.buffers.len();
+        match n.checked_sub(2).and_then(|i| self.buffers.get_mut(i)) {
+            Some(below) => below.data.extend_from_slice(bytes),
+            None => self.host.write(bytes),
+        }
     }
 
-    /// Drop the innermost buffer's contents (ob_end_clean); false if none.
-    fn end_clean(&mut self) -> bool {
-        self.buffers.pop().is_some()
-    }
-
+    /// Everything buffered goes out as it is (a fatal error's report).
     fn flush_all(&mut self) {
         while let Some(buffer) = self.buffers.pop() {
-            self.write(&buffer);
+            self.write(&buffer.data);
         }
         self.host.flush();
     }
 }
+
+/// How ob_list_handlers() names a buffer's handler.
+fn handler_name(handler: &Option<Value>) -> String {
+    match handler {
+        None => "default output handler".into(),
+        Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+        Some(Value::Object(o)) if o.class.lower == b"closure" => "Closure::__invoke".into(),
+        Some(Value::Array(a)) => {
+            let parts: Vec<Value> = a.values().map(Value::deref).collect();
+            let class = match parts.first() {
+                Some(Value::Object(o)) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                Some(v) => String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
+                None => String::new(),
+            };
+            let method = parts.get(1).map_or_else(String::new, |m| String::from_utf8_lossy(m.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned());
+            format!("{class}::{method}")
+        }
+        Some(Value::Object(o)) => format!("{}::__invoke", String::from_utf8_lossy(o.class.name.as_bytes())),
+        Some(_) => "???".into(),
+    }
+}
+
+/// PHP_OUTPUT_HANDLER_* phases a handler is told.
+const OB_START: i64 = 1;
+const OB_CLEAN: i64 = 2;
+const OB_FLUSH: i64 = 4;
+const OB_FINAL: i64 = 8;
 
 /// No interrupt pending.
 const NO_INTERRUPT: u64 = 0;
@@ -1047,6 +1085,95 @@ impl Context<'_> {
         Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some()
     }
 
+    /// Run the innermost buffer's handler on its contents (`phase`); what it
+    /// gives back (its contents, without a handler or when it returns false).
+    fn ob_handle(&mut self, regs: &mut Vec<Value>, phase: i64) -> Result<Vec<u8>, Throw> {
+        let Some(buffer) = self.out.buffers.last_mut() else { return Ok(Vec::new()) };
+        let data = std::mem::take(&mut buffer.data);
+        let Some(handler) = buffer.handler.clone() else { return Ok(data) };
+        let phase = if buffer.started { phase } else { phase | OB_START };
+        buffer.started = true;
+        // The handler's own output is not buffered output.
+        let r = self.call_with_regs(regs, &handler, &mut [Value::Str(PhpStr::new(data.clone())), Value::Int(phase)])?;
+        Ok(match r {
+            Value::Bool(false) => data,
+            v => v.to_php_string().map_or_else(Vec::new, |s| s.as_bytes().to_vec()),
+        })
+    }
+
+    pub(crate) fn ob_with(&mut self, regs: &mut Vec<Value>, op: p8_runtime::ext::Ob) -> Result<Value, Throw> {
+        use p8_runtime::ext::Ob;
+        let none = self.out.buffers.is_empty();
+        Ok(match op {
+            Ob::Start { handler, chunk } => {
+                let handler = (!matches!(handler, Value::Null)).then_some(handler);
+                self.out.buffers.push(Buffer { data: Vec::new(), handler, chunk: chunk.max(0) as usize, started: false });
+                Value::Bool(true)
+            }
+            _ if none && !matches!(op, Ob::Level | Ob::Handlers | Ob::Status { .. }) => Value::Bool(false),
+            Ob::Contents => Value::Str(PhpStr::new(self.out.buffers.last().map_or_else(Vec::new, |b| b.data.clone()))),
+            Ob::Length => Value::Int(self.out.buffers.last().map_or(0, |b| b.data.len()) as i64),
+            Ob::Level => Value::Int(self.out.buffers.len() as i64),
+            Ob::Clean => {
+                self.ob_handle(regs, OB_CLEAN)?;
+                Value::Bool(true)
+            }
+            Ob::Flush => {
+                let out = self.ob_handle(regs, OB_FLUSH)?;
+                self.out.write_below(&out);
+                Value::Bool(true)
+            }
+            Ob::End { flush } => {
+                let phase = if flush { OB_FINAL } else { OB_CLEAN | OB_FINAL };
+                let out = self.ob_handle(regs, phase)?;
+                if flush {
+                    self.out.write_below(&out);
+                }
+                self.out.buffers.pop();
+                Value::Bool(true)
+            }
+            Ob::Handlers => {
+                let names: Vec<Value> = self.out.buffers.iter().map(|b| Value::Str(PhpStr::from(handler_name(&b.handler)))).collect();
+                Value::Array(Rc::new(PhpArray::from_list(names)))
+            }
+            Ob::Status { full } => {
+                let status = |level: usize, b: &Buffer| {
+                    let mut a = PhpArray::new();
+                    let user = b.handler.is_some();
+                    a.insert(Key::from_string(PhpStr::from("name")), Value::Str(PhpStr::from(handler_name(&b.handler))));
+                    a.insert(Key::from_string(PhpStr::from("type")), Value::Int(i64::from(user)));
+                    // PHP_OUTPUT_HANDLER_STDFLAGS (| USER); STARTED | PROCESSED once called.
+                    a.insert(Key::from_string(PhpStr::from("flags")), Value::Int(if user { 0x71 } else { 0x70 } | if b.started { 0x5000 } else { 0 }));
+                    a.insert(Key::from_string(PhpStr::from("level")), Value::Int(level as i64));
+                    a.insert(Key::from_string(PhpStr::from("chunk_size")), Value::Int(b.chunk as i64));
+                    a.insert(Key::from_string(PhpStr::from("buffer_size")), Value::Int(16384));
+                    a.insert(Key::from_string(PhpStr::from("buffer_used")), Value::Int(b.data.len() as i64));
+                    Value::Array(Rc::new(a))
+                };
+                if full {
+                    let all: Vec<Value> = self.out.buffers.iter().enumerate().map(|(i, b)| status(i, b)).collect();
+                    Value::Array(Rc::new(PhpArray::from_list(all)))
+                } else {
+                    match self.out.buffers.last() {
+                        Some(b) => status(self.out.buffers.len() - 1, b),
+                        None => Value::Array(Rc::new(PhpArray::new())),
+                    }
+                }
+            }
+        })
+    }
+
+    /// The request's end: each buffer left is flushed through its handler.
+    fn end_buffers(&mut self, regs: &mut Vec<Value>) {
+        while !self.out.buffers.is_empty() {
+            if let Err(t) = self.ob_with(regs, p8_runtime::ext::Ob::End { flush: true }) {
+                let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
+                self.report_end(Err(t));
+                self.out.buffers.pop();
+            }
+        }
+    }
+
     /// Write to the output and flush it (messages the host shows as they come).
     pub fn echo_and_flush(&mut self, bytes: &[u8]) {
         self.out.write(bytes);
@@ -1096,6 +1223,7 @@ impl Context<'_> {
                 status = self.report_end(Err(t));
             }
         }
+        self.end_buffers(&mut regs);
         // The request's variables go now (the isolate keeps the capacity).
         regs.clear();
         self.frames.clear();
@@ -3140,12 +3268,11 @@ impl Ctx for Context<'_> {
         self.out.write(bytes);
     }
 
-    fn ob_start(&mut self) {
-        self.out.start_buffer();
-    }
-
-    fn ob_end_clean(&mut self) -> bool {
-        self.out.end_clean()
+    fn ob(&mut self, op: p8_runtime::ext::Ob) -> Result<Value, Throw> {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let r = self.ob_with(&mut regs, op);
+        self.isolate.regs = regs;
+        r
     }
 
     fn warn(&mut self, message: &str) {
@@ -3155,6 +3282,10 @@ impl Ctx for Context<'_> {
     fn deprecated(&mut self, message: &str) {
         self.diags.push(Diag::Deprecated(message.to_string()));
         self.report_diags();
+    }
+
+    fn notice(&mut self, message: &str) {
+        Context::notice(self, message);
     }
 
     fn report(&mut self, level: i64, message: &str) {

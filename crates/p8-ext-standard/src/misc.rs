@@ -6,7 +6,6 @@
 //! $PHP_SRC_PATH/main/main.c, $PHP_SRC_PATH/ext/standard/basic_functions.c
 
 use crate::{arg, str_arg};
-use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -114,20 +113,12 @@ fn phpversion(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// getenv($name = null, $local_only = false): one variable, or all of them.
-fn getenv(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn getenv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     match args.first().map(Value::deref) {
-        None | Some(Value::Null) => {
-            let mut all = PhpArray::new();
-            for (k, v) in std::env::vars_os() {
-                let (k, v) = (k.into_encoded_bytes(), v.into_encoded_bytes());
-                all.insert(Key::from_string(PhpStr::new(k)), Value::Str(PhpStr::new(v)));
-            }
-            Ok(Value::Array(Rc::new(all)))
-        }
+        None | Some(Value::Null) => Ok(Value::Array(Rc::new(crate::process::env_all(ctx)))),
         Some(name) => {
             let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
-            let Ok(name) = std::str::from_utf8(name.as_bytes()) else { return Ok(Value::Bool(false)) };
-            Ok(std::env::var_os(name).map_or(Value::Bool(false), |v| Value::Str(PhpStr::new(v.into_encoded_bytes()))))
+            Ok(crate::process::env_var(ctx, name.as_bytes()).map_or(Value::Bool(false), |v| Value::Str(PhpStr::new(v))))
         }
     }
 }
