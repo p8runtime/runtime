@@ -1122,6 +1122,20 @@ impl<'src> Lexer<'src> {
                 self.state_stack.push(LexerState::RawData);
                 TokenKind::SemiColon
             }
+            b'?' if self.peek() == Some(b'>') => {
+                self.advance();
+                if self.peek() == Some(b'\n') {
+                    self.advance();
+                } else if self.peek() == Some(b'\r') {
+                    self.advance();
+                    if self.peek() == Some(b'\n') {
+                        self.advance();
+                    }
+                }
+                self.state_stack.pop();
+                self.state_stack.push(LexerState::RawData);
+                TokenKind::CloseTag
+            }
             b'#' => self.consume_single_line_comment(),
             b'/' => {
                 if self.peek() == Some(b'/') {
@@ -1263,11 +1277,11 @@ impl<'src> Iterator for Lexer<'src> {
                     span: Span::new(self.cursor, self.cursor),
                 });
             }
-            let start = self.cursor;
-            self.cursor = self.input.len(); // Consume all
+            // The data after __halt_compiler() is not code or output.
+            self.cursor = self.input.len();
             return Some(Token {
-                kind: TokenKind::InlineHtml,
-                span: Span::new(start, self.cursor),
+                kind: TokenKind::Eof,
+                span: Span::new(self.cursor, self.cursor),
             });
         }
 

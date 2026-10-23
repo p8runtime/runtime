@@ -62,6 +62,8 @@ enum Body<'a> {
 }
 
 struct Loop {
+    /// Which loop (or switch) this is, for `goto` into one.
+    id: usize,
     breaks: Vec<usize>,
     continues: Vec<usize>,
 }
@@ -131,6 +133,18 @@ struct FnBuilder<'a> {
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
     silences: Vec<(u32, u32, Reg)>,
+    loops_made: usize,
+    /// `label:` positions and the loops open there; `goto`s to patch.
+    labels: HashMap<Vec<u8>, (u32, Vec<usize>)>,
+    gotos: Vec<Goto>,
+}
+
+/// A `goto` waiting for its label (which may come later).
+struct Goto {
+    label: Vec<u8>,
+    at: usize,
+    loops: Vec<usize>,
+    line: u32,
 }
 
 impl FnBuilder<'_> {
@@ -166,6 +180,9 @@ impl FnBuilder<'_> {
             is_generator: false,
             decls: Vec::new(),
             silences: Vec::new(),
+            loops_made: 0,
+            labels: HashMap::new(),
+            gotos: Vec::new(),
         }
     }
 
@@ -195,6 +212,31 @@ impl FnBuilder<'_> {
 
     fn here(&self) -> u32 {
         self.code.len() as u32
+    }
+
+    fn push_loop(&mut self) {
+        self.loops_made += 1;
+        self.loops.push(Loop { id: self.loops_made, breaks: Vec::new(), continues: Vec::new() });
+    }
+
+    fn open_loops(&self) -> Vec<usize> {
+        self.loops.iter().map(|l| l.id).collect()
+    }
+
+    /// Point each `goto` at its label: one in the same loops or outside
+    /// them (never into a loop or switch).
+    fn resolve_gotos(&mut self) -> Result<()> {
+        for g in std::mem::take(&mut self.gotos) {
+            let Some((target, loops)) = self.labels.get(&g.label) else {
+                return Err(CompileError { message: format!("'goto' to undefined label '{}'", String::from_utf8_lossy(&g.label)), line: g.line });
+            };
+            if !g.loops.starts_with(loops) {
+                return Err(CompileError { message: "'goto' into loop or switch statement is disallowed".into(), line: g.line });
+            }
+            let target = *target;
+            self.patch(g.at, target);
+        }
+        Ok(())
     }
 
     fn patch(&mut self, at: usize, target: u32) {
@@ -748,6 +790,8 @@ fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
 
 pub struct Compiler<'src> {
     source: &'src [u8],
+    /// Where the data after `__halt_compiler();` starts (__COMPILER_HALT_OFFSET__).
+    halt_offset: Option<usize>,
     /// The builtins (their by-reference parameters are known when compiling).
     registry: &'src Registry,
     file: Arc<str>,
@@ -820,6 +864,7 @@ impl<'src> Compiler<'src> {
             use_consts: HashMap::new(),
             anonymous: 0,
             hook_value: false,
+            halt_offset: None,
             strict: false,
             pending_ret: None,
         }
@@ -886,6 +931,10 @@ impl<'src> Compiler<'src> {
                 self.strict = true;
             }
         }
+        self.halt_offset = stmts.iter().find_map(|s| match s {
+            Stmt::HaltCompiler { span } => Some(span.end),
+            _ => None,
+        });
         // Each top-level function's by-reference parameters, by its full name.
         let mut ns: Vec<u8> = Vec::new();
         let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
@@ -923,6 +972,7 @@ impl<'src> Compiler<'src> {
             let one = f.constant(Frozen::Int(1));
             f.emit(Instr::Return { src: one });
         }
+        f.resolve_gotos()?;
         let main = Arc::new(f.finish(self.file.clone()));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
@@ -1032,7 +1082,7 @@ impl<'src> Compiler<'src> {
             }
             Stmt::DoWhile { body, condition, .. } => {
                 let start = f.here();
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                f.push_loop();
                 self.stmts(f, body)?;
                 let cont = f.here();
                 let back = self.branch(f, condition, true)?;
@@ -1048,7 +1098,7 @@ impl<'src> Compiler<'src> {
                 // Body first, then the step and the condition at the bottom.
                 let to_cond = f.emit(Instr::Jump { target: 0 });
                 let body_start = f.here();
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                f.push_loop();
                 self.stmts(f, body)?;
                 let cont = f.here();
                 for e in *loop_expr {
@@ -1085,7 +1135,7 @@ impl<'src> Compiler<'src> {
                     None => None,
                 };
                 let next = f.emit(Instr::IterNextRef { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                f.push_loop();
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
@@ -1122,7 +1172,7 @@ impl<'src> Compiler<'src> {
                     None => None,
                 };
                 let next = f.emit(Instr::IterNext { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                f.push_loop();
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, None)?;
@@ -1142,6 +1192,24 @@ impl<'src> Compiler<'src> {
                 }
             }
             Stmt::Block { statements, .. } => self.stmts(f, statements)?,
+            // The script ends here; what follows is data.
+            Stmt::HaltCompiler { .. } => {
+                let one = f.constant(Frozen::Int(1));
+                f.emit(Instr::Return { src: one });
+            }
+            Stmt::Label { name, span } => {
+                let label = self.text(name.span).to_vec();
+                if f.labels.contains_key(&label) {
+                    return Err(CompileError { message: format!("Label '{}' already defined", String::from_utf8_lossy(&label)), line: self.line(*span) });
+                }
+                let loops = f.open_loops();
+                f.labels.insert(label, (f.here(), loops));
+            }
+            Stmt::Goto { label, span } => {
+                let at = f.emit(Instr::Jump { target: 0 });
+                let (label, loops, line) = (self.text(label.span).to_vec(), f.open_loops(), self.line(*span));
+                f.gotos.push(Goto { label, at, loops, line });
+            }
             Stmt::Break { level, span } | Stmt::Continue { level, span } => {
                 let is_break = matches!(stmt, Stmt::Break { .. });
                 let depth = match level {
@@ -1231,7 +1299,7 @@ impl<'src> Compiler<'src> {
                 }
                 let no_match = f.emit(Instr::Jump { target: 0 });
                 f.temps = f.floor;
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                f.push_loop();
                 let mut default = None;
                 for (case, jump) in cases.iter().zip(to_body) {
                     match jump {
@@ -1520,7 +1588,7 @@ impl<'src> Compiler<'src> {
     }
 
     fn loop_body<'a>(&mut self, f: &mut FnBuilder<'a>, body: &'a [StmtId<'a>], _start: u32) -> Result<()> {
-        f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+        f.push_loop();
         self.stmts(f, body)
     }
 
@@ -1676,6 +1744,7 @@ impl<'src> Compiler<'src> {
                 }
             }
         }
+        f.resolve_gotos()?;
         Ok((f.finish(self.file.clone()), captures))
     }
 
@@ -3563,6 +3632,11 @@ impl<'src> Compiler<'src> {
             b"false" => return f.constant(Frozen::Bool(false)),
             b"null" => return f.constant(Frozen::Null),
             _ => {}
+        }
+        if bare == b"__COMPILER_HALT_OFFSET__"
+            && let Some(at) = self.halt_offset
+        {
+            return f.constant(Frozen::Int(at as i64));
         }
         let (full, fallback) = self.ns_name(name, &self.use_consts, false);
         // A namespace's part is case-insensitive; the constant's own is not.

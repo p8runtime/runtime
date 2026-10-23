@@ -129,9 +129,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         message: "Expected ')' after __halt_compiler(",
                     });
                 }
-                self.expect_semicolon();
-
+                // The data starts after the `;` (or `?>` and its newline).
                 let end = self.current_token.span.end;
+                if self.current_token.kind == TokenKind::CloseTag {
+                    self.bump();
+                } else {
+                    self.expect_semicolon();
+                }
                 self.arena.alloc(Stmt::HaltCompiler {
                     span: Span::new(start, end),
                 })

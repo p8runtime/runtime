@@ -309,6 +309,7 @@ Zend/tests/bug48409.phpt
 Zend/tests/bug48428.phpt
 Zend/tests/bug48899.phpt
 Zend/tests/bug48912.phpt
+Zend/tests/bug48930.phpt
 Zend/tests/bug49269.phpt
 Zend/tests/bug49472.phpt
 Zend/tests/bug49866.phpt
@@ -334,6 +335,7 @@ Zend/tests/bug54305.phpt
 Zend/tests/bug54358.phpt
 Zend/tests/bug54367.phpt
 Zend/tests/bug54624.phpt
+Zend/tests/bug54804.phpt
 Zend/tests/bug55007.phpt
 Zend/tests/bug55086.phpt
 Zend/tests/bug55135.phpt
@@ -436,6 +438,7 @@ Zend/tests/bug69989_1.phpt
 Zend/tests/bug69989_3.phpt
 Zend/tests/bug69996.phpt
 Zend/tests/bug70012.phpt
+Zend/tests/bug70164.phpt
 Zend/tests/bug70179.phpt
 Zend/tests/bug70183.phpt
 Zend/tests/bug70187.phpt
@@ -699,6 +702,7 @@ Zend/tests/constants/final_constants/final_const4.phpt
 Zend/tests/constants/final_constants/final_const6.phpt
 Zend/tests/constants/final_constants/final_const7.phpt
 Zend/tests/constants/final_constants/final_const9.phpt
+Zend/tests/constants/gh18850.phpt
 Zend/tests/constants_001.phpt
 Zend/tests/constants_002.phpt
 Zend/tests/constants_003.phpt
@@ -740,6 +744,7 @@ Zend/tests/div_by_zero_in_static.phpt
 Zend/tests/double_array_cast.phpt
 Zend/tests/double_to_string_64bit.phpt
 Zend/tests/dtor_scope.phpt
+Zend/tests/duplicate_label_error.phpt
 Zend/tests/dval_to_lval_64.phpt
 Zend/tests/dynamic_call_freeing.phpt
 Zend/tests/dynamic_call_to_ref_returning_function.phpt
@@ -817,6 +822,7 @@ Zend/tests/error_reporting09.phpt
 Zend/tests/error_reporting10.phpt
 Zend/tests/eval_constant_resolution.phpt
 Zend/tests/exception_001.phpt
+Zend/tests/exception_002.phpt
 Zend/tests/exception_003.phpt
 Zend/tests/exception_005.phpt
 Zend/tests/exception_006.phpt
@@ -1066,6 +1072,7 @@ Zend/tests/gh9775_2.phpt
 Zend/tests/ghsa-rwp7-7vc6-8477_002.phpt
 Zend/tests/ghsa-rwp7-7vc6-8477_003.phpt
 Zend/tests/globals_005.phpt
+Zend/tests/goto_in_foreach.phpt
 Zend/tests/grammar/bug78441.phpt
 Zend/tests/grammar/regression_001.phpt
 Zend/tests/grammar/regression_002.phpt
@@ -1078,6 +1085,10 @@ Zend/tests/grammar/regression_013.phpt
 Zend/tests/grammar/semi_reserved_004.phpt
 Zend/tests/grammar/semi_reserved_007.phpt
 Zend/tests/grammar/semi_reserved_009.phpt
+Zend/tests/halt01.phpt
+Zend/tests/halt02.phpt
+Zend/tests/halt_compiler1.phpt
+Zend/tests/halt_compiler2.phpt
 Zend/tests/halt_compiler5.phpt
 Zend/tests/heredoc_001.phpt
 Zend/tests/heredoc_003.phpt
@@ -1140,6 +1151,23 @@ Zend/tests/interface_exists_001.phpt
 Zend/tests/interface_exists_002.phpt
 Zend/tests/isset_001.phpt
 Zend/tests/isset_002.phpt
+Zend/tests/jmpznz_relative_offsets.phpt
+Zend/tests/jump01.phpt
+Zend/tests/jump02.phpt
+Zend/tests/jump03.phpt
+Zend/tests/jump04.phpt
+Zend/tests/jump05.phpt
+Zend/tests/jump06.phpt
+Zend/tests/jump07.phpt
+Zend/tests/jump08.phpt
+Zend/tests/jump09.phpt
+Zend/tests/jump10.phpt
+Zend/tests/jump11.phpt
+Zend/tests/jump12.phpt
+Zend/tests/jump13.phpt
+Zend/tests/jump14.phpt
+Zend/tests/jump15.phpt
+Zend/tests/jump16.phpt
 Zend/tests/line_const_in_array.phpt
 Zend/tests/list/list_reference_002.phpt
 Zend/tests/list_001.phpt
@@ -1311,6 +1339,7 @@ Zend/tests/ns_077_5.phpt
 Zend/tests/ns_077_7.phpt
 Zend/tests/ns_077_8.phpt
 Zend/tests/ns_078.phpt
+Zend/tests/ns_080.phpt
 Zend/tests/ns_082.phpt
 Zend/tests/ns_085.phpt
 Zend/tests/ns_093.phpt
@@ -1721,6 +1750,7 @@ Zend/tests/try/catch_finally_003.phpt
 Zend/tests/try/catch_finally_005.phpt
 Zend/tests/try/catch_finally_006.phpt
 Zend/tests/try/catch_novar_1.phpt
+Zend/tests/try/gh22280.phpt
 Zend/tests/try/try_catch_finally_001.phpt
 Zend/tests/try/try_catch_finally_002.phpt
 Zend/tests/try/try_catch_finally_003.phpt
