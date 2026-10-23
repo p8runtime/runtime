@@ -107,7 +107,7 @@ enum Storage {
     Hashed(Hashed),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 struct Packed {
     slots: Vec<Value>,
     /// How many slots are holes.
@@ -141,11 +141,37 @@ impl Packed {
 
 /// An insertion-ordered hash: entries in order (None where unset), and a
 /// table of entry indices by key hash.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 struct Hashed {
     entries: Vec<Option<(Key, Value)>>,
     index: HashTable<usize>,
     live: usize,
+}
+
+/// An element as a copy of its array holds it (zend_array_dup): a
+/// reference nothing else holds (its variable gone) is a plain value.
+#[inline]
+fn dup(v: &Value) -> Value {
+    match v {
+        Value::Ref(cell) if std::rc::Rc::strong_count(cell) == 1 => cell.borrow().clone(),
+        v => v.clone(),
+    }
+}
+
+impl Clone for Packed {
+    fn clone(&self) -> Self {
+        Packed { slots: self.slots.iter().map(dup).collect(), holes: self.holes }
+    }
+}
+
+impl Clone for Hashed {
+    fn clone(&self) -> Self {
+        Hashed {
+            entries: self.entries.iter().map(|e| e.as_ref().map(|(k, v)| (k.clone(), dup(v)))).collect(),
+            index: self.index.clone(),
+            live: self.live,
+        }
+    }
 }
 
 impl Hashed {

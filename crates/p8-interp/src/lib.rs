@@ -6,6 +6,7 @@ mod builtin_classes;
 mod callable;
 mod classes;
 mod include;
+mod refs;
 mod throw;
 
 use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg};
@@ -428,6 +429,12 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::Capture { .. }
                 | Instr::CallValue { .. }
                 | Instr::FromCallable { .. }
+                | Instr::BindRef { .. }
+                | Instr::RefDim { .. }
+                | Instr::DimSetRef { .. }
+                | Instr::IterInitRef { .. }
+                | Instr::IterNextRef { .. }
+                | Instr::StaticVar { .. }
                 | Instr::Unsilence { .. }
                 | Instr::New { .. }
                 | Instr::This { .. }
@@ -771,6 +778,7 @@ impl Isolate {
             arg_buf: Vec::new(),
             lambdas: HashMap::new(),
             natives: Vec::new(),
+            statics: HashMap::new(),
         }
     }
 }
@@ -823,6 +831,8 @@ pub struct Context<'i> {
     lambdas: HashMap<usize, Rc<Closure>>,
     /// Builtins running that may call back into PHP, innermost last.
     natives: Vec<NativeCall>,
+    /// `static` variables, by function and index.
+    statics: HashMap<(usize, u16), Rc<RefCell<Value>>>,
 }
 
 impl Context<'_> {
@@ -1536,6 +1546,80 @@ impl Context<'_> {
                         && let Some(data) = callable::closure_data(o)
                     {
                         data.captured.borrow_mut().push(v);
+                    }
+                }
+                Instr::BindRef { var, src } => {
+                    if var != src {
+                        let cell = make_ref(w, src);
+                        reg!(var) = Value::Ref(cell);
+                    }
+                }
+                Instr::RefDim { var, root, keys, n, append } => {
+                    let mut path = Vec::with_capacity(n as usize);
+                    for i in 0..n {
+                        path.push(self.key(w, func, keys + i as Reg)?);
+                    }
+                    let cell = make_ref(w, root);
+                    let mut value = std::mem::take(&mut *cell.borrow_mut());
+                    let r = self.dim_ref(&mut value, &path, append);
+                    *cell.borrow_mut() = value;
+                    reg!(var) = Value::Ref(r?);
+                }
+                Instr::DimSetRef { root, keys, n, append, src } => {
+                    let mut path = Vec::with_capacity(n as usize);
+                    for i in 0..n {
+                        path.push(self.key(w, func, keys + i as Reg)?);
+                    }
+                    let target = make_ref(w, src);
+                    let cell = make_ref(w, root);
+                    let mut value = std::mem::take(&mut *cell.borrow_mut());
+                    let r = self.dim_set_ref(&mut value, &path, append, target);
+                    *cell.borrow_mut() = value;
+                    r?;
+                }
+                Instr::IterInitRef { src, iter, end } => {
+                    let cell = make_ref(w, src);
+                    let state = match &*cell.borrow() {
+                        Value::Array(a) => Ok(!a.is_empty()),
+                        other => Err(other.type_name()),
+                    };
+                    match state {
+                        Ok(true) => {
+                            reg!(iter) = Value::Int(0);
+                            reg!(iter + 1) = Value::Ref(cell);
+                        }
+                        Ok(false) => pc = end as usize,
+                        Err(ty) => {
+                            self.warn(format!("foreach() argument must be of type array|object, {ty} given"));
+                            pc = end as usize;
+                        }
+                    }
+                }
+                Instr::IterNextRef { iter, val, key, has_key, end } => {
+                    let pos = match reg!(iter) {
+                        Value::Int(p) => p as usize,
+                        _ => 0,
+                    };
+                    let next = match &reg!(iter + 1) {
+                        Value::Ref(cell) => refs::next_ref(cell, pos),
+                        _ => None,
+                    };
+                    match next {
+                        Some((p, k, cell)) => {
+                            reg!(iter) = Value::Int(p as i64 + 1);
+                            reg!(val) = Value::Ref(cell);
+                            if has_key {
+                                assign(w, key, k.into_value());
+                            }
+                        }
+                        None => pc = end as usize,
+                    }
+                }
+                Instr::StaticVar { var, index, skip } => {
+                    let (cell, new) = self.static_var(func, index);
+                    reg!(var) = Value::Ref(cell);
+                    if !new {
+                        pc = skip as usize;
                     }
                 }
                 Instr::FromCallable { dst, src } => {

@@ -113,6 +113,8 @@ struct FnBuilder<'a> {
     lambdas: Vec<Arc<Function>>,
     /// For a closure: the registers of its captured variables, in order.
     bound: Vec<Reg>,
+    /// `static` variables declared so far.
+    statics: u16,
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
     silences: Vec<(u32, u32, Reg)>,
@@ -145,6 +147,7 @@ impl FnBuilder<'_> {
             handlers: Vec::new(),
             lambdas: Vec::new(),
             bound: Vec::new(),
+            statics: 0,
             decls: Vec::new(),
             silences: Vec::new(),
         }
@@ -425,6 +428,30 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     match instr {
         DeclareClass { .. } => {}
         MakeClosure { dst, .. } => *dst = f(*dst),
+        BindRef { var, src } => {
+            *var = f(*var);
+            *src = f(*src);
+        }
+        RefDim { var, root, keys, .. } => {
+            *var = f(*var);
+            *root = f(*root);
+            *keys = f(*keys);
+        }
+        DimSetRef { root, keys, src, .. } => {
+            *root = f(*root);
+            *keys = f(*keys);
+            *src = f(*src);
+        }
+        IterInitRef { src, iter, .. } => {
+            *src = f(*src);
+            *iter = f(*iter);
+        }
+        IterNextRef { iter, val, key, .. } => {
+            *iter = f(*iter);
+            *val = f(*val);
+            *key = f(*key);
+        }
+        StaticVar { var, .. } => *var = f(*var),
         FromCallable { dst, src } => {
             *dst = f(*dst);
             *src = f(*src);
@@ -864,6 +891,30 @@ impl<'src> Compiler<'src> {
                 f.temps = f.floor;
                 self.close_loop(f, cont);
             }
+            Stmt::Foreach { expr, key_var, value_var: Expr::Unary { op: UnaryOp::Reference, expr: value_var, .. }, body, .. } => {
+                // By reference: the elements of the variable's own array.
+                let src = self.expr(f, expr)?;
+                let iter = f.temp();
+                let _cell = f.temp();
+                let saved = f.temps;
+                let init = f.emit(Instr::IterInitRef { src, iter, end: 0 });
+                let start = f.here();
+                let val = self.var_target(f, value_var)?;
+                let key = match key_var {
+                    Some(k) => Some(self.var_target(f, k)?),
+                    None => None,
+                };
+                let next = f.emit(Instr::IterNextRef { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
+                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                let outer_floor = std::mem::replace(&mut f.floor, saved);
+                self.stmts(f, body)?;
+                f.floor = outer_floor;
+                f.emit(Instr::Jump { target: start });
+                let end = f.here();
+                f.patch(init, end);
+                f.patch(next, end);
+                self.close_loop(f, start);
+            }
             Stmt::Foreach { expr, key_var, value_var, body, .. } => {
                 let src = self.expr(f, expr)?;
                 // The iterator's two registers stay live through the body.
@@ -1020,6 +1071,24 @@ impl<'src> Compiler<'src> {
                     f.emit(Instr::Move { dst: second, src: value });
                     let dst = f.temp();
                     f.emit(Instr::Call { site, base, argc: 2, dst });
+                }
+            }
+            Stmt::Static { vars, .. } => {
+                for v in *vars {
+                    // `static $x = 1` may come as an assignment.
+                    let (target, default) = match v.var {
+                        Expr::Assign { var, expr, .. } if v.default.is_none() => (*var, Some(*expr)),
+                        other => (other, v.default),
+                    };
+                    let var = self.var_target(f, target)?;
+                    let index = f.statics;
+                    f.statics += 1;
+                    let at = f.emit(Instr::StaticVar { var, index, skip: 0 });
+                    if let Some(init) = default {
+                        let value = self.expr(f, init)?;
+                        f.emit(Instr::Assign { var, src: value });
+                    }
+                    f.patch(at, f.here());
                 }
             }
             Stmt::Unset { vars, .. } => {
@@ -1605,7 +1674,7 @@ impl<'src> Compiler<'src> {
     fn var_target(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
         match e {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => Ok(f.cv(&self.text(*name)[1..])),
-            other => Err(self.unsupported(other.span(), "this foreach target")),
+            other => Err(self.unsupported(other.span(), &format!("this foreach target ({})", kind(other)))),
         }
     }
 
@@ -1738,6 +1807,29 @@ impl<'src> Compiler<'src> {
                     dst
                 }
                 other => return Err(self.unsupported(other.span(), "this assignment")),
+            },
+            Expr::AssignRef { var, expr, span } => match (var, expr) {
+                (Expr::Variable { name, .. }, Expr::Variable { name: src, .. })
+                    if self.text(*name).starts_with(b"$") && self.text(*src).starts_with(b"$") && self.text(*src) != b"$this" =>
+                {
+                    let var = f.cv(&self.text(*name)[1..]);
+                    let src = f.cv(&self.text(*src)[1..]);
+                    f.emit(Instr::BindRef { var, src });
+                    var
+                }
+                (Expr::Variable { name, .. }, Expr::ArrayDimFetch { .. }) if self.text(*name).starts_with(b"$") && !dim_root_is_prop(expr) => {
+                    let var = f.cv(&self.text(*name)[1..]);
+                    let (root, keys, n, append) = self.dim_path(f, expr)?;
+                    f.emit(Instr::RefDim { var, root, keys, n, append });
+                    var
+                }
+                (Expr::ArrayDimFetch { .. }, Expr::Variable { name: src, .. }) if self.text(*src).starts_with(b"$") && !dim_root_is_prop(var) => {
+                    let src = f.cv(&self.text(*src)[1..]);
+                    let (root, keys, n, append) = self.dim_path(f, var)?;
+                    f.emit(Instr::DimSetRef { root, keys, n, append, src });
+                    src
+                }
+                _ => return Err(self.unsupported(*span, "this assignment by reference")),
             },
             Expr::AssignOp { var, op, expr, span } => {
                 let Some(bin) = assign_binop(*op) else {
@@ -2413,10 +2505,12 @@ impl<'src> Compiler<'src> {
                     let var = f.cv(&self.text(*name)[1..]);
                     f.emit(Instr::SendVar { site, n: n as u8, arg: *r, var });
                 }
-                // Only a variable can be passed by reference yet.
-                Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }
-                    if modes[n] != Some(false) =>
-                {
+                // An array element passed by reference becomes one.
+                Expr::ArrayDimFetch { .. } if modes[n] == Some(true) && !dim_root_is_prop(arg.value) => {
+                    let (root, keys, count, append) = self.dim_path(f, arg.value)?;
+                    f.emit(Instr::RefDim { var: *r, root, keys, n: count, append });
+                }
+                Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. } if modes[n] == Some(true) => {
                     return Err(self.unsupported(arg.span, "passing this argument by reference"));
                 }
                 value => self.expr_into(f, value, *r)?,
