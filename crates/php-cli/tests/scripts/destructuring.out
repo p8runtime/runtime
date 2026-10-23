@@ -1,0 +1,22 @@
+1 2
+2 1
+x z
+2
+ann 30
+123
+
+Warning: Undefined array key 1 in %s on line 8
+NULL
+NULL
+NULL
+1:a 2:b 
+v1v2
+Array
+(
+    [one] => 1
+    [two] => 2
+)
+11
+9
+278
+second

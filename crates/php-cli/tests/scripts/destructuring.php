@@ -1,0 +1,21 @@
+<?php
+[$a, $b] = [1, 2]; echo "$a $b\n";
+[$a, $b] = [$b, $a]; echo "$a $b\n";
+list($x, , $z) = ['x', 'y', 'z']; echo "$x $z\n";
+[, $second] = [1, 2]; echo $second, "\n";
+['name' => $n, 'age' => $g] = ['age' => 30, 'name' => 'ann']; echo "$n $g\n";
+[[$p, $q], [$r]] = [[1, 2], [3]]; echo "$p$q$r\n";
+[$m1, $m2] = [1]; var_dump($m2);
+[$s1] = null; var_dump($s1);
+[$t1] = "str"; var_dump($t1);
+$rows = [[1, 'a'], [2, 'b']];
+foreach ($rows as [$id, $label]) echo "$id:$label ";
+echo "\n";
+foreach ([['k' => 'v1'], ['k' => 'v2']] as ['k' => $kv]) echo $kv;
+echo "\n";
+$arr = [];
+[$arr['one'], $arr['two']] = [1, 2]; print_r($arr);
+$o = new stdClass; [$o->x, $o->y] = [5, 6]; echo $o->x + $o->y, "\n";
+$src = [1, 2]; [&$ra, $rb] = $src; $ra = 9; echo $src[0], "\n";
+$res = ([$u, $v] = [7, 8]); echo count($res), $u, $v, "\n";
+function pair() { return ['first', 'second']; } [$f1, $f2] = pair(); echo $f2, "\n";
