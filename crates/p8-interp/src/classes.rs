@@ -67,34 +67,33 @@ impl Context<'_> {
     /// Link the classes whose parent and interfaces are already known,
     /// in order, before the file runs (PHP's early binding); the others
     /// link when their declaration runs.
-    pub(crate) fn early_bind(&mut self) -> Result<(), Throw> {
-        for i in 0..self.class_defs.len() {
-            let def = Arc::clone(&self.class_defs[i]);
+    pub(crate) fn early_bind(&mut self, defs: &[Arc<ClassDef>]) -> Result<(), Throw> {
+        for def in defs {
             let known = |n: &p8_runtime::frozen::Text| self.classes.contains_key(&n.as_bytes().to_ascii_lowercase());
-            if def.parent.as_ref().is_none_or(known) && def.interfaces.iter().all(known) && !self.declared[i] {
+            if def.parent.as_ref().is_none_or(known) && def.interfaces.iter().all(known) {
                 let lower = def.name.as_bytes().to_ascii_lowercase();
                 if self.classes.contains_key(&lower) {
                     continue;
                 }
-                self.declare_class(i)?;
+                self.declare_class(def)?;
             }
         }
         Ok(())
     }
 
-    /// DeclareClass: link class `i` of the script (once).
-    pub(crate) fn declare_class(&mut self, i: usize) -> Result<(), Throw> {
-        if self.declared[i] {
+    /// DeclareClass: link a class declaration (once).
+    pub(crate) fn declare_class(&mut self, def: &Arc<ClassDef>) -> Result<(), Throw> {
+        let key = Arc::as_ptr(def) as usize;
+        if self.declared.contains(&key) {
             return Ok(());
         }
-        let def = Arc::clone(&self.class_defs[i]);
         let lower = def.name.as_bytes().to_ascii_lowercase();
         if self.classes.contains_key(&lower) {
             return Err(self.fatal_at(format!("Cannot declare class {}, because the name is already in use", text_of(&def.name)), def.line));
         }
-        let class = self.link(&def)?;
+        let class = self.link(def)?;
         self.classes.insert(lower, class);
-        self.declared[i] = true;
+        self.declared.insert(key);
         Ok(())
     }
 

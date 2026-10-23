@@ -17,6 +17,8 @@ pub enum Throw {
     Error { class: &'static str, message: String, file: Rc<str>, line: u32 },
     /// A fatal error: not an exception, nothing catches it.
     Fatal { message: String, file: Rc<str>, line: u32 },
+    /// A file that does not parse (an included one).
+    Parse { message: String, file: Rc<str>, line: u32 },
     Exit(i32),
     /// A thrown object (a Throwable): what `throw` throws, and what an
     /// Error becomes once the engine makes its object.

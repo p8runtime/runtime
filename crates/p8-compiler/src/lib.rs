@@ -9,7 +9,7 @@
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
-use p8_bytecode::{CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, Instr, MethodDef, Param, PropDef, Reg, Site};
+use p8_bytecode::{CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site};
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_READONLY, Visibility};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
@@ -103,6 +103,9 @@ struct FnBuilder<'a> {
     is_static: bool,
     tries: Vec<TryCtx<'a>>,
     handlers: Vec<Handler>,
+    /// The classes declared in this function's code (`DeclareClass`).
+    decls: Vec<Arc<ClassDef>>,
+    silences: Vec<(u32, u32, Reg)>,
 }
 
 impl FnBuilder<'_> {
@@ -130,6 +133,8 @@ impl FnBuilder<'_> {
             is_static: false,
             tries: Vec::new(),
             handlers: Vec::new(),
+            decls: Vec::new(),
+            silences: Vec::new(),
         }
     }
 
@@ -238,6 +243,9 @@ impl FnBuilder<'_> {
         for h in &mut self.handlers {
             h.slot = map(h.slot);
         }
+        for s in &mut self.silences {
+            s.2 = map(s.2);
+        }
         fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
@@ -261,6 +269,8 @@ impl FnBuilder<'_> {
             class: self.class,
             is_static: self.is_static,
             handlers: self.handlers,
+            decls: self.decls,
+            silences: self.silences,
         }
     }
 }
@@ -390,6 +400,11 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
         DeclareClass { .. } => {}
+        Silence { saved } | Unsilence { saved } => *saved = f(*saved),
+        Include { dst, src, .. } => {
+            *dst = f(*dst);
+            *src = f(*src);
+        }
         New { dst, base, .. } | StaticCall { dst, base, .. } => {
             *dst = f(*dst);
             *base = f(*base);
@@ -545,13 +560,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     }
 }
 
-/// The compiled program: the top-level code and every function declared.
-pub struct Program {
-    pub main: Arc<Function>,
-    pub functions: Vec<Arc<Function>>,
-    /// Every class the file declares, in order (`DeclareClass` indexes it).
-    pub classes: Vec<Arc<ClassDef>>,
-}
+pub use p8_bytecode::Program;
 
 pub struct Compiler<'src> {
     source: &'src [u8],
@@ -623,7 +632,9 @@ impl<'src> Compiler<'src> {
         }
         let mut f = FnBuilder::new(Text::from("{main}"));
         self.stmts(&mut f, stmts)?;
-        f.emit(Instr::ReturnNull);
+        // A file's code ends returning 1 (what including it gives).
+        let one = f.constant(Frozen::Int(1));
+        f.emit(Instr::Return { src: one });
         let main = Arc::new(f.finish(self.file.clone()));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
@@ -1237,8 +1248,10 @@ impl<'src> Compiler<'src> {
         }
         self.scope = saved;
         let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, line: self.line(name) };
-        self.classes.push(Arc::new(def));
-        f.emit(Instr::DeclareClass { class: (self.classes.len() - 1) as u16 });
+        let def = Arc::new(def);
+        self.classes.push(Arc::clone(&def));
+        f.decls.push(def);
+        f.emit(Instr::DeclareClass { class: (f.decls.len() - 1) as u16 });
         Ok(())
     }
 
@@ -1631,7 +1644,21 @@ impl<'src> Compiler<'src> {
                     f.emit(instr);
                     dst
                 }
-                UnaryOp::ErrorSuppress => self.expr(f, expr)?,
+                // `@expr`: diagnostics are off while it runs.
+                UnaryOp::ErrorSuppress => {
+                    let saved = f.temp();
+                    let start = f.emit(Instr::Silence { saved }) as u32;
+                    let mut r = self.expr(f, expr)?;
+                    // A variable is read here, inside, not where it is used.
+                    if r >> KIND_SHIFT == CV {
+                        let t = f.temp();
+                        f.emit(Instr::Move { dst: t, src: r });
+                        r = t;
+                    }
+                    let end = f.emit(Instr::Unsilence { saved }) as u32;
+                    f.silences.push((start, end, saved));
+                    r
+                }
                 UnaryOp::Reference => return Err(self.unsupported(*span, "a reference")),
             },
             Expr::PostInc { var, .. } | Expr::PostDec { var, .. } => {
@@ -1894,6 +1921,19 @@ impl<'src> Compiler<'src> {
                 for at in ends {
                     f.patch(at, f.here());
                 }
+                dst
+            }
+            Expr::Include { kind, expr, .. } => {
+                use p8_syntax::ast::IncludeKind as K;
+                let kind = match kind {
+                    K::Include => IncludeKind::Include,
+                    K::IncludeOnce => IncludeKind::IncludeOnce,
+                    K::Require => IncludeKind::Require,
+                    K::RequireOnce => IncludeKind::RequireOnce,
+                };
+                let src = self.expr(f, expr)?;
+                let dst = f.temp();
+                f.emit(Instr::Include { dst, src, kind });
                 dst
             }
             Expr::Exit { expr, .. } | Expr::Die { expr, .. } => {
