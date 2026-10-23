@@ -1,5 +1,4 @@
 use crate::core::value::{Handle, Val};
-use crate::runtime::core_extension::CoreExtensionData;
 use crate::vm::engine::VM;
 use std::f64::consts::PI;
 use std::rc::Rc;
@@ -474,66 +473,3 @@ fn convert_to_int(vm: &mut VM, args: &[Handle], base: u32, name: &str) -> Result
     Ok(vm.arena.alloc(Val::Int(value as i64)))
 }
 
-pub fn php_srand(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() > 1 {
-        return Err("srand() expects at most 1 parameter".into());
-    }
-
-    let seed = if args.is_empty() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        now as i64
-    } else {
-        vm.arena.get(args[0]).value.to_int()
-    };
-
-    let core = vm
-        .context
-        .get_or_init_extension_data(CoreExtensionData::default);
-    core.rng_seed(seed as u32);
-
-    Ok(vm.arena.alloc(Val::Null))
-}
-
-pub fn php_rand(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() > 2 {
-        return Err("rand() expects at most 2 parameters".into());
-    }
-
-    let core = vm
-        .context
-        .get_or_init_extension_data(CoreExtensionData::default);
-
-    let rand_max = 2147483647i64;
-    if args.is_empty() {
-        let value = core.rng_next_u31() as i64;
-        return Ok(vm.arena.alloc(Val::Int(value)));
-    }
-
-    let mut min = vm.arena.get(args[0]).value.to_int();
-    let mut max = if args.len() == 2 {
-        vm.arena.get(args[1]).value.to_int()
-    } else {
-        rand_max
-    };
-
-    if min > max {
-        std::mem::swap(&mut min, &mut max);
-    }
-
-    let range = (max - min + 1) as u64;
-    let value = if range == 0 {
-        min
-    } else {
-        let roll = core.rng_next_u32() as u64;
-        min + (roll % range) as i64
-    };
-
-    Ok(vm.arena.alloc(Val::Int(value)))
-}
-
-pub fn php_getrandmax(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {
-    Ok(vm.arena.alloc(Val::Int(2147483647)))
-}

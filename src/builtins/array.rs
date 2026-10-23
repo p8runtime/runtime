@@ -1597,27 +1597,34 @@ pub fn php_array_rand(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         return Err("array_rand(): Number of elements must be between 1 and the number of elements".into());
     }
 
-    let core = vm
-        .context
-        .get_or_init_extension_data(CoreExtensionData::default);
-
-    let mut keys = entries;
+    // php_array_pick_keys, on the request's Mt19937. Our arrays have no
+    // holes, so one draw picks a single key.
+    let keys = entries;
+    let mt = crate::builtins::random::default_engine(vm);
     if num as usize == 1 {
-        let idx = (core.rng_next_u32() as usize) % count;
+        let idx = mt.range(0, count as i64 - 1) as usize;
         let handle = vm.arena.alloc(array_key_to_val(&keys[idx]));
         return Ok(handle);
     }
 
-    // Fisher-Yates shuffle for deterministic unique selection
-    for i in (1..keys.len()).rev() {
-        let j = (core.rng_next_u32() as usize) % (i + 1);
-        keys.swap(i, j);
+    // Mark num distinct positions (or the ones to leave out, when more
+    // than half are wanted), then return the keys in array order.
+    let negative = num as usize > count / 2;
+    let mut wanted = if negative { count - num as usize } else { num as usize };
+    let mut picked = vec![false; count];
+    while wanted > 0 {
+        let idx = mt.range(0, count as i64 - 1) as usize;
+        if !picked[idx] {
+            picked[idx] = true;
+            wanted -= 1;
+        }
     }
-
     let mut out = IndexMap::new();
-    for (idx, key) in keys.into_iter().take(num as usize).enumerate() {
-        let handle = vm.arena.alloc(array_key_to_val(&key));
-        out.insert(ArrayKey::Int(idx as i64), handle);
+    for (key, is_picked) in keys.iter().zip(picked) {
+        if is_picked != negative {
+            let handle = vm.arena.alloc(array_key_to_val(key));
+            out.insert(ArrayKey::Int(out.len() as i64), handle);
+        }
     }
 
     Ok(vm.arena.alloc(Val::Array(
@@ -2389,17 +2396,15 @@ pub fn php_shuffle(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     }
 
     let arr_handle = args[0];
-    let arr_val = vm.arena.get(arr_handle);
+    let arr_val = vm.arena.get(arr_handle).value.clone();
 
-    if let Val::Array(arr_rc) = &arr_val.value {
+    if let Val::Array(arr_rc) = &arr_val {
         let mut values: Vec<Handle> = arr_rc.map.values().copied().collect();
-        let core = vm
-            .context
-            .get_or_init_extension_data(CoreExtensionData::default);
-
-        for i in (1..values.len()).rev() {
-            let j = (core.rng_next_u32() as usize) % (i + 1);
-            values.swap(i, j);
+        // php_array_data_shuffle, on the request's Mt19937
+        let mt = crate::builtins::random::default_engine(vm);
+        for n_left in (1..values.len()).rev() {
+            let j = mt.range(0, n_left as i64) as usize;
+            values.swap(n_left, j);
         }
 
         let mut arr_data = (**arr_rc).clone();

@@ -287,6 +287,8 @@ pub struct RequestContext {
     /// Insertion-ordered, as PHP's symbol table is ($GLOBALS, get_defined_vars()).
     pub globals: indexmap::IndexMap<Symbol, Handle>,
     pub constants: HashMap<Symbol, Val>,
+    /// Built-in constants PHP 8.4 marks #[\Deprecated]: reading one warns.
+    pub deprecated_constants: HashSet<Symbol>,
     pub user_functions: HashMap<Symbol, Rc<UserFunc>>,
     pub classes: HashMap<Symbol, ClassDef>,
     pub included_files: HashSet<String>,
@@ -321,6 +323,7 @@ impl RequestContext {
             config,
             globals: indexmap::IndexMap::new(),
             constants: HashMap::new(),
+            deprecated_constants: HashSet::new(),
             user_functions: HashMap::new(),
             classes: HashMap::new(),
             included_files: HashSet::new(),
@@ -372,7 +375,7 @@ impl RequestContext {
     fn copy_engine_constants(&mut self) {
         // Phase 0: the constants real PHP defines in the loaded extensions
         let registry = &self.engine.registry;
-        for (ext, name, value) in crate::builtins::defaults::CONSTANTS {
+        for (ext, name, value, deprecated) in crate::builtins::defaults::CONSTANTS {
             if !registry.extension_loaded(ext) {
                 continue;
             }
@@ -385,6 +388,9 @@ impl RequestContext {
             };
             let sym = self.interner.intern(name);
             self.constants.insert(sym, value);
+            if *deprecated {
+                self.deprecated_constants.insert(sym);
+            }
         }
 
         // Phase 1: Copy all extension constants (O(n) bulk operation)

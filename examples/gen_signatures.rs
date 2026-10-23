@@ -49,6 +49,8 @@ struct Func {
     returns_ref: bool,
     /// Method modifiers: 1 final, 2 static, 4 abstract, 8 private, 16 protected.
     flags: u8,
+    /// Index of its #[\Deprecated] attribute's (since, message).
+    deprecated: Option<usize>,
 }
 
 fn main() {
@@ -60,12 +62,14 @@ fn main() {
     stubs.sort();
 
     let mut funcs: Vec<Func> = Vec::new();
+    let mut deprecations: Vec<(Option<String>, Option<String>)> = Vec::new();
     for path in &stubs {
         // The zend_test extension declares test-only functions.
         if path.components().any(|c| c.as_os_str() == "zend_test") {
             continue;
         }
         let src = std::fs::read_to_string(path).expect("read stub");
+        let src = mark_deprecated(&src, &mut deprecations);
         parse_stub(&strip(&mark_tentative(&src)), &mut funcs);
     }
     funcs.sort_by_key(|f| f.name.to_ascii_lowercase());
@@ -97,6 +101,17 @@ fn main() {
             "], ret_mask: {:#x}, ret_classes: &{:?}, tentative: {}, returns_ref: {}, flags: {} }},",
             f.ret_mask, f.ret_classes, f.tentative, f.returns_ref, f.flags
         );
+    }
+    out.push_str("];\n");
+    out.push_str(
+        "\n/// Functions and methods declared #[\\Deprecated]: (name, since, message),\n\
+         /// sorted by lowercase name.\n\
+         #[rustfmt::skip]\n\
+         pub(crate) static DEPRECATED: &[(&str, Option<&str>, Option<&str>)] = &[\n",
+    );
+    for f in funcs.iter().filter(|f| f.deprecated.is_some()) {
+        let (since, message) = &deprecations[f.deprecated.unwrap_or_default()];
+        let _ = writeln!(out, "    ({:?}, {:?}, {:?}),", f.name, since, message);
     }
     out.push_str("];\n");
     print!("{out}");
@@ -179,6 +194,40 @@ fn strip(src: &str) -> String {
 
 /// Keep `@tentative-return-type` through comment stripping: the doc
 /// comment becomes a marker the parser attaches to the next function.
+/// Replace each `#[\\Deprecated(since: ..., message: ...)]` with a
+/// `__DEPRECATED_<n>__` marker naming its entry in `found`, so the parser
+/// (which drops attributes) can attach it to the next declaration.
+fn mark_deprecated(src: &str, found: &mut Vec<(Option<String>, Option<String>)>) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(start) = rest.find("#[\\Deprecated") {
+        out.push_str(&rest[..start]);
+        let attr = &rest[start..];
+        let end = attr.find(")]").map_or(attr.find(']').map_or(attr.len(), |e| e + 1), |e| e + 2);
+        let args = &attr[..end];
+        let arg = |key: &str| -> Option<String> {
+            let at = args.find(&format!("{key}:"))? + key.len() + 1;
+            let value = args[at..].trim_start();
+            let quote = value.chars().next()?;
+            let mut text = String::new();
+            let mut chars = value[1..].chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => text.extend(chars.next()),
+                    c if c == quote => break,
+                    c => text.push(c),
+                }
+            }
+            Some(text)
+        };
+        found.push((arg("since"), arg("message")));
+        out.push_str(&format!(" __DEPRECATED_{}__ ", found.len() - 1));
+        rest = &attr[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn mark_tentative(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut rest = src;
@@ -209,6 +258,7 @@ fn parse_stub(src: &str, funcs: &mut Vec<Func>) {
     let mut pending_class: Option<String> = None;
     let mut class: Option<(String, usize)> = None;
     let mut tentative = false;
+    let mut deprecated: Option<usize> = None;
     let mut modifiers: u8 = 0;
     let mut i = 0;
     while i < b.len() {
@@ -226,9 +276,11 @@ fn parse_stub(src: &str, funcs: &mut Vec<Func>) {
         }
         if c == b';' {
             modifiers = 0;
+            deprecated = None;
         }
         if c == b'{' {
             modifiers = 0;
+            deprecated = None;
             depth += 1;
             if let Some(name) = pending_class.take() {
                 class = Some((name, depth));
@@ -304,6 +356,11 @@ fn parse_stub(src: &str, funcs: &mut Vec<Func>) {
                 i = word_end;
                 continue;
             }
+            w if w.starts_with("__DEPRECATED_") => {
+                deprecated = w.trim_start_matches("__DEPRECATED_").trim_end_matches('_').parse().ok();
+                i = word_end;
+                continue;
+            }
             "function" => {
                 let in_class = class.as_ref().filter(|(_, d)| *d == depth).map(|(n, _)| n.clone());
                 if in_class.is_none() && depth != ns_blocks.len() {
@@ -331,6 +388,7 @@ fn parse_stub(src: &str, funcs: &mut Vec<Func>) {
                     ret_mask,
                     ret_classes,
                     tentative: std::mem::take(&mut tentative),
+                    deprecated: deprecated.take(),
                     returns_ref,
                     flags: std::mem::take(&mut modifiers),
                 });

@@ -1459,10 +1459,14 @@ pub fn php_str_shuffle(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.len() != 1 {
         return Err("str_shuffle() expects exactly 1 parameter".into());
     }
-    use rand::seq::SliceRandom;
     let mut s = vm.value_to_string(args[0])?;
-    let mut rng = rand::thread_rng();
-    s.shuffle(&mut rng);
+    // php_binary_string_shuffle: Fisher-Yates from the end, on the
+    // request's Mt19937, so a seeded shuffle matches PHP's
+    let mt = crate::builtins::random::default_engine(vm);
+    for n_left in (1..s.len()).rev() {
+        let j = mt.range(0, n_left as i64) as usize;
+        s.swap(n_left, j);
+    }
     Ok(vm.arena.alloc(Val::String(s.into())))
 }
 

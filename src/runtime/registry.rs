@@ -26,7 +26,7 @@ pub struct NativeMethodEntry {
 
 /// Extensions implemented inside the core extension rather than registered
 /// separately, in PHP's spelling.
-pub const BUILT_IN_EXTENSIONS: &[&str] = &["standard", "pcre", "SPL", "random", "Reflection", "bcmath"];
+pub const BUILT_IN_EXTENSIONS: &[&str] = &["standard", "pcre", "SPL", "random", "Reflection", "bcmath", "ctype"];
 
 /// Extension registry - manages all loaded extensions and their registered components
 ///
