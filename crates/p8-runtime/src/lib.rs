@@ -9,6 +9,7 @@ pub mod ext;
 pub mod frozen;
 pub mod number;
 pub mod numeric;
+pub mod object;
 pub mod ops;
 pub mod string;
 pub mod value;

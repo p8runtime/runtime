@@ -13,7 +13,7 @@ use crate::ops::{Diag, Diags};
 use crate::string::PhpStr;
 use crate::value::Value;
 use p8_stubs::{
-    Param, Sig, T_ARRAY, T_BOOL, T_CALLABLE, T_FALSE, T_FLOAT, T_INT, T_MIXED, T_NULL, T_STRING, T_TRUE,
+    Param, Sig, T_ARRAY, T_BOOL, T_CALLABLE, T_FALSE, T_FLOAT, T_INT, T_MIXED, T_NULL, T_OBJECT, T_STRING, T_TRUE,
     type_to_string,
 };
 
@@ -83,10 +83,10 @@ fn label(param: &Param) -> String {
 }
 
 /// How a TypeError names a value (zend_zval_value_name).
-pub fn value_name(v: &Value) -> &'static str {
+pub fn value_name(v: &Value) -> std::borrow::Cow<'static, str> {
     match v {
-        Value::Bool(true) => "true",
-        Value::Bool(false) => "false",
+        Value::Bool(true) => "true".into(),
+        Value::Bool(false) => "false".into(),
         Value::Ref(cell) => value_name(&cell.borrow()),
         other => other.type_name(),
     }
@@ -178,6 +178,10 @@ fn accepts(param: &Param, value: &Value) -> Accept {
             if mask & (T_ARRAY | T_CALLABLE) != 0 { Accept::Yes } else { Accept::No }
         }
         Value::Ref(cell) => accepts(param, &cell.borrow()),
+        Value::Object(o) => {
+            let named = param.classes.iter().any(|c| o.class.is_a(c.to_ascii_lowercase().as_bytes()));
+            if mask & T_OBJECT != 0 || named { Accept::Yes } else { Accept::No }
+        }
     }
 }
 
@@ -198,7 +202,7 @@ fn convert(mask: u32, value: &Value) -> Option<Value> {
         Value::Int(_) => accepts(T_INT),
         Value::Float(_) => accepts(T_FLOAT),
         Value::Str(_) => accepts(T_STRING),
-        Value::Array(_) | Value::Ref(_) => true,
+        Value::Array(_) | Value::Ref(_) | Value::Object(_) => true,
     };
     if already {
         return None;
@@ -243,7 +247,7 @@ fn convert(mask: u32, value: &Value) -> Option<Value> {
             Some(Number::Float(f)) if accepts(T_INT) => Value::Int(f as i64),
             _ => Value::Bool(value.to_bool()),
         },
-        Value::Array(_) | Value::Ref(_) => return None,
+        Value::Array(_) | Value::Ref(_) | Value::Object(_) => return None,
     })
 }
 

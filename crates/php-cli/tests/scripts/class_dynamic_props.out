@@ -1,0 +1,6 @@
+
+Deprecated: Creation of dynamic property A::$b is deprecated in %s on line 4
+
+Warning: Undefined property: A::$c in %s on line 5
+
+2

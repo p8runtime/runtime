@@ -179,6 +179,7 @@ fn pow(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         ops::OpError::Type(m) => ctx.throw("TypeError", m),
         ops::OpError::DivisionByZero(m) => ctx.throw("DivisionByZeroError", m.into()),
         ops::OpError::Arithmetic(m) => ctx.throw("ArithmeticError", m.into()),
+        ops::OpError::Error(m) => ctx.throw("Error", m),
     })
 }
 

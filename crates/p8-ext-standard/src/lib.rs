@@ -3,14 +3,14 @@
 //! ported so far (the rest move here module by module, each gated by its
 //! php-src directories).
 
-use p8_runtime::array::{Key, PhpArray};
+use p8_runtime::array::PhpArray;
 use p8_runtime::ext::{Builtin, Constant, Ctx, Extension, Registry, Throw};
-use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
 mod array;
+mod class;
 pub mod defaults;
 mod math;
 mod misc;
@@ -35,7 +35,6 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "defined", run: defined, by_ref: &[] },
     Builtin { name: "date_default_timezone_set", run: date_default_timezone_set, by_ref: &[] },
     Builtin { name: "func_get_args", run: func_get_args, by_ref: &[] },
-    Builtin { name: "var_dump", run: var_dump, by_ref: &[] },
     Builtin { name: "array_keys", run: array_keys, by_ref: &[] },
     Builtin { name: "range", run: range, by_ref: &[] },
 ];
@@ -78,6 +77,7 @@ fn register(registry: &mut Registry) {
     }
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
+    registry.add_functions(class::BUILTINS);
     registry.add_functions(math::BUILTINS);
     registry.add_functions(misc::BUILTINS);
     registry.add_functions(string::BUILTINS);
@@ -351,45 +351,3 @@ fn array_keys(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     })
 }
 
-/// var_dump, for the types v2 has so far.
-fn var_dump(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    fn dump(v: &Value, indent: usize, out: &mut Vec<u8>) {
-        let pad = " ".repeat(indent);
-        match v {
-            Value::Null | Value::Undef => out.extend_from_slice(format!("{pad}NULL\n").as_bytes()),
-            Value::Bool(b) => out.extend_from_slice(format!("{pad}bool({b})\n").as_bytes()),
-            Value::Int(i) => out.extend_from_slice(format!("{pad}int({i})\n").as_bytes()),
-            Value::Float(f) => {
-                let s = float_to_string(*f, Precision::SERIALIZE, 'E');
-                out.extend_from_slice(format!("{pad}float({s})\n").as_bytes());
-            }
-            Value::Str(s) => {
-                out.extend_from_slice(format!("{pad}string({}) \"", s.len()).as_bytes());
-                out.extend_from_slice(s.as_bytes());
-                out.extend_from_slice(b"\"\n");
-            }
-            Value::Array(a) => {
-                out.extend_from_slice(format!("{pad}array({}) {{\n", a.len()).as_bytes());
-                for (k, v) in a.iter() {
-                    match k {
-                        Key::Int(i) => out.extend_from_slice(format!("{pad}  [{i}]=>\n").as_bytes()),
-                        Key::Str(s) => {
-                            out.extend_from_slice(format!("{pad}  [\"").as_bytes());
-                            out.extend_from_slice(s.as_bytes());
-                            out.extend_from_slice(b"\"]=>\n");
-                        }
-                    }
-                    dump(v, indent + 2, out);
-                }
-                out.extend_from_slice(format!("{pad}}}\n").as_bytes());
-            }
-            Value::Ref(cell) => dump(&cell.borrow(), indent, out),
-        }
-    }
-    let mut out = Vec::new();
-    for v in args.iter() {
-        dump(v, 0, &mut out);
-    }
-    ctx.echo(&out);
-    Ok(Value::Null)
-}

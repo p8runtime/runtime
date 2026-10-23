@@ -9,6 +9,8 @@ use crate::{arg, str_arg};
 use p8_runtime::array::Key;
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
+use p8_runtime::object::{Object, Visibility};
+use std::rc::Rc;
 use p8_runtime::numeric::numeric_string;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -34,6 +36,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "doubleval", run: floatval, by_ref: &[] },
     Builtin { name: "strval", run: strval, by_ref: &[] },
     Builtin { name: "boolval", run: boolval, by_ref: &[] },
+    Builtin { name: "var_dump", run: var_dump, by_ref: &[] },
     Builtin { name: "print_r", run: print_r, by_ref: &[] },
     Builtin { name: "var_export", run: var_export, by_ref: &[] },
 ];
@@ -46,16 +49,18 @@ fn gettype(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Value::Float(_) => "double",
         Value::Str(_) => "string",
         Value::Array(_) => "array",
+        Value::Object(_) => "object",
         Value::Ref(_) => unreachable!("arg() looks through references"),
     }))
 }
 
 fn get_debug_type(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::str(match arg(args, 0) {
-        Value::Null | Value::Undef => "null",
-        Value::Bool(_) => "bool",
+    let name = match arg(args, 0) {
+        Value::Null | Value::Undef => "null".into(),
+        Value::Bool(_) => "bool".into(),
         other => other.type_name(),
-    }))
+    };
+    Ok(Value::str(name.into_owned()))
 }
 
 fn is_null(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -177,7 +182,7 @@ fn boolval(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// print_r($value, $return = false)
 fn print_r(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut out = Vec::new();
-    print_r_to(&arg(args, 0), 0, &mut out);
+    print_r_to(&arg(args, 0), 0, &mut out, &mut Vec::new());
     if args.len() > 1 && arg(args, 1).to_bool() {
         return Ok(Value::Str(PhpStr::new(out)));
     }
@@ -185,7 +190,7 @@ fn print_r(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(true))
 }
 
-fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>) {
+fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>) {
     match v {
         Value::Array(a) => {
             out.extend_from_slice(b"Array\n");
@@ -199,13 +204,45 @@ fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>) {
                     Key::Str(s) => out.extend_from_slice(s.as_bytes()),
                 }
                 out.extend_from_slice(b"] => ");
-                print_r_to(v, indent + 8, out);
+                print_r_to(v, indent + 8, out, seen);
                 out.push(b'\n');
             }
             out.extend(std::iter::repeat_n(b' ', indent));
             out.extend_from_slice(b")\n");
         }
-        Value::Ref(cell) => print_r_to(&cell.borrow(), indent, out),
+        Value::Ref(cell) => print_r_to(&cell.borrow(), indent, out, seen),
+        Value::Object(o) => {
+            out.extend_from_slice(o.class.name.as_bytes());
+            out.extend_from_slice(b" Object\n");
+            if seen.iter().any(|s| Rc::ptr_eq(s, o)) {
+                out.extend_from_slice(b" *RECURSION*");
+                return;
+            }
+            seen.push(Rc::clone(o));
+            out.extend(std::iter::repeat_n(b' ', indent));
+            out.extend_from_slice(b"(\n");
+            for e in entries(o) {
+                let Some(v) = e.value else { continue };
+                out.extend(std::iter::repeat_n(b' ', indent + 4));
+                out.push(b'[');
+                out.extend_from_slice(e.name.as_bytes());
+                match e.visibility {
+                    Visibility::Public => {}
+                    Visibility::Protected => out.extend_from_slice(b":protected"),
+                    Visibility::Private => {
+                        out.push(b':');
+                        out.extend_from_slice(e.declaring.as_bytes());
+                        out.extend_from_slice(b":private");
+                    }
+                }
+                out.extend_from_slice(b"] => ");
+                print_r_to(&v, indent + 8, out, seen);
+                out.push(b'\n');
+            }
+            out.extend(std::iter::repeat_n(b' ', indent));
+            out.extend_from_slice(b")\n");
+            seen.pop();
+        }
         other => {
             if let Some(s) = other.to_php_string() {
                 out.extend_from_slice(s.as_bytes());
@@ -263,6 +300,147 @@ fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
             out.push(b')');
         }
         Value::Ref(cell) => export(&cell.borrow(), level, out),
+        Value::Object(o) => {
+            if level > 1 {
+                out.push(b'\n');
+                out.extend(std::iter::repeat_n(b' ', level - 1));
+            }
+            let std_class = o.class.lower == b"stdclass";
+            if std_class {
+                out.extend_from_slice(b"(object) array(\n");
+            } else {
+                out.push(b'\\');
+                out.extend_from_slice(o.class.name.as_bytes());
+                out.extend_from_slice(b"::__set_state(array(\n");
+            }
+            for e in entries(o) {
+                let Some(v) = e.value else { continue };
+                out.extend(std::iter::repeat_n(b' ', level + 2));
+                export_string(e.name.as_bytes(), out);
+                out.extend_from_slice(b" => ");
+                export(&v, level + 2, out);
+                out.extend_from_slice(b",\n");
+            }
+            if level > 1 {
+                out.extend(std::iter::repeat_n(b' ', level - 1));
+            }
+            out.extend_from_slice(if std_class { b")" } else { b"))" });
+        }
+    }
+}
+
+/// One of an object's properties as the dump functions list them.
+struct Entry {
+    name: PhpStr,
+    visibility: Visibility,
+    declaring: PhpStr,
+    /// None: a typed property not yet initialized.
+    value: Option<Value>,
+    ty: Option<PhpStr>,
+}
+
+/// An object's properties in PHP's order: declared slots (the parent's
+/// first), then dynamic ones. An unset untyped property is left out.
+fn entries(o: &Object) -> Vec<Entry> {
+    let mut list = Vec::new();
+    let slots = o.slots.borrow();
+    for (p, v) in o.class.properties.iter().zip(slots.iter()) {
+        let value = match v {
+            Value::Undef if p.ty.is_none() => continue,
+            Value::Undef => None,
+            v => Some(v.clone()),
+        };
+        list.push(Entry { name: p.name.clone(), visibility: p.visibility, declaring: p.declaring_name.clone(), value, ty: p.ty.clone() });
+    }
+    for (k, v) in o.dynamic.borrow().iter() {
+        let name = match k {
+            Key::Int(i) => PhpStr::from(i.to_string()),
+            Key::Str(s) => s,
+        };
+        list.push(Entry { name, visibility: Visibility::Public, declaring: PhpStr::empty(), value: Some(v.clone()), ty: None });
+    }
+    list
+}
+
+/// var_dump($value, ...$values)
+fn var_dump(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    for v in args.iter() {
+        dump(v, 0, &mut out, &mut seen);
+    }
+    ctx.echo(&out);
+    Ok(Value::Null)
+}
+
+fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>) {
+    let pad = " ".repeat(indent);
+    match v {
+        Value::Null | Value::Undef => out.extend_from_slice(format!("{pad}NULL\n").as_bytes()),
+        Value::Bool(b) => out.extend_from_slice(format!("{pad}bool({b})\n").as_bytes()),
+        Value::Int(i) => out.extend_from_slice(format!("{pad}int({i})\n").as_bytes()),
+        Value::Float(f) => {
+            let s = float_to_string(*f, Precision::SERIALIZE, 'E');
+            out.extend_from_slice(format!("{pad}float({s})\n").as_bytes());
+        }
+        Value::Str(s) => {
+            out.extend_from_slice(format!("{pad}string({}) \"", s.len()).as_bytes());
+            out.extend_from_slice(s.as_bytes());
+            out.extend_from_slice(b"\"\n");
+        }
+        Value::Array(a) => {
+            out.extend_from_slice(format!("{pad}array({}) {{\n", a.len()).as_bytes());
+            for (k, v) in a.iter() {
+                match k {
+                    Key::Int(i) => out.extend_from_slice(format!("{pad}  [{i}]=>\n").as_bytes()),
+                    Key::Str(s) => {
+                        out.extend_from_slice(format!("{pad}  [\"").as_bytes());
+                        out.extend_from_slice(s.as_bytes());
+                        out.extend_from_slice(b"\"]=>\n");
+                    }
+                }
+                dump(v, indent + 2, out, seen);
+            }
+            out.extend_from_slice(format!("{pad}}}\n").as_bytes());
+        }
+        Value::Ref(cell) => dump(&cell.borrow(), indent, out, seen),
+        Value::Object(o) => {
+            if seen.iter().any(|s| Rc::ptr_eq(s, o)) {
+                out.extend_from_slice(format!("{pad}*RECURSION*\n").as_bytes());
+                return;
+            }
+            seen.push(Rc::clone(o));
+            let list = entries(o);
+            let count = list.iter().filter(|e| e.value.is_some()).count();
+            out.extend_from_slice(format!("{pad}object(").as_bytes());
+            out.extend_from_slice(o.class.name.as_bytes());
+            out.extend_from_slice(format!(")#{} ({count}) {{\n", o.id).as_bytes());
+            for e in list {
+                out.extend_from_slice(format!("{pad}  [\"").as_bytes());
+                out.extend_from_slice(e.name.as_bytes());
+                out.push(b'"');
+                match e.visibility {
+                    Visibility::Public => {}
+                    Visibility::Protected => out.extend_from_slice(b":protected"),
+                    Visibility::Private => {
+                        out.extend_from_slice(b":\"");
+                        out.extend_from_slice(e.declaring.as_bytes());
+                        out.extend_from_slice(b"\":private");
+                    }
+                }
+                out.extend_from_slice(b"]=>\n");
+                match e.value {
+                    Some(v) => dump(&v, indent + 2, out, seen),
+                    None => {
+                        out.extend_from_slice(format!("{pad}  uninitialized(").as_bytes());
+                        out.extend_from_slice(e.ty.as_ref().map_or(&b""[..], |t| t.as_bytes()));
+                        out.extend_from_slice(b")\n");
+                    }
+                }
+            }
+            out.extend_from_slice(format!("{pad}}}\n").as_bytes());
+            seen.pop();
+        }
     }
 }
 

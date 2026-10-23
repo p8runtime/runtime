@@ -1,0 +1,5 @@
+
+Fatal error: Uncaught Error: Class "Nope" not found in %s:2
+Stack trace:
+#0 {main}
+  thrown in %s on line 2

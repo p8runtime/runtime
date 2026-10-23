@@ -1,0 +1,66 @@
+rect area 6 sides 4
+square area 16 sides 4
+2 4 0
+bool(true)
+bool(true)
+bool(false)
+object(Rect)#1 (3) {
+  ["name":protected]=>
+  string(4) "rect"
+  ["w":"Rect":private]=>
+  int(2)
+  ["h":"Rect":private]=>
+  int(3)
+}
+Sq Object
+(
+    [name:protected] => square
+    [w:Rect:private] => 4
+    [h:Rect:private] => 4
+)
+
+bool(true)
+bool(false)
+bool(true)
+object(stdClass)#4 (2) {
+  ["a"]=>
+  int(7)
+  ["b"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+bool(true)
+bool(false)
+string(4) "dflt"
+object(stdClass)#4 (1) {
+  ["b"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+\P::__set_state(array(
+   'x' => 1,
+   'arr' => 
+  array (
+    'k' => 
+    array (
+      'j' => 7,
+    ),
+  ),
+   'secret' => 's',
+))
+s
+
+Deprecated: Creation of dynamic property P::$dyn is deprecated in %s on line 40
+Rect

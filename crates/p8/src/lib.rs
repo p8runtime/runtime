@@ -142,6 +142,7 @@ impl Context<'_> {
                 return 255;
             }
         }
+        self.inner.declare_classes(&script.program.classes);
         self.inner.run_main(Arc::clone(&script.program.main))
     }
 

@@ -1,0 +1,5 @@
+
+Fatal error: Uncaught Error: Cannot access private property P::$secret in %s:4
+Stack trace:
+#0 {main}
+  thrown in %s on line 4

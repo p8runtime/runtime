@@ -4,9 +4,11 @@
 //! resources join with the class model (milestone M4).
 
 use crate::array::PhpArray;
+use crate::object::Object;
 use crate::string::PhpStr;
 use crate::numeric::{Number, leading_numeric, numeric_string};
 use crate::number::{Precision, dval_to_lval, float_to_string};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
@@ -22,6 +24,8 @@ pub enum Value {
     Array(Rc<PhpArray>),
     /// A PHP reference: the shared cell `$a = &$b` makes.
     Ref(Rc<RefCell<Value>>),
+    /// An object: a shared handle (copying the value copies the handle).
+    Object(Rc<Object>),
     /// A variable never assigned (only in registers; reads warn and give null).
     Undef,
 }
@@ -38,6 +42,7 @@ impl Clone for Value {
             Value::Str(s) => Value::Str(s.clone()),
             Value::Array(a) => Value::Array(Rc::clone(a)),
             Value::Ref(r) => Value::Ref(Rc::clone(r)),
+            Value::Object(o) => Value::Object(Rc::clone(o)),
             Value::Undef => Value::Undef,
         }
     }
@@ -56,17 +61,19 @@ impl Value {
         }
     }
 
-    /// The type name PHP uses in messages (zend_zval_type_name).
-    pub fn type_name(&self) -> &'static str {
-        match self {
+    /// The type name PHP uses in messages (zend_zval_type_name): an
+    /// object's is its class name.
+    pub fn type_name(&self) -> Cow<'static, str> {
+        Cow::Borrowed(match self {
             Value::Null | Value::Undef => "null",
             Value::Bool(_) => "bool",
             Value::Int(_) => "int",
             Value::Float(_) => "float",
             Value::Str(_) => "string",
             Value::Array(_) => "array",
-            Value::Ref(cell) => cell.borrow().type_name(),
-        }
+            Value::Object(o) => return Cow::Owned(String::from_utf8_lossy(o.class.name.as_bytes()).into_owned()),
+            Value::Ref(cell) => return cell.borrow().type_name(),
+        })
     }
 
     /// zend_is_true
@@ -78,6 +85,7 @@ impl Value {
             Value::Float(f) => *f != 0.0,
             Value::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
             Value::Array(a) => !a.is_empty(),
+            Value::Object(_) => true,
             Value::Ref(cell) => cell.borrow().to_bool(),
         }
     }
@@ -96,6 +104,8 @@ impl Value {
                 None => 0,
             },
             Value::Array(a) => i64::from(!a.is_empty()),
+            // PHP warns "could not be converted to int" (the engine reports it).
+            Value::Object(_) => 1,
             Value::Ref(cell) => cell.borrow().to_int(),
         }
     }
@@ -113,6 +123,7 @@ impl Value {
                 None => 0.0,
             },
             Value::Array(a) => f64::from(u8::from(!a.is_empty())),
+            Value::Object(_) => 1.0,
             Value::Ref(cell) => cell.borrow().to_float(),
         }
     }
@@ -130,7 +141,9 @@ impl Value {
             }
             Value::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Value::Str(s) => s.clone(),
-            Value::Array(_) => return None,
+            // An object's string comes from __toString, which the engine
+            // calls; neither converts here.
+            Value::Array(_) | Value::Object(_) => return None,
             Value::Ref(cell) => return cell.borrow().to_php_string(),
         })
     }
@@ -146,6 +159,7 @@ impl Value {
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
+            (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -179,6 +193,24 @@ impl Value {
             (Float(a), Int(b)) => float_cmp(*a, *b as f64),
             (Float(a), Float(b)) => float_cmp(*a, *b),
             (Array(a), Array(b)) => return a.compare(b),
+            // zend_std_compare_objects: the same object, or the same class
+            // compared property by property; other classes can't be compared.
+            (Object(a), Object(b)) => {
+                if Rc::ptr_eq(a, b) {
+                    return Some(Ordering::Equal);
+                }
+                if !Rc::ptr_eq(&a.class, &b.class) {
+                    return None;
+                }
+                let (x, y) = (a.slots.borrow(), b.slots.borrow());
+                for (p, q) in x.iter().zip(y.iter()) {
+                    match p.compare(q)? {
+                        Ordering::Equal => {}
+                        o => return Some(o),
+                    }
+                }
+                return a.dynamic.borrow().compare(&b.dynamic.borrow());
+            }
             (Null, Null) => Ordering::Equal,
             (Null, Bool(b)) | (Bool(false), Bool(b)) => false.cmp(b),
             (Bool(a), Null) => a.cmp(&false),
@@ -196,6 +228,8 @@ impl Value {
             (Str(s), Int(_) | Float(_)) => compare_number_to_string(other, s).reverse(),
             (Array(_), _) => Ordering::Greater,
             (_, Array(_)) => Ordering::Less,
+            (Object(_), _) => Ordering::Greater,
+            (_, Object(_)) => Ordering::Less,
         })
     }
 }

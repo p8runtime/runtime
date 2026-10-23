@@ -5,6 +5,7 @@
 //! The registry is immutable after startup and `Send + Sync`, so every
 //! isolate on every thread shares one.
 
+use crate::object::Class;
 use crate::string::PhpStr;
 use crate::value::Value;
 use std::collections::HashMap;
@@ -54,6 +55,10 @@ pub trait Ctx {
     fn extra_args(&self) -> &[Value];
     /// A Throw with PHP's error `class` at the current line.
     fn throw(&self, class: &'static str, message: String) -> Throw;
+    /// The class `name` (any case, optional leading `\`), if declared.
+    fn class(&self, name: &[u8]) -> Option<Rc<Class>>;
+    /// The class the running code is in (None outside any class).
+    fn scope(&self) -> Option<Rc<Class>>;
 }
 
 /// A builtin function: arguments arrive by value (moved out of the caller's

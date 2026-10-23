@@ -1,0 +1,7 @@
+
+Warning: Attempt to read property "p" on null in %s on line 3
+
+Fatal error: Uncaught Error: Call to a member function m() on null in %s:4
+Stack trace:
+#0 {main}
+  thrown in %s on line 4

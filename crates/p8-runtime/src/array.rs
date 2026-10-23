@@ -49,6 +49,7 @@ impl Key {
                 (Key::Int(dval_to_lval(*f)), issue)
             }
             Value::Array(_) => return Err(KeyIssue::Illegal("array")),
+            Value::Object(_) => return Err(KeyIssue::Illegal("object")),
             Value::Ref(cell) => return Key::from_value(&cell.borrow()),
         })
     }

@@ -1,0 +1,51 @@
+A/A/A B/A/B B/A/B B/A/B
+C! C!
+bool(true)
+p1p2
+object(P2)#2 (2) {
+  ["v":"P1":private]=>
+  string(2) "p1"
+  ["v":"P2":private]=>
+  string(2) "p2"
+}
+P2 Object
+(
+    [v:P1:private] => p1
+    [v:P2:private] => p2
+)
+
+\P2::__set_state(array(
+   'v' => 'p1',
+   'v' => 'p2',
+))
+1
+object(stdClass)#3 (1) {
+  ["self"]=>
+  *RECURSION*
+}
+stdClass Object
+(
+    [self] => stdClass Object
+ *RECURSION*
+)
+
+array(2) {
+  [0]=>
+  object(stdClass)#4 (1) {
+    ["n"]=>
+    int(1)
+  }
+  [1]=>
+  object(stdClass)#5 (0) {
+  }
+}
+object(stdClass)#6 (0) {
+}
+object(stdClass)#7 (0) {
+}
+object(stdClass)#6 (0) {
+}
+bool(true)
+bool(false)
+bool(true)
+B
