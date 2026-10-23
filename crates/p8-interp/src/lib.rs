@@ -236,13 +236,16 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 // $a[int] on an array (or a reference to one) holding a plain
                 // value at that key
                 Instr::FetchDim { dst, arr, key, .. } => {
-                    let Value::Int(k) = w[key as usize] else { return pc };
-                    let v = match &w[arr as usize] {
-                        Value::Array(a) => int_elem(a, k),
-                        Value::Ref(cell) => match &*cell.borrow() {
+                    let v = match w[key as usize] {
+                        Value::Int(k) => match &w[arr as usize] {
                             Value::Array(a) => int_elem(a, k),
+                            Value::Ref(cell) => match &*cell.borrow() {
+                                Value::Array(a) => int_elem(a, k),
+                                _ => None,
+                            },
                             _ => None,
                         },
+                        Value::Str(_) => str_elem(w, arr, key),
                         _ => None,
                     };
                     match v {
@@ -255,6 +258,13 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 }
                 // $a[int] = int|float|bool|null, $a an array (or a reference to one)
                 Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
+                    if let Value::Str(_) = w[keys as usize] {
+                        if !set_str_elem(w, var, keys, val, dst) {
+                            return pc;
+                        }
+                        pc += 1;
+                        continue;
+                    }
                     let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { return pc };
                     let k = *k;
                     let done = match &mut w[var as usize] {
@@ -316,49 +326,54 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::BindGlobal { .. }
                 | Instr::ArgDefault { .. }
                 | Instr::Exit { .. } => return pc,
-                Instr::Call { site, base: args, argc: n, dst } => match clo.sites[site as usize].get() {
-                    Some(&Callee::User(target)) => {
-                        let target = &closures[target as usize];
-                        if n as usize >= target.code.required && stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT {
-                            break Switch::Call(target, base + args as usize, n as usize, (base + dst as usize) as u32);
-                        }
-                        return pc;
-                    }
-                    _ => return pc,
-                },
-                // The main frame's return ends the run: `step` does that.
-                Instr::Return { src } if frames.len() > 1 => match &w[src as usize] {
-                    Value::Undef => return pc,
-                    Value::Ref(cell) => break Switch::Return(cell.borrow().clone()),
-                    v => break Switch::Return(v.clone()),
-                },
-                Instr::ReturnNull if frames.len() > 1 => break Switch::Return(Value::Null),
-                Instr::Return { .. } | Instr::ReturnNull => return pc,
+                // Calls and returns leave this loop, so the loop itself
+                // keeps only the code and the registers live.
+                Instr::Call { site, base: args, argc: n, dst } => break Switch::Call(site, args, n, dst),
+                Instr::Return { src } => break Switch::Return(src),
+                Instr::ReturnNull => break Switch::ReturnNull,
             }
         };
         match switch {
-            Switch::Call(target, at, argc, ret) => {
+            Switch::Call(site, args, n, dst) => {
+                // A user function the call site resolved, with its required
+                // arguments, and no interrupt pending: anything else is `step`'s.
+                let Some(&Callee::User(target)) = clo.sites[site as usize].get() else { return pc };
+                let target = &closures[target as usize];
+                if (n as usize) < target.code.required || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                    return pc;
+                }
                 if let Some(caller) = frames.last_mut() {
                     caller.pc = (pc + 1) as u32;
                 }
-                frames.push(target, at, argc, ret);
+                frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
                 enter(frames, regs);
                 pc = 0;
             }
-            Switch::Return(value) => {
+            // The main frame's return ends the run: `step` does that.
+            Switch::Return(_) | Switch::ReturnNull if frames.len() == 1 => return pc,
+            Switch::Return(src) => {
+                let value = match &regs[base + src as usize] {
+                    Value::Undef => return pc,
+                    Value::Ref(cell) => cell.borrow().clone(),
+                    v => v.clone(),
+                };
                 leave(frames, regs, value);
+                pc = frames.last().expect("the caller's frame").pc as usize;
+            }
+            Switch::ReturnNull => {
+                leave(frames, regs, Value::Null);
                 pc = frames.last().expect("the caller's frame").pc as usize;
             }
         }
     }
 }
 
-/// How `fast` changes frames.
-enum Switch<'c> {
-    /// Enter a user function: its closure, its window's start, the
-    /// argument count and the caller's result register.
-    Call(&'c Rc<Closure>, usize, usize, u32),
-    Return(Value),
+/// Why `fast`'s inner loop stopped: a call (its site, arguments' start,
+/// count and result register) or a return (of a register, or of null).
+enum Switch {
+    Call(u16, Reg, u8, Reg),
+    Return(Reg),
+    ReturnNull,
 }
 
 /// Set up the registers of the frame just pushed: its window starts at
@@ -1651,6 +1666,47 @@ fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -
         _ => return false,
     };
     w[dst as usize] = r;
+    true
+}
+
+/// `$a[string]` on an array (or a reference to one) holding a value that is
+/// not a reference at that key; None for anything else (a missing key
+/// warns, in `step`).
+#[inline(never)]
+fn str_elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
+    let Value::Str(s) = &w[key as usize] else { return None };
+    let key = Key::from_string(s.clone());
+    let elem = |a: &PhpArray| match a.get(&key) {
+        Some(Value::Ref(_)) | None => None,
+        Some(v) => Some(v.clone()),
+    };
+    match &w[arr as usize] {
+        Value::Array(a) => elem(a),
+        Value::Ref(cell) => match &*cell.borrow() {
+            Value::Array(a) => elem(a),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `$a[string] = v`, `$a` an array whose element there (if any) is not a
+/// reference, `v` defined and not a reference; false (nothing done) for
+/// anything else.
+#[inline(never)]
+fn set_str_elem(w: &mut [Value], var: Reg, keys: Reg, val: Reg, dst: Reg) -> bool {
+    let (Value::Str(s), Some(v)) = (&w[keys as usize], copied(&w[val as usize])) else { return false };
+    let key = Key::from_string(s.clone());
+    let Value::Array(a) = &mut w[var as usize] else { return false };
+    if matches!(a.get(&key), Some(Value::Ref(_))) {
+        return false;
+    }
+    let a = Rc::make_mut(a);
+    match a.get_mut(&key) {
+        Some(slot) => *slot = v.clone(),
+        None => a.insert(key, v.clone()),
+    }
+    w[dst as usize] = v;
     true
 }
 
