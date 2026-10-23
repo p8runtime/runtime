@@ -1378,7 +1378,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     self.arena
                         .alloc(Expr::IndirectVariable { name: expr, span })
                 } else {
-                    let expr = self.parse_expr(200);
+                    // `$$a[0]` is `${$a}[0]`: the name is the variable alone.
+                    let expr = if self.current_token.kind == TokenKind::Variable {
+                        let token = self.current_token;
+                        self.bump();
+                        self.arena.alloc(Expr::Variable { name: token.span, span: token.span })
+                    } else {
+                        self.parse_expr(200)
+                    };
                     let span = Span::new(start, expr.span().end);
                     self.arena
                         .alloc(Expr::IndirectVariable { name: expr, span })

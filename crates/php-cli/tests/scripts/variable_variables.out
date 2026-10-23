@@ -1,0 +1,43 @@
+string(5) "hello"
+string(5) "hello"
+string(5) "hello"
+int(12)
+bool(true)
+bool(true)
+bool(false)
+array(2) {
+  [0]=>
+  string(1) "a"
+  ["k"]=>
+  string(1) "b"
+}
+bool(false)
+string(4) "val!"
+bool(true)
+array(4) {
+  ["v"]=>
+  string(3) "val"
+  ["x"]=>
+  string(3) "dyn"
+  ["other"]=>
+  int(2)
+  ["dyn"]=>
+  string(4) "val!"
+}
+bool(false)
+array(1) {
+  ["other"]=>
+  int(2)
+}
+string(3) "val"
+string(10) "by extract"
+int(6)
+string(4) "bool"
+
+Warning: Undefined variable $undefinedname in %s on line 37
+default
+
+Warning: Undefined variable $missing in %s on line 39
+NULL
+int(10)
+int(20)

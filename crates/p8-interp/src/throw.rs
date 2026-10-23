@@ -56,7 +56,7 @@ impl Context<'_> {
                 };
                 let _ = args.push(v);
             }
-            for v in frame.extra.iter().flatten() {
+            for v in frame.args().iter() {
                 let _ = args.push(v.deref());
             }
             entry.insert(key("args"), Value::Array(Rc::new(args)));

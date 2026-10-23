@@ -305,6 +305,13 @@ pub enum Rare {
     /// Before a return: check (and convert) the value in a against the
     /// declared return type.
     VerifyReturn,
+    /// `$$name` written: a gets a reference to the variable named by b
+    /// (made, if the code never names it).
+    VarRef,
+    /// `$$name` read: a = the variable named by b (c: 1 quietly, for isset).
+    VarGet,
+    /// `unset($$name)`: the variable named by a.
+    VarUnset,
 }
 
 impl Instr {

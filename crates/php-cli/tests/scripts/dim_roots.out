@@ -1,0 +1,73 @@
+array(3) {
+  ["k"]=>
+  int(1)
+  [0]=>
+  string(2) "k!"
+  ["n"]=>
+  int(15)
+}
+array(1) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    int(2)
+    ["z"]=>
+    array(1) {
+      [0]=>
+      string(4) "deep"
+    }
+  }
+}
+bool(true)
+bool(false)
+bool(true)
+array(2) {
+  [0]=>
+  int(0)
+  [1]=>
+  string(1) "n"
+}
+int(3)
+int(1)
+int(4)
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+  [3]=>
+  int(9)
+}
+object(stdClass)#2 (2) {
+  ["list"]=>
+  array(2) {
+    [0]=>
+    int(5)
+    [1]=>
+    int(6)
+  }
+  ["n"]=>
+  array(1) {
+    ["b"]=>
+    array(3) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+      [2]=>
+      int(3)
+    }
+  }
+}
+bool(true)
+bool(false)
+string(8) "via call"
+array(2) {
+  [0]=>
+  bool(true)
+  [1]=>
+  string(3) "baz"
+}
+string(7) "changed"

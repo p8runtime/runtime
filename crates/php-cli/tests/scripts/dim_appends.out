@@ -1,0 +1,72 @@
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    array(1) {
+      [0]=>
+      int(2)
+    }
+  }
+}
+array(1) {
+  ["k"]=>
+  array(2) {
+    [0]=>
+    array(1) {
+      ["x"]=>
+      array(1) {
+        [0]=>
+        string(1) "v"
+      }
+    }
+    [1]=>
+    array(1) {
+      [1]=>
+      int(1)
+    }
+  }
+}
+int(5)
+string(1) "0"
+string(2) "ok"
+array(3) {
+  [0]=>
+  int(5)
+  [1]=>
+  string(1) "0"
+  [2]=>
+  string(2) "ok"
+}
+array(2) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(-2)
+}
+object(P)#1 (1) {
+  ["p"]=>
+  array(1) {
+    [0]=>
+    array(1) {
+      [0]=>
+      string(4) "prop"
+    }
+  }
+}
+array(2) {
+  [0]=>
+  array(1) {
+    ["a"]=>
+    string(6) "static"
+  }
+  [1]=>
+  string(1) "x"
+}
+int(4)
