@@ -254,11 +254,31 @@ pub fn php_call_user_func_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, 
     let callback_handle = args[0];
     let params_handle = args[1];
 
-    // Extract array elements as arguments
-    let func_args: smallvec::SmallVec<[Handle; 8]> = match &vm.arena.get(params_handle).value {
-        Val::Array(arr) => arr.map.values().copied().collect(),
+    // Elements are the arguments; string keys pass them by name.
+    let entries: Vec<(crate::core::value::ArrayKey, Handle)> = match &vm.arena.get(params_handle).value {
+        Val::Array(arr) => arr.map.iter().map(|(k, v)| (k.clone(), *v)).collect(),
         _ => return Err("call_user_func_array() expects parameter 2 to be array".to_string()),
     };
+    let mut func_args: smallvec::SmallVec<[Handle; 8]> = smallvec::SmallVec::new();
+    let mut names = Vec::new();
+    for (key, value) in entries {
+        match key {
+            crate::core::value::ArrayKey::Str(name) => {
+                names.push(vm.context.interner.intern(&name));
+                func_args.push(value);
+            }
+            crate::core::value::ArrayKey::Int(_) if !names.is_empty() => {
+                return Err(vm.throw_from_native(
+                    b"Error",
+                    "Cannot use positional argument after named argument during unpacking",
+                ));
+            }
+            crate::core::value::ArrayKey::Int(_) => func_args.push(value),
+        }
+    }
+    if !names.is_empty() {
+        vm.pending_arg_names = Some(names);
+    }
 
     vm.call_callable(callback_handle, func_args)
             .map_err(|e| vm.callback_error(e))

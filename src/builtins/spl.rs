@@ -105,3 +105,56 @@ pub fn php_spl_object_hash(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
     let hash_bytes = Rc::new(hash.into_bytes());
     Ok(vm.arena.alloc(Val::String(hash_bytes)))
 }
+
+/// iterator_to_array(Traversable|array $iterator, bool $preserve_keys = true): array
+/// Reference: $PHP_SRC_PATH/ext/spl/spl_iterators.c
+pub fn php_iterator_to_array(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let preserve_keys = args.get(1).is_none_or(|&h| vm.arena.get(h).value.to_bool());
+    let entries = vm
+        .traversable_entries(args[0])
+        .map_err(|e| vm.callback_error(e))?;
+    let mut out = crate::core::value::ArrayData::new();
+    for (key, value) in entries {
+        let value = vm.arena.alloc(vm.arena.get(value).value.clone());
+        if preserve_keys {
+            let key = vm
+                .array_key_from_value(&vm.arena.get(key).value.clone())
+                .map_err(|e| vm.callback_error(e))?;
+            out.insert(key, value);
+        } else {
+            out.push(value);
+        }
+    }
+    Ok(vm.arena.alloc(Val::Array(Rc::new(out))))
+}
+
+/// iterator_count(Traversable|array $iterator): int
+pub fn php_iterator_count(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let entries = vm
+        .traversable_entries(args[0])
+        .map_err(|e| vm.callback_error(e))?;
+    Ok(vm.arena.alloc(Val::Int(entries.len() as i64)))
+}
+
+/// iterator_apply(Traversable $iterator, callable $callback, ?array $args = null): int
+/// Calls the callback once per element until it returns something falsy.
+pub fn php_iterator_apply(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let call_args: Vec<Handle> = match args.get(2).map(|&h| vm.arena.get(h).value.clone()) {
+        Some(Val::Array(arr)) => arr.map.values().copied().collect(),
+        _ => Vec::new(),
+    };
+    let entries = vm
+        .traversable_entries(args[0])
+        .map_err(|e| vm.callback_error(e))?;
+    let mut count = 0;
+    for _ in entries {
+        count += 1;
+        let result = vm
+            .call_callable(args[1], call_args.iter().copied().collect())
+            .map_err(|e| vm.callback_error(e))?;
+        if !vm.arena.get(result).value.to_bool() {
+            break;
+        }
+    }
+    Ok(vm.arena.alloc(Val::Int(count)))
+}

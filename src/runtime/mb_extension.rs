@@ -36,6 +36,8 @@ impl Extension for MbStringExtension {
         registry.register_function(b"mb_strwidth", mbstring::php_mb_strwidth);
         registry.register_function(b"mb_strimwidth", mbstring::php_mb_strimwidth);
         registry.register_function(b"mb_trim", mbstring::php_mb_trim);
+        registry.register_function(b"mb_ltrim", mbstring::php_mb_ltrim);
+        registry.register_function(b"mb_rtrim", mbstring::php_mb_rtrim);
         registry.register_function(b"mb_str_split", mbstring::php_mb_str_split);
         registry.register_function(b"mb_str_pad", mbstring::php_mb_str_pad);
         registry.register_function(b"mb_substr_count", mbstring::php_mb_substr_count);

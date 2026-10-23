@@ -7,6 +7,8 @@ mod class_resolution;
 pub mod engine;
 pub(crate) mod error_construction;
 pub(crate) mod error_formatting;
+mod call_args;
+mod generator;
 pub mod executor;
 pub mod frame;
 mod frame_helpers;
