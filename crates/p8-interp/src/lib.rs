@@ -793,6 +793,7 @@ impl Isolate {
             included: std::collections::HashSet::new(),
             ids: Rc::new(Ids::default()),
             native_class: None,
+            ext_state: HashMap::new(),
             resource_classes: HashMap::new(),
             resource_ids: Rc::new(Ids::monotonic()),
             enum_objects: HashMap::new(),
@@ -855,6 +856,8 @@ pub struct Context<'i> {
     ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
     arg_buf: Vec<Value>,
+    /// Extensions' per-request state (Ctx::state).
+    ext_state: HashMap<&'static str, Value>,
     /// The class of each kind of resource, and their numbers.
     resource_classes: HashMap<&'static str, Rc<Class>>,
     resource_ids: Rc<Ids>,
@@ -2752,6 +2755,78 @@ impl Ctx for Context<'_> {
 
     fn called_class(&self) -> Option<Rc<Class>> {
         Context::scope(self).1
+    }
+
+    fn new_object(&mut self, class: &Rc<Class>) -> Rc<Object> {
+        Object::new(Rc::clone(class), &self.ids)
+    }
+
+    fn call_args(&self) -> Vec<Value> {
+        let Some(frame) = self.frames.last() else { return Vec::new() };
+        let regs = &self.isolate.regs;
+        let base = frame.base as usize;
+        let n = (frame.argc as usize).min(frame.func.code.params.len());
+        let mut out: Vec<Value> = (0..n).map(|i| regs.get(base + i).map(Value::deref).unwrap_or(Value::Null)).collect();
+        out.extend(frame.extra.iter().flatten().map(Value::deref));
+        out
+    }
+
+    fn local(&self, name: &[u8]) -> Option<Value> {
+        let frame = self.frames.last()?;
+        let regs = &self.isolate.regs;
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => match regs.get(frame.base as usize + r)?.deref() {
+                Value::Undef => None,
+                v => Some(v),
+            },
+            None if frame.base == 0 => self.globals.get(name).map(|c| c.borrow().clone()),
+            None => None,
+        }
+    }
+
+    fn set_local(&mut self, name: &[u8], value: Value) -> bool {
+        let Some(frame) = self.frames.last() else { return false };
+        let base = frame.base as usize;
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => {
+                if let Some(slot) = self.isolate.regs.get_mut(base + r) {
+                    assign(std::slice::from_mut(slot), 0, value);
+                }
+                true
+            }
+            None if base == 0 => {
+                self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).replace(value);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn locals(&self) -> Vec<(PhpStr, Value)> {
+        let Some(frame) = self.frames.last() else { return Vec::new() };
+        let regs = &self.isolate.regs;
+        let base = frame.base as usize;
+        let mut out: Vec<(PhpStr, Value)> = frame
+            .func
+            .code
+            .cv_names
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| match regs.get(base + i).map(Value::deref) {
+                Some(Value::Undef) | None => None,
+                Some(v) => Some((PhpStr::from(n.as_bytes()), v)),
+            })
+            .collect();
+        if base == 0 {
+            for (n, c) in &self.globals {
+                out.push((PhpStr::from(n.as_slice()), c.borrow().clone()));
+            }
+        }
+        out
+    }
+
+    fn state(&mut self, key: &'static str) -> &mut Value {
+        self.ext_state.entry(key).or_insert(Value::Null)
     }
 
     fn new_resource(&mut self, resource: p8_runtime::stream::Resource) -> Value {

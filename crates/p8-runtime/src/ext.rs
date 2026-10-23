@@ -77,6 +77,20 @@ pub trait Ctx {
     fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
     /// Closure::fromCallable: a Closure calling `callable`.
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw>;
+    /// A new object of class `class` (declared), its constructor not run
+    /// (unserialize, json_decode's stdClass).
+    fn new_object(&mut self, class: &Rc<Class>) -> Rc<crate::object::Object>;
+    /// The calling code's arguments (func_get_args).
+    fn call_args(&self) -> Vec<Value>;
+    /// The calling code's variable `name` (None: not set).
+    fn local(&self, name: &[u8]) -> Option<Value>;
+    /// Set the calling code's variable `name`; false when it has none of
+    /// that name (a function's variables are known when it is compiled).
+    fn set_local(&mut self, name: &[u8], value: Value) -> bool;
+    /// The calling code's set variables, in order (get_defined_vars).
+    fn locals(&self) -> Vec<(PhpStr, Value)>;
+    /// Per-request state an extension keeps (json_last_error, ...).
+    fn state(&mut self, key: &'static str) -> &mut Value;
     /// A new resource (its number is the next one).
     fn new_resource(&mut self, resource: crate::stream::Resource) -> Value;
     /// Write to the host directly, past output buffers (PHP's STDOUT).
@@ -232,6 +246,16 @@ impl Registry {
     /// callable): the engine lends it the registers.
     pub fn reenters(&self, i: usize) -> bool {
         self.reenters[i]
+    }
+
+    /// Builtins that run PHP code or reach the caller's variables though
+    /// they take no callable (serialize, compact): the registers are lent.
+    pub fn mark_reenters(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(&i) = self.index.get(n) {
+                self.reenters[i] = true;
+            }
+        }
     }
 
     pub fn by_ref(&self, i: usize, n: usize) -> bool {
