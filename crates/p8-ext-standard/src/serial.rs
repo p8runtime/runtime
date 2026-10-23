@@ -95,7 +95,7 @@ impl Writer<'_> {
             self.out.extend_from_slice(b"\";");
             return Ok(());
         }
-        if o.class.lower == b"closure" || o.class.lower == b"generator" {
+        if o.class.lower == b"closure" || o.class.lower == b"generator" || o.class.flags & p8_runtime::object::CLASS_NOT_SERIALIZABLE != 0 {
             return Err(self.ctx.throw("Exception", format!("Serialization of '{}' is not allowed", text(&name))));
         }
         let header = |w: &mut Self, n: usize| {
