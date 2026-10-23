@@ -170,6 +170,21 @@ pub enum Instr {
     /// Call the value in `callee` (a closure, a callable string or array,
     /// an invokable object) with the `argc` arguments at `base`.
     CallValue { dst: Reg, callee: Reg, base: Reg, argc: u8 },
+    /// `$var = &$src`: both name one value from now on.
+    BindRef { var: Reg, src: Reg },
+    /// `$var = &$root[k1]..[kn]` (`append`: a last `[]`), and an element
+    /// passed by reference: the element becomes a reference.
+    RefDim { var: Reg, root: Reg, keys: Reg, n: u8, append: bool },
+    /// `$root[k1]..[kn] = &$src`
+    DimSetRef { root: Reg, keys: Reg, n: u8, append: bool, src: Reg },
+    /// `foreach ($src as &$v)`: `iter` gets the position, `iter + 1` a
+    /// reference to the array's variable; `end` if there is nothing.
+    IterInitRef { src: Reg, iter: Reg, end: u32 },
+    /// The next element, made a reference and bound to `val`.
+    IterNextRef { iter: Reg, val: Reg, key: Reg, has_key: bool, end: u32 },
+    /// `static $var`: bind the function's static `index`; if it was set
+    /// up already, skip its initializer (to `skip`).
+    StaticVar { var: Reg, index: u16, skip: u32 },
     /// `f(...)`: a Closure of the callable in `src` (Closure::fromCallable).
     FromCallable { dst: Reg, src: Reg },
     /// `include`, `require` (and `_once`): dst gets the file's result.
@@ -281,6 +296,9 @@ impl Instr {
         match self {
             Instr::Jump { target: t }
             | Instr::CatchIf { target: t, .. }
+            | Instr::IterInitRef { end: t, .. }
+            | Instr::IterNextRef { end: t, .. }
+            | Instr::StaticVar { skip: t, .. }
             | Instr::JumpIf { target: t, .. }
             | Instr::JumpIfNot { target: t, .. }
             | Instr::JumpIfSet { target: t, .. }
