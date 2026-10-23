@@ -77,6 +77,80 @@ impl Context<'_> {
         Ok(())
     }
 
+    /// The destructors due (objects whose last reference went), in order.
+    pub(crate) fn run_destructors(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
+        self.run_destructors_at(regs, None)
+    }
+
+    /// The destructors due, called from the instruction before `pc` of
+    /// the top frame (where a trace shows the call).
+    pub(crate) fn run_destructors_at(&mut self, regs: &mut Vec<Value>, pc: Option<usize>) -> Result<(), Throw> {
+        let saved = self.frames.last().map(|f| f.pc);
+        if let (Some(pc), Some(top)) = (pc, self.frames.last_mut()) {
+            top.pc = pc as u32;
+        }
+        let mut r = Ok(());
+        while let Some(object) = self.ids.next_pending() {
+            if let Some(m) = self.destructor(&object) {
+                r = self.run_nested(regs, m, &mut []).map(|_| ());
+                if r.is_err() {
+                    break;
+                }
+            }
+        }
+        if let (Some(pc), Some(top)) = (saved, self.frames.last_mut()) {
+            top.pc = pc;
+        }
+        r
+    }
+
+    /// The end of the script: shutdown functions, then (as PHP does) the
+    /// globals that alone hold an object, last first, until none is left;
+    /// then every object still alive, oldest first.
+    pub(crate) fn script_end(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
+        if !self.shutdown.is_empty() {
+            self.run_shutdown(regs)?;
+        }
+        let ncv = self.frames.last().map_or(0, |f| f.func.code.consts_at as usize);
+        self.end_destructors(regs, ncv)
+    }
+
+    /// The destructors at the end: the globals (the main frame's first
+    /// `ncv` registers) that alone hold an object, last first, until none
+    /// is left; then every object still alive, oldest first.
+    pub(crate) fn end_destructors(&mut self, regs: &mut Vec<Value>, ncv: usize) -> Result<(), Throw> {
+        loop {
+            let mut freed = false;
+            for r in (0..ncv).rev() {
+                if let Value::Object(o) = &regs[r]
+                    && Rc::strong_count(o) == 1
+                {
+                    regs[r] = Value::Undef;
+                    freed = true;
+                    self.run_destructors(regs)?;
+                }
+            }
+            if !freed {
+                break;
+            }
+        }
+        self.destruct_remaining(regs)
+    }
+
+    /// Destruct every object (with a destructor) still alive, oldest first.
+    pub(crate) fn destruct_remaining(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
+        for object in self.ids.undestructed() {
+            if object.destructed.replace(true) {
+                continue;
+            }
+            if let Some(m) = self.destructor(&object) {
+                self.run_nested(regs, m, &mut [])?;
+            }
+            self.run_destructors(regs)?;
+        }
+        Ok(())
+    }
+
     /// register_shutdown_function's functions, in order (one may add more).
     pub(crate) fn run_shutdown(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
         while !self.shutdown.is_empty() {

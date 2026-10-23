@@ -1,0 +1,22 @@
+bye x
+after x
+bye y
+after y
+in f
+bye local
+after f
+bye temp
+after temp
+
+Deprecated: Creation of dynamic property D::$self is deprecated in %s on line 10
+after cycle
+caught
+end
+shutdown
+bye y2
+bye b
+bye a
+bye c
+bye in-array
+bye static
+bye cycle

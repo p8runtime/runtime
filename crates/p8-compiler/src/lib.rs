@@ -573,10 +573,11 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *dst = f(*dst);
             *src = f(*src);
         }
-        Assign { var, src } => {
+        Assign { var, src } | AssignTake { var, src } => {
             *var = f(*var);
             *src = f(*src);
         }
+        Free { reg } => *reg = f(*reg),
         LoadNull { dst } | NewArray { dst } => *dst = f(*dst),
         Binary { dst, a, b, .. } | Add { dst, a, b } | Sub { dst, a, b } | Mul { dst, a, b } | Compare { dst, a, b, .. } => {
             *dst = f(*dst);
@@ -677,6 +678,16 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
 }
 
 pub use p8_bytecode::Program;
+
+/// After storing a value an expression made (an object, likely) from a
+/// temporary: release the temporary's copy.
+fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
+    if val >> KIND_SHIFT == TEMP
+        && matches!(e, Expr::New { .. } | Expr::Clone { .. } | Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. })
+    {
+        f.emit(Instr::Free { reg: val });
+    }
+}
 
 pub struct Compiler<'src> {
     source: &'src [u8],
@@ -981,6 +992,11 @@ impl<'src> Compiler<'src> {
                 f.patch(init, end);
                 f.patch(next, end);
                 self.close_loop(f, start);
+                // The loop is done with what it iterated (PHP frees it here).
+                f.emit(Instr::Free { reg: iter });
+                if src >> KIND_SHIFT == TEMP {
+                    f.emit(Instr::Free { reg: src });
+                }
             }
             Stmt::Foreach { expr, key_var, value_var, body, .. } => {
                 let src = self.expr(f, expr)?;
@@ -1017,6 +1033,11 @@ impl<'src> Compiler<'src> {
                 f.patch(init, end);
                 f.patch(next, end);
                 self.close_loop(f, start);
+                // The loop is done with what it iterated (PHP frees it here).
+                f.emit(Instr::Free { reg: iter });
+                if src >> KIND_SHIFT == TEMP {
+                    f.emit(Instr::Free { reg: src });
+                }
             }
             Stmt::Block { statements, .. } => self.stmts(f, statements)?,
             Stmt::Break { level, span } | Stmt::Continue { level, span } => {
@@ -1237,7 +1258,10 @@ impl<'src> Compiler<'src> {
                 f.emit(if matches!(op, UnaryOp::PreInc) { Instr::IncVar { var } } else { Instr::DecVar { var } });
             }
             _ => {
-                self.expr(f, e)?;
+                let r = self.expr(f, e)?;
+                if r >> KIND_SHIFT == TEMP {
+                    f.emit(Instr::Free { reg: r });
+                }
             }
         }
         Ok(())
@@ -2057,7 +2081,7 @@ impl<'src> Compiler<'src> {
                         return Ok(target);
                     }
                     let src = self.expr(f, expr)?;
-                    f.emit(Instr::Assign { var: target, src });
+                    f.emit(if src >> KIND_SHIFT == TEMP { Instr::AssignTake { var: target, src } } else { Instr::Assign { var: target, src } });
                     target
                 }
                 Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
@@ -2072,6 +2096,7 @@ impl<'src> Compiler<'src> {
                     let (target, keys, n, append) = self.dim_path(f, var)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignDim { var: target, keys, n, append, val, dst });
+                    free_made(f, expr, val);
                     dst
                 }
                 Expr::PropertyFetch { target, property, .. } => {
@@ -2080,6 +2105,7 @@ impl<'src> Compiler<'src> {
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignProp { obj, name, val, dst });
+                    free_made(f, expr, val);
                     dst
                 }
                 Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
@@ -2326,6 +2352,7 @@ impl<'src> Compiler<'src> {
                             f.emit(Instr::ArrayPush { arr: dst, val });
                         }
                     }
+                    free_made(f, item.value, val);
                 }
                 dst
             }
