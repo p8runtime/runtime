@@ -1,0 +1,12 @@
+string(29) "Hello World
+  indented Worlds"
+string(64) "World at a line start
+  two more spaces
+
+after a blank line, n=3"
+string(15) "raw $name \t \\"
+string(18) "tab-indented World"
+string(1) "\"
+string(0) ""
+in a callin a call
+string(5) "a	bA!"

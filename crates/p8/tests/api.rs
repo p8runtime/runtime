@@ -165,3 +165,24 @@ fn an_interrupted_isolate_runs_the_next_request() {
     let platform = platform();
     assert_eq!(request(&platform, &mut isolate, "<?php for ($i = 0; $i < 3; $i++) echo $i;"), (0, "012".into()));
 }
+
+/// A broken heredoc fails to compile, in bounded time: compilation can't be
+/// interrupted, so a lexer loop would stall the host for good.
+#[test]
+fn unterminated_heredoc_is_a_parse_error_not_a_hang() {
+    for source in ["<?php\n\necho <<<END\n", "<?php\n$b = <<<EOT\n\\\nEOT;\n", "<?php\n$b = <<<'EOT'\nx\n"] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let platform = platform();
+            let _ = tx.send(platform.compile(source.as_bytes(), "t.php").err().map(|e| (e.kind, e.message)));
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("compile returned within 5 s");
+        if source.contains("\\\n") {
+            assert!(result.is_none(), "a backslash before the closing label is valid: {result:?}");
+        } else {
+            let (kind, message) = result.expect("a parse error");
+            assert!(matches!(kind, p8::ErrorKind::Parse), "{kind:?}");
+            assert_eq!(message, "syntax error, unexpected end of file");
+        }
+    }
+}

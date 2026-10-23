@@ -1759,6 +1759,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
     fn parse_interpolated_string(&mut self, end_token: TokenKind) -> ExprId<'ast> {
         let start = self.current_token.span.start;
+        // `<<<'LABEL'` opens a nowdoc: its text is taken as written.
+        let nowdoc = end_token == TokenKind::EndHeredoc && self.lexer.slice(self.current_token.span).contains(&b'\'');
         self.bump(); // Eat opening token
 
         let mut parts: bumpalo::collections::Vec<&'ast Expr<'ast>> =
@@ -1903,21 +1905,91 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
         }
 
+        // A heredoc's closing label: its indentation comes off every line.
+        let mut closing_indent = None;
         let end = if self.current_token.kind == end_token {
-            let end = self.current_token.span.end;
+            let token = self.current_token;
+            if end_token == TokenKind::EndHeredoc {
+                let text = self.lexer.slice(token.span);
+                closing_indent = Some(text.iter().take_while(|c| matches!(c, b' ' | b'\t')).count());
+            }
             self.bump();
-            end
+            token.span.end
         } else {
+            if end_token == TokenKind::EndHeredoc && self.current_token.kind == TokenKind::Eof {
+                self.errors.push(ParseError {
+                    span: self.current_token.span,
+                    message: "syntax error, unexpected end of file",
+                });
+            }
             self.current_token.span.start
         };
 
         let span = Span::new(start, end);
-        let parts = parts.into_bump_slice();
+        let parts = match closing_indent {
+            Some(indent) => self.heredoc_body(&parts, indent),
+            None => parts.into_bump_slice(),
+        };
 
         if end_token == TokenKind::Backtick {
             self.arena.alloc(Expr::ShellExec { parts, span })
+        } else if nowdoc {
+            // A nowdoc is a plain string with no escapes at all. It becomes
+            // a single-quoted literal whose own two escapes (\\ and \') are
+            // added here, so turning it back into text yields it unchanged.
+            let mut quoted = vec![b'\''];
+            for part in parts {
+                if let Expr::String { value, .. } = part {
+                    for &c in *value {
+                        if c == b'\\' || c == b'\'' {
+                            quoted.push(b'\\');
+                        }
+                        quoted.push(c);
+                    }
+                }
+            }
+            quoted.push(b'\'');
+            self.arena.alloc(Expr::String { value: self.arena.alloc_slice_copy(&quoted), span })
         } else {
             self.arena.alloc(Expr::InterpolatedString { parts, span })
         }
+    }
+
+    /// A heredoc's text as PHP sees it: the closing label's indentation is
+    /// removed from the start of every line, and the newline before the
+    /// closing label is not part of the string. Lines start at the start of
+    /// the body and after each newline in its literal parts (not after an
+    /// interpolated variable).
+    fn heredoc_body(&self, parts: &[&'ast Expr<'ast>], indent: usize) -> &'ast [&'ast Expr<'ast>] {
+        let mut out: bumpalo::collections::Vec<&'ast Expr<'ast>> = bumpalo::collections::Vec::new_in(self.arena);
+        let last = parts.len().saturating_sub(1);
+        let mut at_line_start = true;
+        for (i, part) in parts.iter().enumerate() {
+            let Expr::String { value, span } = **part else {
+                out.push(*part);
+                at_line_start = false;
+                continue;
+            };
+            let mut text = Vec::with_capacity(value.len());
+            for (n, line) in value.split_inclusive(|&c| c == b'\n').enumerate() {
+                let line = if at_line_start || n > 0 {
+                    let ws = line.iter().take(indent).take_while(|c| matches!(c, b' ' | b'\t')).count();
+                    &line[ws..]
+                } else {
+                    line
+                };
+                text.extend_from_slice(line);
+            }
+            at_line_start = value.ends_with(b"\n");
+            if i == last {
+                if text.ends_with(b"\r\n") {
+                    text.truncate(text.len() - 2);
+                } else if text.ends_with(b"\n") {
+                    text.pop();
+                }
+            }
+            out.push(self.arena.alloc(Expr::String { value: self.arena.alloc_slice_copy(&text), span }));
+        }
+        out.into_bump_slice()
     }
 }

@@ -948,6 +948,10 @@ impl<'src> Lexer<'src> {
         };
 
         if self.cursor >= self.input.len() {
+            // Unterminated: report it once and leave the heredoc, so the
+            // next token is the end of the file (asking again must not
+            // return this error forever).
+            self.state_stack.pop();
             return Some(Token {
                 kind: TokenKind::Error,
                 span: Span::new(self.cursor, self.cursor),
@@ -992,6 +996,10 @@ impl<'src> Lexer<'src> {
         };
 
         if self.cursor >= self.input.len() {
+            // Unterminated: report it once and leave the heredoc, so the
+            // next token is the end of the file (asking again must not
+            // return this error forever).
+            self.state_stack.pop();
             return Some(Token {
                 kind: TokenKind::Error,
                 span: Span::new(self.cursor, self.cursor),
@@ -1071,7 +1079,9 @@ impl<'src> Lexer<'src> {
                 break;
             }
 
-            if c == b'\\' && self.peek().is_some() {
+            // A backslash escapes the next byte, except a newline: the line
+            // after it may hold the closing label.
+            if c == b'\\' && self.peek().is_some_and(|n| n != b'\n') {
                 self.advance();
             }
         }
