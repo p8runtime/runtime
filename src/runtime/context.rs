@@ -191,6 +191,12 @@ pub struct EngineContext {
     pub registry: ExtensionRegistry,
 }
 
+impl Default for EngineContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EngineContext {
     pub fn new() -> Self {
         let mut registry = ExtensionRegistry::new();
@@ -247,6 +253,11 @@ impl EngineContext {
         registry
             .register_extension(Box::new(MbStringExtension))
             .expect("Failed to register mbstring extension");
+
+        use crate::runtime::opcache_extension::OpcacheExtension;
+        registry
+            .register_extension(Box::new(OpcacheExtension))
+            .expect("Failed to register Zend OPcache");
 
         // Register Zip extension
         #[cfg(feature = "zip")]
@@ -698,6 +709,8 @@ impl EngineBuilder {
             .push(Box::new(super::zlib_extension::ZlibExtension));
         self.extensions
             .push(Box::new(super::mb_extension::MbStringExtension));
+        self.extensions
+            .push(Box::new(super::opcache_extension::OpcacheExtension));
         self
     }
 

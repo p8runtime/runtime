@@ -19,6 +19,7 @@ pub mod registry;
 pub mod resource_manager;
 #[cfg(feature = "zip")]
 pub mod zip_extension;
+pub mod opcache_extension;
 pub mod zlib_extension;
 
 #[cfg(test)]

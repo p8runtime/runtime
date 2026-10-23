@@ -48,7 +48,7 @@ fn built_in_extensions_report_loaded() {
     );
     assert_eq!(
         out,
-        "bool(true)\nbool(true)\nbool(true)\nstring(4) \"Core\"\nbool(true)\narray(0) {\n}\n"
+        "bool(true)\nbool(true)\nbool(true)\nstring(4) \"Core\"\nbool(true)\narray(1) {\n  [0]=>\n  string(12) \"Zend OPcache\"\n}\n"
     );
 }
 

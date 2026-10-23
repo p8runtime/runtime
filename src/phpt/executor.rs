@@ -83,7 +83,7 @@ impl PhptExecutor {
         names: impl IntoIterator<Item = &'a str>,
         scratch: &Path,
     ) -> Result<(), String> {
-        let names: Vec<&str> = names.into_iter().collect();
+        let names: Vec<&str> = names.into_iter().map(Self::module_name).collect();
         let mut code = String::from("<?php\n");
         for name in &names {
             code.push_str(&format!("if (extension_loaded('{}')) echo '{}', \"\\n\";\n", name, name));
@@ -92,6 +92,15 @@ impl PhptExecutor {
         let out = self.run_section(&PhptTest::default(), &probe, &code)?;
         self.loaded_extensions = out.text.lines().map(str::to_string).collect();
         Ok(())
+    }
+
+    /// The module name an --EXTENSIONS-- entry stands for: run-tests.php
+    /// loads `opcache` as the Zend extension "Zend OPcache".
+    fn module_name(extension: &str) -> &str {
+        match extension {
+            "opcache" => "Zend OPcache",
+            other => other,
+        }
     }
 
     pub fn run_test(&self, test: &PhptTest) -> TestResult {
@@ -104,7 +113,7 @@ impl PhptExecutor {
             .sections
             .extensions
             .iter()
-            .find(|e| !self.loaded_extensions.contains(e.as_str()))
+            .find(|e| !self.loaded_extensions.contains(Self::module_name(e)))
         {
             return TestResult::Skipped {
                 reason: format!("extension {} not loaded", ext),

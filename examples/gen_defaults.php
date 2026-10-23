@@ -77,3 +77,11 @@ foreach ($all_ini as $name => $value) {
     printf("    (\"%s\", \"%s\", %s),\n", $ext, $name, $value === null ? 'None' : 'Some(' . rust_bytes($value) . ')');
 }
 echo "];\n";
+
+// opcache_get_configuration() reports each directive with a type.
+echo "\n/// The type opcache_get_configuration() gives each directive: b(ool), i(nt), f(loat), s(tring).\n";
+echo "pub static OPCACHE_DIRECTIVE_TYPES: &[(&str, char)] = &[\n";
+foreach (opcache_get_configuration()['directives'] as $name => $value) {
+    printf("    (\"%s\", '%s'),\n", $name, match (true) { is_bool($value) => 'b', is_int($value) => 'i', is_float($value) => 'f', default => 's' });
+}
+echo "];\n";

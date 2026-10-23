@@ -17,6 +17,7 @@ pub mod math;
 pub mod mbstring;
 #[cfg(feature = "mysqli")]
 pub mod mysqli;
+pub mod opcache;
 #[cfg(feature = "openssl")]
 pub mod openssl;
 pub mod output_control;
