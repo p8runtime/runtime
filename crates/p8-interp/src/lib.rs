@@ -70,7 +70,9 @@ struct Frame {
     ret: u32,
     argc: u32,
     /// Arguments past the declared parameters (func_get_args()).
-    extra: Option<Box<[Value]>>,
+    /// and the variables only named at run time (`$$name`, extract()):
+    /// rare, so one box that is usually none.
+    extra: Option<Box<Extra>>,
     /// A method's `$this`, the class its code is in (visibility, self::)
     /// and the class it was called on (static::); None in a function.
     this: Option<Rc<Object>>,
@@ -81,6 +83,52 @@ struct Frame {
 }
 
 const NO_RET: u32 = u32::MAX;
+
+/// A frame's arguments past its parameters and its run-time variables.
+#[derive(Default)]
+struct Extra {
+    args: Box<[Value]>,
+    vars: Vars,
+}
+
+impl Frame {
+    /// The arguments past the declared parameters.
+    fn args(&self) -> &[Value] {
+        self.extra.as_ref().map_or(&[], |e| &e.args)
+    }
+
+    fn vars(&self) -> Option<&Vars> {
+        self.extra.as_ref().map(|e| &e.vars)
+    }
+
+    fn vars_mut(&mut self) -> &mut Vars {
+        &mut self.extra.get_or_insert_with(Default::default).vars
+    }
+}
+
+/// A frame's variables only named at run time, in the order made.
+#[derive(Default)]
+struct Vars(Vec<(Vec<u8>, Rc<RefCell<Value>>)>);
+
+impl Vars {
+    fn get(&self, name: &[u8]) -> Option<&Rc<RefCell<Value>>> {
+        self.0.iter().find(|(n, _)| n == name).map(|(_, c)| c)
+    }
+
+    /// The variable `name`, made (null) if there is none.
+    fn cell(&mut self, name: &[u8]) -> Rc<RefCell<Value>> {
+        if let Some(c) = self.get(name) {
+            return Rc::clone(c);
+        }
+        let c = Rc::new(RefCell::new(Value::Null));
+        self.0.push((name.to_vec(), Rc::clone(&c)));
+        c
+    }
+
+    fn remove(&mut self, name: &[u8]) {
+        self.0.retain(|(n, _)| n != name);
+    }
+}
 
 /// PHP's error levels (E_*), for error_reporting.
 const E_WARNING: i64 = 2;
@@ -2162,6 +2210,27 @@ impl Context<'_> {
                             }
                         }
                     }
+                    Rare::VarRef => {
+                        let name = self.var_name(w, func, b);
+                        let cell = self.var_cell(w, in_main, &name);
+                        reg!(a) = Value::Ref(cell);
+                    }
+                    Rare::VarGet => {
+                        let name = self.var_name(w, func, b);
+                        match self.var_value(w, in_main, &name) {
+                            Some(v) => reg!(a) = v,
+                            None => {
+                                if c == 0 {
+                                    self.warn(format!("Undefined variable ${}", String::from_utf8_lossy(&name)));
+                                }
+                                reg!(a) = Value::Null;
+                            }
+                        }
+                    }
+                    Rare::VarUnset => {
+                        let name = self.var_name(w, func, a);
+                        self.var_unset(w, in_main, &name);
+                    }
                     Rare::IssetStatic => {
                         let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
                         reg!(a) = Value::Bool(set);
@@ -2257,7 +2326,7 @@ impl Context<'_> {
                         list.push(std::mem::replace(&mut reg!(var), Value::Undef));
                     }
                     if let Some(frame) = self.frames.last() {
-                        list.extend(frame.extra.iter().flatten().cloned());
+                        list.extend(frame.args().iter().cloned());
                     }
                     let mut arr = PhpArray::from_list(list);
                     // Named arguments no parameter takes: by their names.
@@ -2790,7 +2859,7 @@ impl Context<'_> {
             cells.push(match func.cv_names.iter().position(|n| n == name) {
                 Some(r) => make_ref(w, r as Reg),
                 None if in_main => self.global_cell(w, name.as_bytes()),
-                None => Rc::new(RefCell::new(Value::Null)),
+                None => self.frames.last_mut().expect("the including frame").vars_mut().cell(name.as_bytes()),
             });
         }
         let (this, scope, called) = match self.frames.last() {
@@ -3073,6 +3142,53 @@ impl Context<'_> {
 
     /// The cell of global `$name`: the main frame's variable if it has one.
     /// `main` is the main frame's window (it starts at register 0).
+    /// The name in register `r`, for `$$name`.
+    fn var_name(&mut self, w: &[Value], func: &Function, r: Reg) -> Vec<u8> {
+        let v = self.operand(w, func, r);
+        ops::to_string_lossy(&v, &mut self.diags).as_bytes().to_vec()
+    }
+
+    /// The running frame's variable `name`, made a reference: a compiled
+    /// variable, a main-script global, or one only named at run time.
+    fn var_cell(&mut self, w: &mut [Value], in_main: bool, name: &[u8]) -> Rc<RefCell<Value>> {
+        if in_main {
+            return self.global_cell(w, name);
+        }
+        let frame = self.frames.last_mut().expect("a running frame");
+        if let Some(r) = frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            return make_ref(w, r as Reg);
+        }
+        frame.vars_mut().cell(name)
+    }
+
+    /// The running frame's variable `name`, if set.
+    fn var_value(&self, w: &[Value], in_main: bool, name: &[u8]) -> Option<Value> {
+        let frame = self.frames.last()?;
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => match w[r].deref() {
+                Value::Undef => None,
+                v => Some(v),
+            },
+            None if in_main => self.globals.get(name).map(|c| c.borrow().clone()),
+            None => frame.vars()?.get(name).map(|c| c.borrow().clone()),
+        }
+    }
+
+    fn var_unset(&mut self, w: &mut [Value], in_main: bool, name: &[u8]) {
+        let Some(frame) = self.frames.last_mut() else { return };
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => w[r] = Value::Undef,
+            None if in_main => {
+                self.globals.remove(name);
+            }
+            None => {
+                if let Some(e) = &mut frame.extra {
+                    e.vars.remove(name);
+                }
+            }
+        }
+    }
+
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
         if let Some(r) = self.frames.first().expect("the main frame").func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             return make_ref(main, r as Reg);
@@ -3246,7 +3362,7 @@ impl Context<'_> {
 
     /// Arguments past the parameters, for func_get_args().
     fn extra_args(&self) -> &[Value] {
-        self.frames.last().and_then(|f| f.extra.as_deref()).unwrap_or(&[])
+        self.frames.last().map_or(&[], |f| f.args())
     }
 }
 
@@ -3445,7 +3561,7 @@ impl Ctx for Context<'_> {
         let base = frame.base as usize;
         let n = (frame.argc as usize).min(frame.func.code.params.len());
         let mut out: Vec<Value> = (0..n).map(|i| regs.get(base + i).map(Value::deref).unwrap_or(Value::Null)).collect();
-        out.extend(frame.extra.iter().flatten().map(Value::deref));
+        out.extend(frame.args().iter().map(Value::deref));
         out
     }
 
@@ -3458,7 +3574,7 @@ impl Ctx for Context<'_> {
                 v => Some(v),
             },
             None if frame.base == 0 => self.globals.get(name).map(|c| c.borrow().clone()),
-            None => None,
+            None => frame.vars()?.get(name).map(|c| c.borrow().clone()),
         }
     }
 
@@ -3476,7 +3592,11 @@ impl Ctx for Context<'_> {
                 self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).replace(value);
                 true
             }
-            None => false,
+            None => {
+                let frame = self.frames.last_mut().expect("the frame");
+                frame.vars_mut().cell(name).replace(value);
+                true
+            }
         }
     }
 
@@ -3497,6 +3617,10 @@ impl Ctx for Context<'_> {
             .collect();
         if base == 0 {
             for (n, c) in &self.globals {
+                out.push((PhpStr::from(n.as_slice()), c.borrow().clone()));
+            }
+        } else if let Some(vars) = frame.vars() {
+            for (n, c) in &vars.0 {
                 out.push((PhpStr::from(n.as_slice()), c.borrow().clone()));
             }
         }
@@ -3694,8 +3818,8 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 /// Arguments past the parameters, moved out for func_get_args() (and a
 /// variadic parameter's `CollectVariadic`).
 #[cold]
-fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<[Value]>> {
-    Some(regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect())
+fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
+    Some(Box::new(Extra { args: regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect(), vars: Vars::default() }))
 }
 
 /// unset(a[k1]..[kn]) on a value; whether anything changed.

@@ -343,6 +343,28 @@ fn kind(node: &impl std::fmt::Debug) -> String {
 }
 
 /// Whether a dimension write's root is a property (`$o->p[k] = v`).
+/// Whether a dimension path has `[]` before its last dimension.
+fn has_inner_append(e: &Expr) -> bool {
+    let Expr::ArrayDimFetch { array, .. } = e else { return false };
+    let mut cur = *array;
+    while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+        if dim.is_none() {
+            return true;
+        }
+        cur = array;
+    }
+    false
+}
+
+/// Whether a dimension path starts at a plain variable (not `$this`).
+fn dim_root_is_var(c: &Compiler, e: &Expr) -> bool {
+    let mut cur = e;
+    while let Expr::ArrayDimFetch { array, .. } = cur {
+        cur = array;
+    }
+    matches!(cur, Expr::Variable { name, .. } if c.text(*name).starts_with(b"$") && c.text(*name) != b"$this")
+}
+
 fn dim_root_is_prop(e: &Expr) -> bool {
     let mut cur = e;
     while let Expr::ArrayDimFetch { array, .. } = cur {
@@ -1295,6 +1317,10 @@ impl<'src> Compiler<'src> {
                             let name = self.prop_name(f, property)?;
                             f.emit(Instr::UnsetProp { obj, name });
                         }
+                        Expr::IndirectVariable { name, .. } => {
+                            let n = self.expr(f, name)?;
+                            f.emit(Instr::rare(Rare::VarUnset, n, 0, 0, 0));
+                        }
                         other => return Err(self.unsupported(other.span(), "this unset")),
                     }
                 }
@@ -1689,7 +1715,45 @@ impl<'src> Compiler<'src> {
     }
 
     /// `target = <the value in val>`, for destructuring.
+    /// `$a[x][][y] = v` is `$a[x][] = [y => v]`: an append before the last
+    /// dimension starts a new array the rest of the path builds. Whether
+    /// `target` had one (then it is assigned).
+    fn assign_inner_append(&mut self, f: &mut FnBuilder, target: &Expr, val: Reg) -> Result<bool> {
+        let mut outer = Vec::new();
+        let mut cur = target;
+        let mut split = None;
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+            if dim.is_none() && !outer.is_empty() {
+                split = Some((cur, outer.len()));
+            }
+            outer.push(*dim);
+            cur = array;
+        }
+        let Some((append_at, rest)) = split else { return Ok(false) };
+        // The dimensions after the split, innermost first.
+        let mut value = val;
+        for dim in outer[..rest].iter() {
+            let arr = f.temp();
+            f.emit(Instr::NewArray { dst: arr });
+            match dim {
+                Some(k) => {
+                    let key = self.expr(f, k)?;
+                    f.emit(Instr::ArraySet { arr, key, val: value });
+                }
+                None => {
+                    f.emit(Instr::ArrayPush { arr, val: value });
+                }
+            }
+            value = arr;
+        }
+        self.assign_from(f, append_at, value)?;
+        Ok(true)
+    }
+
     fn assign_from(&mut self, f: &mut FnBuilder, target: &Expr, val: Reg) -> Result<()> {
+        if self.assign_inner_append(f, target, val)? {
+            return Ok(());
+        }
         match target {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
                 let var = f.cv(&self.text(*name)[1..]);
@@ -1710,6 +1774,16 @@ impl<'src> Compiler<'src> {
                 let name = self.prop_name(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::AssignProp { obj, name, val, dst });
+            }
+            Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                let class = self.class_ref(f, class)?;
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let dst = f.temp();
+                f.emit(Instr::AssignStaticProp { class, name, val, dst });
+            }
+            Expr::IndirectVariable { name, .. } => {
+                let var = self.var_ref(f, name)?;
+                f.emit(Instr::Assign { var, src: val });
             }
             other => return Err(self.unsupported(other.span(), "this destructuring target")),
         }
@@ -2250,6 +2324,7 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::rare(Rare::PropRef, dst, obj, name, 0));
                 Ok((dst, false))
             }
+            Expr::IndirectVariable { name, .. } => Ok((self.var_ref(f, name)?, false)),
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
@@ -2379,6 +2454,20 @@ impl<'src> Compiler<'src> {
         d
     }
 
+    /// Call the callable [a, b] (a method named at run time).
+    fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
+        let callee = f.temp();
+        f.emit(Instr::NewArray { dst: callee });
+        f.emit(Instr::ArrayPush { arr: callee, val: a });
+        f.emit(Instr::ArrayPush { arr: callee, val: b });
+        if needs_spread(args) {
+            return self.spread_call(f, callee, args);
+        }
+        let (base, argc) = self.args_by_value(f, args)?;
+        f.emit(Instr::CallValue { dst: base, callee, base, argc });
+        Ok(base)
+    }
+
     fn args_by_value(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8)> {
         let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
         for (arg, r) in args.iter().zip(&regs) {
@@ -2482,14 +2571,7 @@ impl<'src> Compiler<'src> {
             cur = array;
         }
         dims.reverse();
-        let Expr::Variable { name, .. } = cur else {
-            return Err(self.unsupported(cur.span(), "this array write"));
-        };
-        let text = self.text(*name);
-        if !text.starts_with(b"$") || text == b"$this" {
-            return Err(self.unsupported(cur.span(), "this array write"));
-        }
-        let var = f.cv(&text[1..]);
+        let var = self.dim_root(f, cur)?;
         let append = dims.last().is_some_and(|d| d.is_none());
         if dims[..dims.len() - usize::from(append)].iter().any(|d| d.is_none()) {
             return Err(self.unsupported(e.span(), "[] before the last dimension"));
@@ -2507,6 +2589,86 @@ impl<'src> Compiler<'src> {
         }
         let keys = regs.first().copied().unwrap_or_else(|| f.temp());
         Ok((var, keys, regs.len() as u8, append))
+    }
+
+    /// `${'name'}` is `$name`, a compiled variable (not `$this`).
+    fn literal_var(&self, f: &mut FnBuilder, name: &Expr) -> Option<Reg> {
+        match self.literal(name) {
+            Some(Frozen::Str(s)) if s.as_bytes() != b"this" => Some(f.cv(s.as_bytes())),
+            _ => None,
+        }
+    }
+
+    /// `$$name`: a temporary holding a reference to the variable it names.
+    fn var_ref(&mut self, f: &mut FnBuilder, name: &Expr) -> Result<Reg> {
+        if let Some(cv) = self.literal_var(f, name) {
+            return Ok(cv);
+        }
+        let n = self.expr(f, name)?;
+        let dst = f.temp();
+        f.emit(Instr::rare(Rare::VarRef, dst, n, 0, 0));
+        Ok(dst)
+    }
+
+    /// `$$name` read (quietly for isset and ??).
+    fn var_get(&mut self, f: &mut FnBuilder, name: &Expr, quiet: bool) -> Result<Reg> {
+        if let Some(cv) = self.literal_var(f, name) {
+            if quiet {
+                return Ok(cv);
+            }
+            let dst = f.temp();
+            f.emit(Instr::Move { dst, src: cv });
+            return Ok(dst);
+        }
+        let n = self.expr(f, name)?;
+        let dst = f.temp();
+        f.emit(Instr::rare(Rare::VarGet, dst, n, Reg::from(quiet), 0));
+        Ok(dst)
+    }
+
+    /// Whether a call's name is a builtin function's (which cannot be redeclared).
+    fn is_builtin(&self, func: &Expr) -> bool {
+        let Expr::Variable { name, .. } = func else { return false };
+        let text = self.text(*name);
+        if text.starts_with(b"$") {
+            return false;
+        }
+        let (full, fallback) = self.ns_name(text, &self.use_functions, true);
+        let name = fallback.unwrap_or(full).to_ascii_lowercase();
+        self.registry.lookup(&name).is_some()
+    }
+
+    /// The register a dimension write starts from: a variable, or a
+    /// temporary holding `$this`, a reference to a static property, or a
+    /// call's result (written to and dropped, unless it is an object).
+    fn dim_root(&mut self, f: &mut FnBuilder, root: &Expr) -> Result<Reg> {
+        match root {
+            Expr::Variable { name, .. } if self.text(*name) == b"$this" => {
+                let dst = f.temp();
+                f.emit(Instr::This { dst });
+                Ok(dst)
+            }
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => Ok(f.cv(&self.text(*name)[1..])),
+            Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                let class = self.class_ref(f, class)?;
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let dst = f.temp();
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
+                Ok(dst)
+            }
+            Expr::Call { func, .. } if self.is_builtin(func) => {
+                Err(CompileError { message: "Cannot use result of built-in function in write context".into(), line: self.line(root.span()) })
+            }
+            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => {
+                let r = self.expr(f, root)?;
+                let dst = f.temp();
+                f.emit(Instr::Move { dst, src: r });
+                Ok(dst)
+            }
+            Expr::IndirectVariable { name, .. } => self.var_ref(f, name),
+            Expr::Variable { .. } => Err(self.unsupported(root.span(), "this array write")),
+            _ => Err(CompileError { message: "Cannot use temporary expression in write context".into(), line: self.line(root.span()) }),
+        }
     }
 
     /// Compile `e` into exactly `dst`, a temporary (never a variable: a
@@ -2591,6 +2753,19 @@ impl<'src> Compiler<'src> {
                     f.emit(if src >> KIND_SHIFT == TEMP { Instr::AssignTake { var: target, src } } else { Instr::Assign { var: target, src } });
                     target
                 }
+                Expr::IndirectVariable { name, .. } => {
+                    let target = self.var_ref(f, name)?;
+                    let src = self.expr(f, expr)?;
+                    f.emit(Instr::Assign { var: target, src });
+                    target
+                }
+                Expr::ArrayDimFetch { .. } if has_inner_append(var) => {
+                    let val = self.expr(f, expr)?;
+                    let dst = f.temp();
+                    f.emit(Instr::Move { dst, src: val });
+                    self.assign_from(f, var, val)?;
+                    dst
+                }
                 Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
                     let (base, n, append) = self.prop_dim_path(f, var)?;
                     let val = self.expr(f, expr)?;
@@ -2670,6 +2845,22 @@ impl<'src> Compiler<'src> {
                         let src = self.expr(f, expr)?;
                         f.emit(Instr::AssignOp { op: bin, var: target, src });
                         target
+                    }
+                    Expr::IndirectVariable { name, .. } => {
+                        let target = self.var_ref(f, name)?;
+                        let src = self.expr(f, expr)?;
+                        f.emit(Instr::AssignOp { op: bin, var: target, src });
+                        target
+                    }
+                    // `$a[] op= v` appends `null op v`.
+                    Expr::ArrayDimFetch { dim: None, .. } => {
+                        let val = self.expr(f, expr)?;
+                        let null = f.temp();
+                        f.emit(Instr::LoadNull { dst: null });
+                        let dst = f.temp();
+                        f.emit(Instr::Binary { op: bin, dst, a: null, b: val });
+                        self.assign_from(f, var, dst)?;
+                        dst
                     }
                     Expr::ArrayDimFetch { dim: Some(_), .. } if !dim_root_is_prop(var) => {
                         let val = self.expr(f, expr)?;
@@ -3070,12 +3261,14 @@ impl<'src> Compiler<'src> {
             }
             Expr::MethodCall { target, method, args, .. } => {
                 let obj = self.expr(f, target)?;
-                let Expr::Variable { name, .. } = method else {
-                    return Err(self.unsupported(method.span(), "a method name in an expression"));
+                let text = match method {
+                    Expr::Variable { name, .. } => self.text(*name),
+                    _ => b"$",
                 };
-                let text = self.text(*name);
                 if text.starts_with(b"$") {
-                    return Err(self.unsupported(method.span(), "a method name in a variable"));
+                    // `$o->$m()`: the callable [$o, $m].
+                    let m = self.expr(f, method)?;
+                    return self.call_pair(f, obj, m, args);
                 }
                 let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
                 let (base, argc) = self.args_by_value(f, args)?;
@@ -3096,14 +3289,28 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
                 base
             }
-            Expr::StaticCall { class, method, args, .. } => {
-                let class = self.class_ref(f, class)?;
-                let Expr::Variable { name, .. } = method else {
-                    return Err(self.unsupported(method.span(), "a method name in an expression"));
+            Expr::StaticCall { class: class_expr, method, args, .. } => {
+                let class = self.class_ref(f, class_expr)?;
+                let text = match method {
+                    Expr::Variable { name, .. } => self.text(*name),
+                    _ => b"$",
                 };
-                let text = self.text(*name);
                 if text.starts_with(b"$") {
-                    return Err(self.unsupported(method.span(), "a method name in a variable"));
+                    // `C::$m()`: the callable [C::class, $m].
+                    let name = match &f.classes[class as usize] {
+                        ClassRef::Named(_, display) | ClassRef::Forward(_, display) => {
+                            let display = display.clone();
+                            f.constant(Frozen::Str(display))
+                        }
+                        _ => {
+                            let dst = f.temp();
+                            let class_const = f.constant(Frozen::Str(Text::from("class")));
+                            f.emit(Instr::ClassConst { dst, class, name: class_const });
+                            dst
+                        }
+                    };
+                    let m = self.expr(f, method)?;
+                    return self.call_pair(f, name, m, args);
                 }
                 let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
                 let (base, argc) = self.args_by_value(f, args)?;
@@ -3174,7 +3381,7 @@ impl<'src> Compiler<'src> {
                             let var = f.cv(&self.text(*name)[1..]);
                             f.emit(Instr::IssetVar { dst, var });
                         }
-                        Expr::ArrayDimFetch { dim: Some(_), .. } if !dim_root_is_prop(v) => {
+                        Expr::ArrayDimFetch { dim: Some(_), .. } if dim_root_is_var(self, v) => {
                             let (var, keys, n, _) = self.dim_path(f, v)?;
                             f.emit(Instr::IssetDim { dst, var, keys, n });
                         }
@@ -3194,6 +3401,10 @@ impl<'src> Compiler<'src> {
                             let arr = self.quiet(f, array)?;
                             let key = self.expr(f, dim)?;
                             f.emit(Instr::IssetDim { dst, var: arr, keys: key, n: 1 });
+                        }
+                        Expr::IndirectVariable { name, .. } => {
+                            let var = self.var_get(f, name, true)?;
+                            f.emit(Instr::IssetVar { dst, var });
                         }
                         other => return Err(self.unsupported(other.span(), "this isset")),
                     }
@@ -3332,6 +3543,7 @@ impl<'src> Compiler<'src> {
                 }
                 f.constant(Frozen::Null)
             }
+            Expr::IndirectVariable { name, .. } => self.var_get(f, name, false)?,
             other => return Err(self.unsupported(other.span(), &format!("this expression ({})", kind(other)))),
         })
     }
@@ -3339,6 +3551,7 @@ impl<'src> Compiler<'src> {
     fn inc_target(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
         match e {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => Ok(f.cv(&self.text(*name)[1..])),
+            Expr::IndirectVariable { name, .. } => self.var_ref(f, name),
             other => Err(self.unsupported(other.span(), "++/-- on this")),
         }
     }
@@ -3461,6 +3674,7 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: true });
                 Ok(dst)
             }
+            Expr::IndirectVariable { name, .. } => self.var_get(f, name, true),
             _ => self.expr(f, e),
         }
     }
@@ -3553,13 +3767,29 @@ impl<'src> Compiler<'src> {
                     let var = f.cv(&self.text(*name)[1..]);
                     f.emit(Instr::SendVar { site, n: n as u8, arg: *r, var });
                 }
-                // An array element passed by reference becomes one.
-                Expr::ArrayDimFetch { .. } if modes[n] == Some(true) && !dim_root_is_prop(arg.value) => {
-                    let (root, keys, count, append) = self.dim_path(f, arg.value)?;
-                    f.emit(Instr::RefDim { var: *r, root, keys, n: count, append });
+                Expr::IndirectVariable { name, .. } if modes[n] != Some(false) => {
+                    let nm = self.expr(f, name)?;
+                    f.emit(Instr::rare(Rare::VarRef, *r, nm, 0, 0));
                 }
-                Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. } if modes[n] == Some(true) => {
-                    return Err(self.unsupported(arg.span, "passing this argument by reference"));
+                // An array element or property passed by reference becomes one.
+                Expr::ArrayDimFetch { .. } if modes[n] == Some(true) => {
+                    let (root, keys, count, append, held) = self.ref_dim_path(f, arg.value)?;
+                    f.emit(Instr::RefDim { var: *r, root, keys, n: count, append });
+                    if let Some(h) = held {
+                        f.emit(Instr::Free { reg: h });
+                    }
+                }
+                Expr::PropertyFetch { target, property, .. } if modes[n] == Some(true) => {
+                    let obj = self.expr(f, target)?;
+                    let name = self.prop_name(f, property)?;
+                    f.emit(Instr::rare(Rare::PropRef, *r, obj, name, 0));
+                }
+                Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. }
+                    if modes[n] == Some(true) && self.text(*name).starts_with(b"$") =>
+                {
+                    let class = self.class_ref(f, class)?;
+                    let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                    f.emit(Instr::rare(Rare::StaticRef, *r, name, 0, class));
                 }
                 value => self.expr_into(f, value, *r)?,
             }

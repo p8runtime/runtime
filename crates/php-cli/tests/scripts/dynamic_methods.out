@@ -1,0 +1,17 @@
+int(1)
+int(11)
+int(3)
+string(6) "made 3"
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(6)
+  [2]=>
+  int(7)
+}
+string(6) "secret"
+int(8)
+Call to private method A::secret() from global scope
+Call to undefined method A::nope()
+string(6) "made 9"
