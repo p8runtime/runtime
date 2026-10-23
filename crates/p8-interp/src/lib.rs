@@ -454,6 +454,8 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::YieldFrom { .. }
                 | Instr::Unsilence { .. }
                 | Instr::New { .. }
+                | Instr::Construct { .. }
+                | Instr::ConstructSpread { .. }
                 | Instr::This { .. }
                 | Instr::FetchProp { .. }
                 | Instr::AssignProp { .. }
@@ -1890,14 +1892,36 @@ impl Context<'_> {
                     };
                     self.unpack_into(w, arr, items)?;
                 }
-                Instr::New { dst, class, base: args, argc } => {
-                    let class = self.class_of(func, class)?;
+                Instr::New { dst, class } => {
+                    let class = self.class_of(func, class, w)?;
                     let (object, ctor) = {
                         let read = |i: usize| if i < base { below[i].clone() } else { w[i - base].clone() };
                         self.instantiate(&read, class)?
                     };
+                    // Construct finds the constructor again, after the arguments.
+                    drop(ctor);
                     reg!(dst) = Value::Object(object);
-                    match ctor {
+                }
+                Instr::ConstructSpread { obj, args } => {
+                    let Value::Object(object) = reg!(obj).clone() else { unreachable!("ConstructSpread follows New") };
+                    let list: Vec<Value> = match self.operand(w, func, args) {
+                        Value::Array(a) => a.values().map(Value::deref).collect(),
+                        _ => Vec::new(),
+                    };
+                    let Some(m) = self.constructor(&object) else { return Ok(Next::Go(pc)) };
+                    let at = base + func.nregs as usize;
+                    if regs.len() < at + list.len() + 1 {
+                        regs.resize(at + list.len() + 1, Value::Undef);
+                    }
+                    let argc = list.len() as u8;
+                    for (i, v) in list.into_iter().enumerate() {
+                        regs[at + i] = v;
+                    }
+                    return self.call_method(regs, m, at, argc, NO_RET, pc);
+                }
+                Instr::Construct { obj, base: args, argc } => {
+                    let Value::Object(object) = reg!(obj).clone() else { unreachable!("Construct follows New") };
+                    match self.constructor(&object) {
                         Some(m) => return self.call_method(regs, m, base + args as usize, argc, NO_RET, pc),
                         None => {
                             for r in &mut w[args as usize..args as usize + argc as usize] {
@@ -1976,16 +2000,16 @@ impl Context<'_> {
                 }
                 Instr::StaticCall { dst, class, method, base: args, argc } => {
                     let site = &func.sites[method as usize];
-                    let m = self.static_frame(func, class, site.name.as_bytes(), site.display.as_bytes())?;
+                    let m = self.static_frame(func, class, site.name.as_bytes(), site.display.as_bytes(), w)?;
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::ClassConst { dst, class, name } => {
                     let name = reg!(name).clone();
-                    reg!(dst) = self.class_constant(func, class, &name)?;
+                    reg!(dst) = self.class_constant(func, class, &name, w)?;
                 }
                 Instr::FetchStaticProp { dst, class, name } => {
                     let name = reg!(name).clone();
-                    let cell = self.static_cell(func, class, &name)?;
+                    let cell = self.static_cell(func, class, &name, w)?;
                     let v = match cell.borrow().deref() {
                         Value::Undef => Value::Null,
                         v => v,
@@ -1994,14 +2018,14 @@ impl Context<'_> {
                 }
                 Instr::AssignStaticProp { class, name, val, dst } => {
                     let name = reg!(name).clone();
-                    let cell = self.static_cell(func, class, &name)?;
+                    let cell = self.static_cell(func, class, &name, w)?;
                     let v = self.operand(w, func, val);
                     store(&cell, v.clone());
                     reg!(dst) = v;
                 }
                 Instr::AssignStaticPropOp { op, class, name, val, dst } => {
                     let name = reg!(name).clone();
-                    let cell = self.static_cell(func, class, &name)?;
+                    let cell = self.static_cell(func, class, &name, w)?;
                     let y = self.operand(w, func, val);
                     let x = cell.borrow().deref();
                     let r = ops::binary(op, &x, &y, &mut self.diags);
@@ -2012,7 +2036,7 @@ impl Context<'_> {
                 }
                 Instr::InstanceOf { dst, src, class } => {
                     let v = self.operand(w, func, src);
-                    reg!(dst) = Value::Bool(self.instance_of(func, &v, class));
+                    reg!(dst) = Value::Bool(self.instance_of(func, &v, class, w));
                 }
                 Instr::Clone { dst, src } => {
                     let v = self.operand(w, func, src);
@@ -2031,7 +2055,7 @@ impl Context<'_> {
                     });
                 }
                 Instr::CatchIf { src, class, target } => {
-                    if self.instance_of(func, &reg!(src), class) {
+                    if self.instance_of(func, &reg!(src), class, w) {
                         pc = target as usize;
                     }
                 }

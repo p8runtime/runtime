@@ -212,9 +212,15 @@ pub enum Instr {
     FromCallable { dst: Reg, src: Reg },
     /// `include`, `require` (and `_once`): dst gets the file's result.
     Include { dst: Reg, src: Reg, kind: IncludeKind },
-    /// `new C(args)`: dst gets the new object; its constructor runs with
-    /// the `argc` arguments at `base`.
-    New { dst: Reg, class: u16, base: Reg, argc: u8 },
+    /// `new C(args)`, first half: dst gets the new object, made before the
+    /// arguments are evaluated (as PHP numbers objects).
+    New { dst: Reg, class: u16 },
+    /// `new C(args)`, second half: the constructor of the object in `obj`
+    /// runs with the `argc` arguments at `base`.
+    Construct { obj: Reg, base: Reg, argc: u8 },
+    /// `new C(...$xs)`: the constructor of the object in `obj` runs with
+    /// the arguments in the array `args`.
+    ConstructSpread { obj: Reg, args: Reg },
     /// `$this`
     This { dst: Reg },
     /// `$obj->name` (`quiet`: for isset/??, no warning when missing)
@@ -386,6 +392,9 @@ pub enum ClassRef {
     /// known when the code runs (forwarding, as `self::` does).
     Scope,
     ParentScope,
+    /// `$x::`, `new $x`: the class named by the string in a register, or
+    /// that object's class.
+    Dynamic(Reg),
 }
 
 impl ClassRef {
@@ -393,7 +402,7 @@ impl ClassRef {
     pub fn lower(&self) -> Option<&Text> {
         match self {
             ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => Some(lower),
-            ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope => None,
+            ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope | ClassRef::Dynamic(_) => None,
         }
     }
 }

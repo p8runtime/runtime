@@ -166,6 +166,7 @@ impl FnBuilder<'_> {
             ClassRef::Static => b"static".to_vec(),
             ClassRef::Scope => b"scope".to_vec(),
             ClassRef::ParentScope => b"parent scope".to_vec(),
+            ClassRef::Dynamic(r) => format!("dynamic:{r}").into_bytes(),
         };
         let next = self.classes.len() as u16;
         let i = *self.class_index.entry(key).or_insert(next);
@@ -267,6 +268,11 @@ impl FnBuilder<'_> {
         }
         for s in &mut self.silences {
             s.2 = map(s.2);
+        }
+        for c in &mut self.classes {
+            if let ClassRef::Dynamic(r) = c {
+                *r = map(*r);
+            }
         }
         fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
@@ -506,7 +512,16 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *dst = f(*dst);
             *src = f(*src);
         }
-        New { dst, base, .. } | StaticCall { dst, base, .. } => {
+        New { dst, .. } => *dst = f(*dst),
+        Construct { obj, base, .. } => {
+            *obj = f(*obj);
+            *base = f(*base);
+        }
+        ConstructSpread { obj, args } => {
+            *obj = f(*obj);
+            *args = f(*args);
+        }
+        StaticCall { dst, base, .. } => {
             *dst = f(*dst);
             *base = f(*base);
         }
@@ -694,6 +709,8 @@ pub struct Compiler<'src> {
     use_classes: HashMap<Vec<u8>, Vec<u8>>,
     use_functions: HashMap<Vec<u8>, Vec<u8>>,
     use_consts: HashMap<Vec<u8>, Vec<u8>>,
+    /// Anonymous classes declared so far (each one's name ends with its number).
+    anonymous: u32,
 }
 
 /// The class being compiled.
@@ -727,6 +744,7 @@ impl<'src> Compiler<'src> {
             use_classes: HashMap::new(),
             use_functions: HashMap::new(),
             use_consts: HashMap::new(),
+            anonymous: 0,
         }
     }
 
@@ -1176,17 +1194,21 @@ impl<'src> Compiler<'src> {
                 }
             }
             Stmt::Class { modifiers, name, extends, implements, members, .. } => {
-                self.class_decl(f, name.span, modifiers, extends.as_ref(), implements, members, 0)?;
+                let (display, line) = self.declared_name(name.span);
+                self.class_decl(f, display, line, modifiers, extends.as_ref(), implements, members, 0)?;
             }
             Stmt::Interface { name, extends, members, .. } => {
-                self.class_decl(f, name.span, &[], None, extends, members, CLASS_INTERFACE)?;
+                let (display, line) = self.declared_name(name.span);
+                self.class_decl(f, display, line, &[], None, extends, members, CLASS_INTERFACE)?;
             }
             Stmt::Trait { name, members, .. } => {
-                self.class_decl(f, name.span, &[], None, &[], members, CLASS_TRAIT)?;
+                let (display, line) = self.declared_name(name.span);
+                self.class_decl(f, display, line, &[], None, &[], members, CLASS_TRAIT)?;
             }
             Stmt::Enum { name, backed_type, implements, members, .. } => {
                 self.enum_backing = backed_type.map(|t| Text::from(type_text(self, t).to_ascii_lowercase().as_slice()));
-                self.class_decl(f, name.span, &[], None, implements, members, CLASS_ENUM | CLASS_FINAL)?;
+                let (display, line) = self.declared_name(name.span);
+                self.class_decl(f, display, line, &[], None, implements, members, CLASS_ENUM | CLASS_FINAL)?;
             }
             Stmt::Nop { .. } => {}
             other => return Err(self.unsupported(other.span(), &format!("this statement ({})", kind(other)))),
@@ -1567,21 +1589,64 @@ impl<'src> Compiler<'src> {
         Text::from(format!("{{closure:{place}:{line}}}").as_bytes())
     }
 
+    /// A declared class's name in the current namespace, and its line.
+    fn declared_name(&self, name: Span) -> (Text, u32) {
+        (Text::from(join(&self.ns, self.text(name)).as_slice()), self.line(name))
+    }
+
+    /// `new class(args) { ... }`: declare the class (once; PHP names it
+    /// "class@anonymous", or after its parent, then a NUL, where it is),
+    /// and make one.
+    fn anonymous_class(&mut self, f: &mut FnBuilder, class: &Expr, args: &[p8_syntax::ast::Arg], hint: Option<Reg>) -> Result<Reg> {
+        let Expr::AnonymousClass { modifiers, extends, implements, members, span, .. } = class else { unreachable!("an anonymous class") };
+        let line = self.line(*span);
+        let base = match extends {
+            Some(n) => self.class_name(self.text(n.span)),
+            None => b"class".to_vec(),
+        };
+        let name = [base.as_slice(), b"@anonymous\0", self.file.as_bytes(), format!(":{line}${:x}", self.anonymous).as_bytes()].concat();
+        self.anonymous += 1;
+        let display = Text::from(name.as_slice());
+        // Its methods are compiled in the middle of this function's code.
+        let method = self.method.take();
+        let promoted = std::mem::take(&mut self.promoted);
+        let declared = self.class_decl(f, display.clone(), line, modifiers, extends.as_ref(), implements, members, 0);
+        self.method = method;
+        self.promoted = promoted;
+        let def = declared?;
+        // Declared when the expression runs, not before the file does.
+        self.classes.retain(|c| !Arc::ptr_eq(c, &def));
+        let class = f.class_ref(ClassRef::Named(Text::from(name.to_ascii_lowercase().as_slice()), display));
+        let dst = match hint {
+            Some(h) if h >> KIND_SHIFT == TEMP => h,
+            _ => f.temp(),
+        };
+        f.emit(Instr::New { dst, class });
+        if args.iter().any(|a| a.unpack) {
+            let list = self.spread_list(f, args)?;
+            f.emit(Instr::ConstructSpread { obj: dst, args: list });
+        } else {
+            let (base, argc) = self.args_by_value(f, args)?;
+            f.emit(Instr::Construct { obj: dst, base, argc });
+        }
+        Ok(dst)
+    }
+
     /// A class or interface declaration: compiled once, linked per request.
     #[allow(clippy::too_many_arguments)] // one per part of the declaration's syntax
     fn class_decl(
         &mut self,
         f: &mut FnBuilder,
-        name: Span,
+        display: Text,
+        line: u32,
         modifiers: &[p8_syntax::lexer::token::Token],
         extends: Option<&p8_syntax::ast::Name>,
         implements: &[p8_syntax::ast::Name],
         members: &[p8_syntax::ast::ClassMember],
         class_kind: u32,
-    ) -> Result<()> {
+    ) -> Result<Arc<ClassDef>> {
         use p8_syntax::ast::{ClassMember, TraitAdaptation};
         let interface = class_kind == CLASS_INTERFACE;
-        let display = Text::from(join(&self.ns, self.text(name)).as_slice());
         let name_of = |c: &Self, n: &p8_syntax::ast::Name| Text::from(c.class_name(c.text(n.span)).as_slice());
         let (parent, interfaces) = if interface {
             (None, extends.iter().map(|n| name_of(self, n)).chain(implements.iter().map(|n| name_of(self, n))).collect())
@@ -1689,12 +1754,12 @@ impl<'src> Compiler<'src> {
             }
         }
         self.scope = saved;
-        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line: self.line(name) };
+        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line };
         let def = Arc::new(def);
         self.classes.push(Arc::clone(&def));
-        f.decls.push(def);
+        f.decls.push(Arc::clone(&def));
         f.emit(Instr::DeclareClass { class: (f.decls.len() - 1) as u16 });
-        Ok(())
+        Ok(def)
     }
 
     /// A constant expression in a declaration (a property default, a class
@@ -1731,13 +1796,14 @@ impl<'src> Compiler<'src> {
     /// The index of the class a name expression names: `self` and
     /// `parent` resolved now, `static` when the code runs.
     fn class_ref(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<u16> {
-        let Expr::Variable { name, .. } = e else {
-            return Err(self.unsupported(e.span(), "a class name in an expression"));
+        let name = match e {
+            Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => name,
+            _ => {
+                let r = self.expr(f, e)?;
+                return Ok(f.class_ref(ClassRef::Dynamic(r)));
+            }
         };
         let text = self.text(*name);
-        if text.starts_with(b"$") {
-            return Err(self.unsupported(e.span(), "a class name in a variable"));
-        }
         let text = text.strip_prefix(b"\\").unwrap_or(text);
         let line = self.line(*name);
         let no_scope = |word: &str| CompileError { message: format!("Cannot use \"{word}\" when no class scope is active"), line };
@@ -1791,6 +1857,14 @@ impl<'src> Compiler<'src> {
     /// A call with `...$spread` arguments: the arguments as one list,
     /// and `callee` called on it.
     fn spread_call(&mut self, f: &mut FnBuilder, callee: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
+        let list = self.spread_list(f, args)?;
+        let dst = f.temp();
+        f.emit(Instr::CallSpread { dst, callee, args: list });
+        Ok(dst)
+    }
+
+    /// The arguments of a call with `...` in it, as one array.
+    fn spread_list(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
         let list = f.temp();
         f.emit(Instr::NewArray { dst: list });
         for arg in args {
@@ -1800,9 +1874,7 @@ impl<'src> Compiler<'src> {
             let v = self.expr(f, arg.value)?;
             f.emit(if arg.unpack { Instr::ArrayUnpack { arr: list, src: v } } else { Instr::ArrayPush { arr: list, val: v } });
         }
-        let dst = f.temp();
-        f.emit(Instr::CallSpread { dst, callee, args: list });
-        Ok(dst)
+        Ok(list)
     }
 
     fn args_by_value(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8)> {
@@ -2354,6 +2426,7 @@ impl<'src> Compiler<'src> {
                 f.patch_all(ends, f.here());
                 dst
             }
+            Expr::New { class, args, .. } if matches!(class, Expr::AnonymousClass { .. }) => self.anonymous_class(f, class, args, hint)?,
             Expr::New { class, args, .. } => {
                 let class = self.class_ref(f, class)?;
                 // The result's register is below the arguments: the
@@ -2364,8 +2437,14 @@ impl<'src> Compiler<'src> {
                     Some(h) if h >> KIND_SHIFT == TEMP => h,
                     _ => f.temp(),
                 };
-                let (base, argc) = self.args_by_value(f, args)?;
-                f.emit(Instr::New { dst, class, base, argc });
+                f.emit(Instr::New { dst, class });
+                if args.iter().any(|a| a.unpack) {
+                    let list = self.spread_list(f, args)?;
+                    f.emit(Instr::ConstructSpread { obj: dst, args: list });
+                } else {
+                    let (base, argc) = self.args_by_value(f, args)?;
+                    f.emit(Instr::Construct { obj: dst, base, argc });
+                }
                 dst
             }
             Expr::PropertyFetch { target, property, .. } => {

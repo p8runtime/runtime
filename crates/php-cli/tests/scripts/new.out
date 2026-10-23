@@ -1,0 +1,79 @@
+B ctor
+A ctor
+object(A)#1 (0) {
+}
+f called
+object(C)#1 (0) {
+}
+Call to private P::__construct() from global scope
+Cannot instantiate abstract class Q
+313
+object(D)#1 (1) {
+  ["v"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+B ctor
+object(B)#1 (0) {
+}
+object(class@anonymous)#3 (1) {
+  ["n"]=>
+  int(5)
+}
+object(class@anonymous)#3 (1) {
+  ["n"]=>
+  int(5)
+}
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+object(P2@anonymous)#5 (1) {
+  ["p"]=>
+  string(2) "pp"
+}
+long
+class@anonymous P2@anonymous
+class@anonymous Object
+(
+    [n] => 5
+)
+
+int(3)
+bool(true)
+Call to undefined method class@anonymous::nope()
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+B ctor
+object(N\B)#7 (0) {
+}
+B ctor
+string(1) "k"
+string(3) "N\C"
+string(3) "N\B"
+int(1)
+int(1)
+int(5)
+B ctor
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+B ctor
+string(3) "N\C"
+B ctor
+object(N\B)#3 (0) {
+}
+Class name must be a valid object or a string
+Class "Nope" not found
+Class name must be a valid object or a string
