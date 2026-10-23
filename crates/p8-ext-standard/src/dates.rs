@@ -394,6 +394,8 @@ struct Parsed {
     weekday: Option<(u32, i64)>,
     first_last_day: Option<bool>,
     zone: Option<Zone>,
+    /// How the text named its zone: (DateTime's timezone_type, name).
+    zone_label: Option<(i64, String)>,
     stamp: Option<i64>,
     reset_time: bool,
 }
@@ -515,6 +517,11 @@ fn parse(text: &str) -> Option<Parsed> {
             }
             "utc" | "gmt" | "z" | "zulu" => {
                 p.zone = Some(Zone::Fixed(0));
+                p.zone_label = Some(match l.as_str() {
+                    "utc" => (3, "UTC".into()),
+                    "gmt" => (2, "GMT".into()),
+                    _ => (2, "Z".into()),
+                });
                 continue;
             }
             "est" | "edt" | "cst" | "cdt" | "mst" | "mdt" | "pst" | "pdt" | "cet" | "cest" | "bst" => {
@@ -530,6 +537,7 @@ fn parse(text: &str) -> Option<Parsed> {
                     _ => 2,
                 };
                 p.zone = Some(Zone::Fixed(h * 3600));
+                p.zone_label = Some((2, t.to_ascii_uppercase()));
                 continue;
             }
             "first" | "last" if next.as_deref() == Some("day") && toks.get(i + 1).is_some_and(|x| lower(x) == "of") => {
@@ -630,12 +638,18 @@ fn parse(text: &str) -> Option<Parsed> {
             };
             let off = (h * 3600 + m * 60) * if t.starts_with('-') { -1 } else { 1 };
             p.zone = Some(Zone::Fixed(off));
+            p.zone_label = Some((1, fixed_name(off, true)));
             continue;
         }
         if t.contains(':') && !t.contains('-') && !t.contains('T') && !t.contains('t') {
             let (clock, zone) = split_zone(&t);
             p.time = Some(parse_time_text(clock)?);
             if let Some(z) = zone {
+                p.zone_label = Some(match z {
+                    Zone::Fixed(0) if clock.len() < t.len() && t.ends_with(['Z', 'z']) => (2, "Z".into()),
+                    Zone::Fixed(o) => (1, fixed_name(o, true)),
+                    Zone::Named(tz) => (3, tz.name().to_string()),
+                });
                 p.zone = Some(z);
             }
             continue;
@@ -664,6 +678,11 @@ fn parse(text: &str) -> Option<Parsed> {
                 let (clock, zone) = split_zone(tp);
                 p.time = Some(parse_time_text(clock)?);
                 if let Some(z) = zone {
+                    p.zone_label = Some(match z {
+                        Zone::Fixed(0) if tp.ends_with(['Z', 'z']) => (2, "Z".into()),
+                        Zone::Fixed(o) => (1, fixed_name(o, true)),
+                        Zone::Named(tz) => (3, tz.name().to_string()),
+                    });
                     p.zone = Some(z);
                 }
             } else {
@@ -687,11 +706,13 @@ fn parse(text: &str) -> Option<Parsed> {
             };
             let off = (h * 3600 + m * 60) * if t.starts_with('-') { -1 } else { 1 };
             p.zone = Some(Zone::Fixed(off));
+            p.zone_label = Some((1, fixed_name(off, true)));
             continue;
         }
         // A zone name (Europe/Paris).
         if let Ok(tz) = t.parse::<Tz>() {
             p.zone = Some(Zone::Named(tz));
+            p.zone_label = Some((3, tz.name().to_string()));
             continue;
         }
         // A bare year after a date.
@@ -733,9 +754,22 @@ fn split_zone(t: &str) -> (&str, Option<Zone>) {
 
 /// strtotime's result for `text`, relative to `base` in `zone`.
 pub(crate) fn resolve(text: &str, base: i64, zone: Zone) -> Option<i64> {
+    resolve_zone(text, base, zone).map(|(ts, _)| ts)
+}
+
+/// A zone a text names: the zone, its PHP timezone_type, and its label.
+pub(crate) type NamedZone = (Zone, i64, String);
+
+/// The moment `text` names, and the zone it named (if any): its Zone,
+/// DateTime's timezone_type and its name.
+pub(crate) fn resolve_zone(text: &str, base: i64, zone: Zone) -> Option<(i64, Option<NamedZone>)> {
     let p = parse(text)?;
+    let named = match (p.zone, &p.zone_label) {
+        (Some(z), Some((t, n))) => Some((z, *t, n.clone())),
+        _ => None,
+    };
     if let Some(ts) = p.stamp {
-        return Some(ts + p.rel[2] * 86400 + p.rel[3] * 3600 + p.rel[4] * 60 + p.rel[5]);
+        return Some((ts + p.rel[2] * 86400 + p.rel[3] * 3600 + p.rel[4] * 60 + p.rel[5], Some(named.unwrap_or((Zone::Fixed(0), 1, "+00:00".into())))));
     }
     let zone = p.zone.unwrap_or(zone);
     let now = zone.at(base).dt;
@@ -775,7 +809,7 @@ pub(crate) fn resolve(text: &str, base: i64, zone: Zone) -> Option<i64> {
         }
         dt += chrono::Duration::days(diff);
     }
-    Some(zone.timestamp(dt))
+    Some((zone.timestamp(dt), named))
 }
 
 /// strtotime(string $datetime, ?int $baseTimestamp = null)

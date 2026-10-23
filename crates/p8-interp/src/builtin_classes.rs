@@ -130,7 +130,7 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
     ("__toString", Some(to_string), false),
 ];
 
-pub(crate) fn build() -> Classes {
+pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
     let mut c = Classes::new();
     declare(&mut c, "stdClass", 0, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
@@ -227,6 +227,46 @@ pub(crate) fn build() -> Classes {
         ("JsonException", "Exception"),
     ] {
         declare(&mut c, name, 0, Some(parent), &[], Vec::new(), &[]);
+    }
+    // The extensions' classes, after the core ones.
+    for spec in registry.classes() {
+        let props = spec.properties.iter().map(|(n, d, v)| prop(n, d.to_value(), *v, spec.name, None)).collect();
+        let methods: Vec<(&str, Option<NativeMethod>, bool)> = spec
+            .methods
+            .iter()
+            .filter_map(|(n, m)| match m {
+                Some(Native::Method(f)) => Some((*n, Some(*f), false)),
+                None => Some((*n, None, false)),
+                Some(Native::Static(_)) => None,
+            })
+            .collect();
+        declare(&mut c, spec.name, spec.flags, spec.parent, spec.interfaces, props, &methods);
+        let class = Rc::get_mut(c.get_mut(spec.name.to_ascii_lowercase().as_bytes()).expect("just declared")).expect("not shared yet");
+        class.debug_info = spec.debug_info;
+        for (n, value) in spec.constants {
+            class.constants.insert(
+                n.as_bytes().to_vec(),
+                p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false },
+            );
+        }
+        for (n, m) in spec.methods {
+            if let Some(Native::Static(f)) = m {
+                class.methods.insert(
+                    n.to_ascii_lowercase().into_bytes(),
+                    Method {
+                        name: PhpStr::from(*n),
+                        func: u32::MAX,
+                        native: Some(Native::Static(*f)),
+                        visibility: Visibility::Public,
+                        is_static: true,
+                        is_abstract: false,
+                        is_final: false,
+                        declaring: spec.name.to_ascii_lowercase().into_bytes(),
+                        declaring_name: PhpStr::from(spec.name),
+                    },
+                );
+            }
+        }
     }
     c
 }
