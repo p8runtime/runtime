@@ -102,6 +102,10 @@ pub trait Ctx {
     /// The class `name`, after the autoloaders had their go (an Err of
     /// Throw::Autoload asks the engine to run them and the call again).
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw>;
+    /// The value of `o`'s property at `slot` as `$o->name` reads it here:
+    /// through its get hook (from a builtin marked as reentering); None
+    /// when it has none (unset, or virtual without a get hook).
+    fn prop_value(&mut self, o: &Rc<crate::object::Object>, slot: usize) -> Result<Option<Value>, Throw>;
     /// The class `static::` names in the running code.
     fn called_class(&self) -> Option<Rc<Class>>;
     /// The class a static builtin method (an enum's cases()) was called on.

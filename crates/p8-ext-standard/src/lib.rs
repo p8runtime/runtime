@@ -111,7 +111,7 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(array2::REENTER);
     registry.mark_reenters(info::REENTER);
     registry.unchecked(&["assert"]);
-    registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode"]);
+    registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export"]);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),

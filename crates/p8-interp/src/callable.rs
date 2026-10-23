@@ -40,6 +40,10 @@ pub(crate) enum Target {
     Frame(MethodFrame),
 }
 
+/// The native stack nested PHP calls may use (the CLI's interpreter
+/// thread has 64 MiB).
+const STACK_LIMIT: usize = 48 * 1024 * 1024;
+
 fn text(s: &[u8]) -> String {
     String::from_utf8_lossy(s).into_owned()
 }
@@ -295,6 +299,15 @@ impl Context<'_> {
     }
 
     fn run_nested_at(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value], at: usize) -> Result<Value, Throw> {
+        // Each nested run takes native stack: stop before it runs out.
+        let here = 0u8;
+        let depth = self.stack_base.saturating_sub(std::ptr::addr_of!(here) as usize);
+        if self.stack_base != 0 && depth > STACK_LIMIT {
+            return Err(self.throw(
+                "Error",
+                format!("Maximum call stack size of {STACK_LIMIT} bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"),
+            ));
+        }
         if regs.len() < at + args.len() + 1 {
             regs.resize(at + args.len() + 1, Value::Undef);
         }
