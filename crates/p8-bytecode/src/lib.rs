@@ -161,6 +161,17 @@ pub enum Instr {
     /// reported until `Unsilence` puts it back.
     Silence { saved: Reg },
     Unsilence { saved: Reg },
+    /// A closure of the function's `lambdas[func]`, bound to `$this` and
+    /// the class scope (unless static); its captures follow.
+    MakeClosure { dst: Reg, func: u16, is_static: bool },
+    /// Add a variable to the closure's captured values (`quiet`: an arrow
+    /// function's, undefined ones stay unset without a warning).
+    Capture { closure: Reg, var: Reg, by_ref: bool, quiet: bool },
+    /// Call the value in `callee` (a closure, a callable string or array,
+    /// an invokable object) with the `argc` arguments at `base`.
+    CallValue { dst: Reg, callee: Reg, base: Reg, argc: u8 },
+    /// `f(...)`: a Closure of the callable in `src` (Closure::fromCallable).
+    FromCallable { dst: Reg, src: Reg },
     /// `include`, `require` (and `_once`): dst gets the file's result.
     Include { dst: Reg, src: Reg, kind: IncludeKind },
     /// `new C(args)`: dst gets the new object; its constructor runs with
@@ -442,6 +453,10 @@ pub struct Function {
     pub handlers: Vec<Handler>,
     /// The classes this code declares, in order (`DeclareClass` indexes them).
     pub decls: Vec<Arc<ClassDef>>,
+    /// Closures and arrow functions this code makes (`MakeClosure`).
+    pub lambdas: Vec<Arc<Function>>,
+    /// For a closure: the registers its captured values go into, in order.
+    pub bound: Vec<Reg>,
     /// `@` expressions: (Silence pc, Unsilence pc, the register saving
     /// the level), so an exception leaving one puts the level back.
     pub silences: Vec<(u32, u32, Reg)>,

@@ -1,0 +1,7 @@
+
+Fatal error: Uncaught RuntimeException: cb 1 in %s:2
+Stack trace:
+#0 [internal function]: cb(1)
+#1 %s(3): array_map('cb', Array)
+#2 {main}
+  thrown in %s on line 2

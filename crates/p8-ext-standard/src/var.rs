@@ -343,6 +343,16 @@ struct Entry {
 /// first), then dynamic ones. An unset untyped property is left out.
 fn entries(o: &Object) -> Vec<Entry> {
     let mut list = Vec::new();
+    if let Some(info) = o.class.debug_info {
+        for (k, v) in info(o).iter() {
+            let name = match k {
+                Key::Int(i) => PhpStr::from(i.to_string()),
+                Key::Str(s) => s,
+            };
+            list.push(Entry { name, visibility: Visibility::Public, declaring: PhpStr::empty(), value: Some(v.clone()), ty: None });
+        }
+        return list;
+    }
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         let value = match v {

@@ -8,7 +8,7 @@
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{CLASS_INTERFACE, Class, Method, NativeMethod, Object, Property, Visibility};
+use p8_runtime::object::{CLASS_INTERFACE, Class, Method, Native, NativeMethod, Object, Property, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::collections::HashMap;
@@ -58,7 +58,7 @@ fn declare(
             Method {
                 name: PhpStr::from(*m),
                 func: u32::MAX,
-                native: *native,
+                native: native.map(Native::Method),
                 visibility: Visibility::Public,
                 is_static: false,
                 is_abstract: native.is_none(),
@@ -79,6 +79,7 @@ fn declare(
         methods: table,
         constants: HashMap::new(),
         statics: HashMap::new(),
+        debug_info: None,
     };
     classes.insert(lower, Rc::new(class));
 }
@@ -131,6 +132,25 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
 pub(crate) fn build() -> Classes {
     let mut c = Classes::new();
     declare(&mut c, "stdClass", 0, None, &[], Vec::new(), &[]);
+    declare(
+        &mut c,
+        "Closure",
+        p8_runtime::object::CLASS_FINAL,
+        None,
+        &[],
+        Vec::new(),
+        &[("bindTo", Some(closure_bind_to), false), ("call", Some(closure_call), false), ("__invoke", Some(closure_invoke), false)],
+    );
+    let closure = Rc::get_mut(c.get_mut(b"closure".as_slice()).expect("Closure")).expect("not shared yet");
+    closure.debug_info = Some(crate::callable::debug_info);
+    for (name, f) in [("bind", closure_bind as p8_runtime::object::NativeStatic), ("fromCallable", closure_from_callable)] {
+        let lower = name.to_ascii_lowercase().into_bytes();
+        let mut m = closure.methods[b"bindto".as_slice()].clone();
+        m.name = PhpStr::from(name);
+        m.native = Some(Native::Static(f));
+        m.is_static = true;
+        closure.methods.insert(lower, m);
+    }
     interface(&mut c, "Stringable", &[], &["__toString"]);
     interface(&mut c, "Traversable", &[], &[]);
     interface(&mut c, "Iterator", &["Traversable"], &["current", "next", "key", "valid", "rewind"]);
@@ -183,6 +203,46 @@ pub(crate) fn build() -> Classes {
         declare(&mut c, name, 0, Some(parent), &[], Vec::new(), &[]);
     }
     c
+}
+
+/// Closure::bindTo(?object $newThis, object|string|null $newScope = "static")
+fn closure_bind_to(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let new_this = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let scope = args.get(1).map(Value::deref);
+    ctx.bind_closure(this, new_this, scope)
+}
+
+/// Closure::bind(Closure $closure, ?object $newThis, object|string|null $newScope = "static")
+fn closure_bind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let Some(Value::Object(closure)) = args.first().map(Value::deref) else {
+        return Err(ctx.throw("TypeError", "Closure::bind(): Argument #1 ($closure) must be of type Closure".into()));
+    };
+    let new_this = args.get(1).map(Value::deref).unwrap_or(Value::Null);
+    let scope = args.get(2).map(Value::deref);
+    ctx.bind_closure(&closure, new_this, scope)
+}
+
+/// Closure::call(object $newThis, mixed ...$args): bound to the object
+/// and its class for this one call.
+fn closure_call(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let new_this = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let scope = match &new_this {
+        Value::Object(o) => Value::Str(o.class.name.clone()),
+        _ => Value::Null,
+    };
+    let bound = ctx.bind_closure(this, new_this, Some(scope))?;
+    let rest = if args.is_empty() { &mut [][..] } else { &mut args[1..] };
+    ctx.call(&bound, rest)
+}
+
+fn closure_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    ctx.call(&Value::Object(Rc::clone(this)), args)
+}
+
+/// Closure::fromCallable(callable $callback)
+fn closure_from_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let callable = args.first().map(Value::deref).unwrap_or(Value::Null);
+    ctx.closure_from(&callable)
 }
 
 /// The class Throwable's private properties belong to: Exception or Error.

@@ -3,6 +3,7 @@
 //! one register file, calls resolved once per call site.
 
 mod builtin_classes;
+mod callable;
 mod classes;
 mod include;
 mod throw;
@@ -91,6 +92,9 @@ struct Frames {
     slots: Vec<Frame>,
     /// Frames in use: `slots[..len]`.
     len: usize,
+    /// The frame the running `execute` started at: a call from a builtin
+    /// back into PHP runs its own `execute` above the frames below.
+    floor: usize,
 }
 
 impl Frames {
@@ -149,7 +153,16 @@ impl Frames {
     fn clear(&mut self) {
         self.slots.clear();
         self.len = 0;
+        self.floor = 0;
     }
+}
+
+/// A builtin that is running PHP code (array_map's callback): where it
+/// was called (the frame count then), its name and arguments.
+struct NativeCall {
+    depth: usize,
+    name: &'static str,
+    args: Vec<Value>,
 }
 
 /// What `step` leaves the frame loop to do.
@@ -411,6 +424,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::DeclareClass { .. }
                 | Instr::Include { .. }
                 | Instr::Silence { .. }
+                | Instr::MakeClosure { .. }
+                | Instr::Capture { .. }
+                | Instr::CallValue { .. }
+                | Instr::FromCallable { .. }
                 | Instr::Unsilence { .. }
                 | Instr::New { .. }
                 | Instr::This { .. }
@@ -455,7 +472,8 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 pc = 0;
             }
             // The main frame's return ends the run: `step` does that.
-            Switch::Return(_) | Switch::ReturnNull if frames.len() == 1 => return pc,
+            // The bottom frame of this `execute` returns there: `step` does it.
+            Switch::Return(_) | Switch::ReturnNull if frames.len() == frames.floor + 1 => return pc,
             Switch::Return(src) => {
                 let value = match &regs[base + src as usize] {
                     Value::Undef => return pc,
@@ -750,6 +768,9 @@ impl Isolate {
             loader: None,
             included: std::collections::HashSet::new(),
             ids: Rc::new(Ids::default()),
+            arg_buf: Vec::new(),
+            lambdas: HashMap::new(),
+            natives: Vec::new(),
         }
     }
 }
@@ -796,6 +817,12 @@ pub struct Context<'i> {
     included: std::collections::HashSet<std::path::PathBuf>,
     /// Object ids (handles), reused as PHP reuses them.
     ids: Rc<Ids>,
+    /// A builtin's arguments while it runs (kept for its capacity).
+    arg_buf: Vec<Value>,
+    /// The closure of each function a Closure object runs (by its code).
+    lambdas: HashMap<usize, Rc<Closure>>,
+    /// Builtins running that may call back into PHP, innermost last.
+    natives: Vec<NativeCall>,
 }
 
 impl Context<'_> {
@@ -1041,8 +1068,7 @@ impl Context<'_> {
             if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
                 && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
             {
-                let w = &mut regs[base..base + func.code.nregs as usize];
-                match self.call_builtin(w, i, args, n, dst) {
+                match self.call_builtin(regs, base, i, args, n, dst) {
                     Ok(()) => pc += 1,
                     Err(t) => pc = self.unwind(regs, t, pc)?,
                 }
@@ -1050,10 +1076,12 @@ impl Context<'_> {
             }
             match self.step(regs, &func, base, argc, pc) {
                 Ok(Next::Go(next)) => pc = next,
-                Ok(Next::Switch) => match self.frames.last() {
-                    Some(frame) => pc = frame.pc as usize,
-                    None => return Ok(()),
-                },
+                Ok(Next::Switch) => {
+                    if self.frames.len() == self.frames.floor {
+                        return Ok(());
+                    }
+                    pc = self.frames.last().expect("a frame").pc as usize;
+                }
                 Err(t) => pc = self.unwind(regs, t, pc)?,
             }
         }
@@ -1487,6 +1515,32 @@ impl Context<'_> {
                     let def = Arc::clone(&func.decls[class as usize]);
                     self.declare_class(&def)?;
                 }
+                Instr::MakeClosure { dst, func: i, is_static } => {
+                    let object = self.make_closure(&func.lambdas[i as usize], is_static);
+                    reg!(dst) = Value::Object(object);
+                }
+                Instr::Capture { closure, var, by_ref, quiet } => {
+                    let v = if by_ref {
+                        Value::Ref(make_ref(w, var))
+                    } else if quiet {
+                        reg!(var).deref()
+                    } else {
+                        self.operand(w, func, var)
+                    };
+                    if let Value::Object(o) = &reg!(closure)
+                        && let Some(data) = callable::closure_data(o)
+                    {
+                        data.captured.borrow_mut().push(v);
+                    }
+                }
+                Instr::FromCallable { dst, src } => {
+                    let v = self.operand(w, func, src);
+                    reg!(dst) = self.closure_from_callable(&v)?;
+                }
+                Instr::CallValue { dst, callee, base: args, argc } => {
+                    let target = self.operand(w, func, callee);
+                    return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                }
                 Instr::Silence { saved } => {
                     reg!(saved) = Value::Int(self.error_level);
                     // E_ERROR | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR | E_PARSE
@@ -1703,7 +1757,7 @@ impl Context<'_> {
                             enter(&mut self.frames, regs);
                             return Ok(Next::Switch);
                         }
-                        Callee::Builtin(i) => self.call_builtin(w, i, args, argc, dst)?,
+                        Callee::Builtin(i) => self.call_builtin(regs, base, i, args, argc, dst)?,
                         Callee::Constant(_) => unreachable!("a call site resolves to a function"),
                     }
                 }
@@ -1728,13 +1782,12 @@ impl Context<'_> {
         let func = match m.func {
             classes::Code::User(func) => func,
             classes::Code::Native(native) => {
-                let this = m.this.expect("a native method has $this");
-                let passed = &mut regs[args..args + argc as usize];
-                let r = native(self, &this, passed);
-                for v in passed {
-                    clear(v);
-                }
-                self.report_diags();
+                let mut buf: Vec<Value> = regs[args..args + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)).collect();
+                // Lent, as to a builtin: Closure::call runs PHP code.
+                self.isolate.regs = std::mem::take(regs);
+                let r = self.run_native(native, m.this.as_ref(), &mut buf);
+                *regs = std::mem::take(&mut self.isolate.regs);
+                drop(buf);
                 let v = r?;
                 if ret != NO_RET {
                     regs[ret as usize] = v;
@@ -1743,8 +1796,9 @@ impl Context<'_> {
             }
         };
         if (argc as usize) < func.code.required {
-            let class = (m.scope.name.clone(), m.this.is_some());
-            return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], Some((&class.0, class.1))));
+            let class = m.scope.as_ref().map(|c| (c.name.clone(), m.this.is_some()));
+            let class = class.as_ref().map(|(n, this)| (n, *this));
+            return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], class));
         }
         if let Some(caller) = self.frames.last_mut() {
             caller.pc = pc as u32;
@@ -1752,29 +1806,76 @@ impl Context<'_> {
         self.frames.push(&func, args, argc as usize, ret);
         let frame = self.frames.last_mut().expect("the frame just pushed");
         frame.this = m.this;
-        frame.scope = Some(m.scope);
-        frame.called = Some(m.called);
+        frame.scope = m.scope;
+        frame.called = m.called;
         enter(&mut self.frames, regs);
+        // A closure's captured values go into their variables.
+        if !m.captured.is_empty() {
+            for (r, v) in func.code.bound.iter().zip(m.captured) {
+                regs[args + *r as usize] = v;
+            }
+        }
         Ok(Next::Switch)
+    }
+
+    /// Run a builtin class's method.
+    pub(crate) fn run_native(&mut self, native: p8_runtime::object::Native, this: Option<&Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
+        let r = match (native, this) {
+            (p8_runtime::object::Native::Method(f), Some(this)) => f(self, this, args),
+            (p8_runtime::object::Native::Static(f), _) => f(self, args),
+            (p8_runtime::object::Native::Method(_), None) => Err(self.throw("Error", "Non-static method cannot be called statically")),
+        };
+        self.report_diags();
+        r
     }
 
     /// An object as a string, when its class's __toString is native (a
     /// Throwable's); anything else as it is.
     fn object_to_string(&mut self, v: Value) -> Result<Value, Throw> {
         let Value::Object(o) = &v else { return Ok(v) };
-        let Some(native) = o.class.method(b"__tostring").and_then(|m| m.native) else { return Ok(v) };
+        let Some(p8_runtime::object::Native::Method(native)) = o.class.method(b"__tostring").and_then(|m| m.native) else {
+            return Ok(v);
+        };
         let o = Rc::clone(o);
         native(self, &o, &mut [])
     }
 
-    /// Call builtin `i` on the `argc` arguments at `args`. The builtin
-    /// works on those registers directly (the register file is not part of
-    /// the context, so it can lend them alongside itself); they are cleared
-    /// after, so nothing the call was given outlives it.
+    /// Call builtin `i` on the `argc` arguments at `args` of the frame at
+    /// `base`, its result into `dst`. The arguments move into a buffer
+    /// and the register file is lent to the context while the builtin
+    /// runs, so it can call back into PHP (array_map, usort).
     #[inline]
-    fn call_builtin(&mut self, w: &mut [Value], i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
-        let args = &mut w[args as usize..args as usize + argc as usize];
-        // PHP's argument checks and conversions, from the stub signature.
+    fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
+        let start = base + args as usize;
+        if !self.isolate.registry.reenters(i) {
+            // The common case: the builtin works on the registers directly.
+            let args = &mut regs[start..start + argc as usize];
+            let r = self.run_builtin(i, args);
+            for v in args {
+                clear(v);
+            }
+            regs[base + dst as usize] = r?;
+            return Ok(());
+        }
+        let mut buf = std::mem::take(&mut self.arg_buf);
+        buf.extend(regs[start..start + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)));
+        self.isolate.regs = std::mem::take(regs);
+        // Running: frames it calls show it in their traces.
+        let name = self.isolate.registry.function(i).name;
+        self.natives.push(NativeCall { depth: self.frames.len(), name, args: buf.iter().map(Value::deref).collect() });
+        let r = self.run_builtin(i, &mut buf);
+        self.natives.pop();
+        *regs = std::mem::take(&mut self.isolate.regs);
+        buf.clear();
+        self.arg_buf = buf;
+        regs[base + dst as usize] = r?;
+        Ok(())
+    }
+
+    /// Run builtin `i` on `args`: PHP's argument checks and conversions
+    /// (from the stub signature), then the function.
+    #[inline(always)]
+    fn run_builtin(&mut self, i: usize, args: &mut [Value]) -> Result<Value, Throw> {
         if let Some(message) = self.isolate.registry.deprecation(i) {
             self.diags.push(Diag::Deprecated(message.to_string()));
         }
@@ -1786,9 +1887,6 @@ impl Context<'_> {
                 if !opcode_function(name, args.len()) {
                     self.failed_call(name.as_bytes(), None, args);
                 }
-                for v in args {
-                    clear(v);
-                }
                 return Err(self.throw(class, message));
             }
         }
@@ -1796,12 +1894,8 @@ impl Context<'_> {
         if let Err(Throw::Error { .. }) = r {
             self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args);
         }
-        for v in args {
-            clear(v);
-        }
         self.report_diags();
-        w[dst as usize] = r?;
-        Ok(())
+        r
     }
 
     /// Whether `a cmp b` holds for two registers (`<=>`: whether it is
@@ -2153,6 +2247,25 @@ impl Ctx for Context<'_> {
 
     fn scope(&self) -> Option<Rc<Class>> {
         Context::scope(self).0
+    }
+
+    fn call(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
+        if self.isolate.regs.is_empty() {
+            return Err(Ctx::fatal(self, "a builtin that takes no callable called back into PHP".into()));
+        }
+        self.call_from_builtin(callable, args)
+    }
+
+    fn is_callable(&mut self, v: &Value) -> bool {
+        self.callable(v)
+    }
+
+    fn bind_closure(&mut self, closure: &Rc<Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw> {
+        self.bind(closure, new_this, scope)
+    }
+
+    fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw> {
+        self.closure_from_callable(callable)
     }
 }
 

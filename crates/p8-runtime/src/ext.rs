@@ -64,6 +64,16 @@ pub trait Ctx {
     fn class(&self, name: &[u8]) -> Option<Rc<Class>>;
     /// The class the running code is in (None outside any class).
     fn scope(&self) -> Option<Rc<Class>>;
+    /// Call a PHP callable (only from a builtin that takes a callable:
+    /// the engine lends it what running PHP code needs).
+    fn call(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw>;
+    /// is_callable(): whether `v` names something that can be called.
+    fn is_callable(&mut self, v: &Value) -> bool;
+    /// A copy of a Closure bound to `new_this` (null: unbound) and the
+    /// class scope `scope` names (None: its own).
+    fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
+    /// Closure::fromCallable: a Closure calling `callable`.
+    fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw>;
 }
 
 /// A builtin function: arguments arrive by value (moved out of the caller's
@@ -116,6 +126,8 @@ pub struct Registry {
     sigs: Vec<Option<&'static p8_stubs::Sig>>,
     /// "Function f() is deprecated…" for the functions PHP deprecates.
     deprecations: Vec<Option<String>>,
+    /// Whether each function takes a callable (and so may run PHP code).
+    reenters: Vec<bool>,
     index: HashMap<&'static str, usize>,
     constants: HashMap<&'static [u8], Constant>,
 }
@@ -136,6 +148,7 @@ impl Registry {
             let sig = p8_stubs::lookup(f.name.as_bytes());
             self.sigs.push(sig);
             self.deprecations.push(sig.and_then(p8_stubs::deprecation));
+            self.reenters.push(sig.is_some_and(|s| s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0)));
             self.index.insert(f.name, i);
         }
     }
@@ -176,6 +189,12 @@ impl Registry {
     }
 
     /// Whether parameter `n` of builtin `i` is passed by reference.
+    /// Whether builtin `i` may call back into PHP code (it takes a
+    /// callable): the engine lends it the registers.
+    pub fn reenters(&self, i: usize) -> bool {
+        self.reenters[i]
+    }
+
     pub fn by_ref(&self, i: usize, n: usize) -> bool {
         self.functions[i].by_ref.contains(&n)
     }

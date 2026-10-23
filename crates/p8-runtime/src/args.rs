@@ -180,7 +180,8 @@ fn accepts(param: &Param, value: &Value) -> Accept {
         Value::Ref(cell) => accepts(param, &cell.borrow()),
         Value::Object(o) => {
             let named = param.classes.iter().any(|c| o.class.is_a(c.to_ascii_lowercase().as_bytes()));
-            if mask & T_OBJECT != 0 || named { Accept::Yes } else { Accept::No }
+            // A callable object (a Closure, an invokable) is checked when called.
+            if mask & (T_OBJECT | T_CALLABLE) != 0 || named { Accept::Yes } else { Accept::No }
         }
     }
 }
