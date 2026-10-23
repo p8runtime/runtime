@@ -1,0 +1,15 @@
+89
+1-10
+ab
+yesno
+int(5)
+NULL
+float(1.5)
+string(3) "two"
+NULL
+fell through
+NULL
+int(3)
+
+Warning: Undefined variable $missing in %s on line 28
+NULL

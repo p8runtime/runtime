@@ -155,6 +155,9 @@ impl FnBuilder {
 
     /// Lay the frame out and renumber every register.
     fn finish(mut self, file: Arc<str>) -> Function {
+        if !self.returns_ref {
+            thread_returns(&mut self.code);
+        }
         let ncv = self.cvs.len();
         let nconst = self.consts.len();
         let map = |r: Reg| -> Reg {
@@ -186,6 +189,30 @@ impl FnBuilder {
             line: self.decl_line,
             sites: self.sites,
             file,
+        }
+    }
+}
+
+/// Returns reached by a jump are made where the jump is: `x ? a : b` in
+/// `return` position, for one, stores its result and jumps to the return.
+/// A temporary moved into a register only to be returned is returned
+/// directly when it is a constant. The code keeps its length (what is
+/// left behind is unreachable), so no jump target moves.
+fn thread_returns(code: &mut [Instr]) {
+    for i in 0..code.len() {
+        if let Instr::Jump { target } = code[i]
+            && let ret @ (Instr::Return { .. } | Instr::ReturnNull) = code[target as usize]
+        {
+            code[i] = ret;
+        }
+    }
+    for i in 0..code.len().saturating_sub(1) {
+        if let (Instr::Move { dst, src }, Instr::Return { src: ret }) = (code[i], code[i + 1])
+            && ret == dst
+            && dst >> KIND_SHIFT == TEMP
+            && src >> KIND_SHIFT == CONST
+        {
+            code[i] = Instr::Return { src };
         }
     }
 }
