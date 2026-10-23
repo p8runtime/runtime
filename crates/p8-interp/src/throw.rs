@@ -108,6 +108,18 @@ impl Context<'_> {
         loop {
             let frame = self.frames.last().expect("a frame");
             let base = frame.base as usize;
+            // Leaving `@` expressions: their level comes back, innermost
+            // first, unless the code changed it (it holds more than the
+            // fatal errors then).
+            let mut silences: Vec<_> = frame.func.code.silences.iter().filter(|s| s.0 as usize <= at && at < s.1 as usize).collect();
+            silences.sort_by_key(|s| std::cmp::Reverse(s.0));
+            for s in silences {
+                if self.error_level & !4437 == 0
+                    && let Value::Int(level) = regs[base + s.2 as usize]
+                {
+                    self.error_level = level;
+                }
+            }
             let handler = frame
                 .func
                 .code

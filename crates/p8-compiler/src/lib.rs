@@ -105,6 +105,7 @@ struct FnBuilder<'a> {
     handlers: Vec<Handler>,
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
+    silences: Vec<(u32, u32, Reg)>,
 }
 
 impl FnBuilder<'_> {
@@ -133,6 +134,7 @@ impl FnBuilder<'_> {
             tries: Vec::new(),
             handlers: Vec::new(),
             decls: Vec::new(),
+            silences: Vec::new(),
         }
     }
 
@@ -241,6 +243,9 @@ impl FnBuilder<'_> {
         for h in &mut self.handlers {
             h.slot = map(h.slot);
         }
+        for s in &mut self.silences {
+            s.2 = map(s.2);
+        }
         fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
@@ -265,6 +270,7 @@ impl FnBuilder<'_> {
             is_static: self.is_static,
             handlers: self.handlers,
             decls: self.decls,
+            silences: self.silences,
         }
     }
 }
@@ -1641,7 +1647,7 @@ impl<'src> Compiler<'src> {
                 // `@expr`: diagnostics are off while it runs.
                 UnaryOp::ErrorSuppress => {
                     let saved = f.temp();
-                    f.emit(Instr::Silence { saved });
+                    let start = f.emit(Instr::Silence { saved }) as u32;
                     let mut r = self.expr(f, expr)?;
                     // A variable is read here, inside, not where it is used.
                     if r >> KIND_SHIFT == CV {
@@ -1649,7 +1655,8 @@ impl<'src> Compiler<'src> {
                         f.emit(Instr::Move { dst: t, src: r });
                         r = t;
                     }
-                    f.emit(Instr::Unsilence { saved });
+                    let end = f.emit(Instr::Unsilence { saved }) as u32;
+                    f.silences.push((start, end, saved));
                     r
                 }
                 UnaryOp::Reference => return Err(self.unsupported(*span, "a reference")),

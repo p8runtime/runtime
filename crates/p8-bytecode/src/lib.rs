@@ -442,6 +442,9 @@ pub struct Function {
     pub handlers: Vec<Handler>,
     /// The classes this code declares, in order (`DeclareClass` indexes them).
     pub decls: Vec<Arc<ClassDef>>,
+    /// `@` expressions: (Silence pc, Unsilence pc, the register saving
+    /// the level), so an exception leaving one puts the level back.
+    pub silences: Vec<(u32, u32, Reg)>,
 }
 
 /// A compiled file: its top-level code, every function it declares, and
