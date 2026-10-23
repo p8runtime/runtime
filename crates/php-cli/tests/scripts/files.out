@@ -1,0 +1,106 @@
+int(18)
+string(18) "line1
+line2
+line3
+"
+array(3) {
+  [0]=>
+  string(6) "line1
+"
+  [1]=>
+  string(6) "line2
+"
+  [2]=>
+  string(6) "line3
+"
+}
+array(3) {
+  [0]=>
+  string(5) "line1"
+  [1]=>
+  string(5) "line2"
+  [2]=>
+  string(5) "line3"
+}
+int(5)
+int(23)
+string(6) "line1
+"
+string(1) "l"
+string(3) "ine"
+int(10)
+bool(false)
+[2][line3][more]
+bool(true)
+string(6) "line1
+"
+string(5) "more
+"
+bool(false)
+fgets(): supplied resource is not a valid stream resource
+abcde00042|x
+string(11) "hello world"
+string(5) "hello"
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+
+Warning: file_get_contents(files_tmp/nope): Failed to open stream: No such file or directory in %s on line 22
+false
+bool(true)
+bool(true)
+bool(true)
+array(3) {
+  [0]=>
+  string(8) "data.txt"
+  [1]=>
+  string(9) "moved.txt"
+  [2]=>
+  string(7) "out.txt"
+}
+array(3) {
+  [0]=>
+  string(8) "data.txt"
+  [1]=>
+  string(9) "moved.txt"
+  [2]=>
+  string(7) "out.txt"
+}
+bool(true)
+
+Warning: mkdir(): File exists in %s on line 27
+bool(false)
+.,..,data.txt,moved.txt,out.txt,sub
+Array
+(
+    [dirname] => /a/b
+    [basename] => file.tar.gz
+    [extension] => gz
+    [filename] => file.tar
+)
+phpnoext
+Array
+(
+    [dirname] => .
+    [basename] => file
+    [filename] => file
+)
+Array
+(
+    [dirname] => /
+    [basename] => dir
+    [filename] => dir
+)
+
+Warning: unlink(files_tmp/gone): No such file or directory in %s on line 32
+bool(false)
+bool(true)
+bool(false)
+via STDOUT
+tmp
+bool(true)
+bool(true)
+bool(true)

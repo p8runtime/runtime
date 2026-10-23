@@ -300,6 +300,7 @@ fn bytewise(op: BinOp, x: &[u8], y: &[u8]) -> PhpStr {
 /// is called by the engine: an object without it can't be converted).
 pub fn object_string_error(v: &Value) -> Option<OpError> {
     match v {
+        Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => None,
         Value::Object(o) => Some(OpError::Error(format!(
             "Object of class {} could not be converted to string",
             String::from_utf8_lossy(o.class.name.as_bytes())

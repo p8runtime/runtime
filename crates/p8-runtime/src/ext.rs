@@ -77,6 +77,10 @@ pub trait Ctx {
     fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
     /// Closure::fromCallable: a Closure calling `callable`.
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw>;
+    /// A new resource (its number is the next one).
+    fn new_resource(&mut self, resource: crate::stream::Resource) -> Value;
+    /// Write to the host directly, past output buffers (PHP's STDOUT).
+    fn write_stdout(&mut self, bytes: &[u8]);
     /// The class `name`, after the autoloaders had their go (an Err of
     /// Throw::Autoload asks the engine to run them and the call again).
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw>;
