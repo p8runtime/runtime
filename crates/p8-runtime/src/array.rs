@@ -89,9 +89,45 @@ pub struct NextKeyOccupied;
 
 #[derive(Debug, Clone)]
 enum Storage {
-    /// Keys 0..len-1 in order.
-    Packed(Vec<Value>),
+    /// Int keys in increasing order, each at its own index, as PHP's packed
+    /// arrays: `slots[k]` is key `k`, `Value::Undef` where there is no such
+    /// key (a hole: `[1 => x]`, or an unset). A key that would break the
+    /// order (filling a hole), a string key, or a far-off int key turns
+    /// the array into a hash.
+    Packed(Packed),
     Hashed(Hashed),
+}
+
+#[derive(Debug, Clone, Default)]
+struct Packed {
+    slots: Vec<Value>,
+    /// How many slots are holes.
+    holes: usize,
+}
+
+impl Packed {
+    #[inline]
+    fn get(&self, i: i64) -> Option<&Value> {
+        match usize::try_from(i).ok().and_then(|i| self.slots.get(i)) {
+            Some(Value::Undef) | None => None,
+            v => v,
+        }
+    }
+
+    #[inline]
+    fn get_mut(&mut self, i: i64) -> Option<&mut Value> {
+        match usize::try_from(i).ok().and_then(|i| self.slots.get_mut(i)) {
+            Some(Value::Undef) | None => None,
+            v => v,
+        }
+    }
+
+    /// Whether key `i`, past the end, still fits a packed array: no more
+    /// holes than values (or a handful), as PHP's packed arrays allow.
+    fn fits(&self, i: i64) -> bool {
+        let Ok(i) = usize::try_from(i) else { return false };
+        i >= self.slots.len() && (i < 8 || i < 2 * (self.slots.len() - self.holes + 1))
+    }
 }
 
 /// An insertion-ordered hash: entries in order (None where unset), and a
@@ -164,18 +200,18 @@ impl Default for PhpArray {
 
 impl PhpArray {
     pub fn new() -> Self {
-        PhpArray { storage: Storage::Packed(Vec::new()), next_free: None }
+        PhpArray { storage: Storage::Packed(Packed::default()), next_free: None }
     }
 
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
-        PhpArray { storage: Storage::Packed(values), next_free }
+        PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free }
     }
 
     pub fn len(&self) -> usize {
         match &self.storage {
-            Storage::Packed(v) => v.len(),
+            Storage::Packed(p) => p.slots.len() - p.holes,
             Storage::Hashed(h) => h.live,
         }
     }
@@ -187,15 +223,15 @@ impl PhpArray {
     /// Whether the keys are exactly 0..n-1 in order (array_is_list).
     pub fn is_list(&self) -> bool {
         match &self.storage {
-            Storage::Packed(_) => true,
+            Storage::Packed(p) => p.holes == 0,
             Storage::Hashed(_) => self.iter().enumerate().all(|(i, (k, _))| k == Key::Int(i as i64)),
         }
     }
 
     pub fn get(&self, key: &Key) -> Option<&Value> {
         match &self.storage {
-            Storage::Packed(v) => match key {
-                Key::Int(i) if *i >= 0 => v.get(*i as usize),
+            Storage::Packed(p) => match key {
+                Key::Int(i) => p.get(*i),
                 _ => None,
             },
             Storage::Hashed(h) => h.find(key).and_then(|i| h.entries[i].as_ref().map(|(_, v)| v)),
@@ -206,7 +242,7 @@ impl PhpArray {
     #[inline]
     pub fn get_int(&self, i: i64) -> Option<&Value> {
         match &self.storage {
-            Storage::Packed(v) => usize::try_from(i).ok().and_then(|i| v.get(i)),
+            Storage::Packed(p) => p.get(i),
             Storage::Hashed(h) => h.find(&Key::Int(i)).and_then(|i| h.entries[i].as_ref().map(|(_, v)| v)),
         }
     }
@@ -215,7 +251,7 @@ impl PhpArray {
     #[inline]
     pub fn get_int_mut(&mut self, i: i64) -> Option<&mut Value> {
         match &mut self.storage {
-            Storage::Packed(v) => usize::try_from(i).ok().and_then(|i| v.get_mut(i)),
+            Storage::Packed(p) => p.get_mut(i),
             Storage::Hashed(h) => {
                 let i = h.find(&Key::Int(i))?;
                 h.entries[i].as_mut().map(|(_, v)| v)
@@ -225,8 +261,8 @@ impl PhpArray {
 
     pub fn get_mut(&mut self, key: &Key) -> Option<&mut Value> {
         match &mut self.storage {
-            Storage::Packed(v) => match key {
-                Key::Int(i) if *i >= 0 => v.get_mut(*i as usize),
+            Storage::Packed(p) => match key {
+                Key::Int(i) => p.get_mut(*i),
                 _ => None,
             },
             Storage::Hashed(h) => {
@@ -264,9 +300,14 @@ impl PhpArray {
             self.note_int_key(k);
         }
         match &mut self.storage {
-            Storage::Packed(v) => match key {
-                Key::Int(i) if i >= 0 && (i as usize) < v.len() => v[i as usize] = value,
-                Key::Int(i) if i >= 0 && i as usize == v.len() => v.push(value),
+            Storage::Packed(p) => match key {
+                Key::Int(i) if p.get(i).is_some() => p.slots[i as usize] = value,
+                Key::Int(i) if p.fits(i) => {
+                    let gap = i as usize - p.slots.len();
+                    p.slots.resize(i as usize, Value::Undef);
+                    p.holes += gap;
+                    p.slots.push(value);
+                }
                 key => {
                     self.make_hashed();
                     self.insert(key, value);
@@ -292,23 +333,30 @@ impl PhpArray {
 
     /// unset($a[key])
     pub fn remove(&mut self, key: &Key) -> Option<Value> {
-        if let Storage::Packed(v) = &self.storage {
-            match key {
-                Key::Int(i) if *i >= 0 && (*i as usize) < v.len() => self.make_hashed(),
-                _ => return None,
-            }
-        }
         match &mut self.storage {
+            // The slot becomes a hole; holes at the end go.
+            Storage::Packed(p) => {
+                let Key::Int(i) = *key else { return None };
+                p.get(i)?;
+                let old = std::mem::replace(&mut p.slots[i as usize], Value::Undef);
+                p.holes += 1;
+                while matches!(p.slots.last(), Some(Value::Undef)) {
+                    p.slots.pop();
+                    p.holes -= 1;
+                }
+                Some(old)
+            }
             Storage::Hashed(h) => h.remove(key),
-            Storage::Packed(_) => None,
         }
     }
 
     fn make_hashed(&mut self) {
-        if let Storage::Packed(v) = &mut self.storage {
+        if let Storage::Packed(p) = &mut self.storage {
             let mut h = Hashed::default();
-            for (i, value) in std::mem::take(v).into_iter().enumerate() {
-                h.insert_new(Key::Int(i as i64), value);
+            for (i, value) in std::mem::take(&mut p.slots).into_iter().enumerate() {
+                if !matches!(value, Value::Undef) {
+                    h.insert_new(Key::Int(i as i64), value);
+                }
             }
             self.storage = Storage::Hashed(h);
         }
@@ -318,7 +366,9 @@ impl PhpArray {
     /// its position (foreach walks an array by position).
     pub fn entry_at(&self, pos: usize) -> Option<(usize, Key, &Value)> {
         match &self.storage {
-            Storage::Packed(v) => v.get(pos).map(|x| (pos, Key::Int(pos as i64), x)),
+            Storage::Packed(p) => p.slots.get(pos..)?.iter().enumerate().find_map(|(i, x)| {
+                (!matches!(x, Value::Undef)).then(|| (pos + i, Key::Int((pos + i) as i64), x))
+            }),
             Storage::Hashed(h) => h.entries.get(pos..)?.iter().enumerate().find_map(|(i, e)| {
                 e.as_ref().map(|(k, v)| (pos + i, k.clone(), v))
             }),
@@ -328,10 +378,12 @@ impl PhpArray {
     /// Entries in order.
     pub fn iter(&self) -> impl Iterator<Item = (Key, &Value)> {
         let (packed, hashed) = match &self.storage {
-            Storage::Packed(v) => (Some(v), None),
+            Storage::Packed(p) => (Some(&p.slots), None),
             Storage::Hashed(h) => (None, Some(h)),
         };
-        let packed = packed.into_iter().flat_map(|v| v.iter().enumerate().map(|(i, x)| (Key::Int(i as i64), x)));
+        let packed = packed.into_iter().flat_map(|v| {
+            v.iter().enumerate().filter(|(_, x)| !matches!(x, Value::Undef)).map(|(i, x)| (Key::Int(i as i64), x))
+        });
         let hashed = hashed
             .into_iter()
             .flat_map(|h| h.entries.iter().flatten().map(|(k, v)| (k.clone(), v)));
@@ -429,6 +481,33 @@ mod tests {
         let values: Vec<i64> = a.values().map(Value::to_int).collect();
         assert_eq!(values, (90..100).collect::<Vec<_>>());
         assert_eq!(a.len(), 10);
+    }
+
+    #[test]
+    fn int_keys_in_order_stay_packed_with_holes() {
+        // [1 => .., 2 => .., ..]: packed, a hole at 0.
+        let mut a = PhpArray::new();
+        for i in 1..=5 {
+            a.insert(Key::Int(i), int(i * 10));
+        }
+        assert!(matches!(a.storage, Storage::Packed(_)));
+        assert_eq!((a.len(), a.get_int(0).is_none(), a.get_int(3).map(Value::to_int)), (5, true, Some(30)));
+        assert!(!a.is_list());
+        // unset leaves a hole; order and count follow.
+        a.remove(&Key::Int(3));
+        let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, [1, 2, 4, 5].map(Key::Int));
+        assert_eq!(a.entry_at(2).map(|(p, k, _)| (p, k)), Some((2, Key::Int(2))));
+        assert_eq!(a.entry_at(3).map(|(p, k, _)| (p, k)), Some((4, Key::Int(4))));
+        // Filling the hole puts key 3 last, as PHP does: a hash now.
+        a.insert(Key::Int(3), int(33));
+        assert!(matches!(a.storage, Storage::Hashed(_)));
+        let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, [1, 2, 4, 5, 3].map(Key::Int));
+        // A far-off key does not leave a long run of holes.
+        let mut b = PhpArray::from_list(vec![int(1)]);
+        b.insert(Key::Int(1000), int(2));
+        assert!(matches!(b.storage, Storage::Hashed(_)));
     }
 
     #[test]
