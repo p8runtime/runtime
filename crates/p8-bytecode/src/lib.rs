@@ -64,6 +64,17 @@ pub enum Instr {
     IncVar { var: Reg },
     /// `--$var` whose value is not used
     DecVar { var: Reg },
+    /// `++$var` (or `--$var`) fused with the compare-and-jump that follows
+    /// it, as a loop's step and test are: jump to `target` when `$var < b`
+    /// (`IncJumpLt`), `$var <= b` (`IncJumpLe`), `$var > b` (`DecJumpGt`)
+    /// or `$var >= b` (`DecJumpGe`), else go past that compare-and-jump.
+    /// The compare-and-jump stays in place (a loop enters at its test), and
+    /// whatever the fast path does not cover runs as `IncVar`/`DecVar`
+    /// followed by that instruction.
+    IncJumpLt { var: Reg, b: Reg, target: u32 },
+    IncJumpLe { var: Reg, b: Reg, target: u32 },
+    DecJumpGt { var: Reg, b: Reg, target: u32 },
+    DecJumpGe { var: Reg, b: Reg, target: u32 },
     /// A comparison and its branch in one, one instruction per test (so
     /// the interpreter dispatches once): jump when `a < b` holds as PHP's
     /// `<` decides it, or for the `Not` forms when it does not. `>` and
@@ -185,6 +196,10 @@ impl Instr {
             | Instr::JumpNotEq { target: t, .. }
             | Instr::JumpIdentical { target: t, .. }
             | Instr::JumpNotIdentical { target: t, .. }
+            | Instr::IncJumpLt { target: t, .. }
+            | Instr::IncJumpLe { target: t, .. }
+            | Instr::DecJumpGt { target: t, .. }
+            | Instr::DecJumpGe { target: t, .. }
             | Instr::IterInit { end: t, .. }
             | Instr::IterNext { end: t, .. }
             | Instr::ArgDefault { target: t, .. } => Some(t),

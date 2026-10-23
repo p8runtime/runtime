@@ -178,6 +178,7 @@ impl FnBuilder {
         for instr in &mut self.code {
             map_regs(instr, map);
         }
+        fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
         cv_names.sort_by_key(|(i, _)| *i);
@@ -197,6 +198,22 @@ impl FnBuilder {
             sites: self.sites,
             file,
         }
+    }
+}
+
+/// A loop's `$i++` (or `$i--`) followed by its test on `$i` becomes one
+/// instruction (see `Instr::IncJumpLt`). The test stays where it is, so the
+/// code keeps its length and every jump target.
+fn fuse_steps(code: &mut [Instr]) {
+    for i in 0..code.len().saturating_sub(1) {
+        code[i] = match (code[i], code[i + 1]) {
+            (Instr::IncVar { var }, Instr::JumpLt { a, b, target }) if a == var && b != var => Instr::IncJumpLt { var, b, target },
+            (Instr::IncVar { var }, Instr::JumpLe { a, b, target }) if a == var && b != var => Instr::IncJumpLe { var, b, target },
+            // `$i > b` and `$i >= b` are compiled with the operands swapped.
+            (Instr::DecVar { var }, Instr::JumpLt { a, b, target }) if b == var && a != var => Instr::DecJumpGt { var, b: a, target },
+            (Instr::DecVar { var }, Instr::JumpLe { a, b, target }) if b == var && a != var => Instr::DecJumpGe { var, b: a, target },
+            (other, _) => other,
+        };
     }
 }
 
@@ -274,6 +291,10 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
         }
         Jump { .. } | ReturnNull | ArgDefault { .. } => {}
         IncVar { var } | DecVar { var } => *var = f(*var),
+        IncJumpLt { var, b, .. } | IncJumpLe { var, b, .. } | DecJumpGt { var, b, .. } | DecJumpGe { var, b, .. } => {
+            *var = f(*var);
+            *b = f(*b);
+        }
         JumpLt { a, b, .. }
         | JumpNotLt { a, b, .. }
         | JumpLe { a, b, .. }

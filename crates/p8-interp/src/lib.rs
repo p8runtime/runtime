@@ -161,6 +161,27 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 }
             };
         }
+        // A fused step and test (`IncJumpLt` and co.) on ints: step, then
+        // jump or go past the test. A non-int bound leaves the test to the
+        // next instruction; a non-int variable leaves both to `step`.
+        macro_rules! step_jump {
+            ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
+                let Value::Int(i) = w[$var as usize] else { return pc };
+                let Some(n) = $step(i, 1) else { return pc };
+                w[$var as usize] = Value::Int(n);
+                match w[$b as usize] {
+                    Value::Int(b) if $holds(n, b) => {
+                        if back($target, pc) {
+                            // The step is done: the test (next) sees the interrupt.
+                            return pc + 1;
+                        }
+                        pc = $target as usize;
+                    }
+                    Value::Int(_) => pc += 2,
+                    _ => pc += 1,
+                }
+            }};
+        }
         let switch = loop {
             match code[pc] {
                 Instr::Jump { target } => {
@@ -191,6 +212,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     }
                     _ => return pc,
                 },
+                Instr::IncJumpLt { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n < b),
+                Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
+                Instr::DecJumpGt { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n > b),
+                Instr::DecJumpGe { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n >= b),
                 Instr::DecVar { var } => match w[var as usize] {
                     Value::Int(i) if i != i64::MIN => {
                         w[var as usize] = Value::Int(i - 1);
@@ -945,8 +970,15 @@ impl Context<'_> {
                         pc = target as usize;
                     }
                 }
-                Instr::IncVar { var } | Instr::DecVar { var } => {
-                    let inc = matches!(instr, Instr::IncVar { .. });
+                // A fused step and test runs here as its step alone; the
+                // test is the next instruction.
+                Instr::IncVar { var }
+                | Instr::DecVar { var }
+                | Instr::IncJumpLt { var, .. }
+                | Instr::IncJumpLe { var, .. }
+                | Instr::DecJumpGt { var, .. }
+                | Instr::DecJumpGe { var, .. } => {
+                    let inc = matches!(instr, Instr::IncVar { .. } | Instr::IncJumpLt { .. } | Instr::IncJumpLe { .. });
                     if let Value::Int(i) = reg!(var)
                         && let Some(n) = if inc { i.checked_add(1) } else { i.checked_sub(1) }
                     {
