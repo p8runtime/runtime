@@ -1,0 +1,42 @@
+bool(true)
+string(3) "hi
+"
+NULL
+string(12) "hello there
+"
+string(1) "c"
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+int(0)
+array(2) {
+  [0]=>
+  string(1) "z"
+  [1]=>
+  string(1) "q"
+}
+sys
+string(3) "sys"
+int(3)
+raw
+int(0)
+bool(true)
+string(1) "1"
+string(2) "1
+"
+bool(true)
+bool(false)
+bool(false)
+putenv(): Argument #1 ($assignment) must have a valid syntax
+exec(): Argument #1 ($command) must not be empty
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+string(5) "/a:/b"
+string(5) "/a:/b"

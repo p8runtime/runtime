@@ -1,0 +1,19 @@
+int(0)
+bool(false)
+string(5) "hello"
+int(0)
+string(10) "a+bint(2)
+"
+SHOUT (5)MORE(8)
+yyy
+Array
+(
+    [0] => Closure::__invoke
+)
+int(43)
+
+Notice: ob_end_clean(): Failed to delete buffer. No buffer to delete in %s on line 10
+bool(false)
+bool(false)
+flushed: string(9) "flushed: "
+[final:left open at the end]

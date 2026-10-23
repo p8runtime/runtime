@@ -2901,6 +2901,29 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::Call { func, args, span } => self.call(f, func, args, *span, hint, mark)?,
+            // `command` runs as shell_exec("command").
+            Expr::ShellExec { parts, .. } => {
+                let base = f.temp();
+                match parts.len() {
+                    0 => {
+                        let empty = f.constant(Frozen::Str(Text::from("")));
+                        f.emit(Instr::Move { dst: base, src: empty });
+                    }
+                    1 => self.expr_into(f, parts[0], base)?,
+                    n => {
+                        let start = f.temp();
+                        let regs: Vec<Reg> = std::iter::once(start).chain((1..n).map(|_| f.temp())).collect();
+                        for (r, p) in regs.iter().zip(parts.iter()) {
+                            self.expr_into(f, p, *r)?;
+                        }
+                        f.emit(Instr::ConcatN { dst: base, start, n: n as u8 });
+                    }
+                }
+                let site = f.site(false, Text::from("shell_exec"), Text::from("shell_exec"));
+                let dst = out(f, hint, mark);
+                f.emit(Instr::Call { site, base, argc: 1, dst });
+                dst
+            }
             Expr::MagicConst { kind, span } => {
                 let text: Vec<u8> = match kind {
                     MagicConstKind::Line => return Ok(f.constant(Frozen::Int(i64::from(self.line(*span))))),

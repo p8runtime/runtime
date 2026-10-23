@@ -28,18 +28,42 @@ pub enum Throw {
     Object(Rc<crate::object::Object>),
 }
 
+/// The output buffer operations (ob_*).
+pub enum Ob {
+    /// ob_start($callback, $chunk_size): a new buffer (its handler, if any).
+    Start { handler: Value, chunk: i64 },
+    /// ob_get_contents()
+    Contents,
+    /// ob_get_length()
+    Length,
+    /// ob_get_level()
+    Level,
+    /// ob_clean(): drop the innermost buffer's contents.
+    Clean,
+    /// ob_flush(): pass them on (through the handler).
+    Flush,
+    /// ob_end_flush() / ob_end_clean(): remove the innermost buffer,
+    /// passing its contents on or not.
+    End { flush: bool },
+    /// ob_list_handlers()
+    Handlers,
+    /// ob_get_status($full_status)
+    Status { full: bool },
+}
+
 /// What a builtin can see and do of the request running it.
 pub trait Ctx {
     /// Write to the output (through any output buffers).
     fn echo(&mut self, bytes: &[u8]);
-    /// ob_start(): start an output buffer.
-    fn ob_start(&mut self);
-    /// ob_end_clean(): drop the innermost buffer; false if there is none.
-    fn ob_end_clean(&mut self) -> bool;
+    /// An output buffer operation (the ob_* functions); false when there
+    /// is no buffer to act on.
+    fn ob(&mut self, op: Ob) -> Result<Value, Throw>;
     /// Report a warning at the current line.
     fn warn(&mut self, message: &str);
     /// Report a deprecation at the current line.
     fn deprecated(&mut self, message: &str);
+    /// Report a notice at the current line.
+    fn notice(&mut self, message: &str);
     /// Report a diagnostic of PHP error `level` (E_USER_NOTICE, E_WARNING,
     /// ...) at the current line, if error_reporting includes it.
     fn report(&mut self, level: i64, message: &str);
