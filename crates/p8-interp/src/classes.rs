@@ -111,11 +111,8 @@ impl Context<'_> {
         Throw::Fatal { message, file, line }
     }
 
-    fn lookup_class(&self, name: &p8_runtime::frozen::Text) -> Result<Rc<Class>, Throw> {
-        match self.classes.get(&name.as_bytes().to_ascii_lowercase()) {
-            Some(c) => Ok(Rc::clone(c)),
-            None => Err(self.throw("Error", format!("Class \"{}\" not found", text_of(name)))),
-        }
+    fn lookup_class(&mut self, name: &p8_runtime::frozen::Text) -> Result<Rc<Class>, Throw> {
+        self.find_class(name.as_bytes())
     }
 
     /// Build this request's class from its compiled declaration.
@@ -266,11 +263,11 @@ impl Context<'_> {
     }
 
     /// The class a code operand names.
-    pub(crate) fn class_of(&self, func: &Function, i: u16) -> Result<Rc<Class>, Throw> {
+    pub(crate) fn class_of(&mut self, func: &Function, i: u16) -> Result<Rc<Class>, Throw> {
         match &func.classes[i as usize] {
             ClassRef::Named(lower, display) | ClassRef::Forward(lower, display) => match self.classes.get(lower.as_bytes()) {
                 Some(c) => Ok(Rc::clone(c)),
-                None => Err(self.throw("Error", format!("Class \"{}\" not found", text_of(display)))),
+                None => self.find_class(display.as_bytes()),
             },
             ClassRef::Static => match self.scope().1 {
                 Some(c) => Ok(c),
@@ -615,7 +612,7 @@ impl Context<'_> {
     }
 
     /// `C::NAME`
-    pub(crate) fn class_constant(&self, func: &Function, class: u16, name: &Value) -> Result<Value, Throw> {
+    pub(crate) fn class_constant(&mut self, func: &Function, class: u16, name: &Value) -> Result<Value, Throw> {
         let class = self.class_of(func, class)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
@@ -637,7 +634,7 @@ impl Context<'_> {
     }
 
     /// The cell of static property `C::$name`.
-    pub(crate) fn static_cell(&self, func: &Function, class: u16, name: &Value) -> Result<Rc<RefCell<Value>>, Throw> {
+    pub(crate) fn static_cell(&mut self, func: &Function, class: u16, name: &Value) -> Result<Rc<RefCell<Value>>, Throw> {
         let class = self.class_of(func, class)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         match class.statics.get(name.as_bytes()) {
