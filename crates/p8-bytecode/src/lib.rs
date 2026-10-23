@@ -299,6 +299,12 @@ pub enum Rare {
     /// `isset(C::$name)`: a gets whether `class`'s static b is set (and
     /// visible here).
     IssetStatic,
+    /// Function entry: check (and convert) the passed arguments against
+    /// the parameters' declared types.
+    VerifyArgs,
+    /// Before a return: check (and convert) the value in a against the
+    /// declared return type.
+    VerifyReturn,
 }
 
 impl Instr {
@@ -519,6 +525,8 @@ pub struct PropDef {
     pub readonly: bool,
     /// The declared type as written.
     pub ty: Option<Text>,
+    /// The declared type, checked when a value is stored.
+    pub ty_decl: Option<p8_runtime::types::TypeDecl>,
 }
 
 #[derive(Debug)]
@@ -548,6 +556,8 @@ pub struct Param {
     pub by_ref: bool,
     pub has_default: bool,
     pub variadic: bool,
+    /// Its declared type, checked when the function is entered.
+    pub ty: Option<p8_runtime::types::TypeDecl>,
 }
 
 /// A compiled function (or a file's top-level code). Immutable, and shared
@@ -555,6 +565,11 @@ pub struct Param {
 #[derive(Debug)]
 pub struct Function {
     pub name: Text,
+    /// The declared return type (checked by Rare::VerifyReturn).
+    pub ret_type: Option<p8_runtime::types::TypeDecl>,
+    /// The file declares strict_types=1: no weak conversions for the
+    /// calls it makes, its returns and the properties it writes.
+    pub strict: bool,
     /// The classes the code names (`new C`, `C::f()`, `instanceof C`).
     pub classes: Vec<ClassRef>,
     /// For a method: the class it is declared in, as declared.

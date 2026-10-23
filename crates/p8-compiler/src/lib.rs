@@ -90,6 +90,10 @@ impl TryCtx<'_> {
 
 /// One function being compiled.
 struct FnBuilder<'a> {
+    /// The declared return type.
+    ret_type: Option<p8_runtime::types::TypeDecl>,
+    /// The file declares strict_types=1.
+    strict: bool,
     name: Text,
     code: Vec<Instr>,
     lines: Vec<u32>,
@@ -132,6 +136,8 @@ struct FnBuilder<'a> {
 impl FnBuilder<'_> {
     fn new(name: Text) -> Self {
         FnBuilder {
+            ret_type: None,
+            strict: false,
             name,
             code: Vec::new(),
             lines: Vec::new(),
@@ -286,6 +292,8 @@ impl FnBuilder<'_> {
         let required = self.params.iter().rposition(|p| !p.has_default && !p.variadic).map_or(0, |i| i + 1);
         Function {
             name: self.name,
+            ret_type: self.ret_type,
+            strict: self.strict,
             params: self.params,
             returns_ref: self.returns_ref,
             code: self.code,
@@ -751,6 +759,10 @@ pub struct Compiler<'src> {
     anonymous: u32,
     /// The function being compiled is a set hook: no parameter list means `$value`.
     hook_value: bool,
+    /// The file declares strict_types=1.
+    strict: bool,
+    /// The declared return type of the function about to be compiled.
+    pending_ret: Option<p8_runtime::types::TypeDecl>,
 }
 
 /// The class being compiled.
@@ -786,6 +798,8 @@ impl<'src> Compiler<'src> {
             use_consts: HashMap::new(),
             anonymous: 0,
             hook_value: false,
+            strict: false,
+            pending_ret: None,
         }
     }
 
@@ -842,6 +856,14 @@ impl<'src> Compiler<'src> {
     }
 
     pub fn compile(mut self, stmts: &[StmtId]) -> Result<Program> {
+        // declare(strict_types=1) (the file's first statement) applies to all of it.
+        for stmt in stmts {
+            if let Stmt::Declare { declares, .. } = stmt
+                && declares.iter().any(|d| self.text(d.key.span).eq_ignore_ascii_case(b"strict_types") && matches!(self.literal(d.value), Some(Frozen::Int(1))))
+            {
+                self.strict = true;
+            }
+        }
         // Each top-level function's by-reference parameters, by its full name.
         let mut ns: Vec<u8> = Vec::new();
         let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
@@ -869,6 +891,7 @@ impl<'src> Compiler<'src> {
             }
         }
         let mut f = FnBuilder::new(Text::from("{main}"));
+        f.strict = self.strict;
         self.stmts(&mut f, stmts)?;
         // A file's code ends returning 1 (what including it gives); eval()'s
         // returns null.
@@ -913,6 +936,9 @@ impl<'src> Compiler<'src> {
                         f.emit(Instr::LoadNull { dst: value });
                     }
                 }
+                if f.ret_type.as_ref().is_some_and(|t| !t.is_void()) {
+                    f.emit(Instr::rare(Rare::VerifyReturn, value, u16::from(expr.is_none()), 0, 0));
+                }
                 let n = f.tries.len();
                 let left = self.leave_tries(f, n)?;
                 f.emit(Instr::Return { src: value });
@@ -940,9 +966,19 @@ impl<'src> Compiler<'src> {
                 }
                 Some(e) => {
                     let r = self.expr(f, e)?;
+                    if f.ret_type.as_ref().is_some_and(|t| t.is_void()) {
+                        return Err(CompileError { message: "A void function must not return a value".into(), line: f.line });
+                    }
+                    if f.ret_type.is_some() {
+                        f.emit(Instr::rare(Rare::VerifyReturn, r, 0, 0, 0));
+                    }
                     f.emit(Instr::Return { src: r });
                 }
                 None => {
+                    if f.ret_type.as_ref().is_some_and(|t| !t.is_void()) {
+                        let null = f.constant(Frozen::Null);
+                        f.emit(Instr::rare(Rare::VerifyReturn, null, 2, 0, 0));
+                    }
                     f.emit(Instr::ReturnNull);
                 }
             },
@@ -1116,9 +1152,10 @@ impl<'src> Compiler<'src> {
                     f.loops[target].continues.push(at);
                 }
             }
-            Stmt::Function { name, params, body, by_ref, .. } => {
+            Stmt::Function { name, params, body, by_ref, return_type, .. } => {
                 let full = join(&self.ns, self.text(name.span));
                 let line = self.line(name.span);
+                self.pending_ret = return_type.map(|t| self.type_decl(t));
                 let (function, _) = self.function_with(Text::from(full.as_slice()), line, params, Body::Stmts(body), *by_ref, &[])?;
                 self.functions.push(Arc::new(function));
             }
@@ -1493,6 +1530,8 @@ impl<'src> Compiler<'src> {
     ) -> Result<(Function, Vec<Text>)> {
         let mut f = FnBuilder::new(name);
         f.returns_ref = by_ref;
+        f.strict = self.strict;
+        f.ret_type = self.pending_ret.take();
         f.line = line;
         if let Some((class, is_static)) = self.method.take() {
             f.class = Some(class);
@@ -1501,21 +1540,26 @@ impl<'src> Compiler<'src> {
         for p in params {
             let text = self.text(p.name.span);
             f.cv(&text[1..]);
+            let ty = p.ty.map(|t| self.type_decl(t));
             f.params.push(Param {
                 name: Text::from(&text[1..]),
                 by_ref: p.by_ref,
                 has_default: p.default.is_some(),
                 variadic: p.variadic,
+                ty,
             });
         }
         // A set hook written without its parameter takes `$value`.
         if std::mem::take(&mut self.hook_value) && params.is_empty() {
             f.cv(b"value");
-            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false });
+            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None });
         }
         f.decl_line = f.line;
         if params.last().is_some_and(|p| p.variadic) {
             f.emit(Instr::CollectVariadic { var: reg(CV, params.len() - 1) });
+        }
+        if f.params.iter().any(|p| p.ty.is_some()) {
+            f.emit(Instr::rare(Rare::VerifyArgs, 0, 0, 0, 0));
         }
         // Defaults: each runs only when its argument was not passed (the
         // call checks the required ones were).
@@ -1544,6 +1588,7 @@ impl<'src> Compiler<'src> {
                 is_static: false,
                 readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
                 ty: p.ty.map(|t| Text::from(type_text(self, t).as_slice())),
+                ty_decl: p.ty.map(|t| self.type_decl(t)),
             });
             let obj = f.temp();
             f.emit(Instr::This { dst: obj });
@@ -1563,6 +1608,12 @@ impl<'src> Compiler<'src> {
         match body {
             Body::Stmts(body) => {
                 self.stmts(&mut f, body)?;
+                // Falling off the end returns null: checked against the type
+                // (none returned), but for void.
+                if f.ret_type.as_ref().is_some_and(|t| !t.is_void()) {
+                    let null = f.constant(Frozen::Null);
+                    f.emit(Instr::rare(Rare::VerifyReturn, null, 1, 0, 0));
+                }
                 f.emit(Instr::ReturnNull);
             }
             Body::Get(e) => {
@@ -1580,6 +1631,9 @@ impl<'src> Compiler<'src> {
             }
             Body::Expr(e) => {
                 let r = self.expr(&mut f, e)?;
+                if f.ret_type.as_ref().is_some_and(|t| !t.is_void()) {
+                    f.emit(Instr::rare(Rare::VerifyReturn, r, 0, 0, 0));
+                }
                 f.emit(Instr::Return { src: r });
                 // An arrow function takes every variable it uses (but its
                 // parameters) by value from where it is made.
@@ -1783,6 +1837,7 @@ impl<'src> Compiler<'src> {
                             is_static: has(b"static"),
                             readonly: has(b"readonly") || flags & CLASS_READONLY != 0,
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
+                            ty_decl: ty.map(|t| self.type_decl(t)),
                         });
                     }
                 }
@@ -1925,6 +1980,7 @@ impl<'src> Compiler<'src> {
                             is_static: false,
                             readonly: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
+                            ty_decl: ty.map(|t| self.type_decl(t)),
                         });
                     }
                 }
@@ -1940,11 +1996,12 @@ impl<'src> Compiler<'src> {
                         });
                     }
                 }
-                ClassMember::Method { modifiers, by_ref, name, params, body, .. } => {
+                ClassMember::Method { modifiers, by_ref, name, params, body, return_type, .. } => {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
                     let is_static = has(b"static");
                     self.method = Some((display.clone(), is_static));
+                    self.pending_ret = return_type.map(|t| self.type_decl(t));
                     let func = self.function(name.span, params, body, *by_ref)?;
                     properties.append(&mut self.promoted);
                     methods.push(MethodDef {
@@ -2245,6 +2302,77 @@ impl<'src> Compiler<'src> {
             }
             _ => return Err(self.unsupported(span, "this assignment by reference")),
         })
+    }
+
+    /// A declared type for checking: its T_* bits and class names (resolved
+    /// in this namespace; `self` and `parent` kept, resolved when checked).
+    fn type_decl(&self, t: &p8_syntax::ast::Type) -> p8_runtime::types::TypeDecl {
+        use p8_runtime::types::*;
+        use p8_syntax::ast::Type;
+        let mut d = p8_runtime::types::TypeDecl { mask: 0, classes: Vec::new(), written: Vec::new(), intersection: false };
+        fn add(c: &Compiler, t: &Type, d: &mut p8_runtime::types::TypeDecl) {
+            match t {
+                Type::Simple(token) => add_word(c, c.text(token.span), d),
+                Type::Name(name) => add_word(c, c.text(name.span), d),
+                Type::Nullable(inner) => {
+                    add(c, inner, d);
+                    d.mask |= T_NULL;
+                }
+                Type::Union(parts) => {
+                    for p in *parts {
+                        add(c, p, d);
+                    }
+                }
+                Type::Intersection(parts) => {
+                    d.intersection = true;
+                    for p in *parts {
+                        add(c, p, d);
+                    }
+                }
+            }
+        }
+        fn add_word(c: &Compiler, word: &[u8], d: &mut p8_runtime::types::TypeDecl) {
+            let bit = match word.to_ascii_lowercase().as_slice() {
+                b"int" => T_INT,
+                b"float" => T_FLOAT,
+                b"string" => T_STRING,
+                b"bool" => T_BOOL,
+                b"false" => T_FALSE,
+                b"true" => T_TRUE,
+                b"null" => T_NULL,
+                b"array" => T_ARRAY,
+                b"callable" => T_CALLABLE,
+                b"object" => T_OBJECT,
+                b"mixed" => T_MIXED,
+                b"void" => T_VOID,
+                b"never" => T_NEVER,
+                b"static" => T_STATIC,
+                b"iterable" => {
+                    d.classes.push(Text::from("Traversable"));
+                    d.written.push(Text::from("Traversable"));
+                    T_ARRAY
+                }
+                // In a class (not a trait): its name, or its parent's.
+                b"self" | b"parent" => {
+                    let known = c.scope.as_ref().filter(|s| !s.in_trait).and_then(|s| {
+                        if word.eq_ignore_ascii_case(b"self") { Some(s.name.clone()) } else { s.parent.clone() }
+                    });
+                    d.classes.push(known.unwrap_or_else(|| Text::from(word.to_ascii_lowercase().as_slice())));
+                    d.written.push(Text::from(word.to_ascii_lowercase().as_slice()));
+                    0
+                }
+                _ => {
+                    // (class_name reads a leading backslash as fully qualified.)
+                    let full = Text::from(c.class_name(word).as_slice());
+                    d.classes.push(full.clone());
+                    d.written.push(full);
+                    0
+                }
+            };
+            d.mask |= bit;
+        }
+        add(self, t, &mut d);
+        d
     }
 
     fn args_by_value(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8)> {
@@ -3051,10 +3179,11 @@ impl<'src> Compiler<'src> {
                 }
                 dst
             }
-            Expr::Closure { is_static, by_ref, params, uses, body, span, .. } => {
+            Expr::Closure { is_static, by_ref, params, uses, body, span, return_type, .. } => {
                 let line = self.line(*span);
                 let name = self.closure_name(f, line);
                 let method = self.method.take();
+                self.pending_ret = return_type.map(|t| self.type_decl(t));
                 let (func, _) = self.function_with(name, line, params, Body::Stmts(body), *by_ref, uses)?;
                 self.method = method;
                 let dst = self.make_closure(f, func, *is_static);
@@ -3064,10 +3193,11 @@ impl<'src> Compiler<'src> {
                 }
                 dst
             }
-            Expr::ArrowFunction { is_static, by_ref, params, expr, span, .. } => {
+            Expr::ArrowFunction { is_static, by_ref, params, expr, span, return_type, .. } => {
                 let line = self.line(*span);
                 let name = self.closure_name(f, line);
                 let method = self.method.take();
+                self.pending_ret = return_type.map(|t| self.type_decl(t));
                 let (func, captures) = self.function_with(name, line, params, Body::Expr(expr), *by_ref, &[])?;
                 self.method = method;
                 let dst = self.make_closure(f, func, *is_static);

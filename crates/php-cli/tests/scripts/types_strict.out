@@ -1,0 +1,5 @@
+float(5)
+f(): Argument #1 ($x) must be of type int, string given, called in %s on line 5
+g(): Return value must be of type int, string returned
+Cannot assign string to property P::$i of type int
+int(3)
