@@ -455,7 +455,21 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *val = f(*val);
             *key = f(*key);
         }
-        StaticVar { var, .. } => *var = f(*var),
+        StaticVar { var, .. } | CollectVariadic { var } => *var = f(*var),
+        DimIncDec { var, keys, dst, .. } => {
+            *var = f(*var);
+            *keys = f(*keys);
+            *dst = f(*dst);
+        }
+        CallSpread { dst, callee, args } => {
+            *dst = f(*dst);
+            *callee = f(*callee);
+            *args = f(*args);
+        }
+        ArrayUnpack { arr, src } | Eval { dst: arr, src } => {
+            *arr = f(*arr);
+            *src = f(*src);
+        }
         FetchList { dst, arr, key } => {
             *dst = f(*dst);
             *arr = f(*arr);
@@ -669,6 +683,8 @@ pub struct Compiler<'src> {
     /// imports by lowercase alias: classes (and namespaces), functions,
     /// constants (`use`, `use function`, `use const`).
     ns: Vec<u8>,
+    /// eval()'s code: it returns null at its end, not 1.
+    pub eval: bool,
     use_classes: HashMap<Vec<u8>, Vec<u8>>,
     use_functions: HashMap<Vec<u8>, Vec<u8>>,
     use_consts: HashMap<Vec<u8>, Vec<u8>>,
@@ -698,6 +714,7 @@ impl<'src> Compiler<'src> {
             method: None,
             promoted: Vec::new(),
             ns: Vec::new(),
+            eval: false,
             use_classes: HashMap::new(),
             use_functions: HashMap::new(),
             use_consts: HashMap::new(),
@@ -785,9 +802,14 @@ impl<'src> Compiler<'src> {
         }
         let mut f = FnBuilder::new(Text::from("{main}"));
         self.stmts(&mut f, stmts)?;
-        // A file's code ends returning 1 (what including it gives).
-        let one = f.constant(Frozen::Int(1));
-        f.emit(Instr::Return { src: one });
+        // A file's code ends returning 1 (what including it gives); eval()'s
+        // returns null.
+        if self.eval {
+            f.emit(Instr::ReturnNull);
+        } else {
+            let one = f.constant(Frozen::Int(1));
+            f.emit(Instr::Return { src: one });
+        }
         let main = Arc::new(f.finish(self.file.clone()));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
@@ -1159,11 +1181,11 @@ impl<'src> Compiler<'src> {
     /// Compile `e` for its effects only.
     fn discard(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<()> {
         match e {
-            Expr::PostInc { var: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. }, .. }
-            | Expr::PostDec { var: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. }, .. }
+            Expr::PostInc { var: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. } | Expr::ArrayDimFetch { .. }, .. }
+            | Expr::PostDec { var: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. } | Expr::ArrayDimFetch { .. }, .. }
             | Expr::Unary {
                 op: UnaryOp::PreInc | UnaryOp::PreDec,
-                expr: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. },
+                expr: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. } | Expr::ArrayDimFetch { .. },
                 ..
             } => {
                 self.expr(f, e)?;
@@ -1377,6 +1399,9 @@ impl<'src> Compiler<'src> {
             });
         }
         f.decl_line = f.line;
+        if params.last().is_some_and(|p| p.variadic) {
+            f.emit(Instr::CollectVariadic { var: reg(CV, params.len() - 1) });
+        }
         // Defaults: each runs only when its argument was not passed (the
         // call checks the required ones were).
         for (i, p) in params.iter().enumerate() {
@@ -1707,6 +1732,23 @@ impl<'src> Compiler<'src> {
     }
 
     /// Arguments by value into consecutive temporaries: (base, count).
+    /// A call with `...$spread` arguments: the arguments as one list,
+    /// and `callee` called on it.
+    fn spread_call(&mut self, f: &mut FnBuilder, callee: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
+        let list = f.temp();
+        f.emit(Instr::NewArray { dst: list });
+        for arg in args {
+            if arg.name.is_some() {
+                return Err(self.unsupported(arg.span, "named arguments"));
+            }
+            let v = self.expr(f, arg.value)?;
+            f.emit(if arg.unpack { Instr::ArrayUnpack { arr: list, src: v } } else { Instr::ArrayPush { arr: list, val: v } });
+        }
+        let dst = f.temp();
+        f.emit(Instr::CallSpread { dst, callee, args: list });
+        Ok(dst)
+    }
+
     fn args_by_value(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8)> {
         let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
         for (arg, r) in args.iter().zip(&regs) {
@@ -1947,8 +1989,16 @@ impl<'src> Compiler<'src> {
             },
             Expr::AssignOp { var, op, expr, span } => {
                 let Some(bin) = assign_binop(*op) else {
-                    // `??=`
-                    return Err(self.unsupported(*span, "??="));
+                    // `$a ??= v`: assigned only when $a is not set.
+                    let _ = span;
+                    let current = self.quiet(f, var)?;
+                    let dst = f.temp();
+                    let set = f.emit(Instr::JumpIfSet { src: current, dst, target: 0 });
+                    let val = self.expr(f, expr)?;
+                    self.assign_from(f, var, val)?;
+                    f.emit(Instr::Move { dst, src: val });
+                    f.patch(set, f.here());
+                    return Ok(dst);
                 };
                 match var {
                     Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
@@ -2032,6 +2082,28 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::AssignStaticPropOp { op, class, name, val: one, dst: scratch });
                 dst
             }
+            Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: target @ Expr::ArrayDimFetch { .. }, .. }
+                if !dim_root_is_prop(target) =>
+            {
+                let (var, keys, n, append) = self.dim_path(f, target)?;
+                if append {
+                    return Err(self.unsupported(target.span(), "++/-- on []"));
+                }
+                let dst = f.temp();
+                f.emit(Instr::DimIncDec { var, keys, n, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
+                dst
+            }
+            Expr::PostInc { var: target @ Expr::ArrayDimFetch { .. }, .. } | Expr::PostDec { var: target @ Expr::ArrayDimFetch { .. }, .. }
+                if !dim_root_is_prop(target) =>
+            {
+                let (var, keys, n, append) = self.dim_path(f, target)?;
+                if append {
+                    return Err(self.unsupported(target.span(), "++/-- on []"));
+                }
+                let dst = f.temp();
+                f.emit(Instr::DimIncDec { var, keys, n, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
+                dst
+            }
             Expr::Unary { op, expr, span } => match op {
                 UnaryOp::PreInc | UnaryOp::PreDec => {
                     let var = self.inc_target(f, expr)?;
@@ -2108,8 +2180,13 @@ impl<'src> Compiler<'src> {
                 let dst = f.temp();
                 f.emit(Instr::NewArray { dst });
                 for item in *items {
-                    if item.unpack || item.by_ref {
-                        return Err(self.unsupported(item.span, "spread or & in an array literal"));
+                    if item.unpack {
+                        let src = self.expr(f, item.value)?;
+                        f.emit(Instr::ArrayUnpack { arr: dst, src });
+                        continue;
+                    }
+                    if item.by_ref {
+                        return Err(self.unsupported(item.span, "& in an array literal"));
                     }
                     let val = self.expr(f, item.value)?;
                     match item.key {
@@ -2229,6 +2306,27 @@ impl<'src> Compiler<'src> {
                 let dst = out(f, hint, mark);
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
                 dst
+            }
+            Expr::MethodCall { target, method, args, .. } if args.iter().any(|a| a.unpack) => {
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, method)?;
+                let pair = f.temp();
+                f.emit(Instr::NewArray { dst: pair });
+                f.emit(Instr::ArrayPush { arr: pair, val: obj });
+                f.emit(Instr::ArrayPush { arr: pair, val: name });
+                self.spread_call(f, pair, args)?
+            }
+            Expr::StaticCall { class: Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
+                if args.iter().any(|a| a.unpack) =>
+            {
+                let class = self.text(*class);
+                let class = match class.to_ascii_lowercase().as_slice() {
+                    b"self" | b"static" | b"parent" => class.to_vec(),
+                    _ => self.class_name(class),
+                };
+                let text = [class.as_slice(), b"::", self.text(*method)].concat();
+                let callee = f.constant(Frozen::Str(Text::from(text.as_slice())));
+                self.spread_call(f, callee, args)?
             }
             Expr::MethodCall { target, method, args, .. } if is_placeholder(args) => {
                 // `$o->m(...)`: a Closure of [$o, 'm'].
@@ -2412,6 +2510,56 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::YieldFrom { dst, src });
                 dst
             }
+            // empty($x): not set, or false when converted.
+            Expr::Empty { expr, .. } => {
+                let v = self.quiet(f, expr)?;
+                let t = f.temp();
+                f.emit(Instr::LoadNull { dst: t });
+                let set = f.emit(Instr::JumpIfSet { src: v, dst: t, target: 0 });
+                f.patch(set, f.here());
+                let dst = f.temp();
+                f.emit(Instr::Not { dst, src: t });
+                dst
+            }
+            Expr::Eval { expr, .. } => {
+                let src = self.expr(f, expr)?;
+                let dst = f.temp();
+                f.emit(Instr::Eval { dst, src });
+                dst
+            }
+            Expr::NullsafePropertyFetch { target, property, .. } => {
+                let obj = self.expr(f, target)?;
+                let dst = f.temp();
+                let null = f.constant(Frozen::Null);
+                let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
+                let name = self.prop_name(f, property)?;
+                f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
+                let end = f.emit(Instr::Jump { target: 0 });
+                f.patch(is_null, f.here());
+                f.emit(Instr::LoadNull { dst });
+                f.patch(end, f.here());
+                dst
+            }
+            Expr::NullsafeMethodCall { target, method, args, .. } => {
+                // Null: no call, and its arguments are not evaluated.
+                let obj = self.expr(f, target)?;
+                let dst = f.temp();
+                let null = f.constant(Frozen::Null);
+                let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
+                let Expr::Variable { name, .. } = method else {
+                    return Err(self.unsupported(method.span(), "a method name in an expression"));
+                };
+                let text = self.text(*name);
+                let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
+                let (base, argc) = self.args_by_value(f, args)?;
+                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
+                f.emit(Instr::Move { dst, src: base });
+                let end = f.emit(Instr::Jump { target: 0 });
+                f.patch(is_null, f.here());
+                f.emit(Instr::LoadNull { dst });
+                f.patch(end, f.here());
+                dst
+            }
             Expr::Include { kind, expr, .. } => {
                 use p8_syntax::ast::IncludeKind as K;
                 let kind = match kind {
@@ -2590,6 +2738,16 @@ impl<'src> Compiler<'src> {
             Expr::Variable { name, .. } => self.text(*name).starts_with(b"$"),
             _ => true,
         };
+        if args.iter().any(|a| a.unpack) {
+            let callee = match func {
+                Expr::Variable { name, .. } if !dynamic => {
+                    let (full, _) = self.ns_name(self.text(*name), &self.use_functions, true);
+                    f.constant(Frozen::Str(Text::from(full.as_slice())))
+                }
+                other => self.expr(f, other)?,
+            };
+            return self.spread_call(f, callee, args);
+        }
         if dynamic {
             let callee = self.expr(f, func)?;
             let (base, argc) = self.args_by_value(f, args)?;

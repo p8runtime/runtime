@@ -52,7 +52,7 @@ impl Platform {
 
     /// Compile a file's source.
     pub fn compile(&self, source: &[u8], file: &str) -> Result<Script, Error> {
-        compile(&self.registry, source, file).map(|program| Script { program })
+        compile(&self.registry, source, file, false).map(|program| Script { program })
     }
 
     /// A script's bytecode, as text (for `--dump`).
@@ -66,14 +66,22 @@ struct Compile(Arc<Registry>);
 
 impl p8_interp::Loader for Compile {
     fn load(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, p8_interp::LoadError> {
-        match compile(&self.0, source, file) {
+        match compile(&self.0, source, file, false) {
+            Ok(program) => Ok(program),
+            Err(e) => Err(p8_interp::LoadError { parse: e.kind == ErrorKind::Parse, message: e.message, line: e.line }),
+        }
+    }
+
+    fn load_eval(&self, code: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, p8_interp::LoadError> {
+        let source = [b"<?php ".as_slice(), code].concat();
+        match compile(&self.0, &source, file, true) {
             Ok(program) => Ok(program),
             Err(e) => Err(p8_interp::LoadError { parse: e.kind == ErrorKind::Parse, message: e.message, line: e.line }),
         }
     }
 }
 
-fn compile(registry: &Registry, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
+fn compile(registry: &Registry, source: &[u8], file: &str, eval: bool) -> Result<Arc<p8_bytecode::Program>, Error> {
     let arena = bumpalo::Bump::new();
     let lexer = p8_syntax::lexer::Lexer::new(source);
     let mut parser = p8_syntax::parser::Parser::new(lexer, &arena);
@@ -82,7 +90,9 @@ fn compile(registry: &Registry, source: &[u8], file: &str) -> Result<Arc<p8_byte
         let line = error.span.line_info(source).map_or(1, |info| info.line as u32);
         return Err(Error { kind: ErrorKind::Parse, message: error.message.to_string(), file: file.into(), line });
     }
-    match p8_compiler::Compiler::new(source, file, registry).compile(program.statements) {
+    let mut compiler = p8_compiler::Compiler::new(source, file, registry);
+    compiler.eval = eval;
+    match compiler.compile(program.statements) {
         Ok(program) => Ok(Arc::new(program)),
         Err(e) => Err(Error { kind: ErrorKind::Fatal, message: e.message, file: file.into(), line: e.line }),
     }

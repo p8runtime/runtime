@@ -1,0 +1,54 @@
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+dflt
+dflt
+Array
+(
+    [k] => v
+)
+3
+NULL
+NULL
+5
+Array
+(
+    [a] => 2
+    [b] => 1
+)
+2 3 2
+3
+
+Warning: Undefined array key "nope" in %s on line 18
+array(1) {
+  ["nope"]=>
+  int(1)
+}
+6 16
+9
+Array
+(
+    [0] => 1
+    [1] => 2
+    [a] => A
+    [2] => 3
+    [3] => 4
+)
+Array
+(
+    [k] => 1
+    [0] => 2
+)
+x-y pq
+3
+set
+side
+NULL
+ef
+ParseError

@@ -194,6 +194,20 @@ pub enum Instr {
     /// An element for destructuring (`[$a, $b] = $arr`): a missing key of
     /// an array warns; anything but an array gives null, silently.
     FetchList { dst: Reg, arr: Reg, key: Reg },
+    /// A variadic parameter (`...$rest`) at `var`: the arguments from
+    /// there on, as a list.
+    CollectVariadic { var: Reg },
+    /// `++$a[k..]`, `$a[k..]--` and the like: dst gets the new value (or
+    /// the old one, `post`).
+    DimIncDec { var: Reg, keys: Reg, n: u8, dst: Reg, inc: bool, post: bool },
+    /// A call with spread arguments: `callee` (a callable value) on the
+    /// list in `args`.
+    CallSpread { dst: Reg, callee: Reg, args: Reg },
+    /// `[...$src]` into the array in `arr` (int keys renumbered, string
+    /// keys kept; a Traversable is gone through).
+    ArrayUnpack { arr: Reg, src: Reg },
+    /// `eval($src)`: dst gets what the code returns (null by default).
+    Eval { dst: Reg, src: Reg },
     /// `f(...)`: a Closure of the callable in `src` (Closure::fromCallable).
     FromCallable { dst: Reg, src: Reg },
     /// `include`, `require` (and `_once`): dst gets the file's result.

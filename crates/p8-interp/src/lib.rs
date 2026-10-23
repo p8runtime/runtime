@@ -444,6 +444,11 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::IterNextRef { .. }
                 | Instr::StaticVar { .. }
                 | Instr::FetchList { .. }
+                | Instr::CollectVariadic { .. }
+                | Instr::DimIncDec { .. }
+                | Instr::CallSpread { .. }
+                | Instr::ArrayUnpack { .. }
+                | Instr::Eval { .. }
                 | Instr::Yield { .. }
                 | Instr::YieldFrom { .. }
                 | Instr::Unsilence { .. }
@@ -1653,6 +1658,17 @@ impl Context<'_> {
                         None => pc = end as usize,
                     }
                 }
+                Instr::CollectVariadic { var } => {
+                    // Its own argument (if passed), then those past it.
+                    let mut list = Vec::new();
+                    if argc > var as usize {
+                        list.push(std::mem::replace(&mut reg!(var), Value::Undef));
+                    }
+                    if let Some(frame) = self.frames.last() {
+                        list.extend(frame.extra.iter().flatten().cloned());
+                    }
+                    reg!(var) = Value::Array(Rc::new(PhpArray::from_list(list)));
+                }
                 Instr::FetchList { dst, arr, key } => {
                     let container = match &reg!(arr) {
                         Value::Ref(cell) => cell.borrow().clone(),
@@ -1705,33 +1721,58 @@ impl Context<'_> {
                             return Ok(Next::Go(pc));
                         }
                     };
-                    // The file's variables are the includer's.
-                    let cells: Vec<Rc<RefCell<Value>>> = program
-                        .main
-                        .cv_names
-                        .iter()
-                        .map(|name| match func.cv_names.iter().position(|n| n == name) {
-                            Some(r) => make_ref(w, r as Reg),
-                            None if in_main => self.global_cell(w, name.as_bytes()),
-                            None => Rc::new(RefCell::new(Value::Null)),
-                        })
-                        .collect();
-                    let (this, scope, called) = match self.frames.last() {
-                        Some(f) => (f.this.clone(), f.scope.clone(), f.called.clone()),
-                        None => (None, None, None),
+                    return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
+                }
+                Instr::Eval { dst, src } => {
+                    let code = self.operand(w, func, src);
+                    let program = self.load_eval(&code)?;
+                    return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
+                }
+                Instr::DimIncDec { var, keys, n, dst, inc, post } => {
+                    let mut path = Vec::with_capacity(n as usize);
+                    for i in 0..n {
+                        path.push(self.key(w, func, keys + i as Reg)?);
+                    }
+                    let mut root = match &mut reg!(var) {
+                        Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                        other => std::mem::take(other),
                     };
-                    if let Some(caller) = self.frames.last_mut() {
-                        caller.pc = pc as u32;
+                    let r = self.incdec_path(&mut root, &path, inc);
+                    match &mut reg!(var) {
+                        Value::Ref(cell) => *cell.borrow_mut() = root,
+                        other => *other = root,
                     }
+                    let (old, new) = r?;
+                    reg!(dst) = if post { old } else { new };
+                }
+                Instr::CallSpread { dst, callee, args } => {
+                    let target = self.operand(w, func, callee);
+                    let list: Vec<Value> = match self.operand(w, func, args) {
+                        Value::Array(a) => a.values().map(Value::deref).collect(),
+                        _ => Vec::new(),
+                    };
                     let at = base + func.nregs as usize;
-                    self.frames.push(&Closure::new(Arc::clone(&program.main)), at, 0, (base + dst as usize) as u32);
-                    enter(&mut self.frames, regs);
-                    for (i, cell) in cells.into_iter().enumerate() {
-                        regs[at + i] = Value::Ref(cell);
+                    if regs.len() < at + list.len() + 1 {
+                        regs.resize(at + list.len() + 1, Value::Undef);
                     }
-                    let frame = self.frames.last_mut().expect("the file's frame");
-                    (frame.this, frame.scope, frame.called) = (this, scope, called);
-                    return Ok(Next::Switch);
+                    let argc = list.len() as u8;
+                    for (i, v) in list.into_iter().enumerate() {
+                        regs[at + i] = v;
+                    }
+                    return self.call_value(regs, &target, at, argc, (base + dst as usize) as u32, pc);
+                }
+                Instr::ArrayUnpack { arr, src } => {
+                    let v = self.operand(w, func, src);
+                    let items = match v {
+                        Value::Array(a) => a.iter().map(|(k, v)| (k.into_value(), v.deref())).collect(),
+                        Value::Object(ref o) if o.class.is_a(b"traversable") => {
+                            let items = self.iterate_all(regs, &v)?;
+                            let w = &mut regs[base..base + func.nregs as usize];
+                            return self.unpack_into(w, arr, items).map(|()| Next::Go(pc));
+                        }
+                        _ => return Err(self.throw("Error", "Only arrays and Traversables can be unpacked")),
+                    };
+                    self.unpack_into(w, arr, items)?;
                 }
                 Instr::New { dst, class, base: args, argc } => {
                     let class = self.class_of(func, class)?;
@@ -1986,6 +2027,102 @@ impl Context<'_> {
             }
         }
         Ok(Next::Switch)
+    }
+
+    /// Run a file's code (include, eval) as a frame above the running one,
+    /// with its variables, `$this` and class scope; its result into `dst`.
+    fn run_in_scope(&mut self, regs: &mut Vec<Value>, base: usize, func: &Function, main: &Arc<Function>, dst: Reg, pc: usize) -> Next {
+        let in_main = base == 0;
+        let w = &mut regs[base..base + func.nregs as usize];
+        let mut cells: Vec<Rc<RefCell<Value>>> = Vec::with_capacity(main.cv_names.len());
+        for name in &main.cv_names {
+            cells.push(match func.cv_names.iter().position(|n| n == name) {
+                Some(r) => make_ref(w, r as Reg),
+                None if in_main => self.global_cell(w, name.as_bytes()),
+                None => Rc::new(RefCell::new(Value::Null)),
+            });
+        }
+        let (this, scope, called) = match self.frames.last() {
+            Some(f) => (f.this.clone(), f.scope.clone(), f.called.clone()),
+            None => (None, None, None),
+        };
+        if let Some(caller) = self.frames.last_mut() {
+            caller.pc = pc as u32;
+        }
+        let at = base + func.nregs as usize;
+        self.frames.push(&Closure::new(Arc::clone(main)), at, 0, (base + dst as usize) as u32);
+        enter(&mut self.frames, regs);
+        for (i, cell) in cells.into_iter().enumerate() {
+            regs[at + i] = Value::Ref(cell);
+        }
+        let frame = self.frames.last_mut().expect("the file's frame");
+        (frame.this, frame.scope, frame.called) = (this, scope, called);
+        Next::Switch
+    }
+
+    /// `[...$x]`: int keys renumbered, string keys kept (PHP 8.1).
+    fn unpack_into(&mut self, w: &mut [Value], arr: Reg, items: Vec<(Value, Value)>) -> Result<(), Throw> {
+        let Value::Array(a) = &mut w[arr as usize] else { return Ok(()) };
+        let a = Rc::make_mut(a);
+        for (k, v) in items {
+            match k {
+                Value::Str(s) => a.insert(Key::from_string(s), v),
+                _ => {
+                    if a.push(v).is_err() {
+                        return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `++`/`--` on `target[k1]..[kn]`: (old, new). A missing element
+    /// warns and counts as null; arrays are made along the way.
+    fn incdec_path(&mut self, target: &mut Value, path: &[Key], inc: bool) -> Result<(Value, Value), Throw> {
+        if matches!(target, Value::Null | Value::Undef) {
+            *target = Value::Array(Rc::new(PhpArray::new()));
+        }
+        let arr = match target {
+            Value::Array(a) => Rc::make_mut(a),
+            Value::Ref(cell) => {
+                let mut inner = std::mem::take(&mut *cell.borrow_mut());
+                let r = self.incdec_path(&mut inner, path, inc);
+                *cell.borrow_mut() = inner;
+                return r;
+            }
+            Value::Str(_) => return Err(self.throw("Error", "Cannot increment/decrement string offsets")),
+            _ => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
+        };
+        let Some((key, rest)) = path.split_first() else { return Ok((Value::Null, Value::Null)) };
+        if !rest.is_empty() {
+            if !arr.contains_key(key) {
+                arr.insert(key.clone(), Value::Null);
+            }
+            let mut child = std::mem::take(arr.get_mut(key).expect("present"));
+            let r = self.incdec_path(&mut child, rest, inc);
+            *arr.get_mut(key).expect("present") = child;
+            return r;
+        }
+        let old = match arr.get(key) {
+            Some(v) => v.deref(),
+            None => {
+                let shown = match key {
+                    Key::Int(i) => i.to_string(),
+                    Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
+                };
+                self.warn(format!("Undefined array key {shown}"));
+                Value::Null
+            }
+        };
+        let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
+        self.report_diags();
+        let new = r.map_err(|e| self.op_error(e))?;
+        match arr.get_mut(key) {
+            Some(Value::Ref(cell)) => *cell.borrow_mut() = new.clone(),
+            _ => arr.insert(key.clone(), new.clone()),
+        }
+        Ok((old, new))
     }
 
     /// Run a builtin class's method.
@@ -2541,13 +2678,10 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
     cell
 }
 
-/// Arguments past the parameters, moved out for func_get_args() (a
-/// variadic parameter collects them instead).
+/// Arguments past the parameters, moved out for func_get_args() (and a
+/// variadic parameter's `CollectVariadic`).
 #[cold]
-fn take_extra(regs: &mut [Value], func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<[Value]>> {
-    if func.params.last().is_some_and(|p| p.variadic) {
-        return None;
-    }
+fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<[Value]>> {
     Some(regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect())
 }
 
