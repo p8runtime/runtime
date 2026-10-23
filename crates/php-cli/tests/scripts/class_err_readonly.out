@@ -1,0 +1,6 @@
+1
+
+Fatal error: Uncaught Error: Cannot modify readonly property A::$x in %s:4
+Stack trace:
+#0 {main}
+  thrown in %s on line 4

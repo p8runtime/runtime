@@ -9,7 +9,8 @@
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
-use p8_bytecode::{CastKind, Cmp, Function, Instr, Param, Reg, Site};
+use p8_bytecode::{CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Instr, MethodDef, Param, PropDef, Reg, Site};
+use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_READONLY, Visibility};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
 use p8_runtime::frozen::{Frozen, Text};
@@ -72,6 +73,12 @@ struct FnBuilder {
     line: u32,
     /// The function's declaration line.
     decl_line: u32,
+    /// Classes the code names, and their indices.
+    classes: Vec<ClassRef>,
+    class_index: HashMap<Vec<u8>, u16>,
+    /// For a method: its class, as declared.
+    class: Option<Text>,
+    is_static: bool,
 }
 
 impl FnBuilder {
@@ -93,7 +100,26 @@ impl FnBuilder {
             returns_ref: false,
             line: 1,
             decl_line: 1,
+            classes: Vec::new(),
+            class_index: HashMap::new(),
+            class: None,
+            is_static: false,
         }
+    }
+
+    /// The index of a class the code names (one entry per class).
+    fn class_ref(&mut self, class: ClassRef) -> u16 {
+        let key = match &class {
+            ClassRef::Named(lower, _) => lower.as_bytes().to_vec(),
+            ClassRef::Forward(lower, _) => [b"forward:", lower.as_bytes()].concat(),
+            ClassRef::Static => b"static".to_vec(),
+        };
+        let next = self.classes.len() as u16;
+        let i = *self.class_index.entry(key).or_insert(next);
+        if i == next {
+            self.classes.push(class);
+        }
+        i
     }
 
     fn emit(&mut self, instr: Instr) -> usize {
@@ -133,6 +159,11 @@ impl FnBuilder {
             Frozen::Int(i) => ConstKey::Int(*i),
             Frozen::Float(f) => ConstKey::Float(f.to_bits()),
             Frozen::Str(s) => ConstKey::Str(s.as_bytes().to_vec()),
+            // Arrays are not shared between constant registers.
+            Frozen::Array(_) => {
+                self.consts.push(value);
+                return reg(CONST, self.consts.len() - 1);
+            }
         };
         let next = self.consts.len();
         let index = *self.const_index.entry(key).or_insert(next);
@@ -197,6 +228,9 @@ impl FnBuilder {
             line: self.decl_line,
             sites: self.sites,
             file,
+            classes: self.classes,
+            class: self.class,
+            is_static: self.is_static,
         }
     }
 }
@@ -222,6 +256,48 @@ fn fuse_steps(code: &mut [Instr]) {
 fn kind(node: &impl std::fmt::Debug) -> String {
     let text = format!("{node:?}");
     text.split(|c: char| !c.is_alphanumeric()).next().unwrap_or_default().to_string()
+}
+
+/// Whether a dimension write's root is a property (`$o->p[k] = v`).
+fn dim_root_is_prop(e: &Expr) -> bool {
+    let mut cur = e;
+    while let Expr::ArrayDimFetch { array, .. } = cur {
+        cur = array;
+    }
+    matches!(cur, Expr::PropertyFetch { .. })
+}
+
+/// The visibility a member's modifiers give it (None: none written).
+fn visibility_of(c: &Compiler, modifiers: &[p8_syntax::lexer::token::Token]) -> Option<Visibility> {
+    modifiers.iter().find_map(|m| match c.text(m.span).to_ascii_lowercase().as_slice() {
+        b"public" | b"var" => Some(Visibility::Public),
+        b"protected" => Some(Visibility::Protected),
+        b"private" => Some(Visibility::Private),
+        _ => None,
+    })
+}
+
+/// A declared type as PHP prints it (`?int`, `A|B`).
+fn type_text(c: &Compiler, t: &p8_syntax::ast::Type) -> Vec<u8> {
+    use p8_syntax::ast::Type;
+    match t {
+        Type::Simple(token) => c.text(token.span).to_vec(),
+        Type::Name(name) => {
+            let text = c.text(name.span);
+            text.strip_prefix(b"\\").unwrap_or(text).to_vec()
+        }
+        Type::Nullable(inner) => [b"?".to_vec(), type_text(c, inner)].concat(),
+        Type::Union(parts) => parts.iter().map(|p| type_text(c, p)).collect::<Vec<_>>().join(&b'|'),
+        Type::Intersection(parts) => parts.iter().map(|p| type_text(c, p)).collect::<Vec<_>>().join(&b'&'),
+    }
+}
+
+/// A class member's span, for errors.
+fn other_span(m: &p8_syntax::ast::ClassMember) -> Span {
+    use p8_syntax::ast::ClassMember::*;
+    match m {
+        Property { span, .. } | PropertyHook { span, .. } | Method { span, .. } | Const { span, .. } | TraitUse { span, .. } | Case { span, .. } => *span,
+    }
 }
 
 /// Whether `a op b` compiles to one instruction that reads both operands
@@ -274,6 +350,55 @@ fn thread_returns(code: &mut [Instr]) {
 fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
+        DeclareClass { .. } => {}
+        New { dst, base, .. } | StaticCall { dst, base, .. } => {
+            *dst = f(*dst);
+            *base = f(*base);
+        }
+        MethodCall { dst, obj, base, .. } => {
+            *dst = f(*dst);
+            *obj = f(*obj);
+            *base = f(*base);
+        }
+        This { dst } => *dst = f(*dst),
+        FetchProp { dst, obj, name, .. } | IssetProp { dst, obj, name } => {
+            *dst = f(*dst);
+            *obj = f(*obj);
+            *name = f(*name);
+        }
+        AssignProp { obj, name, val, dst } | AssignPropOp { obj, name, val, dst, .. } => {
+            *obj = f(*obj);
+            *name = f(*name);
+            *val = f(*val);
+            *dst = f(*dst);
+        }
+        PropIncDec { obj, name, dst, .. } => {
+            *obj = f(*obj);
+            *name = f(*name);
+            *dst = f(*dst);
+        }
+        AssignPropDim { base, val, dst, .. } => {
+            *base = f(*base);
+            *val = f(*val);
+            *dst = f(*dst);
+        }
+        UnsetProp { obj, name } => {
+            *obj = f(*obj);
+            *name = f(*name);
+        }
+        ClassConst { dst, name, .. } | FetchStaticProp { dst, name, .. } => {
+            *dst = f(*dst);
+            *name = f(*name);
+        }
+        AssignStaticProp { name, val, dst, .. } | AssignStaticPropOp { name, val, dst, .. } => {
+            *name = f(*name);
+            *val = f(*val);
+            *dst = f(*dst);
+        }
+        InstanceOf { dst, src, .. } | Clone { dst, src } => {
+            *dst = f(*dst);
+            *src = f(*src);
+        }
         Move { dst, src } | Not { dst, src } | Neg { dst, src } | BitNot { dst, src } | ToBool { dst, src } | Cast { dst, src, .. } => {
             *dst = f(*dst);
             *src = f(*src);
@@ -383,6 +508,8 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
 pub struct Program {
     pub main: Arc<Function>,
     pub functions: Vec<Arc<Function>>,
+    /// Every class the file declares, in order (`DeclareClass` indexes it).
+    pub classes: Vec<Arc<ClassDef>>,
 }
 
 pub struct Compiler<'src> {
@@ -397,6 +524,20 @@ pub struct Compiler<'src> {
     /// when compiled: its by-value arguments need no runtime check).
     /// (Each parameter's mode, and whether extra arguments go by reference.)
     by_ref: HashMap<Vec<u8>, (Vec<bool>, bool)>,
+    /// Every class the file declares, in order.
+    classes: Vec<Arc<ClassDef>>,
+    /// The class whose members are being compiled (for self and parent).
+    scope: Option<ClassScope>,
+    /// Set while compiling a method: its class and whether it is static.
+    method: Option<(Text, bool)>,
+    /// Properties a constructor's parameters promoted (`public int $x`).
+    promoted: Vec<PropDef>,
+}
+
+/// The class being compiled.
+struct ClassScope {
+    name: Text,
+    parent: Option<Text>,
 }
 
 type Result<T> = std::result::Result<T, CompileError>;
@@ -405,7 +546,18 @@ impl<'src> Compiler<'src> {
     pub fn new(source: &'src [u8], file: &str, registry: &'src Registry) -> Self {
         let mut line_starts = vec![0];
         line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
-        Compiler { source, registry, file: Arc::from(file), line_starts, functions: Vec::new(), by_ref: HashMap::new() }
+        Compiler {
+            source,
+            registry,
+            file: Arc::from(file),
+            line_starts,
+            functions: Vec::new(),
+            by_ref: HashMap::new(),
+            classes: Vec::new(),
+            scope: None,
+            method: None,
+            promoted: Vec::new(),
+        }
     }
 
     fn line(&self, span: Span) -> u32 {
@@ -432,7 +584,7 @@ impl<'src> Compiler<'src> {
         self.stmts(&mut f, stmts)?;
         f.emit(Instr::ReturnNull);
         let main = Arc::new(f.finish(self.file.clone()));
-        Ok(Program { main, functions: self.functions })
+        Ok(Program { main, functions: self.functions, classes: self.classes })
     }
 
     fn stmts(&mut self, f: &mut FnBuilder, stmts: &[StmtId]) -> Result<()> {
@@ -668,9 +820,20 @@ impl<'src> Compiler<'src> {
                             }
                             f.emit(Instr::UnsetDim { var, keys, n });
                         }
+                        Expr::PropertyFetch { target, property, .. } => {
+                            let obj = self.expr(f, target)?;
+                            let name = self.prop_name(f, property)?;
+                            f.emit(Instr::UnsetProp { obj, name });
+                        }
                         other => return Err(self.unsupported(other.span(), "this unset")),
                     }
                 }
+            }
+            Stmt::Class { modifiers, name, extends, implements, members, .. } => {
+                self.class_decl(f, name.span, modifiers, extends.as_ref(), implements, members, false)?;
+            }
+            Stmt::Interface { name, extends, members, .. } => {
+                self.class_decl(f, name.span, &[], None, extends, members, true)?;
             }
             Stmt::Nop { .. } => {}
             other => return Err(self.unsupported(other.span(), &format!("this statement ({})", kind(other)))),
@@ -681,6 +844,15 @@ impl<'src> Compiler<'src> {
     /// Compile `e` for its effects only.
     fn discard(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<()> {
         match e {
+            Expr::PostInc { var: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. }, .. }
+            | Expr::PostDec { var: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. }, .. }
+            | Expr::Unary {
+                op: UnaryOp::PreInc | UnaryOp::PreDec,
+                expr: Expr::PropertyFetch { .. } | Expr::ClassConstFetch { .. },
+                ..
+            } => {
+                self.expr(f, e)?;
+            }
             Expr::PostInc { var, .. } | Expr::PostDec { var, .. } => {
                 let var = self.inc_target(f, var)?;
                 f.emit(if matches!(e, Expr::PostInc { .. }) { Instr::IncVar { var } } else { Instr::DecVar { var } });
@@ -759,6 +931,10 @@ impl<'src> Compiler<'src> {
         let mut f = FnBuilder::new(Text::from(self.text(name)));
         f.returns_ref = by_ref;
         f.line = self.line(name);
+        if let Some((class, is_static)) = self.method.take() {
+            f.class = Some(class);
+            f.is_static = is_static;
+        }
         for p in params {
             let text = self.text(p.name.span);
             f.cv(&text[1..]);
@@ -782,9 +958,245 @@ impl<'src> Compiler<'src> {
                 f.patch(at, f.here());
             }
         }
+        // Constructor promotion: `public int $x` declares the property and
+        // assigns the argument to it first thing.
+        for (i, p) in params.iter().enumerate() {
+            let Some(visibility) = visibility_of(self, p.modifiers) else { continue };
+            let text = self.text(p.name.span);
+            let name = Text::from(&text[1..]);
+            self.promoted.push(PropDef {
+                name: name.clone(),
+                default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
+                visibility,
+                is_static: false,
+                readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
+                ty: p.ty.map(|t| Text::from(type_text(self, t).as_slice())),
+            });
+            let obj = f.temp();
+            f.emit(Instr::This { dst: obj });
+            let key = f.constant(Frozen::Str(name));
+            let dst = f.temp();
+            f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst });
+            f.temps = f.floor;
+        }
         self.stmts(&mut f, body)?;
         f.emit(Instr::ReturnNull);
         Ok(f.finish(self.file.clone()))
+    }
+
+    /// A class or interface declaration: compiled once, linked per request.
+    #[allow(clippy::too_many_arguments)] // one per part of the declaration's syntax
+    fn class_decl(
+        &mut self,
+        f: &mut FnBuilder,
+        name: Span,
+        modifiers: &[p8_syntax::lexer::token::Token],
+        extends: Option<&p8_syntax::ast::Name>,
+        implements: &[p8_syntax::ast::Name],
+        members: &[p8_syntax::ast::ClassMember],
+        interface: bool,
+    ) -> Result<()> {
+        use p8_syntax::ast::ClassMember;
+        let display = Text::from(self.text(name));
+        let name_of = |c: &Self, n: &p8_syntax::ast::Name| {
+            let t = c.text(n.span);
+            Text::from(t.strip_prefix(b"\\").unwrap_or(t))
+        };
+        let (parent, interfaces) = if interface {
+            (None, extends.iter().map(|n| name_of(self, n)).chain(implements.iter().map(|n| name_of(self, n))).collect())
+        } else {
+            (extends.map(|n| name_of(self, n)), implements.iter().map(|n| name_of(self, n)).collect())
+        };
+        let mut flags = if interface { CLASS_INTERFACE } else { 0 };
+        for m in modifiers {
+            match self.text(m.span).to_ascii_lowercase().as_slice() {
+                b"abstract" => flags |= CLASS_ABSTRACT,
+                b"final" => flags |= CLASS_FINAL,
+                b"readonly" => flags |= CLASS_READONLY,
+                _ => {}
+            }
+        }
+        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone() });
+        let (mut constants, mut properties, mut methods) = (Vec::new(), Vec::new(), Vec::new());
+        for member in members {
+            match member {
+                ClassMember::Property { modifiers, ty, entries, .. } => {
+                    let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
+                    let has = |w: &[u8]| words.iter().any(|x| x == w);
+                    for e in *entries {
+                        let text = self.text(e.name.span);
+                        let default = match e.default {
+                            Some(x) => Some(self.const_value(x)?),
+                            None if ty.is_some() => None,
+                            None => Some(Frozen::Null),
+                        };
+                        properties.push(PropDef {
+                            name: Text::from(text.strip_prefix(b"$").unwrap_or(text)),
+                            default,
+                            visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
+                            is_static: has(b"static"),
+                            readonly: has(b"readonly") || flags & CLASS_READONLY != 0,
+                            ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
+                        });
+                    }
+                }
+                ClassMember::Const { modifiers, consts, .. } => {
+                    for c in *consts {
+                        constants.push(ConstDef {
+                            name: Text::from(self.text(c.name.span)),
+                            value: self.const_value(c.value)?,
+                            visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
+                            is_final: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")),
+                        });
+                    }
+                }
+                ClassMember::Method { modifiers, by_ref, name, params, body, .. } => {
+                    let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
+                    let has = |w: &[u8]| words.iter().any(|x| x == w);
+                    let is_static = has(b"static");
+                    self.method = Some((display.clone(), is_static));
+                    let func = self.function(name.span, params, body, *by_ref)?;
+                    properties.append(&mut self.promoted);
+                    methods.push(MethodDef {
+                        func: Arc::new(func),
+                        visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
+                        is_static,
+                        is_abstract: has(b"abstract") || interface,
+                        is_final: has(b"final"),
+                    });
+                }
+                other => {
+                    self.scope = saved;
+                    return Err(self.unsupported(other_span(other), &format!("this class member ({})", kind(other))));
+                }
+            }
+        }
+        self.scope = saved;
+        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, line: self.line(name) };
+        self.classes.push(Arc::new(def));
+        f.emit(Instr::DeclareClass { class: (self.classes.len() - 1) as u16 });
+        Ok(())
+    }
+
+    /// A constant expression in a declaration (a property default, a class
+    /// constant): literals, and arrays of them, so far.
+    fn const_value(&self, e: &Expr) -> Result<Frozen> {
+        if let Some(v) = self.literal(e) {
+            return Ok(v);
+        }
+        match e {
+            Expr::Unary { op: op @ (UnaryOp::Minus | UnaryOp::Plus), expr, .. } => match (op, self.const_value(expr)?) {
+                (UnaryOp::Minus, Frozen::Int(i)) => Ok(i.checked_neg().map_or(Frozen::Float(-(i as f64)), Frozen::Int)),
+                (UnaryOp::Minus, Frozen::Float(x)) => Ok(Frozen::Float(-x)),
+                (UnaryOp::Plus, v @ (Frozen::Int(_) | Frozen::Float(_))) => Ok(v),
+                _ => Err(self.unsupported(e.span(), "this constant expression")),
+            },
+            Expr::Array { items, .. } => {
+                let mut entries = Vec::with_capacity(items.len());
+                for item in *items {
+                    if item.unpack || item.by_ref {
+                        return Err(self.unsupported(e.span(), "this constant expression"));
+                    }
+                    let key = match item.key {
+                        Some(k) => Some(self.const_value(k)?),
+                        None => None,
+                    };
+                    entries.push((key, self.const_value(item.value)?));
+                }
+                Ok(Frozen::Array(entries.into()))
+            }
+            _ => Err(self.unsupported(e.span(), "this constant expression")),
+        }
+    }
+
+    /// The index of the class a name expression names: `self` and
+    /// `parent` resolved now, `static` when the code runs.
+    fn class_ref(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<u16> {
+        let Expr::Variable { name, .. } = e else {
+            return Err(self.unsupported(e.span(), "a class name in an expression"));
+        };
+        let text = self.text(*name);
+        if text.starts_with(b"$") {
+            return Err(self.unsupported(e.span(), "a class name in a variable"));
+        }
+        let text = text.strip_prefix(b"\\").unwrap_or(text);
+        let line = self.line(*name);
+        let no_scope = |word: &str| CompileError { message: format!("Cannot use \"{word}\" when no class scope is active"), line };
+        let class = match text.to_ascii_lowercase().as_slice() {
+            b"self" => {
+                let scope = self.scope.as_ref().map(|s| s.name.clone()).or_else(|| f.class.clone()).ok_or_else(|| no_scope("self"))?;
+                ClassRef::Forward(Text::from(scope.as_bytes().to_ascii_lowercase().as_slice()), scope)
+            }
+            b"parent" => {
+                let Some(scope) = &self.scope else { return Err(no_scope("parent")) };
+                let Some(parent) = scope.parent.clone() else {
+                    return Err(CompileError { message: "Cannot use \"parent\" when current class scope has no parent".into(), line });
+                };
+                ClassRef::Forward(Text::from(parent.as_bytes().to_ascii_lowercase().as_slice()), parent)
+            }
+            b"static" => {
+                if self.scope.is_none() && f.class.is_none() {
+                    return Err(no_scope("static"));
+                }
+                ClassRef::Static
+            }
+            lower => ClassRef::Named(Text::from(lower), Text::from(text)),
+        };
+        Ok(f.class_ref(class))
+    }
+
+    /// A property name: a constant for `->name`, the value for `->$name`
+    /// or `->{expr}`.
+    fn prop_name(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        match e {
+            Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
+                Ok(f.constant(Frozen::Str(Text::from(self.text(*name)))))
+            }
+            other => self.expr(f, other),
+        }
+    }
+
+    /// Arguments by value into consecutive temporaries: (base, count).
+    fn args_by_value(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8)> {
+        let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
+        for (arg, r) in args.iter().zip(&regs) {
+            if arg.unpack || arg.name.is_some() {
+                return Err(self.unsupported(arg.span, "spread or named arguments"));
+            }
+            self.expr_into(f, arg.value, *r)?;
+        }
+        Ok((regs[0], args.len() as u8))
+    }
+
+    /// `$obj->name[k1]..[kn]`: the object, the name and the keys in
+    /// consecutive temporaries from the returned base; the key count and
+    /// whether the last dimension is `[]`.
+    fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, u8, bool)> {
+        let mut dims = Vec::new();
+        let mut cur = e;
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+            dims.push(*dim);
+            cur = array;
+        }
+        dims.reverse();
+        let Expr::PropertyFetch { target, property, .. } = cur else {
+            return Err(self.unsupported(cur.span(), "this array write"));
+        };
+        let append = dims.last().is_some_and(|d| d.is_none());
+        if dims[..dims.len() - usize::from(append)].iter().any(|d| d.is_none()) {
+            return Err(self.unsupported(e.span(), "[] before the last dimension"));
+        }
+        let keyed: Vec<&Expr> = dims.iter().flatten().copied().collect();
+        let base = f.temp();
+        let name = f.temp();
+        let keys: Vec<Reg> = keyed.iter().map(|_| f.temp()).collect();
+        self.expr_into(f, target, base)?;
+        let n = self.prop_name(f, property)?;
+        f.emit(Instr::Move { dst: name, src: n });
+        for (r, d) in keys.iter().zip(&keyed) {
+            self.expr_into(f, d, *r)?;
+        }
+        Ok((base, keys.len() as u8, append))
     }
 
     fn literal(&self, e: &Expr) -> Option<Frozen> {
@@ -876,7 +1288,10 @@ impl<'src> Compiler<'src> {
                 let text = self.text(*name);
                 if let Some(var) = text.strip_prefix(b"$") {
                     if var == b"this" {
-                        return Err(self.unsupported(*span, "$this"));
+                        let _ = span;
+                        let dst = out(f, hint, mark);
+                        f.emit(Instr::This { dst });
+                        return Ok(dst);
                     }
                     f.cv(var)
                 } else {
@@ -904,11 +1319,34 @@ impl<'src> Compiler<'src> {
                     f.emit(Instr::Assign { var: target, src });
                     target
                 }
+                Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
+                    let (base, n, append) = self.prop_dim_path(f, var)?;
+                    let val = self.expr(f, expr)?;
+                    let dst = f.temp();
+                    f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+                    dst
+                }
                 Expr::ArrayDimFetch { .. } => {
                     let val = self.expr(f, expr)?;
                     let (target, keys, n, append) = self.dim_path(f, var)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignDim { var: target, keys, n, append, val, dst });
+                    dst
+                }
+                Expr::PropertyFetch { target, property, .. } => {
+                    let obj = self.expr(f, target)?;
+                    let name = self.prop_name(f, property)?;
+                    let val = self.expr(f, expr)?;
+                    let dst = f.temp();
+                    f.emit(Instr::AssignProp { obj, name, val, dst });
+                    dst
+                }
+                Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                    let class = self.class_ref(f, class)?;
+                    let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                    let val = self.expr(f, expr)?;
+                    let dst = f.temp();
+                    f.emit(Instr::AssignStaticProp { class, name, val, dst });
                     dst
                 }
                 other => return Err(self.unsupported(other.span(), "this assignment")),
@@ -925,17 +1363,81 @@ impl<'src> Compiler<'src> {
                         f.emit(Instr::AssignOp { op: bin, var: target, src });
                         target
                     }
-                    Expr::ArrayDimFetch { dim: Some(_), .. } => {
+                    Expr::ArrayDimFetch { dim: Some(_), .. } if !dim_root_is_prop(var) => {
                         let val = self.expr(f, expr)?;
                         let (target, keys, n, _) = self.dim_path(f, var)?;
                         let dst = f.temp();
                         f.emit(Instr::AssignDimOp { op: bin, var: target, keys, n, val, dst });
                         dst
                     }
+                    Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
+                        let (base, n, append) = self.prop_dim_path(f, var)?;
+                        let val = self.expr(f, expr)?;
+                        let dst = f.temp();
+                        f.emit(Instr::AssignPropDim { op: Some(bin), base, n, append, val, dst });
+                        dst
+                    }
+                    Expr::PropertyFetch { target, property, .. } => {
+                        let obj = self.expr(f, target)?;
+                        let name = self.prop_name(f, property)?;
+                        let val = self.expr(f, expr)?;
+                        let dst = f.temp();
+                        f.emit(Instr::AssignPropOp { op: bin, obj, name, val, dst });
+                        dst
+                    }
+                    Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                        let class = self.class_ref(f, class)?;
+                        let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                        let val = self.expr(f, expr)?;
+                        let dst = f.temp();
+                        f.emit(Instr::AssignStaticPropOp { op: bin, class, name, val, dst });
+                        dst
+                    }
                     other => return Err(self.unsupported(other.span(), "this compound assignment")),
                 }
             }
             Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
+            Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::PropertyFetch { target, property, .. }, .. } => {
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, property)?;
+                let dst = f.temp();
+                f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
+                dst
+            }
+            Expr::PostInc { var: Expr::PropertyFetch { target, property, .. }, .. }
+            | Expr::PostDec { var: Expr::PropertyFetch { target, property, .. }, .. } => {
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, property)?;
+                let dst = f.temp();
+                f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
+                dst
+            }
+            // `++C::$x`, `C::$x--`: a fetch and a compound assignment of 1.
+            Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. }, .. }
+                if self.text(*name).starts_with(b"$") =>
+            {
+                let class = self.class_ref(f, class)?;
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let one = f.constant(Frozen::Int(1));
+                let dst = f.temp();
+                let op = if matches!(op, UnaryOp::PreInc) { BinOp::Add } else { BinOp::Sub };
+                f.emit(Instr::AssignStaticPropOp { op, class, name, val: one, dst });
+                dst
+            }
+            Expr::PostInc { var: Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. }, .. }
+            | Expr::PostDec { var: Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. }, .. }
+                if self.text(*name).starts_with(b"$") =>
+            {
+                let class = self.class_ref(f, class)?;
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let one = f.constant(Frozen::Int(1));
+                let dst = f.temp();
+                let scratch = f.temp();
+                f.emit(Instr::FetchStaticProp { dst, class, name });
+                let op = if matches!(e, Expr::PostInc { .. }) { BinOp::Add } else { BinOp::Sub };
+                f.emit(Instr::AssignStaticPropOp { op, class, name, val: one, dst: scratch });
+                dst
+            }
             Expr::Unary { op, expr, span } => match op {
                 UnaryOp::PreInc | UnaryOp::PreDec => {
                     let var = self.inc_target(f, expr)?;
@@ -1095,6 +1597,79 @@ impl<'src> Compiler<'src> {
                 f.patch_all(ends, f.here());
                 dst
             }
+            Expr::New { class, args, .. } => {
+                let class = self.class_ref(f, class)?;
+                // The result's register is below the arguments: the
+                // constructor's frame starts at them.
+                let dst = f.temp();
+                let (base, argc) = self.args_by_value(f, args)?;
+                f.emit(Instr::New { dst, class, base, argc });
+                dst
+            }
+            Expr::PropertyFetch { target, property, .. } => {
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, property)?;
+                let dst = out(f, hint, mark);
+                f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
+                dst
+            }
+            Expr::MethodCall { target, method, args, .. } => {
+                let obj = self.expr(f, target)?;
+                let Expr::Variable { name, .. } = method else {
+                    return Err(self.unsupported(method.span(), "a method name in an expression"));
+                };
+                let text = self.text(*name);
+                if text.starts_with(b"$") {
+                    return Err(self.unsupported(method.span(), "a method name in a variable"));
+                }
+                let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
+                let (base, argc) = self.args_by_value(f, args)?;
+                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
+                base
+            }
+            Expr::StaticCall { class, method, args, .. } => {
+                let class = self.class_ref(f, class)?;
+                let Expr::Variable { name, .. } = method else {
+                    return Err(self.unsupported(method.span(), "a method name in an expression"));
+                };
+                let text = self.text(*name);
+                if text.starts_with(b"$") {
+                    return Err(self.unsupported(method.span(), "a method name in a variable"));
+                }
+                let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
+                let (base, argc) = self.args_by_value(f, args)?;
+                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
+                base
+            }
+            Expr::ClassConstFetch { class, constant, .. } => {
+                let Expr::Variable { name, .. } = constant else {
+                    return Err(self.unsupported(constant.span(), "a class constant name in an expression"));
+                };
+                let text = self.text(*name);
+                let class_index = self.class_ref(f, class)?;
+                let dst = out(f, hint, mark);
+                if let Some(prop) = text.strip_prefix(b"$") {
+                    let name = f.constant(Frozen::Str(Text::from(prop)));
+                    f.emit(Instr::FetchStaticProp { dst, class: class_index, name });
+                } else if text.eq_ignore_ascii_case(b"class")
+                    && let ClassRef::Named(_, display) | ClassRef::Forward(_, display) = &f.classes[class_index as usize]
+                {
+                    // `C::class` is the name, resolved when compiled (but
+                    // `static::class` when the code runs).
+                    let display = display.clone();
+                    return Ok(f.constant(Frozen::Str(display)));
+                } else {
+                    let name = f.constant(Frozen::Str(Text::from(text)));
+                    f.emit(Instr::ClassConst { dst, class: class_index, name });
+                }
+                dst
+            }
+            Expr::Clone { expr, .. } => {
+                let src = self.expr(f, expr)?;
+                let dst = out(f, hint, mark);
+                f.emit(Instr::Clone { dst, src });
+                dst
+            }
             Expr::Print { expr, .. } => {
                 let r = self.expr(f, expr)?;
                 f.emit(Instr::Echo { src: r });
@@ -1124,9 +1699,20 @@ impl<'src> Compiler<'src> {
                             let var = f.cv(&self.text(*name)[1..]);
                             f.emit(Instr::IssetVar { dst, var });
                         }
-                        Expr::ArrayDimFetch { dim: Some(_), .. } => {
+                        Expr::ArrayDimFetch { dim: Some(_), .. } if !dim_root_is_prop(v) => {
                             let (var, keys, n, _) = self.dim_path(f, v)?;
                             f.emit(Instr::IssetDim { dst, var, keys, n });
+                        }
+                        Expr::PropertyFetch { target, property, .. } => {
+                            let obj = self.quiet(f, target)?;
+                            let name = self.prop_name(f, property)?;
+                            f.emit(Instr::IssetProp { dst, obj, name });
+                        }
+                        // isset($o->p[k]...): the dimensions of a quietly read root
+                        Expr::ArrayDimFetch { dim: Some(dim), array, .. } => {
+                            let arr = self.quiet(f, array)?;
+                            let key = self.expr(f, dim)?;
+                            f.emit(Instr::IssetDim { dst, var: arr, keys: key, n: 1 });
                         }
                         other => return Err(self.unsupported(other.span(), "this isset")),
                     }
@@ -1213,6 +1799,13 @@ impl<'src> Compiler<'src> {
             f.emit(Instr::Compare { cmp, dst, a, b });
             return Ok(dst);
         }
+        if op == BinaryOp::Instanceof {
+            let src = self.expr(f, left)?;
+            let class = self.class_ref(f, right)?;
+            let dst = out(f, hint, mark);
+            f.emit(Instr::InstanceOf { dst, src, class });
+            return Ok(dst);
+        }
         let dst = f.temp();
         match op {
             BinaryOp::And | BinaryOp::LogicalAnd | BinaryOp::Or | BinaryOp::LogicalOr => {
@@ -1256,6 +1849,13 @@ impl<'src> Compiler<'src> {
                 let key = self.expr(f, dim)?;
                 let dst = f.temp();
                 f.emit(Instr::FetchDim { dst, arr, key, quiet: true });
+                Ok(dst)
+            }
+            Expr::PropertyFetch { target, property, .. } => {
+                let obj = self.quiet(f, target)?;
+                let name = self.prop_name(f, property)?;
+                let dst = f.temp();
+                f.emit(Instr::FetchProp { dst, obj, name, quiet: true });
                 Ok(dst)
             }
             _ => self.expr(f, e),

@@ -1,0 +1,5 @@
+
+Fatal error: Uncaught Error: Non-static method A::f() cannot be called statically in %s:3
+Stack trace:
+#0 {main}
+  thrown in %s on line 3

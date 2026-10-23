@@ -10,6 +10,7 @@
 //! so passing arguments copies nothing.
 
 use p8_runtime::frozen::{Frozen, Text};
+use p8_runtime::object::Visibility;
 use p8_runtime::ops::BinOp;
 use std::sync::Arc;
 
@@ -144,6 +145,50 @@ pub enum Instr {
     Exit { src: Reg, has: bool },
     /// A `match` with no arm for its subject: throws UnhandledMatchError.
     MatchError { src: Reg },
+
+    // Classes and objects. A class operand is an index into the
+    // function's `classes`; a property name is a register (a constant for
+    // `$o->name`, any value for `$o->$name`).
+    /// A class declaration runs here (one linked at the file's start is
+    /// already there).
+    DeclareClass { class: u16 },
+    /// `new C(args)`: dst gets the new object; its constructor runs with
+    /// the `argc` arguments at `base`.
+    New { dst: Reg, class: u16, base: Reg, argc: u8 },
+    /// `$this`
+    This { dst: Reg },
+    /// `$obj->name` (`quiet`: for isset/??, no warning when missing)
+    FetchProp { dst: Reg, obj: Reg, name: Reg, quiet: bool },
+    /// `$obj->name = val`
+    AssignProp { obj: Reg, name: Reg, val: Reg, dst: Reg },
+    /// `$obj->name op= val`
+    AssignPropOp { op: BinOp, obj: Reg, name: Reg, val: Reg, dst: Reg },
+    /// `++$obj->name` and the like
+    PropIncDec { obj: Reg, name: Reg, dst: Reg, inc: bool, post: bool },
+    /// `$obj->name[k1]..[kn] = val` (or `op=` with `op`): the object at
+    /// `base`, the property name at `base + 1`, the keys after (`append`:
+    /// the last dimension is `[]`)
+    AssignPropDim { op: Option<BinOp>, base: Reg, n: u8, append: bool, val: Reg, dst: Reg },
+    /// `isset($obj->name)`
+    IssetProp { dst: Reg, obj: Reg, name: Reg },
+    /// `unset($obj->name)`
+    UnsetProp { obj: Reg, name: Reg },
+    /// `$obj->method(args)`: `method` names a site (its name)
+    MethodCall { dst: Reg, obj: Reg, method: u16, base: Reg, argc: u8 },
+    /// `C::method(args)`, `parent::method(args)`, `static::…`
+    StaticCall { dst: Reg, class: u16, method: u16, base: Reg, argc: u8 },
+    /// `C::NAME`
+    ClassConst { dst: Reg, class: u16, name: Reg },
+    /// `C::$name`
+    FetchStaticProp { dst: Reg, class: u16, name: Reg },
+    /// `C::$name = val`
+    AssignStaticProp { class: u16, name: Reg, val: Reg, dst: Reg },
+    /// `C::$name op= val`
+    AssignStaticPropOp { op: BinOp, class: u16, name: Reg, val: Reg, dst: Reg },
+    /// `$x instanceof C`
+    InstanceOf { dst: Reg, src: Reg, class: u16 },
+    /// `clone $x`
+    Clone { dst: Reg, src: Reg },
 }
 
 impl Instr {
@@ -236,6 +281,73 @@ impl Instr {
     }
 }
 
+/// A class a function names. `self` and `parent` are resolved when the
+/// code is compiled; `static` (late static binding) when it runs.
+#[derive(Debug, Clone)]
+pub enum ClassRef {
+    /// Lowercase name, and the name as written.
+    Named(Text, Text),
+    /// `self` or `parent`, resolved to this class: a static call through
+    /// it keeps the caller's called class (late static binding forwards).
+    Forward(Text, Text),
+    Static,
+}
+
+impl ClassRef {
+    /// The lowercase name, unless it is `static`.
+    pub fn lower(&self) -> Option<&Text> {
+        match self {
+            ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => Some(lower),
+            ClassRef::Static => None,
+        }
+    }
+}
+
+/// A class declaration as compiled: immutable, shared by every isolate.
+/// Each request links it into a `p8_runtime::object::Class`.
+#[derive(Debug)]
+pub struct ClassDef {
+    /// As declared.
+    pub name: Text,
+    pub parent: Option<Text>,
+    pub interfaces: Vec<Text>,
+    /// CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, … (p8_runtime::object)
+    pub flags: u32,
+    pub constants: Vec<ConstDef>,
+    pub properties: Vec<PropDef>,
+    pub methods: Vec<MethodDef>,
+    pub line: u32,
+}
+
+#[derive(Debug)]
+pub struct ConstDef {
+    pub name: Text,
+    pub value: Frozen,
+    pub visibility: Visibility,
+    pub is_final: bool,
+}
+
+#[derive(Debug)]
+pub struct PropDef {
+    pub name: Text,
+    /// None: a typed property with no default (uninitialized until set).
+    pub default: Option<Frozen>,
+    pub visibility: Visibility,
+    pub is_static: bool,
+    pub readonly: bool,
+    /// The declared type as written.
+    pub ty: Option<Text>,
+}
+
+#[derive(Debug)]
+pub struct MethodDef {
+    pub func: Arc<Function>,
+    pub visibility: Visibility,
+    pub is_static: bool,
+    pub is_abstract: bool,
+    pub is_final: bool,
+}
+
 /// A name a call or constant fetch resolves (each context caches what it
 /// resolved to, in its closure of the function).
 #[derive(Debug)]
@@ -261,6 +373,12 @@ pub struct Param {
 #[derive(Debug)]
 pub struct Function {
     pub name: Text,
+    /// The classes the code names (`new C`, `C::f()`, `instanceof C`).
+    pub classes: Vec<ClassRef>,
+    /// For a method: the class it is declared in, as declared.
+    pub class: Option<Text>,
+    /// A static method, or a function with no `$this`.
+    pub is_static: bool,
     pub params: Vec<Param>,
     pub returns_ref: bool,
     pub code: Vec<Instr>,

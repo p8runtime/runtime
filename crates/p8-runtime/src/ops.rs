@@ -31,6 +31,8 @@ pub enum OpError {
     DivisionByZero(&'static str),
     /// ArithmeticError
     Arithmetic(&'static str),
+    /// Error
+    Error(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +79,12 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
         return binary(op, a, &cell.borrow(), diags);
     }
     match op {
-        BinOp::Concat => Ok(concat(a, b, diags)),
+        BinOp::Concat => {
+            if let Some(e) = object_string_error(a).or_else(|| object_string_error(b)) {
+                return Err(e);
+            }
+            Ok(concat(a, b, diags))
+        }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => arithmetic(op, a, b, diags),
         BinOp::Mod => {
             let (x, y) = (int_operand(op, a, b, a, diags)?, int_operand(op, a, b, b, diags)?);
@@ -134,7 +141,7 @@ fn number_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags)
                 None => return Err(unsupported(op, a, b)),
             },
         },
-        Value::Array(_) | Value::Ref(_) => return Err(unsupported(op, a, b)),
+        Value::Array(_) | Value::Ref(_) | Value::Object(_) => return Err(unsupported(op, a, b)),
     })
 }
 
@@ -289,6 +296,19 @@ fn bytewise(op: BinOp, x: &[u8], y: &[u8]) -> PhpStr {
 }
 
 /// A value as `.` and echo see it; arrays warn and are "Array".
+/// The Error converting an object to a string raises (until __toString
+/// is called by the engine: an object without it can't be converted).
+pub fn object_string_error(v: &Value) -> Option<OpError> {
+    match v {
+        Value::Object(o) => Some(OpError::Error(format!(
+            "Object of class {} could not be converted to string",
+            String::from_utf8_lossy(o.class.name.as_bytes())
+        ))),
+        Value::Ref(cell) => object_string_error(&cell.borrow()),
+        _ => None,
+    }
+}
+
 pub fn to_string_lossy(v: &Value, diags: &mut Diags) -> PhpStr {
     match v.to_php_string() {
         Some(s) => s,
@@ -378,6 +398,7 @@ pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
             }
         },
         Value::Array(_) => return Err(OpError::Type("Cannot increment array".into())),
+        Value::Object(_) => return Err(OpError::Type(format!("Cannot increment {}", a.type_name()))),
         Value::Ref(cell) => return increment(&cell.borrow(), diags),
     })
 }
@@ -412,6 +433,7 @@ pub fn decrement(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
             }
         },
         Value::Array(_) => return Err(OpError::Type("Cannot decrement array".into())),
+        Value::Object(_) => return Err(OpError::Type(format!("Cannot decrement {}", a.type_name()))),
         Value::Ref(cell) => return decrement(&cell.borrow(), diags),
     })
 }

@@ -87,7 +87,7 @@ fn show(v: &Value) -> String {
         Value::Float(f) => format!("f:{}", hex(&f.to_be_bytes())),
         Value::Str(s) => format!("s:{}", hex(s.as_bytes())),
         Value::Array(a) => format!("a:{}", hex(json(a).as_bytes())),
-        Value::Ref(_) | Value::Undef => "ref".into(),
+        Value::Ref(_) | Value::Undef | Value::Object(_) => "ref".into(),
     }
 }
 
@@ -124,6 +124,7 @@ fn binary_operators_match_php_8_4() {
                     OpError::Type(m) => ("TypeError", m),
                     OpError::DivisionByZero(m) => ("DivisionByZeroError", m.to_string()),
                     OpError::Arithmetic(m) => ("ArithmeticError", m.to_string()),
+                    OpError::Error(m) => ("Error", m),
                 };
                 format!("E:{}:{}", class, hex(msg.as_bytes()))
             }

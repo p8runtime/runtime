@@ -2,11 +2,14 @@
 //! The p8 interpreter: one loop over register instructions, all frames in
 //! one register file, calls resolved once per call site.
 
-use p8_bytecode::{CastKind, Cmp, Function, Instr, Reg};
+mod classes;
+
+use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Registry};
 pub use p8_runtime::ext::Throw;
 use p8_runtime::number::{Precision, float_to_string};
+use p8_runtime::object::{Class, Ids, Object};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -57,6 +60,11 @@ struct Frame {
     argc: u32,
     /// Arguments past the declared parameters (func_get_args()).
     extra: Option<Box<[Value]>>,
+    /// A method's `$this`, the class its code is in (visibility, self::)
+    /// and the class it was called on (static::); None in a function.
+    this: Option<Rc<Object>>,
+    scope: Option<Rc<Class>>,
+    called: Option<Rc<Class>>,
 }
 
 const NO_RET: u32 = u32::MAX;
@@ -111,7 +119,17 @@ impl Frames {
                 }
                 (slot.pc, slot.base, slot.ret, slot.argc) = (0, base as u32, ret, argc as u32);
             }
-            None => self.slots.push(Frame { func: Rc::clone(func), pc: 0, base: base as u32, ret, argc: argc as u32, extra: None }),
+            None => self.slots.push(Frame {
+                func: Rc::clone(func),
+                pc: 0,
+                base: base as u32,
+                ret,
+                argc: argc as u32,
+                extra: None,
+                this: None,
+                scope: None,
+                called: None,
+            }),
         }
         self.len += 1;
     }
@@ -191,9 +209,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
         // next instruction; a non-int variable leaves both to `step`.
         macro_rules! step_jump {
             ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
-                let Value::Int(i) = w[$var as usize] else { return pc };
-                let Some(n) = $step(i, 1) else { return pc };
-                w[$var as usize] = Value::Int(n);
+                // Written in place: no drop of the old value to compile.
+                let Value::Int(i) = &mut w[$var as usize] else { return pc };
+                let Some(n) = $step(*i, 1) else { return pc };
+                *i = n;
                 match w[$b as usize] {
                     Value::Int(b) if $holds(n, b) => {
                         if back($target, pc) {
@@ -230,9 +249,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     }
                     _ => return pc,
                 },
-                Instr::IncVar { var } => match w[var as usize] {
-                    Value::Int(i) if i != i64::MAX => {
-                        w[var as usize] = Value::Int(i + 1);
+                Instr::IncVar { var } => match &mut w[var as usize] {
+                    Value::Int(i) if *i != i64::MAX => {
+                        *i += 1;
                         pc += 1;
                     }
                     _ => return pc,
@@ -241,9 +260,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
                 Instr::DecJumpGt { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n > b),
                 Instr::DecJumpGe { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n >= b),
-                Instr::DecVar { var } => match w[var as usize] {
-                    Value::Int(i) if i != i64::MIN => {
-                        w[var as usize] = Value::Int(i - 1);
+                Instr::DecVar { var } => match &mut w[var as usize] {
+                    Value::Int(i) if *i != i64::MIN => {
+                        *i -= 1;
                         pc += 1;
                     }
                     _ => return pc,
@@ -353,9 +372,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 },
                 // $i++ / ++$i (and --) whose value is used, on an int
                 Instr::IncDec { var, dst, inc, post } => {
-                    let Value::Int(i) = w[var as usize] else { return pc };
+                    let Value::Int(slot) = &mut w[var as usize] else { return pc };
+                    let i = *slot;
                     let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { return pc };
-                    w[var as usize] = Value::Int(n);
+                    *slot = n;
                     w[dst as usize] = Value::Int(if post { i } else { n });
                     pc += 1;
                 }
@@ -383,7 +403,25 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::BindGlobal { .. }
                 | Instr::ArgDefault { .. }
                 | Instr::Exit { .. }
-                | Instr::MatchError { .. } => return pc,
+                | Instr::MatchError { .. }
+                | Instr::DeclareClass { .. }
+                | Instr::New { .. }
+                | Instr::This { .. }
+                | Instr::FetchProp { .. }
+                | Instr::AssignProp { .. }
+                | Instr::AssignPropOp { .. }
+                | Instr::PropIncDec { .. }
+                | Instr::AssignPropDim { .. }
+                | Instr::IssetProp { .. }
+                | Instr::UnsetProp { .. }
+                | Instr::MethodCall { .. }
+                | Instr::StaticCall { .. }
+                | Instr::ClassConst { .. }
+                | Instr::FetchStaticProp { .. }
+                | Instr::AssignStaticProp { .. }
+                | Instr::AssignStaticPropOp { .. }
+                | Instr::InstanceOf { .. }
+                | Instr::Clone { .. } => return pc,
                 // Calls and returns leave this loop, so the loop itself
                 // keeps only the code and the registers live.
                 Instr::Call { site, base: args, argc: n, dst } => break Switch::Call(site, args, n, dst),
@@ -479,6 +517,13 @@ fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     for r in &mut regs[consts.end..base + code.nregs as usize] {
         clear(r);
     }
+    // `$this` goes after the arguments, as in PHP (it decides which
+    // object id is free first).
+    if frame.scope.is_some() {
+        frame.this = None;
+        frame.scope = None;
+        frame.called = None;
+    }
     if frame.ret != NO_RET {
         regs[frame.ret as usize] = value;
     }
@@ -488,11 +533,12 @@ fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
 /// nothing to release, so they are only re-tagged.
 #[inline(always)]
 fn clear(r: &mut Value) {
-    if matches!(r, Value::Str(_) | Value::Array(_) | Value::Ref(_)) {
-        *r = Value::Undef;
-    } else {
-        // Nothing to drop: `forget` skips the drop check entirely.
+    if matches!(r, Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Undef) {
+        // Nothing to drop: `forget` skips the drop check entirely. (The
+        // scalars are listed, so any value holding memory is dropped.)
         std::mem::forget(std::mem::replace(r, Value::Undef));
+    } else {
+        *r = Value::Undef;
     }
 }
 
@@ -680,6 +726,10 @@ impl Isolate {
             error_level: E_DEFAULT,
             display_errors: true,
             pc: 0,
+            classes: HashMap::new(),
+            class_defs: Vec::new(),
+            declared: Vec::new(),
+            ids: Rc::new(Ids::default()),
         }
     }
 }
@@ -711,6 +761,14 @@ pub struct Context<'i> {
     display_errors: bool,
     /// The running frame's pc (Frame.pc is written when it calls out).
     pc: usize,
+    /// Linked classes by lowercase name.
+    classes: HashMap<Vec<u8>, Rc<Class>>,
+    /// The script's class declarations (DeclareClass indexes them), and
+    /// which are linked.
+    class_defs: Vec<Arc<ClassDef>>,
+    declared: Vec<bool>,
+    /// Object ids (handles), reused as PHP reuses them.
+    ids: Rc<Ids>,
 }
 
 impl Context<'_> {
@@ -722,6 +780,20 @@ impl Context<'_> {
         self.closures.push(Closure::new(func));
         self.functions.insert(key, (self.closures.len() - 1) as u32);
         Ok(())
+    }
+
+    /// Make a closure of `func` (a method's code) and return its index.
+    fn add_closure(&mut self, func: Arc<Function>) -> u32 {
+        self.closures.push(Closure::new(func));
+        (self.closures.len() - 1) as u32
+    }
+
+    /// The script's class declarations: those whose parent and
+    /// interfaces are known are linked when the run starts, the others
+    /// when their declaration runs.
+    pub fn declare_classes(&mut self, classes: &[Arc<ClassDef>]) {
+        self.class_defs.extend(classes.iter().cloned());
+        self.declared.resize(self.class_defs.len(), false);
     }
 
     pub fn function_exists(&self, name: &[u8]) -> bool {
@@ -740,7 +812,7 @@ impl Context<'_> {
         let mut regs = std::mem::take(&mut self.isolate.regs);
         self.frames.push(&Closure::new(main), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
-        let result = self.execute(&mut regs);
+        let result = self.early_bind().and_then(|()| self.execute(&mut regs));
         // The request's variables go now (the isolate keeps the capacity).
         regs.clear();
         self.frames.clear();
@@ -795,6 +867,7 @@ impl Context<'_> {
             OpError::Type(m) => self.throw("TypeError", m),
             OpError::DivisionByZero(m) => self.throw("DivisionByZeroError", m),
             OpError::Arithmetic(m) => self.throw("ArithmeticError", m),
+            OpError::Error(m) => self.throw("Error", m),
         }
     }
 
@@ -995,6 +1068,10 @@ impl Context<'_> {
                     if op == BinOp::Concat {
                         // `.=` appends in place when the string is not shared
                         let x = self.take_var(w, func, var);
+                        if let Some(e) = ops::object_string_error(&x).or_else(|| ops::object_string_error(&y)) {
+                            assign(w, var, x);
+                            return Err(self.op_error(e));
+                        }
                         let mut s = match x {
                             Value::Str(s) => s,
                             other => ops::to_string_lossy(&other, &mut self.diags),
@@ -1080,12 +1157,16 @@ impl Context<'_> {
                         CastKind::Float => Value::Float(v.to_float()),
                         CastKind::Bool => Value::Bool(v.to_bool()),
                         CastKind::String => {
+                            if let Some(e) = ops::object_string_error(&v) {
+                                return Err(self.op_error(e));
+                            }
                             let s = ops::to_string_lossy(&v, &mut self.diags);
                             self.report_diags();
                             Value::Str(s)
                         }
                         CastKind::Array => match v {
                             Value::Array(a) => Value::Array(a),
+                            Value::Object(o) => Value::Array(Rc::new(classes::object_to_array(&o))),
                             Value::Null => Value::Array(Rc::new(PhpArray::new())),
                             other => Value::Array(Rc::new(PhpArray::from_list(vec![other]))),
                         },
@@ -1271,6 +1352,9 @@ impl Context<'_> {
                 }
                 Instr::Echo { src } => {
                     let v = self.operand(w, func, src);
+                    if let Some(e) = ops::object_string_error(&v) {
+                        return Err(self.op_error(e));
+                    }
                     match &v {
                         Value::Str(s) => self.out.write(s.as_bytes()),
                         other => {
@@ -1302,6 +1386,9 @@ impl Context<'_> {
                     let mut bytes = Vec::with_capacity(w[parts].iter().map(ops::string_len_hint).sum());
                     for i in 0..n {
                         let v = self.operand(w, func, start + i as Reg);
+                        if let Some(e) = ops::object_string_error(&v) {
+                            return Err(self.op_error(e));
+                        }
                         ops::push_string(&mut bytes, &v, &mut self.diags);
                     }
                     self.report_diags();
@@ -1334,6 +1421,137 @@ impl Context<'_> {
                     };
                     return Err(Throw::Exit(status));
                 }
+                Instr::DeclareClass { class } => self.declare_class(class as usize)?,
+                Instr::New { dst, class, base: args, argc } => {
+                    let class = self.class_of(func, class)?;
+                    let (object, ctor) = self.instantiate(class)?;
+                    reg!(dst) = Value::Object(object);
+                    match ctor {
+                        Some(m) => return self.call_method(regs, m, base + args as usize, argc, NO_RET, pc),
+                        None => {
+                            for r in &mut w[args as usize..args as usize + argc as usize] {
+                                clear(r);
+                            }
+                        }
+                    }
+                }
+                Instr::This { dst } => match self.frames.last().and_then(|f| f.this.clone()) {
+                    Some(this) => reg!(dst) = Value::Object(this),
+                    None => return Err(self.throw("Error", "Using $this when not in object context")),
+                },
+                Instr::FetchProp { dst, obj, name, quiet } => {
+                    let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
+                    let name = reg!(name).clone();
+                    reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
+                }
+                Instr::AssignProp { obj, name, val, dst } => {
+                    let target = self.operand(w, func, obj);
+                    let v = self.operand(w, func, val);
+                    let name = reg!(name).clone();
+                    self.write_prop(&target, &name, v.clone())?;
+                    reg!(dst) = v;
+                }
+                Instr::AssignPropOp { op, obj, name, val, dst } => {
+                    let target = self.operand(w, func, obj);
+                    let y = self.operand(w, func, val);
+                    let name = reg!(name).clone();
+                    let x = self.read_for_update(&target, &name)?;
+                    let r = ops::binary(op, &x, &y, &mut self.diags);
+                    self.report_diags();
+                    let v = r.map_err(|e| self.op_error(e))?;
+                    self.write_prop(&target, &name, v.clone())?;
+                    reg!(dst) = v;
+                }
+                Instr::PropIncDec { obj, name, dst, inc, post } => {
+                    let target = self.operand(w, func, obj);
+                    let name = reg!(name).clone();
+                    let old = self.read_for_update(&target, &name)?;
+                    let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
+                    self.report_diags();
+                    let new = r.map_err(|e| self.op_error(e))?;
+                    self.write_prop(&target, &name, new.clone())?;
+                    reg!(dst) = if post { old } else { new };
+                }
+                Instr::AssignPropDim { op, base: at, n, append, val, dst } => {
+                    let target = self.operand(w, func, at);
+                    let name = reg!(at + 1).clone();
+                    let mut path = Vec::with_capacity(n as usize);
+                    for i in 0..n {
+                        path.push(self.key(w, func, at + 2 + i as Reg)?);
+                    }
+                    let v = self.operand(w, func, val);
+                    reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
+                }
+                Instr::IssetProp { dst, obj, name } => {
+                    let target = reg!(obj).deref();
+                    let name = reg!(name).clone();
+                    reg!(dst) = Value::Bool(self.isset_prop(&target, &name)?);
+                }
+                Instr::UnsetProp { obj, name } => {
+                    let target = reg!(obj).deref();
+                    let name = reg!(name).clone();
+                    self.unset_prop(&target, &name)?;
+                }
+                Instr::MethodCall { dst, obj, method, base: args, argc } => {
+                    let target = self.operand(w, func, obj);
+                    // A temporary (`(new A)->f()`) is released as it is
+                    // used: the call's `$this` holds the object.
+                    if is_temp(func, obj) {
+                        clear(&mut reg!(obj));
+                    }
+                    let site = &func.sites[method as usize];
+                    let m = self.method_frame(&target, site.name.as_bytes(), site.display.as_bytes())?;
+                    return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                }
+                Instr::StaticCall { dst, class, method, base: args, argc } => {
+                    let site = &func.sites[method as usize];
+                    let m = self.static_frame(func, class, site.name.as_bytes(), site.display.as_bytes())?;
+                    return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                }
+                Instr::ClassConst { dst, class, name } => {
+                    let name = reg!(name).clone();
+                    reg!(dst) = self.class_constant(func, class, &name)?;
+                }
+                Instr::FetchStaticProp { dst, class, name } => {
+                    let name = reg!(name).clone();
+                    let cell = self.static_cell(func, class, &name)?;
+                    let v = match cell.borrow().deref() {
+                        Value::Undef => Value::Null,
+                        v => v,
+                    };
+                    reg!(dst) = v;
+                }
+                Instr::AssignStaticProp { class, name, val, dst } => {
+                    let name = reg!(name).clone();
+                    let cell = self.static_cell(func, class, &name)?;
+                    let v = self.operand(w, func, val);
+                    store(&cell, v.clone());
+                    reg!(dst) = v;
+                }
+                Instr::AssignStaticPropOp { op, class, name, val, dst } => {
+                    let name = reg!(name).clone();
+                    let cell = self.static_cell(func, class, &name)?;
+                    let y = self.operand(w, func, val);
+                    let x = cell.borrow().deref();
+                    let r = ops::binary(op, &x, &y, &mut self.diags);
+                    self.report_diags();
+                    let v = r.map_err(|e| self.op_error(e))?;
+                    store(&cell, v.clone());
+                    reg!(dst) = v;
+                }
+                Instr::InstanceOf { dst, src, class } => {
+                    let v = self.operand(w, func, src);
+                    reg!(dst) = Value::Bool(self.instance_of(func, &v, class));
+                }
+                Instr::Clone { dst, src } => {
+                    let v = self.operand(w, func, src);
+                    let (copy, hook) = self.clone_object(&v)?;
+                    reg!(dst) = Value::Object(copy);
+                    if let Some(m) = hook {
+                        // __clone runs in a window past this frame's.
+                        return self.call_method(regs, m, base + func.nregs as usize, 0, NO_RET, pc);
+                    }
+                }
                 Instr::Call { site, base: args, argc, dst } => {
                     match self.resolve(clo, site)? {
                         Callee::User(target) => {
@@ -1365,6 +1583,25 @@ impl Context<'_> {
                 }
         }
         Ok(Next::Go(pc))
+    }
+
+    /// Push the frame of a method call: its arguments at `args`
+    /// (absolute), its result to `ret` (NO_RET: discarded, as a
+    /// constructor's is).
+    fn call_method(&mut self, regs: &mut Vec<Value>, m: classes::MethodFrame, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+        if (argc as usize) < m.func.code.required {
+            return Err(self.missing_args(&m.func.code, argc as usize));
+        }
+        if let Some(caller) = self.frames.last_mut() {
+            caller.pc = pc as u32;
+        }
+        self.frames.push(&m.func, args, argc as usize, ret);
+        let frame = self.frames.last_mut().expect("the frame just pushed");
+        frame.this = m.this;
+        frame.scope = Some(m.scope);
+        frame.called = Some(m.called);
+        enter(&mut self.frames, regs);
+        Ok(Next::Switch)
     }
 
     /// Call builtin `i` on the `argc` arguments at `args`. The builtin
@@ -1444,7 +1681,10 @@ impl Context<'_> {
         let (file, line) = self.location();
         let declared = func.params.iter().filter(|p| !p.variadic).count();
         let exactly = if func.required == declared { "exactly" } else { "at least" };
-        let name = String::from_utf8_lossy(func.name.as_bytes());
+        let name = match &func.class {
+            Some(class) => format!("{}::{}", String::from_utf8_lossy(class.as_bytes()), String::from_utf8_lossy(func.name.as_bytes())),
+            None => String::from_utf8_lossy(func.name.as_bytes()).into_owned(),
+        };
         Throw::Error {
             class: "ArgumentCountError",
             message: format!(
@@ -1733,6 +1973,15 @@ impl Ctx for Context<'_> {
     fn throw(&self, class: &'static str, message: String) -> Throw {
         Context::throw(self, class, message)
     }
+
+    fn class(&self, name: &[u8]) -> Option<Rc<Class>> {
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        self.classes.get(&name.to_ascii_lowercase()).cloned()
+    }
+
+    fn scope(&self) -> Option<Rc<Class>> {
+        Context::scope(self).0
+    }
 }
 
 /// `x cmp y` on two ints (`<=>`: whether it is nonzero).
@@ -1755,6 +2004,20 @@ fn assign(w: &mut [Value], r: Reg, value: Value) {
     match slot {
         Value::Ref(cell) => *cell.borrow_mut() = value,
         _ => *slot = value,
+    }
+}
+
+/// Whether register `r` holds a temporary (not a variable or constant).
+fn is_temp(func: &Function, r: Reg) -> bool {
+    r as usize >= func.consts_at as usize + func.consts.len()
+}
+
+/// Write `value` into a cell (through a reference it holds).
+fn store(cell: &RefCell<Value>, value: Value) {
+    let inner = cell.borrow().clone();
+    match inner {
+        Value::Ref(r) => *r.borrow_mut() = value,
+        _ => *cell.borrow_mut() = value,
     }
 }
 

@@ -1,0 +1,5 @@
+
+Fatal error: Uncaught Error: Call to undefined method A::g() in %s:4
+Stack trace:
+#0 {main}
+  thrown in %s on line 4

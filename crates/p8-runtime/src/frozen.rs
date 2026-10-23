@@ -2,6 +2,7 @@
 //! script is shared by every isolate on every thread. A context turns them
 //! into [`Value`]s once, when it first runs the code that holds them.
 
+use crate::array::{Key, PhpArray};
 use crate::string::PhpStr;
 use crate::value::Value;
 use std::fmt;
@@ -49,6 +50,8 @@ pub enum Frozen {
     Int(i64),
     Float(f64),
     Str(Text),
+    /// A literal array: its entries' keys (None: the next int key) and values.
+    Array(Arc<[(Option<Frozen>, Frozen)]>),
 }
 
 impl Frozen {
@@ -59,6 +62,18 @@ impl Frozen {
             Frozen::Int(i) => Value::Int(*i),
             Frozen::Float(f) => Value::Float(*f),
             Frozen::Str(s) => Value::Str(PhpStr::from(s.as_bytes())),
+            Frozen::Array(entries) => {
+                let mut array = PhpArray::new();
+                for (k, v) in entries.iter() {
+                    match k.as_ref().map(|k| Key::from_value(&k.to_value())) {
+                        Some(Ok((key, _))) => array.insert(key, v.to_value()),
+                        _ => {
+                            let _ = array.push(v.to_value());
+                        }
+                    }
+                }
+                Value::Array(std::rc::Rc::new(array))
+            }
         }
     }
 }
