@@ -12,7 +12,10 @@ const WHITESPACE: &[u8] = b" \t\n\r\x0b\x0c";
 
 /// The numeric prefix of `s` after leading whitespace (may be empty).
 pub fn numeric_prefix(s: &[u8]) -> &[u8] {
-    let start = s.iter().position(|b| !WHITESPACE.contains(b)).unwrap_or(s.len());
+    let start = s
+        .iter()
+        .position(|b| !WHITESPACE.contains(b))
+        .unwrap_or(s.len());
     let s = &s[start..];
     let digits = |from: usize| s[from..].iter().take_while(|b| b.is_ascii_digit()).count();
     let mut end = usize::from(matches!(s.first(), Some(b'+' | b'-')));
@@ -59,7 +62,10 @@ pub fn leading_numeric(s: &[u8]) -> Option<(Number, usize)> {
 /// whitespace allowed, as in PHP 8).
 pub fn numeric_string(s: &[u8]) -> Option<Number> {
     let (value, end) = leading_numeric(s)?;
-    s[end..].iter().all(|b| WHITESPACE.contains(b)).then_some(value)
+    s[end..]
+        .iter()
+        .all(|b| WHITESPACE.contains(b))
+        .then_some(value)
 }
 
 /// Perl-style increment of an alphanumeric string ("a" -> "b", "Az" ->
@@ -98,7 +104,10 @@ mod tests {
         assert_eq!(numeric_string(b".5"), Some(Number::Float(0.5)));
         assert_eq!(numeric_string(b"12abc"), None);
         assert_eq!(leading_numeric(b"12abc"), Some((Number::Int(12), 2)));
-        assert_eq!(numeric_string(b"9223372036854775808"), Some(Number::Float(9.223372036854776e18)));
+        assert_eq!(
+            numeric_string(b"9223372036854775808"),
+            Some(Number::Float(9.223372036854776e18))
+        );
         assert_eq!(numeric_string(b""), None);
         assert_eq!(numeric_string(b"-"), None);
         assert_eq!(numeric_string(b"1e"), None);
@@ -107,7 +116,14 @@ mod tests {
 
     #[test]
     fn alphanumeric_increment() {
-        for (from, to) in [("a", "b"), ("z", "aa"), ("Az", "Ba"), ("zZ9", "aaA0"), ("a9", "b0"), ("a-", "a-")] {
+        for (from, to) in [
+            ("a", "b"),
+            ("z", "aa"),
+            ("Az", "Ba"),
+            ("zZ9", "aaA0"),
+            ("a9", "b0"),
+            ("a-", "a-"),
+        ] {
             let mut s = from.as_bytes().to_vec();
             increment_alphanumeric(&mut s);
             assert_eq!(s, to.as_bytes(), "{from}");

@@ -44,88 +44,261 @@ pub enum CastKind {
 #[derive(Debug, Clone, Copy)]
 pub enum Instr {
     /// dst = src's value (a copy; references are looked through)
-    Move { dst: Reg, src: Reg },
+    Move {
+        dst: Reg,
+        src: Reg,
+    },
     /// The variable `var` = src's value, written through a reference
-    Assign { var: Reg, src: Reg },
-    LoadNull { dst: Reg },
-    Binary { op: BinOp, dst: Reg, a: Reg, b: Reg },
+    Assign {
+        var: Reg,
+        src: Reg,
+    },
+    LoadNull {
+        dst: Reg,
+    },
+    Binary {
+        op: BinOp,
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
     /// `var op= src` (the expression's value is the variable itself)
-    AssignOp { op: BinOp, var: Reg, src: Reg },
-    Compare { cmp: Cmp, dst: Reg, a: Reg, b: Reg },
-    Not { dst: Reg, src: Reg },
-    Neg { dst: Reg, src: Reg },
-    BitNot { dst: Reg, src: Reg },
-    ToBool { dst: Reg, src: Reg },
-    Cast { kind: CastKind, dst: Reg, src: Reg },
+    AssignOp {
+        op: BinOp,
+        var: Reg,
+        src: Reg,
+    },
+    Compare {
+        cmp: Cmp,
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Not {
+        dst: Reg,
+        src: Reg,
+    },
+    Neg {
+        dst: Reg,
+        src: Reg,
+    },
+    BitNot {
+        dst: Reg,
+        src: Reg,
+    },
+    ToBool {
+        dst: Reg,
+        src: Reg,
+    },
+    Cast {
+        kind: CastKind,
+        dst: Reg,
+        src: Reg,
+    },
     /// `++$var`/`--$var` (dst gets the new value) or `$var++`/`$var--`
     /// (dst gets the old one)
-    IncDec { var: Reg, dst: Reg, inc: bool, post: bool },
+    IncDec {
+        var: Reg,
+        dst: Reg,
+        inc: bool,
+        post: bool,
+    },
     /// `++$var` whose value is not used
-    IncVar { var: Reg },
+    IncVar {
+        var: Reg,
+    },
     /// `--$var` whose value is not used
-    DecVar { var: Reg },
+    DecVar {
+        var: Reg,
+    },
     /// A comparison and its branch in one, one instruction per test (so
     /// the interpreter dispatches once): jump when `a < b` holds as PHP's
     /// `<` decides it, or for the `Not` forms when it does not. `>` and
     /// `>=` swap their operands, as PHP compiles them. See `jump_cmp`.
-    JumpLt { a: Reg, b: Reg, target: u32 },
-    JumpNotLt { a: Reg, b: Reg, target: u32 },
-    JumpLe { a: Reg, b: Reg, target: u32 },
-    JumpNotLe { a: Reg, b: Reg, target: u32 },
-    JumpEq { a: Reg, b: Reg, target: u32 },
-    JumpNotEq { a: Reg, b: Reg, target: u32 },
-    JumpIdentical { a: Reg, b: Reg, target: u32 },
-    JumpNotIdentical { a: Reg, b: Reg, target: u32 },
-    Jump { target: u32 },
-    JumpIf { cond: Reg, target: u32 },
-    JumpIfNot { cond: Reg, target: u32 },
+    JumpLt {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    JumpNotLt {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    JumpLe {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    JumpNotLe {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    JumpEq {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    JumpNotEq {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    JumpIdentical {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    JumpNotIdentical {
+        a: Reg,
+        b: Reg,
+        target: u32,
+    },
+    Jump {
+        target: u32,
+    },
+    JumpIf {
+        cond: Reg,
+        target: u32,
+    },
+    JumpIfNot {
+        cond: Reg,
+        target: u32,
+    },
     /// `a ?? b`: if `src` is set and not null, dst = it and jump
-    JumpIfSet { src: Reg, dst: Reg, target: u32 },
-    NewArray { dst: Reg },
+    JumpIfSet {
+        src: Reg,
+        dst: Reg,
+        target: u32,
+    },
+    NewArray {
+        dst: Reg,
+    },
     /// arr[] = val (array literal building)
-    ArrayPush { arr: Reg, val: Reg },
+    ArrayPush {
+        arr: Reg,
+        val: Reg,
+    },
     /// arr[key] = val (array literal building)
-    ArraySet { arr: Reg, key: Reg, val: Reg },
+    ArraySet {
+        arr: Reg,
+        key: Reg,
+        val: Reg,
+    },
     /// dst = arr[key]; `quiet` for isset/?? (no warning)
-    FetchDim { dst: Reg, arr: Reg, key: Reg, quiet: bool },
+    FetchDim {
+        dst: Reg,
+        arr: Reg,
+        key: Reg,
+        quiet: bool,
+    },
     /// var[k1]..[kn] = val with keys in `keys..keys+n`; when `append`, the
     /// last level is `[]`. dst gets the assigned value.
-    AssignDim { var: Reg, keys: Reg, n: u8, append: bool, val: Reg, dst: Reg },
+    AssignDim {
+        var: Reg,
+        keys: Reg,
+        n: u8,
+        append: bool,
+        val: Reg,
+        dst: Reg,
+    },
     /// var[k1]..[kn] op= val
-    AssignDimOp { op: BinOp, var: Reg, keys: Reg, n: u8, val: Reg, dst: Reg },
+    AssignDimOp {
+        op: BinOp,
+        var: Reg,
+        keys: Reg,
+        n: u8,
+        val: Reg,
+        dst: Reg,
+    },
     /// isset(var[k1]..[kn])
-    IssetDim { dst: Reg, var: Reg, keys: Reg, n: u8 },
+    IssetDim {
+        dst: Reg,
+        var: Reg,
+        keys: Reg,
+        n: u8,
+    },
     /// isset($var)
-    IssetVar { dst: Reg, var: Reg },
+    IssetVar {
+        dst: Reg,
+        var: Reg,
+    },
     /// unset($var)
-    UnsetVar { var: Reg },
+    UnsetVar {
+        var: Reg,
+    },
     /// unset(var[k1]..[kn])
-    UnsetDim { var: Reg, keys: Reg, n: u8 },
+    UnsetDim {
+        var: Reg,
+        keys: Reg,
+        n: u8,
+    },
     /// Start a foreach over `src`: iter gets the iterated value, pos the
     /// position; an empty iterable jumps to `end`
-    IterInit { src: Reg, iter: Reg, end: u32 },
+    IterInit {
+        src: Reg,
+        iter: Reg,
+        end: u32,
+    },
     /// Next element: value into `val` (and key into `key` when has_key),
     /// or jump to `end` when done
-    IterNext { iter: Reg, val: Reg, key: Reg, has_key: bool, end: u32 },
+    IterNext {
+        iter: Reg,
+        val: Reg,
+        key: Reg,
+        has_key: bool,
+        end: u32,
+    },
     /// Call site `site` with `argc` arguments in base..base+argc; result to dst
-    Call { site: u16, base: Reg, argc: u8, dst: Reg },
+    Call {
+        site: u16,
+        base: Reg,
+        argc: u8,
+        dst: Reg,
+    },
     /// Pass variable `var` as argument `n` of `site` into `arg`: by
     /// reference if the callee takes it so, else its value
-    SendVar { site: u16, n: u8, arg: Reg, var: Reg },
-    Return { src: Reg },
+    SendVar {
+        site: u16,
+        n: u8,
+        arg: Reg,
+        var: Reg,
+    },
+    Return {
+        src: Reg,
+    },
     ReturnNull,
-    Echo { src: Reg },
+    Echo {
+        src: Reg,
+    },
     /// dst = the constant named at site (cached once found)
-    FetchConst { site: u16, dst: Reg },
+    FetchConst {
+        site: u16,
+        dst: Reg,
+    },
     /// dst = a . b . … for n registers from start (interpolation)
-    ConcatN { dst: Reg, start: Reg, n: u8 },
+    ConcatN {
+        dst: Reg,
+        start: Reg,
+        n: u8,
+    },
     /// `global $name`: bind CV `var` to the global variable named const `name`
-    BindGlobal { var: Reg, name: u16 },
+    BindGlobal {
+        var: Reg,
+        name: u16,
+    },
     /// Parameter `n` was passed: skip its default's code (at the next
     /// instruction) by jumping to target
-    ArgDefault { n: u8, target: u32 },
+    ArgDefault {
+        n: u8,
+        target: u32,
+    },
     /// exit/die with status or message in src (or none)
-    Exit { src: Reg, has: bool },
+    Exit {
+        src: Reg,
+        has: bool,
+    },
 }
 
 impl Instr {
@@ -260,6 +433,10 @@ mod tests {
     #[test]
     fn instructions_stay_small() {
         // Dispatch reads one instruction per step; keep them compact.
-        assert!(std::mem::size_of::<super::Instr>() <= 12, "{}", std::mem::size_of::<super::Instr>());
+        assert!(
+            std::mem::size_of::<super::Instr>() <= 12,
+            "{}",
+            std::mem::size_of::<super::Instr>()
+        );
     }
 }

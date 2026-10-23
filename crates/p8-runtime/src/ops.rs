@@ -7,10 +7,10 @@
 //! for it to throw.
 
 use crate::array::PhpArray;
+use crate::number::{Precision, dval_to_lval, float_to_string};
+use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string};
 use crate::string::PhpStr;
 use crate::value::Value;
-use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string};
-use crate::number::{Precision, dval_to_lval, float_to_string};
 use std::rc::Rc;
 
 /// A diagnostic an operator raised (shown with the current location).
@@ -78,9 +78,14 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
     }
     match op {
         BinOp::Concat => Ok(concat(a, b, diags)),
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => arithmetic(op, a, b, diags),
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
+            arithmetic(op, a, b, diags)
+        }
         BinOp::Mod => {
-            let (x, y) = (int_operand(op, a, b, a, diags)?, int_operand(op, a, b, b, diags)?);
+            let (x, y) = (
+                int_operand(op, a, b, a, diags)?,
+                int_operand(op, a, b, b, diags)?,
+            );
             match y {
                 0 => Err(OpError::DivisionByZero("Modulo by zero")),
                 -1 => Ok(Value::Int(0)),
@@ -91,7 +96,10 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
             if let (Value::Str(x), Value::Str(y)) = (a, b) {
                 return Ok(Value::Str(bytewise(op, x.as_bytes(), y.as_bytes())));
             }
-            let (x, y) = (int_operand(op, a, b, a, diags)?, int_operand(op, a, b, b, diags)?);
+            let (x, y) = (
+                int_operand(op, a, b, a, diags)?,
+                int_operand(op, a, b, b, diags)?,
+            );
             Ok(Value::Int(match op {
                 BinOp::BitAnd => x & y,
                 BinOp::BitOr => x | y,
@@ -99,14 +107,23 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
             }))
         }
         BinOp::Shl | BinOp::Shr => {
-            let (x, y) = (int_operand(op, a, b, a, diags)?, int_operand(op, a, b, b, diags)?);
+            let (x, y) = (
+                int_operand(op, a, b, a, diags)?,
+                int_operand(op, a, b, b, diags)?,
+            );
             if y < 0 {
                 return Err(OpError::Arithmetic("Bit shift by negative number"));
             }
             Ok(Value::Int(match (op, y >= 64) {
                 (BinOp::Shl, true) => 0,
                 (BinOp::Shl, false) => x.wrapping_shl(y as u32),
-                (_, true) => if x < 0 { -1 } else { 0 },
+                (_, true) => {
+                    if x < 0 {
+                        -1
+                    } else {
+                        0
+                    }
+                }
                 (_, false) => x >> y,
             }))
         }
@@ -114,11 +131,22 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
 }
 
 fn unsupported(op: BinOp, a: &Value, b: &Value) -> OpError {
-    OpError::Type(format!("Unsupported operand types: {} {} {}", a.type_name(), op.symbol(), b.type_name()))
+    OpError::Type(format!(
+        "Unsupported operand types: {} {} {}",
+        a.type_name(),
+        op.symbol(),
+        b.type_name()
+    ))
 }
 
 /// The number an arithmetic operand stands for (zendi_try_convert_scalar_to_number).
-fn number_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags) -> Result<Number, OpError> {
+fn number_operand(
+    op: BinOp,
+    a: &Value,
+    b: &Value,
+    v: &Value,
+    diags: &mut Diags,
+) -> Result<Number, OpError> {
     Ok(match v {
         Value::Int(i) => Number::Int(*i),
         Value::Float(f) => Number::Float(*f),
@@ -140,7 +168,13 @@ fn number_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags)
 
 /// The int an operand of %, bitwise or shift operators stands for; a
 /// fractional float (or float string) is deprecated.
-fn int_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags) -> Result<i64, OpError> {
+fn int_operand(
+    op: BinOp,
+    a: &Value,
+    b: &Value,
+    v: &Value,
+    diags: &mut Diags,
+) -> Result<i64, OpError> {
     let n = number_operand(op, a, b, v, diags)?;
     Ok(match n {
         Number::Int(i) => i,
@@ -180,13 +214,21 @@ fn arithmetic(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
     }
     let y = number_operand(op, a, b, b, diags)?;
     if op == BinOp::Pow && as_f64(x) == 0.0 && as_f64(y) < 0.0 {
-        diags.push(Diag::Deprecated("Power of base 0 and negative exponent is deprecated".into()));
+        diags.push(Diag::Deprecated(
+            "Power of base 0 and negative exponent is deprecated".into(),
+        ));
     }
     Ok(match (x, y) {
         (Number::Int(x), Number::Int(y)) => match op {
-            BinOp::Add => x.checked_add(y).map_or(Value::Float(x as f64 + y as f64), Value::Int),
-            BinOp::Sub => x.checked_sub(y).map_or(Value::Float(x as f64 - y as f64), Value::Int),
-            BinOp::Mul => x.checked_mul(y).map_or(Value::Float(x as f64 * y as f64), Value::Int),
+            BinOp::Add => x
+                .checked_add(y)
+                .map_or(Value::Float(x as f64 + y as f64), Value::Int),
+            BinOp::Sub => x
+                .checked_sub(y)
+                .map_or(Value::Float(x as f64 - y as f64), Value::Int),
+            BinOp::Mul => x
+                .checked_mul(y)
+                .map_or(Value::Float(x as f64 * y as f64), Value::Int),
             BinOp::Div => {
                 if y == 0 {
                     return Err(OpError::DivisionByZero("Division by zero"));
@@ -311,7 +353,9 @@ fn concat(a: &Value, b: &Value, diags: &mut Diags) -> Value {
 /// `-$a` (as `$a * -1`, keeping -0.0 and int overflow rules).
 pub fn negate(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     match a {
-        Value::Int(i) => Ok(i.checked_neg().map_or(Value::Float(-(*i as f64)), Value::Int)),
+        Value::Int(i) => Ok(i
+            .checked_neg()
+            .map_or(Value::Float(-(*i as f64)), Value::Int)),
         Value::Float(f) => Ok(Value::Float(-f)),
         _ => binary(BinOp::Mul, a, &Value::Int(-1), diags),
     }
@@ -322,16 +366,23 @@ pub fn bit_not(a: &Value) -> Result<Value, OpError> {
     match a {
         Value::Int(i) => Ok(Value::Int(!i)),
         Value::Float(f) => Ok(Value::Int(!dval_to_lval(*f))),
-        Value::Str(s) => Ok(Value::Str(PhpStr::new(s.as_bytes().iter().map(|b| !b).collect()))),
+        Value::Str(s) => Ok(Value::Str(PhpStr::new(
+            s.as_bytes().iter().map(|b| !b).collect(),
+        ))),
         Value::Ref(cell) => bit_not(&cell.borrow()),
-        other => Err(OpError::Type(format!("Cannot perform bitwise not on {}", other.type_name()))),
+        other => Err(OpError::Type(format!(
+            "Cannot perform bitwise not on {}",
+            other.type_name()
+        ))),
     }
 }
 
 /// `++$a` (increment_function).
 pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     Ok(match a {
-        Value::Int(i) => i.checked_add(1).map_or(Value::Float(*i as f64 + 1.0), Value::Int),
+        Value::Int(i) => i
+            .checked_add(1)
+            .map_or(Value::Float(*i as f64 + 1.0), Value::Int),
         Value::Float(f) => Value::Float(f + 1.0),
         Value::Null | Value::Undef => Value::Int(1),
         Value::Bool(_) => {
@@ -341,15 +392,21 @@ pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
             a.clone()
         }
         Value::Str(s) if s.is_empty() => {
-            diags.push(Diag::Deprecated("Increment on non-alphanumeric string is deprecated".into()));
+            diags.push(Diag::Deprecated(
+                "Increment on non-alphanumeric string is deprecated".into(),
+            ));
             Value::str("1")
         }
         Value::Str(s) => match numeric_string(s.as_bytes()) {
-            Some(Number::Int(i)) => i.checked_add(1).map_or(Value::Float(i as f64 + 1.0), Value::Int),
+            Some(Number::Int(i)) => i
+                .checked_add(1)
+                .map_or(Value::Float(i as f64 + 1.0), Value::Int),
             Some(Number::Float(f)) => Value::Float(f + 1.0),
             None => {
                 if !s.as_bytes().iter().all(u8::is_ascii_alphanumeric) {
-                    diags.push(Diag::Deprecated("Increment on non-alphanumeric string is deprecated".into()));
+                    diags.push(Diag::Deprecated(
+                        "Increment on non-alphanumeric string is deprecated".into(),
+                    ));
                 }
                 let mut bytes = s.as_bytes().to_vec();
                 increment_alphanumeric(&mut bytes);
@@ -364,7 +421,9 @@ pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
 /// `--$a` (decrement_function).
 pub fn decrement(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     Ok(match a {
-        Value::Int(i) => i.checked_sub(1).map_or(Value::Float(*i as f64 - 1.0), Value::Int),
+        Value::Int(i) => i
+            .checked_sub(1)
+            .map_or(Value::Float(*i as f64 - 1.0), Value::Int),
         Value::Float(f) => Value::Float(f - 1.0),
         Value::Null | Value::Undef => {
             diags.push(Diag::Warning(
@@ -379,14 +438,20 @@ pub fn decrement(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
             a.clone()
         }
         Value::Str(s) if s.is_empty() => {
-            diags.push(Diag::Deprecated("Decrement on empty string is deprecated as non-numeric".into()));
+            diags.push(Diag::Deprecated(
+                "Decrement on empty string is deprecated as non-numeric".into(),
+            ));
             Value::Int(-1)
         }
         Value::Str(s) => match numeric_string(s.as_bytes()) {
-            Some(Number::Int(i)) => i.checked_sub(1).map_or(Value::Float(i as f64 - 1.0), Value::Int),
+            Some(Number::Int(i)) => i
+                .checked_sub(1)
+                .map_or(Value::Float(i as f64 - 1.0), Value::Int),
             Some(Number::Float(f)) => Value::Float(f - 1.0),
             None => {
-                diags.push(Diag::Deprecated("Decrement on non-numeric string has no effect and is deprecated".into()));
+                diags.push(Diag::Deprecated(
+                    "Decrement on non-numeric string has no effect and is deprecated".into(),
+                ));
                 a.clone()
             }
         },

@@ -9,14 +9,14 @@
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
+use indexmap::IndexMap;
 use p8_bytecode::{CastKind, Cmp, Function, Instr, Param, Reg, Site};
 use p8_runtime::ext::Registry;
-use p8_runtime::ops::BinOp;
 use p8_runtime::frozen::{Frozen, Text};
-use p8_syntax::literal::{self, Number};
+use p8_runtime::ops::BinOp;
 use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, Stmt, StmtId, UnaryOp};
+use p8_syntax::literal::{self, Number};
 use p8_syntax::span::Span;
-use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -147,7 +147,11 @@ impl FnBuilder {
         if let Some(&i) = self.site_index.get(&key) {
             return i;
         }
-        self.sites.push(Site { name, fallback: None, display });
+        self.sites.push(Site {
+            name,
+            fallback: None,
+            display,
+        });
         let i = (self.sites.len() - 1) as u16;
         self.site_index.insert(key, i);
         i
@@ -168,10 +172,17 @@ impl FnBuilder {
         for instr in &mut self.code {
             map_regs(instr, map);
         }
-        let mut cv_names: Vec<(usize, Text)> =
-            self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
+        let mut cv_names: Vec<(usize, Text)> = self
+            .cvs
+            .iter()
+            .map(|(n, &i)| (i, Text::from(n.as_slice())))
+            .collect();
         cv_names.sort_by_key(|(i, _)| *i);
-        let required = self.params.iter().rposition(|p| !p.has_default && !p.variadic).map_or(0, |i| i + 1);
+        let required = self
+            .params
+            .iter()
+            .rposition(|p| !p.has_default && !p.variadic)
+            .map_or(0, |i| i + 1);
         Function {
             name: self.name,
             params: self.params,
@@ -194,7 +205,12 @@ impl FnBuilder {
 fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
-        Move { dst, src } | Not { dst, src } | Neg { dst, src } | BitNot { dst, src } | ToBool { dst, src } | Cast { dst, src, .. } => {
+        Move { dst, src }
+        | Not { dst, src }
+        | Neg { dst, src }
+        | BitNot { dst, src }
+        | ToBool { dst, src }
+        | Cast { dst, src, .. } => {
             *dst = f(*dst);
             *src = f(*src);
         }
@@ -248,7 +264,20 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *arr = f(*arr);
             *key = f(*key);
         }
-        AssignDim { var, keys, val, dst, .. } | AssignDimOp { var, keys, val, dst, .. } => {
+        AssignDim {
+            var,
+            keys,
+            val,
+            dst,
+            ..
+        }
+        | AssignDimOp {
+            var,
+            keys,
+            val,
+            dst,
+            ..
+        } => {
             *var = f(*var);
             *keys = f(*keys);
             *val = f(*val);
@@ -320,8 +349,21 @@ type Result<T> = std::result::Result<T, CompileError>;
 impl<'src> Compiler<'src> {
     pub fn new(source: &'src [u8], file: &str, registry: &'src Registry) -> Self {
         let mut line_starts = vec![0];
-        line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
-        Compiler { source, registry, file: Arc::from(file), line_starts, functions: Vec::new(), by_ref: HashMap::new() }
+        line_starts.extend(
+            source
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| **b == b'\n')
+                .map(|(i, _)| i + 1),
+        );
+        Compiler {
+            source,
+            registry,
+            file: Arc::from(file),
+            line_starts,
+            functions: Vec::new(),
+            by_ref: HashMap::new(),
+        }
     }
 
     fn line(&self, span: Span) -> u32 {
@@ -333,7 +375,10 @@ impl<'src> Compiler<'src> {
     }
 
     fn unsupported(&self, span: Span, what: &str) -> CompileError {
-        CompileError { message: format!("p8 cannot compile {what} yet"), line: self.line(span) }
+        CompileError {
+            message: format!("p8 cannot compile {what} yet"),
+            line: self.line(span),
+        }
     }
 
     pub fn compile(mut self, stmts: &[StmtId]) -> Result<Program> {
@@ -341,14 +386,18 @@ impl<'src> Compiler<'src> {
             if let Stmt::Function { name, params, .. } = stmt {
                 let modes = params.iter().map(|p| p.by_ref).collect();
                 let rest = params.last().is_some_and(|p| p.variadic && p.by_ref);
-                self.by_ref.insert(self.text(name.span).to_ascii_lowercase(), (modes, rest));
+                self.by_ref
+                    .insert(self.text(name.span).to_ascii_lowercase(), (modes, rest));
             }
         }
         let mut f = FnBuilder::new(Text::from("{main}"));
         self.stmts(&mut f, stmts)?;
         f.emit(Instr::ReturnNull);
         let main = Arc::new(f.finish(self.file.clone()));
-        Ok(Program { main, functions: self.functions })
+        Ok(Program {
+            main,
+            functions: self.functions,
+        })
     }
 
     fn stmts(&mut self, f: &mut FnBuilder, stmts: &[StmtId]) -> Result<()> {
@@ -382,7 +431,12 @@ impl<'src> Compiler<'src> {
                     f.emit(Instr::ReturnNull);
                 }
             },
-            Stmt::If { condition, then_block, else_block, .. } => {
+            Stmt::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
                 let skip = self.branch(f, condition, false)?;
                 f.temps = f.floor;
                 self.stmts(f, then_block)?;
@@ -396,7 +450,9 @@ impl<'src> Compiler<'src> {
                     None => f.patch(skip, f.here()),
                 }
             }
-            Stmt::While { condition, body, .. } => {
+            Stmt::While {
+                condition, body, ..
+            } => {
                 // The condition is tested at the bottom: one branch per iteration.
                 let to_cond = f.emit(Instr::Jump { target: 0 });
                 let body_start = f.here();
@@ -408,9 +464,14 @@ impl<'src> Compiler<'src> {
                 f.temps = f.floor;
                 self.close_loop(f, cond_at);
             }
-            Stmt::DoWhile { body, condition, .. } => {
+            Stmt::DoWhile {
+                body, condition, ..
+            } => {
                 let start = f.here();
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                f.loops.push(Loop {
+                    breaks: Vec::new(),
+                    continues: Vec::new(),
+                });
                 self.stmts(f, body)?;
                 let cont = f.here();
                 let back = self.branch(f, condition, true)?;
@@ -418,7 +479,13 @@ impl<'src> Compiler<'src> {
                 f.temps = f.floor;
                 self.close_loop(f, cont);
             }
-            Stmt::For { init, condition, loop_expr, body, .. } => {
+            Stmt::For {
+                init,
+                condition,
+                loop_expr,
+                body,
+                ..
+            } => {
                 for e in *init {
                     self.discard(f, e)?;
                     f.temps = f.floor;
@@ -426,7 +493,10 @@ impl<'src> Compiler<'src> {
                 // Body first, then the step and the condition at the bottom.
                 let to_cond = f.emit(Instr::Jump { target: 0 });
                 let body_start = f.here();
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                f.loops.push(Loop {
+                    breaks: Vec::new(),
+                    continues: Vec::new(),
+                });
                 self.stmts(f, body)?;
                 let cont = f.here();
                 for e in *loop_expr {
@@ -449,7 +519,13 @@ impl<'src> Compiler<'src> {
                 f.temps = f.floor;
                 self.close_loop(f, cont);
             }
-            Stmt::Foreach { expr, key_var, value_var, body, .. } => {
+            Stmt::Foreach {
+                expr,
+                key_var,
+                value_var,
+                body,
+                ..
+            } => {
                 let src = self.expr(f, expr)?;
                 // The iterator's two registers stay live through the body.
                 let iter = f.temp();
@@ -462,8 +538,17 @@ impl<'src> Compiler<'src> {
                     Some(k) => Some(self.var_target(f, k)?),
                     None => None,
                 };
-                let next = f.emit(Instr::IterNext { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
-                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                let next = f.emit(Instr::IterNext {
+                    iter,
+                    val,
+                    key: key.unwrap_or(val),
+                    has_key: key.is_some(),
+                    end: 0,
+                });
+                f.loops.push(Loop {
+                    breaks: Vec::new(),
+                    continues: Vec::new(),
+                });
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
@@ -479,7 +564,11 @@ impl<'src> Compiler<'src> {
                 let depth = match level {
                     Some(e) => match self.literal(e) {
                         Some(Frozen::Int(n)) if n >= 1 => n as usize,
-                        _ => return Err(self.unsupported(*span, "break/continue with a non-literal level")),
+                        _ => {
+                            return Err(
+                                self.unsupported(*span, "break/continue with a non-literal level")
+                            );
+                        }
                     },
                     None => 1,
                 };
@@ -502,7 +591,13 @@ impl<'src> Compiler<'src> {
                     f.loops[target].continues.push(at);
                 }
             }
-            Stmt::Function { name, params, body, by_ref, .. } => {
+            Stmt::Function {
+                name,
+                params,
+                body,
+                by_ref,
+                ..
+            } => {
                 let function = self.function(name.span, params, body, *by_ref)?;
                 self.functions.push(Arc::new(function));
             }
@@ -515,7 +610,10 @@ impl<'src> Compiler<'src> {
                     let var = f.cv(&text[1..]);
                     let name_reg = f.constant(Frozen::Str(Text::from(&text[1..])));
                     let name_index = name_reg & ((1 << KIND_SHIFT) - 1);
-                    f.emit(Instr::BindGlobal { var, name: name_index });
+                    f.emit(Instr::BindGlobal {
+                        var,
+                        name: name_index,
+                    });
                 }
             }
             Stmt::Const { consts, .. } => {
@@ -525,10 +623,21 @@ impl<'src> Compiler<'src> {
                     let site = f.site(false, Text::from("define"), Text::from("define"));
                     let base = f.temp();
                     let second = f.temp();
-                    f.emit(Instr::Move { dst: base, src: name });
-                    f.emit(Instr::Move { dst: second, src: value });
+                    f.emit(Instr::Move {
+                        dst: base,
+                        src: name,
+                    });
+                    f.emit(Instr::Move {
+                        dst: second,
+                        src: value,
+                    });
                     let dst = f.temp();
-                    f.emit(Instr::Call { site, base, argc: 2, dst });
+                    f.emit(Instr::Call {
+                        site,
+                        base,
+                        argc: 2,
+                        dst,
+                    });
                 }
             }
             Stmt::Unset { vars, .. } => {
@@ -541,7 +650,10 @@ impl<'src> Compiler<'src> {
                         Expr::ArrayDimFetch { .. } => {
                             let (var, keys, n, append) = self.dim_path(f, v)?;
                             if append {
-                                return Err(CompileError { message: "Cannot use [] for unsetting".into(), line: f.line });
+                                return Err(CompileError {
+                                    message: "Cannot use [] for unsetting".into(),
+                                    line: f.line,
+                                });
                             }
                             f.emit(Instr::UnsetDim { var, keys, n });
                         }
@@ -560,11 +672,23 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::PostInc { var, .. } | Expr::PostDec { var, .. } => {
                 let var = self.inc_target(f, var)?;
-                f.emit(if matches!(e, Expr::PostInc { .. }) { Instr::IncVar { var } } else { Instr::DecVar { var } });
+                f.emit(if matches!(e, Expr::PostInc { .. }) {
+                    Instr::IncVar { var }
+                } else {
+                    Instr::DecVar { var }
+                });
             }
-            Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr, .. } => {
+            Expr::Unary {
+                op: op @ (UnaryOp::PreInc | UnaryOp::PreDec),
+                expr,
+                ..
+            } => {
                 let var = self.inc_target(f, expr)?;
-                f.emit(if matches!(op, UnaryOp::PreInc) { Instr::IncVar { var } } else { Instr::DecVar { var } });
+                f.emit(if matches!(op, UnaryOp::PreInc) {
+                    Instr::IncVar { var }
+                } else {
+                    Instr::DecVar { var }
+                });
             }
             _ => {
                 self.expr(f, e)?;
@@ -576,7 +700,9 @@ impl<'src> Compiler<'src> {
     /// Emit a jump taken when `cond` is `when`; returns it for patching.
     /// A comparison becomes one compare-and-jump instruction.
     fn branch(&mut self, f: &mut FnBuilder, cond: &Expr, when: bool) -> Result<usize> {
-        if let Expr::Binary { left, op, right, .. } = cond
+        if let Expr::Binary {
+            left, op, right, ..
+        } = cond
             && let Some(cmp) = comparison(*op)
         {
             let a = self.expr(f, left)?;
@@ -584,11 +710,18 @@ impl<'src> Compiler<'src> {
             return Ok(f.emit(Instr::jump_cmp(cmp, a, b, when, 0)));
         }
         let c = self.expr(f, cond)?;
-        Ok(f.emit(if when { Instr::JumpIf { cond: c, target: 0 } } else { Instr::JumpIfNot { cond: c, target: 0 } }))
+        Ok(f.emit(if when {
+            Instr::JumpIf { cond: c, target: 0 }
+        } else {
+            Instr::JumpIfNot { cond: c, target: 0 }
+        }))
     }
 
     fn loop_body(&mut self, f: &mut FnBuilder, body: &[StmtId], _start: u32) -> Result<()> {
-        f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+        f.loops.push(Loop {
+            breaks: Vec::new(),
+            continues: Vec::new(),
+        });
         self.stmts(f, body)
     }
 
@@ -605,7 +738,13 @@ impl<'src> Compiler<'src> {
     }
 
     /// A user function.
-    fn function(&mut self, name: Span, params: &[p8_syntax::ast::Param], body: &[StmtId], by_ref: bool) -> Result<Function> {
+    fn function(
+        &mut self,
+        name: Span,
+        params: &[p8_syntax::ast::Param],
+        body: &[StmtId],
+        by_ref: bool,
+    ) -> Result<Function> {
         let mut f = FnBuilder::new(Text::from(self.text(name)));
         f.returns_ref = by_ref;
         f.line = self.line(name);
@@ -624,7 +763,10 @@ impl<'src> Compiler<'src> {
         // call checks the required ones were).
         for (i, p) in params.iter().enumerate() {
             if let Some(default) = p.default {
-                let at = f.emit(Instr::ArgDefault { n: i as u8, target: 0 });
+                let at = f.emit(Instr::ArgDefault {
+                    n: i as u8,
+                    target: 0,
+                });
                 let var = reg(CV, i);
                 let value = self.expr(&mut f, default)?;
                 f.emit(Instr::Assign { var, src: value });
@@ -654,7 +796,9 @@ impl<'src> Compiler<'src> {
     /// A variable written by foreach: its register.
     fn var_target(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
         match e {
-            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => Ok(f.cv(&self.text(*name)[1..])),
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
+                Ok(f.cv(&self.text(*name)[1..]))
+            }
             other => Err(self.unsupported(other.span(), "this foreach target")),
         }
     }
@@ -678,7 +822,10 @@ impl<'src> Compiler<'src> {
         }
         let var = f.cv(&text[1..]);
         let append = dims.last().is_some_and(|d| d.is_none());
-        if dims[..dims.len() - usize::from(append)].iter().any(|d| d.is_none()) {
+        if dims[..dims.len() - usize::from(append)]
+            .iter()
+            .any(|d| d.is_none())
+        {
             return Err(self.unsupported(e.span(), "[] before the last dimension"));
         }
         let keyed: Vec<&Expr> = dims.iter().flatten().copied().collect();
@@ -744,12 +891,24 @@ impl<'src> Compiler<'src> {
                     let val = self.expr(f, expr)?;
                     let (target, keys, n, append) = self.dim_path(f, var)?;
                     let dst = f.temp();
-                    f.emit(Instr::AssignDim { var: target, keys, n, append, val, dst });
+                    f.emit(Instr::AssignDim {
+                        var: target,
+                        keys,
+                        n,
+                        append,
+                        val,
+                        dst,
+                    });
                     dst
                 }
                 other => return Err(self.unsupported(other.span(), "this assignment")),
             },
-            Expr::AssignOp { var, op, expr, span } => {
+            Expr::AssignOp {
+                var,
+                op,
+                expr,
+                span,
+            } => {
                 let Some(bin) = assign_binop(*op) else {
                     // `??=`
                     return Err(self.unsupported(*span, "??="));
@@ -758,25 +917,43 @@ impl<'src> Compiler<'src> {
                     Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
                         let target = f.cv(&self.text(*name)[1..]);
                         let src = self.expr(f, expr)?;
-                        f.emit(Instr::AssignOp { op: bin, var: target, src });
+                        f.emit(Instr::AssignOp {
+                            op: bin,
+                            var: target,
+                            src,
+                        });
                         target
                     }
                     Expr::ArrayDimFetch { dim: Some(_), .. } => {
                         let val = self.expr(f, expr)?;
                         let (target, keys, n, _) = self.dim_path(f, var)?;
                         let dst = f.temp();
-                        f.emit(Instr::AssignDimOp { op: bin, var: target, keys, n, val, dst });
+                        f.emit(Instr::AssignDimOp {
+                            op: bin,
+                            var: target,
+                            keys,
+                            n,
+                            val,
+                            dst,
+                        });
                         dst
                     }
                     other => return Err(self.unsupported(other.span(), "this compound assignment")),
                 }
             }
-            Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
+            Expr::Binary {
+                left, op, right, ..
+            } => self.binary(f, left, *op, right, hint, mark)?,
             Expr::Unary { op, expr, span } => match op {
                 UnaryOp::PreInc | UnaryOp::PreDec => {
                     let var = self.inc_target(f, expr)?;
                     let dst = f.temp();
-                    f.emit(Instr::IncDec { var, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
+                    f.emit(Instr::IncDec {
+                        var,
+                        dst,
+                        inc: matches!(op, UnaryOp::PreInc),
+                        post: false,
+                    });
                     dst
                 }
                 UnaryOp::Not | UnaryOp::Minus | UnaryOp::BitNot | UnaryOp::Plus => {
@@ -788,7 +965,12 @@ impl<'src> Compiler<'src> {
                         UnaryOp::BitNot => Instr::BitNot { dst, src },
                         _ => {
                             let one = f.constant(Frozen::Int(1));
-                            Instr::Binary { op: BinOp::Mul, dst, a: src, b: one }
+                            Instr::Binary {
+                                op: BinOp::Mul,
+                                dst,
+                                a: src,
+                                b: one,
+                            }
                         }
                     };
                     f.emit(instr);
@@ -800,10 +982,20 @@ impl<'src> Compiler<'src> {
             Expr::PostInc { var, .. } | Expr::PostDec { var, .. } => {
                 let target = self.inc_target(f, var)?;
                 let dst = f.temp();
-                f.emit(Instr::IncDec { var: target, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
+                f.emit(Instr::IncDec {
+                    var: target,
+                    dst,
+                    inc: matches!(e, Expr::PostInc { .. }),
+                    post: true,
+                });
                 dst
             }
-            Expr::Ternary { condition, if_true, if_false, .. } => {
+            Expr::Ternary {
+                condition,
+                if_true,
+                if_false,
+                ..
+            } => {
                 let dst = hint.unwrap_or_else(|| f.temp());
                 let keep = f.temps;
                 match if_true {
@@ -822,7 +1014,10 @@ impl<'src> Compiler<'src> {
                         // `a ?: b`
                         self.expr_into(f, condition, dst)?;
                         f.temps = keep;
-                        let end = f.emit(Instr::JumpIf { cond: dst, target: 0 });
+                        let end = f.emit(Instr::JumpIf {
+                            cond: dst,
+                            target: 0,
+                        });
                         self.expr_into(f, if_false, dst)?;
                         f.temps = keep;
                         f.patch(end, f.here());
@@ -852,12 +1047,20 @@ impl<'src> Compiler<'src> {
             }
             Expr::ArrayDimFetch { array, dim, span } => {
                 let Some(dim) = dim else {
-                    return Err(CompileError { message: "Cannot use [] for reading".into(), line: self.line(*span) });
+                    return Err(CompileError {
+                        message: "Cannot use [] for reading".into(),
+                        line: self.line(*span),
+                    });
                 };
                 let arr = self.expr(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = out(f, hint, mark);
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: false });
+                f.emit(Instr::FetchDim {
+                    dst,
+                    arr,
+                    key,
+                    quiet: false,
+                });
                 dst
             }
             Expr::InterpolatedString { parts, .. } => {
@@ -865,12 +1068,18 @@ impl<'src> Compiler<'src> {
                     return Ok(f.constant(Frozen::Str(Text::from(""))));
                 }
                 let start = f.temp();
-                let regs: Vec<Reg> = std::iter::once(start).chain((1..parts.len()).map(|_| f.temp())).collect();
+                let regs: Vec<Reg> = std::iter::once(start)
+                    .chain((1..parts.len()).map(|_| f.temp()))
+                    .collect();
                 for (r, p) in regs.iter().zip(parts.iter()) {
                     self.expr_into(f, p, *r)?;
                 }
                 let dst = f.temp();
-                f.emit(Instr::ConcatN { dst, start, n: parts.len() as u8 });
+                f.emit(Instr::ConcatN {
+                    dst,
+                    start,
+                    n: parts.len() as u8,
+                });
                 dst
             }
             Expr::Call { func, args, span } => self.call(f, func, args, *span, hint, mark)?,
@@ -910,7 +1119,10 @@ impl<'src> Compiler<'src> {
                         other => return Err(self.unsupported(other.span(), "this isset")),
                     }
                     if i + 1 < vars.len() {
-                        ends.push(f.emit(Instr::JumpIfNot { cond: dst, target: 0 }));
+                        ends.push(f.emit(Instr::JumpIfNot {
+                            cond: dst,
+                            target: 0,
+                        }));
                     }
                 }
                 for at in ends {
@@ -937,7 +1149,9 @@ impl<'src> Compiler<'src> {
 
     fn inc_target(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
         match e {
-            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => Ok(f.cv(&self.text(*name)[1..])),
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
+                Ok(f.cv(&self.text(*name)[1..]))
+            }
             other => Err(self.unsupported(other.span(), "++/-- on this")),
         }
     }
@@ -956,7 +1170,15 @@ impl<'src> Compiler<'src> {
         dst
     }
 
-    fn binary(&mut self, f: &mut FnBuilder, left: &Expr, op: BinaryOp, right: &Expr, hint: Option<Reg>, mark: usize) -> Result<Reg> {
+    fn binary(
+        &mut self,
+        f: &mut FnBuilder,
+        left: &Expr,
+        op: BinaryOp,
+        right: &Expr,
+        hint: Option<Reg>,
+        mark: usize,
+    ) -> Result<Reg> {
         let arith = |op: BinaryOp| -> Option<BinOp> {
             Some(match op {
                 BinaryOp::Plus => BinOp::Add,
@@ -999,9 +1221,15 @@ impl<'src> Compiler<'src> {
                 let a = self.expr(f, left)?;
                 f.emit(Instr::ToBool { dst, src: a });
                 let end = f.emit(if is_and {
-                    Instr::JumpIfNot { cond: dst, target: 0 }
+                    Instr::JumpIfNot {
+                        cond: dst,
+                        target: 0,
+                    }
                 } else {
-                    Instr::JumpIf { cond: dst, target: 0 }
+                    Instr::JumpIf {
+                        cond: dst,
+                        target: 0,
+                    }
                 });
                 let b = self.expr(f, right)?;
                 f.emit(Instr::ToBool { dst, src: b });
@@ -1014,11 +1242,20 @@ impl<'src> Compiler<'src> {
                 let y = f.temp();
                 f.emit(Instr::ToBool { dst: x, src: a });
                 f.emit(Instr::ToBool { dst: y, src: b });
-                f.emit(Instr::Compare { cmp: Cmp::NotIdentical, dst, a: x, b: y });
+                f.emit(Instr::Compare {
+                    cmp: Cmp::NotIdentical,
+                    dst,
+                    a: x,
+                    b: y,
+                });
             }
             BinaryOp::Coalesce => {
                 let a = self.quiet(f, left)?;
-                let end = f.emit(Instr::JumpIfSet { src: a, dst, target: 0 });
+                let end = f.emit(Instr::JumpIfSet {
+                    src: a,
+                    dst,
+                    target: 0,
+                });
                 self.expr_into(f, right, dst)?;
                 f.patch(end, f.here());
             }
@@ -1030,18 +1267,35 @@ impl<'src> Compiler<'src> {
     /// `e` read without "undefined" warnings (the left of ??, isset).
     fn quiet(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
         match e {
-            Expr::ArrayDimFetch { array, dim: Some(dim), .. } => {
+            Expr::ArrayDimFetch {
+                array,
+                dim: Some(dim),
+                ..
+            } => {
                 let arr = self.quiet(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = f.temp();
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: true });
+                f.emit(Instr::FetchDim {
+                    dst,
+                    arr,
+                    key,
+                    quiet: true,
+                });
                 Ok(dst)
             }
             _ => self.expr(f, e),
         }
     }
 
-    fn call(&mut self, f: &mut FnBuilder, func: &Expr, args: &[p8_syntax::ast::Arg], span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
+    fn call(
+        &mut self,
+        f: &mut FnBuilder,
+        func: &Expr,
+        args: &[p8_syntax::ast::Arg],
+        span: Span,
+        hint: Option<Reg>,
+        mark: usize,
+    ) -> Result<Reg> {
         let Expr::Variable { name, .. } = func else {
             return Err(self.unsupported(span, "this call"));
         };
@@ -1056,7 +1310,9 @@ impl<'src> Compiler<'src> {
             if let Some((modes, rest)) = self.by_ref.get(&lower) {
                 return Some(modes.get(n).copied().unwrap_or(*rest));
             }
-            self.registry.lookup(&lower).map(|i| self.registry.by_ref(i, n))
+            self.registry
+                .lookup(&lower)
+                .map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
         let site = f.site(false, Text::from(lower), Text::from(text));
@@ -1067,10 +1323,17 @@ impl<'src> Compiler<'src> {
             }
             match arg.value {
                 Expr::Variable { name, .. }
-                    if modes[n] != Some(false) && self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" =>
+                    if modes[n] != Some(false)
+                        && self.text(*name).starts_with(b"$")
+                        && self.text(*name) != b"$this" =>
                 {
                     let var = f.cv(&self.text(*name)[1..]);
-                    f.emit(Instr::SendVar { site, n: n as u8, arg: *r, var });
+                    f.emit(Instr::SendVar {
+                        site,
+                        n: n as u8,
+                        arg: *r,
+                        var,
+                    });
                 }
                 // Only a variable can be passed by reference yet.
                 Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }
@@ -1086,7 +1349,12 @@ impl<'src> Compiler<'src> {
         // the result may land in the first (the callee's frame is cleared
         // before its result is written).
         let dst = out(f, hint, mark);
-        f.emit(Instr::Call { site, base, argc: args.len() as u8, dst });
+        f.emit(Instr::Call {
+            site,
+            base,
+            argc: args.len() as u8,
+            dst,
+        });
         Ok(dst)
     }
 }

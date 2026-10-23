@@ -6,7 +6,9 @@ use std::path::Path;
 use std::process::Command;
 
 fn crates_dir() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates/")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/")
 }
 
 #[test]
@@ -14,15 +16,24 @@ fn every_p8_crate_forbids_unsafe() {
     let mut checked = 0;
     for entry in std::fs::read_dir(crates_dir()).expect("crates/") {
         let dir = entry.expect("entry").path();
-        let name = dir.file_name().expect("name").to_string_lossy().into_owned();
+        let name = dir
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
         if name != "p8" && !name.starts_with("p8-") && !name.starts_with("php-") {
             continue;
         }
-        let root = ["src/lib.rs", "src/main.rs"].iter().map(|f| dir.join(f)).find(|p| p.exists());
+        let root = ["src/lib.rs", "src/main.rs"]
+            .iter()
+            .map(|f| dir.join(f))
+            .find(|p| p.exists());
         let root = root.unwrap_or_else(|| panic!("{name}: no src/lib.rs or src/main.rs"));
         let source = std::fs::read_to_string(&root).expect("crate root");
         assert!(
-            source.lines().any(|l| l.trim_start().starts_with("#![forbid(unsafe_code)]")),
+            source
+                .lines()
+                .any(|l| l.trim_start().starts_with("#![forbid(unsafe_code)]")),
             "{} does not forbid unsafe code",
             root.display()
         );
@@ -35,17 +46,29 @@ fn every_p8_crate_forbids_unsafe() {
 fn p8_links_no_c() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = Command::new(cargo)
-        .args(["tree", "-p", "p8", "-e", "normal", "--prefix", "none", "--format", "{p}"])
+        .args([
+            "tree", "-p", "p8", "-e", "normal", "--prefix", "none", "--format", "{p}",
+        ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("run cargo tree");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let tree = String::from_utf8_lossy(&out.stdout);
     let offenders: Vec<&str> = tree
         .lines()
         .filter_map(|line| line.split_whitespace().next())
-        .filter(|name| name.ends_with("-sys") || ["cc", "openssl", "native-tls", "ring", "aws-lc-rs"].contains(name))
+        .filter(|name| {
+            name.ends_with("-sys")
+                || ["cc", "openssl", "native-tls", "ring", "aws-lc-rs"].contains(name)
+        })
         .collect();
     assert!(offenders.is_empty(), "p8 depends on C: {offenders:?}");
-    assert!(tree.lines().any(|l| l.starts_with("p8-interp ")), "cargo tree output not understood:\n{tree}");
+    assert!(
+        tree.lines().any(|l| l.starts_with("p8-interp ")),
+        "cargo tree output not understood:\n{tree}"
+    );
 }

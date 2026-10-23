@@ -72,7 +72,11 @@ fn json(a: &PhpArray) -> String {
             .iter()
             .map(|(k, v)| match k {
                 Key::Int(i) => format!("\"{}\":{}", i, scalar(v)),
-                Key::Str(s) => format!("\"{}\":{}", String::from_utf8_lossy(s.as_bytes()), scalar(v)),
+                Key::Str(s) => format!(
+                    "\"{}\":{}",
+                    String::from_utf8_lossy(s.as_bytes()),
+                    scalar(v)
+                ),
             })
             .collect();
         format!("{{{}}}", parts.join(","))
@@ -115,7 +119,10 @@ fn binary_operators_match_php_8_4() {
     let mut failures = Vec::new();
     for line in include_str!("fixtures/ops.txt").lines() {
         let parts: Vec<&str> = line.split(' ').collect();
-        let (a, b) = (&values[parts[1].parse::<usize>().unwrap()], &values[parts[2].parse::<usize>().unwrap()]);
+        let (a, b) = (
+            &values[parts[1].parse::<usize>().unwrap()],
+            &values[parts[2].parse::<usize>().unwrap()],
+        );
         let mut diags = Vec::new();
         let result = match binary(op(parts[0]), a, b, &mut diags) {
             Ok(v) => show(&v),
@@ -135,11 +142,23 @@ fn binary_operators_match_php_8_4() {
                 Diag::Deprecated(m) => hex(format!("D:{m}").as_bytes()),
             })
             .collect();
-        let got = if diags.is_empty() { result } else { format!("{} {}", result, diags.join("|")) };
+        let got = if diags.is_empty() {
+            result
+        } else {
+            format!("{} {}", result, diags.join("|"))
+        };
         let want = parts[3..].join(" ");
         if got != want {
-            failures.push(format!("{} {} {} want {} got {}", parts[0], parts[1], parts[2], want, got));
+            failures.push(format!(
+                "{} {} {} want {} got {}",
+                parts[0], parts[1], parts[2], want, got
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} mismatches:\n{}", failures.len(), failures[..failures.len().min(40)].join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures[..failures.len().min(40)].join("\n")
+    );
 }

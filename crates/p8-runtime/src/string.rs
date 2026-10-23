@@ -19,7 +19,10 @@ pub struct PhpStr(Rc<Inner>);
 
 impl PhpStr {
     pub fn new(bytes: Vec<u8>) -> Self {
-        PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes }))
+        PhpStr(Rc::new(Inner {
+            hash: Cell::new(0),
+            bytes,
+        }))
     }
 
     pub fn empty() -> Self {
@@ -74,7 +77,8 @@ impl PhpStr {
 
 impl PartialEq for PhpStr {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0) || (self.hash() == other.hash() && self.as_bytes() == other.as_bytes())
+        Rc::ptr_eq(&self.0, &other.0)
+            || (self.hash() == other.hash() && self.as_bytes() == other.as_bytes())
     }
 }
 

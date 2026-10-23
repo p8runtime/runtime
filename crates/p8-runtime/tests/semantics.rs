@@ -86,10 +86,25 @@ fn matches_php_8_4() {
                     Value::Array(_) => "x".to_string(),
                     _ => hex(&v.to_float().to_be_bytes()),
                 };
-                let got_str = v.to_php_string().map_or("ARRAY".into(), |s| hex(s.as_bytes()));
-                let want = (parts[2], parts[3], parts[4], parts.get(5).copied().unwrap_or(""));
-                if (got_bool.as_str(), got_int.as_str(), got_float.as_str(), got_str.as_str()) != want {
-                    failures.push(format!("{line} | got {got_bool} {got_int} {got_float} {got_str}"));
+                let got_str = v
+                    .to_php_string()
+                    .map_or("ARRAY".into(), |s| hex(s.as_bytes()));
+                let want = (
+                    parts[2],
+                    parts[3],
+                    parts[4],
+                    parts.get(5).copied().unwrap_or(""),
+                );
+                if (
+                    got_bool.as_str(),
+                    got_int.as_str(),
+                    got_float.as_str(),
+                    got_str.as_str(),
+                ) != want
+                {
+                    failures.push(format!(
+                        "{line} | got {got_bool} {got_int} {got_float} {got_str}"
+                    ));
                 }
             }
             "cmp" => {
@@ -113,5 +128,10 @@ fn matches_php_8_4() {
             _ => {}
         }
     }
-    assert!(failures.is_empty(), "{} mismatches:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

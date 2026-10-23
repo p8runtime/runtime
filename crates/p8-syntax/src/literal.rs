@@ -105,7 +105,11 @@ pub fn integer(value: &[u8]) -> Number {
 
 /// The value of a float literal (`_` separators allowed).
 pub fn float(value: &[u8]) -> f64 {
-    let text: String = value.iter().filter(|b| **b != b'_').map(|b| char::from(*b)).collect();
+    let text: String = value
+        .iter()
+        .filter(|b| **b != b'_')
+        .map(|b| char::from(*b))
+        .collect();
     text.parse().unwrap_or(0.0)
 }
 

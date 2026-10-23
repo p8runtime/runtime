@@ -13,9 +13,18 @@ use std::rc::Rc;
 /// Something that ends the normal flow: a thrown error, or exit().
 #[derive(Debug, Clone)]
 pub enum Throw {
-    Error { class: &'static str, message: String, file: Rc<str>, line: u32 },
+    Error {
+        class: &'static str,
+        message: String,
+        file: Rc<str>,
+        line: u32,
+    },
     /// A fatal error: not an exception, nothing catches it.
-    Fatal { message: String, file: Rc<str>, line: u32 },
+    Fatal {
+        message: String,
+        file: Rc<str>,
+        line: u32,
+    },
     Exit(i32),
 }
 
