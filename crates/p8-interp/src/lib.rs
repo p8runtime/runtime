@@ -231,8 +231,15 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                             w[dst as usize] = r;
                             pc += 1;
                         }
+                        None if op == BinOp::Concat && concat(w, dst, a, b) => pc += 1,
                         None => return pc,
                     }
+                }
+                Instr::ConcatN { dst, start, n } => {
+                    if !concat_n(w, dst, start, n) {
+                        return pc;
+                    }
+                    pc += 1;
                 }
                 Instr::Move { dst, src } => match copied(&w[src as usize]) {
                     Some(v) => {
@@ -356,7 +363,6 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::SendVar { .. }
                 | Instr::Echo { .. }
                 | Instr::FetchConst { .. }
-                | Instr::ConcatN { .. }
                 | Instr::BindGlobal { .. }
                 | Instr::ArgDefault { .. }
                 | Instr::Exit { .. } => return pc,
@@ -1243,11 +1249,11 @@ impl Context<'_> {
                     reg!(dst) = v;
                 }
                 Instr::ConcatN { dst, start, n } => {
-                    let mut bytes = Vec::new();
+                    let parts = start as usize..start as usize + n as usize;
+                    let mut bytes = Vec::with_capacity(w[parts].iter().map(ops::string_len_hint).sum());
                     for i in 0..n {
                         let v = self.operand(w, func, start + i as Reg);
-                        let s = ops::to_string_lossy(&v, &mut self.diags);
-                        bytes.extend_from_slice(s.as_bytes());
+                        ops::push_string(&mut bytes, &v, &mut self.diags);
                     }
                     self.report_diags();
                     reg!(dst) = Value::Str(PhpStr::new(bytes));
@@ -1760,6 +1766,52 @@ fn append_str(w: &mut [Value], var: Reg, src: Reg) -> bool {
     let tail = tail.clone();
     let Value::Str(s) = &mut w[var as usize] else { return false };
     s.push_bytes(tail.as_bytes());
+    true
+}
+
+/// Whether a value becomes a string with no warning and no side effect
+/// (so when it is converted cannot be observed).
+#[inline(always)]
+fn silent_str(v: &Value) -> bool {
+    matches!(v, Value::Str(_) | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Null)
+}
+
+/// `a . b` on values that convert silently, the result not into a
+/// reference. A temporary string on the left that nothing else holds is
+/// appended to in place (`a . b . c` builds one string). False otherwise.
+#[inline(never)]
+fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Reg) -> bool {
+    let (x, y) = (&w[a as usize], &w[b as usize]);
+    if !silent_str(x) || !silent_str(y) || matches!(w[dst as usize], Value::Ref(_)) {
+        return false;
+    }
+    let mut diags = Vec::new();
+    if dst == a && a != b && matches!(w[a as usize], Value::Str(_)) {
+        let Value::Str(mut s) = std::mem::take(&mut w[a as usize]) else { unreachable!("checked") };
+        ops::push_string(s.make_mut(), &w[b as usize], &mut diags);
+        w[dst as usize] = Value::Str(s);
+        return true;
+    }
+    let mut bytes = Vec::with_capacity(ops::string_len_hint(x) + ops::string_len_hint(y));
+    ops::push_string(&mut bytes, x, &mut diags);
+    ops::push_string(&mut bytes, y, &mut diags);
+    w[dst as usize] = Value::Str(PhpStr::new(bytes));
+    true
+}
+
+/// Interpolation (`"a $b c"`) when every part converts silently.
+#[inline(never)]
+fn concat_n(w: &mut [Value], dst: Reg, start: Reg, n: u8) -> bool {
+    let parts = &w[start as usize..start as usize + n as usize];
+    if !parts.iter().all(silent_str) || matches!(w[dst as usize], Value::Ref(_)) {
+        return false;
+    }
+    let mut diags = Vec::new();
+    let mut bytes = Vec::with_capacity(parts.iter().map(ops::string_len_hint).sum());
+    for v in parts {
+        ops::push_string(&mut bytes, v, &mut diags);
+    }
+    w[dst as usize] = Value::Str(PhpStr::new(bytes));
     true
 }
 
