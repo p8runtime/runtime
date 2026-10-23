@@ -9,11 +9,9 @@
 //! the caller's top temporaries, which become the callee's first registers,
 //! so passing arguments copies nothing.
 
+use p8_runtime::frozen::{Frozen, Text};
 use p8_runtime::ops::BinOp;
-use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
-use std::cell::OnceCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// A register index within the current frame.
 pub type Reg = u16;
@@ -118,52 +116,45 @@ pub enum Instr {
     Exit { src: Reg, has: bool },
 }
 
-/// A name a call or constant fetch resolves once, then caches.
+/// A name a call or constant fetch resolves (each context caches what it
+/// resolved to, in its closure of the function).
 #[derive(Debug)]
 pub struct Site {
     /// Lowercased for functions; as written for constants.
-    pub name: PhpStr,
+    pub name: Text,
     /// The global name to try if `name` (namespaced) is not found.
-    pub fallback: Option<PhpStr>,
-    pub cache: OnceCell<Callee>,
+    pub fallback: Option<Text>,
     /// The name as written, for messages.
-    pub display: PhpStr,
-}
-
-/// What a call site resolved to.
-#[derive(Debug, Clone)]
-pub enum Callee {
-    User(Rc<Function>),
-    Builtin(usize),
-    Constant(Value),
+    pub display: Text,
 }
 
 #[derive(Debug, Clone)]
 pub struct Param {
-    pub name: PhpStr,
+    pub name: Text,
     pub by_ref: bool,
     pub has_default: bool,
     pub variadic: bool,
 }
 
-/// A compiled function (or a file's top-level code).
+/// A compiled function (or a file's top-level code). Immutable, and shared
+/// by every isolate (`Send + Sync`).
 #[derive(Debug)]
 pub struct Function {
-    pub name: PhpStr,
+    pub name: Text,
     pub params: Vec<Param>,
     pub returns_ref: bool,
     pub code: Vec<Instr>,
     /// Source line of each instruction.
     pub lines: Vec<u32>,
-    pub consts: Vec<Value>,
+    pub consts: Vec<Frozen>,
     /// First constant register (constants occupy consts_at..consts_at+consts.len()).
     pub consts_at: Reg,
     /// Registers the frame needs.
     pub nregs: Reg,
     /// Names of the compiled variables, by register (params first).
-    pub cv_names: Vec<PhpStr>,
+    pub cv_names: Vec<Text>,
     pub sites: Vec<Site>,
-    pub file: Rc<str>,
+    pub file: Arc<str>,
     /// Arguments a call must pass: up to the last parameter without a
     /// default (an optional one before it is required too, as in PHP).
     pub required: usize,
@@ -183,6 +174,12 @@ impl Function {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compiled_code_is_shared_across_threads() {
+        fn shared<T: Send + Sync>() {}
+        shared::<super::Function>();
+    }
+
     #[test]
     fn instructions_stay_small() {
         // Dispatch reads one instruction per step; keep them compact.

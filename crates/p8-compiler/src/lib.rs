@@ -12,15 +12,13 @@
 use p8_bytecode::{CastKind, Cmp, Function, Instr, Param, Reg, Site};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
-use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
+use p8_runtime::frozen::{Frozen, Text};
 use p8_syntax::literal::{self, Number};
 use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, Stmt, StmtId, UnaryOp};
 use p8_syntax::span::Span;
 use indexmap::IndexMap;
-use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// What the compiler cannot (yet) compile, or a compile-time error.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,10 +54,10 @@ struct Loop {
 
 /// One function being compiled.
 struct FnBuilder {
-    name: PhpStr,
+    name: Text,
     code: Vec<Instr>,
     lines: Vec<u32>,
-    consts: Vec<Value>,
+    consts: Vec<Frozen>,
     const_index: HashMap<ConstKey, usize>,
     cvs: IndexMap<Vec<u8>, usize>,
     temps: usize,
@@ -77,7 +75,7 @@ struct FnBuilder {
 }
 
 impl FnBuilder {
-    fn new(name: PhpStr) -> Self {
+    fn new(name: Text) -> Self {
         FnBuilder {
             name,
             code: Vec::new(),
@@ -128,17 +126,13 @@ impl FnBuilder {
         reg(CV, index)
     }
 
-    fn constant(&mut self, value: Value) -> Reg {
+    fn constant(&mut self, value: Frozen) -> Reg {
         let key = match &value {
-            Value::Null => ConstKey::Null,
-            Value::Bool(b) => ConstKey::Bool(*b),
-            Value::Int(i) => ConstKey::Int(*i),
-            Value::Float(f) => ConstKey::Float(f.to_bits()),
-            Value::Str(s) => ConstKey::Str(s.as_bytes().to_vec()),
-            Value::Array(_) | Value::Ref(_) | Value::Undef => {
-                self.consts.push(value);
-                return reg(CONST, self.consts.len() - 1);
-            }
+            Frozen::Null => ConstKey::Null,
+            Frozen::Bool(b) => ConstKey::Bool(*b),
+            Frozen::Int(i) => ConstKey::Int(*i),
+            Frozen::Float(f) => ConstKey::Float(f.to_bits()),
+            Frozen::Str(s) => ConstKey::Str(s.as_bytes().to_vec()),
         };
         let next = self.consts.len();
         let index = *self.const_index.entry(key).or_insert(next);
@@ -155,19 +149,19 @@ impl FnBuilder {
         r
     }
 
-    fn site(&mut self, constant: bool, name: PhpStr, display: PhpStr) -> u16 {
+    fn site(&mut self, constant: bool, name: Text, display: Text) -> u16 {
         let key = (constant, name.as_bytes().to_vec());
         if let Some(&i) = self.site_index.get(&key) {
             return i;
         }
-        self.sites.push(Site { name, fallback: None, cache: OnceCell::new(), display });
+        self.sites.push(Site { name, fallback: None, display });
         let i = (self.sites.len() - 1) as u16;
         self.site_index.insert(key, i);
         i
     }
 
     /// Lay the frame out and renumber every register.
-    fn finish(mut self, file: Rc<str>) -> Function {
+    fn finish(mut self, file: Arc<str>) -> Function {
         let ncv = self.cvs.len();
         let nconst = self.consts.len();
         let map = |r: Reg| -> Reg {
@@ -181,8 +175,8 @@ impl FnBuilder {
         for instr in &mut self.code {
             map_regs(instr, map);
         }
-        let mut cv_names: Vec<(usize, PhpStr)> =
-            self.cvs.iter().map(|(n, &i)| (i, PhpStr::from(n.as_slice()))).collect();
+        let mut cv_names: Vec<(usize, Text)> =
+            self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
         cv_names.sort_by_key(|(i, _)| *i);
         let required = self.params.iter().rposition(|p| !p.has_default && !p.variadic).map_or(0, |i| i + 1);
         Function {
@@ -303,17 +297,17 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
 
 /// The compiled program: the top-level code and every function declared.
 pub struct Program {
-    pub main: Rc<Function>,
-    pub functions: Vec<Rc<Function>>,
+    pub main: Arc<Function>,
+    pub functions: Vec<Arc<Function>>,
 }
 
 pub struct Compiler<'src> {
     source: &'src [u8],
     /// The builtins (their by-reference parameters are known when compiling).
     registry: &'src Registry,
-    file: Rc<str>,
+    file: Arc<str>,
     line_starts: Vec<usize>,
-    functions: Vec<Rc<Function>>,
+    functions: Vec<Arc<Function>>,
     /// Which parameters take references, for the functions declared at the
     /// top level (declared before the file runs, so a call to one is bound
     /// when compiled: its by-value arguments need no runtime check).
@@ -327,7 +321,7 @@ impl<'src> Compiler<'src> {
     pub fn new(source: &'src [u8], file: &str, registry: &'src Registry) -> Self {
         let mut line_starts = vec![0];
         line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
-        Compiler { source, registry, file: Rc::from(file), line_starts, functions: Vec::new(), by_ref: HashMap::new() }
+        Compiler { source, registry, file: Arc::from(file), line_starts, functions: Vec::new(), by_ref: HashMap::new() }
     }
 
     fn line(&self, span: Span) -> u32 {
@@ -350,10 +344,10 @@ impl<'src> Compiler<'src> {
                 self.by_ref.insert(self.text(name.span).to_ascii_lowercase(), (modes, rest));
             }
         }
-        let mut f = FnBuilder::new(PhpStr::from("{main}"));
+        let mut f = FnBuilder::new(Text::from("{main}"));
         self.stmts(&mut f, stmts)?;
         f.emit(Instr::ReturnNull);
-        let main = Rc::new(f.finish(self.file.clone()));
+        let main = Arc::new(f.finish(self.file.clone()));
         Ok(Program { main, functions: self.functions })
     }
 
@@ -376,7 +370,7 @@ impl<'src> Compiler<'src> {
                 }
             }
             Stmt::InlineHtml { value, .. } => {
-                let r = f.constant(Value::Str(PhpStr::from(*value)));
+                let r = f.constant(Frozen::Str(Text::from(*value)));
                 f.emit(Instr::Echo { src: r });
             }
             Stmt::Return { expr, .. } => match expr {
@@ -484,7 +478,7 @@ impl<'src> Compiler<'src> {
                 let is_break = matches!(stmt, Stmt::Break { .. });
                 let depth = match level {
                     Some(e) => match self.literal(e) {
-                        Some(Value::Int(n)) if n >= 1 => n as usize,
+                        Some(Frozen::Int(n)) if n >= 1 => n as usize,
                         _ => return Err(self.unsupported(*span, "break/continue with a non-literal level")),
                     },
                     None => 1,
@@ -510,7 +504,7 @@ impl<'src> Compiler<'src> {
             }
             Stmt::Function { name, params, body, by_ref, .. } => {
                 let function = self.function(name.span, params, body, *by_ref)?;
-                self.functions.push(Rc::new(function));
+                self.functions.push(Arc::new(function));
             }
             Stmt::Global { vars, .. } => {
                 for v in *vars {
@@ -519,16 +513,16 @@ impl<'src> Compiler<'src> {
                     };
                     let text = self.text(*name);
                     let var = f.cv(&text[1..]);
-                    let name_reg = f.constant(Value::Str(PhpStr::from(&text[1..])));
+                    let name_reg = f.constant(Frozen::Str(Text::from(&text[1..])));
                     let name_index = name_reg & ((1 << KIND_SHIFT) - 1);
                     f.emit(Instr::BindGlobal { var, name: name_index });
                 }
             }
             Stmt::Const { consts, .. } => {
                 for c in *consts {
-                    let name = f.constant(Value::Str(PhpStr::from(self.text(c.name.span))));
+                    let name = f.constant(Frozen::Str(Text::from(self.text(c.name.span))));
                     let value = self.expr(f, c.value)?;
-                    let site = f.site(false, PhpStr::from("define"), PhpStr::from("define"));
+                    let site = f.site(false, Text::from("define"), Text::from("define"));
                     let base = f.temp();
                     let second = f.temp();
                     f.emit(Instr::Move { dst: base, src: name });
@@ -612,14 +606,14 @@ impl<'src> Compiler<'src> {
 
     /// A user function.
     fn function(&mut self, name: Span, params: &[p8_syntax::ast::Param], body: &[StmtId], by_ref: bool) -> Result<Function> {
-        let mut f = FnBuilder::new(PhpStr::from(self.text(name)));
+        let mut f = FnBuilder::new(Text::from(self.text(name)));
         f.returns_ref = by_ref;
         f.line = self.line(name);
         for p in params {
             let text = self.text(p.name.span);
             f.cv(&text[1..]);
             f.params.push(Param {
-                name: PhpStr::from(&text[1..]),
+                name: Text::from(&text[1..]),
                 by_ref: p.by_ref,
                 has_default: p.default.is_some(),
                 variadic: p.variadic,
@@ -643,16 +637,16 @@ impl<'src> Compiler<'src> {
         Ok(f.finish(self.file.clone()))
     }
 
-    fn literal(&self, e: &Expr) -> Option<Value> {
+    fn literal(&self, e: &Expr) -> Option<Frozen> {
         Some(match e {
             Expr::Integer { value, .. } => match literal::integer(value) {
-                Number::Int(i) => Value::Int(i),
-                Number::Float(x) => Value::Float(x),
+                Number::Int(i) => Frozen::Int(i),
+                Number::Float(x) => Frozen::Float(x),
             },
-            Expr::Float { value, .. } => Value::Float(literal::float(value)),
-            Expr::String { value, .. } => Value::Str(PhpStr::new(literal::string(value))),
-            Expr::Boolean { value, .. } => Value::Bool(*value),
-            Expr::Null { .. } => Value::Null,
+            Expr::Float { value, .. } => Frozen::Float(literal::float(value)),
+            Expr::String { value, .. } => Frozen::Str(Text::from(literal::string(value))),
+            Expr::Boolean { value, .. } => Frozen::Bool(*value),
+            Expr::Null { .. } => Frozen::Null,
             _ => return None,
         })
     }
@@ -783,7 +777,7 @@ impl<'src> Compiler<'src> {
                         UnaryOp::Minus => Instr::Neg { dst, src },
                         UnaryOp::BitNot => Instr::BitNot { dst, src },
                         _ => {
-                            let one = f.constant(Value::Int(1));
+                            let one = f.constant(Frozen::Int(1));
                             Instr::Binary { op: BinOp::Mul, dst, a: src, b: one }
                         }
                     };
@@ -853,7 +847,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::InterpolatedString { parts, .. } => {
                 if parts.is_empty() {
-                    return Ok(f.constant(Value::Str(PhpStr::empty())));
+                    return Ok(f.constant(Frozen::Str(Text::from(""))));
                 }
                 let start = f.temp();
                 let regs: Vec<Reg> = std::iter::once(start).chain((1..parts.len()).map(|_| f.temp())).collect();
@@ -868,7 +862,7 @@ impl<'src> Compiler<'src> {
             Expr::Print { expr, .. } => {
                 let r = self.expr(f, expr)?;
                 f.emit(Instr::Echo { src: r });
-                f.constant(Value::Int(1))
+                f.constant(Frozen::Int(1))
             }
             Expr::Cast { kind, expr, span } => {
                 let kind = match kind {
@@ -916,11 +910,11 @@ impl<'src> Compiler<'src> {
                         f.emit(Instr::Exit { src, has: true });
                     }
                     None => {
-                        let src = f.constant(Value::Null);
+                        let src = f.constant(Frozen::Null);
                         f.emit(Instr::Exit { src, has: false });
                     }
                 }
-                f.constant(Value::Null)
+                f.constant(Frozen::Null)
             }
             other => return Err(self.unsupported(other.span(), "this expression")),
         })
@@ -936,12 +930,12 @@ impl<'src> Compiler<'src> {
     fn constant_fetch(&mut self, f: &mut FnBuilder, name: &[u8]) -> Reg {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
         match name.to_ascii_lowercase().as_slice() {
-            b"true" => return f.constant(Value::Bool(true)),
-            b"false" => return f.constant(Value::Bool(false)),
-            b"null" => return f.constant(Value::Null),
+            b"true" => return f.constant(Frozen::Bool(true)),
+            b"false" => return f.constant(Frozen::Bool(false)),
+            b"null" => return f.constant(Frozen::Null),
             _ => {}
         }
-        let site = f.site(true, PhpStr::from(name), PhpStr::from(name));
+        let site = f.site(true, Text::from(name), Text::from(name));
         let dst = f.temp();
         f.emit(Instr::FetchConst { site, dst });
         dst
@@ -1050,7 +1044,7 @@ impl<'src> Compiler<'src> {
             self.registry.lookup(&lower).map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
-        let site = f.site(false, PhpStr::new(lower), PhpStr::from(text));
+        let site = f.site(false, Text::from(lower), Text::from(text));
         let regs: Vec<Reg> = (0..args.len()).map(|_| f.temp()).collect();
         for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
             if arg.unpack || arg.name.is_some() {

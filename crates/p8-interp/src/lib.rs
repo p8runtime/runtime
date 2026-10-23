@@ -2,7 +2,7 @@
 //! The p8 interpreter: one loop over register instructions, all frames in
 //! one register file, calls resolved once per call site.
 
-use p8_bytecode::{Callee, CastKind, Cmp, Function, Instr, Reg};
+use p8_bytecode::{CastKind, Cmp, Function, Instr, Reg};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Registry};
 pub use p8_runtime::ext::Throw;
@@ -10,15 +10,40 @@ use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::io::Write;
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// A function as one context runs it: the shared compiled code, plus what
+/// belongs to this context alone: its constants as values, and what each
+/// call site and constant fetch resolved to (a feedback vector, in V8's
+/// terms). Compiled code is shared by every context; this is not.
+pub struct Closure {
+    code: Arc<Function>,
+    consts: Box<[Value]>,
+    sites: Box<[OnceCell<Callee>]>,
+}
+
+impl Closure {
+    fn new(code: Arc<Function>) -> Rc<Closure> {
+        let consts = code.consts.iter().map(|c| c.to_value()).collect();
+        let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
+        Rc::new(Closure { code, consts, sites })
+    }
+}
+
+/// What a call site or constant fetch resolved to, in one context.
+#[derive(Clone)]
+enum Callee {
+    User(Rc<Closure>),
+    Builtin(usize),
+    Constant(Value),
+}
+
 struct Frame {
-    func: Rc<Function>,
+    func: Rc<Closure>,
     /// Where the frame resumes (written when it calls out).
     pc: u32,
     base: u32,
@@ -214,102 +239,134 @@ fn num_test(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
     })
 }
 
-/// Output, with output buffers (ob_start) stacked on top of stdout.
-pub struct Output {
-    buffers: Vec<Vec<u8>>,
-    stdout: std::io::BufWriter<std::io::Stdout>,
+/// Where a context's output goes: the embedder's side of a request (a
+/// terminal, an HTTP response).
+pub trait Host {
+    fn write(&mut self, bytes: &[u8]);
+    fn flush(&mut self) {}
 }
 
-impl Output {
-    fn new() -> Self {
-        Output { buffers: Vec::new(), stdout: std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()) }
-    }
+/// Output, with output buffers (ob_start) stacked on top of the host.
+struct Output<'i> {
+    buffers: Vec<Vec<u8>>,
+    host: &'i mut dyn Host,
+}
 
-    pub fn write(&mut self, bytes: &[u8]) {
+impl Output<'_> {
+    fn write(&mut self, bytes: &[u8]) {
         match self.buffers.last_mut() {
             Some(buffer) => buffer.extend_from_slice(bytes),
-            None => {
-                let _ = self.stdout.write_all(bytes);
-            }
+            None => self.host.write(bytes),
         }
     }
 
-    pub fn start_buffer(&mut self) {
+    fn start_buffer(&mut self) {
         self.buffers.push(Vec::new());
     }
 
     /// Drop the innermost buffer's contents (ob_end_clean); false if none.
-    pub fn end_clean(&mut self) -> bool {
+    fn end_clean(&mut self) -> bool {
         self.buffers.pop().is_some()
     }
 
-    pub fn flush_all(&mut self) {
+    fn flush_all(&mut self) {
         while let Some(buffer) = self.buffers.pop() {
             self.write(&buffer);
         }
-        let _ = self.stdout.flush();
+        self.host.flush();
     }
 }
 
-pub struct Vm {
+/// One engine on one thread. It runs one context (request) at a time: a
+/// context borrows it mutably for as long as it lives. What it keeps
+/// between requests (the register file, buffers) stays allocated, so a warm
+/// isolate starts the next request without allocating them again.
+///
+/// `!Send`: values are reference-counted without atomics, so an isolate
+/// and everything in it stays on the thread that made it.
+pub struct Isolate {
+    /// The builtins and their constants (shared by every isolate).
+    registry: Arc<Registry>,
     /// All frames' registers. While code runs, the interpreter holds the
     /// register file itself (taken out of here) so the hot loop works on a
     /// plain local slice.
     regs: Vec<Value>,
-    frames: Vec<Frame>,
-    /// Declared functions by lowercase name (only ever grows, so call sites
-    /// can cache what they resolve).
-    functions: HashMap<Vec<u8>, Rc<Function>>,
-    /// The builtins and their constants (shared by every isolate).
-    registry: Arc<Registry>,
-    /// Constants the script defined (define(), const).
-    constants: HashMap<Vec<u8>, Value>,
-    /// Globals not held in the main frame's registers.
-    globals: HashMap<Vec<u8>, Rc<RefCell<Value>>>,
-    out: Output,
-    diags: Vec<Diag>,
-    /// The running frame's pc (Frame.pc is written when it calls out).
-    pc: usize,
     /// Reused for builtin arguments, so a builtin call does not allocate.
     args: Vec<Value>,
 }
 
-impl Vm {
-    pub fn new(registry: Arc<Registry>) -> Self {
-        Vm {
-            registry,
-            regs: Vec::with_capacity(1024),
+impl Isolate {
+    pub fn new(registry: Arc<Registry>) -> Isolate {
+        Isolate { registry, regs: Vec::with_capacity(1024), args: Vec::new() }
+    }
+
+    pub fn registry(&self) -> &Arc<Registry> {
+        &self.registry
+    }
+
+    /// Start a request whose output goes to `host`.
+    pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
+        Context {
+            isolate: self,
             frames: Vec::new(),
             functions: HashMap::new(),
             constants: HashMap::new(),
             globals: HashMap::new(),
-            out: Output::new(),
+            out: Output { buffers: Vec::new(), host },
             diags: Vec::new(),
             pc: 0,
-            args: Vec::new(),
         }
     }
+}
 
-    pub fn declare(&mut self, func: Rc<Function>) -> Result<(), String> {
+/// One request: its declared functions, constants and globals, its output.
+/// Dropping it ends the request.
+pub struct Context<'i> {
+    isolate: &'i mut Isolate,
+    frames: Vec<Frame>,
+    /// Declared functions by lowercase name (only ever grows, so call sites
+    /// can cache what they resolve).
+    functions: HashMap<Vec<u8>, Rc<Closure>>,
+    /// Constants the script defined (define(), const).
+    constants: HashMap<Vec<u8>, Value>,
+    /// Globals not held in the main frame's registers.
+    globals: HashMap<Vec<u8>, Rc<RefCell<Value>>>,
+    out: Output<'i>,
+    diags: Vec<Diag>,
+    /// The running frame's pc (Frame.pc is written when it calls out).
+    pc: usize,
+}
+
+impl Context<'_> {
+    pub fn declare(&mut self, func: Arc<Function>) -> Result<(), String> {
         let key = func.name.as_bytes().to_ascii_lowercase();
-        if self.functions.contains_key(&key) || self.registry.lookup(&key).is_some() {
+        if self.functions.contains_key(&key) || self.isolate.registry.lookup(&key).is_some() {
             return Err(format!("Cannot redeclare function {}()", String::from_utf8_lossy(func.name.as_bytes())));
         }
-        self.functions.insert(key, func);
+        self.functions.insert(key, Closure::new(func));
         Ok(())
     }
 
     pub fn function_exists(&self, name: &[u8]) -> bool {
         let key = name.strip_prefix(b"\\").unwrap_or(name).to_ascii_lowercase();
-        self.functions.contains_key(&key) || self.registry.lookup(&key).is_some()
+        self.functions.contains_key(&key) || self.isolate.registry.lookup(&key).is_some()
+    }
+
+    /// Write to the output and flush it (messages the host shows as they come).
+    pub fn echo_and_flush(&mut self, bytes: &[u8]) {
+        self.out.write(bytes);
+        self.out.flush_all();
     }
 
     /// Run a file's top-level code; returns the exit status.
-    pub fn run_main(&mut self, main: Rc<Function>) -> i32 {
-        let mut regs = std::mem::take(&mut self.regs);
-        self.enter(&mut regs, main, 0, 0, NO_RET);
+    pub fn run_main(&mut self, main: Arc<Function>) -> i32 {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        self.enter(&mut regs, Closure::new(main), 0, 0, NO_RET);
         let result = self.execute(&mut regs);
-        self.regs = regs;
+        // The request's variables go now (the isolate keeps the capacity).
+        regs.clear();
+        self.frames.clear();
+        self.isolate.regs = regs;
         let status = match result {
             Ok(()) => 0,
             Err(Throw::Exit(status)) => status,
@@ -330,14 +387,15 @@ impl Vm {
     /// Push a frame for `func` whose window starts at `base`, with `argc`
     /// arguments already in its first registers.
     #[inline(never)]
-    fn enter(&mut self, regs: &mut Vec<Value>, func: Rc<Function>, base: usize, argc: usize, ret: u32) {
-        let need = base + func.nregs as usize;
+    fn enter(&mut self, regs: &mut Vec<Value>, func: Rc<Closure>, base: usize, argc: usize, ret: u32) {
+        let code = &*func.code;
+        let need = base + code.nregs as usize;
         if regs.len() < need {
             regs.resize(need, Value::Undef);
         }
-        let nparams = func.params.len();
-        let extra = if argc > nparams { take_extra(regs, &func, base, nparams, argc) } else { None };
-        let consts_at = func.consts_at as usize;
+        let nparams = code.params.len();
+        let extra = if argc > nparams { take_extra(regs, code, base, nparams, argc) } else { None };
+        let consts_at = code.consts_at as usize;
         for r in &mut regs[base + argc.min(nparams)..base + consts_at] {
             *r = Value::Undef;
         }
@@ -352,7 +410,7 @@ impl Vm {
 
     fn location(&self) -> (Rc<str>, u32) {
         match self.frames.last() {
-            Some(f) => (f.func.file.clone(), f.func.lines.get(self.pc.saturating_sub(1)).copied().unwrap_or(0)),
+            Some(f) => (Rc::from(&*f.func.code.file), f.func.code.lines.get(self.pc.saturating_sub(1)).copied().unwrap_or(0)),
             None => (Rc::from(""), 0),
         }
     }
@@ -419,27 +477,27 @@ impl Vm {
 
     /// What call site `site` names (cached after the first time).
     #[inline(always)]
-    fn resolve(&mut self, func: &Function, site: u16) -> Result<Callee, Throw> {
-        match func.sites[site as usize].cache.get() {
+    fn resolve(&mut self, clo: &Closure, site: u16) -> Result<Callee, Throw> {
+        match clo.sites[site as usize].get() {
             Some(c) => Ok(c.clone()),
-            None => self.resolve_slow(func, site),
+            None => self.resolve_slow(clo, site),
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn resolve_slow(&mut self, func: &Function, site: u16) -> Result<Callee, Throw> {
-        let s = &func.sites[site as usize];
+    fn resolve_slow(&mut self, clo: &Closure, site: u16) -> Result<Callee, Throw> {
+        let s = &clo.code.sites[site as usize];
         let key = s.name.as_bytes();
         let callee = if let Some(f) = self.functions.get(key) {
             Callee::User(f.clone())
-        } else if let Some(i) = self.registry.lookup(key) {
+        } else if let Some(i) = self.isolate.registry.lookup(key) {
             Callee::Builtin(i)
         } else {
             let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
             return Err(self.throw("Error", format!("Call to undefined function {name}()")));
         };
-        let _ = s.cache.set(callee.clone());
+        let _ = clo.sites[site as usize].set(callee.clone());
         Ok(callee)
     }
 
@@ -456,7 +514,7 @@ impl Vm {
             let argc = frame.argc as usize;
             let mut pc = frame.pc as usize;
             loop {
-                pc = fast(&mut regs[base..base + func.nregs as usize], &func.code, pc);
+                pc = fast(&mut regs[base..base + func.code.nregs as usize], &func.code.code, pc);
                 self.pc = pc + 1;
                 match self.step(regs, &func, base, argc, pc)? {
                     Next::Go(next) => pc = next,
@@ -471,7 +529,8 @@ impl Vm {
 
     /// Execute the instruction at `pc` of `func`'s frame (at `base`).
     #[inline(never)]
-    fn step(&mut self, regs: &mut Vec<Value>, func: &Function, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
+    fn step(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
+        let func = &*clo.code;
         let instr = func.code[at];
         let mut pc = at + 1;
         // `w` is this frame's window (registers are frame-relative); `below`
@@ -779,9 +838,9 @@ impl Vm {
                     }
                 }
                 Instr::SendVar { site, n, arg, var } => {
-                    let by_ref = match self.resolve(func, site)? {
-                        Callee::User(f) => f.param_by_ref(n as usize),
-                        Callee::Builtin(i) => self.registry.by_ref(i, n as usize),
+                    let by_ref = match self.resolve(clo, site)? {
+                        Callee::User(f) => f.code.param_by_ref(n as usize),
+                        Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     };
                     reg!(arg) = if by_ref {
@@ -808,11 +867,11 @@ impl Vm {
                 }
                 Instr::FetchConst { site, dst } => {
                     let s = &func.sites[site as usize];
-                    let v = match s.cache.get() {
+                    let v = match clo.sites[site as usize].get() {
                         Some(Callee::Constant(v)) => v.clone(),
                         _ => match self.constant_value(s.name.as_bytes()) {
                             Some(v) => {
-                                let _ = s.cache.set(Callee::Constant(v.clone()));
+                                let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
                                 v
                             }
                             None => {
@@ -834,7 +893,7 @@ impl Vm {
                     reg!(dst) = Value::Str(PhpStr::new(bytes));
                 }
                 Instr::BindGlobal { var, name } => {
-                    let name = match &func.consts[name as usize] {
+                    let name = match &clo.consts[name as usize] {
                         Value::Str(s) => s.as_bytes().to_vec(),
                         _ => Vec::new(),
                     };
@@ -857,10 +916,10 @@ impl Vm {
                     return Err(Throw::Exit(status));
                 }
                 Instr::Call { site, base: args, argc, dst } => {
-                    match self.resolve(func, site)? {
+                    match self.resolve(clo, site)? {
                         Callee::User(target) => {
-                            if (argc as usize) < target.required {
-                                return Err(self.missing_args(&target, argc as usize));
+                            if (argc as usize) < target.code.required {
+                                return Err(self.missing_args(&target.code, argc as usize));
                             }
                             if let Some(caller) = self.frames.last_mut() {
                                 caller.pc = pc as u32;
@@ -891,12 +950,12 @@ impl Vm {
     #[inline(never)]
     fn call_builtin(&mut self, w: &mut [Value], i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = args as usize;
-        let mut values = std::mem::take(&mut self.args);
+        let mut values = std::mem::take(&mut self.isolate.args);
         values.extend(w[start..start + argc as usize].iter_mut().map(std::mem::take));
-        let entry = self.registry.function(i);
+        let entry = self.isolate.registry.function(i);
         let r = (entry.run)(self, &mut values);
         values.clear();
-        self.args = values;
+        self.isolate.args = values;
         self.report_diags();
         w[dst as usize] = r?;
         Ok(())
@@ -956,7 +1015,7 @@ impl Vm {
                 "Too few arguments to function {name}(), {passed} passed in {file} on line {line} and {exactly} {} expected",
                 func.required
             ),
-            file: func.file.clone(),
+            file: Rc::from(&*func.file),
             line: func.line,
         }
     }
@@ -969,7 +1028,7 @@ impl Vm {
         // Locals die with the frame (before the result lands: the result
         // register may be inside the window).
         let base = frame.base as usize;
-        for r in &mut regs[base..base + frame.func.nregs as usize] {
+        for r in &mut regs[base..base + frame.func.code.nregs as usize] {
             *r = Value::Undef;
         }
         if frame.ret != NO_RET {
@@ -983,7 +1042,7 @@ impl Vm {
     /// The cell of global `$name`: the main frame's variable if it has one.
     /// `main` is the main frame's window (it starts at register 0).
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
-        if let Some(r) = self.frames[0].func.cv_names.iter().position(|n| n.as_bytes() == name) {
+        if let Some(r) = self.frames[0].func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             return make_ref(main, r as Reg);
         }
         self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone()
@@ -1160,17 +1219,17 @@ impl Vm {
 }
 
 
-impl Vm {
+impl Context<'_> {
     /// The constant `name`: the script's own, else an extension's.
     fn constant_value(&self, name: &[u8]) -> Option<Value> {
         match self.constants.get(name) {
             Some(v) => Some(v.clone()),
-            None => self.registry.constant(name).map(|c| c.to_value()),
+            None => self.isolate.registry.constant(name).map(|c| c.to_value()),
         }
     }
 }
 
-impl Ctx for Vm {
+impl Ctx for Context<'_> {
     fn echo(&mut self, bytes: &[u8]) {
         self.out.write(bytes);
     }
@@ -1184,7 +1243,7 @@ impl Ctx for Vm {
     }
 
     fn warn(&mut self, message: &str) {
-        Vm::warn(self, message);
+        Context::warn(self, message);
     }
 
     fn constant(&self, name: &[u8]) -> Option<Value> {
@@ -1200,15 +1259,15 @@ impl Ctx for Vm {
     }
 
     fn function_exists(&self, name: &[u8]) -> bool {
-        Vm::function_exists(self, name)
+        Context::function_exists(self, name)
     }
 
     fn extra_args(&self) -> &[Value] {
-        Vm::extra_args(self)
+        Context::extra_args(self)
     }
 
     fn throw(&self, class: &'static str, message: String) -> Throw {
-        Vm::throw(self, class, message)
+        Context::throw(self, class, message)
     }
 }
 

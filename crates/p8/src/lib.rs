@@ -3,11 +3,31 @@
 //! engine, and the hosts that drive it"). Hosts use this crate only; the
 //! crates behind it (syntax, compiler, bytecode, runtime, interpreter,
 //! extensions) are not part of the API.
+//!
+//! ```no_run
+//! struct Stdout;
+//! impl p8::Host for Stdout {
+//!     fn write(&mut self, bytes: &[u8]) {
+//!         use std::io::Write;
+//!         let _ = std::io::stdout().write_all(bytes);
+//!     }
+//! }
+//!
+//! let platform = p8::Platform::new(&[p8::extensions::STANDARD]); // once per process
+//! let mut isolate = platform.new_isolate();                      // once per thread
+//! let script = platform.compile(b"<?php echo 1 + 2;", "a.php");
+//! let mut host = Stdout;
+//! let mut context = isolate.new_context(&mut host);              // once per request
+//! let status = match &script {
+//!     Ok(script) => context.run(script),
+//!     Err(error) => context.fail(error),
+//! };
+//! ```
 
 use p8_runtime::ext::Registry;
-use std::rc::Rc;
 use std::sync::Arc;
 
+pub use p8_interp::Host;
 pub use p8_runtime::ext::Extension;
 
 /// The extensions p8 ships.
@@ -25,20 +45,32 @@ impl Platform {
         Platform { registry: Arc::new(Registry::new(extensions)) }
     }
 
-    /// Compile PHP source and print its bytecode.
-    pub fn dump(&self, source: &[u8], file: &str) -> Result<String, String> {
+    /// An engine for the calling thread.
+    pub fn new_isolate(&self) -> Isolate {
+        Isolate { inner: p8_interp::Isolate::new(Arc::clone(&self.registry)) }
+    }
+
+    /// Compile a file's source.
+    pub fn compile(&self, source: &[u8], file: &str) -> Result<Script, Error> {
         let arena = bumpalo::Bump::new();
         let lexer = p8_syntax::lexer::Lexer::new(source);
         let mut parser = p8_syntax::parser::Parser::new(lexer, &arena);
         let program = parser.parse_program();
         if let Some(error) = program.errors.first() {
-            return Err(error.message.to_string());
+            let line = error.span.line_info(source).map_or(1, |info| info.line as u32);
+            return Err(Error { kind: ErrorKind::Parse, message: error.message.to_string(), file: file.into(), line });
         }
-        let compiled = p8_compiler::Compiler::new(source, file, &self.registry)
-            .compile(program.statements)
-            .map_err(|e| e.message)?;
+        match p8_compiler::Compiler::new(source, file, &self.registry).compile(program.statements) {
+            Ok(program) => Ok(Script { program }),
+            Err(e) => Err(Error { kind: ErrorKind::Fatal, message: e.message, file: file.into(), line: e.line }),
+        }
+    }
+
+    /// A script's bytecode, as text (for `--dump`).
+    pub fn disassemble(&self, script: &Script) -> String {
+        let program = &script.program;
         let mut out = String::new();
-        for f in std::iter::once(&compiled.main).chain(&compiled.functions) {
+        for f in std::iter::once(&program.main).chain(&program.functions) {
             out.push_str(&format!(
                 "function {} (regs {}, consts at {}: {:?})\n",
                 String::from_utf8_lossy(f.name.as_bytes()),
@@ -50,34 +82,71 @@ impl Platform {
                 out.push_str(&format!("  {pc:4} L{:<4} {instr:?}\n", f.lines[pc]));
             }
         }
-        Ok(out)
+        out
+    }
+}
+
+/// A compiled file: immutable, and `Send + Sync`, so one compile serves
+/// every isolate on every thread.
+pub struct Script {
+    program: p8_compiler::Program,
+}
+
+/// A file that does not compile.
+#[derive(Debug, Clone)]
+pub struct Error {
+    pub kind: ErrorKind,
+    pub message: String,
+    pub file: String,
+    pub line: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// PHP's "Parse error".
+    Parse,
+    /// PHP's "Fatal error" raised while compiling.
+    Fatal,
+}
+
+/// One engine on one thread; it runs one context (request) at a time.
+pub struct Isolate {
+    inner: p8_interp::Isolate,
+}
+
+impl Isolate {
+    /// Start a request whose output goes to `host`. The context borrows the
+    /// isolate until it is dropped, which ends the request.
+    pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
+        Context { inner: self.inner.new_context(host) }
+    }
+}
+
+/// One request.
+pub struct Context<'i> {
+    inner: p8_interp::Context<'i>,
+}
+
+impl Context<'_> {
+    /// Run a script's top-level code; returns the exit status.
+    pub fn run(&mut self, script: &Script) -> i32 {
+        for f in &script.program.functions {
+            if let Err(message) = self.inner.declare(Arc::clone(f)) {
+                self.inner.echo_and_flush(format!("\nFatal error: {message} in {}\n", f.file).as_bytes());
+                return 255;
+            }
+        }
+        self.inner.run_main(Arc::clone(&script.program.main))
     }
 
-    /// Compile and run PHP source as one request; returns the exit status.
-    pub fn run(&self, source: &[u8], file: &str) -> i32 {
-        let arena = bumpalo::Bump::new();
-        let lexer = p8_syntax::lexer::Lexer::new(source);
-        let mut parser = p8_syntax::parser::Parser::new(lexer, &arena);
-        let program = parser.parse_program();
-        if let Some(error) = program.errors.first() {
-            let line = error.span.line_info(source).map_or(1, |info| info.line);
-            print!("\nParse error: {} in {} on line {}\n", error.message, file, line);
-            return 255;
-        }
-        let compiled = match p8_compiler::Compiler::new(source, file, &self.registry).compile(program.statements) {
-            Ok(p) => p,
-            Err(e) => {
-                print!("\nFatal error: {} in {} on line {}\n", e.message, file, e.line);
-                return 255;
-            }
+    /// Report a file that did not compile, as PHP does; returns the exit status.
+    pub fn fail(&mut self, error: &Error) -> i32 {
+        let label = match error.kind {
+            ErrorKind::Parse => "Parse error",
+            ErrorKind::Fatal => "Fatal error",
         };
-        let mut vm = p8_interp::Vm::new(Arc::clone(&self.registry));
-        for f in compiled.functions {
-            if let Err(message) = vm.declare(f) {
-                print!("\nFatal error: {} in {}\n", message, file);
-                return 255;
-            }
-        }
-        vm.run_main(Rc::clone(&compiled.main))
+        let text = format!("\n{label}: {} in {} on line {}\n", error.message, error.file, error.line);
+        self.inner.echo_and_flush(text.as_bytes());
+        255
     }
 }

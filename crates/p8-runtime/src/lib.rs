@@ -5,6 +5,7 @@
 
 pub mod array;
 pub mod ext;
+pub mod frozen;
 pub mod number;
 pub mod numeric;
 pub mod ops;
