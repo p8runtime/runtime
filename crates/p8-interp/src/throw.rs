@@ -165,6 +165,12 @@ fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     frame.extra = None;
     let base = frame.base as usize;
     let code = &frame.func.code;
+    // A constructor an exception left: the object is never destructed.
+    if code.name.as_bytes().eq_ignore_ascii_case(b"__construct")
+        && let Some(this) = &frame.this
+    {
+        this.destructed.set(true);
+    }
     let consts = base + code.consts_at as usize..base + code.consts_at as usize + frame.func.consts.len();
     for r in &mut regs[base..consts.start] {
         clear(r);

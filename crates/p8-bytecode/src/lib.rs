@@ -48,6 +48,12 @@ pub enum Instr {
     Move { dst: Reg, src: Reg },
     /// The variable `var` = src's value, written through a reference
     Assign { var: Reg, src: Reg },
+    /// Assign from a temporary nothing reads again: its value is moved
+    /// (no copy left behind to keep an object alive).
+    AssignTake { var: Reg, src: Reg },
+    /// Release a temporary's value (a result nothing uses: PHP frees it
+    /// there, and a destructor may be due).
+    Free { reg: Reg },
     LoadNull { dst: Reg },
     Binary { op: BinOp, dst: Reg, a: Reg, b: Reg },
     /// `Binary` for `+`, `-` and `*`, one opcode each (the commonest

@@ -442,7 +442,8 @@ fn done(ctx: &mut dyn Ctx, func: &str, shown: &str, r: std::io::Result<()>) -> V
 
 fn unlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = text(&str_arg(args, 0));
-    if Path::new(&p).is_dir() {
+    // A symlink to a directory is unlinked (the link, not what it names).
+    if std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
         ctx.warn(&format!("unlink({p}): Is a directory"));
         return Ok(Value::Bool(false));
     }

@@ -188,7 +188,7 @@ enum Next {
 ///
 /// Kept apart from everything else so its state stays in machine registers.
 #[inline(never)]
-fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mut pc: usize, stop: &AtomicU64) -> usize {
+fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mut pc: usize, stop: &AtomicU64, ids: &Ids) -> usize {
     // A loop's backward branch is where an interrupt is noticed: `step`
     // then raises it.
     let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
@@ -300,10 +300,15 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     }
                     pc += 1;
                 }
+                // A write that freed an object with a destructor stops here:
+                // `execute` runs it before the next instruction.
                 Instr::Move { dst, src } => match copied(&w[src as usize]) {
                     Some(v) => {
                         w[dst as usize] = v;
                         pc += 1;
+                        if ids.has_pending() {
+                            return pc;
+                        }
                     }
                     None => return pc,
                 },
@@ -311,9 +316,33 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     Some(v) => {
                         assign(w, var, v);
                         pc += 1;
+                        if ids.has_pending() {
+                            return pc;
+                        }
                     }
                     None => return pc,
                 },
+                Instr::AssignTake { var, src } => match std::mem::replace(&mut w[src as usize], Value::Undef) {
+                    // Through a reference, or undefined: `step`'s.
+                    v @ (Value::Ref(_) | Value::Undef) => {
+                        w[src as usize] = v;
+                        return pc;
+                    }
+                    v => {
+                        assign(w, var, v);
+                        pc += 1;
+                        if ids.has_pending() {
+                            return pc;
+                        }
+                    }
+                },
+                Instr::Free { reg } => {
+                    clear(&mut w[reg as usize]);
+                    pc += 1;
+                    if ids.has_pending() {
+                        return pc;
+                    }
+                }
                 Instr::JumpIf { cond, target } => match w[cond as usize] {
                     Value::Bool(true) if back(target, pc) => return pc,
                     Value::Bool(c) => pc = if c { target as usize } else { pc + 1 },
@@ -343,6 +372,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                         Some(v) => {
                             w[dst as usize] = v;
                             pc += 1;
+                            if ids.has_pending() {
+                                return pc;
+                            }
                         }
                         None => return pc,
                     }
@@ -371,6 +403,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     }
                     w[dst as usize] = v;
                     pc += 1;
+                    if ids.has_pending() {
+                        return pc;
+                    }
                 }
                 // $a[int] op= number, $a an array holding a number at
                 // that key
@@ -508,10 +543,16 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 };
                 leave(frames, regs, value);
                 pc = frames.last().expect("the caller's frame").pc as usize;
+                if ids.has_pending() {
+                    return pc;
+                }
             }
             Switch::ReturnNull => {
                 leave(frames, regs, Value::Null);
                 pc = frames.last().expect("the caller's frame").pc as usize;
+                if ids.has_pending() {
+                    return pc;
+                }
             }
         }
     }
@@ -938,6 +979,7 @@ impl Context<'_> {
         }
         self.standard_streams();
         let mut regs = std::mem::take(&mut self.isolate.regs);
+        let ncv = main.consts_at as usize;
         self.frames.push(&Closure::new(main), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
         let defs = std::mem::take(&mut self.class_defs);
@@ -948,12 +990,23 @@ impl Context<'_> {
         if let Err(t) = result {
             result = Err(self.handle_uncaught(&mut regs, t));
         }
+        // exit() and an uncaught exception end the script cleanly enough
+        // for destructors (a fatal error does not).
+        let clean_end = matches!(result, Err(Throw::Exit(_) | Throw::Object(_) | Throw::Error { .. } | Throw::Autoload(_)));
         let mut status = self.report_end(result);
         // Shutdown functions (when the main frame returned, they ran then).
         if !self.shutdown.is_empty() {
             self.frames.floor = 0;
             let r = self.run_shutdown(&mut regs);
             if let Err(t) = r {
+                let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
+                let t = self.handle_uncaught(&mut regs, t);
+                status = self.report_end(Err(t));
+            }
+        }
+        if clean_end {
+            self.frames.floor = 0;
+            if let Err(t) = self.run_destructors(&mut regs).and_then(|()| self.end_destructors(&mut regs, ncv)) {
                 let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
                 let t = self.handle_uncaught(&mut regs, t);
                 status = self.report_end(Err(t));
@@ -1170,7 +1223,10 @@ impl Context<'_> {
         // The function `step` last ran in (refreshed when `fast` switched).
         let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
         loop {
-            pc = fast(regs, &mut self.frames, &self.closures, pc, &stop);
+            pc = fast(regs, &mut self.frames, &self.closures, pc, &stop, &self.ids);
+            if self.ids.has_pending() {
+                pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+            }
             let frame = self.frames.last().expect("a frame");
             if !Rc::ptr_eq(&func, &frame.func) {
                 func = Rc::clone(&frame.func);
@@ -1188,7 +1244,7 @@ impl Context<'_> {
                     Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
                     Err(t) => pc = self.unwind(regs, t, pc)?,
                 }
-                if !self.pending_errors.is_empty() {
+                if !self.pending_errors.is_empty() || self.ids.has_pending() {
                     pc = self.after_errors(regs, pc, at)?;
                 }
                 continue;
@@ -1201,6 +1257,9 @@ impl Context<'_> {
                         if !self.pending_errors.is_empty() {
                             self.dispatch_errors(regs)?;
                         }
+                        if self.ids.has_pending() {
+                            self.run_destructors(regs)?;
+                        }
                         return Ok(());
                     }
                     pc = self.frames.last().expect("a frame").pc as usize;
@@ -1210,7 +1269,7 @@ impl Context<'_> {
                 Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
                 Err(t) => pc = self.unwind(regs, t, pc)?,
             }
-            if !self.pending_errors.is_empty() {
+            if !self.pending_errors.is_empty() || self.ids.has_pending() {
                 pc = self.after_errors(regs, pc, at)?;
             }
         }
@@ -1227,10 +1286,12 @@ impl Context<'_> {
     }
 
     /// Call the error handler for the diagnostics the last instruction
-    /// raised; an exception it throws is raised there.
+    /// raised, then the destructors of the objects it freed; an exception
+    /// either throws is raised there.
     #[cold]
     fn after_errors(&mut self, regs: &mut Vec<Value>, pc: usize, at: usize) -> Result<usize, Throw> {
-        match self.dispatch_errors(regs) {
+        let r = if self.pending_errors.is_empty() { Ok(()) } else { self.dispatch_errors(regs) };
+        match r.and_then(|()| self.run_destructors_at(regs, Some(at + 1))) {
             Ok(()) => Ok(pc),
             Err(t) => self.unwind(regs, t, at),
         }
@@ -1268,6 +1329,12 @@ impl Context<'_> {
                     let v = self.operand(w, func, src);
                     assign(w, var, v);
                 }
+                Instr::AssignTake { var, src } => {
+                    let v = self.operand(w, func, src);
+                    clear(&mut reg!(src));
+                    assign(w, var, v);
+                }
+                Instr::Free { reg } => clear(&mut reg!(reg)),
                 Instr::LoadNull { dst } => reg!(dst) = Value::Null,
                 Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => unreachable!("normalized to Binary above"),
                 Instr::Binary { op, dst, a, b } => {
@@ -1900,10 +1967,13 @@ impl Context<'_> {
                     };
                     // Construct finds the constructor again, after the arguments.
                     drop(ctor);
+                    // Not destructed unless constructed (an argument may throw first).
+                    object.destructed.set(true);
                     reg!(dst) = Value::Object(object);
                 }
                 Instr::ConstructSpread { obj, args } => {
                     let Value::Object(object) = reg!(obj).clone() else { unreachable!("ConstructSpread follows New") };
+                    object.destructed.set(false);
                     let list: Vec<Value> = match self.operand(w, func, args) {
                         Value::Array(a) => a.values().map(Value::deref).collect(),
                         _ => Vec::new(),
@@ -1921,6 +1991,7 @@ impl Context<'_> {
                 }
                 Instr::Construct { obj, base: args, argc } => {
                     let Value::Object(object) = reg!(obj).clone() else { unreachable!("Construct follows New") };
+                    object.destructed.set(false);
                     match self.constructor(&object) {
                         Some(m) => return self.call_method(regs, m, base + args as usize, argc, NO_RET, pc),
                         None => {
@@ -2087,9 +2158,10 @@ impl Context<'_> {
                 }
                 Instr::Return { src } => {
                     let v = self.operand(w, func, src);
-                    if self.frames.len() == 1 && self.frames.floor == 0 && !self.shutdown.is_empty() {
-                        // The script ends: shutdown functions, with its globals still there.
-                        self.run_shutdown(regs)?;
+                    if self.frames.len() == 1 && self.frames.floor == 0 {
+                        // The script ends: shutdown functions and destructors,
+                        // with its globals still there.
+                        self.script_end(regs)?;
                     }
                     if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
                         self.finish(&g, v);
@@ -2101,8 +2173,8 @@ impl Context<'_> {
                 }
 
                 Instr::ReturnNull => {
-                    if self.frames.len() == 1 && self.frames.floor == 0 && !self.shutdown.is_empty() {
-                        self.run_shutdown(regs)?;
+                    if self.frames.len() == 1 && self.frames.floor == 0 {
+                        self.script_end(regs)?;
                     }
                     if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
                         self.finish(&g, Value::Null);

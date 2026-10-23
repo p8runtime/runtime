@@ -1,0 +1,35 @@
+bye a
+after unset
+bye e0
+after unset elem
+bye e1
+after arr
+bye parent
+bye kid
+after nested
+m tmp
+bye tmp
+after tmp call
+m expr
+bye expr
+expr
+caught from dtor
+bye ret
+after g
+kept
+bye in-prop
+after prop null
+iter loop1
+iter loop2
+bye loop1
+after loop
+bye loop2
+gen 1
+gen 2
+bye gen-local
+after gen
+gen gone
+exiting
+bye survivor
+bye prop-holder
+bye ret

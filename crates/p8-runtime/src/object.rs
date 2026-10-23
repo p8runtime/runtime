@@ -48,6 +48,8 @@ pub const CLASS_ENUM: u32 = 16;
 pub const CLASS_READONLY: u32 = 32;
 /// A resource's class (see `stream::Resource`): not a PHP class.
 pub const CLASS_RESOURCE: u32 = 64;
+/// The class has a `__destruct` (its own or inherited).
+pub const CLASS_DESTRUCTOR: u32 = 128;
 
 /// An instance property's declaration, at its slot.
 #[derive(Debug, Clone)]
@@ -236,6 +238,14 @@ pub struct Ids {
     free: RefCell<Vec<u32>>,
     /// Never reuse a number (resources: PHP numbers them up only).
     monotonic: bool,
+    /// Objects whose last reference went and whose destructor is due, in
+    /// the order they went (each one revived to run it).
+    pending: RefCell<std::collections::VecDeque<Rc<Object>>>,
+    /// How many are pending (read on hot paths: one load).
+    due: Cell<u32>,
+    /// Every object with a destructor, for the ones the script leaves
+    /// alive (PHP destructs them at its end, oldest first).
+    live: RefCell<Vec<std::rc::Weak<Object>>>,
 }
 
 impl Ids {
@@ -256,6 +266,40 @@ impl Ids {
     fn give_back(&self, id: u32) {
         if !self.monotonic {
             self.free.borrow_mut().push(id);
+        }
+    }
+
+    /// Whether a destructor is due.
+    #[inline(always)]
+    pub fn has_pending(&self) -> bool {
+        self.due.get() != 0
+    }
+
+    /// The next object whose destructor is due.
+    pub fn next_pending(&self) -> Option<Rc<Object>> {
+        let o = self.pending.borrow_mut().pop_front()?;
+        self.due.set(self.due.get() - 1);
+        Some(o)
+    }
+
+    /// The objects with a destructor still alive and not yet destructed,
+    /// oldest (lowest id) first.
+    pub fn undestructed(&self) -> Vec<Rc<Object>> {
+        let mut live = self.live.borrow_mut();
+        live.retain(|w| w.strong_count() > 0);
+        let mut out: Vec<Rc<Object>> = live.iter().filter_map(std::rc::Weak::upgrade).filter(|o| !o.destructed.get()).collect();
+        out.sort_by_key(|o| o.id);
+        out
+    }
+
+    fn track(&self, o: &Rc<Object>) {
+        if o.class.flags & CLASS_DESTRUCTOR != 0 {
+            let mut live = self.live.borrow_mut();
+            // Drop the dead now and then, so the list stays the size of the living.
+            if live.len() >= 64 && live.len().is_power_of_two() {
+                live.retain(|w| w.strong_count() > 0);
+            }
+            live.push(Rc::downgrade(o));
         }
     }
 }
@@ -281,6 +325,8 @@ pub struct Object {
     pub dynamic: RefCell<PhpArray>,
     pub id: u32,
     ids: Rc<Ids>,
+    /// Its destructor ran, or must not (its constructor threw).
+    pub destructed: Cell<bool>,
 }
 
 impl Object {
@@ -292,31 +338,53 @@ impl Object {
     /// A new object holding `data` (see [`Data`]).
     pub fn with_data(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
         let slots = class.properties.iter().map(|p| p.default.clone()).collect();
-        Rc::new(Object {
+        let o = Rc::new(Object {
             class,
             data: data.map(Data),
             slots: RefCell::new(slots),
             dynamic: RefCell::new(PhpArray::new()),
             id: ids.take(),
             ids: Rc::clone(ids),
-        })
+            destructed: Cell::new(false),
+        });
+        ids.track(&o);
+        o
     }
 
     /// A shallow copy (clone): same class, the properties copied, a new id.
     pub fn copy(&self) -> Rc<Object> {
-        Rc::new(Object {
+        let o = Rc::new(Object {
             class: Rc::clone(&self.class),
             data: self.data.as_ref().map(|d| Data(Rc::clone(&d.0))),
             slots: RefCell::new(self.slots.borrow().clone()),
             dynamic: RefCell::new(self.dynamic.borrow().clone()),
             id: self.ids.take(),
             ids: Rc::clone(&self.ids),
-        })
+            destructed: Cell::new(false),
+        });
+        self.ids.track(&o);
+        o
     }
 }
 
 impl Drop for Object {
     fn drop(&mut self) {
+        if self.class.flags & CLASS_DESTRUCTOR != 0 && !self.destructed.get() {
+            // Its destructor is due: the object lives on (same id, same
+            // properties) until the interpreter has run it.
+            let revived = Rc::new(Object {
+                class: Rc::clone(&self.class),
+                data: self.data.take(),
+                slots: RefCell::new(std::mem::take(self.slots.get_mut())),
+                dynamic: RefCell::new(std::mem::take(self.dynamic.get_mut())),
+                id: self.id,
+                ids: Rc::clone(&self.ids),
+                destructed: Cell::new(true),
+            });
+            self.ids.pending.borrow_mut().push_back(revived);
+            self.ids.due.set(self.ids.due.get() + 1);
+            return;
+        }
         self.ids.give_back(self.id);
     }
 }

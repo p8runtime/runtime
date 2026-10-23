@@ -394,10 +394,11 @@ impl Context<'_> {
         ordered.extend(methods);
         ordered.extend(traits);
         let methods = ordered;
+        let destructor = if methods.contains_key(b"__destruct".as_slice()) { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,
-            flags: def.flags,
+            flags: def.flags | destructor,
             parent,
             interfaces,
             properties,
@@ -471,11 +472,21 @@ impl Context<'_> {
             let t = self.throw("Error", format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()));
             // Made while the object still is (PHP numbers the Error after it).
             let e = self.exception(regs, t);
+            // Never constructed: never destructed.
+            object.destructed.set(true);
             drop(object);
             return Err(e);
         }
         let func = self.code_of(&ctor);
         Ok((Rc::clone(&object), Some(MethodFrame::method(func, Some(object), declaring, class))))
+    }
+
+    /// The destructor call of an object (if its class has one).
+    pub(crate) fn destructor(&self, object: &Rc<Object>) -> Option<MethodFrame> {
+        let class = Rc::clone(&object.class);
+        let dtor = class.method(b"__destruct")?;
+        let declaring = self.declaring(&class, &dtor.declaring);
+        Some(MethodFrame::method(self.code_of(dtor), Some(Rc::clone(object)), declaring, class))
     }
 
     /// The constructor call of a new object (its visibility was checked
