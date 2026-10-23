@@ -2804,6 +2804,8 @@ dependencies = [
 name = "p8-ext-standard"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "chrono-tz",
  "crc32fast",
  "getrandom 0.2.16",
  "md-5 0.10.6",
