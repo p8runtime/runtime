@@ -3890,7 +3890,7 @@ impl<'src> Emitter<'src> {
                 Val::Int(i) => i.to_string(),
                 Val::Float(f) => crate::core::value::php_float_to_string(
                     f,
-                    crate::core::value::FloatPrecision::ECHO,
+                    crate::core::value::FloatPrecision::echo(),
                     'E',
                 ),
                 Val::String(s) => {

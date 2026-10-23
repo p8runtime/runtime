@@ -489,6 +489,7 @@ impl Extension for CoreExtension {
         registry.register_function(b"call_user_func", function::php_call_user_func);
         registry.register_function(b"call_user_func_array", function::php_call_user_func_array);
         registry.register_function(b"extension_loaded", function::php_extension_loaded);
+        registry.register_function(b"get_loaded_extensions", function::php_get_loaded_extensions);
         registry.register_function(b"spl_autoload_register", spl::php_spl_autoload_register);
         registry.register_function(b"spl_object_hash", spl::php_spl_object_hash);
         registry.register_function(b"spl_object_id", spl::php_spl_object_id);

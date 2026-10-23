@@ -24,8 +24,19 @@ pub fn create_engine() -> anyhow::Result<Arc<EngineContext>> {
         .map_err(|e| anyhow::anyhow!("Failed to build engine: {}", e))
 }
 
+/// Run `php -r` code as one request; returns the process exit status.
+#[allow(dead_code)] // only the php binary takes -r; the other binaries share this module
+pub fn run_code(code: &str, args: &[String], ini: &[(String, String)]) -> anyhow::Result<i32> {
+    let engine_context = create_engine()?;
+    let mut vm = VM::new(engine_context);
+    php_rs::builtins::errors::apply_startup_ini(&mut vm, ini);
+    set_argv(&mut vm, "Standard input code", args);
+    let source = format!("<?php {}", code);
+    Ok(execute_source(source.as_bytes(), Some(Path::new("Command line code")), &mut vm))
+}
+
 /// Run a script file as one request; returns the process exit status.
-pub fn run_script(script_path: &Path, args: &[String]) -> anyhow::Result<i32> {
+pub fn run_script(script_path: &Path, args: &[String], ini: &[(String, String)]) -> anyhow::Result<i32> {
     // PHP source is bytes, not necessarily UTF-8.
     let source = fs::read(script_path)
         .with_context(|| format!("Failed to read script: {}", script_path.display()))?;
@@ -47,6 +58,7 @@ pub fn run_script(script_path: &Path, args: &[String]) -> anyhow::Result<i32> {
 
     let engine_context = create_engine()?;
     let mut vm = VM::new(engine_context);
+    php_rs::builtins::errors::apply_startup_ini(&mut vm, ini);
 
     if let Some(server_handle) = vm
         .context
@@ -109,11 +121,18 @@ pub fn run_script(script_path: &Path, args: &[String]) -> anyhow::Result<i32> {
         slot.value = Val::Array(array_data_rc);
     }
 
+    set_argv(&mut vm, &script_name, args);
+
+    Ok(execute_source(&source, Some(&canonical_path), &mut vm))
+}
+
+/// $argv and $argc: the script name, then its arguments.
+fn set_argv(vm: &mut VM, script_name: &str, args: &[String]) {
     let mut argv_map = IndexMap::new();
     argv_map.insert(
         ArrayKey::Int(0),
         vm.arena
-            .alloc(Val::String(Rc::new(script_name.into_bytes()))),
+            .alloc(Val::String(Rc::new(script_name.as_bytes().to_vec()))),
     );
 
     for (i, arg) in args.iter().enumerate() {
@@ -132,8 +151,6 @@ pub fn run_script(script_path: &Path, args: &[String]) -> anyhow::Result<i32> {
 
     vm.context.globals.insert(argv_symbol, argv_handle);
     vm.context.globals.insert(argc_symbol, argc_handle);
-
-    Ok(execute_source(&source, Some(&canonical_path), &mut vm))
 }
 
 /// Compile and run `source` as one request; returns the exit status

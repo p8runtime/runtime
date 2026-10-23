@@ -17,6 +17,6 @@ fn main() -> Result<()> {
     }
 
     let script = PathBuf::from(&args[1]);
-    let status = run_script(&script, &args[2..])?;
+    let status = run_script(&script, &args[2..], &[])?;
     std::process::exit(status);
 }

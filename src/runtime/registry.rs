@@ -24,6 +24,10 @@ pub struct NativeMethodEntry {
     pub is_static: bool,
 }
 
+/// Extensions implemented inside the core extension rather than registered
+/// separately, in PHP's spelling.
+pub const BUILT_IN_EXTENSIONS: &[&str] = &["standard", "pcre", "SPL", "random", "Reflection", "bcmath"];
+
 /// Extension registry - manages all loaded extensions and their registered components
 ///
 /// This is stored in `EngineContext` and persists for the lifetime of the process
@@ -132,14 +136,32 @@ impl ExtensionRegistry {
         self.constants.get(name)
     }
 
-    /// Check if an extension is loaded
+    /// Check if an extension is loaded (case-insensitive, as PHP compares)
     pub fn extension_loaded(&self, name: &str) -> bool {
-        self.extension_map.contains_key(name)
+        self.get_extensions()
+            .iter()
+            .any(|loaded| loaded.eq_ignore_ascii_case(name))
     }
 
-    /// Get list of all loaded extension names
+    /// Names of all loaded extensions, in PHP's spelling: the registered
+    /// ones in load order, then those built into the core extension (when
+    /// it is loaded).
     pub fn get_extensions(&self) -> Vec<&str> {
-        self.extension_map.keys().map(|s| s.as_str()).collect()
+        let built_in = match self.extension_map.contains_key("Core") {
+            true => BUILT_IN_EXTENSIONS,
+            false => &[],
+        };
+        let mut names: Vec<(usize, &str)> = self
+            .extension_map
+            .iter()
+            .map(|(name, &index)| (index, name.as_str()))
+            .collect();
+        names.sort_unstable();
+        names
+            .into_iter()
+            .map(|(_, name)| name)
+            .chain(built_in.iter().copied())
+            .collect()
     }
 
     /// Register an extension and call its MINIT hook

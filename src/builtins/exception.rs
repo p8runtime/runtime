@@ -239,7 +239,7 @@ fn trace_arg(vm: &VM, h: Handle) -> String {
         Val::Null => "NULL".into(),
         Val::Bool(b) => if *b { "true" } else { "false" }.into(),
         Val::Int(i) => i.to_string(),
-        Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E'),
+        Val::Float(f) => crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::echo(), 'E'),
         Val::String(s) => {
             // zend.exception_string_param_max_len = 15
             let shown = String::from_utf8_lossy(&s[..s.len().min(15)]).into_owned();
