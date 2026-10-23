@@ -438,13 +438,16 @@ impl Context<'_> {
         ordered.extend(methods);
         ordered.extend(traits);
         let methods = ordered;
-        let destructor = if methods.contains_key(b"__destruct".as_slice()) { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
+        let native_dtor = parent.as_ref().and_then(|p| p.native_dtor);
+        let destructor = if methods.contains_key(b"__destruct".as_slice()) || native_dtor.is_some() { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
         let lazy = properties.iter().any(|p| p.init.is_some())
             || !static_inits.is_empty()
             || constants.values().any(|c| c.init.is_some())
             || parent.as_ref().is_some_and(|p| p.flags & CLASS_LAZY != 0);
         let destructor = destructor | if lazy { CLASS_LAZY } else { 0 };
         let destructor = destructor | if properties.iter().any(|p| p.hooks != 0) { p8_runtime::object::CLASS_HOOKS } else { 0 };
+        let destructor = destructor | parent.as_ref().map_or(0, |p| p.flags & p8_runtime::object::CLASS_UNCLONEABLE);
+        let make_data = parent.as_ref().and_then(|p| p.make_data);
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,
@@ -457,6 +460,8 @@ impl Context<'_> {
             constants,
             statics,
             debug_info: None,
+            make_data,
+            native_dtor,
             enum_cases: def.cases.iter().map(|(n, _)| PhpStr::from(n.as_bytes())).collect(),
             enum_backing: def.enum_backing.as_ref().map(|t| PhpStr::from(t.as_bytes())),
             static_inits,
@@ -1315,6 +1320,9 @@ impl Context<'_> {
         let Value::Object(o) = v.deref() else {
             return Err(self.throw("Error", "__clone method called on non-object"));
         };
+        if o.class.flags & p8_runtime::object::CLASS_UNCLONEABLE != 0 {
+            return Err(self.throw("Error", format!("Trying to clone an uncloneable object of class {}", text(&o.class.name))));
+        }
         let copy = o.copy();
         let Some(method) = o.class.method(b"__clone").cloned() else { return Ok((copy, None)) };
         let declaring = self.declaring(&o.class, &method.declaring);

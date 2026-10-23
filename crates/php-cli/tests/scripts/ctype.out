@@ -1,0 +1,18 @@
+ctype_alnum nyyyynnnnynnnyyynnnn
+ctype_alpha nyynnnnnnnnnnynnnnnn
+ctype_cntrl nnnnnynnynnnnnnnnnnn
+ctype_digit nnnnynnnnnnnnnyynnnn
+ctype_lower nynnnnnnnnnnnnnnnnnn
+ctype_graph nyyyynnynynynyyynnnn
+ctype_print nyyyynyynynynyyynnnn
+ctype_punct nnnnnnnynnnnnnnnnnnn
+ctype_space nnnnnyynnnnnnnnnnnnn
+ctype_upper nnynnnnnnnnnnynnnnnn
+ctype_xdigit nyyyynnnnynnnyyynnnn
+
+Deprecated: ctype_digit(): Argument of type int will be interpreted as string in the future in %s on line 9
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)

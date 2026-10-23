@@ -31,6 +31,7 @@ mod math;
 mod misc;
 mod process;
 mod csv;
+mod ctype;
 mod string;
 mod string2;
 mod var;
@@ -60,6 +61,8 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "ob_implicit_flush", run: ob_implicit_flush, by_ref: &[] },
     Builtin { name: "flush", run: flush, by_ref: &[] },
     Builtin { name: "function_exists", run: function_exists, by_ref: &[] },
+    Builtin { name: "extension_loaded", run: extension_loaded, by_ref: &[] },
+    Builtin { name: "get_loaded_extensions", run: get_loaded_extensions, by_ref: &[] },
     Builtin { name: "define", run: define, by_ref: &[] },
     Builtin { name: "defined", run: defined, by_ref: &[] },
     Builtin { name: "func_get_args", run: func_get_args, by_ref: &[] },
@@ -87,7 +90,7 @@ const HOST_CONSTANTS: &[(&str, Constant)] = &[
     ("PHP_EOL", Constant::Str(b"\n")),
     ("DIRECTORY_SEPARATOR", Constant::Str(b"/")),
     ("PATH_SEPARATOR", Constant::Str(b":")),
-    ("PHP_MAXPATHLEN", Constant::Int(if cfg!(target_os = "macos") { 1024 } else { 4096 })),
+    ("PHP_MAXPATHLEN", Constant::Int(p8_runtime::stream::MAXPATHLEN as i64)),
     ("PHP_FD_SETSIZE", Constant::Int(1024)),
     ("PHP_SHLIB_SUFFIX", Constant::Str(b"so")),
     ("PHP_ZTS", Constant::Bool(false)),
@@ -106,6 +109,11 @@ fn register(registry: &mut Registry) {
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
     registry.add_functions(callback::BUILTINS);
+    registry.add_functions(ctype::BUILTINS);
+    // The PHP modules this extension provides, in PHP's order.
+    for module in ["Core", "date", "hash", "json", "random", "Reflection", "SPL", "standard", "ctype"] {
+        registry.add_module(module);
+    }
     registry.add_functions(file::BUILTINS);
     registry.add_functions(json::BUILTINS);
     registry.add_functions(hash::BUILTINS);
@@ -446,6 +454,20 @@ fn flush(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 
 fn function_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(ctx.function_exists(str_arg(args, 0).as_bytes())))
+}
+
+/// extension_loaded(string $extension): any case.
+fn extension_loaded(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let name = str_arg(args, 0);
+    Ok(Value::Bool(ctx.modules().iter().any(|m| m.as_bytes().eq_ignore_ascii_case(name.as_bytes()))))
+}
+
+/// get_loaded_extensions(bool $zend_extensions = false): p8 has no Zend
+/// extensions (no OPcache).
+fn get_loaded_extensions(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let zend = args.first().is_some_and(|v| v.to_bool());
+    let names = if zend { Vec::new() } else { ctx.modules().iter().map(|m| Value::str(*m)).collect() };
+    Ok(Value::Array(std::rc::Rc::new(PhpArray::from_list(names))))
 }
 
 fn define(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

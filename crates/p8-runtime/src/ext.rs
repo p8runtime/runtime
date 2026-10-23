@@ -83,6 +83,9 @@ pub trait Ctx {
     fn define(&mut self, name: &[u8], value: Value) -> bool;
     /// Whether a function `name` exists (any case, optional leading `\`).
     fn function_exists(&self, name: &[u8]) -> bool;
+    /// The PHP modules the process's extensions provide (extension_loaded,
+    /// get_loaded_extensions), in the order they registered.
+    fn modules(&self) -> &[&'static str];
     /// The running user function's arguments past its parameters.
     fn extra_args(&self) -> &[Value];
     /// A Throw with PHP's error `class` at the current line.
@@ -226,6 +229,12 @@ pub struct Registry {
     constants: HashMap<&'static [u8], Constant>,
     /// Classes extensions declare, in order (a parent before its children).
     classes: Vec<&'static ClassSpec>,
+    /// Native classes' per-object state makers, by class name.
+    data: HashMap<&'static str, crate::object::MakeData>,
+    /// Native classes' cleanups on destruction, by class name.
+    dtors: HashMap<&'static str, crate::object::NativeMethod>,
+    /// The PHP modules provided ("standard", "json", ...), in order.
+    modules: Vec<&'static str>,
 }
 
 /// A class an extension declares: its methods are Rust. The engine links
@@ -256,6 +265,38 @@ impl Registry {
 
     pub fn add_classes(&mut self, classes: &'static [ClassSpec]) {
         self.classes.extend(classes.iter());
+    }
+
+    /// Declare a PHP module (as extension_loaded names it) provided.
+    pub fn add_module(&mut self, name: &'static str) {
+        self.modules.push(name);
+    }
+
+    /// The modules provided, in the order they were added.
+    pub fn modules(&self) -> &[&'static str] {
+        &self.modules
+    }
+
+    /// Give every new object of native class `class` (and its
+    /// subclasses) the state `make` makes.
+    pub fn add_data(&mut self, class: &'static str, make: crate::object::MakeData) {
+        self.data.insert(class, make);
+    }
+
+    /// Run `dtor` when an object of native class `class` (or a
+    /// subclass) is destroyed, before any __destruct.
+    pub fn add_dtor(&mut self, class: &'static str, dtor: crate::object::NativeMethod) {
+        self.dtors.insert(class, dtor);
+    }
+
+    /// The cleanup `add_dtor` registered for `class`.
+    pub fn native_dtor(&self, class: &str) -> Option<crate::object::NativeMethod> {
+        self.dtors.get(class).copied()
+    }
+
+    /// The state maker `add_data` registered for `class`.
+    pub fn data_maker(&self, class: &str) -> Option<crate::object::MakeData> {
+        self.data.get(class).copied()
     }
 
     /// The classes extensions declare, in order.

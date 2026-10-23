@@ -2965,6 +2965,8 @@ impl Context<'_> {
                     constants: p8_runtime::object::Constants::new(),
                     statics: HashMap::new(),
                     debug_info: None,
+                    make_data: None,
+                    native_dtor: None,
                     enum_cases: Vec::new(),
                     enum_backing: None,
                     static_inits: Vec::new(),
@@ -3460,6 +3462,10 @@ impl Ctx for Context<'_> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
         self.constants.insert(const_key(name).into_owned(), value);
         true
+    }
+
+    fn modules(&self) -> &[&'static str] {
+        self.isolate.registry.modules()
     }
 
     fn function_exists(&self, name: &[u8]) -> bool {

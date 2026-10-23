@@ -79,6 +79,8 @@ fn declare(
         constants: p8_runtime::object::Constants::new(),
         statics: HashMap::new(),
         debug_info: None,
+        make_data: None,
+        native_dtor: None,
         enum_cases: Vec::new(),
         enum_backing: None,
         static_inits: Vec::new(),
@@ -239,7 +241,12 @@ pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
 }
 
 /// Declare a class an extension (or the engine's Reflection) specifies.
-pub(crate) fn declare_spec(c: &mut Classes, spec: &p8_runtime::ext::ClassSpec) {
+pub(crate) fn declare_spec(
+    c: &mut Classes,
+    spec: &p8_runtime::ext::ClassSpec,
+    make_data: Option<p8_runtime::object::MakeData>,
+    dtor: Option<p8_runtime::object::NativeMethod>,
+) {
     let props = spec.properties.iter().map(|(n, d, v)| prop(n, d.to_value(), *v, spec.name, None)).collect();
     let methods: Vec<(&str, Option<NativeMethod>, bool)> = spec
         .methods
@@ -253,6 +260,11 @@ pub(crate) fn declare_spec(c: &mut Classes, spec: &p8_runtime::ext::ClassSpec) {
     declare(c, spec.name, spec.flags, spec.parent, spec.interfaces, props, &methods);
     let class = Rc::get_mut(c.get_mut(spec.name.to_ascii_lowercase().as_bytes()).expect("just declared")).expect("not shared yet");
     class.debug_info = spec.debug_info;
+    class.make_data = make_data.or_else(|| class.parent.as_ref().and_then(|p| p.make_data));
+    class.native_dtor = dtor.or_else(|| class.parent.as_ref().and_then(|p| p.native_dtor));
+    if class.native_dtor.is_some() {
+        class.flags |= p8_runtime::object::CLASS_DESTRUCTOR;
+    }
     for (n, value) in spec.constants {
         class.constants.insert(
             n.as_bytes().to_vec(),

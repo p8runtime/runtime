@@ -1,0 +1,11 @@
+[package]
+name = "p8-ext-xml"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's XML extensions: xmlwriter (and, to come, the parser under xml, xmlreader, dom and simplexml)"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+# Output encodings other than UTF-8, Latin-1 and ASCII (what libxml2 hands to iconv).
+encoding_rs = "0.8"
