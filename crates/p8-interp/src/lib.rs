@@ -209,9 +209,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
         // next instruction; a non-int variable leaves both to `step`.
         macro_rules! step_jump {
             ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
-                let Value::Int(i) = w[$var as usize] else { return pc };
-                let Some(n) = $step(i, 1) else { return pc };
-                w[$var as usize] = Value::Int(n);
+                // Written in place: no drop of the old value to compile.
+                let Value::Int(i) = &mut w[$var as usize] else { return pc };
+                let Some(n) = $step(*i, 1) else { return pc };
+                *i = n;
                 match w[$b as usize] {
                     Value::Int(b) if $holds(n, b) => {
                         if back($target, pc) {
@@ -248,9 +249,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     }
                     _ => return pc,
                 },
-                Instr::IncVar { var } => match w[var as usize] {
-                    Value::Int(i) if i != i64::MAX => {
-                        w[var as usize] = Value::Int(i + 1);
+                Instr::IncVar { var } => match &mut w[var as usize] {
+                    Value::Int(i) if *i != i64::MAX => {
+                        *i += 1;
                         pc += 1;
                     }
                     _ => return pc,
@@ -259,9 +260,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
                 Instr::DecJumpGt { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n > b),
                 Instr::DecJumpGe { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n >= b),
-                Instr::DecVar { var } => match w[var as usize] {
-                    Value::Int(i) if i != i64::MIN => {
-                        w[var as usize] = Value::Int(i - 1);
+                Instr::DecVar { var } => match &mut w[var as usize] {
+                    Value::Int(i) if *i != i64::MIN => {
+                        *i -= 1;
                         pc += 1;
                     }
                     _ => return pc,
@@ -371,9 +372,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 },
                 // $i++ / ++$i (and --) whose value is used, on an int
                 Instr::IncDec { var, dst, inc, post } => {
-                    let Value::Int(i) = w[var as usize] else { return pc };
+                    let Value::Int(slot) = &mut w[var as usize] else { return pc };
+                    let i = *slot;
                     let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { return pc };
-                    w[var as usize] = Value::Int(n);
+                    *slot = n;
                     w[dst as usize] = Value::Int(if post { i } else { n });
                     pc += 1;
                 }
