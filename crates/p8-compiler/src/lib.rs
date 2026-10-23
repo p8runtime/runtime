@@ -400,6 +400,11 @@ fn thread_returns(code: &mut [Instr]) {
     }
 }
 
+/// `ns\\name` (just `name` in the global namespace).
+fn join(ns: &[u8], name: &[u8]) -> Vec<u8> {
+    if ns.is_empty() { name.to_vec() } else { [ns, b"\\", name].concat() }
+}
+
 /// Whether a call's arguments are `...` (the first-class callable syntax).
 fn is_placeholder(args: &[p8_syntax::ast::Arg]) -> bool {
     matches!(args, [arg] if matches!(arg.value, Expr::VariadicPlaceholder { .. }))
@@ -615,6 +620,13 @@ pub struct Compiler<'src> {
     method: Option<(Text, bool)>,
     /// Properties a constructor's parameters promoted (`public int $x`).
     promoted: Vec<PropDef>,
+    /// The namespace the code is in (empty: the global one), and its
+    /// imports by lowercase alias: classes (and namespaces), functions,
+    /// constants (`use`, `use function`, `use const`).
+    ns: Vec<u8>,
+    use_classes: HashMap<Vec<u8>, Vec<u8>>,
+    use_functions: HashMap<Vec<u8>, Vec<u8>>,
+    use_consts: HashMap<Vec<u8>, Vec<u8>>,
 }
 
 /// The class being compiled.
@@ -640,7 +652,51 @@ impl<'src> Compiler<'src> {
             scope: None,
             method: None,
             promoted: Vec::new(),
+            ns: Vec::new(),
+            use_classes: HashMap::new(),
+            use_functions: HashMap::new(),
+            use_consts: HashMap::new(),
         }
+    }
+
+    /// A class name as written, fully qualified: through the imports and
+    /// the current namespace (`\\A` is A itself, `namespace\\A` the
+    /// current namespace's).
+    fn class_name(&self, text: &[u8]) -> Vec<u8> {
+        if let Some(full) = text.strip_prefix(b"\\") {
+            return full.to_vec();
+        }
+        if text.len() > 10 && text[..10].eq_ignore_ascii_case(b"namespace\\") {
+            return join(&self.ns, &text[10..]);
+        }
+        let (first, rest) = match text.iter().position(|&c| c == b'\\') {
+            Some(at) => (&text[..at], Some(&text[at..])),
+            None => (text, None),
+        };
+        if let Some(full) = self.use_classes.get(&first.to_ascii_lowercase()) {
+            return [full.as_slice(), rest.unwrap_or(b"")].concat();
+        }
+        join(&self.ns, text)
+    }
+
+    /// A function or constant name as written: its full name, and the
+    /// global name to fall back to when that is not defined (an
+    /// unqualified name in a namespace).
+    fn ns_name(&self, text: &[u8], imports: &HashMap<Vec<u8>, Vec<u8>>, lower_alias: bool) -> (Vec<u8>, Option<Vec<u8>>) {
+        if let Some(full) = text.strip_prefix(b"\\") {
+            return (full.to_vec(), None);
+        }
+        if text.contains(&b'\\') {
+            return (self.class_name(text), None);
+        }
+        let alias = if lower_alias { text.to_ascii_lowercase() } else { text.to_vec() };
+        if let Some(full) = imports.get(&alias) {
+            return (full.clone(), None);
+        }
+        if self.ns.is_empty() {
+            return (text.to_vec(), None);
+        }
+        (join(&self.ns, text), Some(text.to_vec()))
     }
 
     fn line(&self, span: Span) -> u32 {
@@ -656,11 +712,30 @@ impl<'src> Compiler<'src> {
     }
 
     pub fn compile(mut self, stmts: &[StmtId]) -> Result<Program> {
-        for stmt in stmts {
+        // Each top-level function's by-reference parameters, by its full name.
+        let mut ns: Vec<u8> = Vec::new();
+        let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
             if let Stmt::Function { name, params, .. } = stmt {
                 let modes = params.iter().map(|p| p.by_ref).collect();
                 let rest = params.last().is_some_and(|p| p.variadic && p.by_ref);
-                self.by_ref.insert(self.text(name.span).to_ascii_lowercase(), (modes, rest));
+                let full = join(ns, c.text(name.span));
+                c.by_ref.insert(full.to_ascii_lowercase(), (modes, rest));
+            }
+        };
+        for stmt in stmts {
+            match stmt {
+                Stmt::Namespace { name, body, .. } => {
+                    let named = name.map(|n| self.text(n.span).to_vec()).unwrap_or_default();
+                    match body {
+                        Some(body) => {
+                            for s in *body {
+                                scan(&mut self, &named, s);
+                            }
+                        }
+                        None => ns = named,
+                    }
+                }
+                other => scan(&mut self, &ns, other),
             }
         }
         let mut f = FnBuilder::new(Text::from("{main}"));
@@ -847,8 +922,40 @@ impl<'src> Compiler<'src> {
                 }
             }
             Stmt::Function { name, params, body, by_ref, .. } => {
-                let function = self.function(name.span, params, body, *by_ref)?;
+                let full = join(&self.ns, self.text(name.span));
+                let line = self.line(name.span);
+                let (function, _) = self.function_with(Text::from(full.as_slice()), line, params, Body::Stmts(body), *by_ref, &[])?;
                 self.functions.push(Arc::new(function));
+            }
+            Stmt::Namespace { name, body, .. } => {
+                self.ns = name.map(|n| self.text(n.span).to_vec()).unwrap_or_default();
+                self.use_classes.clear();
+                self.use_functions.clear();
+                self.use_consts.clear();
+                if let Some(body) = body {
+                    self.stmts(f, body)?;
+                    self.ns.clear();
+                    self.use_classes.clear();
+                    self.use_functions.clear();
+                    self.use_consts.clear();
+                }
+            }
+            Stmt::Use { uses, kind, .. } => {
+                use p8_syntax::ast::UseKind;
+                for u in *uses {
+                    let full = self.text(u.name.span);
+                    let full = full.strip_prefix(b"\\").unwrap_or(full).to_vec();
+                    let alias = match u.alias {
+                        Some(a) => self.text(a.span).to_vec(),
+                        None => full.rsplit(|&c| c == b'\\').next().unwrap_or(&full).to_vec(),
+                    };
+                    let kind = if u.kind == UseKind::Normal { *kind } else { u.kind };
+                    match kind {
+                        UseKind::Normal => self.use_classes.insert(alias.to_ascii_lowercase(), full),
+                        UseKind::Function => self.use_functions.insert(alias.to_ascii_lowercase(), full),
+                        UseKind::Const => self.use_consts.insert(alias, full),
+                    };
+                }
             }
             // `case` values are compared with ==, in order, until one
             // matches; then the bodies run from there (falling through).
@@ -903,7 +1010,8 @@ impl<'src> Compiler<'src> {
             }
             Stmt::Const { consts, .. } => {
                 for c in *consts {
-                    let name = f.constant(Frozen::Str(Text::from(self.text(c.name.span))));
+                    let full = join(&self.ns, self.text(c.name.span));
+                    let name = f.constant(Frozen::Str(Text::from(full.as_slice())));
                     let value = self.expr(f, c.value)?;
                     let site = f.site(false, Text::from("define"), Text::from("define"));
                     let base = f.temp();
@@ -1269,11 +1377,8 @@ impl<'src> Compiler<'src> {
         interface: bool,
     ) -> Result<()> {
         use p8_syntax::ast::ClassMember;
-        let display = Text::from(self.text(name));
-        let name_of = |c: &Self, n: &p8_syntax::ast::Name| {
-            let t = c.text(n.span);
-            Text::from(t.strip_prefix(b"\\").unwrap_or(t))
-        };
+        let display = Text::from(join(&self.ns, self.text(name)).as_slice());
+        let name_of = |c: &Self, n: &p8_syntax::ast::Name| Text::from(c.class_name(c.text(n.span)).as_slice());
         let (parent, interfaces) = if interface {
             (None, extends.iter().map(|n| name_of(self, n)).chain(implements.iter().map(|n| name_of(self, n))).collect())
         } else {
@@ -1414,16 +1519,18 @@ impl<'src> Compiler<'src> {
                 }
                 ClassRef::Static
             }
-            lower => ClassRef::Named(Text::from(lower), Text::from(text)),
+            _ => {
+                let full = self.class_name(self.text(*name));
+                ClassRef::Named(Text::from(full.to_ascii_lowercase().as_slice()), Text::from(full.as_slice()))
+            }
         };
         Ok(f.class_ref(class))
     }
 
     /// A class a `catch` names.
     fn class_name_ref(&mut self, f: &mut FnBuilder, name: &p8_syntax::ast::Name) -> Result<u16> {
-        let text = self.text(name.span);
-        let text = text.strip_prefix(b"\\").unwrap_or(text);
-        Ok(f.class_ref(ClassRef::Named(Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text))))
+        let full = self.class_name(self.text(name.span));
+        Ok(f.class_ref(ClassRef::Named(Text::from(full.to_ascii_lowercase().as_slice()), Text::from(full.as_slice()))))
     }
 
     /// A property name: a constant for `->name`, the value for `->$name`
@@ -1844,10 +1951,14 @@ impl<'src> Compiler<'src> {
                         Some(i) => self.file.as_bytes()[..i].to_vec(),
                         None => b".".to_vec(),
                     },
-                    // Outside a class, __METHOD__ is the function's name.
-                    MagicConstKind::Function | MagicConstKind::Method if f.name.as_bytes() != b"{main}" => {
-                        f.name.as_bytes().to_vec()
-                    }
+                    MagicConstKind::Method if f.name.as_bytes() != b"{main}" => match &f.class {
+                        Some(c) => [c.as_bytes(), b"::", f.name.as_bytes()].concat(),
+                        // Outside a class, __METHOD__ is the function's name.
+                        None => f.name.as_bytes().to_vec(),
+                    },
+                    MagicConstKind::Function if f.name.as_bytes() != b"{main}" => f.name.as_bytes().to_vec(),
+                    MagicConstKind::Namespace => self.ns.clone(),
+                    MagicConstKind::Class => self.scope.as_ref().map(|s| s.name.as_bytes().to_vec()).unwrap_or_default(),
                     // No classes, traits, namespaces or property hooks yet:
                     // outside them these are empty, as in PHP.
                     _ => Vec::new(),
@@ -2111,14 +2222,23 @@ impl<'src> Compiler<'src> {
     }
 
     fn constant_fetch(&mut self, f: &mut FnBuilder, name: &[u8]) -> Reg {
-        let name = name.strip_prefix(b"\\").unwrap_or(name);
-        match name.to_ascii_lowercase().as_slice() {
+        let bare = name.strip_prefix(b"\\").unwrap_or(name);
+        match bare.to_ascii_lowercase().as_slice() {
             b"true" => return f.constant(Frozen::Bool(true)),
             b"false" => return f.constant(Frozen::Bool(false)),
             b"null" => return f.constant(Frozen::Null),
             _ => {}
         }
-        let site = f.site(true, Text::from(name), Text::from(name));
+        let (full, fallback) = self.ns_name(name, &self.use_consts, false);
+        // A namespace's part is case-insensitive; the constant's own is not.
+        let key = match full.iter().rposition(|&c| c == b'\\') {
+            Some(at) => [full[..at].to_ascii_lowercase().as_slice(), &full[at..]].concat(),
+            None => full.clone(),
+        };
+        let site = f.site(true, Text::from(key.as_slice()), Text::from(full.as_slice()));
+        if let Some(global) = fallback {
+            f.sites[site as usize].fallback = Some(Text::from(global.as_slice()));
+        }
         let dst = f.temp();
         f.emit(Instr::FetchConst { site, dst });
         dst
@@ -2251,8 +2371,10 @@ impl<'src> Compiler<'src> {
         }
         let Expr::Variable { name, .. } = func else { unreachable!("a name") };
         let text = self.text(*name);
-        let text = text.strip_prefix(b"\\").unwrap_or(text);
+        let (full, fallback) = self.ns_name(text, &self.use_functions, true);
+        let text = full.as_slice();
         let lower = text.to_ascii_lowercase();
+        let fallback = fallback.map(|g| g.to_ascii_lowercase());
         // strlen of a literal string is a constant, as PHP compiles it
         // (a builtin cannot be redeclared, so the name means strlen).
         if lower == b"strlen"
@@ -2268,10 +2390,17 @@ impl<'src> Compiler<'src> {
             if let Some((modes, rest)) = self.by_ref.get(&lower) {
                 return Some(modes.get(n).copied().unwrap_or(*rest));
             }
-            self.registry.lookup(&lower).map(|i| self.registry.by_ref(i, n))
+            let global = fallback.as_deref().unwrap_or(&lower);
+            if let Some((modes, rest)) = self.by_ref.get(global) {
+                return Some(modes.get(n).copied().unwrap_or(*rest));
+            }
+            self.registry.lookup(global).map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
-        let site = f.site(false, Text::from(lower), Text::from(text));
+        let site = f.site(false, Text::from(lower.as_slice()), Text::from(text));
+        if let Some(global) = &fallback {
+            f.sites[site as usize].fallback = Some(Text::from(global.as_slice()));
+        }
         let regs: Vec<Reg> = (0..args.len()).map(|_| f.temp()).collect();
         for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
             if arg.unpack || arg.name.is_some() {
