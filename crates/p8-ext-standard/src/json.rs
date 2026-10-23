@@ -267,7 +267,7 @@ impl Encoder<'_> {
         // Public properties (initialized), then dynamic ones.
         let mut entries = Vec::new();
         for (i, p) in o.class.properties.iter().enumerate() {
-            if p.visibility != Visibility::Public {
+            if p.visibility != Visibility::Public || p.is_internal() {
                 continue;
             }
             // A hooked property through its get hook (a virtual one too).

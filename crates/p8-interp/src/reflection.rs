@@ -419,7 +419,7 @@ class_method!(rc_get_properties, |ctx, class, this, args| {
             }
             names.push(PhpStr::from(n.as_slice()));
         }
-        for p in class.properties.iter().filter(|p| p.declaring == c.lower && (depth == 0 || p.visibility != Visibility::Private)) {
+        for p in class.properties.iter().filter(|p| p.declaring == c.lower && !p.is_internal() && (depth == 0 || p.visibility != Visibility::Private)) {
             let modifiers = vis_bits(p.visibility) | if p.readonly { 128 } else { 0 };
             if filter.is_some_and(|f| modifiers & f == 0) || names.contains(&p.name) {
                 continue;

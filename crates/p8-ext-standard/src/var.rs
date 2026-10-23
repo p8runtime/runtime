@@ -427,7 +427,7 @@ fn entries_through_hooks(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Result<Vec<Entry>
         }
         let value = ctx.prop_value(o, i)?;
         if value.is_some() {
-            out.push(Entry { name: p.name.clone(), visibility: p.visibility, declaring: p.declaring_name.clone(), value, ty: p.ty.clone() });
+            out.push(Entry { numeric: false, name: p.name.clone(), visibility: p.visibility, declaring: p.declaring_name.clone(), value, ty: p.ty.clone() });
         }
     }
     out.extend(slot_entries);
@@ -437,6 +437,8 @@ fn entries_through_hooks(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Result<Vec<Entry>
 /// One of an object's properties as the dump functions list them.
 struct Entry {
     name: PhpStr,
+    /// An integer key of debug info (SplFixedArray's): `[0]`, not `["0"]`.
+    numeric: bool,
     visibility: Visibility,
     declaring: PhpStr,
     /// None: a typed property not yet initialized.
@@ -455,18 +457,27 @@ fn entries(o: &Object) -> Vec<Entry> {
     let mut list = Vec::new();
     if let Some(info) = o.class.debug_info {
         for (k, v) in info(o).iter() {
+            let numeric = matches!(k, Key::Int(_));
             let name = match k {
                 Key::Int(i) => PhpStr::from(i.to_string()),
                 Key::Str(s) => s,
             };
-            list.push(Entry { name, visibility: Visibility::Public, declaring: PhpStr::empty(), value: Some(v.clone()), ty: None });
+            // Mangled names, as PHP's debug info gives them: "\0Class\0name"
+            // (private) and "\0*\0name" (protected).
+            let (name, visibility, declaring) = match name.as_bytes().strip_prefix(b"\0").and_then(|r| r.iter().position(|&c| c == 0).map(|i| (r[..i].to_vec(), r[i + 1..].to_vec()))) {
+                Some((class, prop)) if class == b"*" => (PhpStr::from(prop.as_slice()), Visibility::Protected, PhpStr::empty()),
+                Some((class, prop)) => (PhpStr::from(prop.as_slice()), Visibility::Private, PhpStr::from(class.as_slice())),
+                None => (name, Visibility::Public, PhpStr::empty()),
+            };
+            list.push(Entry { numeric, name, visibility, declaring, value: Some(v.clone()), ty: None });
         }
         return list;
     }
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-        // A virtual property stores nothing: not listed.
-        if p.hooks & p8_runtime::object::HOOK_VIRTUAL != 0 {
+        // A virtual property stores nothing, a builtin's hidden state is
+        // not shown: neither is listed.
+        if p.hooks & p8_runtime::object::HOOK_VIRTUAL != 0 || p.is_internal() {
             continue;
         }
         let value = match v {
@@ -474,14 +485,14 @@ fn entries(o: &Object) -> Vec<Entry> {
             Value::Undef => None,
             v => Some(v.clone()),
         };
-        list.push(Entry { name: p.name.clone(), visibility: p.visibility, declaring: p.declaring_name.clone(), value, ty: p.ty.clone() });
+        list.push(Entry { numeric: false, name: p.name.clone(), visibility: p.visibility, declaring: p.declaring_name.clone(), value, ty: p.ty.clone() });
     }
     for (k, v) in o.dynamic.borrow().iter() {
         let name = match k {
             Key::Int(i) => PhpStr::from(i.to_string()),
             Key::Str(s) => s,
         };
-        list.push(Entry { name, visibility: Visibility::Public, declaring: PhpStr::empty(), value: Some(v.clone()), ty: None });
+        list.push(Entry { numeric: false, name, visibility: Visibility::Public, declaring: PhpStr::empty(), value: Some(v.clone()), ty: None });
     }
     list
 }
@@ -563,9 +574,14 @@ fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>)
             out.extend_from_slice(o.class.shown());
             out.extend_from_slice(format!(")#{} ({count}) {{\n", o.id).as_bytes());
             for e in list {
-                out.extend_from_slice(format!("{pad}  [\"").as_bytes());
-                out.extend_from_slice(e.name.as_bytes());
-                out.push(b'"');
+                if e.numeric {
+                    out.extend_from_slice(format!("{pad}  [").as_bytes());
+                    out.extend_from_slice(e.name.as_bytes());
+                } else {
+                    out.extend_from_slice(format!("{pad}  [\"").as_bytes());
+                    out.extend_from_slice(e.name.as_bytes());
+                    out.push(b'"');
+                }
                 match e.visibility {
                     Visibility::Public => {}
                     Visibility::Protected => out.extend_from_slice(b":protected"),

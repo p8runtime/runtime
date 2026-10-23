@@ -380,7 +380,11 @@ impl Context<'_> {
     pub(crate) fn call_named(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, name: &[u8]) -> Result<Value, Throw> {
         let m = self.method_frame(&Value::Object(Rc::clone(object)), &name.to_ascii_lowercase(), name)?;
         if let Code::Native(native) = m.func {
-            return self.run_native(native, m.this.as_ref(), &mut []);
+            // Lent the registers: it may call PHP (SplHeap's compare()).
+            std::mem::swap(&mut self.isolate.regs, regs);
+            let r = self.run_native(native, m.this.as_ref(), &mut []);
+            std::mem::swap(&mut self.isolate.regs, regs);
+            return r;
         }
         self.run_nested(regs, m, &mut [])
     }
@@ -478,7 +482,7 @@ impl Context<'_> {
         let mut out = PhpArray::new();
         let slots = o.slots.borrow();
         for (i, p) in o.class.properties.iter().enumerate() {
-            if matches!(slots[i], Value::Undef) {
+            if matches!(slots[i], Value::Undef) || p.is_internal() {
                 continue;
             }
             if o.class.slot(p.name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) != Some(i) {
