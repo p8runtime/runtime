@@ -185,6 +185,12 @@ pub enum Instr {
     /// `static $var`: bind the function's static `index`; if it was set
     /// up already, skip its initializer (to `skip`).
     StaticVar { var: Reg, index: u16, skip: u32 },
+    /// `yield value` / `yield key => value`: the generator stops here;
+    /// what send() passes lands in `dst` when it goes on.
+    Yield { dst: Reg, value: Reg, key: Reg, has_key: bool },
+    /// `yield from src` (an array or a generator): yields each of its
+    /// elements, then `dst` gets the inner generator's return value.
+    YieldFrom { dst: Reg, src: Reg },
     /// `f(...)`: a Closure of the callable in `src` (Closure::fromCallable).
     FromCallable { dst: Reg, src: Reg },
     /// `include`, `require` (and `_once`): dst gets the file's result.
@@ -471,6 +477,9 @@ pub struct Function {
     pub handlers: Vec<Handler>,
     /// The classes this code declares, in order (`DeclareClass` indexes them).
     pub decls: Vec<Arc<ClassDef>>,
+    /// A generator function (its code contains `yield`): a call returns a
+    /// Generator that runs it.
+    pub is_generator: bool,
     /// Closures and arrow functions this code makes (`MakeClosure`).
     pub lambdas: Vec<Arc<Function>>,
     /// For a closure: the registers its captured values go into, in order.

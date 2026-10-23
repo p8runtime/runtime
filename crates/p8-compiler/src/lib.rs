@@ -115,6 +115,8 @@ struct FnBuilder<'a> {
     bound: Vec<Reg>,
     /// `static` variables declared so far.
     statics: u16,
+    /// The code yields: a generator.
+    is_generator: bool,
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
     silences: Vec<(u32, u32, Reg)>,
@@ -148,6 +150,7 @@ impl FnBuilder<'_> {
             lambdas: Vec::new(),
             bound: Vec::new(),
             statics: 0,
+            is_generator: false,
             decls: Vec::new(),
             silences: Vec::new(),
         }
@@ -285,6 +288,7 @@ impl FnBuilder<'_> {
             is_static: self.is_static,
             handlers: self.handlers,
             lambdas: self.lambdas,
+            is_generator: self.is_generator,
             bound: self.bound,
             decls: self.decls,
             silences: self.silences,
@@ -452,6 +456,15 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *key = f(*key);
         }
         StaticVar { var, .. } => *var = f(*var),
+        Yield { dst, value, key, .. } => {
+            *dst = f(*dst);
+            *value = f(*value);
+            *key = f(*key);
+        }
+        YieldFrom { dst, src } => {
+            *dst = f(*dst);
+            *src = f(*src);
+        }
         FromCallable { dst, src } => {
             *dst = f(*dst);
             *src = f(*src);
@@ -2274,6 +2287,28 @@ impl<'src> Compiler<'src> {
                     let var = f.cv(name.as_bytes());
                     f.emit(Instr::Capture { closure: dst, var, by_ref: false, quiet: true });
                 }
+                dst
+            }
+            Expr::Yield { key, value, from: false, .. } => {
+                f.is_generator = true;
+                let value = match value {
+                    Some(v) => self.expr(f, v)?,
+                    None => f.constant(Frozen::Null),
+                };
+                let (key, has_key) = match key {
+                    Some(k) => (self.expr(f, k)?, true),
+                    None => (value, false),
+                };
+                let dst = f.temp();
+                f.emit(Instr::Yield { dst, value, key, has_key });
+                dst
+            }
+            Expr::Yield { value, from: true, span, .. } => {
+                f.is_generator = true;
+                let Some(value) = value else { return Err(self.unsupported(*span, "yield from without a value")) };
+                let src = self.expr(f, value)?;
+                let dst = f.temp();
+                f.emit(Instr::YieldFrom { dst, src });
                 dst
             }
             Expr::Include { kind, expr, .. } => {

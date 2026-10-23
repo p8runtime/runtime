@@ -164,6 +164,24 @@ pub(crate) fn build() -> Classes {
         &["Stringable"],
         &["getMessage", "getCode", "getFile", "getLine", "getTrace", "getPrevious", "getTraceAsString"],
     );
+    declare(
+        &mut c,
+        "Generator",
+        p8_runtime::object::CLASS_FINAL,
+        None,
+        &["Iterator"],
+        Vec::new(),
+        &[
+            ("current", Some(gen_current), false),
+            ("key", Some(gen_key), false),
+            ("next", Some(gen_next), false),
+            ("send", Some(gen_send), false),
+            ("valid", Some(gen_valid), false),
+            ("rewind", Some(gen_rewind), false),
+            ("getReturn", Some(gen_get_return), false),
+            ("throw", Some(gen_throw), false),
+        ],
+    );
     declare(&mut c, "Exception", 0, None, &["Throwable"], throwable_props("Exception"), THROWABLE_METHODS);
     declare(&mut c, "Error", 0, None, &["Throwable"], throwable_props("Error"), THROWABLE_METHODS);
     declare(
@@ -203,6 +221,42 @@ pub(crate) fn build() -> Classes {
         declare(&mut c, name, 0, Some(parent), &[], Vec::new(), &[]);
     }
     c
+}
+
+fn gen_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.generator(this, "current", Value::Null)
+}
+
+fn gen_key(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.generator(this, "key", Value::Null)
+}
+
+fn gen_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.generator(this, "next", Value::Null)
+}
+
+fn gen_send(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let v = args.first().map(Value::deref).unwrap_or(Value::Null);
+    ctx.generator(this, "send", v)
+}
+
+fn gen_valid(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.generator(this, "valid", Value::Null)
+}
+
+fn gen_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.generator(this, "rewind", Value::Null)
+}
+
+fn gen_get_return(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.generator(this, "getreturn", Value::Null)
+}
+
+fn gen_throw(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    match args.first().map(Value::deref) {
+        Some(e @ Value::Object(_)) => ctx.generator(this, "throw", e),
+        _ => Err(ctx.throw("TypeError", "Generator::throw(): Argument #1 ($exception) must be of type Throwable".into())),
+    }
 }
 
 /// Closure::bindTo(?object $newThis, object|string|null $newScope = "static")

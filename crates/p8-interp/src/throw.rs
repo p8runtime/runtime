@@ -175,4 +175,5 @@ fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     frame.this = None;
     frame.scope = None;
     frame.called = None;
+    frame.generator = None;
 }
