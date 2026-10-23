@@ -132,6 +132,10 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
 pub(crate) fn build() -> Classes {
     let mut c = Classes::new();
     declare(&mut c, "stdClass", 0, None, &[], Vec::new(), &[]);
+    // The attribute classes (empty here: attributes are not read yet).
+    for name in ["Attribute", "ReturnTypeWillChange", "AllowDynamicProperties", "SensitiveParameter", "Override", "Deprecated"] {
+        declare(&mut c, name, p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
+    }
     declare(
         &mut c,
         "Closure",
