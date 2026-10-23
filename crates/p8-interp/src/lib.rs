@@ -845,6 +845,7 @@ impl Isolate {
             resolved: std::collections::HashSet::new(),
             stack_base: 0,
             ref_wanted: Vec::new(),
+            named_extra: None,
             class_defaults: HashMap::new(),
             const_cache: HashMap::new(),
             const_evaluating: Vec::new(),
@@ -921,6 +922,9 @@ pub struct Context<'i> {
     /// Result registers (absolute) of calls in a reference context: a
     /// function returning by reference returns the reference there.
     ref_wanted: Vec<usize>,
+    /// Named arguments for the variadic parameter of the function being
+    /// called (at this frame depth), by name.
+    named_extra: Option<(usize, PhpArray)>,
     /// The native stack's address where the script started (0: unknown),
     /// to stop runaway nesting (PHP's "Maximum call stack size").
     stack_base: usize,
@@ -1740,8 +1744,9 @@ impl Context<'_> {
                         self.operand(w, func, var)
                     };
                 }
+                // Passed (and not a hole a named argument skipped): no default.
                 Instr::ArgDefault { n, target } => {
-                    if (n as usize) < argc {
+                    if (n as usize) < argc && !matches!(reg!(n as Reg), Value::Undef) {
                         pc = target as usize;
                     }
                 }
@@ -1998,7 +2003,18 @@ impl Context<'_> {
                     if let Some(frame) = self.frames.last() {
                         list.extend(frame.extra.iter().flatten().cloned());
                     }
-                    reg!(var) = Value::Array(Rc::new(PhpArray::from_list(list)));
+                    let mut arr = PhpArray::from_list(list);
+                    // Named arguments no parameter takes: by their names.
+                    if let Some((depth, named)) = self.named_extra.take() {
+                        if depth == self.frames.len() {
+                            for (k, v) in named.iter() {
+                                arr.insert(k, v.clone());
+                            }
+                        } else {
+                            self.named_extra = Some((depth, named));
+                        }
+                    }
+                    reg!(var) = Value::Array(Rc::new(arr));
                 }
                 Instr::FetchList { dst, arr, key } => {
                     let container = match &reg!(arr) {
@@ -2079,6 +2095,11 @@ impl Context<'_> {
                 Instr::CallSpread { dst, callee, args } => {
                     let target = self.operand(w, func, callee);
                     let list: Vec<Value> = match self.operand(w, func, args) {
+                        // Named arguments: placed by the target's parameters.
+                        Value::Array(a) if a.iter().any(|(k, _)| matches!(k, p8_runtime::array::Key::Str(_))) => {
+                            let t = self.resolve_callable(&target)?;
+                            self.place_args(&t, &a)?
+                        }
                         Value::Array(a) => a.values().map(Value::deref).collect(),
                         _ => Vec::new(),
                     };
@@ -2124,11 +2145,14 @@ impl Context<'_> {
                 Instr::ConstructSpread { obj, args } => {
                     let Value::Object(object) = reg!(obj).clone() else { unreachable!("ConstructSpread follows New") };
                     object.destructed.set(false);
-                    let list: Vec<Value> = match self.operand(w, func, args) {
-                        Value::Array(a) => a.values().map(Value::deref).collect(),
+                    let arr = self.operand(w, func, args);
+                    let Some(m) = self.constructor(&object) else { return Ok(Next::Go(pc)) };
+                    let target = callable::Target::Frame(m);
+                    let list = match &arr {
+                        Value::Array(a) => self.place_args(&target, a)?,
                         _ => Vec::new(),
                     };
-                    let Some(m) = self.constructor(&object) else { return Ok(Next::Go(pc)) };
+                    let callable::Target::Frame(m) = target else { unreachable!("a frame") };
                     let at = base + func.nregs as usize;
                     if regs.len() < at + list.len() + 1 {
                         regs.resize(at + list.len() + 1, Value::Undef);

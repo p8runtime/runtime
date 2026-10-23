@@ -12,6 +12,7 @@ use p8_bytecode::Function;
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{Class, Object};
 use p8_runtime::string::PhpStr;
+use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -38,6 +39,16 @@ pub(crate) fn closure_data(o: &Object) -> Option<&ClosureData> {
 pub(crate) enum Target {
     Builtin(usize),
     Frame(MethodFrame),
+}
+
+/// A parameter as named arguments see it: its name, whether it may be
+/// left out, whether it is variadic, and a builtin's default (as the stub
+/// writes it).
+struct NamedParam {
+    name: String,
+    optional: bool,
+    variadic: bool,
+    default: Option<&'static str>,
 }
 
 /// The native stack nested PHP calls may use (the CLI's interpreter
@@ -341,6 +352,131 @@ impl Context<'_> {
         r?;
         let v = std::mem::replace(&mut regs[at], Value::Undef);
         Ok(v)
+    }
+
+    /// A call's argument array (`...`, named arguments) in parameter
+    /// order: string keys are named arguments. A skipped optional
+    /// parameter is Undef for a user function (its default runs) or its
+    /// default for a builtin.
+    pub(crate) fn place_args(&mut self, target: &Target, list: &PhpArray) -> Result<Vec<Value>, Throw> {
+        if !list.iter().any(|(k, _)| matches!(k, Key::Str(_))) {
+            return Ok(list.values().map(Value::deref).collect());
+        }
+        let (fname, params) = self.named_params(target);
+        let mut extra = PhpArray::new();
+        let mut out: Vec<Value> = Vec::new();
+        let mut set: Vec<bool> = Vec::new();
+        for (k, v) in list.iter() {
+            match k {
+                Key::Int(_) => {
+                    out.push(v.deref());
+                    set.push(true);
+                }
+                Key::Str(key) => {
+                    let name = String::from_utf8_lossy(key.as_bytes()).into_owned();
+                    let Some(i) = params.iter().position(|p| p.name == name && !p.variadic) else {
+                        // A variadic user function collects it by name.
+                        if params.last().is_some_and(|p| p.variadic) && matches!(target, Target::Frame(_)) {
+                            extra.insert(Key::Str(key.clone()), v.deref());
+                            continue;
+                        }
+                        return Err(self.throw("Error", format!("Unknown named parameter ${name}")));
+                    };
+                    if i < set.len() && set[i] {
+                        return Err(self.throw("Error", format!("Named parameter ${name} overwrites previous argument")));
+                    }
+                    if out.len() <= i {
+                        out.resize(i + 1, Value::Undef);
+                        set.resize(i + 1, false);
+                    }
+                    out[i] = v.deref();
+                    set[i] = true;
+                }
+            }
+        }
+        // The holes: optional parameters left out.
+        for i in 0..out.len() {
+            if set[i] {
+                continue;
+            }
+            let p = &params[i];
+            if !p.optional {
+                return Err(self.throw("ArgumentCountError", format!("{fname}(): Argument #{} (${}) not passed", i + 1, p.name)));
+            }
+            if let Some(text) = p.default {
+                out[i] = match self.stub_default(text) {
+                    Some(v) => v,
+                    None => return Err(self.throw("Error", format!("p8 cannot pass named arguments to {fname}() past ${} yet", p.name))),
+                };
+            }
+        }
+        if !extra.is_empty() {
+            // For the callee's frame, one above this one.
+            self.named_extra = Some((self.frames.len() + 1, extra));
+        }
+        Ok(out)
+    }
+
+    /// The parameters of a call's target, and its name for messages.
+    fn named_params(&self, target: &Target) -> (String, Vec<NamedParam>) {
+        match target {
+            Target::Builtin(i) => {
+                let name = self.isolate.registry.function(*i).name.to_string();
+                let params = self
+                    .isolate
+                    .registry
+                    .sig(*i)
+                    .map(|s| s.params.iter().map(|p| NamedParam { name: p.name.to_string(), optional: p.optional(), variadic: p.variadic, default: p.default }).collect())
+                    .unwrap_or_default();
+                (name, params)
+            }
+            Target::Frame(m) => match &m.func {
+                Code::User(clo) => {
+                    let code = &clo.code;
+                    let name = match (&code.class, &m.scope) {
+                        (Some(_), Some(scope)) => format!("{}::{}", text(scope.name.as_bytes()), text(code.name.as_bytes())),
+                        _ => text(code.name.as_bytes()),
+                    };
+                    let params = code
+                        .params
+                        .iter()
+                        .map(|p| NamedParam { name: text(p.name.as_bytes()), optional: p.has_default || p.variadic, variadic: p.variadic, default: None })
+                        .collect();
+                    (name, params)
+                }
+                Code::Native(_) => (String::new(), Vec::new()),
+            },
+        }
+    }
+
+    /// A builtin parameter's default as the stub writes it: literals,
+    /// constants, `A | B`, `[]`.
+    pub(crate) fn stub_default(&self, text: &str) -> Option<Value> {
+        let t = text.trim();
+        if t.contains('|') {
+            let mut acc = 0i64;
+            for part in t.split('|') {
+                acc |= self.stub_default(part)?.to_int();
+            }
+            return Some(Value::Int(acc));
+        }
+        Some(match t {
+            "null" | "NULL" => Value::Null,
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            "[]" => Value::Array(Rc::new(PhpArray::new())),
+            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::Str(PhpStr::from(&t[1..t.len() - 1])),
+            _ => {
+                if let Ok(i) = t.parse::<i64>() {
+                    Value::Int(i)
+                } else if let Ok(x) = t.parse::<f64>() {
+                    Value::Float(x)
+                } else {
+                    let c = self.isolate.registry.constant(t.trim_start_matches('\\').as_bytes())?;
+                    c.to_value()
+                }
+            }
+        })
     }
 
     /// Whether a value is callable (is_callable, no autoloading).
