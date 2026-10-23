@@ -12,7 +12,7 @@ use crate::builtins::signature::{
     T_TRUE, T_VOID,
 };
 use crate::compiler::chunk::{ReturnType, UserFunc};
-use crate::core::value::{Symbol, Visibility};
+use crate::core::value::{Handle, Symbol, Val, Visibility};
 use crate::vm::engine::{ErrorLevel, VM, VmError};
 use std::rc::Rc;
 
@@ -117,6 +117,49 @@ fn visibility_name(v: Visibility) -> &'static str {
 
 impl VM {
     /// Link a class once all its members are declared (FinalizeClass).
+    /// Evaluate the property defaults of `class` and its ancestors that are
+    /// constant expressions, each in its declaring class's scope, the first
+    /// time the class is used (zend_update_class_constants: on `new` or a
+    /// static property access, not at declaration).
+    pub(crate) fn ensure_class_defaults(&mut self, class: Symbol) -> Result<(), VmError> {
+        if !self.defaults_resolved.insert(class) {
+            return Ok(());
+        }
+        let Some(def) = self.context.classes.get(&class) else {
+            return Ok(());
+        };
+        if let Some(parent) = def.parent {
+            self.ensure_class_defaults(parent)?;
+        }
+        let Some(def) = self.context.classes.get(&class) else {
+            return Ok(());
+        };
+        let instance: Vec<(Symbol, Val)> = def
+            .properties
+            .iter()
+            .filter(|(_, e)| crate::compiler::chunk::ConstExpr::of(&e.default_value).is_some())
+            .map(|(n, e)| (*n, e.default_value.clone()))
+            .collect();
+        let statics: Vec<(Symbol, Handle)> = def
+            .static_properties
+            .iter()
+            .filter(|(_, e)| crate::compiler::chunk::ConstExpr::of(&self.arena.get(e.handle).value).is_some())
+            .map(|(n, e)| (*n, e.handle))
+            .collect();
+        for (name, thunk) in instance {
+            let value = self.resolve_const_value(thunk, Some(class))?;
+            if let Some(entry) = self.context.classes.get_mut(&class).and_then(|d| d.properties.get_mut(&name)) {
+                entry.default_value = value;
+            }
+        }
+        for (_, handle) in statics {
+            let thunk = self.arena.get(handle).value.clone();
+            let value = self.resolve_const_value(thunk, Some(class))?;
+            self.arena.get_mut(handle).value = value;
+        }
+        Ok(())
+    }
+
     pub(crate) fn link_class(&mut self, class: Symbol) -> Result<(), VmError> {
         let Some(def) = self.context.classes.get(&class).cloned() else {
             return Ok(());

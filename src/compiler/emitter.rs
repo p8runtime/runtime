@@ -1,4 +1,4 @@
-use crate::compiler::chunk::{CatchEntry, CodeChunk, CompileError, FuncParam, ReturnType, UserFunc};
+use crate::compiler::chunk::{CatchEntry, CodeChunk, CompileError, ConstExpr, FuncParam, ReturnType, UserFunc};
 use crate::core::interner::Interner;
 use crate::core::value::{Symbol, Val, Visibility};
 use crate::parser::ast::{
@@ -753,22 +753,20 @@ impl<'src> Emitter<'src> {
                         if p_name.starts_with(b"$") {
                             let sym = method_emitter.interner.intern(&p_name[1..]);
                             let param_type = info.ty.and_then(|ty| method_emitter.convert_type(ty));
-                            let default_value = info
-                                .default
-                                .map(|expr| method_emitter.eval_constant_expr(expr));
+                            let default_value = info.default.map(|expr| method_emitter.const_initializer(expr));
 
                             param_syms.push(FuncParam {
                                 name: sym,
                                 by_ref: info.by_ref,
                                 param_type,
                                 is_variadic: info.variadic,
-                                default_value,
+                                default_value: default_value.clone(),
                                 default_display: info.default.map(|e| method_emitter.default_display(e).into()),
                                 attributes: method_emitter.build_attribute_instances(info.attributes),
                             });
 
-                            if let Some(default_expr) = info.default {
-                                let val = method_emitter.eval_constant_expr(default_expr);
+                            if let Some(val) = default_value.clone() {
+                                let val = val;
                                 let idx = method_emitter.add_constant(val);
                                 method_emitter
                                     .chunk
@@ -891,7 +889,7 @@ impl<'src> Emitter<'src> {
                         let prop_sym = self.interner.intern(prop_name);
 
                         let default_idx = if let Some(default_expr) = entry.default {
-                            let val = self.eval_constant_expr(default_expr);
+                            let val = self.const_initializer(default_expr);
                             self.add_constant(val)
                         } else {
                             if type_hint_opt.is_some() || is_readonly {
@@ -944,7 +942,7 @@ impl<'src> Emitter<'src> {
                     let name_text = self.get_text(name.span);
                     let prop_sym = self.interner.intern(name_text.strip_prefix(b"$").unwrap_or(name_text));
                     let val = match default {
-                        Some(d) => self.eval_constant_expr(d),
+                        Some(d) => self.const_initializer(d),
                         None => Val::Null,
                     };
                     let default_idx = self.add_constant(val);
@@ -969,9 +967,7 @@ impl<'src> Emitter<'src> {
                         let const_name_str = self.get_text(entry.name.span);
                         let const_sym = self.interner.intern(const_name_str);
 
-                        let val = self
-                            .get_literal_value(entry.value)
-                            .unwrap_or_else(|| Val::Null);
+                        let val = self.const_initializer(entry.value);
                         let val_idx = self.add_constant(val);
                         self.chunk.code.push(OpCode::DefClassConst(
                             class_sym,
@@ -1259,7 +1255,7 @@ impl<'src> Emitter<'src> {
                     // No, `DefGlobalConst` takes `val_idx` which implies it's in the constant table.
                     // So we must evaluate it at compile time.
 
-                    let val = self.get_literal_value(c.value).unwrap_or_else(|| Val::Null);
+                    let val = self.const_initializer(c.value);
 
                     let val_idx = self.add_constant(val);
                     self.chunk
@@ -1612,22 +1608,20 @@ impl<'src> Emitter<'src> {
                     if p_name.starts_with(b"$") {
                         let sym = func_emitter.interner.intern(&p_name[1..]);
                         let param_type = info.ty.and_then(|ty| func_emitter.convert_type(ty));
-                        let default_value = info
-                            .default
-                            .map(|expr| func_emitter.eval_constant_expr(expr));
+                        let default_value = info.default.map(|expr| func_emitter.const_initializer(expr));
 
                         param_syms.push(FuncParam {
                             name: sym,
                             by_ref: info.by_ref,
                             param_type,
                             is_variadic: info.variadic,
-                            default_value,
+                            default_value: default_value.clone(),
                             default_display: info.default.map(|e| func_emitter.default_display(e).into()),
                             attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
-                        if let Some(default_expr) = info.default {
-                            let val = func_emitter.eval_constant_expr(default_expr);
+                        if let Some(val) = default_value.clone() {
+                            let val = val;
                             let idx = func_emitter.add_constant(val);
                             func_emitter
                                 .chunk
@@ -3420,22 +3414,20 @@ impl<'src> Emitter<'src> {
                     if p_name.starts_with(b"$") {
                         let sym = func_emitter.interner.intern(&p_name[1..]);
                         let param_type = info.ty.and_then(|ty| func_emitter.convert_type(ty));
-                        let default_value = info
-                            .default
-                            .map(|expr| func_emitter.eval_constant_expr(expr));
+                        let default_value = info.default.map(|expr| func_emitter.const_initializer(expr));
 
                         param_syms.push(FuncParam {
                             name: sym,
                             by_ref: info.by_ref,
                             param_type,
                             is_variadic: info.variadic,
-                            default_value,
+                            default_value: default_value.clone(),
                             default_display: info.default.map(|e| func_emitter.default_display(e).into()),
                             attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
-                        if let Some(default_expr) = info.default {
-                            let val = func_emitter.eval_constant_expr(default_expr);
+                        if let Some(val) = default_value.clone() {
+                            let val = val;
                             let idx = func_emitter.add_constant(val);
                             func_emitter
                                 .chunk
@@ -3534,7 +3526,7 @@ impl<'src> Emitter<'src> {
                     };
                     let sym = func_emitter.interner.intern(p_name);
                     let param_type = param.ty.and_then(|ty| func_emitter.convert_type(ty));
-                    let default_value = param.default.map(|e| func_emitter.eval_constant_expr(e));
+                    let default_value = param.default.map(|e| func_emitter.const_initializer(e));
                     param_syms.push(FuncParam {
                         name: sym,
                         by_ref: param.by_ref,
@@ -5017,8 +5009,69 @@ impl<'src> Emitter<'src> {
         self.chunk.constants.len() - 1
     }
 
+    /// A constant expression's value (zend_compile_const_expr): literals,
+    /// and arrays of them, are kept as values; anything else (constants,
+    /// operators, `self::X`, `new`) becomes a thunk that the VM evaluates
+    /// when the value is needed (zval_update_constant_ex).
+    fn const_initializer(&mut self, expr: &Expr) -> Val {
+        if Self::is_literal(expr) {
+            return self.eval_constant_expr(expr);
+        }
+        let (line, line_starts) = self.child_lines(expr.span().start);
+        let compile_error = self.compile_error.clone();
+        let mut thunk = Emitter::new(self.source, self.interner);
+        thunk.compile_error = compile_error;
+        thunk.compile_warnings = self.compile_warnings.clone();
+        thunk.imports = self.imports.clone();
+        thunk.current_line = line;
+        thunk.line_starts = line_starts;
+        thunk.file_path = self.file_path.clone();
+        thunk.current_class = self.current_class;
+        thunk.current_trait = self.current_trait;
+        thunk.current_namespace = self.current_namespace;
+        thunk.current_function = Some(thunk.interner.intern(b"{constant}"));
+        thunk.chunk.strict_types = self.chunk.strict_types;
+        let (chunk, _) = thunk.compile_arrow_body(expr);
+        Val::Resource(Rc::new(ConstExpr(Rc::new(chunk))))
+    }
+
+    /// A literal, a signed number literal, or an array of literals.
+    fn is_literal(expr: &Expr) -> bool {
+        match expr {
+            Expr::Integer { .. }
+            | Expr::Float { .. }
+            | Expr::String { .. }
+            | Expr::Boolean { .. }
+            | Expr::Null { .. } => true,
+            Expr::Unary {
+                op: UnaryOp::Minus | UnaryOp::Plus,
+                expr: Expr::Integer { .. } | Expr::Float { .. },
+                ..
+            } => true,
+            Expr::Array { items, .. } => items.iter().all(|item| {
+                !item.unpack
+                    && !item.by_ref
+                    && item.key.is_none_or(Self::is_literal)
+                    && Self::is_literal(item.value)
+            }),
+            _ => false,
+        }
+    }
+
     fn eval_constant_expr(&self, expr: &Expr) -> Val {
         match expr {
+            Expr::Unary {
+                op: op @ (UnaryOp::Minus | UnaryOp::Plus),
+                expr: inner,
+                ..
+            } => match (op, self.eval_constant_expr(inner)) {
+                (UnaryOp::Minus, Val::Int(i)) => match i.checked_neg() {
+                    Some(n) => Val::Int(n),
+                    None => Val::Float(-(i as f64)),
+                },
+                (UnaryOp::Minus, Val::Float(f)) => Val::Float(-f),
+                (_, v) => v,
+            },
             Expr::Integer { value, .. } => integer_literal(value),
             Expr::Float { value, .. } => Val::Float(float_literal(value)),
             Expr::String { value, .. } => Val::String(string_literal(value).into()),
