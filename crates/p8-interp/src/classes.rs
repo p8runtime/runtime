@@ -180,6 +180,7 @@ impl Context<'_> {
                 declaring_name: PhpStr::from(def.name.as_bytes()),
                 readonly: p.readonly,
                 ty: p.ty.as_ref().map(|t| PhpStr::from(t.as_bytes())),
+                ty_decl: p.ty_decl.clone().map(Rc::new),
                 init,
                 hooks: p.hooks,
             };
@@ -311,6 +312,7 @@ impl Context<'_> {
                 declaring_name: PhpStr::from(def.name.as_bytes()),
                 readonly: true,
                 ty: Some(PhpStr::from(ty.unwrap_or("string"))),
+                ty_decl: None,
                 init: None,
                 hooks: 0,
             };
@@ -814,6 +816,30 @@ impl Context<'_> {
                         ));
                     }
                 }
+                // A typed property: the value checked (and converted) by the
+                // writing code's strict_types.
+                let value = match &prop.ty_decl {
+                    Some(ty) => {
+                        let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
+                        match self.check_type(ty, &value, strict) {
+                            Ok(Some(converted)) => converted,
+                            Ok(None) => value,
+                            Err(()) => {
+                                return Err(self.throw(
+                                    "TypeError",
+                                    format!(
+                                        "Cannot assign {} to property {}::${} of type {}",
+                                        p8_runtime::args::value_name(&value),
+                                        text(&prop.declaring_name),
+                                        text(&name),
+                                        ty.shown()
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    None => value,
+                };
                 let mut slots = object.slots.borrow_mut();
                 match &slots[slot] {
                     Value::Ref(cell) => *cell.borrow_mut() = value,
@@ -1116,6 +1142,102 @@ impl Context<'_> {
         }
         self.class_defaults.insert(Rc::as_ptr(class) as usize, Rc::new(defaults));
         Ok(())
+    }
+
+    /// Check `v` against a declared type in the running code: Ok(Some)
+    /// the converted value, Ok(None) as it is, Err a TypeError's case.
+    /// (A deprecation it brings is reported here.)
+    pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, ()> {
+        let (scope, called) = self.scope();
+        let is_a = |o: &Object, name: &[u8]| match name {
+            b"self" => scope.as_ref().is_some_and(|s| o.class.is_a(&s.lower)),
+            b"parent" => scope.as_ref().and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
+            n => o.class.is_a(n),
+        };
+        let static_ok = |o: &Object| called.as_ref().is_some_and(|c| o.class.is_a(&c.lower));
+        let verdict = ty.verify(v, strict, &is_a, &static_ok);
+        match verdict {
+            p8_runtime::types::Verdict::Accepted(c) => Ok(c),
+            p8_runtime::types::Verdict::Deprecated(m, c) => {
+                self.diags.push(p8_runtime::ops::Diag::Deprecated(m));
+                self.report_diags();
+                Ok(c)
+            }
+            p8_runtime::types::Verdict::Refused => Err(()),
+        }
+    }
+
+    /// How messages name the running function: `f`, `A::m`, `{closure}`.
+    pub(crate) fn function_display(&self) -> String {
+        let Some(frame) = self.frames.last() else { return String::new() };
+        let code = &frame.func.code;
+        match (&code.class, &frame.scope) {
+            (Some(_), Some(scope)) if !code.name.as_bytes().starts_with(b"{closure") => format!("{}::{}", text(&scope.name), text_of(&code.name)),
+            _ => text_of(&code.name),
+        }
+    }
+
+    /// Function entry: the passed arguments against their declared types
+    /// (the caller's strict_types decides the conversions).
+    pub(crate) fn verify_args(&mut self, regs: &mut [Value], base: usize, argc: usize) -> Result<(), Throw> {
+        let n = self.frames.len();
+        let Some(frame) = self.frames.last() else { return Ok(()) };
+        let func = Rc::clone(&frame.func);
+        let caller = (n >= 2 && n - 1 > self.frames.floor.saturating_sub(1)).then(|| &self.frames.slots[n - 2]);
+        let from_native = self.natives.iter().any(|x| x.depth == n - 1);
+        let strict = !from_native && caller.is_some_and(|c| c.func.code.strict);
+        let called_at = match caller {
+            Some(c) if !from_native => {
+                let line = c.func.code.lines.get((c.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
+                Some((Rc::<str>::from(&*c.func.code.file), line))
+            }
+            _ => None,
+        };
+        for (i, p) in func.code.params.iter().enumerate() {
+            let Some(ty) = &p.ty else { continue };
+            if p.variadic {
+                // Each extra argument, by the same type.
+                let Value::Array(list) = regs[base + i].clone() else { continue };
+                let mut checked = (*list).clone();
+                for (k, v) in list.iter() {
+                    match self.check_type(ty, &v.deref(), strict) {
+                        Ok(Some(converted)) => checked.insert(k, converted),
+                        Ok(None) => {}
+                        Err(()) => {
+                            let pos = match k {
+                                Key::Int(j) => i as i64 + j + 1,
+                                Key::Str(_) => i as i64 + 1,
+                            };
+                            return Err(self.arg_type_error(pos as usize, None, ty, &v.deref(), called_at.clone()));
+                        }
+                    }
+                }
+                regs[base + i] = Value::Array(Rc::new(checked));
+                continue;
+            }
+            if i >= argc || matches!(regs[base + i], Value::Undef) {
+                continue;
+            }
+            let v = regs[base + i].deref();
+            match self.check_type(ty, &v, strict) {
+                Ok(Some(converted)) => match &regs[base + i] {
+                    Value::Ref(cell) => *cell.borrow_mut() = converted,
+                    _ => regs[base + i] = converted,
+                },
+                Ok(None) => {}
+                Err(()) => return Err(self.arg_type_error(i + 1, Some(&p.name), ty, &v, called_at)),
+            }
+        }
+        Ok(())
+    }
+
+    fn arg_type_error(&self, pos: usize, name: Option<&p8_runtime::frozen::Text>, ty: &p8_runtime::types::TypeDecl, v: &Value, called_at: Option<(Rc<str>, u32)>) -> Throw {
+        let label = name.map_or(String::new(), |n| format!(" (${})", text_of(n)));
+        let at = called_at.map_or(String::new(), |(file, line)| format!(", called in {file} on line {line}"));
+        self.throw(
+            "TypeError",
+            format!("{}(): Argument #{pos}{label} must be of type {}, {} given{at}", self.function_display(), ty.shown_resolved(), p8_runtime::args::value_name(v)),
+        )
     }
 
     /// `(object) $v`: an object as is; an array's entries as a stdClass's

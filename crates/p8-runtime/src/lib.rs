@@ -13,5 +13,6 @@ pub mod object;
 pub mod ops;
 pub mod stream;
 pub mod trace;
+pub mod types;
 pub mod string;
 pub mod value;

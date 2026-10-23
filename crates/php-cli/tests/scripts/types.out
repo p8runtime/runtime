@@ -1,0 +1,59 @@
+int(5)
+string(2) "12"
+array(2) {
+  [0]=>
+  float(1)
+  [1]=>
+  float(2.5)
+}
+float(5)
+f(): Argument #1 ($x) must be of type int, string given, called in %s on line 4
+f(): Argument #1 ($x) must be of type int, null given, called in %s on line 5
+int(1)
+NULL
+array(0) {
+}
+int(1)
+NULL
+array(0) {
+}
+float(1)
+float(1)
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 2
+int(2)
+NULL
+array(0) {
+}
+int(7)
+h(): Return value must be of type string, array returned
+none(): Return value must be of type int, none returned
+NULL
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 14
+int(1)
+bool(true)
+string(1) "x"
+bool(false)
+int(42)
+float(3)
+string(3) "5.5"
+Cannot assign string to property A::$i of type int
+Cannot assign string to property A::$arr of type array
+Cannot assign stdClass to property A::$me of type self
+B
+
+Deprecated: Implicit conversion from float 43.5 to int loses precision in %s on line 26
+int(43)
+int(44)
+string(1) "B"
+string(1) "B"
+A::takes(): Argument #1 ($o) must be of type A, stdClass given, called in %s on line 29
+int(3)
+{closure:%s:30}(): Argument #2 must be of type int, string given, called in %s on line 31
+array(2) {
+  [0]=>
+  string(1) "2"
+  [1]=>
+  string(1) "4"
+}

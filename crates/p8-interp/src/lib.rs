@@ -1927,6 +1927,22 @@ impl Context<'_> {
                         let v = self.operand(w, func, b);
                         reg!(a) = self.object_cast(v);
                     }
+                    Rare::VerifyArgs => self.verify_args(regs, base, argc)?,
+                    Rare::VerifyReturn => {
+                        if let Some(ty) = func.ret_type.as_ref().filter(|_| !func.is_generator) {
+                            let v = self.operand(w, func, a);
+                            match self.check_type(ty, &v, func.strict) {
+                                Ok(Some(converted)) => reg!(a) = converted,
+                                Ok(None) => {}
+                                Err(()) => {
+                                    // b: 0 a value returned, else none (`return;`, the end).
+                                    let given = if b != 0 { "none".into() } else { p8_runtime::args::value_name(&v) };
+                                    let name = self.function_display();
+                                    return Err(self.throw("TypeError", format!("{name}(): Return value must be of type {}, {given} returned", ty.shown_resolved())));
+                                }
+                            }
+                        }
+                    }
                     Rare::IssetStatic => {
                         let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
                         reg!(a) = Value::Bool(set);

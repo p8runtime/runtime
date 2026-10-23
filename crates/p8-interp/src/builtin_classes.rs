@@ -99,6 +99,7 @@ fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty:
         declaring: declaring.to_ascii_lowercase().into_bytes(),
         declaring_name: PhpStr::from(declaring),
         readonly: false,
+        ty_decl: None,
         init: None,
         hooks: 0,
         ty: ty.map(PhpStr::from),

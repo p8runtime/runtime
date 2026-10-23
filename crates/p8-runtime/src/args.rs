@@ -97,7 +97,7 @@ fn fits_long(f: f64) -> bool {
     (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f)
 }
 
-enum Accept {
+pub(crate) enum Accept {
     Yes,
     /// Null to a scalar parameter: accepted, deprecated.
     NullDeprecated,
@@ -106,7 +106,7 @@ enum Accept {
     No,
 }
 
-fn accepts(param: &Param, value: &Value) -> Accept {
+pub(crate) fn accepts(param: &Param, value: &Value) -> Accept {
     let mask = param.mask;
     if param.untyped() || mask & T_MIXED != 0 {
         return Accept::Yes;
@@ -188,7 +188,7 @@ fn accepts(param: &Param, value: &Value) -> Accept {
 
 /// The value the builtin receives for an accepted argument when it differs
 /// from the one passed: weak-mode scalar conversion to the declared type.
-fn convert(mask: u32, value: &Value) -> Option<Value> {
+pub(crate) fn convert(mask: u32, value: &Value) -> Option<Value> {
     if mask == 0 || mask & (T_MIXED | T_CALLABLE) != 0 {
         return None;
     }

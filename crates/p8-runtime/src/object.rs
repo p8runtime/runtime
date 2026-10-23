@@ -88,6 +88,8 @@ pub struct Property {
     pub readonly: bool,
     /// The declared type as written (`int`, `?Foo`), if typed.
     pub ty: Option<PhpStr>,
+    /// The declared type, checked when a value is stored.
+    pub ty_decl: Option<Rc<crate::types::TypeDecl>>,
     /// The default is this code's value (computed once per class).
     pub init: Option<Thunk>,
     /// HOOK_GET | HOOK_SET | HOOK_VIRTUAL (0: a plain property).
