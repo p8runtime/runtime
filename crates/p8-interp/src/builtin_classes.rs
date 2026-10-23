@@ -80,6 +80,8 @@ fn declare(
         constants: HashMap::new(),
         statics: HashMap::new(),
         debug_info: None,
+        enum_cases: Vec::new(),
+        enum_backing: None,
     };
     classes.insert(lower, Rc::new(class));
 }
@@ -162,6 +164,8 @@ pub(crate) fn build() -> Classes {
     interface(&mut c, "ArrayAccess", &[], &["offsetExists", "offsetGet", "offsetSet", "offsetUnset"]);
     interface(&mut c, "Countable", &[], &["count"]);
     interface(&mut c, "JsonSerializable", &[], &["jsonSerialize"]);
+    interface(&mut c, "UnitEnum", &[], &["cases"]);
+    interface(&mut c, "BackedEnum", &["UnitEnum"], &["from", "tryFrom"]);
     interface(
         &mut c,
         "Throwable",
@@ -261,6 +265,44 @@ fn gen_throw(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
         Some(e @ Value::Object(_)) => ctx.generator(this, "throw", e),
         _ => Err(ctx.throw("TypeError", "Generator::throw(): Argument #1 ($exception) must be of type Throwable".into())),
     }
+}
+
+/// An enum's cases(), in order.
+pub(crate) fn enum_cases(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let Some(class) = ctx.native_class() else { return Ok(Value::Null) };
+    let cases: Vec<Value> = class.enum_cases.iter().map(|n| ctx.enum_case(&class, n.as_bytes())).collect();
+    Ok(Value::Array(Rc::new(PhpArray::from_list(cases))))
+}
+
+/// The case backed by `v` (converted to the backing type), if any.
+fn backed_case(ctx: &mut dyn Ctx, args: &[Value]) -> Result<(Rc<Class>, Value, Option<Value>), Throw> {
+    let class = ctx.native_class().expect("an enum's method");
+    let v = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let int = class.enum_backing.as_ref().is_some_and(|t| t.as_bytes() == b"int");
+    let v = if int { Value::Int(v.to_int()) } else { Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty)) };
+    let found = class.enum_cases.iter().find(|n| class.constants.get(n.as_bytes()).is_some_and(|c| c.value.identical(&v))).cloned();
+    let case = found.map(|n| ctx.enum_case(&class, n.as_bytes()));
+    Ok((class, v, case))
+}
+
+/// BackedEnum::from(int|string $value)
+pub(crate) fn enum_from(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let (class, v, case) = backed_case(ctx, args)?;
+    match case {
+        Some(c) => Ok(c),
+        None => {
+            let shown = match &v {
+                Value::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
+                other => String::from_utf8_lossy(other.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
+            };
+            Err(ctx.throw("ValueError", format!("{shown} is not a valid backing value for enum {}", String::from_utf8_lossy(class.name.as_bytes()))))
+        }
+    }
+}
+
+/// BackedEnum::tryFrom(int|string $value)
+pub(crate) fn enum_try_from(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(backed_case(ctx, args)?.2.unwrap_or(Value::Null))
 }
 
 /// Closure::bindTo(?object $newThis, object|string|null $newScope = "static")

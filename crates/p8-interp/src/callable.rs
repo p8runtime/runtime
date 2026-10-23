@@ -274,9 +274,12 @@ impl Context<'_> {
                 std::mem::swap(&mut self.isolate.regs, regs);
                 return r;
             }
-            Target::Frame(MethodFrame { func: Code::Native(native), this, .. }) => {
+            Target::Frame(MethodFrame { func: Code::Native(native), this, called, .. }) => {
                 let mut passed: Vec<Value> = args.iter().map(Value::deref).collect();
-                return self.run_native(native, this.as_ref(), &mut passed);
+                let saved = std::mem::replace(&mut self.native_class, called);
+                let r = self.run_native(native, this.as_ref(), &mut passed);
+                self.native_class = saved;
+                return r;
             }
             Target::Frame(m) => m,
         };

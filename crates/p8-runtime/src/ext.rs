@@ -82,6 +82,10 @@ pub trait Ctx {
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw>;
     /// The class `static::` names in the running code.
     fn called_class(&self) -> Option<Rc<Class>>;
+    /// The class a static builtin method (an enum's cases()) was called on.
+    fn native_class(&self) -> Option<Rc<Class>>;
+    /// An enum's case object.
+    fn enum_case(&mut self, class: &Rc<Class>, case: &[u8]) -> Value;
     /// set_error_handler / restore_error_handler (`handler` None): the
     /// handler before.
     fn error_handler(&mut self, handler: Option<(Value, i64)>) -> Value;

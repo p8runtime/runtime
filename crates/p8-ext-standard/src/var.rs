@@ -9,7 +9,7 @@ use crate::{arg, str_arg};
 use p8_runtime::array::Key;
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{Object, Visibility};
+use p8_runtime::object::{CLASS_ENUM, Object, Visibility};
 use std::rc::Rc;
 use p8_runtime::numeric::numeric_string;
 use p8_runtime::string::PhpStr;
@@ -213,7 +213,17 @@ fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Obj
         Value::Ref(cell) => print_r_to(&cell.borrow(), indent, out, seen),
         Value::Object(o) => {
             out.extend_from_slice(o.class.name.as_bytes());
-            out.extend_from_slice(b" Object\n");
+            // An enum: "Suit Enum" (":string" when backed).
+            if o.class.flags & CLASS_ENUM != 0 {
+                out.extend_from_slice(b" Enum");
+                if let Some(t) = &o.class.enum_backing {
+                    out.push(b':');
+                    out.extend_from_slice(t.as_bytes());
+                }
+                out.push(b'\n');
+            } else {
+                out.extend_from_slice(b" Object\n");
+            }
             if seen.iter().any(|s| Rc::ptr_eq(s, o)) {
                 out.extend_from_slice(b" *RECURSION*");
                 return;
@@ -300,6 +310,16 @@ fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
             out.push(b')');
         }
         Value::Ref(cell) => export(&cell.borrow(), level, out),
+        Value::Object(o) if o.class.flags & CLASS_ENUM != 0 => {
+            if level > 1 {
+                out.push(b'\n');
+                out.extend(std::iter::repeat_n(b' ', level - 1));
+            }
+            out.push(b'\\');
+            out.extend_from_slice(o.class.name.as_bytes());
+            out.extend_from_slice(b"::");
+            out.extend_from_slice(case_name(o).as_bytes());
+        }
         Value::Object(o) => {
             if level > 1 {
                 out.push(b'\n');
@@ -341,6 +361,11 @@ struct Entry {
 
 /// An object's properties in PHP's order: declared slots (the parent's
 /// first), then dynamic ones. An unset untyped property is left out.
+/// An enum case object's case name.
+fn case_name(o: &Object) -> PhpStr {
+    o.class.read(o, b"name", &o.class.lower).to_php_string().unwrap_or_else(PhpStr::empty)
+}
+
 fn entries(o: &Object) -> Vec<Entry> {
     let mut list = Vec::new();
     if let Some(info) = o.class.debug_info {
@@ -414,6 +439,13 @@ fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>)
             out.extend_from_slice(format!("{pad}}}\n").as_bytes());
         }
         Value::Ref(cell) => dump(&cell.borrow(), indent, out, seen),
+        Value::Object(o) if o.class.flags & CLASS_ENUM != 0 => {
+            out.extend_from_slice(format!("{pad}enum(").as_bytes());
+            out.extend_from_slice(o.class.name.as_bytes());
+            out.extend_from_slice(b"::");
+            out.extend_from_slice(case_name(o).as_bytes());
+            out.extend_from_slice(b")\n");
+        }
         Value::Object(o) => {
             if seen.iter().any(|s| Rc::ptr_eq(s, o)) {
                 out.extend_from_slice(format!("{pad}*RECURSION*\n").as_bytes());
