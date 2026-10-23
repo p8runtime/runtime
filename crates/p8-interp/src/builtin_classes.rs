@@ -29,7 +29,7 @@ fn declare(
     let lower = name.to_ascii_lowercase().into_bytes();
     let parent = parent.map(|p| Rc::clone(&classes[p.to_ascii_lowercase().as_bytes()]));
     let mut all_interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
-    let mut table: HashMap<Vec<u8>, Method> = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
+    let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
     for i in interfaces {
         let iface = &classes[i.to_ascii_lowercase().as_bytes()];
         for x in std::iter::once(iface.lower.clone()).chain(iface.interfaces.iter().cloned()) {

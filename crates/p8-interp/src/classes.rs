@@ -133,7 +133,7 @@ impl Context<'_> {
             }
         };
         let mut interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
-        let mut methods: HashMap<Vec<u8>, Method> = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
+        let mut methods: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
         let mut constants: HashMap<Vec<u8>, Constant> = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
         for i in &def.interfaces {
             let iface = self.lookup_class(i)?;

@@ -78,6 +78,10 @@ pub enum Native {
     Static(NativeStatic),
 }
 
+/// A class's methods by lowercase name, in declaration order (inherited
+/// ones first): PHP reports and lists them in that order.
+pub type Methods = indexmap::IndexMap<Vec<u8>, Method>;
+
 /// A method in a class's table.
 #[derive(Debug, Clone)]
 pub struct Method {
@@ -128,7 +132,7 @@ pub struct Class {
     /// property shares a name with a subclass's.
     pub slots: HashMap<Vec<u8>, Vec<usize>>,
     /// Lowercase name → method, inherited ones included.
-    pub methods: HashMap<Vec<u8>, Method>,
+    pub methods: Methods,
     pub constants: HashMap<Vec<u8>, Constant>,
     /// Static properties: a subclass shares its parent's cell unless it
     /// redeclares the property.

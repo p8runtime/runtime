@@ -2257,7 +2257,7 @@ impl Context<'_> {
                     interfaces: Vec::new(),
                     properties: Vec::new(),
                     slots: HashMap::new(),
-                    methods: HashMap::new(),
+                    methods: Default::default(),
                     constants: HashMap::new(),
                     statics: HashMap::new(),
                     debug_info: None,
