@@ -1035,9 +1035,14 @@ impl Context<'_> {
     fn resolve_slow(&mut self, clo: &Closure, site: u16) -> Result<Callee, Throw> {
         let s = &clo.code.sites[site as usize];
         let key = s.name.as_bytes();
+        let global = s.fallback.as_ref().map(|g| g.as_bytes());
         let callee = if let Some(f) = self.functions.get(key) {
             Callee::User(*f)
         } else if let Some(i) = self.isolate.registry.lookup(key) {
+            Callee::Builtin(i)
+        } else if let Some(f) = global.and_then(|g| self.functions.get(g)) {
+            Callee::User(*f)
+        } else if let Some(i) = global.and_then(|g| self.isolate.registry.lookup(g)) {
             Callee::Builtin(i)
         } else {
             let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
@@ -1457,7 +1462,7 @@ impl Context<'_> {
                     let s = &func.sites[site as usize];
                     let v = match clo.sites[site as usize].get() {
                         Some(Callee::Constant(v)) => v.clone(),
-                        _ => match self.constant_value(s.name.as_bytes()) {
+                        _ => match self.constant_value(s.name.as_bytes()).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_value(g.as_bytes()))) {
                             Some(v) => {
                                 let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
                                 v
@@ -2145,7 +2150,9 @@ impl Context<'_> {
 impl Context<'_> {
     /// The constant `name`: the script's own, else an extension's.
     fn constant_value(&self, name: &[u8]) -> Option<Value> {
-        match self.constants.get(name) {
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        let key = const_key(name);
+        match self.constants.get(key.as_ref()) {
             Some(v) => Some(v.clone()),
             None => self.isolate.registry.constant(name).map(|c| c.to_value()),
         }
@@ -2224,7 +2231,8 @@ impl Ctx for Context<'_> {
         if self.constant_value(name).is_some() {
             return false;
         }
-        self.constants.insert(name.to_vec(), value);
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        self.constants.insert(const_key(name).into_owned(), value);
         true
     }
 
@@ -2297,6 +2305,15 @@ fn assign(w: &mut [Value], r: Reg, value: Value) {
 /// with no frame of their own in the trace.
 fn opcode_function(name: &str, argc: usize) -> bool {
     matches!((name, argc), ("strlen" | "count" | "sizeof", 1) | ("array_key_exists", 2))
+}
+
+/// A constant's key: its namespace's part is case-insensitive (lowered),
+/// its own name is not.
+fn const_key(name: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match name.iter().rposition(|&c| c == b'\\') {
+        Some(at) => std::borrow::Cow::Owned([name[..at].to_ascii_lowercase().as_slice(), &name[at..]].concat()),
+        None => std::borrow::Cow::Borrowed(name),
+    }
 }
 
 /// Whether register `r` holds a temporary (not a variable or constant).

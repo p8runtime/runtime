@@ -1,0 +1,8 @@
+aA\fa
+A\f
+a
+
+Fatal error: Uncaught Error: Class "B\Missing" not found in %s:15
+Stack trace:
+#0 {main}
+  thrown in %s on line 15
