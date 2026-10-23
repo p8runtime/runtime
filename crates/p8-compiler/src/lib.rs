@@ -200,6 +200,28 @@ impl FnBuilder {
     }
 }
 
+/// Whether `a op b` compiles to one instruction that reads both operands
+/// and then writes its result (and nothing else), so the result can go
+/// straight to a variable.
+fn writes_once(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Plus
+            | BinaryOp::Minus
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Pow
+            | BinaryOp::Concat
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::ShiftLeft
+            | BinaryOp::ShiftRight
+            | BinaryOp::Spaceship
+    ) || comparison(op).is_some()
+}
+
 /// Returns reached by a jump are made where the jump is: `x ? a : b` in
 /// `return` position, for one, stores its result and jumps to the return.
 /// A temporary moved into a register only to be returned is returned
@@ -797,6 +819,20 @@ impl<'src> Compiler<'src> {
             Expr::Assign { var, expr, .. } => match var {
                 Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
                     let target = f.cv(&self.text(*name)[1..]);
+                    // Arithmetic and comparisons are one instruction that
+                    // writes its result last: it can write the variable
+                    // itself (through a reference, if the variable is one).
+                    if let Expr::Binary { op, .. } = expr
+                        && writes_once(*op)
+                    {
+                        let mark = f.temps;
+                        let src = self.expr_to(f, expr, Some(target))?;
+                        f.temps = mark;
+                        if src != target {
+                            f.emit(Instr::Assign { var: target, src });
+                        }
+                        return Ok(target);
+                    }
                     let src = self.expr(f, expr)?;
                     f.emit(Instr::Assign { var: target, src });
                     target

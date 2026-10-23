@@ -178,7 +178,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 Instr::JumpIdentical { a, b, target } => jump_if!(Cmp::Identical, true, a, b, target),
                 Instr::JumpNotIdentical { a, b, target } => jump_if!(Cmp::Identical, false, a, b, target),
                 Instr::Compare { cmp, dst, a, b } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
-                    Some(t) if cmp != Cmp::Spaceship => {
+                    Some(t) if cmp != Cmp::Spaceship && !matches!(w[dst as usize], Value::Ref(_)) => {
                         w[dst as usize] = Value::Bool(t);
                         pc += 1;
                     }
@@ -200,6 +200,8 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 },
                 Instr::Binary { op, dst, a, b } => {
                     match num_op(op, &w[a as usize], &w[b as usize]) {
+                        // A variable holding a reference is written through it (`step`).
+                        Some(_) if matches!(w[dst as usize], Value::Ref(_)) => return pc,
                         Some(r) => {
                             w[dst as usize] = r;
                             pc += 1;
@@ -280,11 +282,18 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 Instr::IterNext { iter, val, key, has_key, end } => {
                     pc = if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize };
                 }
+                // $var op= number, $var holding a number
+                Instr::AssignOp { op, var, src } => match num_op(op, &w[var as usize], &w[src as usize]) {
+                    Some(r) => {
+                        w[var as usize] = r;
+                        pc += 1;
+                    }
+                    None => return pc,
+                },
                 // Every other instruction (listed, so dispatch needs no range check).
                 Instr::AssignDim { .. }
                 | Instr::AssignDimOp { .. }
                 | Instr::LoadNull { .. }
-                | Instr::AssignOp { .. }
                 | Instr::Not { .. }
                 | Instr::Neg { .. }
                 | Instr::BitNot { .. }
@@ -874,7 +883,8 @@ impl Context<'_> {
                             r.map_err(|e| self.op_error(e))?
                         }
                     };
-                    reg!(dst) = v;
+                    // The result may go straight to a variable (`$x = $a + $b`).
+                    assign(w, dst, v);
                 }
                 Instr::AssignOp { op, var, src } => {
                     let y = self.operand(w, func, src);
@@ -905,7 +915,7 @@ impl Context<'_> {
                     } else {
                         Value::Bool(self.test_regs(w, func, cmp, a, b))
                     };
-                    reg!(dst) = v;
+                    assign(w, dst, v);
                 }
                 Instr::JumpLt { .. }
                 | Instr::JumpNotLt { .. }
