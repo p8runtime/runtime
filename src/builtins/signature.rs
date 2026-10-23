@@ -439,6 +439,101 @@ fn arg_label(param: &Param) -> String {
 /// The value a builtin receives for an accepted argument, when it differs
 /// from the one passed: weak-mode scalar conversion, preferring int, then
 /// float, then string, then bool, as zend_verify_weak_scalar_type_hint does.
+/// zend_verify_scalar_type_hint for a user function's argument (or a
+/// typed property or return value): `mask` holds the type's scalar T_* bits.
+/// Returns the coerced value, or None when the value is not accepted (a
+/// TypeError). Null is never coerced for user code; strict mode only
+/// widens int to float.
+pub(crate) fn coerce_user_scalar(
+    vm: &mut VM,
+    mask: u32,
+    handle: Handle,
+    strict: bool,
+) -> Result<Option<Val>, VmError> {
+    let value = vm.arena.get(handle).value.clone();
+    if mask & (T_BOOL | T_TRUE | T_FALSE | T_INT | T_FLOAT | T_STRING) == 0
+        || matches!(value, Val::Null)
+    {
+        return Ok(None);
+    }
+    if strict {
+        return Ok(match value {
+            Val::Int(i) if mask & T_FLOAT != 0 => Some(Val::Float(i as f64)),
+            _ => None,
+        });
+    }
+    let float_text = |f: f64| crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::Shortest, 'E');
+    // Type preference order: int -> float -> string -> bool
+    if mask & T_INT != 0 {
+        match &value {
+            Val::String(s) if mask & T_FLOAT != 0 => {
+                if let Some(n) = numeric_string(s) {
+                    return Ok(Some(n));
+                }
+            }
+            // zend_parse_arg_long_weak
+            Val::Float(f) if f.is_finite() && fits_long(*f) => {
+                if f.fract() != 0.0 {
+                    let message = format!("Implicit conversion from float {} to int loses precision", float_text(*f));
+                    vm.report_error(ErrorLevel::Deprecated, &message);
+                }
+                return Ok(Some(Val::Int(*f as i64)));
+            }
+            Val::String(s) => match numeric_string(s) {
+                Some(Val::Int(i)) => return Ok(Some(Val::Int(i))),
+                Some(Val::Float(f)) if fits_long(f) => {
+                    if f.fract() != 0.0 {
+                        let message = format!(
+                            "Implicit conversion from float-string \"{}\" to int loses precision",
+                            String::from_utf8_lossy(s)
+                        );
+                        vm.report_error(ErrorLevel::Deprecated, &message);
+                    }
+                    return Ok(Some(Val::Int(f as i64)));
+                }
+                _ => {}
+            },
+            Val::Bool(b) => return Ok(Some(Val::Int(*b as i64))),
+            _ => {}
+        }
+    }
+    if mask & T_FLOAT != 0 {
+        match &value {
+            Val::Int(i) => return Ok(Some(Val::Float(*i as f64))),
+            Val::String(s) => {
+                if let Some(n) = numeric_string(s) {
+                    return Ok(Some(Val::Float(n.to_float())));
+                }
+            }
+            Val::Bool(b) => return Ok(Some(Val::Float(*b as i64 as f64))),
+            _ => {}
+        }
+    }
+    if mask & T_STRING != 0 {
+        match &value {
+            Val::Int(_) | Val::Float(_) | Val::Bool(_) => {
+                return Ok(Some(Val::String(value.to_php_string_bytes().into())));
+            }
+            Val::Object(payload) => {
+                let class = match &vm.arena.get(*payload).value {
+                    Val::ObjPayload(obj) => Some(obj.class),
+                    _ => None,
+                };
+                if class.is_some_and(|c| vm.class_has_to_string(c))
+                    && let Some(text) = coerce(vm, T_STRING, handle)?
+                {
+                    return Ok(Some(text));
+                }
+            }
+            _ => {}
+        }
+    }
+    if mask & T_BOOL != 0 && matches!(value, Val::Int(_) | Val::Float(_) | Val::String(_)) {
+        return Ok(Some(Val::Bool(value.to_bool())));
+    }
+    Ok(None)
+}
+
 fn coerce(vm: &mut VM, mask: u32, handle: Handle) -> Result<Option<Val>, VmError> {
     // Callables (names, arrays, closures) and untyped parameters pass as is.
     if mask == 0 || mask & (T_MIXED | T_CALLABLE) != 0 {
