@@ -749,10 +749,10 @@ pub struct Isolate {
 impl Isolate {
     pub fn new(registry: Arc<Registry>) -> Isolate {
         Isolate {
-            registry,
             regs: Vec::with_capacity(1024),
             interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)),
-            builtin_classes: builtin_classes::build(),
+            builtin_classes: builtin_classes::build(&registry),
+            registry,
         }
     }
 

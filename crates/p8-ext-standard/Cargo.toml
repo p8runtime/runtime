@@ -15,5 +15,5 @@ crc32fast = "1.5"
 # random_bytes, random_int: the OS's randomness
 getrandom = "0.2"
 # Dates: time zones (the IANA database, built in)
-chrono = "0.4"
-chrono-tz = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }

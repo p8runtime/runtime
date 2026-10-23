@@ -13,6 +13,7 @@ mod array;
 mod array2;
 mod callback;
 mod dates;
+mod datetime;
 mod file;
 mod hash;
 mod info;
@@ -96,6 +97,8 @@ fn register(registry: &mut Registry) {
     registry.add_functions(random::BUILTINS);
     registry.add_functions(scan::BUILTINS);
     registry.add_functions(dates::BUILTINS);
+    registry.add_functions(datetime::BUILTINS);
+    registry.add_classes(datetime::CLASSES);
     registry.add_functions(serial::BUILTINS);
     registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);

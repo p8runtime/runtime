@@ -1,0 +1,42 @@
+<?php
+date_default_timezone_set('UTC');
+$d = new DateTime('2024-01-31 10:20:30');
+var_dump($d);
+echo $d->format('Y-m-d H:i:s T e P U'), "\n";
+echo $d->format(DATE_ATOM), "\n", DateTimeInterface::RFC2822, "\n";
+$paris = new DateTimeZone('Europe/Paris'); $i = new DateTimeImmutable('2024-02-29 12:00:00', $paris);
+var_dump($i);
+$j = $i->modify('+1 month');
+echo $i->format('c'), ' ', $j->format('c'), "\n";
+$d->modify('+1 day');
+echo $d->format('Y-m-d'), "\n";
+$a = new DateTime('2020-03-15 08:00:00');
+$b = new DateTime('2024-01-10 06:30:00');
+$diff = $a->diff($b);
+var_dump($diff);
+echo $diff->format('%R %y years %m months %d days %h:%I:%S total %a'), "\n";
+echo $b->diff($a)->format('%R%a %r'), "\n";
+$p = new DateInterval('P1Y2M3DT4H5M6S');
+$x = new DateTime('2024-01-01');
+$x->add($p); echo $x->format('Y-m-d H:i:s'), "\n";
+$x->sub(new DateInterval('P2W')); echo $x->format('Y-m-d H:i:s'), "\n";
+$z = new DateTimeZone('America/New_York');
+var_dump($z, $z->getName(), $z->getOffset(new DateTime('2024-07-01')));
+$c = DateTime::createFromFormat('Y-m-d H:i', '2023-05-06 07:08');
+echo get_class($c), ' ', $c->format('Y-m-d H:i:s'), "\n";
+$c2 = DateTimeImmutable::createFromFormat('!d/m/Y', '15/08/2022');
+echo get_class($c2), ' ', $c2->format('Y-m-d H:i:s'), "\n";
+var_dump(DateTime::createFromFormat('Y-m-d', 'garbage'));
+$o = new DateTime('2024-01-01 00:00:00+02:00'); var_dump($o);
+$t = new DateTime('2024-01-01 00:00:00 EST'); var_dump($t); echo $t->format('T e'), "\n";
+$e = date_create('2000-01-01'); date_add($e, new DateInterval('P1D')); echo date_format($e, 'D, d M Y'), "\n";
+$cl = clone $e; $cl->setDate(1999, 12, 25)->setTime(5, 6); echo $e->format('Y-m-d H:i'), ' ', $cl->format('Y-m-d H:i'), "\n";
+$s = new DateTime('@86400'); var_dump($s);
+$m = new DateTime('2024-01-01'); $m->setTimezone(new DateTimeZone('Asia/Tokyo')); echo $m->format('Y-m-d H:i T P'), "\n";
+echo $m->getTimestamp(), ' ', $m->getOffset(), "\n";
+var_dump($m instanceof DateTimeInterface, new DateTime('2021-06-15 12:00:00.5') == new DateTime('2021-06-15 12:00:00.5'));
+$iv = DateInterval::createFromDateString('3 days'); echo $iv->d, ' ', $iv->format('%d'), "\n";
+$w = new DateTime('2024-01-01'); $w->setISODate(2024, 10, 3); echo $w->format('Y-m-d'), "\n";
+try { new DateTime('not a date'); } catch (Exception $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+try { new DateTimeZone('Mars/Base'); } catch (Exception $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+var_dump(date_create('nope'));

@@ -184,6 +184,25 @@ pub struct Registry {
     reenters: Vec<bool>,
     index: HashMap<&'static str, usize>,
     constants: HashMap<&'static [u8], Constant>,
+    /// Classes extensions declare, in order (a parent before its children).
+    classes: Vec<&'static ClassSpec>,
+}
+
+/// A class an extension declares: its methods are Rust. The engine links
+/// it with the core classes, after them (so it may extend Exception).
+pub struct ClassSpec {
+    pub name: &'static str,
+    pub parent: Option<&'static str>,
+    pub interfaces: &'static [&'static str],
+    /// CLASS_FINAL, CLASS_INTERFACE, ... (crate::object)
+    pub flags: u32,
+    /// Declared properties: name, default, visibility.
+    pub properties: &'static [(&'static str, Constant, crate::object::Visibility)],
+    /// Methods (None: abstract, for an interface).
+    pub methods: &'static [(&'static str, Option<crate::object::Native>)],
+    pub constants: &'static [(&'static str, Constant)],
+    /// What var_dump shows instead of the properties.
+    pub debug_info: Option<fn(&crate::object::Object) -> crate::array::PhpArray>,
 }
 
 impl Registry {
@@ -193,6 +212,15 @@ impl Registry {
             (extension.register)(&mut registry);
         }
         registry
+    }
+
+    pub fn add_classes(&mut self, classes: &'static [ClassSpec]) {
+        self.classes.extend(classes.iter());
+    }
+
+    /// The classes extensions declare, in order.
+    pub fn classes(&self) -> &[&'static ClassSpec] {
+        &self.classes
     }
 
     pub fn add_functions(&mut self, functions: &'static [Builtin]) {
