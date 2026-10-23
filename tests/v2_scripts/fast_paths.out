@@ -1,0 +1,38 @@
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(1.8446744073709552E+19)
+float(4.5)
+float(1.5)
+float(4.5)
+float(2)
+float(3)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+int(1)
+0.5
+1.5
+2.5
+not nan<1
+int(5)
+float(5)
+int(3)
+int(8)
+
+Warning: Undefined variable $undef1 in %s on line 25
+int(1)
+
+Warning: Undefined variable $undef2 in %s on line 26
+bool(true)
+
+Warning: Undefined variable $undef3 in %s on line 27
+null

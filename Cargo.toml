@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 indexmap = "2.0"
+hashbrown = { version = "0.16", default-features = false }
 bumpalo = { version = "3.12", features = ["collections"] }
 clap = { version = "4.5", features = ["derive"], optional = true }
 rustyline = { version = "14.0", optional = true }
@@ -151,3 +152,9 @@ router = [
 
 [dev-dependencies]
 serde_json = "1.0"
+
+[profile.release]
+# The interpreter's dispatch loop and value operations live in different
+# modules: whole-program optimization lets them inline into one another.
+lto = "fat"
+codegen-units = 1

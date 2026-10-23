@@ -456,48 +456,17 @@ impl Val {
     /// The value of the numeric prefix of `s` ("12abc" -> 12) and the bytes
     /// after it, or None when `s` does not start with a number.
     pub fn leading_numeric(s: &[u8]) -> Option<(Val, &[u8])> {
-        let prefix = Self::numeric_prefix(s);
-        if prefix.is_empty() {
-            return None;
-        }
-        let end = prefix.as_ptr() as usize - s.as_ptr() as usize + prefix.len();
-        let text = std::str::from_utf8(prefix).ok()?;
-        let value = match text.parse::<i64>() {
-            Ok(i) if !text.contains(['.', 'e', 'E']) => Val::Int(i),
-            _ => Val::Float(text.parse::<f64>().ok()?),
+        let (value, end) = crate::core::numeric::leading_numeric(s)?;
+        let value = match value {
+            crate::core::numeric::Number::Int(i) => Val::Int(i),
+            crate::core::numeric::Number::Float(f) => Val::Float(f),
         };
         Some((value, &s[end..]))
     }
 
     /// The numeric prefix of `s` after leading whitespace (may be empty).
     fn numeric_prefix(s: &[u8]) -> &[u8] {
-        let start = s
-            .iter()
-            .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c'))
-            .unwrap_or(s.len());
-        let s = &s[start..];
-        let digits = |from: usize| s[from..].iter().take_while(|b| b.is_ascii_digit()).count();
-        let mut end = usize::from(matches!(s.first(), Some(b'+' | b'-')));
-        let int_digits = digits(end);
-        end += int_digits;
-        let mut frac_digits = 0;
-        if s.get(end) == Some(&b'.') {
-            frac_digits = digits(end + 1);
-            if int_digits + frac_digits > 0 {
-                end += 1 + frac_digits;
-            }
-        }
-        if int_digits + frac_digits == 0 {
-            return &s[..0];
-        }
-        if matches!(s.get(end), Some(b'e' | b'E')) {
-            let sign = usize::from(matches!(s.get(end + 1), Some(b'+' | b'-')));
-            let exp_digits = digits(end + 1 + sign);
-            if exp_digits > 0 {
-                end += 1 + sign + exp_digits;
-            }
-        }
-        &s[..end]
+        crate::core::numeric::numeric_prefix(s)
     }
 }
 

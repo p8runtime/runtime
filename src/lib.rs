@@ -7,4 +7,5 @@ pub mod parser;
 pub mod phpt;
 pub mod runtime;
 pub mod sapi;
+pub mod v2;
 pub mod vm;
