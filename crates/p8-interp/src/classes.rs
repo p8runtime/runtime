@@ -96,7 +96,7 @@ impl Context<'_> {
     /// DeclareClass: link a class declaration (once).
     pub(crate) fn declare_class(&mut self, def: &Arc<ClassDef>) -> Result<(), Throw> {
         let key = Arc::as_ptr(def) as usize;
-        if self.declared.contains(&key) {
+        if self.declared.contains_key(&key) {
             return Ok(());
         }
         let lower = def.name.as_bytes().to_ascii_lowercase();
@@ -105,7 +105,7 @@ impl Context<'_> {
         }
         let class = self.link(def)?;
         self.classes.insert(lower, class);
-        self.declared.insert(key);
+        self.declared.insert(key, Arc::clone(def));
         Ok(())
     }
 

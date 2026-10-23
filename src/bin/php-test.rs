@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)] // memory safety is the point of this runtime; see SECURITY.md
 
 use clap::Parser;
-use php_rs::phpt::executor::TestResult;
+use php_rs::phpt::executor::{Limits, TestResult};
 use php_rs::phpt::results::TestResults;
 use php_rs::phpt::{PhptExecutor, PhptTest};
 use std::collections::BTreeSet;
@@ -36,9 +36,17 @@ struct Cli {
     #[arg(long, default_value_t = 10)]
     timeout: u64,
 
-    /// Parallel test processes (default: available cores)
-    #[arg(short = 'j', long)]
-    jobs: Option<usize>,
+    /// Tests run at once (at most half the cores; the machine is shared)
+    #[arg(short = 'j', long, default_value_t = 4)]
+    jobs: usize,
+
+    /// Resident memory one test (with everything it starts) may use, in MB
+    #[arg(long, default_value_t = 1024)]
+    memory_mb: u64,
+
+    /// Processes one test may have running at once
+    #[arg(long, default_value_t = 32)]
+    max_processes: usize,
 
     /// Print every test, not only failures
     #[arg(short = 's', long)]
@@ -90,7 +98,12 @@ fn main() -> anyhow::Result<()> {
         .iter()
         .map(|f| PhptTest::from_file(f).map_err(|e| e.to_string()))
         .collect();
-    let mut executor = PhptExecutor::new(php, Duration::from_secs(cli.timeout));
+    let limits = Limits {
+        timeout: Duration::from_secs(cli.timeout),
+        memory: cli.memory_mb << 20,
+        processes: cli.max_processes,
+    };
+    let mut executor = PhptExecutor::new(php, limits);
     let wanted: BTreeSet<&str> = tests
         .iter()
         .flatten()
@@ -100,13 +113,13 @@ fn main() -> anyhow::Result<()> {
         .probe_extensions(wanted, &std::env::temp_dir())
         .map_err(|e| anyhow::anyhow!("extension probe failed: {}", e))?;
 
-    let jobs = cli
-        .jobs
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    let jobs = cli.jobs.clamp(1, (cores / 2).max(1));
+    eprintln!("{jobs} at a time, each up to {} MB, {} processes, {}s", cli.memory_mb, cli.max_processes, cli.timeout);
     let next = AtomicUsize::new(0);
     let slots: Vec<Mutex<Option<TestResult>>> = files.iter().map(|_| Mutex::new(None)).collect();
     std::thread::scope(|scope| {
-        for _ in 0..jobs.max(1) {
+        for _ in 0..jobs {
             scope.spawn(|| {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);

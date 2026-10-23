@@ -2,11 +2,18 @@
 //! section is written next to the test as `<name>.php` / `.skip.php` /
 //! `.clean.php` and executed by the `php` binary in a child process, so a
 //! crash or hang fails one test instead of the whole run.
+//!
+//! Each run is its own process group, watched while it runs: past its
+//! memory or process limit, or its timeout, the whole group is killed, and
+//! whatever it left running in the background is killed when it exits. A
+//! runaway test (unbounded allocation, a command that never ends) froze the
+//! build machine on 23 Oct before this.
 
 use crate::phpt::matcher::{ExpectationType, match_output};
 use crate::phpt::parser::PhptTest;
 use std::collections::HashSet;
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -57,22 +64,42 @@ const RUN_TESTS_INI: &[(&str, &str)] = &[
     ("date.timezone", "UTC"),
 ];
 
+/// What one test run (its php process and everything it starts) may use.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub timeout: Duration,
+    /// Resident memory of the whole process group, in bytes.
+    pub memory: u64,
+    /// Processes in the group at once.
+    pub processes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits { timeout: Duration::from_secs(10), memory: 1 << 30, processes: 32 }
+    }
+}
+
+/// How often a running test's memory and processes are checked.
+const WATCH_EVERY: Duration = Duration::from_millis(200);
+
 pub struct PhptExecutor {
     php: PathBuf,
-    timeout: Duration,
+    limits: Limits,
     loaded_extensions: HashSet<String>,
 }
 
 struct Output {
     text: String,
-    timed_out: bool,
+    /// Why the run was killed, if it was.
+    killed: Option<String>,
 }
 
 impl PhptExecutor {
-    pub fn new(php: PathBuf, timeout: Duration) -> Self {
+    pub fn new(php: PathBuf, limits: Limits) -> Self {
         Self {
             php,
-            timeout,
+            limits,
             loaded_extensions: HashSet::new(),
         }
     }
@@ -94,7 +121,7 @@ impl PhptExecutor {
         // finish (a loaded machine), and would skip every --EXTENSIONS-- test.
         for _ in 0..3 {
             let out = self.run_section(&PhptTest::default(), &probe, &code)?;
-            if !out.timed_out && !out.text.trim().is_empty() {
+            if out.killed.is_none() && !out.text.trim().is_empty() {
                 self.loaded_extensions = out.text.lines().map(str::to_string).collect();
                 return Ok(());
             }
@@ -155,9 +182,9 @@ impl PhptExecutor {
 
         let path = sibling(&base, "php");
         let result = match self.run_section(test, &path, &test.sections.file) {
-            Ok(out) if out.timed_out => TestResult::Failed {
+            Ok(Output { text, killed: Some(why) }) => TestResult::Failed {
                 expected: "(completion)".into(),
-                actual: format!("timed out after {:?}\n{}", self.timeout, out.text),
+                actual: format!("{why}\n{text}"),
             },
             Ok(out) => self.judge(test, out.text),
             Err(e) => TestResult::Error { error: e },
@@ -208,6 +235,8 @@ impl PhptExecutor {
     fn spawn(&self, test: &PhptTest, path: &Path) -> Result<Output, String> {
         let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&self.php);
+        // Its own process group, so everything it starts can be watched and killed.
+        cmd.process_group(0);
         let dir = path.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
         let section = test.sections.ini.iter().map(|(k, v)| (k.as_str(), v.as_str()));
         for (name, value) in RUN_TESTS_INI.iter().copied().chain(section) {
@@ -246,27 +275,86 @@ impl PhptExecutor {
             }
             buf
         });
-        let deadline = Instant::now() + self.timeout;
-        let mut timed_out = false;
+        let group = child.id();
+        let start = Instant::now();
+        let mut watched = start;
+        let mut killed = None;
         loop {
             match child.try_wait() {
                 Ok(Some(_)) => break,
-                Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
+                Ok(None) => {}
+                Err(e) => {
+                    kill_group(group);
                     let _ = child.wait();
-                    timed_out = true;
-                    break;
+                    return Err(e.to_string());
                 }
-                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-                Err(e) => return Err(e.to_string()),
             }
+            if start.elapsed() >= self.limits.timeout {
+                killed = Some(format!("timed out after {:?}", self.limits.timeout));
+            } else if watched.elapsed() >= WATCH_EVERY {
+                watched = Instant::now();
+                killed = self.over_limit(group);
+            }
+            if killed.is_some() {
+                kill_group(group);
+                let _ = child.wait();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
         }
+        // Whatever it left running in the background goes too; until it
+        // does, the output pipe stays open.
+        kill_group(group);
         let bytes = collector.join().unwrap_or_default();
         Ok(Output {
             text: String::from_utf8_lossy(&bytes).into_owned(),
-            timed_out,
+            killed,
         })
     }
+
+    /// Why the process group `group` must be stopped, if it is over a limit.
+    fn over_limit(&self, group: u32) -> Option<String> {
+        let (processes, memory) = group_usage(group)?;
+        if memory > self.limits.memory {
+            return Some(format!("killed: {} MB resident, over the {} MB limit", memory >> 20, self.limits.memory >> 20));
+        }
+        if processes > self.limits.processes {
+            return Some(format!("killed: {processes} processes, over the limit of {}", self.limits.processes));
+        }
+        None
+    }
+}
+
+/// The processes in a process group and their resident memory in bytes,
+/// as `ps` reports them.
+fn group_usage(group: u32) -> Option<(usize, u64)> {
+    let out = Command::new("ps").args(["-A", "-o", "pgid=,rss="]).stderr(Stdio::null()).output().ok()?;
+    parse_usage(&String::from_utf8_lossy(&out.stdout), group)
+}
+
+/// `ps -o pgid=,rss=` lines (rss in KB) summed for `group`.
+fn parse_usage(ps: &str, group: u32) -> Option<(usize, u64)> {
+    let mut processes = 0;
+    let mut memory = 0u64;
+    for line in ps.lines() {
+        let mut cols = line.split_whitespace();
+        let (Some(pgid), Some(rss)) = (cols.next(), cols.next()) else { continue };
+        if pgid.parse() == Ok(group) {
+            processes += 1;
+            memory += rss.parse::<u64>().unwrap_or(0) * 1024;
+        }
+    }
+    Some((processes, memory))
+}
+
+/// SIGKILL every process in the group a test run started (its group id is
+/// its php process's pid).
+fn kill_group(group: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{group}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn sibling(base: &Path, ext: &str) -> PathBuf {
@@ -274,4 +362,16 @@ fn sibling(base: &Path, ext: &str) -> PathBuf {
     name.push(".");
     name.push(ext);
     PathBuf::from(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_sums_only_the_group() {
+        let ps = "    1  26344\n  700   1000\n  700   2048\n  701  99999\n  bad line\n";
+        assert_eq!(parse_usage(ps, 700), Some((2, 3048 * 1024)));
+        assert_eq!(parse_usage(ps, 9), Some((0, 0)));
+    }
 }

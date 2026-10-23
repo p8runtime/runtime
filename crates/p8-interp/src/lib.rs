@@ -921,7 +921,7 @@ impl Isolate {
             classes,
             failed_call: None,
             class_defs: Vec::new(),
-            declared: std::collections::HashSet::new(),
+            declared: HashMap::new(),
             loader: None,
             included: std::collections::HashSet::new(),
             included_order: Vec::new(),
@@ -988,7 +988,9 @@ pub struct Context<'i> {
     /// The script's class declarations (DeclareClass indexes them), and
     /// which are linked.
     class_defs: Vec<Arc<ClassDef>>,
-    declared: std::collections::HashSet<usize>,
+    /// Keyed by the declaration's address, holding it so that address
+    /// is not reused by another file's class while it is remembered.
+    declared: HashMap<usize, Arc<ClassDef>>,
     /// Compiles the files `include` runs (the embedder's compiler).
     loader: Option<Rc<dyn Loader>>,
     /// Files included so far, for `_once` (resolved paths).

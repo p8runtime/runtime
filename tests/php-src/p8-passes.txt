@@ -557,6 +557,7 @@ Zend/tests/bug78810.phpt
 Zend/tests/bug78868.phpt
 Zend/tests/bug78921.phpt
 Zend/tests/bug78926.phpt
+Zend/tests/bug79022.phpt
 Zend/tests/bug79155.phpt
 Zend/tests/bug79364.phpt
 Zend/tests/bug79514.phpt
@@ -687,6 +688,7 @@ Zend/tests/const_eval_and.phpt
 Zend/tests/const_expr_dim_on_null_warning.phpt
 Zend/tests/constant_expressions.phpt
 Zend/tests/constant_expressions_arrays.phpt
+Zend/tests/constant_expressions_classes.phpt
 Zend/tests/constant_expressions_coalesce.phpt
 Zend/tests/constant_expressions_coalesce_empty_dim.phpt
 Zend/tests/constant_expressions_dynamic.phpt
