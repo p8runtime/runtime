@@ -11,7 +11,7 @@ use p8_bytecode::{ClassDef, ClassRef, Function};
 use p8_runtime::array::Key;
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, Class, Constant, Method, NativeMethod, Object, Property, Visibility, visible,
+    CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, Class, Constant, Method, Native, Object, Property, Visibility, visible,
 };
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -24,14 +24,23 @@ use std::sync::Arc;
 /// What a method runs: user code, or Rust.
 pub(crate) enum Code {
     User(Rc<Closure>),
-    Native(NativeMethod),
+    Native(Native),
 }
 
 pub(crate) struct MethodFrame {
     pub func: Code,
     pub this: Option<Rc<Object>>,
-    pub scope: Rc<Class>,
-    pub called: Rc<Class>,
+    /// The class the code is in (None: a function, or an unbound closure).
+    pub scope: Option<Rc<Class>>,
+    pub called: Option<Rc<Class>>,
+    /// A closure's captured values, for its `bound` registers.
+    pub captured: Vec<Value>,
+}
+
+impl MethodFrame {
+    pub(crate) fn method(func: Code, this: Option<Rc<Object>>, scope: Rc<Class>, called: Rc<Class>) -> MethodFrame {
+        MethodFrame { func, this, scope: Some(scope), called: Some(called), captured: Vec::new() }
+    }
 }
 
 fn text(s: &PhpStr) -> String {
@@ -40,9 +49,9 @@ fn text(s: &PhpStr) -> String {
 
 impl Context<'_> {
     /// What method `m` runs.
-    fn code_of(&self, m: &Method) -> Code {
+    pub(crate) fn code_of(&self, m: &Method) -> Code {
         match m.native {
-            Some(f) => Code::Native(f),
+            Some(n) => Code::Native(n),
             None => Code::User(Rc::clone(&self.closures[m.func as usize])),
         }
     }
@@ -252,6 +261,7 @@ impl Context<'_> {
             methods,
             constants,
             statics,
+            debug_info: None,
         }))
     }
 
@@ -296,7 +306,7 @@ impl Context<'_> {
             ));
         }
         let func = self.code_of(&ctor);
-        Ok((Rc::clone(&object), Some(MethodFrame { func, this: Some(object), scope: declaring, called: class })))
+        Ok((Rc::clone(&object), Some(MethodFrame::method(func, Some(object), declaring, class))))
     }
 
     /// The class in `class`'s chain that declares a member (as linked).
@@ -342,7 +352,7 @@ impl Context<'_> {
         }
         let func = self.code_of(&method);
         let this = (!method.is_static).then_some(object);
-        Ok(MethodFrame { func, this, scope: declaring, called: class })
+        Ok(MethodFrame::method(func, this, declaring, class))
     }
 
     /// `C::method(args)`: the frame to push. A non-static method gets the
@@ -375,12 +385,12 @@ impl Context<'_> {
                 Some(c) if forward && c.is_a(&target.lower) => c,
                 _ => target,
             };
-            return Ok(MethodFrame { func: fframe, this: None, scope: declaring, called });
+            return Ok(MethodFrame::method(fframe, None, declaring, called));
         }
         match this {
             Some(this) if this.class.is_a(&target.lower) => {
                 let called = Rc::clone(&this.class);
-                Ok(MethodFrame { func: fframe, this: Some(this), scope: declaring, called })
+                Ok(MethodFrame::method(fframe, Some(this), declaring, called))
             }
             _ => Err(self.throw(
                 "Error",
@@ -669,7 +679,7 @@ impl Context<'_> {
             ));
         }
         let func = self.code_of(&method);
-        Ok((Rc::clone(&copy), Some(MethodFrame { func, this: Some(copy), scope: declaring, called: Rc::clone(&o.class) })))
+        Ok((Rc::clone(&copy), Some(MethodFrame::method(func, Some(copy), declaring, Rc::clone(&o.class)))))
     }
 }
 

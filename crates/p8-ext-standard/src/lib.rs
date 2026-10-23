@@ -10,6 +10,7 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 mod array;
+mod callback;
 mod class;
 pub mod defaults;
 mod math;
@@ -77,6 +78,7 @@ fn register(registry: &mut Registry) {
     }
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
+    registry.add_functions(callback::BUILTINS);
     registry.add_functions(class::BUILTINS);
     registry.add_functions(math::BUILTINS);
     registry.add_functions(misc::BUILTINS);

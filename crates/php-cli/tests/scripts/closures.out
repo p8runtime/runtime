@@ -1,0 +1,73 @@
+15
+15
+2
+11
+5
+2,4,6
+Array
+(
+    [0] => Array
+        (
+            [0] => 1
+            [1] => a
+        )
+
+    [1] => Array
+        (
+            [0] => 2
+            [1] => b
+        )
+
+)
+Array
+(
+    [0] => 1
+    [2] => 2
+    [4] => 3
+)
+Array
+(
+    [a] => 1
+    [c] => 3
+)
+20
+Array
+(
+    [0] => 1
+    [1] => 2
+    [2] => 3
+)
+Array
+(
+    [x] => 3
+    [z] => 2
+    [y] => 1
+)
+Array
+(
+    [x] => 3
+    [y] => 1
+    [z] => 2
+)
+Array
+(
+    [0] => #0:1
+    [1] => #1:2
+    [2] => #2:3
+)
+1-2 3-4
+x-y
+ABC
+m:1:priv st:2 st:3
+priv
+invoked 7 invoked 8
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+120
+iife
+a
+in cb 9
+end

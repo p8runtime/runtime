@@ -66,6 +66,15 @@ pub struct Property {
 
 /// A method written in Rust (a builtin class's): `$this`, the arguments.
 pub type NativeMethod = fn(&mut dyn Ctx, &Rc<Object>, &mut [Value]) -> Result<Value, Throw>;
+/// A static method written in Rust: the arguments.
+pub type NativeStatic = fn(&mut dyn Ctx, &mut [Value]) -> Result<Value, Throw>;
+
+/// A builtin class's method in Rust.
+#[derive(Debug, Clone, Copy)]
+pub enum Native {
+    Method(NativeMethod),
+    Static(NativeStatic),
+}
 
 /// A method in a class's table.
 #[derive(Debug, Clone)]
@@ -75,7 +84,7 @@ pub struct Method {
     /// What runs: the context's closure of the method's code (unused for
     /// a native or abstract builtin method).
     pub func: u32,
-    pub native: Option<NativeMethod>,
+    pub native: Option<Native>,
     pub visibility: Visibility,
     pub is_static: bool,
     pub is_abstract: bool,
@@ -119,6 +128,9 @@ pub struct Class {
     /// Static properties: a subclass shares its parent's cell unless it
     /// redeclares the property.
     pub statics: HashMap<Vec<u8>, Static>,
+    /// What var_dump and print_r show of an object instead of its
+    /// properties (a Closure's name, file, bindings).
+    pub debug_info: Option<fn(&Object) -> PhpArray>,
 }
 
 impl Class {
@@ -220,10 +232,21 @@ impl Ids {
     }
 }
 
+/// What an object of a builtin class holds beyond its properties (a
+/// Closure's function and bindings), for the code that knows its type.
+pub struct Data(pub Rc<dyn std::any::Any>);
+
+impl std::fmt::Debug for Data {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Data")
+    }
+}
+
 /// A PHP object.
 #[derive(Debug)]
 pub struct Object {
     pub class: Rc<Class>,
+    pub data: Option<Data>,
     /// Declared properties by slot; Undef where unset or uninitialized.
     pub slots: RefCell<Vec<Value>>,
     /// Properties added at run time (`$o->new = 1`), in order.
@@ -235,14 +258,27 @@ pub struct Object {
 impl Object {
     /// A new object of `class` with its properties' defaults.
     pub fn new(class: Rc<Class>, ids: &Rc<Ids>) -> Rc<Object> {
+        Object::with_data(class, ids, None)
+    }
+
+    /// A new object holding `data` (see [`Data`]).
+    pub fn with_data(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
         let slots = class.properties.iter().map(|p| p.default.clone()).collect();
-        Rc::new(Object { class, slots: RefCell::new(slots), dynamic: RefCell::new(PhpArray::new()), id: ids.take(), ids: Rc::clone(ids) })
+        Rc::new(Object {
+            class,
+            data: data.map(Data),
+            slots: RefCell::new(slots),
+            dynamic: RefCell::new(PhpArray::new()),
+            id: ids.take(),
+            ids: Rc::clone(ids),
+        })
     }
 
     /// A shallow copy (clone): same class, the properties copied, a new id.
     pub fn copy(&self) -> Rc<Object> {
         Rc::new(Object {
             class: Rc::clone(&self.class),
+            data: self.data.as_ref().map(|d| Data(Rc::clone(&d.0))),
             slots: RefCell::new(self.slots.borrow().clone()),
             dynamic: RefCell::new(self.dynamic.borrow().clone()),
             id: self.ids.take(),

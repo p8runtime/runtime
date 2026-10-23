@@ -30,8 +30,12 @@ impl Context<'_> {
             let mut entry = PhpArray::new();
             let code = &caller.func.code;
             let line = code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
-            entry.insert(key("file"), Value::Str(PhpStr::from(&*code.file)));
-            entry.insert(key("line"), Value::Int(i64::from(line)));
+            // A frame a builtin called (a callback): from no file.
+            let native = self.natives.iter().find(|n| n.depth == k);
+            if native.is_none() {
+                entry.insert(key("file"), Value::Str(PhpStr::from(&*code.file)));
+                entry.insert(key("line"), Value::Int(i64::from(line)));
+            }
             let code = &frame.func.code;
             entry.insert(key("function"), Value::Str(PhpStr::from(code.name.as_bytes())));
             if code.class.is_some() {
@@ -53,6 +57,14 @@ impl Context<'_> {
             }
             entry.insert(key("args"), Value::Array(Rc::new(args)));
             let _ = trace.push(Value::Array(Rc::new(entry)));
+            if let Some(n) = native {
+                let mut entry = PhpArray::new();
+                entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
+                entry.insert(key("line"), Value::Int(i64::from(line)));
+                entry.insert(key("function"), Value::str(n.name));
+                entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
+                let _ = trace.push(Value::Array(Rc::new(entry)));
+            }
         }
         trace
     }
@@ -132,7 +144,12 @@ impl Context<'_> {
                 regs[base + h.slot as usize] = Value::Object(object);
                 return Ok(h.target as usize);
             }
-            if self.frames.len() == 1 {
+            // The bottom frame of this `execute`: the exception goes to
+            // whoever started it (the host, or a builtin calling back).
+            if self.frames.len() == self.frames.floor + 1 {
+                if self.frames.floor > 0 {
+                    drop_frame(&mut self.frames, regs);
+                }
                 return Err(Throw::Object(object));
             }
             drop_frame(&mut self.frames, regs);

@@ -48,6 +48,12 @@ enum ConstKey {
     Str(Vec<u8>),
 }
 
+/// A function's body: statements, or an arrow function's expression.
+enum Body<'a> {
+    Stmts(&'a [StmtId<'a>]),
+    Expr(&'a Expr<'a>),
+}
+
 struct Loop {
     breaks: Vec<usize>,
     continues: Vec<usize>,
@@ -103,6 +109,10 @@ struct FnBuilder<'a> {
     is_static: bool,
     tries: Vec<TryCtx<'a>>,
     handlers: Vec<Handler>,
+    /// Closures and arrow functions made in this code (`MakeClosure`).
+    lambdas: Vec<Arc<Function>>,
+    /// For a closure: the registers of its captured variables, in order.
+    bound: Vec<Reg>,
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
     silences: Vec<(u32, u32, Reg)>,
@@ -133,6 +143,8 @@ impl FnBuilder<'_> {
             is_static: false,
             tries: Vec::new(),
             handlers: Vec::new(),
+            lambdas: Vec::new(),
+            bound: Vec::new(),
             decls: Vec::new(),
             silences: Vec::new(),
         }
@@ -269,6 +281,8 @@ impl FnBuilder<'_> {
             class: self.class,
             is_static: self.is_static,
             handlers: self.handlers,
+            lambdas: self.lambdas,
+            bound: self.bound,
             decls: self.decls,
             silences: self.silences,
         }
@@ -386,6 +400,11 @@ fn thread_returns(code: &mut [Instr]) {
     }
 }
 
+/// Whether a call's arguments are `...` (the first-class callable syntax).
+fn is_placeholder(args: &[p8_syntax::ast::Arg]) -> bool {
+    matches!(args, [arg] if matches!(arg.value, Expr::VariadicPlaceholder { .. }))
+}
+
 /// Reopen the try blocks `leave_tries` left (the code after the exit is
 /// inside them again).
 fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
@@ -400,6 +419,20 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
         DeclareClass { .. } => {}
+        MakeClosure { dst, .. } => *dst = f(*dst),
+        FromCallable { dst, src } => {
+            *dst = f(*dst);
+            *src = f(*src);
+        }
+        Capture { closure, var, .. } => {
+            *closure = f(*closure);
+            *var = f(*var);
+        }
+        CallValue { dst, callee, base, .. } => {
+            *dst = f(*dst);
+            *callee = f(*callee);
+            *base = f(*base);
+        }
         Silence { saved } | Unsilence { saved } => *saved = f(*saved),
         Include { dst, src, .. } => {
             *dst = f(*dst);
@@ -1103,9 +1136,25 @@ impl<'src> Compiler<'src> {
 
     /// A user function.
     fn function(&mut self, name: Span, params: &[p8_syntax::ast::Param], body: &[StmtId], by_ref: bool) -> Result<Function> {
-        let mut f = FnBuilder::new(Text::from(self.text(name)));
+        let text = Text::from(self.text(name));
+        let line = self.line(name);
+        Ok(self.function_with(text, line, params, Body::Stmts(body), by_ref, &[])?.0)
+    }
+
+    /// A function, closure or arrow function: its code, and (for an arrow
+    /// function) the variables it takes from where it is made.
+    fn function_with<'a>(
+        &mut self,
+        name: Text,
+        line: u32,
+        params: &[p8_syntax::ast::Param],
+        body: Body<'a>,
+        by_ref: bool,
+        uses: &[p8_syntax::ast::ClosureUse],
+    ) -> Result<(Function, Vec<Text>)> {
+        let mut f = FnBuilder::new(name);
         f.returns_ref = by_ref;
-        f.line = self.line(name);
+        f.line = line;
         if let Some((class, is_static)) = self.method.take() {
             f.class = Some(class);
             f.is_static = is_static;
@@ -1154,9 +1203,57 @@ impl<'src> Compiler<'src> {
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst });
             f.temps = f.floor;
         }
-        self.stmts(&mut f, body)?;
-        f.emit(Instr::ReturnNull);
-        Ok(f.finish(self.file.clone()))
+        // `use ($a, &$b)`: variables after the parameters, set from the
+        // closure's captured values on each call.
+        for u in uses {
+            let text = self.text(u.var.span);
+            let r = f.cv(&text[1..]);
+            f.bound.push(r & ((1 << KIND_SHIFT) - 1));
+        }
+        let mut captures = Vec::new();
+        match body {
+            Body::Stmts(body) => {
+                self.stmts(&mut f, body)?;
+                f.emit(Instr::ReturnNull);
+            }
+            Body::Expr(e) => {
+                let r = self.expr(&mut f, e)?;
+                f.emit(Instr::Return { src: r });
+                // An arrow function takes every variable it uses (but its
+                // parameters) by value from where it is made.
+                let nparams = f.params.len();
+                for (name, &i) in &f.cvs {
+                    if i >= nparams {
+                        captures.push(Text::from(name.as_slice()));
+                        f.bound.push(i as Reg);
+                    }
+                }
+            }
+        }
+        Ok((f.finish(self.file.clone()), captures))
+    }
+
+    /// `MakeClosure` of `func` into a new temporary (not a variable: a
+    /// `use` of the variable being assigned takes its old value).
+    fn make_closure(&mut self, f: &mut FnBuilder, func: Function, is_static: bool) -> Reg {
+        f.lambdas.push(Arc::new(func));
+        let dst = f.temp();
+        f.emit(Instr::MakeClosure { dst, func: (f.lambdas.len() - 1) as u16, is_static });
+        dst
+    }
+
+    /// The name PHP 8.4 gives a closure: where it is made.
+    fn closure_name(&self, f: &FnBuilder, line: u32) -> Text {
+        let place = if f.name.as_bytes() == b"{main}" {
+            self.file.to_string()
+        } else {
+            let name = String::from_utf8_lossy(f.name.as_bytes());
+            match &f.class {
+                Some(c) => format!("{}::{name}()", String::from_utf8_lossy(c.as_bytes())),
+                None => format!("{name}()"),
+            }
+        };
+        Text::from(format!("{{closure:{place}:{line}}}").as_bytes())
     }
 
     /// A class or interface declaration: compiled once, linked per request.
@@ -1798,8 +1895,13 @@ impl<'src> Compiler<'src> {
             Expr::New { class, args, .. } => {
                 let class = self.class_ref(f, class)?;
                 // The result's register is below the arguments: the
-                // constructor's frame starts at them.
-                let dst = f.temp();
+                // constructor's frame starts at them. A temporary it is
+                // wanted in will do (no copy left behind to keep the
+                // object alive); a variable is assigned only after.
+                let dst = match hint {
+                    Some(h) if h >> KIND_SHIFT == TEMP => h,
+                    _ => f.temp(),
+                };
                 let (base, argc) = self.args_by_value(f, args)?;
                 f.emit(Instr::New { dst, class, base, argc });
                 dst
@@ -1809,6 +1911,28 @@ impl<'src> Compiler<'src> {
                 let name = self.prop_name(f, property)?;
                 let dst = out(f, hint, mark);
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
+                dst
+            }
+            Expr::MethodCall { target, method, args, .. } if is_placeholder(args) => {
+                // `$o->m(...)`: a Closure of [$o, 'm'].
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, method)?;
+                let pair = f.temp();
+                f.emit(Instr::NewArray { dst: pair });
+                f.emit(Instr::ArrayPush { arr: pair, val: obj });
+                f.emit(Instr::ArrayPush { arr: pair, val: name });
+                let dst = f.temp();
+                f.emit(Instr::FromCallable { dst, src: pair });
+                dst
+            }
+            Expr::StaticCall { class: Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
+                if is_placeholder(args) =>
+            {
+                // `C::m(...)`: a Closure of "C::m".
+                let text = [self.text(*class), b"::", self.text(*method)].concat();
+                let src = f.constant(Frozen::Str(Text::from(text.as_slice())));
+                let dst = f.temp();
+                f.emit(Instr::FromCallable { dst, src });
                 dst
             }
             Expr::MethodCall { target, method, args, .. } => {
@@ -1920,6 +2044,32 @@ impl<'src> Compiler<'src> {
                 }
                 for at in ends {
                     f.patch(at, f.here());
+                }
+                dst
+            }
+            Expr::Closure { is_static, by_ref, params, uses, body, span, .. } => {
+                let line = self.line(*span);
+                let name = self.closure_name(f, line);
+                let method = self.method.take();
+                let (func, _) = self.function_with(name, line, params, Body::Stmts(body), *by_ref, uses)?;
+                self.method = method;
+                let dst = self.make_closure(f, func, *is_static);
+                for u in *uses {
+                    let var = f.cv(&self.text(u.var.span)[1..]);
+                    f.emit(Instr::Capture { closure: dst, var, by_ref: u.by_ref, quiet: false });
+                }
+                dst
+            }
+            Expr::ArrowFunction { is_static, by_ref, params, expr, span, .. } => {
+                let line = self.line(*span);
+                let name = self.closure_name(f, line);
+                let method = self.method.take();
+                let (func, captures) = self.function_with(name, line, params, Body::Expr(expr), *by_ref, &[])?;
+                self.method = method;
+                let dst = self.make_closure(f, func, *is_static);
+                for name in captures {
+                    let var = f.cv(name.as_bytes());
+                    f.emit(Instr::Capture { closure: dst, var, by_ref: false, quiet: true });
                 }
                 dst
             }
@@ -2074,13 +2224,33 @@ impl<'src> Compiler<'src> {
     }
 
     fn call(&mut self, f: &mut FnBuilder, func: &Expr, args: &[p8_syntax::ast::Arg], span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
-        let Expr::Variable { name, .. } = func else {
-            return Err(self.unsupported(span, "this call"));
-        };
-        let text = self.text(*name);
-        if text.starts_with(b"$") {
-            return Err(self.unsupported(span, "a variable function call"));
+        // `f(...)`: a Closure of the function.
+        if is_placeholder(args) {
+            let src = match func {
+                Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
+                    let text = self.text(*name);
+                    f.constant(Frozen::Str(Text::from(text.strip_prefix(b"\\").unwrap_or(text))))
+                }
+                other => self.expr(f, other)?,
+            };
+            let dst = f.temp();
+            f.emit(Instr::FromCallable { dst, src });
+            return Ok(dst);
         }
+        // A call of a value: `$f()`, `(function () {})()`, `$o->p()()`.
+        let dynamic = match func {
+            Expr::Variable { name, .. } => self.text(*name).starts_with(b"$"),
+            _ => true,
+        };
+        if dynamic {
+            let callee = self.expr(f, func)?;
+            let (base, argc) = self.args_by_value(f, args)?;
+            f.emit(Instr::CallValue { dst: base, callee, base, argc });
+            let _ = (span, hint, mark);
+            return Ok(base);
+        }
+        let Expr::Variable { name, .. } = func else { unreachable!("a name") };
+        let text = self.text(*name);
         let text = text.strip_prefix(b"\\").unwrap_or(text);
         let lower = text.to_ascii_lowercase();
         // strlen of a literal string is a constant, as PHP compiles it
