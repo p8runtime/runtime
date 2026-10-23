@@ -225,6 +225,8 @@ pub struct PhpArray {
     /// The key `$a[] = v` uses next; None until an int key is used
     /// (PHP 8.3+: after only negative keys it is the largest plus one).
     next_free: Option<i64>,
+    /// The internal pointer (current(), next(), reset()): a position.
+    cursor: usize,
 }
 
 impl Default for PhpArray {
@@ -235,13 +237,13 @@ impl Default for PhpArray {
 
 impl PhpArray {
     pub fn new() -> Self {
-        PhpArray { storage: Storage::Packed(Packed::default()), next_free: None }
+        PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0 }
     }
 
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
-        PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free }
+        PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free, cursor: 0 }
     }
 
     pub fn len(&self) -> usize {
@@ -422,6 +424,35 @@ impl PhpArray {
                 e.as_ref().map(|(k, v)| (pos + i, k.clone(), v))
             }),
         }
+    }
+
+    /// The last entry before position `pos`.
+    pub fn entry_before(&self, pos: usize) -> Option<(usize, Key, &Value)> {
+        match &self.storage {
+            Storage::Packed(p) => p.slots.get(..pos.min(p.slots.len()))?.iter().enumerate().rev().find_map(|(i, x)| {
+                (!matches!(x, Value::Undef)).then_some((i, Key::Int(i as i64), x))
+            }),
+            Storage::Hashed(h) => h.entries.get(..pos.min(h.entries.len()))?.iter().enumerate().rev().find_map(|(i, e)| {
+                e.as_ref().map(|(k, v)| (i, k.clone(), v))
+            }),
+        }
+    }
+
+    /// One past the last position.
+    pub fn end_pos(&self) -> usize {
+        match &self.storage {
+            Storage::Packed(p) => p.slots.len(),
+            Storage::Hashed(h) => h.entries.len(),
+        }
+    }
+
+    /// The internal pointer's position.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn set_cursor(&mut self, pos: usize) {
+        self.cursor = pos;
     }
 
     /// Entries in order.

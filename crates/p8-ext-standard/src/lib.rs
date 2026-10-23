@@ -10,8 +10,11 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 mod array;
+mod array2;
 mod callback;
 mod file;
+mod json;
+mod serial;
 mod class;
 pub mod defaults;
 mod math;
@@ -81,11 +84,18 @@ fn register(registry: &mut Registry) {
     registry.add_functions(array::BUILTINS);
     registry.add_functions(callback::BUILTINS);
     registry.add_functions(file::BUILTINS);
+    registry.add_functions(json::BUILTINS);
+    registry.add_functions(serial::BUILTINS);
+    registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);
     registry.add_functions(math::BUILTINS);
     registry.add_functions(misc::BUILTINS);
     registry.add_functions(string::BUILTINS);
     registry.add_functions(var::BUILTINS);
+    // These reach the caller's variables or run PHP code (__serialize,
+    // jsonSerialize) though they take no callable.
+    registry.mark_reenters(array2::REENTER);
+    registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode"]);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
@@ -330,7 +340,7 @@ fn date_default_timezone_set(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, 
 }
 
 fn func_get_args(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(PhpArray::from_list(ctx.extra_args().to_vec()))))
+    Ok(Value::Array(Rc::new(PhpArray::from_list(ctx.call_args()))))
 }
 
 /// range() for int bounds and step (the float and character forms come with the port).
