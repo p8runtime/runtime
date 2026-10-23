@@ -1,0 +1,58 @@
+array(3) {
+  [0]=>
+  &int(10)
+  ["k"]=>
+  &int(20)
+  [1]=>
+  int(3)
+}
+int(20)
+2
+array(1) {
+  ["y"]=>
+  &string(3) "via"
+}
+object(C)#1 (2) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [2]=>
+    int(3)
+  }
+  ["person"]=>
+  array(1) {
+    ["m"]=>
+    string(1) "y"
+  }
+}
+object(stdClass)#2 (3) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+  ["5"]=>
+  string(4) "five"
+}
+int(1)
+object(stdClass)#3 (1) {
+  ["scalar"]=>
+  int(1)
+}
+object(stdClass)#4 (0) {
+}
+object(stdClass)#5 (1) {
+  ["scalar"]=>
+  string(3) "str"
+}
+bool(true)
+string(9) "{"f":1.5}"
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(true)

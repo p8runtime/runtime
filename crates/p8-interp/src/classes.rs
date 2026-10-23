@@ -1118,6 +1118,41 @@ impl Context<'_> {
         Ok(())
     }
 
+    /// `(object) $v`: an object as is; an array's entries as a stdClass's
+    /// properties; null an empty stdClass; another value its `scalar`.
+    pub(crate) fn object_cast(&mut self, v: Value) -> Value {
+        if let Value::Object(_) = v {
+            return v;
+        }
+        let class = Rc::clone(&self.classes[b"stdclass".as_slice()]);
+        let o = Object::new(class, &self.ids);
+        {
+            let mut props = o.dynamic.borrow_mut();
+            match v {
+                Value::Null | Value::Undef => {}
+                Value::Array(a) => {
+                    for (k, v) in a.iter() {
+                        props.insert(k, v.clone());
+                    }
+                }
+                v => {
+                    props.insert(Key::from_string(PhpStr::from("scalar")), v);
+                }
+            }
+        }
+        Value::Object(o)
+    }
+
+    /// `isset(C::$name)`: declared, visible here, and not null (an
+    /// unknown class is an error, as in PHP).
+    pub(crate) fn isset_static(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<bool, Throw> {
+        let class = self.class_of(func, class, w)?;
+        let Some(name) = name.to_php_string() else { return Ok(false) };
+        let Some((cell, visibility, declaring)) = class.statics.get(name.as_bytes()) else { return Ok(false) };
+        let declaring = self.classes.get(declaring).cloned().unwrap_or_else(|| Rc::clone(&class));
+        Ok(visible(*visibility, &declaring, self.scope().0.as_deref()) && !matches!(cell.borrow().deref(), Value::Null | Value::Undef))
+    }
+
     /// The cell of static property `C::$name`.
     pub(crate) fn static_cell(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Rc<RefCell<Value>>, Throw> {
         let class = self.class_of(func, class, w)?;

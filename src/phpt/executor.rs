@@ -111,6 +111,12 @@ impl PhptExecutor {
     }
 
     pub fn run_test(&self, test: &PhptTest) -> TestResult {
+        // php-src's open_basedir suite counts on open_basedir to stop it:
+        // without it, it chmods, unlinks and writes outside its directory
+        // (it made php-src/tests unreadable).
+        if test.sections.file.contains("open_basedir.inc") && test.sections.ini.iter().any(|(k, v)| k.trim() == "open_basedir" && !v.trim().is_empty()) {
+            return TestResult::Skipped { reason: "open_basedir is not enforced yet".to_string() };
+        }
         if let Some(section) = test.sections.unsupported.first() {
             return TestResult::Skipped {
                 reason: format!("needs --{}--", section),

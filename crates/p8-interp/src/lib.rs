@@ -11,7 +11,7 @@ mod include;
 mod refs;
 mod throw;
 
-use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg, RefOp};
+use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg, Rare};
 pub use include::{LoadError, Loader};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Registry};
@@ -490,7 +490,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::Unsilence { .. }
                 | Instr::New { .. }
                 | Instr::Construct { .. }
-                | Instr::Ref { .. }
+                | Instr::Rare { .. }
                 | Instr::ConstructSpread { .. }
                 | Instr::This { .. }
                 | Instr::FetchProp { .. }
@@ -1845,22 +1845,22 @@ impl Context<'_> {
                         data.captured.borrow_mut().push(v);
                     }
                 }
-                Instr::Ref { op, a, b, c, class } => match op {
-                    RefOp::PropRef => {
+                Instr::Rare { op, a, b, c, class } => match op {
+                    Rare::PropRef => {
                             let (dst, obj, name) = (a, b, c);
                         let target = self.operand(w, func, obj);
                         let name = reg!(name).clone();
                         let cell = self.prop_ref(&target, &name)?;
                         reg!(dst) = Value::Ref(cell);
                     }
-                    RefOp::AssignPropRef => {
+                    Rare::AssignPropRef => {
                             let (obj, name, src) = (a, b, c);
                         let target = self.operand(w, func, obj);
                         let name = reg!(name).clone();
                         let cell = make_ref(w, src);
                         self.prop_bind(&target, &name, cell)?;
                     }
-                    RefOp::StaticRef => {
+                    Rare::StaticRef => {
                             let (dst, name) = (a, b);
                         if let Some(c) = self.lazy_class(func, class, w)? {
                             self.resolve_class(regs, &c)?;
@@ -1886,7 +1886,7 @@ impl Context<'_> {
                         };
                         reg!(dst) = Value::Ref(r);
                     }
-                    RefOp::AssignStaticRef => {
+                    Rare::AssignStaticRef => {
                             let (name, src) = (a, b);
                         if let Some(c) = self.lazy_class(func, class, w)? {
                             self.resolve_class(regs, &c)?;
@@ -1897,8 +1897,8 @@ impl Context<'_> {
                         let r = make_ref(w, src);
                         *cell.borrow_mut() = Value::Ref(r);
                     }
-                    RefOp::WantRef => self.ref_wanted.push(base + a as usize),
-                    RefOp::BindRefResult => {
+                    Rare::WantRef => self.ref_wanted.push(base + a as usize),
+                    Rare::BindRefResult => {
                             let (var, src) = (a, b);
                         let at_reg = base + src as usize;
                         self.ref_wanted.retain(|&r| r != at_reg);
@@ -1910,7 +1910,28 @@ impl Context<'_> {
                             }
                         }
                     }
-                    RefOp::ReturnRef => {
+                    Rare::ArrayPushRef => {
+                        let cell = make_ref(w, b);
+                        if let Value::Array(arr) = &mut reg!(a) {
+                            let _ = Rc::make_mut(arr).push(Value::Ref(cell));
+                        }
+                    }
+                    Rare::ArraySetRef => {
+                        let key = self.key(w, func, b)?;
+                        let cell = make_ref(w, c);
+                        if let Value::Array(arr) = &mut reg!(a) {
+                            Rc::make_mut(arr).insert(key, Value::Ref(cell));
+                        }
+                    }
+                    Rare::ToObject => {
+                        let v = self.operand(w, func, b);
+                        reg!(a) = self.object_cast(v);
+                    }
+                    Rare::IssetStatic => {
+                        let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
+                        reg!(a) = Value::Bool(set);
+                    }
+                    Rare::ReturnRef => {
                             let src = a;
                         let ret = self.frames.last().map_or(NO_RET, |f| f.ret);
                         let wanted = ret != NO_RET && self.ref_wanted.contains(&(ret as usize));

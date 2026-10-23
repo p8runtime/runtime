@@ -261,14 +261,15 @@ pub enum Instr {
     InstanceOf { dst: Reg, src: Reg, class: u16 },
     /// `clone $x`
     Clone { dst: Reg, src: Reg },
-    /// A reference operation (rare: one variant keeps dispatch small);
-    /// the operands' meaning depends on `op` (see RefOp).
-    Ref { op: RefOp, a: Reg, b: Reg, c: Reg, class: u16 },
+    /// A rarely run operation (see Rare): they share one variant, since
+    /// each variant costs `fast()`'s dispatch (seven separate ones cost
+    /// 2% on bfib). The operands' meaning depends on `op`.
+    Rare { op: Rare, a: Reg, b: Reg, c: Reg, class: u16 },
 }
 
-/// Instr::Ref's operation, and what its operands are.
+/// Instr::Rare's operation, and what its operands are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefOp {
+pub enum Rare {
     /// `&$obj->name`: a gets a reference to the property of b named c (made one).
     PropRef,
     /// `$obj->name = &…`: the property of a named b becomes the reference
@@ -288,12 +289,22 @@ pub enum RefOp {
     /// `return` in a function returning by reference: the reference in a
     /// (made one), when the caller wants one.
     ReturnRef,
+    /// `[&$x]`: the array in a gets the reference in b (made one) appended.
+    ArrayPushRef,
+    /// `[k => &$x]`: the array in a gets the reference in c at key b.
+    ArraySetRef,
+    /// `(object) $v`: a gets b as an object (an array's entries become a
+    /// stdClass's properties; a scalar its `scalar`).
+    ToObject,
+    /// `isset(C::$name)`: a gets whether `class`'s static b is set (and
+    /// visible here).
+    IssetStatic,
 }
 
 impl Instr {
-    /// One reference operation (unused operands 0).
-    pub fn reference(op: RefOp, a: Reg, b: Reg, c: Reg, class: u16) -> Instr {
-        Instr::Ref { op, a, b, c, class }
+    /// One rare operation (unused operands 0).
+    pub fn rare(op: Rare, a: Reg, b: Reg, c: Reg, class: u16) -> Instr {
+        Instr::Rare { op, a, b, c, class }
     }
 
     /// The compare-and-branch that jumps to `target` when `a cmp b` is
