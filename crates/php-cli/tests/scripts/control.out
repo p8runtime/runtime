@@ -1,0 +1,35 @@
+4
+bool(true)
+string(0) ""
+string(0) ""
+string(0) ""
+string(0) ""
+string(0) ""
+named/named@7
+0 => one two 
+1 => two 
+2 => three 
+3 => three 
+4 => three 
+5 => four 
+6 => default four 
+7 => default four 
+8 => one two 
+9 => one two 
+[1][2]yes
+02
+only default
+0 => small
+1 => small
+2 => int three
+3 => string three
+4 => other
+5 => other
+b
+[5][4][5]five
+nested
+
+Fatal error: Uncaught UnhandledMatchError: Unhandled match case 42 in %s:62
+Stack trace:
+#0 {main}
+  thrown in %s on line 62

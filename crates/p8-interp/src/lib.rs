@@ -372,7 +372,8 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::FetchConst { .. }
                 | Instr::BindGlobal { .. }
                 | Instr::ArgDefault { .. }
-                | Instr::Exit { .. } => return pc,
+                | Instr::Exit { .. }
+                | Instr::MatchError { .. } => return pc,
                 // Calls and returns leave this loop, so the loop itself
                 // keeps only the code and the registers live.
                 Instr::Call { site, base: args, argc: n, dst } => break Switch::Call(site, args, n, dst),
@@ -1283,6 +1284,10 @@ impl Context<'_> {
                     let cell = if in_main { self.global_cell(w, &name) } else { self.global_cell(below, &name) };
                     reg!(var) = Value::Ref(cell);
                 }
+                Instr::MatchError { src } => {
+                    let v = self.operand(w, func, src);
+                    return Err(self.throw("UnhandledMatchError", format!("Unhandled match case {}", match_case(&v))));
+                }
                 Instr::Exit { src, has } => {
                     let v = self.operand(w, func, src);
                     let status = match (has, &v) {
@@ -1829,6 +1834,42 @@ fn concat_n(w: &mut [Value], dst: Reg, start: Reg, n: u8) -> bool {
     }
     w[dst as usize] = Value::Str(PhpStr::new(bytes));
     true
+}
+
+/// How UnhandledMatchError names the value no arm matched, as PHP's
+/// smart_str_append_scalar does: scalars as written (a string quoted,
+/// escaped and cut at 15 characters), anything else by type.
+fn match_case(v: &Value) -> String {
+    match v {
+        Value::Null | Value::Undef => "NULL".into(),
+        Value::Bool(b) => if *b { "true" } else { "false" }.into(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => float_to_string(*f, Precision::ECHO, 'E'),
+        Value::Str(s) => {
+            let bytes = s.as_bytes();
+            let mut out = String::from("'");
+            for &c in &bytes[..bytes.len().min(15)] {
+                match c {
+                    b'\n' => out.push_str("\\n"),
+                    b'\r' => out.push_str("\\r"),
+                    b'\t' => out.push_str("\\t"),
+                    0x0c => out.push_str("\\f"),
+                    0x0b => out.push_str("\\v"),
+                    b'\\' => out.push_str("\\\\"),
+                    0x1b => out.push_str("\\e"),
+                    c if !(0x20..0x7f).contains(&c) => out.push_str(&format!("\\x{c:02X}")),
+                    c => out.push(c as char),
+                }
+            }
+            if bytes.len() > 15 {
+                out.push_str("...");
+            }
+            out.push('\'');
+            out
+        }
+        Value::Ref(cell) => match_case(&cell.borrow()),
+        other => format!("of type {}", other.type_name()),
+    }
 }
 
 /// foreach's next element: its value into `val` (and key into `key`), the

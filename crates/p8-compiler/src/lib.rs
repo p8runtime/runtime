@@ -14,7 +14,7 @@ use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
 use p8_runtime::frozen::{Frozen, Text};
 use p8_syntax::literal::{self, Number};
-use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, Stmt, StmtId, UnaryOp};
+use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, MagicConstKind, Stmt, StmtId, UnaryOp};
 use p8_syntax::span::Span;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -369,7 +369,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *arg = f(*arg);
             *var = f(*var);
         }
-        Return { src } | Echo { src } | Exit { src, .. } => *src = f(*src),
+        Return { src } | Echo { src } | Exit { src, .. } | MatchError { src } => *src = f(*src),
         FetchConst { dst, .. } => *dst = f(*dst),
         ConcatN { dst, start, .. } => {
             *dst = f(*dst);
@@ -590,6 +590,45 @@ impl<'src> Compiler<'src> {
                 let function = self.function(name.span, params, body, *by_ref)?;
                 self.functions.push(Arc::new(function));
             }
+            // `case` values are compared with ==, in order, until one
+            // matches; then the bodies run from there (falling through).
+            // A switch is a loop level for break and continue: `continue`
+            // targeting it acts as `break`, as in PHP.
+            Stmt::Switch { condition, cases, .. } => {
+                let subject = self.expr(f, condition)?;
+                let keep = f.temps;
+                let mut to_body = Vec::with_capacity(cases.len());
+                for case in *cases {
+                    match case.condition {
+                        Some(c) => {
+                            let value = self.expr(f, c)?;
+                            to_body.push(Some(f.emit(Instr::jump_cmp(Cmp::Eq, subject, value, true, 0))));
+                            f.temps = keep;
+                        }
+                        None => to_body.push(None),
+                    }
+                }
+                let no_match = f.emit(Instr::Jump { target: 0 });
+                f.temps = f.floor;
+                f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                let mut default = None;
+                for (case, jump) in cases.iter().zip(to_body) {
+                    match jump {
+                        Some(at) => f.patch(at, f.here()),
+                        None => default = Some(f.here()),
+                    }
+                    self.stmts(f, case.body)?;
+                    f.temps = f.floor;
+                }
+                let end = f.here();
+                f.patch(no_match, default.unwrap_or(end));
+                let lp = f.loops.pop().expect("the switch's level");
+                f.patch_all(lp.breaks, end);
+                f.patch_all(lp.continues, end);
+            }
+            // declare(strict_types=1), ticks, encoding: p8 has nothing yet
+            // that they change, so only the body (if any) runs.
+            Stmt::Declare { body, .. } => self.stmts(f, body)?,
             Stmt::Global { vars, .. } => {
                 for v in *vars {
                     let Expr::Variable { name, .. } = v else {
@@ -999,6 +1038,63 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::Call { func, args, span } => self.call(f, func, args, *span, hint, mark)?,
+            Expr::MagicConst { kind, span } => {
+                let text: Vec<u8> = match kind {
+                    MagicConstKind::Line => return Ok(f.constant(Frozen::Int(i64::from(self.line(*span))))),
+                    MagicConstKind::File => self.file.as_bytes().to_vec(),
+                    MagicConstKind::Dir => match self.file.rfind('/') {
+                        Some(0) => b"/".to_vec(),
+                        Some(i) => self.file.as_bytes()[..i].to_vec(),
+                        None => b".".to_vec(),
+                    },
+                    // Outside a class, __METHOD__ is the function's name.
+                    MagicConstKind::Function | MagicConstKind::Method if f.name.as_bytes() != b"{main}" => {
+                        f.name.as_bytes().to_vec()
+                    }
+                    // No classes, traits, namespaces or property hooks yet:
+                    // outside them these are empty, as in PHP.
+                    _ => Vec::new(),
+                };
+                f.constant(Frozen::Str(Text::from(text.as_slice())))
+            }
+            // Arms are tried in order with ===; an arm's conditions are
+            // evaluated only until one matches. No match throws.
+            Expr::Match { condition, arms, .. } => {
+                let subject = self.expr(f, condition)?;
+                let dst = hint.unwrap_or_else(|| f.temp());
+                let keep = f.temps;
+                let mut ends = Vec::new();
+                let mut default = None;
+                for arm in *arms {
+                    let Some(conditions) = arm.conditions else {
+                        default = Some(arm.body);
+                        continue;
+                    };
+                    let mut to_body = Vec::new();
+                    for c in conditions {
+                        let value = self.expr(f, c)?;
+                        to_body.push(f.emit(Instr::jump_cmp(Cmp::Identical, subject, value, true, 0)));
+                        f.temps = keep;
+                    }
+                    let skip = f.emit(Instr::Jump { target: 0 });
+                    f.patch_all(to_body, f.here());
+                    self.expr_into(f, arm.body, dst)?;
+                    f.temps = keep;
+                    ends.push(f.emit(Instr::Jump { target: 0 }));
+                    f.patch(skip, f.here());
+                }
+                match default {
+                    Some(body) => {
+                        self.expr_into(f, body, dst)?;
+                        f.temps = keep;
+                    }
+                    None => {
+                        f.emit(Instr::MatchError { src: subject });
+                    }
+                }
+                f.patch_all(ends, f.here());
+                dst
+            }
             Expr::Print { expr, .. } => {
                 let r = self.expr(f, expr)?;
                 f.emit(Instr::Echo { src: r });

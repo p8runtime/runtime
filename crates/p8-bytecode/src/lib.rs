@@ -142,6 +142,8 @@ pub enum Instr {
     ArgDefault { n: u8, target: u32 },
     /// exit/die with status or message in src (or none)
     Exit { src: Reg, has: bool },
+    /// A `match` with no arm for its subject: throws UnhandledMatchError.
+    MatchError { src: Reg },
 }
 
 impl Instr {
