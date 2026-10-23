@@ -323,8 +323,18 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                         w[var as usize] = r;
                         pc += 1;
                     }
+                    // $str .= string
+                    None if op == BinOp::Concat && append_str(w, var, src) => pc += 1,
                     None => return pc,
                 },
+                // $i++ / ++$i (and --) whose value is used, on an int
+                Instr::IncDec { var, dst, inc, post } => {
+                    let Value::Int(i) = w[var as usize] else { return pc };
+                    let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { return pc };
+                    w[var as usize] = Value::Int(n);
+                    w[dst as usize] = Value::Int(if post { i } else { n });
+                    pc += 1;
+                }
                 // Every other instruction (listed, so dispatch needs no range check).
                 Instr::AssignDim { .. }
                 | Instr::AssignDimOp { .. }
@@ -334,7 +344,6 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::BitNot { .. }
                 | Instr::ToBool { .. }
                 | Instr::Cast { .. }
-                | Instr::IncDec { .. }
                 | Instr::JumpIfSet { .. }
                 | Instr::NewArray { .. }
                 | Instr::ArrayPush { .. }
@@ -1739,6 +1748,18 @@ fn set_str_elem(w: &mut [Value], var: Reg, keys: Reg, val: Reg, dst: Reg) -> boo
         None => a.insert(key, v.clone()),
     }
     w[dst as usize] = v;
+    true
+}
+
+/// `$str .= $s` with both strings (and `$str` not a reference): appends in
+/// place unless the string is shared. False (nothing done) otherwise.
+#[inline(never)]
+fn append_str(w: &mut [Value], var: Reg, src: Reg) -> bool {
+    let Value::Str(tail) = &w[src as usize] else { return false };
+    // A handle of its own: `$s .= $s` reads what it appends to.
+    let tail = tail.clone();
+    let Value::Str(s) = &mut w[var as usize] else { return false };
+    s.push_bytes(tail.as_bytes());
     true
 }
 
