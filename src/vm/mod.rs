@@ -9,6 +9,7 @@ pub(crate) mod error_construction;
 pub(crate) mod error_formatting;
 mod call_args;
 mod generator;
+mod inheritance;
 pub mod executor;
 pub mod frame;
 mod frame_helpers;

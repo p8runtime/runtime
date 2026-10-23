@@ -16,6 +16,10 @@ pub struct UserFunc {
     pub statics: Rc<RefCell<HashMap<Symbol, Handle>>>,
     pub return_type: Option<ReturnType>,
     pub attributes: Vec<AttributeInstance>,
+    /// Line of the declaration, where PHP reports inheritance errors.
+    pub decl_line: u32,
+    /// A `final` method.
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +58,9 @@ pub struct FuncParam {
     pub param_type: Option<ReturnType>,
     pub is_variadic: bool,
     pub default_value: Option<Val>,
+    /// The default as PHP shows it in a prototype ("null", "'abc'", "[...]",
+    /// "PHP_INT_MAX", "<expression>"): zend_get_function_declaration.
+    pub default_display: Option<Rc<str>>,
     pub attributes: Vec<AttributeInstance>,
 }
 

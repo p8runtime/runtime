@@ -336,6 +336,7 @@ impl<'src> Emitter<'src> {
                     modifiers,
                     return_type,
                     attributes,
+                    by_ref,
                     ..
                 } => {
                     let method_name_str = self.get_text(name.span);
@@ -403,6 +404,7 @@ impl<'src> Emitter<'src> {
                                 param_type,
                                 is_variadic: info.variadic,
                                 default_value,
+                                default_display: info.default.map(|e| method_emitter.default_display(e).into()),
                                 attributes: method_emitter.build_attribute_instances(info.attributes),
                             });
 
@@ -435,7 +437,8 @@ impl<'src> Emitter<'src> {
                         method_emitter.chunk.code.push(OpCode::Pop);
                     }
 
-                    let (method_chunk, is_generator) = method_emitter.compile(body);
+                    let (mut method_chunk, is_generator) = method_emitter.compile(body);
+                    method_chunk.returns_ref = *by_ref;
 
                     for param in params.iter().filter(|p| is_constructor && !p.modifiers.is_empty()) {
                         let prop_sym = self.interner.intern(&self.get_text(param.name.span)[1..]);
@@ -474,6 +477,8 @@ impl<'src> Emitter<'src> {
                         statics: Rc::new(RefCell::new(HashMap::new())),
                         return_type: ret_type,
                         attributes: Vec::new(),
+                        decl_line: self.line_at(name.span.start),
+                        is_final: modifiers.iter().any(|t| t.kind == TokenKind::Final),
                     };
 
                     // Store in constants
@@ -663,6 +668,7 @@ impl<'src> Emitter<'src> {
         modifiers: &[Token],
         members: &[ClassMember],
     ) {
+        let class_line = self.current_line;
         let parent_sym = extends
             .as_ref()
             .map(|parent| self.interner.intern(self.get_text(parent.span)));
@@ -708,8 +714,13 @@ impl<'src> Emitter<'src> {
         self.emit_members(class_sym, members);
         self.current_class = prev_class;
 
-        // Finalize class: validate interfaces, abstract methods, etc.
+        // Finalize class: link it (inheritance checks), on the class's line.
+        self.sync_lines();
+        let saved = self.current_line;
+        self.current_line = class_line;
         self.chunk.code.push(OpCode::FinalizeClass(class_sym));
+        self.sync_lines();
+        self.current_line = saved;
     }
 
     fn emit_class_attributes(&mut self, class_sym: Symbol, attributes: &[AttributeGroup]) {
@@ -1204,6 +1215,7 @@ impl<'src> Emitter<'src> {
                             param_type,
                             is_variadic: info.variadic,
                             default_value,
+                            default_display: info.default.map(|e| func_emitter.default_display(e).into()),
                             attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
@@ -1239,6 +1251,8 @@ impl<'src> Emitter<'src> {
                     statics: Rc::new(RefCell::new(HashMap::new())),
                     return_type: ret_type,
                     attributes: self.build_attribute_instances(attributes),
+                    decl_line: self.line_at(name.span.start),
+                    is_final: false,
                 };
 
                 let func_res = Val::Resource(Rc::new(user_func));
@@ -1269,6 +1283,7 @@ impl<'src> Emitter<'src> {
             } => {
                 let name_str = self.get_text(name.span);
                 let sym = self.interner.intern(name_str);
+                let interface_line = self.current_line;
 
                 self.chunk.code.push(OpCode::DefInterface(sym));
 
@@ -1284,6 +1299,13 @@ impl<'src> Emitter<'src> {
                 self.current_class = Some(sym);
                 self.emit_members(sym, members);
                 self.current_class = prev_class;
+
+                self.sync_lines();
+                let saved = self.current_line;
+                self.current_line = interface_line;
+                self.chunk.code.push(OpCode::FinalizeClass(sym));
+                self.sync_lines();
+                self.current_line = saved;
             }
             Stmt::Trait { name, members, .. } => {
                 let name_str = self.get_text(name.span);
@@ -2590,6 +2612,7 @@ impl<'src> Emitter<'src> {
                             param_type,
                             is_variadic: info.variadic,
                             default_value,
+                            default_display: info.default.map(|e| func_emitter.default_display(e).into()),
                             attributes: func_emitter.build_attribute_instances(info.attributes),
                         });
 
@@ -2643,6 +2666,8 @@ impl<'src> Emitter<'src> {
                     statics: Rc::new(RefCell::new(HashMap::new())),
                     return_type: ret_type,
                     attributes: Vec::new(),
+                    decl_line: self.line_at(span.start),
+                    is_final: false,
                 };
 
                 let func_res = Val::Resource(Rc::new(user_func));
@@ -2688,6 +2713,7 @@ impl<'src> Emitter<'src> {
                         param_type,
                         is_variadic: param.variadic,
                         default_value: default_value.clone(),
+                        default_display: param.default.map(|e| func_emitter.default_display(e).into()),
                         attributes: func_emitter.build_attribute_instances(param.attributes),
                     });
                     match default_value {
@@ -2727,6 +2753,8 @@ impl<'src> Emitter<'src> {
                     statics: Rc::new(RefCell::new(HashMap::new())),
                     return_type: ret_type,
                     attributes: Vec::new(),
+                    decl_line: self.line_at(span.start),
+                    is_final: false,
                 };
                 let const_idx = self.add_constant(Val::Resource(Rc::new(user_func)));
                 self.chunk
@@ -3777,6 +3805,53 @@ impl<'src> Emitter<'src> {
             }
         }
         out
+    }
+
+    /// A parameter default as PHP prints it in a function prototype.
+    /// Reference: $PHP_SRC_PATH/Zend/zend_inheritance.c - zend_get_function_declaration
+    fn default_display(&self, expr: &Expr) -> String {
+        match expr {
+            Expr::Variable { span, .. } if !self.get_text(*span).starts_with(b"$") => {
+                String::from_utf8_lossy(self.get_text(*span)).into_owned()
+            }
+            Expr::ClassConstFetch { class, constant, .. } => match (class, constant) {
+                (Expr::Variable { span: c, .. }, Expr::Variable { span: k, .. })
+                    if !self.get_text(*k).starts_with(b"$") =>
+                {
+                    format!(
+                        "{}::{}",
+                        String::from_utf8_lossy(self.get_text(*c)),
+                        String::from_utf8_lossy(self.get_text(*k))
+                    )
+                }
+                _ => "<expression>".into(),
+            },
+            Expr::Integer { .. }
+            | Expr::Float { .. }
+            | Expr::String { .. }
+            | Expr::Boolean { .. }
+            | Expr::Null { .. }
+            | Expr::Array { .. }
+            | Expr::Unary { .. } => match self.eval_constant_expr(expr) {
+                Val::Bool(true) => "true".into(),
+                Val::Bool(false) => "false".into(),
+                Val::Null => "null".into(),
+                Val::Int(i) => i.to_string(),
+                Val::Float(f) => crate::core::value::php_float_to_string(
+                    f,
+                    crate::core::value::FloatPrecision::ECHO,
+                    'E',
+                ),
+                Val::String(s) => {
+                    let shown = String::from_utf8_lossy(&s[..s.len().min(10)]).into_owned();
+                    format!("'{}{}'", shown, if s.len() > 10 { "..." } else { "" })
+                }
+                Val::Array(a) if a.map.is_empty() => "[]".into(),
+                Val::Array(_) | Val::ConstArray(_) => "[...]".into(),
+                _ => "<expression>".into(),
+            },
+            _ => "<expression>".into(),
+        }
     }
 
     /// Push an expression's value the way isset(), empty() and `??` read

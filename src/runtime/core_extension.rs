@@ -456,6 +456,7 @@ impl Extension for CoreExtension {
         registry.register_function(b"is_subclass_of", class::php_is_subclass_of);
         registry.register_function(b"is_a", class::php_is_a);
         registry.register_function(b"class_exists", class::php_class_exists);
+        registry.register_function(b"class_alias", class::php_class_alias);
         registry.register_function(b"interface_exists", class::php_interface_exists);
         registry.register_function(b"trait_exists", class::php_trait_exists);
         registry.register_function(b"method_exists", class::php_method_exists);

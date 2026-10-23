@@ -1,6 +1,6 @@
 use crate::core::value::{ArrayKey, Handle, Val};
 use crate::runtime::context::EnumBackedType;
-use crate::vm::engine::{PropertyCollectionMode, VM};
+use crate::vm::engine::{ErrorLevel, PropertyCollectionMode, VM};
 use indexmap::IndexMap;
 use std::rc::Rc;
 
@@ -680,57 +680,72 @@ pub fn php_is_a(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     Ok(vm.arena.alloc(Val::Bool(result)))
 }
 
-pub fn php_class_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() {
-        return Err("class_exists() expects at least 1 parameter".into());
+/// The declared class, interface, trait or enum `args[0]` names (any case,
+/// aliases too), autoloading it when `args[autoload_arg]` allows.
+fn declared_class(vm: &mut VM, args: &[Handle], autoload_arg: usize) -> Option<crate::core::value::Symbol> {
+    let Val::String(name) = vm.arena.get(*args.first()?).value.clone() else {
+        return None;
+    };
+    let name = name.strip_prefix(b"\\").unwrap_or(&name).to_vec();
+    let sym = vm.context.interner.intern(&name);
+    let found = vm.canonical_class(sym);
+    if vm.context.classes.contains_key(&found) {
+        return Some(found);
     }
-
-    let val = vm.arena.get(args[0]);
-    if let Val::String(s) = &val.value {
-        if let Some(sym) = vm.context.interner.find(s) {
-            if let Some(def) = vm.context.classes.get(&sym) {
-                return Ok(vm
-                    .arena
-                    .alloc(Val::Bool(!def.is_interface && !def.is_trait)));
-            }
+    let autoload = args.get(autoload_arg).is_none_or(|&h| vm.arena.get(h).value.to_bool());
+    if autoload {
+        let _ = vm.trigger_autoload(sym);
+        let found = vm.canonical_class(sym);
+        if vm.context.classes.contains_key(&found) {
+            return Some(found);
         }
     }
+    None
+}
 
-    Ok(vm.arena.alloc(Val::Bool(false)))
+pub fn php_class_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let exists = declared_class(vm, args, 1)
+        .and_then(|c| vm.context.classes.get(&c))
+        .is_some_and(|def| !def.is_interface && !def.is_trait);
+    Ok(vm.arena.alloc(Val::Bool(exists)))
 }
 
 pub fn php_interface_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() {
-        return Err("interface_exists() expects at least 1 parameter".into());
-    }
-
-    let val = vm.arena.get(args[0]);
-    if let Val::String(s) = &val.value {
-        if let Some(sym) = vm.context.interner.find(s) {
-            if let Some(def) = vm.context.classes.get(&sym) {
-                return Ok(vm.arena.alloc(Val::Bool(def.is_interface)));
-            }
-        }
-    }
-
-    Ok(vm.arena.alloc(Val::Bool(false)))
+    let exists = declared_class(vm, args, 1)
+        .and_then(|c| vm.context.classes.get(&c))
+        .is_some_and(|def| def.is_interface);
+    Ok(vm.arena.alloc(Val::Bool(exists)))
 }
 
 pub fn php_trait_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.is_empty() {
-        return Err("trait_exists() expects at least 1 parameter".into());
-    }
+    let exists = declared_class(vm, args, 1)
+        .and_then(|c| vm.context.classes.get(&c))
+        .is_some_and(|def| def.is_trait);
+    Ok(vm.arena.alloc(Val::Bool(exists)))
+}
 
-    let val = vm.arena.get(args[0]);
-    if let Val::String(s) = &val.value {
-        if let Some(sym) = vm.context.interner.find(s) {
-            if let Some(def) = vm.context.classes.get(&sym) {
-                return Ok(vm.arena.alloc(Val::Bool(def.is_trait)));
-            }
-        }
+/// class_alias(string $class, string $alias, bool $autoload = true): bool
+/// Reference: $PHP_SRC_PATH/Zend/zend_builtin_functions.c
+pub fn php_class_alias(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let alias = vm.arena.get(args[1]).value.to_php_string_bytes();
+    let alias = alias.strip_prefix(b"\\").unwrap_or(&alias).to_vec();
+    let Some(class) = declared_class(vm, &[args[0], *args.get(2).unwrap_or(&args[0])], 1) else {
+        let name = String::from_utf8_lossy(&vm.arena.get(args[0]).value.to_php_string_bytes()).into_owned();
+        vm.report_error(ErrorLevel::Warning, &format!("Class \"{}\" not found", name));
+        return Ok(vm.arena.alloc(Val::Bool(false)));
+    };
+    let alias_sym = vm.context.interner.intern(&alias);
+    let taken = vm.context.classes.contains_key(&vm.canonical_class(alias_sym));
+    if taken {
+        let msg = format!(
+            "Cannot declare class {}, because the name is already in use",
+            String::from_utf8_lossy(&alias)
+        );
+        vm.report_error(ErrorLevel::Warning, &msg);
+        return Ok(vm.arena.alloc(Val::Bool(false)));
     }
-
-    Ok(vm.arena.alloc(Val::Bool(false)))
+    vm.class_aliases.insert(alias.to_ascii_lowercase(), class);
+    Ok(vm.arena.alloc(Val::Bool(true)))
 }
 
 pub fn php_method_exists(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {

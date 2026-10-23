@@ -394,6 +394,8 @@ pub struct VM {
     decl_counter: u64,
     /// Other spellings of class names seen at runtime -> the declared name.
     class_case_cache: std::cell::RefCell<HashMap<Symbol, Symbol>>,
+    /// class_alias(): lowercase alias name -> the class it names.
+    pub(crate) class_aliases: HashMap<Vec<u8>, Symbol>,
     /// Exit status set by exit(int).
     pub exit_status: i32,
     /// set_error_handler() stack: (callable, E_* mask); None = no handler.
@@ -476,6 +478,7 @@ impl VM {
             pending_throw: None,
             decl_counter: 0,
             class_case_cache: Default::default(),
+            class_aliases: HashMap::new(),
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
@@ -899,6 +902,7 @@ impl VM {
             pending_throw: None,
             decl_counter: 0,
             class_case_cache: Default::default(),
+            class_aliases: HashMap::new(),
             exit_status: 0,
             user_error_handlers: Vec::new(),
             user_exception_handlers: Vec::new(),
@@ -1060,8 +1064,14 @@ impl VM {
     /// An exception thrown by the handler is left in `pending_throw` and thrown
     /// once the current opcode finishes.
     pub(crate) fn report_error(&mut self, level: ErrorLevel, message: &str) {
-        let level_bitmask = level.to_bitmask();
         let (file, line) = self.current_location();
+        self.report_error_at(level, message, file, line);
+    }
+
+    /// report_error at an explicit location (compile-time diagnostics name
+    /// the declaration, not the code running now).
+    pub(crate) fn report_error_at(&mut self, level: ErrorLevel, message: &str, file: String, line: u32) {
+        let level_bitmask = level.to_bitmask();
         self.last_error_handled = false;
 
         self.context.last_error = Some(crate::runtime::context::ErrorInfo {
@@ -2264,12 +2274,8 @@ impl VM {
             frame.class_scope = Some(defined_class);
             frame.called_scope = Some(class_name);
 
-            // Set parameters
-            for (i, arg_handle) in args.iter().enumerate() {
-                if let Some(param) = method.params.get(i) {
-                    frame.locals.insert(param.name, *arg_handle);
-                }
-            }
+            // Passed as arguments: Recv binds them by value, as PHP does.
+            frame.args = args.iter().copied().collect();
 
             self.push_frame(frame);
 
@@ -2341,11 +2347,14 @@ impl VM {
         let Some(lower) = self.context.interner.lookup(name).map(<[u8]>::to_ascii_lowercase) else {
             return name;
         };
-        let found = self.context.classes.keys().copied().find(|k| {
-            self.context
-                .interner
-                .lookup(*k)
-                .is_some_and(|n| n.eq_ignore_ascii_case(&lower))
+        let lower = lower.strip_prefix(b"\\").unwrap_or(&lower).to_vec();
+        let found = self.class_aliases.get(&lower).copied().or_else(|| {
+            self.context.classes.keys().copied().find(|k| {
+                self.context
+                    .interner
+                    .lookup(*k)
+                    .is_some_and(|n| n.eq_ignore_ascii_case(&lower))
+            })
         });
         match found {
             Some(canonical) => {
@@ -3940,12 +3949,8 @@ impl VM {
                 frame.called_scope = Some(class_name);
                 frame.discard_return = true;
 
-                if let Some(param) = method.params.first() {
-                    frame.locals.insert(param.name, name_handle);
-                }
-                if let Some(param) = method.params.get(1) {
-                    frame.locals.insert(param.name, val_handle);
-                }
+                // Passed as arguments: Recv binds them by value, as PHP does.
+                frame.args = [name_handle, val_handle].into_iter().collect();
 
                 self.operand_stack.push(val_handle);
                 self.push_frame(frame);
@@ -4351,9 +4356,7 @@ impl VM {
                 frame.class_scope = Some(defined_class);
                 frame.called_scope = Some(class_name);
 
-                if let Some(param) = method.params.first() {
-                    frame.locals.insert(param.name, name_handle);
-                }
+                frame.args = std::iter::once(name_handle).collect();
 
                 self.push_frame(frame);
             } else {
@@ -7063,37 +7066,7 @@ impl VM {
                     class_def.interfaces.push(interface_name);
                 }
             }
-            OpCode::FinalizeClass(class_name) => {
-                // Validate interface implementation after all methods are defined
-                if let Some(class_def) = self.context.classes.get(&class_name) {
-                    if let Some(parent_sym) = class_def.parent
-                        && let Some(parent_def) = self.context.classes.get(&parent_sym)
-                        && parent_def.is_final
-                    {
-                        let name = |sym| {
-                            self.context
-                                .interner
-                                .lookup(sym)
-                                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-                                .unwrap_or_else(|| format!("{:?}", sym))
-                        };
-                        return Err(VmError::RuntimeError(format!(
-                            "Class {} cannot extend final class {}",
-                            name(class_name),
-                            name(parent_sym)
-                        )));
-                    }
-
-                    for &interface_name in &class_def.interfaces.clone() {
-                        self.validate_interface_implementation(class_name, interface_name)?;
-                    }
-
-                    // Validate abstract method implementation
-                    if !class_def.is_abstract {
-                        self.validate_abstract_methods_implemented(class_name)?;
-                    }
-                }
-            }
+            OpCode::FinalizeClass(class_name) => self.link_class(class_name)?,
             OpCode::AllowDynamicProperties(class_name) => {
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.allows_dynamic_properties = true;
@@ -7393,24 +7366,6 @@ impl VM {
                             .as_ref()
                             .and_then(|rt| self.return_type_to_type_hint(rt)),
                     };
-
-                    // Check if parent class has this method - validate override compatibility
-                    if let Some(class_def) = self.context.classes.get(&class_name)
-                        && let Some(parent_sym) = class_def.parent
-                        && let Some((parent_method, parent_vis, parent_static, _)) =
-                            self.find_method(parent_sym, lower_key)
-                    {
-                        self.validate_method_override(
-                            class_name,
-                            method_name,
-                            &signature,
-                            is_static,
-                            visibility,
-                            &parent_method,
-                            parent_static,
-                            parent_vis,
-                        )?;
-                    }
 
                     if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                         self.decl_counter += 1;
@@ -8214,9 +8169,7 @@ impl VM {
                         frame.discard_return = true; // Discard return value
 
                         // Param 0: name
-                        if let Some(param) = magic_func.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
-                        }
+                        frame.args = std::iter::once(name_handle).collect();
 
                         self.push_frame(frame);
                     }
@@ -8339,10 +8292,13 @@ impl VM {
                         .map(|f| f.chunk.strict_types)
                         .unwrap_or(false);
 
+                    // PHP names eval()'d code after where eval() ran.
+                    let (caller_file, caller_line) = self.current_location();
                     let emitter = crate::compiler::emitter::Emitter::new(
                         &wrapped_source,
                         &mut self.context.interner,
                     )
+                    .with_file_path(format!("{}({}) : eval()'d code", caller_file, caller_line))
                     .with_inherited_strict_types(caller_strict);
                     let (chunk, _) = emitter.compile(program.statements);
 
@@ -9163,9 +9119,7 @@ impl VM {
                                 frame.class_scope = Some(defined_class);
                                 frame.called_scope = Some(class_name);
 
-                                if let Some(param) = method.params.get(0) {
-                                    frame.locals.insert(param.name, name_handle);
-                                }
+                                frame.args = std::iter::once(name_handle).collect();
 
                                 self.push_frame(frame);
                             } else {
@@ -9187,9 +9141,7 @@ impl VM {
                             frame.class_scope = Some(defined_class);
                             frame.called_scope = Some(class_name);
 
-                            if let Some(param) = method.params.get(0) {
-                                frame.locals.insert(param.name, name_handle);
-                            }
+                            frame.args = std::iter::once(name_handle).collect();
 
                             self.push_frame(frame);
                         } else {
@@ -10006,9 +9958,7 @@ impl VM {
                                 frame.class_scope = Some(defined_class);
                                 frame.called_scope = Some(class_name);
 
-                                if let Some(param) = method.params.get(0) {
-                                    frame.locals.insert(param.name, name_handle);
-                                }
+                                frame.args = std::iter::once(name_handle).collect();
 
                                 self.push_frame(frame);
 
@@ -10041,9 +9991,7 @@ impl VM {
                             frame.class_scope = Some(defined_class);
                             frame.called_scope = Some(class_name);
 
-                            if let Some(param) = method.params.get(0) {
-                                frame.locals.insert(param.name, name_handle);
-                            }
+                            frame.args = std::iter::once(name_handle).collect();
 
                             self.push_frame(frame);
 
@@ -11126,12 +11074,8 @@ impl VM {
                         frame.called_scope = Some(class_name);
                         frame.discard_return = true;
 
-                        if let Some(param) = method.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
-                        }
-                        if let Some(param) = method.params.get(1) {
-                            frame.locals.insert(param.name, val_handle);
-                        }
+                        // Passed as arguments: Recv binds them by value, as PHP does.
+                        frame.args = [name_handle, val_handle].into_iter().collect();
 
                         self.operand_stack.push(val_handle);
                         self.push_frame(frame);
@@ -12793,15 +12737,7 @@ impl VM {
                     frame_args.push(args_array_handle);
                     frame.args = frame_args;
 
-                    // Pass args: $name, $arguments
-                    // Param 0: name
-                    if let Some(param) = magic_func.params.get(0) {
-                        frame.locals.insert(param.name, frame.args[0]);
-                    }
-                    // Param 1: arguments
-                    if let Some(param) = magic_func.params.get(1) {
-                        frame.locals.insert(param.name, frame.args[1]);
-                    }
+                    // frame.args is [$name, $arguments]; Recv binds them.
 
                     self.push_frame(frame);
                 } else {
@@ -12962,15 +12898,7 @@ impl VM {
                 frame_args.push(args_array_handle);
                 frame.args = frame_args;
 
-                // Pass args: $name, $arguments
-                // Param 0: name
-                if let Some(param) = magic_func.params.get(0) {
-                    frame.locals.insert(param.name, frame.args[0]);
-                }
-                // Param 1: arguments
-                if let Some(param) = magic_func.params.get(1) {
-                    frame.locals.insert(param.name, frame.args[1]);
-                }
+                // frame.args is [$name, $arguments]; Recv binds them.
 
                 self.push_frame(frame);
             } else {
@@ -12995,574 +12923,6 @@ impl VM {
         Ok(())
     }
 
-    /// Validate that a class properly implements an interface
-    fn validate_interface_implementation(
-        &self,
-        class_name: Symbol,
-        interface_name: Symbol,
-    ) -> Result<(), VmError> {
-        // 1. Check that interface exists and is actually an interface
-        let interface_def = self.context.classes.get(&interface_name).ok_or_else(|| {
-            let name = self
-                .context
-                .interner
-                .lookup(interface_name)
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_else(|| format!("{:?}", interface_name));
-            VmError::RuntimeError(format!("Interface {} not found", name))
-        })?;
-
-        if !interface_def.is_interface {
-            let iface_name = self
-                .context
-                .interner
-                .lookup(interface_name)
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_else(|| format!("{:?}", interface_name));
-            let class_name_str = self
-                .context
-                .interner
-                .lookup(class_name)
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_else(|| format!("{:?}", class_name));
-            return Err(VmError::RuntimeError(format!(
-                "{} cannot implement {} - it is not an interface",
-                class_name_str, iface_name
-            )));
-        }
-
-        // 2. Check for enum-specific interfaces
-        let interface_name_bytes = self.context.interner.lookup(interface_name).unwrap_or(b"");
-        if interface_name_bytes == b"BackedEnum" || interface_name_bytes == b"UnitEnum" {
-            let class_def = self
-                .context
-                .classes
-                .get(&class_name)
-                .ok_or_else(|| VmError::RuntimeError("Class not found".into()))?;
-
-            if !class_def.is_enum {
-                let class_name_str = self
-                    .context
-                    .interner
-                    .lookup(class_name)
-                    .map(|b| String::from_utf8_lossy(b).to_string())
-                    .unwrap_or_else(|| format!("{:?}", class_name));
-                let iface_name_str = String::from_utf8_lossy(interface_name_bytes);
-                return Err(VmError::RuntimeError(format!(
-                    "Non-enum class {} cannot implement interface {}",
-                    class_name_str, iface_name_str
-                )));
-            }
-
-            // For BackedEnum, validate backing type
-            if interface_name_bytes == b"BackedEnum" && class_def.enum_backed_type.is_none() {
-                let class_name_str = self
-                    .context
-                    .interner
-                    .lookup(class_name)
-                    .map(|b| String::from_utf8_lossy(b).to_string())
-                    .unwrap_or_else(|| format!("{:?}", class_name));
-                return Err(VmError::RuntimeError(format!(
-                    "Enum {} must be a backed enum to implement BackedEnum",
-                    class_name_str
-                )));
-            }
-        }
-
-        // 3. Collect required interface methods
-        let required_methods = self.collect_interface_methods(interface_name);
-
-        // 4. Get implementing class
-        let class_def = self
-            .context
-            .classes
-            .get(&class_name)
-            .ok_or_else(|| VmError::RuntimeError("Class not found".into()))?;
-
-        // 5. Validate each required method is implemented
-        for (method_name, iface_method) in &required_methods {
-            let class_name_str = self
-                .context
-                .interner
-                .lookup(class_name)
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_else(|| format!("{:?}", class_name));
-            let iface_name_str = self
-                .context
-                .interner
-                .lookup(interface_name)
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_else(|| format!("{:?}", interface_name));
-            let method_name_str = self
-                .context
-                .interner
-                .lookup(*method_name)
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_else(|| format!("{:?}", method_name));
-
-            if !class_def.methods.contains_key(method_name) {
-                return Err(VmError::RuntimeError(format!(
-                    "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining method ({}::{})",
-                    class_name_str, iface_name_str, method_name_str
-                )));
-            }
-
-            // Validate signature compatibility (parameter and return types)
-            if let Some(class_method) = class_def.methods.get(method_name) {
-                // Validate parameter types (contravariance)
-                for (i, iface_param) in iface_method.signature.parameters.iter().enumerate() {
-                    if i >= class_method.signature.parameters.len() {
-                        return Err(VmError::RuntimeError(format!(
-                            "Declaration of {}::{}() must be compatible with {}::{}()",
-                            class_name_str, method_name_str, iface_name_str, method_name_str
-                        )));
-                    }
-                    let class_param = &class_method.signature.parameters[i];
-
-                    // Interface parameter types must match exactly or be contravariant
-                    if let Some(iface_type) = &iface_param.type_hint {
-                        match &class_param.type_hint {
-                            None => {
-                                let param_name = self
-                                    .context
-                                    .interner
-                                    .lookup(class_param.name)
-                                    .map(|b| String::from_utf8_lossy(b).to_string())
-                                    .unwrap_or_else(|| format!("{:?}", class_param.name));
-                                return Err(VmError::RuntimeError(format!(
-                                    "Type of parameter ${} must be compatible with interface in {}::{}()",
-                                    param_name, class_name_str, method_name_str
-                                )));
-                            }
-                            Some(class_type) => {
-                                if !self.types_equal(class_type, iface_type)
-                                    && !self.is_type_contravariant(class_type, iface_type)
-                                {
-                                    return Err(VmError::RuntimeError(format!(
-                                        "Declaration of {}::{}() must be compatible with {}::{}()",
-                                        class_name_str,
-                                        method_name_str,
-                                        iface_name_str,
-                                        method_name_str
-                                    )));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Validate return type (covariance)
-                match (
-                    &iface_method.signature.return_type,
-                    &class_method.signature.return_type,
-                ) {
-                    (Some(_iface_ret), None) => {
-                        return Err(VmError::RuntimeError(format!(
-                            "Declaration of {}::{}() must be compatible with interface return type",
-                            class_name_str, method_name_str
-                        )));
-                    }
-                    (Some(iface_ret), Some(class_ret)) => {
-                        if !self.types_equal(class_ret, iface_ret)
-                            && !self.is_type_covariant(class_ret, iface_ret)
-                        {
-                            return Err(VmError::RuntimeError(format!(
-                                "Declaration of {}::{}() must be compatible with interface return type",
-                                class_name_str, method_name_str
-                            )));
-                        }
-                    }
-                    _ => {} // Interface has no return type, class can have any
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Collect all method signatures required by an interface (including parent interfaces)
-    fn collect_interface_methods(&self, interface_sym: Symbol) -> HashMap<Symbol, MethodEntry> {
-        let mut methods = HashMap::new();
-
-        if let Some(interface_def) = self.context.classes.get(&interface_sym) {
-            if !interface_def.is_interface {
-                return methods;
-            }
-
-            // Collect methods from this interface
-            for (method_name, method_entry) in &interface_def.methods {
-                methods.insert(*method_name, method_entry.clone());
-            }
-
-            // Recursively collect from parent interfaces
-            for &parent_interface in &interface_def.interfaces {
-                methods.extend(self.collect_interface_methods(parent_interface));
-            }
-        }
-
-        methods
-    }
-
-    /// Validate that all abstract methods inherited by a concrete class are implemented
-    /// Reference: $PHP_SRC_PATH/Zend/zend_compile.c - zend_verify_abstract_class
-    fn validate_abstract_methods_implemented(&self, class_name: Symbol) -> Result<(), VmError> {
-        let class_def = self
-            .context
-            .classes
-            .get(&class_name)
-            .ok_or_else(|| VmError::RuntimeError("Class not found".into()))?;
-
-        // Don't check abstract classes
-        if class_def.is_abstract {
-            return Ok(());
-        }
-
-        // Check if there are any unimplemented abstract methods
-        // The abstract_methods set should contain only methods that are still abstract after inheritance
-        if !class_def.abstract_methods.is_empty() {
-            let class_name_str = self
-                .context
-                .interner
-                .lookup(class_name)
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_else(|| format!("{:?}", class_name));
-
-            // Find which class declared each abstract method
-            let unimplemented: Vec<String> = class_def
-                .abstract_methods
-                .iter()
-                .map(|&method_sym| {
-                    // Find the declaring class by walking up the parent chain
-                    let mut current = Some(class_name);
-                    let mut declaring_class = class_name;
-
-                    while let Some(curr_sym) = current {
-                        if let Some(curr_def) = self.context.classes.get(&curr_sym) {
-                            if curr_def.methods.contains_key(&method_sym) {
-                                if let Some(method_entry) = curr_def.methods.get(&method_sym) {
-                                    if method_entry.is_abstract {
-                                        declaring_class = method_entry.declaring_class;
-                                        break;
-                                    }
-                                }
-                            }
-                            current = curr_def.parent;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let method_name_str = self
-                        .context
-                        .interner
-                        .lookup(method_sym)
-                        .map(|b| String::from_utf8_lossy(b).to_string())
-                        .unwrap_or_else(|| format!("{:?}", method_sym));
-                    let declaring_name_str = self
-                        .context
-                        .interner
-                        .lookup(declaring_class)
-                        .map(|b| String::from_utf8_lossy(b).to_string())
-                        .unwrap_or_else(|| format!("{:?}", declaring_class));
-
-                    format!("{}::{}", declaring_name_str, method_name_str)
-                })
-                .collect();
-
-            return Err(VmError::RuntimeError(format!(
-                "Class {} contains {} abstract method{} and must therefore be declared abstract or implement the remaining method{} ({})",
-                class_name_str,
-                unimplemented.len(),
-                if unimplemented.len() == 1 { "" } else { "s" },
-                if unimplemented.len() == 1 { "" } else { "s" },
-                unimplemented.join(", ")
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Validate method override compatibility
-    /// Reference: $PHP_SRC_PATH/Zend/zend_inheritance.c - do_inheritance_check_on_method
-    fn validate_method_override(
-        &self,
-        child_class: Symbol,
-        method_name: Symbol,
-        child_signature: &MethodSignature,
-        child_static: bool,
-        child_vis: Visibility,
-        parent_func: &UserFunc,
-        parent_static: bool,
-        parent_vis: Visibility,
-    ) -> Result<(), VmError> {
-        let child_class_str = self
-            .context
-            .interner
-            .lookup(child_class)
-            .map(|b| String::from_utf8_lossy(b).to_string())
-            .unwrap_or_else(|| format!("{:?}", child_class));
-        let method_name_str = self
-            .context
-            .interner
-            .lookup(method_name)
-            .map(|b| String::from_utf8_lossy(b).to_string())
-            .unwrap_or_else(|| format!("{:?}", method_name));
-
-        // 1. Static/non-static must match
-        if child_static != parent_static {
-            return Err(VmError::RuntimeError(format!(
-                "Cannot make {}static method {}::{}() {}static in class {}",
-                if parent_static { "" } else { "non-" },
-                method_name_str,
-                method_name_str,
-                if child_static { "" } else { "non-" },
-                child_class_str,
-            )));
-        }
-
-        // 2. Visibility can only widen (private -> protected -> public)
-        let valid_visibility = match parent_vis {
-            Visibility::Private => true, // Can override with any visibility
-            Visibility::Protected => {
-                matches!(child_vis, Visibility::Protected | Visibility::Public)
-            }
-            Visibility::Public => child_vis == Visibility::Public,
-        };
-
-        if !valid_visibility {
-            let parent_vis_str = match parent_vis {
-                Visibility::Public => "public",
-                Visibility::Protected => "protected",
-                Visibility::Private => "private",
-            };
-            return Err(VmError::RuntimeError(format!(
-                "Access level to {}::{}() must be {} (as in parent class) or weaker",
-                child_class_str, method_name_str, parent_vis_str,
-            )));
-        }
-
-        // 3. Build parent signature from UserFunc for comparison
-        let parent_signature = MethodSignature {
-            parameters: parent_func
-                .params
-                .iter()
-                .map(|p| ParameterInfo {
-                    name: p.name,
-                    type_hint: p
-                        .param_type
-                        .as_ref()
-                        .and_then(|rt| self.return_type_to_type_hint(rt)),
-                    is_reference: p.by_ref,
-                    is_variadic: p.is_variadic,
-                    default_value: p.default_value.clone(),
-                    attributes: p.attributes.clone(),
-                })
-                .collect(),
-            return_type: parent_func
-                .return_type
-                .as_ref()
-                .and_then(|rt| self.return_type_to_type_hint(rt)),
-        };
-
-        // 4. Parameter count validation (can have more with defaults, but not fewer)
-        if child_signature.parameters.len() < parent_signature.parameters.len() {
-            return Err(VmError::RuntimeError(format!(
-                "Declaration of {}::{}() must be compatible with parent signature",
-                child_class_str, method_name_str,
-            )));
-        }
-
-        // 5. Validate parameter types (contravariance)
-        for (i, parent_param) in parent_signature.parameters.iter().enumerate() {
-            let child_param = &child_signature.parameters[i];
-
-            // If parent has no type hint, child can have any type hint or none
-            if let Some(parent_type) = &parent_param.type_hint {
-                match &child_param.type_hint {
-                    None => {
-                        // Child removed type hint - not allowed in PHP 8.x
-                        let param_name = self
-                            .context
-                            .interner
-                            .lookup(child_param.name)
-                            .map(|b| String::from_utf8_lossy(b).to_string())
-                            .unwrap_or_else(|| format!("{:?}", child_param.name));
-                        return Err(VmError::RuntimeError(format!(
-                            "Type of parameter ${} must be compatible with parent in {}::{}()",
-                            param_name, child_class_str, method_name_str,
-                        )));
-                    }
-                    Some(child_type) => {
-                        // Validate contravariance: child type must be same or wider
-                        if !self.types_equal(child_type, parent_type)
-                            && !self.is_type_contravariant(child_type, parent_type)
-                        {
-                            return Err(VmError::RuntimeError(format!(
-                                "Declaration of {}::{}() must be compatible with parent signature",
-                                child_class_str, method_name_str,
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-
-        // 6. Validate return type (covariance)
-        match (&parent_signature.return_type, &child_signature.return_type) {
-            (None, _) => {} // Parent has no return type - child can have any or none
-            (Some(_parent_type), None) => {
-                // Parent has return type, child has none - not allowed
-                return Err(VmError::RuntimeError(format!(
-                    "Declaration of {}::{}() must be compatible with parent return type",
-                    child_class_str, method_name_str,
-                )));
-            }
-            (Some(parent_type), Some(child_type)) => {
-                // Both have return types - validate covariance
-                if !self.types_equal(child_type, parent_type)
-                    && !self.is_type_covariant(child_type, parent_type)
-                {
-                    return Err(VmError::RuntimeError(format!(
-                        "Declaration of {}::{}() must be compatible with parent return type",
-                        child_class_str, method_name_str,
-                    )));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Check if two types are equal
-    fn types_equal(&self, a: &TypeHint, b: &TypeHint) -> bool {
-        match (a, b) {
-            (TypeHint::Int, TypeHint::Int) => true,
-            (TypeHint::Float, TypeHint::Float) => true,
-            (TypeHint::String, TypeHint::String) => true,
-            (TypeHint::Bool, TypeHint::Bool) => true,
-            (TypeHint::Array, TypeHint::Array) => true,
-            (TypeHint::Object, TypeHint::Object) => true,
-            (TypeHint::Callable, TypeHint::Callable) => true,
-            (TypeHint::Iterable, TypeHint::Iterable) => true,
-            (TypeHint::Mixed, TypeHint::Mixed) => true,
-            (TypeHint::Void, TypeHint::Void) => true,
-            (TypeHint::Never, TypeHint::Never) => true,
-            (TypeHint::Null, TypeHint::Null) => true,
-            (TypeHint::Class(a_sym), TypeHint::Class(b_sym)) => a_sym == b_sym,
-            (TypeHint::Union(a_types), TypeHint::Union(b_types)) => {
-                a_types.len() == b_types.len()
-                    && a_types
-                        .iter()
-                        .all(|at| b_types.iter().any(|bt| self.types_equal(at, bt)))
-            }
-            (TypeHint::Intersection(a_types), TypeHint::Intersection(b_types)) => {
-                a_types.len() == b_types.len()
-                    && a_types
-                        .iter()
-                        .all(|at| b_types.iter().any(|bt| self.types_equal(at, bt)))
-            }
-            _ => false,
-        }
-    }
-
-    /// Check if child_type is contravariant with parent_type
-    /// Contravariance: child can accept wider types
-    /// Example: parent accepts Dog, child can accept Animal (wider)
-    /// Reference: $PHP_SRC_PATH/Zend/zend_inheritance.c
-    fn is_type_contravariant(&self, child_type: &TypeHint, parent_type: &TypeHint) -> bool {
-        match (child_type, parent_type) {
-            // Mixed accepts anything - widest type
-            (TypeHint::Mixed, _) => true,
-            (_, TypeHint::Mixed) => false,
-
-            // Union types: child union must be superset of parent union
-            (TypeHint::Union(child_types), TypeHint::Union(parent_types)) => {
-                parent_types.iter().all(|parent_t| {
-                    child_types.iter().any(|child_t| {
-                        self.types_equal(child_t, parent_t)
-                            || self.is_type_contravariant(child_t, parent_t)
-                    })
-                })
-            }
-
-            // Child union can accept parent single type if union contains it
-            (TypeHint::Union(child_types), parent_single) => child_types.iter().any(|ct| {
-                self.types_equal(ct, parent_single) || self.is_type_contravariant(ct, parent_single)
-            }),
-
-            // Class inheritance: child can accept parent class (wider)
-            (TypeHint::Class(child_class), TypeHint::Class(parent_class)) => {
-                *child_class == *parent_class || self.is_subclass_of(*parent_class, *child_class)
-            }
-
-            // Object type compatibility
-            (TypeHint::Object, TypeHint::Class(_)) => true, // object is wider than any class
-
-            // Iterable compatibility
-            (TypeHint::Iterable, TypeHint::Array) => true, // iterable is wider than array
-
-            _ => false,
-        }
-    }
-
-    /// Check if child_type is covariant with parent_type
-    /// Covariance: child can return narrower types
-    /// Example: parent returns Animal, child can return Dog (narrower)
-    /// Reference: $PHP_SRC_PATH/Zend/zend_inheritance.c
-    fn is_type_covariant(&self, child_type: &TypeHint, parent_type: &TypeHint) -> bool {
-        match (child_type, parent_type) {
-            // Mixed can be returned when parent expects anything
-            (_, TypeHint::Mixed) => true,
-            (TypeHint::Mixed, _) => false,
-
-            // Never is covariant with everything (never returns)
-            (TypeHint::Never, _) => true,
-
-            // Void compatibility
-            (TypeHint::Void, TypeHint::Void) => true,
-            (TypeHint::Void, _) | (_, TypeHint::Void) => false,
-
-            // Union types: child union must be subset of parent union
-            (TypeHint::Union(child_types), TypeHint::Union(parent_types)) => {
-                child_types.iter().all(|child_t| {
-                    parent_types.iter().any(|parent_t| {
-                        self.types_equal(child_t, parent_t)
-                            || self.is_type_covariant(child_t, parent_t)
-                    })
-                })
-            }
-
-            // Parent union, child single - child must be subtype of something in union
-            (child_single, TypeHint::Union(parent_types)) => parent_types.iter().any(|pt| {
-                self.types_equal(child_single, pt) || self.is_type_covariant(child_single, pt)
-            }),
-
-            // Intersection types: child must implement all interfaces
-            (TypeHint::Intersection(child_types), TypeHint::Intersection(parent_types)) => {
-                parent_types.iter().all(|parent_t| {
-                    child_types
-                        .iter()
-                        .any(|child_t| self.types_equal(child_t, parent_t))
-                })
-            }
-
-            // Class inheritance: child can return subclass (narrower)
-            (TypeHint::Class(child_class), TypeHint::Class(parent_class)) => {
-                *child_class == *parent_class || self.is_subclass_of(*child_class, *parent_class)
-            }
-
-            // Class is covariant with Object
-            (TypeHint::Class(_), TypeHint::Object) => true,
-
-            // Array/Iterable compatibility
-            (TypeHint::Array, TypeHint::Iterable) => true,
-
-            // Null compatibility
-            (TypeHint::Null, TypeHint::Null) => true,
-
-            _ => false,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -13602,6 +12962,7 @@ mod tests {
                     param_type: None,
                     is_variadic: false,
                     default_value: None,
+                    default_display: None,
                     attributes: Vec::new(),
                 },
                 FuncParam {
@@ -13610,6 +12971,7 @@ mod tests {
                     param_type: None,
                     is_variadic: false,
                     default_value: None,
+                    default_display: None,
                     attributes: Vec::new(),
                 },
             ],
@@ -13620,6 +12982,8 @@ mod tests {
             statics: Rc::new(RefCell::new(HashMap::new())),
             return_type: None,
             attributes: Vec::new(),
+            decl_line: 0,
+            is_final: false,
         })
     }
 

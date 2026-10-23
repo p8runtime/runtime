@@ -345,6 +345,17 @@ pub fn php_print_r(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 }
 
 fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
+    print_r_inner(vm, handle, depth, output, &mut Vec::new());
+}
+
+/// An array or object print_r/var_dump is inside of, to detect recursion.
+#[derive(PartialEq)]
+pub(crate) enum Visit {
+    Array(*const crate::core::value::ArrayData),
+    Object(Handle),
+}
+
+fn print_r_inner(vm: &VM, handle: Handle, depth: usize, output: &mut String, visiting: &mut Vec<Visit>) {
     let val = vm.arena.get(handle);
     let indent = "    ".repeat(depth);
 
@@ -366,6 +377,12 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
         }
         Val::Array(arr) => {
             output.push_str("Array\n");
+            let visit = Visit::Array(std::rc::Rc::as_ptr(arr));
+            if visiting.contains(&visit) {
+                output.push_str(" *RECURSION*");
+                return;
+            }
+            visiting.push(visit);
             output.push_str(&indent);
             output.push_str("(\n");
             for (key, val_handle) in arr.map.iter() {
@@ -388,17 +405,18 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                 let val = vm.arena.get(*val_handle);
                 match &val.value {
                     Val::Array(_) | Val::Object(_) => {
-                        print_r_value(vm, *val_handle, depth + 2, output);
+                        print_r_inner(vm, *val_handle, depth + 2, output, visiting);
                         output.push('\n');
                     }
                     _ => {
-                        print_r_value(vm, *val_handle, depth + 1, output);
+                        print_r_inner(vm, *val_handle, depth + 1, output, visiting);
                         output.push('\n');
                     }
                 }
             }
             output.push_str(&indent);
             output.push_str(")\n");
+            visiting.pop();
         }
         Val::Object(handle) => {
             let payload_val = vm.arena.get(*handle);
@@ -410,6 +428,12 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                     .unwrap_or(b"<unknown>");
                 output.push_str(&String::from_utf8_lossy(display_class_name(class_name)));
                 output.push_str(" Object\n");
+                let visit = Visit::Object(*handle);
+                if visiting.contains(&visit) {
+                    output.push_str(" *RECURSION*");
+                    return;
+                }
+                visiting.push(visit);
                 output.push_str(&indent);
                 output.push_str("(\n");
 
@@ -424,11 +448,11 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                     let val = vm.arena.get(*val_handle);
                     match &val.value {
                         Val::Array(_) | Val::Object(_) => {
-                            print_r_value(vm, *val_handle, depth + 2, output);
+                            print_r_inner(vm, *val_handle, depth + 2, output, visiting);
                             output.push('\n');
                         }
                         _ => {
-                            print_r_value(vm, *val_handle, depth + 1, output);
+                            print_r_inner(vm, *val_handle, depth + 1, output, visiting);
                             output.push('\n');
                         }
                     }
@@ -436,6 +460,7 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
 
                 output.push_str(&indent);
                 output.push_str(")\n");
+                visiting.pop();
             } else {
                 // shouldn't happen
             }
