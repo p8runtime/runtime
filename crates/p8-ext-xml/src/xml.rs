@@ -227,10 +227,12 @@ fn xml_set_element_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
     let func = "xml_set_element_handler";
     let o = parser_arg(ctx, func, args)?;
     let (a, b) = (arg(args, 1), arg(args, 2));
-    for (i, (v, param)) in [(&a, "start_handler"), (&b, "end_handler")].into_iter().enumerate() {
-        if !matches!(v, Value::Null | Value::Str(_)) && !ctx.is_callable(v) {
-            return Err(ctx.throw("TypeError", format!("{func}(): Argument #{} (${param}) must be of type callable|string|null", i + 2)));
-        }
+    let invalid = |ctx: &mut dyn Ctx, v: &Value| !matches!(v, Value::Null | Value::Str(_)) && !ctx.is_callable(v);
+    if invalid(ctx, &a) || invalid(ctx, &b) {
+        // PHP's fallback parse blames the start handler unless it is null
+        // or a string (even when it is a valid callable).
+        let (n, param) = if matches!(a, Value::Null | Value::Str(_)) { (3, "end_handler") } else { (2, "start_handler") };
+        return Err(ctx.throw("TypeError", format!("{func}(): Argument #{n} (${param}) must be of type callable|string|null")));
     }
     if non_callable_string(ctx, &a) || non_callable_string(ctx, &b) {
         ctx.report(8192, &format!("{func}(): Passing non-callable strings is deprecated since 8.4"));

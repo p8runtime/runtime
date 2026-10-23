@@ -2740,7 +2740,7 @@ impl Context<'_> {
                                 return Err(self.missing_args(&target.code, passed, None));
                             }
                             if target.code.is_generator {
-                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, captured: Vec::new() };
+                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None };
                                 let g = self.make_generator(regs, m, target, base + args as usize, argc as usize);
                                 regs[base + dst as usize] = Value::Object(g);
                                 return Ok(Next::Go(pc));
@@ -2801,7 +2801,20 @@ impl Context<'_> {
     /// Push the frame of a method call: its arguments at `args`
     /// (absolute), its result to `ret` (NO_RET: discarded, as a
     /// constructor's is).
-    fn call_method(&mut self, regs: &mut Vec<Value>, m: classes::MethodFrame, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+    fn call_method(&mut self, regs: &mut Vec<Value>, mut m: classes::MethodFrame, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+        // __call / __callStatic: the arguments become (name, [arguments]).
+        let argc = match m.trampoline.take() {
+            Some(name) => {
+                let packed: Vec<Value> = regs[args..args + argc as usize].iter().map(Value::deref).collect();
+                if regs.len() < args + 2 {
+                    regs.resize(args + 2, Value::Undef);
+                }
+                regs[args] = Value::Str(name);
+                regs[args + 1] = Value::Array(Rc::new(PhpArray::from_list(packed)));
+                2
+            }
+            None => argc,
+        };
         let func = match m.func {
             classes::Code::User(func) => func,
             classes::Code::Native(native) => {
@@ -2826,7 +2839,7 @@ impl Context<'_> {
             return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], class));
         }
         if func.code.is_generator {
-            let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, captured: m.captured };
+            let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, captured: m.captured, trampoline: None };
             let g = self.make_generator(regs, frame, Rc::clone(&func), args, argc as usize);
             if ret != NO_RET {
                 regs[ret as usize] = Value::Object(g);
