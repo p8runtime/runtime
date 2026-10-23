@@ -59,6 +59,17 @@ struct Cli {
     /// Write `STATUS path` per test to this file
     #[arg(long)]
     list: Option<PathBuf>,
+
+    /// The target set: a file of test paths (relative to PATH, one per
+    /// line) that real PHP passes, e.g. tests/php-src/target.txt. Reports
+    /// how many of them pass.
+    #[arg(long)]
+    target: Option<PathBuf>,
+
+    /// Write the paths (relative to PATH) of the target tests that passed
+    /// to this file, sorted: the pass list later runs are compared with.
+    #[arg(long, requires = "target")]
+    passes: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -126,6 +137,32 @@ fn main() -> anyhow::Result<()> {
         results.print_by_dir(root, depth);
     }
     results.print_summary();
+    if let Some(target) = &cli.target {
+        let target = std::fs::read_to_string(target)?;
+        let target: BTreeSet<&str> = target.lines().filter(|l| !l.is_empty()).collect();
+        let root = if cli.path.is_dir() { cli.path.as_path() } else { Path::new("") };
+        let passed: BTreeSet<String> = results
+            .details
+            .iter()
+            .filter(|(_, r)| matches!(r, TestResult::Passed))
+            .map(|(file, _)| file.strip_prefix(root).unwrap_or(file).to_string_lossy().into_owned())
+            .filter(|rel| target.contains(rel.as_str()))
+            .collect();
+        println!(
+            "Target:  {} of {} passed ({:.1}%)",
+            passed.len(),
+            target.len(),
+            100.0 * passed.len() as f64 / target.len().max(1) as f64
+        );
+        if let Some(passes) = &cli.passes {
+            let mut out = String::new();
+            for p in &passed {
+                out.push_str(p);
+                out.push('\n');
+            }
+            std::fs::write(passes, out)?;
+        }
+    }
     if let Some(list) = &cli.list {
         results.write_list(&mut std::fs::File::create(list)?)?;
     }

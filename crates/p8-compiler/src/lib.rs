@@ -217,6 +217,13 @@ fn fuse_steps(code: &mut [Instr]) {
     }
 }
 
+/// The name of a syntax node's kind (`Class`, `Try`, `Closure`, ...), for
+/// "cannot compile" errors: what the php-src runner counts per feature.
+fn kind(node: &impl std::fmt::Debug) -> String {
+    let text = format!("{node:?}");
+    text.split(|c: char| !c.is_alphanumeric()).next().unwrap_or_default().to_string()
+}
+
 /// Whether `a op b` compiles to one instruction that reads both operands
 /// and then writes its result (and nothing else), so the result can go
 /// straight to a variable.
@@ -627,7 +634,7 @@ impl<'src> Compiler<'src> {
                 }
             }
             Stmt::Nop { .. } => {}
-            other => return Err(self.unsupported(other.span(), "this statement")),
+            other => return Err(self.unsupported(other.span(), &format!("this statement ({})", kind(other)))),
         }
         Ok(())
     }
@@ -1049,7 +1056,7 @@ impl<'src> Compiler<'src> {
                 }
                 f.constant(Frozen::Null)
             }
-            other => return Err(self.unsupported(other.span(), "this expression")),
+            other => return Err(self.unsupported(other.span(), &format!("this expression ({})", kind(other)))),
         })
     }
 
