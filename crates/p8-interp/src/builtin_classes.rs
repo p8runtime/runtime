@@ -100,6 +100,7 @@ fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty:
         declaring_name: PhpStr::from(declaring),
         readonly: false,
         init: None,
+        hooks: 0,
         ty: ty.map(PhpStr::from),
     }
 }

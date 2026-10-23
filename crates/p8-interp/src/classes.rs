@@ -181,6 +181,7 @@ impl Context<'_> {
                 readonly: p.readonly,
                 ty: p.ty.as_ref().map(|t| PhpStr::from(t.as_bytes())),
                 init,
+                hooks: p.hooks,
             };
             match properties.iter().position(|q| q.name.as_bytes() == pname.as_slice() && q.visibility != Visibility::Private) {
                 Some(at) => {
@@ -196,6 +197,14 @@ impl Context<'_> {
                             ),
                             def.line,
                         ));
+                    }
+                    // Hooks are inherited one by one: the redeclaration's
+                    // own replace the parent's, the others stay.
+                    let mut prop = prop;
+                    if inherited.hooks != 0 {
+                        use p8_runtime::object::HOOK_VIRTUAL;
+                        let virtual_ = inherited.hooks & HOOK_VIRTUAL != 0 && (prop.hooks == 0 || prop.hooks & HOOK_VIRTUAL != 0);
+                        prop.hooks = (prop.hooks | inherited.hooks) & !HOOK_VIRTUAL | if virtual_ { HOOK_VIRTUAL } else { 0 };
                     }
                     properties[at] = prop;
                 }
@@ -303,6 +312,7 @@ impl Context<'_> {
                 readonly: true,
                 ty: Some(PhpStr::from(ty.unwrap_or("string"))),
                 init: None,
+                hooks: 0,
             };
             properties.insert(0, prop("name", None));
             if let Some(t) = &def.enum_backing {
@@ -386,8 +396,20 @@ impl Context<'_> {
             );
         }
         if def.flags & (CLASS_ABSTRACT | CLASS_INTERFACE | CLASS_TRAIT) == 0 {
-            let mut missing: Vec<String> =
-                methods.values().filter(|m| m.is_abstract).map(|m| format!("{}::{}", text(&m.declaring_name), text(&m.name))).collect();
+            // An abstract hook `$x::get` is implemented by a property `x`
+            // that can be read (or written, for `$x::set`).
+            let implemented = |m: &Method| {
+                let n = m.name.as_bytes();
+                let Some(rest) = n.strip_prefix(b"$") else { return false };
+                let Some(at) = rest.windows(2).position(|w| w == b"::") else { return false };
+                let bit = if rest[at + 2..].eq_ignore_ascii_case(b"set") { p8_runtime::object::HOOK_SET } else { p8_runtime::object::HOOK_GET };
+                properties.iter().any(|p| p.name.as_bytes() == &rest[..at] && (p.hooks & p8_runtime::object::HOOK_VIRTUAL == 0 || p.hooks & bit != 0))
+            };
+            let mut missing: Vec<String> = methods
+                .values()
+                .filter(|m| m.is_abstract && !implemented(m))
+                .map(|m| format!("{}::{}", text(&m.declaring_name), text(&m.name)))
+                .collect();
             if !missing.is_empty() {
                 missing.sort();
                 let n = missing.len();
@@ -420,6 +442,7 @@ impl Context<'_> {
             || constants.values().any(|c| c.init.is_some())
             || parent.as_ref().is_some_and(|p| p.flags & CLASS_LAZY != 0);
         let destructor = destructor | if lazy { CLASS_LAZY } else { 0 };
+        let destructor = destructor | if properties.iter().any(|p| p.hooks != 0) { p8_runtime::object::CLASS_HOOKS } else { 0 };
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,
@@ -927,6 +950,62 @@ impl Context<'_> {
             top.pc = saved;
         }
         r
+    }
+
+    /// The hook a property access on `target` runs: Some(frame) for its
+    /// `get` (bit HOOK_GET) or `set` hook; an Error for a virtual
+    /// property without that hook; None for a plain access (no hook, the
+    /// stored value of a backed one, or the hook's own `$this->name`).
+    pub(crate) fn prop_hook(&self, target: &Value, name: &Value, bit: u8) -> Option<Result<MethodFrame, Throw>> {
+        self.prop_hook_seen(target, name, bit, true)
+    }
+
+    pub(crate) fn prop_hook_seen(&self, target: &Value, name: &Value, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
+        let Value::Object(o) = target else { return None };
+        if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
+            return None;
+        }
+        let name = name.to_php_string()?;
+        let p = self.hooked_property_seen(o, name.as_bytes(), check_visibility)?;
+        let kind: &[u8] = if bit == p8_runtime::object::HOOK_GET { b"get" } else { b"set" };
+        if p.hooks & bit == 0 {
+            if p.hooks & p8_runtime::object::HOOK_VIRTUAL == 0 {
+                return None;
+            }
+            let what = if bit == p8_runtime::object::HOOK_GET { "write-only" } else { "read-only" };
+            return Some(Err(self.throw("Error", format!("Property {}::${} is {what}", text(&p.declaring_name), text(&name)))));
+        }
+        let key = [b"$", name.as_bytes(), b"::", kind].concat().to_ascii_lowercase();
+        let m = o.class.method(&key)?;
+        let declaring = self.declaring(&o.class, &m.declaring);
+        Some(Ok(MethodFrame::method(self.code_of(m), Some(Rc::clone(o)), declaring, Rc::clone(&o.class))))
+    }
+
+    /// The hooked property `name` of `o` as the running code sees it (None
+    /// when not hooked, not visible here, or inside its own hook on `o`).
+    pub(crate) fn hooked_property<'c>(&self, o: &'c Rc<Object>, name: &[u8]) -> Option<&'c Property> {
+        self.hooked_property_seen(o, name, true)
+    }
+
+    /// As hooked_property; `check_visibility` false: as the dump
+    /// functions see it (any visibility).
+    pub(crate) fn hooked_property_seen<'c>(&self, o: &'c Rc<Object>, name: &[u8], check_visibility: bool) -> Option<&'c Property> {
+        let slots = o.class.slots.get(name)?;
+        let p = slots.iter().map(|&i| &o.class.properties[i]).find(|p| p.hooks != 0)?;
+        let declaring = self.classes.get(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(&o.class));
+        if check_visibility && !visible(p.visibility, &declaring, self.scope().0.as_deref()) {
+            return None;
+        }
+        // In a hook of this property on this object: the stored value.
+        if let Some(top) = self.frames.last()
+            && top.this.as_ref().is_some_and(|t| Rc::ptr_eq(t, o))
+        {
+            let fname = top.func.code.name.as_bytes();
+            if fname.len() > name.len() + 1 && fname[0] == b'$' && &fname[1..=name.len()] == name && fname[name.len() + 1..].starts_with(b"::") {
+                return None;
+            }
+        }
+        Some(p)
     }
 
     /// Whether a class has default code still to run.

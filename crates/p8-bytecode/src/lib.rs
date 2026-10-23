@@ -468,6 +468,9 @@ pub struct PropDef {
     /// A default that needs other constants: the code computing it (run
     /// before the class is first used).
     pub code: Option<Arc<Function>>,
+    /// Its hooks (p8_runtime::object::HOOK_*); they are methods named
+    /// `$name::get` and `$name::set`.
+    pub hooks: u8,
     pub visibility: Visibility,
     pub is_static: bool,
     pub readonly: bool,

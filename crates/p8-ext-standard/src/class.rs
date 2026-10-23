@@ -220,9 +220,8 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
     let scope = ctx.scope();
     let mut out = PhpArray::new();
-    let slots = o.slots.borrow();
     for (i, p) in o.class.properties.iter().enumerate() {
-        if matches!(slots[i], Value::Undef) {
+        if p.hooks == 0 && matches!(o.slots.borrow()[i], Value::Undef) {
             continue;
         }
         let declaring = declaring(&o.class, &p.declaring);
@@ -234,7 +233,10 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
         if o.class.slot(p.name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) != Some(i) {
             continue;
         }
-        out.insert(Key::from_string(p.name.clone()), slots[i].deref());
+        // Through its get hook, as `$o->name` reads it.
+        if let Some(v) = ctx.prop_value(&o, i)? {
+            out.insert(Key::from_string(p.name.clone()), v);
+        }
     }
     for (k, v) in o.dynamic.borrow().iter() {
         out.insert(k, v.deref());

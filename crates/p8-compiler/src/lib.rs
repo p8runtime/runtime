@@ -13,7 +13,7 @@ use p8_bytecode::{
     CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
     CONST_EXPR,
 };
-use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, Visibility};
+use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
 use p8_runtime::frozen::{Frozen, Text};
@@ -55,6 +55,10 @@ enum ConstKey {
 enum Body<'a> {
     Stmts(&'a [StmtId<'a>]),
     Expr(&'a Expr<'a>),
+    /// `get => expr`: its value is returned.
+    Get(&'a Expr<'a>),
+    /// `set => expr`: it is stored in the property (the named one).
+    Set(Text, &'a Expr<'a>),
 }
 
 struct Loop {
@@ -361,14 +365,6 @@ fn type_text(c: &Compiler, t: &p8_syntax::ast::Type) -> Vec<u8> {
         Type::Nullable(inner) => [b"?".to_vec(), type_text(c, inner)].concat(),
         Type::Union(parts) => parts.iter().map(|p| type_text(c, p)).collect::<Vec<_>>().join(&b'|'),
         Type::Intersection(parts) => parts.iter().map(|p| type_text(c, p)).collect::<Vec<_>>().join(&b'&'),
-    }
-}
-
-/// A class member's span, for errors.
-fn other_span(m: &p8_syntax::ast::ClassMember) -> Span {
-    use p8_syntax::ast::ClassMember::*;
-    match m {
-        Property { span, .. } | PropertyHook { span, .. } | Method { span, .. } | Const { span, .. } | TraitUse { span, .. } | Case { span, .. } => *span,
     }
 }
 
@@ -680,6 +676,17 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
 
 pub use p8_bytecode::Program;
 
+/// Whether a hook's source uses its property's stored value: `$this->name`,
+/// or `parent::$name::` (a parent's plain property is the stored value).
+fn uses_own_property(source: &[u8], name: &[u8]) -> bool {
+    let word_at = |needle: &[u8]| {
+        source.windows(needle.len()).enumerate().any(|(i, w)| {
+            w.eq_ignore_ascii_case(needle) && source.get(i + needle.len()).is_none_or(|&c| !(c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80))
+        })
+    };
+    word_at(&[b"$this->".as_slice(), name].concat()) || word_at(&[b"parent::$".as_slice(), name].concat())
+}
+
 /// After storing a value an expression made (an object, likely) from a
 /// temporary: release the temporary's copy.
 fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
@@ -723,6 +730,8 @@ pub struct Compiler<'src> {
     use_consts: HashMap<Vec<u8>, Vec<u8>>,
     /// Anonymous classes declared so far (each one's name ends with its number).
     anonymous: u32,
+    /// The function being compiled is a set hook: no parameter list means `$value`.
+    hook_value: bool,
 }
 
 /// The class being compiled.
@@ -757,6 +766,7 @@ impl<'src> Compiler<'src> {
             use_functions: HashMap::new(),
             use_consts: HashMap::new(),
             anonymous: 0,
+            hook_value: false,
         }
     }
 
@@ -1461,6 +1471,11 @@ impl<'src> Compiler<'src> {
                 variadic: p.variadic,
             });
         }
+        // A set hook written without its parameter takes `$value`.
+        if std::mem::take(&mut self.hook_value) && params.is_empty() {
+            f.cv(b"value");
+            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false });
+        }
         f.decl_line = f.line;
         if params.last().is_some_and(|p| p.variadic) {
             f.emit(Instr::CollectVariadic { var: reg(CV, params.len() - 1) });
@@ -1487,6 +1502,7 @@ impl<'src> Compiler<'src> {
                 name: name.clone(),
                 default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
                 code: None,
+                hooks: 0,
                 visibility,
                 is_static: false,
                 readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
@@ -1510,6 +1526,19 @@ impl<'src> Compiler<'src> {
         match body {
             Body::Stmts(body) => {
                 self.stmts(&mut f, body)?;
+                f.emit(Instr::ReturnNull);
+            }
+            Body::Get(e) => {
+                let r = self.expr(&mut f, e)?;
+                f.emit(Instr::Return { src: r });
+            }
+            Body::Set(name, e) => {
+                let obj = f.temp();
+                f.emit(Instr::This { dst: obj });
+                let key = f.constant(Frozen::Str(name));
+                let val = self.expr(&mut f, e)?;
+                let dst = f.temp();
+                f.emit(Instr::AssignProp { obj, name: key, val, dst });
                 f.emit(Instr::ReturnNull);
             }
             Body::Expr(e) => {
@@ -1712,9 +1741,152 @@ impl<'src> Compiler<'src> {
                             name: Text::from(text.strip_prefix(b"$").unwrap_or(text)),
                             default,
                             code,
+                            hooks: 0,
                             visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
                             is_static: has(b"static"),
                             readonly: has(b"readonly") || flags & CLASS_READONLY != 0,
+                            ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
+                        });
+                    }
+                }
+                ClassMember::PropertyHook { modifiers, ty, name, default, hooks, .. } => {
+                    let text = self.text(name.span);
+                    let pname = Text::from(text.strip_prefix(b"$").unwrap_or(text));
+                    let visibility = visibility_of(self, modifiers).unwrap_or(Visibility::Public);
+                    let line = self.line(name.span);
+                    let fatal = |message: &str| CompileError { message: message.to_string(), line };
+                    let has = |c: &Self, w: &[u8]| modifiers.iter().any(|m| c.text(m.span).eq_ignore_ascii_case(w));
+                    let prop_abstract = has(self, b"abstract");
+                    if interface {
+                        if has(self, b"final") {
+                            return Err(fatal("Property in interface cannot be final"));
+                        }
+                        if visibility != Visibility::Public {
+                            return Err(fatal("Property in interface cannot be protected or private"));
+                        }
+                        if prop_abstract {
+                            return Err(fatal("Property in interface cannot be explicitly abstract. All interface members are implicitly abstract"));
+                        }
+                    }
+                    if prop_abstract && !hooks.iter().any(|h| matches!(h.body, p8_syntax::ast::PropertyHookBody::None)) {
+                        return Err(fatal(&format!(
+                            "Abstract property {}::${} must specify at least one abstract hook",
+                            String::from_utf8_lossy(display.as_bytes()),
+                            String::from_utf8_lossy(pname.as_bytes())
+                        )));
+                    }
+                    if hooks.is_empty() {
+                        return Err(fatal("Property hook list must not be empty"));
+                    }
+                    if has(self, b"static") {
+                        return Err(fatal("Cannot declare hooks for static property"));
+                    }
+                    if has(self, b"readonly") {
+                        return Err(fatal("Hooked properties cannot be readonly"));
+                    }
+                    let mut seen: Vec<Vec<u8>> = Vec::new();
+                    let mut bits = 0;
+                    // Backed when a hook uses `$this->name` (or is `set => …`).
+                    let mut backed = false;
+                    for h in *hooks {
+                        let hline = self.line(h.span);
+                        let hfatal = |message: String| CompileError { message, line: hline };
+                        let hname = self.text(h.name.span).to_ascii_lowercase();
+                        if seen.contains(&hname) {
+                            return Err(hfatal(format!("Cannot redeclare property hook \"{}\"", String::from_utf8_lossy(&hname))));
+                        }
+                        seen.push(hname.clone());
+                        for m in h.modifiers {
+                            let w = self.text(m.span).to_ascii_lowercase();
+                            if matches!(w.as_slice(), b"static" | b"public" | b"protected" | b"private" | b"readonly" | b"abstract") {
+                                return Err(hfatal(format!("Cannot use the {} modifier on a property hook", String::from_utf8_lossy(&w))));
+                            }
+                        }
+                        let what = format!("{}::${}", String::from_utf8_lossy(display.as_bytes()), String::from_utf8_lossy(pname.as_bytes()));
+                        if hname == b"get" && !h.params.is_empty() {
+                            return Err(hfatal(format!("get hook of property {what} must not have a parameter list")));
+                        }
+                        if hname == b"set" && h.params.iter().any(|p| p.variadic) {
+                            let p = h.params.iter().find(|p| p.variadic).expect("found");
+                            return Err(hfatal(format!("Parameter {} of set hook {what} must not be variadic", String::from_utf8_lossy(self.text(p.name.span)))));
+                        }
+                        let hook_final = h.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final"));
+                        let is_abstract = matches!(h.body, p8_syntax::ast::PropertyHookBody::None);
+                        if is_abstract && (hook_final || (has(self, b"final") && !interface)) {
+                            return Err(fatal("Property hook cannot be both abstract and final"));
+                        }
+                        if is_abstract && visibility == Visibility::Private {
+                            return Err(fatal("Property hook cannot be both abstract and private"));
+                        }
+                        let kind = self.text(h.name.span).to_ascii_lowercase();
+                        let bit = match kind.as_slice() {
+                            b"get" => HOOK_GET,
+                            b"set" => HOOK_SET,
+                            _ => {
+                                return Err(CompileError {
+                                    message: format!(
+                                        "Unknown hook \"{}\" for property {}::${}, expected \"get\" or \"set\"",
+                                        String::from_utf8_lossy(self.text(h.name.span)),
+                                        String::from_utf8_lossy(display.as_bytes()),
+                                        String::from_utf8_lossy(pname.as_bytes())
+                                    ),
+                                    line: self.line(h.span),
+                                });
+                            }
+                        };
+                        let body = match h.body {
+                            // Abstract: a method the class (or a subclass) implements.
+                            p8_syntax::ast::PropertyHookBody::None => Body::Stmts(&[]),
+                            p8_syntax::ast::PropertyHookBody::Statements(s) => Body::Stmts(s),
+                            p8_syntax::ast::PropertyHookBody::Expr(e) if bit == HOOK_GET => Body::Get(e),
+                            p8_syntax::ast::PropertyHookBody::Expr(e) => {
+                                backed = true;
+                                Body::Set(pname.clone(), e)
+                            }
+                        };
+                        if uses_own_property(self.text(h.span), pname.as_bytes()) {
+                            backed = true;
+                        }
+                        if !is_abstract {
+                            bits |= bit;
+                        }
+                        self.method = Some((display.clone(), false));
+                        self.hook_value = bit == HOOK_SET;
+                        let hname = Text::from([b"$", pname.as_bytes(), b"::", kind.as_slice()].concat().as_slice());
+                        let line = self.line(h.span);
+                        let r = self.function_with(hname, line, h.params, body, h.by_ref, &[]);
+                        self.hook_value = false;
+                        self.method = None;
+                        let (func, _) = r?;
+                        methods.push(MethodDef {
+                            func: Arc::new(func),
+                            visibility,
+                            is_static: false,
+                            is_abstract,
+                            is_final: hook_final,
+                        });
+                    }
+                    // A default value is stored: backed too.
+                    if !backed && bits != 0 && default.is_none() {
+                        bits |= HOOK_VIRTUAL;
+                    }
+                    let (default, code) = match default {
+                        Some(x) => {
+                            let (v, code) = self.const_init(x)?;
+                            (Some(v), code)
+                        }
+                        None if ty.is_some() || bits & HOOK_VIRTUAL != 0 => (None, None),
+                        None => (Some(Frozen::Null), None),
+                    };
+                    if !interface {
+                        properties.push(PropDef {
+                            name: pname,
+                            default,
+                            code,
+                            hooks: bits,
+                            visibility,
+                            is_static: false,
+                            readonly: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
                         });
                     }
@@ -1778,10 +1950,6 @@ impl<'src> Compiler<'src> {
                             visibility,
                         });
                     }
-                }
-                other => {
-                    self.scope = saved;
-                    return Err(self.unsupported(other_span(other), &format!("this class member ({})", kind(other))));
                 }
             }
         }
@@ -2580,6 +2748,20 @@ impl<'src> Compiler<'src> {
                 let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
                 let (base, argc) = self.args_by_value(f, args)?;
                 f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
+                base
+            }
+            // `parent::$prop::get()` / `::set($v)`: the parent's hook (or
+            // its stored value when the parent's property has none).
+            Expr::StaticCall { class: Expr::ClassConstFetch { class: parent @ Expr::Variable { name: p, .. }, constant: Expr::Variable { name: prop, .. }, .. }, method: Expr::Variable { name: m, .. }, args, .. }
+                if self.text(*p).eq_ignore_ascii_case(b"parent")
+                    && self.text(*prop).starts_with(b"$")
+                    && matches!(self.text(*m).to_ascii_lowercase().as_slice(), b"get" | b"set") =>
+            {
+                let class = self.class_ref(f, parent)?;
+                let display = [self.text(*prop), b"::", self.text(*m).to_ascii_lowercase().as_slice()].concat();
+                let site = f.site(false, Text::from(display.to_ascii_lowercase().as_slice()), Text::from(display.as_slice()));
+                let (base, argc) = self.args_by_value(f, args)?;
+                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
                 base
             }
             Expr::StaticCall { class, method, args, .. } => {

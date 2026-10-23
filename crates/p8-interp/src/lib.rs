@@ -17,7 +17,7 @@ use p8_runtime::array::{Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Registry};
 pub use p8_runtime::ext::Throw;
 use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{Class, Ids, Object};
+use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -842,6 +842,7 @@ impl Isolate {
             resource_ids: Rc::new(Ids::monotonic()),
             enum_objects: HashMap::new(),
             resolved: std::collections::HashSet::new(),
+            stack_base: 0,
             class_defaults: HashMap::new(),
             const_cache: HashMap::new(),
             const_evaluating: Vec::new(),
@@ -915,6 +916,9 @@ pub struct Context<'i> {
     native_class: Option<Rc<Class>>,
     /// Enum case objects, one per (enum, case) in a request.
     enum_objects: HashMap<(Vec<u8>, Vec<u8>), Rc<Object>>,
+    /// The native stack's address where the script started (0: unknown),
+    /// to stop runaway nesting (PHP's "Maximum call stack size").
+    stack_base: usize,
     /// Lazy classes (CLASS_LAZY) whose default code has run, by address.
     resolved: std::collections::HashSet<usize>,
     /// A lazy class's computed instance defaults: (slot, value).
@@ -992,6 +996,8 @@ impl Context<'_> {
         self.standard_streams();
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let ncv = main.consts_at as usize;
+        let here = 0u8;
+        self.stack_base = std::ptr::addr_of!(here) as usize;
         self.frames.push(&Closure::new(main), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
         let defs = std::mem::take(&mut self.class_defs);
@@ -1315,6 +1321,35 @@ impl Context<'_> {
             Ok(()) => Ok(pc),
             Err(t) => self.unwind(regs, t, at),
         }
+    }
+
+    /// `$o->p op= …`, `$o->p++` on a hooked property: read through its get
+    /// hook (or the stored value), compute (the stored value, the
+    /// expression's), write through its set hook. None: not hooked.
+    fn hooked_update(
+        &mut self,
+        regs: &mut Vec<Value>,
+        target: &Value,
+        name: &Value,
+        compute: impl FnOnce(&mut Self, &Value) -> Result<(Value, Value), Throw>,
+    ) -> Result<Option<Value>, Throw> {
+        let get = self.prop_hook(target, name, HOOK_GET);
+        let set = self.prop_hook(target, name, HOOK_SET);
+        if get.is_none() && set.is_none() {
+            return Ok(None);
+        }
+        let x = match get {
+            Some(hook) => self.run_nested(regs, hook?, &mut [])?,
+            None => self.read_for_update(target, name)?,
+        };
+        let (stored, result) = compute(self, &x)?;
+        match self.prop_hook(target, name, HOOK_SET) {
+            Some(hook) => {
+                self.run_nested(regs, hook?, &mut [stored])?;
+            }
+            None => self.write_prop(target, name, stored)?,
+        }
+        Ok(Some(result))
     }
 
     /// Execute the instruction at `pc` of `func`'s frame (at `base`).
@@ -2032,12 +2067,22 @@ impl Context<'_> {
                 Instr::FetchProp { dst, obj, name, quiet } => {
                     let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
                     let name = reg!(name).clone();
+                    if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
+                        let v = self.run_nested(regs, hook?, &mut [])?;
+                        regs[base + dst as usize] = v;
+                        return Ok(Next::Go(pc));
+                    }
                     reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
                 }
                 Instr::AssignProp { obj, name, val, dst } => {
                     let target = self.operand(w, func, obj);
                     let v = self.operand(w, func, val);
                     let name = reg!(name).clone();
+                    if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
+                        self.run_nested(regs, hook?, &mut [v.clone()])?;
+                        regs[base + dst as usize] = v;
+                        return Ok(Next::Go(pc));
+                    }
                     self.write_prop(&target, &name, v.clone())?;
                     reg!(dst) = v;
                 }
@@ -2045,6 +2090,15 @@ impl Context<'_> {
                     let target = self.operand(w, func, obj);
                     let y = self.operand(w, func, val);
                     let name = reg!(name).clone();
+                    if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
+                        let v = self.hooked_update(regs, &target, &name, |c, x| {
+                        let r = ops::binary(op, x, &y, &mut c.diags);
+                        c.report_diags();
+                        r.map(|v| (v.clone(), v)).map_err(|e| c.op_error(e))
+                    })?;
+                        regs[base + dst as usize] = v.unwrap_or(Value::Null);
+                        return Ok(Next::Go(pc));
+                    }
                     let x = self.read_for_update(&target, &name)?;
                     let r = ops::binary(op, &x, &y, &mut self.diags);
                     self.report_diags();
@@ -2055,6 +2109,15 @@ impl Context<'_> {
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
                     let target = self.operand(w, func, obj);
                     let name = reg!(name).clone();
+                    if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
+                        let v = self.hooked_update(regs, &target, &name, |c, x| {
+                        let r = if inc { ops::increment(x, &mut c.diags) } else { ops::decrement(x, &mut c.diags) };
+                        c.report_diags();
+                        r.map(|new| (new.clone(), if post { x.clone() } else { new })).map_err(|e| c.op_error(e))
+                    })?;
+                        regs[base + dst as usize] = v.unwrap_or(Value::Null);
+                        return Ok(Next::Go(pc));
+                    }
                     let old = self.read_for_update(&target, &name)?;
                     let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
                     self.report_diags();
@@ -2065,6 +2128,13 @@ impl Context<'_> {
                 Instr::AssignPropDim { op, base: at, n, append, val, dst } => {
                     let target = self.operand(w, func, at);
                     let name = reg!(at + 1).clone();
+                    // A hooked property's value is not modified in place.
+                    if let (Value::Object(o), Some(pn)) = (&target, name.to_php_string())
+                        && let Some(p) = self.hooked_property(o, pn.as_bytes())
+                    {
+                        let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
+                        return Err(self.throw("Error", format!("Indirect modification of {class}::${} is not allowed", String::from_utf8_lossy(pn.as_bytes()))));
+                    }
                     let mut path = Vec::with_capacity(n as usize);
                     for i in 0..n {
                         path.push(self.key(w, func, at + 2 + i as Reg)?);
@@ -2075,11 +2145,22 @@ impl Context<'_> {
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
                     let name = reg!(name).clone();
+                    if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
+                        let v = self.run_nested(regs, hook?, &mut [])?;
+                        regs[base + dst as usize] = Value::Bool(!matches!(v.deref(), Value::Null | Value::Undef));
+                        return Ok(Next::Go(pc));
+                    }
                     reg!(dst) = Value::Bool(self.isset_prop(&target, &name)?);
                 }
                 Instr::UnsetProp { obj, name } => {
                     let target = reg!(obj).deref();
                     let name = reg!(name).clone();
+                    if let (Value::Object(o), Some(n)) = (&target, name.to_php_string())
+                        && let Some(p) = self.hooked_property(o, n.as_bytes())
+                    {
+                        let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
+                        return Err(self.throw("Error", format!("Cannot unset hooked property {class}::${}", String::from_utf8_lossy(n.as_bytes()))));
+                    }
                     self.unset_prop(&target, &name)?;
                 }
                 Instr::MethodCall { dst, obj, method, base: args, argc } => {
@@ -2095,6 +2176,30 @@ impl Context<'_> {
                 }
                 Instr::StaticCall { dst, class, method, base: args, argc } => {
                     let site = &func.sites[method as usize];
+                    // `parent::$prop::get()` on a parent whose property has
+                    // no such hook: the stored value of `$this->prop`.
+                    if let Some(rest) = site.display.as_bytes().strip_prefix(b"$")
+                        && let Some(at_sep) = rest.windows(2).position(|x| x == b"::")
+                    {
+                        let target = self.class_of(func, class, w)?;
+                        if target.method(site.name.as_bytes()).is_none() {
+                            let this = self.frames.last().and_then(|f| f.this.clone());
+                            let Some(this) = this else { return Err(self.throw("Error", "Using $this when not in object context")) };
+                            let prop = Value::Str(PhpStr::from(&rest[..at_sep]));
+                            let v = if rest.ends_with(b"::set") {
+                                let v = reg!(args).deref();
+                                self.write_prop(&Value::Object(this), &prop, v.clone())?;
+                                v
+                            } else {
+                                self.fetch_prop(&Value::Object(this), &prop, false)?
+                            };
+                            for r in &mut w[args as usize..args as usize + argc as usize] {
+                                clear(r);
+                            }
+                            reg!(dst) = v;
+                            return Ok(Next::Go(pc));
+                        }
+                    }
                     let m = self.static_frame(func, class, site.name.as_bytes(), site.display.as_bytes(), w)?;
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
@@ -2888,6 +2993,29 @@ impl Ctx for Context<'_> {
 
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw> {
         self.closure_from_callable(callable)
+    }
+
+    fn prop_value(&mut self, o: &Rc<Object>, slot: usize) -> Result<Option<Value>, Throw> {
+        let p = &o.class.properties[slot];
+        let raw = || match o.slots.borrow()[slot].deref() {
+            Value::Undef => None,
+            v => Some(v),
+        };
+        if p.hooks == 0 || self.isolate.regs.is_empty() {
+            return Ok(raw());
+        }
+        let name = Value::Str(p.name.clone());
+        match self.prop_hook_seen(&Value::Object(Rc::clone(o)), &name, HOOK_GET, false) {
+            Some(Ok(m)) => {
+                let mut regs = std::mem::take(&mut self.isolate.regs);
+                let r = self.run_nested(&mut regs, m, &mut []);
+                self.isolate.regs = regs;
+                r.map(Some)
+            }
+            // Virtual and write-only: nothing to read.
+            Some(Err(_)) => Ok(None),
+            None => Ok(raw()),
+        }
     }
 
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {

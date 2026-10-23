@@ -266,13 +266,16 @@ impl Encoder<'_> {
         }
         // Public properties (initialized), then dynamic ones.
         let mut entries = Vec::new();
-        let slots = o.slots.borrow();
-        for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-            if p.visibility == Visibility::Public && !matches!(v, Value::Undef) {
-                entries.push((Key::from_string(p.name.clone()), v.clone()));
+        for (i, p) in o.class.properties.iter().enumerate() {
+            if p.visibility != Visibility::Public {
+                continue;
+            }
+            // A hooked property through its get hook (a virtual one too).
+            let v = if p.hooks == 0 { Some(o.slots.borrow()[i].clone()).filter(|v| !matches!(v, Value::Undef)) } else { self.ctx.prop_value(o, i)? };
+            if let Some(v) = v {
+                entries.push((Key::from_string(p.name.clone()), v));
             }
         }
-        drop(slots);
         for (k, v) in o.dynamic.borrow().iter() {
             entries.push((k, v.clone()));
         }

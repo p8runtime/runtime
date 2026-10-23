@@ -53,6 +53,14 @@ pub const CLASS_DESTRUCTOR: u32 = 128;
 /// Some property default is code to run before the class is first used
 /// (a constant expression naming other constants).
 pub const CLASS_LAZY: u32 = 256;
+/// Some property has hooks (get/set run as methods `$name::get`, `$name::set`).
+pub const CLASS_HOOKS: u32 = 512;
+
+/// A property's hooks (Property::hooks): a get hook, a set hook, and
+/// whether it is virtual (no stored value: no hook uses `$this->name`).
+pub const HOOK_GET: u8 = 1;
+pub const HOOK_SET: u8 = 2;
+pub const HOOK_VIRTUAL: u8 = 4;
 
 /// The code a declaration's value comes from, run when PHP evaluates it
 /// (the interpreter's compiled function; opaque here).
@@ -82,6 +90,8 @@ pub struct Property {
     pub ty: Option<PhpStr>,
     /// The default is this code's value (computed once per class).
     pub init: Option<Thunk>,
+    /// HOOK_GET | HOOK_SET | HOOK_VIRTUAL (0: a plain property).
+    pub hooks: u8,
 }
 
 /// A method written in Rust (a builtin class's): `$this`, the arguments.

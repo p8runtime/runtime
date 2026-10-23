@@ -1,0 +1,72 @@
+float(100)
+float(212)
+Temp::$name::get
+string(5) "HELLO"
+$log::set [1,2]
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+$log::set {"0":1,"1":2,"5":5}
+$log::set 10
+$log::set 11
+$log::set 12
+$log::set 10
+int(10)
+Property Temp::$readOnly is read-only
+Property Temp::$writeOnly is write-only
+Property Temp::$writeOnly is write-only
+wrote w
+bool(true)
+bool(true)
+string(2) "ro"
+Cannot unset hooked property Temp::$name
+$log::set []
+Indirect modification of Temp::$log is not allowed
+object(Temp)#1 (3) {
+  ["celsius"]=>
+  float(100)
+  ["name"]=>
+  string(5) "hello"
+  ["log"]=>
+  array(0) {
+  }
+}
+Temp::$name::get
+array(5) {
+  ["celsius"]=>
+  float(100)
+  ["fahrenheit"]=>
+  float(212)
+  ["name"]=>
+  string(5) "HELLO"
+  ["log"]=>
+  array(0) {
+  }
+  ["readOnly"]=>
+  string(2) "ro"
+}
+Temp::$name::get
+{"celsius":100,"fahrenheit":212,"name":"HELLO","log":[],"readOnly":"ro"}
+Temp::$name::get
+\Temp::__set_state(array(
+   'celsius' => 100.0,
+   'fahrenheit' => 212.0,
+   'name' => 'HELLO',
+   'log' => 
+  array (
+  ),
+   'readOnly' => 'ro',
+))
+string(8) "base+kid"
+string(2) "Q!"
+int(7)
+Maximum call stack siz

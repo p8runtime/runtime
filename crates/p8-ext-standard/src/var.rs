@@ -315,7 +315,7 @@ fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Obj
 /// var_export($value, $return = false)
 fn var_export(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut out = Vec::new();
-    export(&arg(args, 0), 1, &mut out);
+    export(ctx, &arg(args, 0), 1, &mut out)?;
     if args.len() > 1 && arg(args, 1).to_bool() {
         return Ok(Value::Str(PhpStr::new(out)));
     }
@@ -324,7 +324,7 @@ fn var_export(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// php_var_export_ex
-fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
+fn export(ctx: &mut dyn Ctx, v: &Value, level: usize, out: &mut Vec<u8>) -> Result<(), Throw> {
     match v {
         // PHP also warns "var_export does not handle resources".
         Value::Null | Value::Undef => out.extend_from_slice(b"NULL"),
@@ -354,7 +354,7 @@ fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
                     Key::Str(s) => export_string(s.as_bytes(), out),
                 }
                 out.extend_from_slice(b" => ");
-                export(v, level + 2, out);
+                export(ctx, v, level + 2, out)?;
                 out.extend_from_slice(b",\n");
             }
             if level > 1 {
@@ -362,7 +362,10 @@ fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
             }
             out.push(b')');
         }
-        Value::Ref(cell) => export(&cell.borrow(), level, out),
+        Value::Ref(cell) => {
+            let v = cell.borrow().clone();
+            export(ctx, &v, level, out)?;
+        }
         Value::Object(o) if o.class.flags & CLASS_ENUM != 0 => {
             if level > 1 {
                 out.push(b'\n');
@@ -386,12 +389,12 @@ fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
                 out.extend_from_slice(o.class.name.as_bytes());
                 out.extend_from_slice(b"::__set_state(array(\n");
             }
-            for e in entries(o) {
+            for e in entries_through_hooks(ctx, o)? {
                 let Some(v) = e.value else { continue };
                 out.extend(std::iter::repeat_n(b' ', level + 2));
                 export_string(e.name.as_bytes(), out);
                 out.extend_from_slice(b" => ");
-                export(&v, level + 2, out);
+                export(ctx, &v, level + 2, out)?;
                 out.extend_from_slice(b",\n");
             }
             if level > 1 {
@@ -400,6 +403,35 @@ fn export(v: &Value, level: usize, out: &mut Vec<u8>) {
             out.extend_from_slice(if std_class { b")" } else { b"))" });
         }
     }
+    Ok(())
+}
+
+/// The entries as var_export lists them: a hooked property's value
+/// through its get hook (virtual ones too).
+fn entries_through_hooks(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Result<Vec<Entry>, Throw> {
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
+        return Ok(entries(o));
+    }
+    let mut out = Vec::new();
+    let mut slot_entries = entries(o).into_iter().peekable();
+    for (i, p) in o.class.properties.iter().enumerate() {
+        if p.hooks == 0 {
+            // The plain ones as entries() made them (in slot order).
+            if let Some(e) = slot_entries.next_if(|e| e.name == p.name && e.declaring == p.declaring_name) {
+                out.push(e);
+            }
+            continue;
+        }
+        if let Some(e) = slot_entries.next_if(|e| e.name == p.name && e.declaring == p.declaring_name) {
+            drop(e);
+        }
+        let value = ctx.prop_value(o, i)?;
+        if value.is_some() {
+            out.push(Entry { name: p.name.clone(), visibility: p.visibility, declaring: p.declaring_name.clone(), value, ty: p.ty.clone() });
+        }
+    }
+    out.extend(slot_entries);
+    Ok(out)
 }
 
 /// One of an object's properties as the dump functions list them.
@@ -433,6 +465,10 @@ fn entries(o: &Object) -> Vec<Entry> {
     }
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
+        // A virtual property stores nothing: not listed.
+        if p.hooks & p8_runtime::object::HOOK_VIRTUAL != 0 {
+            continue;
+        }
         let value = match v {
             Value::Undef if p.ty.is_none() => continue,
             Value::Undef => None,
