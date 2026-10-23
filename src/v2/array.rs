@@ -42,7 +42,7 @@ impl Key {
         Ok(match value {
             Value::Int(i) => (Key::Int(*i), None),
             Value::Str(s) => (Key::from_string(s.clone()), None),
-            Value::Null => (Key::Str(PhpStr::empty()), None),
+            Value::Null | Value::Undef => (Key::Str(PhpStr::empty()), None),
             Value::Bool(b) => (Key::Int(i64::from(*b)), None),
             Value::Float(f) => {
                 let issue = (f.fract() != 0.0 || !f.is_finite()).then_some(KeyIssue::LosesPrecision(*f));
@@ -202,6 +202,27 @@ impl PhpArray {
         }
     }
 
+    /// `get` for an int key.
+    #[inline]
+    pub fn get_int(&self, i: i64) -> Option<&Value> {
+        match &self.storage {
+            Storage::Packed(v) => usize::try_from(i).ok().and_then(|i| v.get(i)),
+            Storage::Hashed(h) => h.find(&Key::Int(i)).and_then(|i| h.entries[i].as_ref().map(|(_, v)| v)),
+        }
+    }
+
+    /// `get_mut` for an int key.
+    #[inline]
+    pub fn get_int_mut(&mut self, i: i64) -> Option<&mut Value> {
+        match &mut self.storage {
+            Storage::Packed(v) => usize::try_from(i).ok().and_then(|i| v.get_mut(i)),
+            Storage::Hashed(h) => {
+                let i = h.find(&Key::Int(i))?;
+                h.entries[i].as_mut().map(|(_, v)| v)
+            }
+        }
+    }
+
     pub fn get_mut(&mut self, key: &Key) -> Option<&mut Value> {
         match &mut self.storage {
             Storage::Packed(v) => match key {
@@ -290,6 +311,17 @@ impl PhpArray {
                 h.insert_new(Key::Int(i as i64), value);
             }
             self.storage = Storage::Hashed(h);
+        }
+    }
+
+    /// The first entry at or after position `pos` in iteration order, with
+    /// its position (foreach walks an array by position).
+    pub fn entry_at(&self, pos: usize) -> Option<(usize, Key, &Value)> {
+        match &self.storage {
+            Storage::Packed(v) => v.get(pos).map(|x| (pos, Key::Int(pos as i64), x)),
+            Storage::Hashed(h) => h.entries.get(pos..)?.iter().enumerate().find_map(|(i, e)| {
+                e.as_ref().map(|(k, v)| (pos + i, k.clone(), v))
+            }),
         }
     }
 

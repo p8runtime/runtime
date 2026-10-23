@@ -11,8 +11,9 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Value {
+    #[default]
     Null,
     Bool(bool),
     Int(i64),
@@ -21,6 +22,8 @@ pub enum Value {
     Array(Rc<PhpArray>),
     /// A PHP reference: the shared cell `$a = &$b` makes.
     Ref(Rc<RefCell<Value>>),
+    /// A variable never assigned (only in registers; reads warn and give null).
+    Undef,
 }
 
 impl Value {
@@ -39,7 +42,7 @@ impl Value {
     /// The type name PHP uses in messages (zend_zval_type_name).
     pub fn type_name(&self) -> &'static str {
         match self {
-            Value::Null => "null",
+            Value::Null | Value::Undef => "null",
             Value::Bool(_) => "bool",
             Value::Int(_) => "int",
             Value::Float(_) => "float",
@@ -52,7 +55,7 @@ impl Value {
     /// zend_is_true
     pub fn to_bool(&self) -> bool {
         match self {
-            Value::Null => false,
+            Value::Null | Value::Undef => false,
             Value::Bool(b) => *b,
             Value::Int(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
@@ -66,7 +69,7 @@ impl Value {
     /// strings read their numeric prefix, saturating when out of range.
     pub fn to_int(&self) -> i64 {
         match self {
-            Value::Null => 0,
+            Value::Null | Value::Undef => 0,
             Value::Bool(b) => i64::from(*b),
             Value::Int(i) => *i,
             Value::Float(f) => dval_to_lval(*f),
@@ -83,7 +86,7 @@ impl Value {
     /// zval_get_double
     pub fn to_float(&self) -> f64 {
         match self {
-            Value::Null => 0.0,
+            Value::Null | Value::Undef => 0.0,
             Value::Bool(b) => f64::from(u8::from(*b)),
             Value::Int(i) => *i as f64,
             Value::Float(f) => *f,
@@ -101,7 +104,7 @@ impl Value {
     /// which the engine reports ("Array to string conversion").
     pub fn to_php_string(&self) -> Option<PhpStr> {
         Some(match self {
-            Value::Null | Value::Bool(false) => PhpStr::empty(),
+            Value::Null | Value::Undef | Value::Bool(false) => PhpStr::empty(),
             Value::Bool(true) => PhpStr::from("1"),
             Value::Int(i) => PhpStr::from(i.to_string()),
             Value::Float(f) => PhpStr::from(php_float_to_string(*f, FloatPrecision::echo(), 'E')),
@@ -116,7 +119,7 @@ impl Value {
         match (self, other) {
             (Value::Ref(a), _) => a.borrow().identical(other),
             (_, Value::Ref(b)) => self.identical(&b.borrow()),
-            (Value::Null, Value::Null) => true,
+            (Value::Null | Value::Undef, Value::Null | Value::Undef) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
@@ -148,6 +151,8 @@ impl Value {
         Some(match (self, other) {
             (Ref(a), _) => return a.borrow().compare(other),
             (_, Ref(b)) => return self.compare(&b.borrow()),
+            (Undef, _) => return Null.compare(other),
+            (_, Undef) => return self.compare(&Null),
             (Int(a), Int(b)) => a.cmp(b),
             (Int(a), Float(b)) => float_cmp(*a as f64, *b),
             (Float(a), Int(b)) => float_cmp(*a, *b as f64),

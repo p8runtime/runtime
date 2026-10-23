@@ -87,7 +87,7 @@ fn show(v: &Value) -> String {
         Value::Float(f) => format!("f:{}", hex(&f.to_be_bytes())),
         Value::Str(s) => format!("s:{}", hex(s.as_bytes())),
         Value::Array(a) => format!("a:{}", hex(json(a).as_bytes())),
-        Value::Ref(_) => "ref".into(),
+        Value::Ref(_) | Value::Undef => "ref".into(),
     }
 }
 

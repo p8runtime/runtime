@@ -1,0 +1,61 @@
+int(1)
+int(20)
+int(4)
+int(5)
+int(6)
+
+Warning: Undefined array key 99 in %s on line 5
+NULL
+int(1)
+int(100)
+array(4) {
+  [0]=>
+  float(0)
+  [1]=>
+  float(1.5)
+  [2]=>
+  float(3)
+  [3]=>
+  float(4.5)
+}
+float(1.5)
+string(1) "b"
+string(1) "c"
+string(4) "none"
+array(1) {
+  [2]=>
+  int(3)
+}
+array(2) {
+  [5]=>
+  int(1)
+  [6]=>
+  int(2)
+}
+int(30)
+int(2)
+array(1) {
+  [1]=>
+  int(0)
+}
+float(2.5)
+NULL
+array(2) {
+  [0]=>
+  array(1) {
+    [0]=>
+    int(9)
+  }
+  [1]=>
+  string(3) "str"
+}
+array(1) {
+  [0]=>
+  int(6)
+}
+int(16)
+int(9)
+int(-3)
+
+Deprecated: Implicit conversion from float 1.7 to int loses precision in %s on line 22
+int(1)

@@ -122,7 +122,7 @@ fn number_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags)
     Ok(match v {
         Value::Int(i) => Number::Int(*i),
         Value::Float(f) => Number::Float(*f),
-        Value::Null => Number::Int(0),
+        Value::Null | Value::Undef => Number::Int(0),
         Value::Bool(x) => Number::Int(i64::from(*x)),
         Value::Str(s) => match numeric_string(s.as_bytes()) {
             Some(n) => n,
@@ -333,7 +333,7 @@ pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     Ok(match a {
         Value::Int(i) => i.checked_add(1).map_or(Value::Float(*i as f64 + 1.0), Value::Int),
         Value::Float(f) => Value::Float(f + 1.0),
-        Value::Null => Value::Int(1),
+        Value::Null | Value::Undef => Value::Int(1),
         Value::Bool(_) => {
             diags.push(Diag::Warning(
                 "Increment on type bool has no effect, this will change in the next major version of PHP".into(),
@@ -366,7 +366,7 @@ pub fn decrement(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     Ok(match a {
         Value::Int(i) => i.checked_sub(1).map_or(Value::Float(*i as f64 - 1.0), Value::Int),
         Value::Float(f) => Value::Float(f - 1.0),
-        Value::Null => {
+        Value::Null | Value::Undef => {
             diags.push(Diag::Warning(
                 "Decrement on type null has no effect, this will change in the next major version of PHP".into(),
             ));

@@ -18,7 +18,7 @@ use std::rc::Rc;
 /// Zend's scanner does: \n \t \r \v \e \f \\ \$ \", octal \[0-7]{1,3},
 /// hex \x[0-9a-f]{1,2} and \u{codepoint}; any other backslash is kept.
 /// Reference: $PHP_SRC_PATH/Zend/zend_language_scanner.l - zend_scan_escape_string
-fn unescape_string(s: &[u8]) -> Vec<u8> {
+pub(crate) fn unescape_string(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
@@ -86,7 +86,7 @@ fn unescape_string(s: &[u8]) -> Vec<u8> {
 /// The value of an integer literal: decimal, 0x hex, 0b binary, 0o or
 /// leading-0 octal, with `_` separators; too large for an int, it is a float.
 /// Reference: $PHP_SRC_PATH/Zend/zend_language_scanner.l - LNUM/HNUM/BNUM/ONUM
-fn integer_literal(value: &[u8]) -> Val {
+pub(crate) fn integer_literal(value: &[u8]) -> Val {
     let digits: Vec<u8> = value.iter().copied().filter(|b| *b != b'_').collect();
     let (radix, body) = match digits.as_slice() {
         [b'0', b'x' | b'X', rest @ ..] => (16, rest),
@@ -111,14 +111,14 @@ fn integer_literal(value: &[u8]) -> Val {
 }
 
 /// The value of a float literal (`_` separators allowed).
-fn float_literal(value: &[u8]) -> f64 {
+pub(crate) fn float_literal(value: &[u8]) -> f64 {
     let text: String = value.iter().filter(|b| **b != b'_').map(|b| char::from(*b)).collect();
     text.parse().unwrap_or(0.0)
 }
 
 /// The value of a string literal token: '...' (only \\ and \' are escapes),
 /// "..." (full escapes) or an unquoted interpolation/heredoc part.
-fn string_literal(value: &[u8]) -> Vec<u8> {
+pub(crate) fn string_literal(value: &[u8]) -> Vec<u8> {
     let quoted = |q: u8| value.len() >= 2 && value[0] == q && value[value.len() - 1] == q;
     if quoted(b'\'') {
         let inner = &value[1..value.len() - 1];
