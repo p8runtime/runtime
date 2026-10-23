@@ -2855,7 +2855,15 @@ impl<'src> Compiler<'src> {
         if let Some(global) = &fallback {
             f.sites[site as usize].fallback = Some(Text::from(global.as_slice()));
         }
-        let regs: Vec<Reg> = (0..args.len()).map(|_| f.temp()).collect();
+        // assert() gets its source as a hidden last argument (the message
+        // of the AssertionError it throws).
+        let assert_text = (fallback.as_deref().unwrap_or(&lower) == b"assert" && args.len() <= 2).then(|| self.text(span).to_vec());
+        let extra = match &assert_text {
+            Some(_) => 3 - args.len().min(2),
+            None => 0,
+        };
+        let all: Vec<Reg> = (0..args.len() + extra).map(|_| f.temp()).collect();
+        let regs: Vec<Reg> = all[..args.len()].to_vec();
         for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
             if arg.unpack || arg.name.is_some() {
                 return Err(self.unsupported(arg.span, "spread or named arguments"));
@@ -2878,12 +2886,22 @@ impl<'src> Compiler<'src> {
                 value => self.expr_into(f, value, *r)?,
             }
         }
-        let base = regs.first().copied().unwrap_or_else(|| f.temp());
+        if let Some(source) = assert_text {
+            let mut i = args.len();
+            if args.len() < 2 {
+                let null = f.constant(Frozen::Null);
+                f.emit(Instr::Move { dst: all[i], src: null });
+                i += 1;
+            }
+            let text = f.constant(Frozen::Str(Text::from(source.as_slice())));
+            f.emit(Instr::Move { dst: all[i], src: text });
+        }
+        let base = all.first().copied().unwrap_or_else(|| f.temp());
         // The arguments' registers are free again once the call has them:
         // the result may land in the first (the callee's frame is cleared
         // before its result is written).
         let dst = out(f, hint, mark);
-        f.emit(Instr::Call { site, base, argc: args.len() as u8, dst });
+        f.emit(Instr::Call { site, base, argc: all.len() as u8, dst });
         Ok(dst)
     }
 }
