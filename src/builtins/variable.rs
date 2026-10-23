@@ -110,7 +110,7 @@ fn dump_value(vm: &VM, handle: Handle, depth: usize) {
                     "{}object({})#{} ({}) {{",
                     indent,
                     String::from_utf8_lossy(class_name),
-                    handle.0,
+                    handle.index(),
                     obj.properties.len()
                 );
                 for (prop_sym, prop_handle) in &obj.properties {
