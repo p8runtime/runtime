@@ -1,55 +1,30 @@
-2
-2
-Array
-(
-    [x] => 10
-    [y] => Array
-        (
-            [0] => 1
-            [1] => 10
-        )
+int(10)
+int(20)
 
-    [new] => Array
-        (
-            [deep] => made
-        )
+Deprecated: Creation of dynamic property O::$q2 is deprecated in %s on line 6
+int(6)
 
-)
-Array
-(
-    [0] => changed
-    [k] => changed
-)
-Array
-(
-    [0] => 2
-    [1] => 4
-    [2] => 6
-)
-Array
-(
-    [a] => a1
-    [b] => b2
-)
-3
-Array
-(
-    [0] => 2
-    [1] => 2
-)
-101112
-Array
-(
-    [s] => Array
-        (
-            [0] => 4
-            [1] => 5
-        )
+Deprecated: Creation of dynamic property O::$self is deprecated in %s on line 7
+bool(true)
+string(7) "changed"
+string(4) "zero"
+string(7) "via ref"
+string(5) "bound"
+string(4) "prop"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  &string(4) "elem"
+}
+int(99)
 
-)
-3
-2
-2r
-2
-6
-3
+Notice: Only variables should be assigned by reference in %s on line 19
+int(99)
+int(99)
+array(1) {
+  ["k"]=>
+  &string(11) "set via ref"
+}
+int(2)
+int(12)

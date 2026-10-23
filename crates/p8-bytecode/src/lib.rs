@@ -261,9 +261,41 @@ pub enum Instr {
     InstanceOf { dst: Reg, src: Reg, class: u16 },
     /// `clone $x`
     Clone { dst: Reg, src: Reg },
+    /// A reference operation (rare: one variant keeps dispatch small);
+    /// the operands' meaning depends on `op` (see RefOp).
+    Ref { op: RefOp, a: Reg, b: Reg, c: Reg, class: u16 },
+}
+
+/// Instr::Ref's operation, and what its operands are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefOp {
+    /// `&$obj->name`: a gets a reference to the property of b named c (made one).
+    PropRef,
+    /// `$obj->name = &…`: the property of a named b becomes the reference
+    /// in c (made one if it is a variable).
+    AssignPropRef,
+    /// `&C::$name`: a gets a reference to `class`'s static b.
+    StaticRef,
+    /// `C::$name = &…`: `class`'s static a becomes the reference in b.
+    AssignStaticRef,
+    /// The call writing a next is in a reference context (`$x = &f()`): a
+    /// function returning by reference returns the reference there.
+    WantRef,
+    /// `$var = &f()`: a binds to the reference the call left in b; a value
+    /// (the function does not return by reference) is assigned, with
+    /// PHP's notice.
+    BindRefResult,
+    /// `return` in a function returning by reference: the reference in a
+    /// (made one), when the caller wants one.
+    ReturnRef,
 }
 
 impl Instr {
+    /// One reference operation (unused operands 0).
+    pub fn reference(op: RefOp, a: Reg, b: Reg, c: Reg, class: u16) -> Instr {
+        Instr::Ref { op, a, b, c, class }
+    }
+
     /// The compare-and-branch that jumps to `target` when `a cmp b` is
     /// `when`. `<=>` is not a branch condition.
     pub fn jump_cmp(cmp: Cmp, a: Reg, b: Reg, when: bool, target: u32) -> Instr {

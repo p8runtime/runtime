@@ -490,11 +490,23 @@ fn entries(o: &Object) -> Vec<Entry> {
 fn var_dump(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut out = Vec::new();
     let mut seen = Vec::new();
+    // Each argument is a value (a reference a builtin returned is read through).
     for v in args.iter() {
-        dump(v, 0, &mut out, &mut seen);
+        dump(&v.deref(), 0, &mut out, &mut seen);
     }
     ctx.echo(&out);
     Ok(Value::Null)
+}
+
+/// A reference inside an array or object: `&` before it when something
+/// else holds it too (more than `holders` holders here).
+fn dump_ref(cell: &Rc<std::cell::RefCell<Value>>, holders: usize, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>) {
+    let start = out.len() + indent;
+    let inner = cell.borrow().clone();
+    dump(&inner, indent, out, seen);
+    if Rc::strong_count(cell) > holders && !out[start..].starts_with(b"*RECURSION*") {
+        out.insert(start, b'&');
+    }
 }
 
 fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>) {
@@ -527,7 +539,7 @@ fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>)
             }
             out.extend_from_slice(format!("{pad}}}\n").as_bytes());
         }
-        Value::Ref(cell) => dump(&cell.borrow(), indent, out, seen),
+        Value::Ref(cell) => dump_ref(cell, 1, indent, out, seen),
         Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => {
             let kind = if closed(o) { "Unknown".to_string() } else { String::from_utf8_lossy(o.class.name.as_bytes()).into_owned() };
             out.extend_from_slice(format!("{pad}resource({}) of type ({kind})\n", o.id).as_bytes());
@@ -565,6 +577,8 @@ fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>)
                 }
                 out.extend_from_slice(b"]=>\n");
                 match e.value {
+                    // The entry is a copy: one more holder of a reference.
+                    Some(Value::Ref(cell)) => dump_ref(&cell, 2, indent + 2, out, seen),
                     Some(v) => dump(&v, indent + 2, out, seen),
                     None => {
                         out.extend_from_slice(format!("{pad}  uninitialized(").as_bytes());

@@ -11,7 +11,7 @@ mod include;
 mod refs;
 mod throw;
 
-use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg};
+use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg, RefOp};
 pub use include::{LoadError, Loader};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Registry};
@@ -490,6 +490,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::Unsilence { .. }
                 | Instr::New { .. }
                 | Instr::Construct { .. }
+                | Instr::Ref { .. }
                 | Instr::ConstructSpread { .. }
                 | Instr::This { .. }
                 | Instr::FetchProp { .. }
@@ -843,6 +844,7 @@ impl Isolate {
             enum_objects: HashMap::new(),
             resolved: std::collections::HashSet::new(),
             stack_base: 0,
+            ref_wanted: Vec::new(),
             class_defaults: HashMap::new(),
             const_cache: HashMap::new(),
             const_evaluating: Vec::new(),
@@ -916,6 +918,9 @@ pub struct Context<'i> {
     native_class: Option<Rc<Class>>,
     /// Enum case objects, one per (enum, case) in a request.
     enum_objects: HashMap<(Vec<u8>, Vec<u8>), Rc<Object>>,
+    /// Result registers (absolute) of calls in a reference context: a
+    /// function returning by reference returns the reference there.
+    ref_wanted: Vec<usize>,
     /// The native stack's address where the script started (0: unknown),
     /// to stop runaway nesting (PHP's "Maximum call stack size").
     stack_base: usize,
@@ -1175,6 +1180,10 @@ impl Context<'_> {
     fn warn(&mut self, message: impl Into<String>) {
         self.diags.push(Diag::Warning(message.into()));
         self.report_diags();
+    }
+
+    fn notice(&mut self, message: &str) {
+        self.show(E_NOTICE, message);
     }
 
     /// The value in register `r` of the frame window `w`, as an operand:
@@ -1831,6 +1840,88 @@ impl Context<'_> {
                         data.captured.borrow_mut().push(v);
                     }
                 }
+                Instr::Ref { op, a, b, c, class } => match op {
+                    RefOp::PropRef => {
+                            let (dst, obj, name) = (a, b, c);
+                        let target = self.operand(w, func, obj);
+                        let name = reg!(name).clone();
+                        let cell = self.prop_ref(&target, &name)?;
+                        reg!(dst) = Value::Ref(cell);
+                    }
+                    RefOp::AssignPropRef => {
+                            let (obj, name, src) = (a, b, c);
+                        let target = self.operand(w, func, obj);
+                        let name = reg!(name).clone();
+                        let cell = make_ref(w, src);
+                        self.prop_bind(&target, &name, cell)?;
+                    }
+                    RefOp::StaticRef => {
+                            let (dst, name) = (a, b);
+                        if let Some(c) = self.lazy_class(func, class, w)? {
+                            self.resolve_class(regs, &c)?;
+                            return Ok(Next::Go(at));
+                        }
+                        let name = reg!(name).clone();
+                        let cell = self.static_cell(func, class, &name, w)?;
+                        let inner = match &*cell.borrow() {
+                            Value::Ref(r) => Some(Rc::clone(r)),
+                            _ => None,
+                        };
+                        let r = match inner {
+                            Some(r) => r,
+                            None => {
+                                let v = match std::mem::take(&mut *cell.borrow_mut()) {
+                                    Value::Undef => Value::Null,
+                                    v => v,
+                                };
+                                let r = Rc::new(RefCell::new(v));
+                                *cell.borrow_mut() = Value::Ref(Rc::clone(&r));
+                                r
+                            }
+                        };
+                        reg!(dst) = Value::Ref(r);
+                    }
+                    RefOp::AssignStaticRef => {
+                            let (name, src) = (a, b);
+                        if let Some(c) = self.lazy_class(func, class, w)? {
+                            self.resolve_class(regs, &c)?;
+                            return Ok(Next::Go(at));
+                        }
+                        let name = reg!(name).clone();
+                        let cell = self.static_cell(func, class, &name, w)?;
+                        let r = make_ref(w, src);
+                        *cell.borrow_mut() = Value::Ref(r);
+                    }
+                    RefOp::WantRef => self.ref_wanted.push(base + a as usize),
+                    RefOp::BindRefResult => {
+                            let (var, src) = (a, b);
+                        let at_reg = base + src as usize;
+                        self.ref_wanted.retain(|&r| r != at_reg);
+                        match reg!(src).clone() {
+                            Value::Ref(cell) => reg!(var) = Value::Ref(cell),
+                            v => {
+                                self.notice("Only variables should be assigned by reference");
+                                assign(w, var, v);
+                            }
+                        }
+                    }
+                    RefOp::ReturnRef => {
+                            let src = a;
+                        let ret = self.frames.last().map_or(NO_RET, |f| f.ret);
+                        let wanted = ret != NO_RET && self.ref_wanted.contains(&(ret as usize));
+                        if wanted {
+                            self.ref_wanted.retain(|&r| r != ret as usize);
+                        }
+                        let v = if wanted { Value::Ref(make_ref(w, src)) } else { self.operand(w, func, src) };
+                        if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                            self.finish(&g, v);
+                            leave(&mut self.frames, regs, Value::Null);
+                            return Ok(Next::Switch);
+                        }
+                        leave(&mut self.frames, regs, v);
+                        return Ok(Next::Switch);
+                    }
+                },
                 Instr::BindRef { var, src } => {
                     if var != src {
                         let cell = make_ref(w, src);
