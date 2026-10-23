@@ -83,7 +83,7 @@ fn text(s: &PhpStr) -> String {
 
 /// The stream resource in argument `i`: TypeError for anything else, and
 /// for a closed one.
-fn stream_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value], i: usize) -> Result<Rc<Object>, Throw> {
+pub(crate) fn stream_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value], i: usize) -> Result<Rc<Object>, Throw> {
     let v = arg(args, i);
     match resource_of(&v) {
         Some(o) if resource(&o).is_some_and(|r| !r.closed.get()) => Ok(o),

@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "array_multisort", run: array_multisort, by_ref: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
     Builtin { name: "sizeof", run: crate::count, by_ref: &[] },
     Builtin { name: "array_values", run: array_values, by_ref: &[] },
     Builtin { name: "array_merge", run: array_merge, by_ref: &[] },
@@ -482,12 +483,88 @@ fn array_unshift(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn order(flags: i64) -> impl Fn(&Value, &Value) -> Ordering {
     move |a, b| match flags & !8 {
         1 => a.to_float().partial_cmp(&b.to_float()).unwrap_or(Ordering::Equal),
-        2 => {
+        2 | 5 => {
             let (x, y) = (text(a), text(b));
             if flags & 8 != 0 { x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()) } else { x.cmp(&y) }
         }
+        6 => crate::string2::natural(&text(a), &text(b), flags & 8 != 0),
         _ => a.deref().compare(&b.deref()).unwrap_or(Ordering::Equal),
     }
+}
+
+/// array_multisort(array &$array, mixed $array_sort_order = SORT_ASC,
+/// mixed $array_sort_flags = SORT_REGULAR, mixed &...$rest): sorts the
+/// arrays together, by the first, ties by the next, as ORDER BY does.
+fn array_multisort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    // Each array, with its order (descending?) and flags.
+    let mut arrays: Vec<(usize, bool, i64)> = Vec::new();
+    let (mut order_free, mut type_free) = (false, false);
+    for (i, a) in args.iter().enumerate() {
+        match a.deref() {
+            Value::Array(_) => {
+                arrays.push((i, false, 0));
+                (order_free, type_free) = (true, true);
+            }
+            Value::Int(n) => match n & !8 {
+                3 | 4 if order_free => {
+                    arrays.last_mut().expect("an array before").1 = n == 3;
+                    order_free = false;
+                }
+                0 | 1 | 2 | 5 | 6 if type_free => {
+                    arrays.last_mut().expect("an array before").2 = n;
+                    type_free = false;
+                }
+                0..=6 => {
+                    return Err(ctx.throw("TypeError", format!("array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified", i + 1)));
+                }
+                _ => return Err(ctx.throw("ValueError", format!("array_multisort(): Argument #{} must be a valid sort flag", i + 1))),
+            },
+            _ => return Err(ctx.throw("TypeError", format!("array_multisort(): Argument #{} must be an array or a sort flag", i + 1))),
+        }
+    }
+    let columns: Vec<Vec<(Key, Value)>> = arrays
+        .iter()
+        .map(|(i, _, _)| match args[*i].deref() {
+            Value::Array(a) => a.iter().map(|(k, v)| (k, v.clone())).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let size = columns[0].len();
+    if columns.iter().any(|c| c.len() != size) {
+        return Err(ctx.throw("ValueError", "Array sizes are inconsistent".into()));
+    }
+    if size == 0 {
+        return Ok(Value::Bool(true));
+    }
+    let orders: Vec<_> = arrays.iter().map(|(_, desc, flags)| (*desc, order(*flags))).collect();
+    let mut rows: Vec<usize> = (0..size).collect();
+    // Stable: equal rows keep their order (PHP's fallback on position).
+    rows.sort_by(|&x, &y| {
+        for (c, (desc, cmp)) in orders.iter().enumerate() {
+            let o = cmp(&columns[c][x].1, &columns[c][y].1);
+            if o != Ordering::Equal {
+                return if *desc { o.reverse() } else { o };
+            }
+        }
+        Ordering::Equal
+    });
+    for (c, (i, _, _)) in arrays.iter().enumerate() {
+        // String keys stay; integer keys are renumbered.
+        let mut out = PhpArray::new();
+        for &r in &rows {
+            let (k, v) = &columns[c][r];
+            match k {
+                Key::Str(_) => out.insert(k.clone(), v.clone()),
+                Key::Int(_) => {
+                    let _ = out.push(v.clone());
+                }
+            }
+        }
+        if let Value::Ref(cell) = &args[*i] {
+            *cell.borrow_mut() = Value::Array(Rc::new(out));
+        }
+    }
+    Ok(Value::Bool(true))
 }
 
 fn key_value(k: &Key) -> Value {
