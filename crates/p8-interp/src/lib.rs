@@ -219,14 +219,14 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                         None => return pc,
                     }
                 }
-                Instr::Move { dst, src } => match plain(&w[src as usize]) {
+                Instr::Move { dst, src } => match copied(&w[src as usize]) {
                     Some(v) => {
                         w[dst as usize] = v;
                         pc += 1;
                     }
                     None => return pc,
                 },
-                Instr::Assign { var, src } => match plain(&w[src as usize]) {
+                Instr::Assign { var, src } => match copied(&w[src as usize]) {
                     Some(v) => {
                         assign(w, var, v);
                         pc += 1;
@@ -439,6 +439,17 @@ fn set_int_elem(a: &mut Rc<PhpArray>, k: i64, v: &Value) -> bool {
     true
 }
 
+/// A copy of a register's value, as `step` makes one (strings and arrays
+/// are shared until written), unless it is undefined (a warning) or a
+/// reference (read through its cell).
+#[inline(always)]
+fn copied(v: &Value) -> Option<Value> {
+    match v {
+        Value::Undef | Value::Ref(_) => None,
+        v => Some(v.clone()),
+    }
+}
+
 /// A copy of a value that holds nothing reference-counted.
 #[inline(always)]
 fn plain(v: &Value) -> Option<Value> {
@@ -549,15 +560,13 @@ pub struct Isolate {
     /// register file itself (taken out of here) so the hot loop works on a
     /// plain local slice.
     regs: Vec<Value>,
-    /// Reused for builtin arguments, so a builtin call does not allocate.
-    args: Vec<Value>,
     /// Set by an InterruptHandle; cleared when a request starts.
     interrupt: Arc<AtomicU64>,
 }
 
 impl Isolate {
     pub fn new(registry: Arc<Registry>) -> Isolate {
-        Isolate { registry, regs: Vec::with_capacity(1024), args: Vec::new(), interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)) }
+        Isolate { registry, regs: Vec::with_capacity(1024), interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)) }
     }
 
     pub fn registry(&self) -> &Arc<Registry> {
@@ -698,10 +707,16 @@ impl Context<'_> {
     }
 
     /// Show the diagnostics the last operation raised, at the current line.
+    #[inline]
     fn report_diags(&mut self) {
-        if self.diags.is_empty() {
-            return;
+        if !self.diags.is_empty() {
+            self.print_diags();
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn print_diags(&mut self) {
         let (file, line) = self.location();
         for d in std::mem::take(&mut self.diags) {
             let (label, message) = match d {
@@ -791,6 +806,16 @@ impl Context<'_> {
             }
             let (base, argc) = (frame.base as usize, frame.argc as usize);
             self.pc = pc + 1;
+            // A builtin the call site already resolved is called from here,
+            // not through `step`.
+            if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
+                && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
+            {
+                let w = &mut regs[base..base + func.code.nregs as usize];
+                self.call_builtin(w, i, args, n, dst)?;
+                pc += 1;
+                continue;
+            }
             match self.step(regs, &func, base, argc, pc)? {
                 Next::Go(next) => pc = next,
                 Next::Switch => match self.frames.last() {
@@ -1234,16 +1259,17 @@ impl Context<'_> {
         Ok(Next::Go(pc))
     }
 
-    /// Call builtin `i` with the `argc` arguments at `args`; result to `dst`.
-    #[inline(never)]
+    /// Call builtin `i` on the `argc` arguments at `args`. The builtin
+    /// works on those registers directly (the register file is not part of
+    /// the context, so it can lend them alongside itself); they are cleared
+    /// after, so nothing the call was given outlives it.
+    #[inline]
     fn call_builtin(&mut self, w: &mut [Value], i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
-        let start = args as usize;
-        let mut values = std::mem::take(&mut self.isolate.args);
-        values.extend(w[start..start + argc as usize].iter_mut().map(std::mem::take));
-        let entry = self.isolate.registry.function(i);
-        let r = (entry.run)(self, &mut values);
-        values.clear();
-        self.isolate.args = values;
+        let args = &mut w[args as usize..args as usize + argc as usize];
+        let r = (self.isolate.registry.function(i).run)(self, args);
+        for v in args {
+            clear(v);
+        }
         self.report_diags();
         w[dst as usize] = r?;
         Ok(())
