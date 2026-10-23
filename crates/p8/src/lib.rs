@@ -27,7 +27,7 @@
 use p8_runtime::ext::Registry;
 use std::sync::Arc;
 
-pub use p8_interp::Host;
+pub use p8_interp::{Host, InterruptHandle};
 pub use p8_runtime::ext::Extension;
 
 /// The extensions p8 ships.
@@ -115,6 +115,12 @@ pub struct Isolate {
 }
 
 impl Isolate {
+    /// A handle that stops this isolate's running request from any thread
+    /// (a host's watchdog holds one).
+    pub fn interrupt_handle(&self) -> InterruptHandle {
+        self.inner.interrupt_handle()
+    }
+
     /// Start a request whose output goes to `host`. The context borrows the
     /// isolate until it is dropped, which ends the request.
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {

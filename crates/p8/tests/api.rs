@@ -123,3 +123,45 @@ fn what_a_request_resolves_is_not_cached_for_the_next() {
     }
     assert_ne!(outputs[0], outputs[1], "the second request saw the first request's constant");
 }
+
+/// Run `source` while another thread interrupts it after 50 ms.
+fn interrupted(source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, String, p8::Isolate) {
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    let handle = isolate.interrupt_handle();
+    let script = platform.compile(source.as_bytes(), "t.php").expect("compiles");
+    let watchdog = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        interrupt(&handle);
+    });
+    let mut host = Capture::default();
+    let status = isolate.new_context(&mut host).run(&script);
+    watchdog.join().expect("watchdog");
+    (status, String::from_utf8(host.0).expect("utf-8"), isolate)
+}
+
+#[test]
+fn a_watchdog_stops_a_loop_running_in_the_fast_path() {
+    let (status, out, _) = interrupted("<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
+    assert_eq!(status, 255);
+    assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\n");
+}
+
+#[test]
+fn a_watchdog_stops_loops_and_recursion_outside_the_fast_path() {
+    let (status, out, _) = interrupted("<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
+    assert_eq!((status, out.as_str()), (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\n"));
+
+    let source = "<?php\nfunction f($n) { return $n < 1 ? 0 : f($n - 1) + f($n - 1); }\nf(60);";
+    let (status, out, _) = interrupted(source, |h| h.terminate());
+    assert_eq!(status, 255);
+    assert!(out.starts_with("\nFatal error: Execution was terminated by the host in t.php on line 2"), "{out:?}");
+}
+
+#[test]
+fn an_interrupted_isolate_runs_the_next_request() {
+    let (status, _, mut isolate) = interrupted("<?php while (true) {}", |h| h.terminate());
+    assert_eq!(status, 255);
+    let platform = platform();
+    assert_eq!(request(&platform, &mut isolate, "<?php for ($i = 0; $i < 3; $i++) echo $i;"), (0, "012".into()));
+}

@@ -15,6 +15,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 /// A function as one context runs it: the shared compiled code, plus what
 /// belongs to this context alone: its constants as values, and what each
@@ -70,12 +71,26 @@ enum Next {
 ///
 /// Kept apart from everything else so its state stays in machine registers.
 #[inline(never)]
-fn fast(w: &mut [Value], code: &[Instr], mut pc: usize) -> usize {
+fn fast(w: &mut [Value], code: &[Instr], mut pc: usize, stop: &AtomicU64) -> usize {
+    // A loop's backward branch is where an interrupt is noticed: `step`
+    // then raises it.
+    let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
     loop {
         match code[pc] {
-            Instr::Jump { target } => pc = target as usize,
+            Instr::Jump { target } => {
+                if back(target, pc) {
+                    return pc;
+                }
+                pc = target as usize;
+            }
             Instr::JumpCmp { cmp, a, b, when, target } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
-                Some(t) => pc = if t == when { target as usize } else { pc + 1 },
+                Some(t) if t == when => {
+                    if back(target, pc) {
+                        return pc;
+                    }
+                    pc = target as usize;
+                }
+                Some(_) => pc += 1,
                 None => return pc,
             },
             Instr::Compare { cmp, dst, a, b } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
@@ -131,10 +146,12 @@ fn fast(w: &mut [Value], code: &[Instr], mut pc: usize) -> usize {
                 None => return pc,
             },
             Instr::JumpIf { cond, target } => match w[cond as usize] {
+                Value::Bool(true) if back(target, pc) => return pc,
                 Value::Bool(c) => pc = if c { target as usize } else { pc + 1 },
                 _ => return pc,
             },
             Instr::JumpIfNot { cond, target } => match w[cond as usize] {
+                Value::Bool(false) if back(target, pc) => return pc,
                 Value::Bool(c) => pc = if c { pc + 1 } else { target as usize },
                 _ => return pc,
             },
@@ -277,6 +294,29 @@ impl Output<'_> {
     }
 }
 
+/// No interrupt pending.
+const NO_INTERRUPT: u64 = 0;
+/// InterruptHandle::terminate (other values: a timeout of that many seconds).
+const TERMINATE: u64 = u64::MAX;
+
+/// Stops the request an isolate is running, from any thread: what a host's
+/// watchdog holds. The request ends with a fatal error at the next loop
+/// iteration or call; the isolate stays usable for the next request.
+#[derive(Clone)]
+pub struct InterruptHandle(Arc<AtomicU64>);
+
+impl InterruptHandle {
+    /// End the request with PHP's max_execution_time error.
+    pub fn timeout(&self, seconds: u64) {
+        self.0.store(seconds.clamp(1, TERMINATE - 1), AtomicOrdering::Relaxed);
+    }
+
+    /// End the request (the host is shutting it down).
+    pub fn terminate(&self) {
+        self.0.store(TERMINATE, AtomicOrdering::Relaxed);
+    }
+}
+
 /// One engine on one thread. It runs one context (request) at a time: a
 /// context borrows it mutably for as long as it lives. What it keeps
 /// between requests (the register file, buffers) stays allocated, so a warm
@@ -293,20 +333,31 @@ pub struct Isolate {
     regs: Vec<Value>,
     /// Reused for builtin arguments, so a builtin call does not allocate.
     args: Vec<Value>,
+    /// Set by an InterruptHandle; cleared when a request starts.
+    interrupt: Arc<AtomicU64>,
 }
 
 impl Isolate {
     pub fn new(registry: Arc<Registry>) -> Isolate {
-        Isolate { registry, regs: Vec::with_capacity(1024), args: Vec::new() }
+        Isolate { registry, regs: Vec::with_capacity(1024), args: Vec::new(), interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)) }
     }
 
     pub fn registry(&self) -> &Arc<Registry> {
         &self.registry
     }
 
-    /// Start a request whose output goes to `host`.
+    /// A handle that stops this isolate's running request from another thread.
+    pub fn interrupt_handle(&self) -> InterruptHandle {
+        InterruptHandle(Arc::clone(&self.interrupt))
+    }
+
+    /// Start a request whose output goes to `host`. An interrupt left from
+    /// an earlier request is cleared.
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
+        self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
+        let stop = Arc::clone(&self.interrupt);
         Context {
+            stop,
             isolate: self,
             frames: Vec::new(),
             functions: HashMap::new(),
@@ -323,6 +374,8 @@ impl Isolate {
 /// Dropping it ends the request.
 pub struct Context<'i> {
     isolate: &'i mut Isolate,
+    /// The isolate's interrupt flag (kept here: read on every step).
+    stop: Arc<AtomicU64>,
     frames: Vec<Frame>,
     /// Declared functions by lowercase name (only ever grows, so call sites
     /// can cache what they resolve).
@@ -370,6 +423,10 @@ impl Context<'_> {
         let status = match result {
             Ok(()) => 0,
             Err(Throw::Exit(status)) => status,
+            Err(Throw::Fatal { message, file, line }) => {
+                self.out.write(format!("\nFatal error: {message} in {file} on line {line}\n").as_bytes());
+                255
+            }
             Err(Throw::Error { class, message, file, line }) => {
                 self.out.write(
                     format!(
@@ -401,6 +458,18 @@ impl Context<'_> {
         }
         regs[base + consts_at..base + consts_at + func.consts.len()].clone_from_slice(&func.consts);
         self.frames.push(Frame { func, pc: 0, base: base as u32, ret, argc: argc as u32, extra });
+    }
+
+    /// The fatal error an interrupt ends the request with.
+    #[cold]
+    #[inline(never)]
+    fn interrupted(&self) -> Throw {
+        let (file, line) = self.location();
+        let message = match self.stop.load(AtomicOrdering::Relaxed) {
+            TERMINATE => "Execution was terminated by the host".to_string(),
+            seconds => format!("Maximum execution time of {seconds} second{} exceeded", if seconds == 1 { "" } else { "s" }),
+        };
+        Throw::Fatal { message, file, line }
     }
 
     fn throw(&self, class: &'static str, message: impl Into<String>) -> Throw {
@@ -507,6 +576,7 @@ impl Context<'_> {
     /// the one instruction `fast` stopped at, until a call or return
     /// switches frames.
     fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
+        let stop = Arc::clone(&self.stop);
         loop {
             let frame = self.frames.last().expect("a frame");
             let func = frame.func.clone();
@@ -514,7 +584,7 @@ impl Context<'_> {
             let argc = frame.argc as usize;
             let mut pc = frame.pc as usize;
             loop {
-                pc = fast(&mut regs[base..base + func.code.nregs as usize], &func.code.code, pc);
+                pc = fast(&mut regs[base..base + func.code.nregs as usize], &func.code.code, pc, &stop);
                 self.pc = pc + 1;
                 match self.step(regs, &func, base, argc, pc)? {
                     Next::Go(next) => pc = next,
@@ -531,6 +601,9 @@ impl Context<'_> {
     #[inline(never)]
     fn step(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
         let func = &*clo.code;
+        if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+            return Err(self.interrupted());
+        }
         let instr = func.code[at];
         let mut pc = at + 1;
         // `w` is this frame's window (registers are frame-relative); `below`

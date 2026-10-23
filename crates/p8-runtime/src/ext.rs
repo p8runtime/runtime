@@ -14,6 +14,8 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub enum Throw {
     Error { class: &'static str, message: String, file: Rc<str>, line: u32 },
+    /// A fatal error: not an exception, nothing catches it.
+    Fatal { message: String, file: Rc<str>, line: u32 },
     Exit(i32),
 }
 
