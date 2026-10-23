@@ -123,7 +123,11 @@ impl Value {
         Some(match self {
             Value::Null | Value::Undef | Value::Bool(false) => PhpStr::empty(),
             Value::Bool(true) => PhpStr::from("1"),
-            Value::Int(i) => PhpStr::from(i.to_string()),
+            Value::Int(i) => {
+                let mut digits = Vec::with_capacity(20);
+                crate::numeric::push_int(&mut digits, *i);
+                PhpStr::new(digits)
+            }
             Value::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Value::Str(s) => s.clone(),
             Value::Array(_) => return None,

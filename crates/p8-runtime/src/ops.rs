@@ -9,7 +9,7 @@
 use crate::array::PhpArray;
 use crate::string::PhpStr;
 use crate::value::Value;
-use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string};
+use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string, push_int};
 use crate::number::{Precision, dval_to_lval, float_to_string};
 use std::rc::Rc;
 
@@ -327,24 +327,7 @@ pub fn string_len_hint(v: &Value) -> usize {
     }
 }
 
-/// An int's decimal digits, appended.
-fn push_int(out: &mut Vec<u8>, i: i64) {
-    let mut buf = [0u8; 20];
-    let mut at = buf.len();
-    let mut n = i.unsigned_abs();
-    loop {
-        at -= 1;
-        buf[at] = b'0' + (n % 10) as u8;
-        n /= 10;
-        if n == 0 {
-            break;
-        }
-    }
-    if i < 0 {
-        out.push(b'-');
-    }
-    out.extend_from_slice(&buf[at..]);
-}
+
 
 /// `-$a` (as `$a * -1`, keeping -0.0 and int overflow rules).
 pub fn negate(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {

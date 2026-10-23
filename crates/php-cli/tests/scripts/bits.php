@@ -6,3 +6,4 @@ foreach ($vals as $x) {
     foreach ($vals as $y) { echo $x & $y, " ", $x | $y, " ", $x ^ $y, " "; if ($y != 0) { echo $x % $y, " "; } }
     echo "\n";
 }
+foreach ([0, 1, 15, 16, 255, 4096, PHP_INT_MAX, -1, PHP_INT_MIN] as $v) { echo dechex($v), " ", $v, " ", "$v", "\n"; }

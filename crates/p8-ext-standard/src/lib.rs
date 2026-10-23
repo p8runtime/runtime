@@ -79,7 +79,9 @@ fn count(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn dechex(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::str(format!("{:x}", arg(args, 0).to_int() as u64)))
+    let mut digits = Vec::with_capacity(16);
+    p8_runtime::numeric::push_digits(&mut digits, arg(args, 0).to_int() as u64, 16, false);
+    Ok(Value::Str(PhpStr::new(digits)))
 }
 
 fn hrtime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
