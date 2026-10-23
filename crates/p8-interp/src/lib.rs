@@ -38,7 +38,11 @@ impl Closure {
 /// What a call site or constant fetch resolved to, in one context.
 #[derive(Clone)]
 enum Callee {
-    User(Rc<Closure>),
+    /// A user function: its closure's index in the context's table (an
+    /// index, not a reference: a recursive function's call site names the
+    /// function itself, and a reference would be a cycle that is never
+    /// freed).
+    User(u32),
     Builtin(usize),
     Constant(Value),
 }
@@ -57,6 +61,65 @@ struct Frame {
 
 const NO_RET: u32 = u32::MAX;
 
+/// The call stack. A popped frame keeps its slot and the closure in it, so
+/// calling the same function again from the same depth (what a loop does)
+/// reuses the slot without touching the closure's reference count.
+#[derive(Default)]
+struct Frames {
+    slots: Vec<Frame>,
+    /// Frames in use: `slots[..len]`.
+    len: usize,
+}
+
+impl Frames {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    fn last(&self) -> Option<&Frame> {
+        self.slots[..self.len].last()
+    }
+
+    #[inline(always)]
+    fn last_mut(&mut self) -> Option<&mut Frame> {
+        self.slots[..self.len].last_mut()
+    }
+
+    fn first(&self) -> Option<&Frame> {
+        self.slots[..self.len].first()
+    }
+
+    /// Push a frame running `func`, its window at `base`.
+    #[inline(always)]
+    fn push(&mut self, func: &Rc<Closure>, base: usize, argc: usize, ret: u32) {
+        match self.slots.get_mut(self.len) {
+            Some(slot) => {
+                if !Rc::ptr_eq(&slot.func, func) {
+                    slot.func = Rc::clone(func);
+                }
+                (slot.pc, slot.base, slot.ret, slot.argc) = (0, base as u32, ret, argc as u32);
+            }
+            None => self.slots.push(Frame { func: Rc::clone(func), pc: 0, base: base as u32, ret, argc: argc as u32, extra: None }),
+        }
+        self.len += 1;
+    }
+
+    /// Pop the top frame; its slot stays for the next push.
+    #[inline(always)]
+    fn pop(&mut self) -> &mut Frame {
+        self.len -= 1;
+        &mut self.slots[self.len]
+    }
+
+    /// Drop every frame and slot (and the closures they hold).
+    fn clear(&mut self) {
+        self.slots.clear();
+        self.len = 0;
+    }
+}
+
 /// What `step` leaves the frame loop to do.
 enum Next {
     /// Continue this frame at the pc.
@@ -74,7 +137,7 @@ enum Next {
 ///
 /// Kept apart from everything else so its state stays in machine registers.
 #[inline(never)]
-fn fast(regs: &mut Vec<Value>, frames: &mut Vec<Frame>, mut pc: usize, stop: &AtomicU64) -> usize {
+fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mut pc: usize, stop: &AtomicU64) -> usize {
     // A loop's backward branch is where an interrupt is noticed: `step`
     // then raises it.
     let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
@@ -247,10 +310,12 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Vec<Frame>, mut pc: usize, stop: &At
                 | Instr::ArgDefault { .. }
                 | Instr::Exit { .. } => return pc,
                 Instr::Call { site, base: args, argc: n, dst } => match clo.sites[site as usize].get() {
-                    Some(Callee::User(target))
-                        if n as usize >= target.code.required && stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT =>
-                    {
-                        break Switch::Call(Rc::clone(target), base + args as usize, n as usize, (base + dst as usize) as u32);
+                    Some(&Callee::User(target)) => {
+                        let target = &closures[target as usize];
+                        if n as usize >= target.code.required && stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT {
+                            break Switch::Call(target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                        }
+                        return pc;
                     }
                     _ => return pc,
                 },
@@ -269,7 +334,8 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Vec<Frame>, mut pc: usize, stop: &At
                 if let Some(caller) = frames.last_mut() {
                     caller.pc = (pc + 1) as u32;
                 }
-                enter(frames, regs, target, at, argc, ret);
+                frames.push(target, at, argc, ret);
+                enter(frames, regs);
                 pc = 0;
             }
             Switch::Return(value) => {
@@ -281,24 +347,28 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Vec<Frame>, mut pc: usize, stop: &At
 }
 
 /// How `fast` changes frames.
-enum Switch {
-    /// Enter a function: the callee, its window's start, the argument
-    /// count and the caller's result register.
-    Call(Rc<Closure>, usize, usize, u32),
+enum Switch<'c> {
+    /// Enter a user function: its closure, its window's start, the
+    /// argument count and the caller's result register.
+    Call(&'c Rc<Closure>, usize, usize, u32),
     Return(Value),
 }
 
-/// Push a frame for `func` whose window starts at `base`, with `argc`
-/// arguments already in its first registers.
+/// Set up the registers of the frame just pushed: its window starts at
+/// its base, with its arguments already in the first registers.
 #[inline(always)]
-fn enter(frames: &mut Vec<Frame>, regs: &mut Vec<Value>, func: Rc<Closure>, base: usize, argc: usize, ret: u32) {
+fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
+    let frame = frames.last_mut().expect("the frame just pushed");
+    let (func, base, argc) = (&frame.func, frame.base as usize, frame.argc as usize);
     let code = &*func.code;
     let need = base + code.nregs as usize;
     if regs.len() < need {
         regs.resize(need, Value::Undef);
     }
     let nparams = code.params.len();
-    let extra = if argc > nparams { take_extra(regs, code, base, nparams, argc) } else { None };
+    if argc > nparams {
+        frame.extra = take_extra(regs, code, base, nparams, argc);
+    }
     let consts_at = code.consts_at as usize;
     for r in &mut regs[base + argc.min(nparams)..base + consts_at] {
         clear(r);
@@ -308,14 +378,14 @@ fn enter(frames: &mut Vec<Frame>, regs: &mut Vec<Value>, func: Rc<Closure>, base
         // `r` is undefined now: nothing to drop.
         std::mem::forget(std::mem::replace(r, c.clone()));
     }
-    frames.push(Frame { func, pc: 0, base: base as u32, ret, argc: argc as u32, extra });
 }
 
 /// Pop the current frame, putting `value` in the caller's result
 /// register; the caller (if any) resumes at its saved pc.
 #[inline(always)]
-fn leave(frames: &mut Vec<Frame>, regs: &mut [Value], value: Value) {
-    let frame = frames.pop().expect("a frame");
+fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
+    let frame = frames.pop();
+    frame.extra = None;
     // Locals die with the frame (before the result lands: the result
     // register may be inside the window).
     let base = frame.base as usize;
@@ -507,8 +577,9 @@ impl Isolate {
         Context {
             stop,
             isolate: self,
-            frames: Vec::new(),
+            frames: Frames::default(),
             functions: HashMap::new(),
+            closures: Vec::new(),
             constants: HashMap::new(),
             globals: HashMap::new(),
             out: Output { buffers: Vec::new(), host },
@@ -524,10 +595,13 @@ pub struct Context<'i> {
     isolate: &'i mut Isolate,
     /// The isolate's interrupt flag (kept here: read on every step).
     stop: Arc<AtomicU64>,
-    frames: Vec<Frame>,
-    /// Declared functions by lowercase name (only ever grows, so call sites
+    frames: Frames,
+    /// Declared functions by lowercase name, as indices in `closures`
+    /// (only ever grows, so call sites
     /// can cache what they resolve).
-    functions: HashMap<Vec<u8>, Rc<Closure>>,
+    functions: HashMap<Vec<u8>, u32>,
+    /// Every closure this context made. Call sites refer to them by index.
+    closures: Vec<Rc<Closure>>,
     /// Constants the script defined (define(), const).
     constants: HashMap<Vec<u8>, Value>,
     /// Globals not held in the main frame's registers.
@@ -544,7 +618,8 @@ impl Context<'_> {
         if self.functions.contains_key(&key) || self.isolate.registry.lookup(&key).is_some() {
             return Err(format!("Cannot redeclare function {}()", String::from_utf8_lossy(func.name.as_bytes())));
         }
-        self.functions.insert(key, Closure::new(func));
+        self.closures.push(Closure::new(func));
+        self.functions.insert(key, (self.closures.len() - 1) as u32);
         Ok(())
     }
 
@@ -562,7 +637,8 @@ impl Context<'_> {
     /// Run a file's top-level code; returns the exit status.
     pub fn run_main(&mut self, main: Arc<Function>) -> i32 {
         let mut regs = std::mem::take(&mut self.isolate.regs);
-        enter(&mut self.frames, &mut regs, Closure::new(main), 0, 0, NO_RET);
+        self.frames.push(&Closure::new(main), 0, 0, NO_RET);
+        enter(&mut self.frames, &mut regs);
         let result = self.execute(&mut regs);
         // The request's variables go now (the isolate keeps the capacity).
         regs.clear();
@@ -688,7 +764,7 @@ impl Context<'_> {
         let s = &clo.code.sites[site as usize];
         let key = s.name.as_bytes();
         let callee = if let Some(f) = self.functions.get(key) {
-            Callee::User(f.clone())
+            Callee::User(*f)
         } else if let Some(i) = self.isolate.registry.lookup(key) {
             Callee::Builtin(i)
         } else {
@@ -708,7 +784,7 @@ impl Context<'_> {
         // The function `step` last ran in (refreshed when `fast` switched).
         let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
         loop {
-            pc = fast(regs, &mut self.frames, pc, &stop);
+            pc = fast(regs, &mut self.frames, &self.closures, pc, &stop);
             let frame = self.frames.last().expect("a frame");
             if !Rc::ptr_eq(&func, &frame.func) {
                 func = Rc::clone(&frame.func);
@@ -1049,7 +1125,7 @@ impl Context<'_> {
                 }
                 Instr::SendVar { site, n, arg, var } => {
                     let by_ref = match self.resolve(clo, site)? {
-                        Callee::User(f) => f.code.param_by_ref(n as usize),
+                        Callee::User(f) => self.closures[f as usize].code.param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     };
@@ -1128,6 +1204,7 @@ impl Context<'_> {
                 Instr::Call { site, base: args, argc, dst } => {
                     match self.resolve(clo, site)? {
                         Callee::User(target) => {
+                            let target = Rc::clone(&self.closures[target as usize]);
                             if (argc as usize) < target.code.required {
                                 return Err(self.missing_args(&target.code, argc as usize));
                             }
@@ -1135,7 +1212,8 @@ impl Context<'_> {
                                 caller.pc = pc as u32;
                             }
                             // Missing optional arguments are filled by the callee's defaults.
-                            enter(&mut self.frames, regs, target, base + args as usize, argc as usize, (base + dst as usize) as u32);
+                            self.frames.push(&target, base + args as usize, argc as usize, (base + dst as usize) as u32);
+                            enter(&mut self.frames, regs);
                             return Ok(Next::Switch);
                         }
                         Callee::Builtin(i) => self.call_builtin(w, i, args, argc, dst)?,
@@ -1233,7 +1311,7 @@ impl Context<'_> {
     /// The cell of global `$name`: the main frame's variable if it has one.
     /// `main` is the main frame's window (it starts at register 0).
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
-        if let Some(r) = self.frames[0].func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+        if let Some(r) = self.frames.first().expect("the main frame").func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             return make_ref(main, r as Reg);
         }
         self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone()
@@ -1556,4 +1634,44 @@ fn compare(cmp: Cmp, x: &Value, y: &Value) -> Value {
             });
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Sink;
+    impl Host for Sink {
+        fn write(&mut self, _: &[u8]) {}
+    }
+
+    fn compile(source: &str, registry: &Registry) -> p8_compiler::Program {
+        let arena = bumpalo::Bump::new();
+        let mut parser = p8_syntax::parser::Parser::new(p8_syntax::lexer::Lexer::new(source.as_bytes()), &arena);
+        let program = parser.parse_program();
+        assert!(program.errors.is_empty(), "parse errors");
+        p8_compiler::Compiler::new(source.as_bytes(), "t.php", registry).compile(program.statements).expect("compiles")
+    }
+
+    /// A recursive function's call site resolves to the function itself.
+    /// When the request ends, every closure it made must be freed: a cycle
+    /// between a closure and its call sites would leak one per request.
+    #[test]
+    fn a_request_frees_its_closures() {
+        let registry = Arc::new(Registry::default());
+        let program = compile("<?php function f($n) { return $n < 1 ? 0 : f($n - 1); } f(5); f(3);", &registry);
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        let mut host = Sink;
+        let closures: Vec<std::rc::Weak<Closure>> = {
+            let mut cx = isolate.new_context(&mut host);
+            for f in &program.functions {
+                cx.declare(Arc::clone(f)).expect("declares");
+            }
+            assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
+            assert!(cx.closures.iter().any(|c| c.sites.iter().any(|s| s.get().is_some())), "a call site was resolved");
+            cx.closures.iter().map(Rc::downgrade).collect()
+        };
+        assert!(!closures.is_empty());
+        assert!(closures.iter().all(|c| c.upgrade().is_none()), "a closure outlived its request");
+    }
 }

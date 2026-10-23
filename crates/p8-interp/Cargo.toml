@@ -8,3 +8,8 @@ description = "p8's interpreter: runs register bytecode"
 [dependencies]
 p8-bytecode = { path = "../p8-bytecode" }
 p8-runtime = { path = "../p8-runtime" }
+
+[dev-dependencies]
+bumpalo = { version = "3.12", features = ["collections"] }
+p8-compiler = { path = "../p8-compiler" }
+p8-syntax = { path = "../p8-syntax" }
