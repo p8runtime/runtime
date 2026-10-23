@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
-//! The php command-line host for p8 (docs/design/engine-v2.md), named
+//! The php command-line host for p8 (p8runtime/aps APS 3), named
 //! php2 while p8 is built next to the legacy engine: `php2 script.php`.
 
 use std::io::Write;
