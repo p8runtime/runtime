@@ -66,6 +66,7 @@ impl Context<'_> {
         if kind.once() && self.included.contains(&real) {
             return Ok(None);
         }
+        self.included_order.push(real.to_string_lossy().into_owned());
         self.included.insert(real);
         let file = path.to_string_lossy().into_owned();
         let loader = match &self.loader {

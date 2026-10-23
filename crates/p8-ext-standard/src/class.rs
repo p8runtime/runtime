@@ -26,6 +26,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "spl_object_id", run: spl_object_id, by_ref: &[] },
     Builtin { name: "spl_object_hash", run: spl_object_hash, by_ref: &[] },
     Builtin { name: "get_called_class", run: get_called_class, by_ref: &[] },
+    Builtin { name: "get_class_methods", run: get_class_methods, by_ref: &[] },
     Builtin { name: "class_alias", run: class_alias, by_ref: &[] },
     Builtin { name: "constant", run: constant, by_ref: &[] },
     Builtin { name: "set_error_handler", run: set_error_handler, by_ref: &[] },
@@ -37,6 +38,31 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "spl_autoload_functions", run: spl_autoload_functions, by_ref: &[] },
     Builtin { name: "register_shutdown_function", run: register_shutdown_function, by_ref: &[] },
 ];
+
+/// get_class_methods(object|string $object_or_class): the methods the
+/// calling code can see, as declared.
+fn get_class_methods(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let v = arg(args, 0);
+    let class = match &v {
+        Value::Object(o) => Some(Rc::clone(&o.class)),
+        Value::Str(s) => ctx.class_load(s.as_bytes())?,
+        _ => None,
+    };
+    let Some(class) = class else {
+        return Err(ctx.throw(
+            "TypeError",
+            format!("get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given", v.type_name()),
+        ));
+    };
+    let scope = ctx.scope();
+    let names: Vec<Value> = class
+        .methods
+        .values()
+        .filter(|m| visible(m.visibility, declaring(&class, &m.declaring), scope.as_deref()))
+        .map(|m| Value::Str(m.name.clone()))
+        .collect();
+    Ok(Value::Array(Rc::new(PhpArray::from_list(names))))
+}
 
 fn get_called_class(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     match ctx.called_class() {

@@ -1,0 +1,20 @@
+26 5 5 dev
+bool(true)
+string(5) "f.txt"
+string(4) "link"
+string(4) "file"
+bool(true)
+bool(true)
+5
+bool(false)
+Array
+(
+    [0] => b:8
+    [1] => a:10
+)
+#0 %s(8): b(1, 'two')
+#1 %s(10): a(1)
+#0 %s(11): K->m()
+#1 %s(12): K::s()
+1info.php
+x-003.1

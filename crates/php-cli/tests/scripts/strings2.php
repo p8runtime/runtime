@@ -1,0 +1,21 @@
+<?php
+echo strip_tags('<p>Hello <b>World</b><!-- c --> <a href="x>y">link</a></p>'), "|", strip_tags('<p>a<br/>b</p>', '<br>'), "|", strip_tags('<p><i>x</i></p>', ['p']), "\n";
+echo html_entity_decode('&lt;p&gt; &amp;amp; &quot;q&quot; &#039;s&#039; &eacute; &copy; &#8364; &#x41; &nbsp;| &apos; &bogus;'), "\n";
+echo htmlentities('café <b> "q" \'s\' © €'), " ", htmlspecialchars_decode('&lt;b&gt; &amp;amp; &quot; &#039;'), "\n";
+var_dump(parse_url('https://user:pw@example.com:8080/path/to?x=1&y=2#frag'));
+var_dump(parse_url('//example.com/p'), parse_url('/just/path?q'), parse_url('mailto:a@b.c'), parse_url('http://h:99999'), parse_url('http://x.com', PHP_URL_HOST), parse_url('x.com:80/p'));
+echo http_build_query(['a' => 1, 'b' => 'x y', 'c' => [1, 2], 'd' => ['k' => 'v'], 'e' => null, 'f' => true]), "\n";
+echo http_build_query([1, 2], 'n_'), " ", http_build_query(['a' => 'b c'], '', '&amp;', PHP_QUERY_RFC3986), "\n";
+parse_str('a=1&b[]=2&b[]=3&c[x][y]=4&d.e=5&f+g=6', $out); var_dump($out);
+echo urlencode('a b&c=d/é~'), " ", rawurlencode('a b&c=d/é~'), " ", urldecode('a+b%20c%2F'), " ", rawurldecode('a+b%20c'), "\n";
+echo base64_encode('Hello, World!'), " ", base64_encode(''), " ", base64_encode('ab'), " ", base64_decode('SGVsbG8sIFdvcmxkIQ=='), " ", var_export(base64_decode('@@', true), true), "\n";
+echo chunk_split('abcdefg', 3, '-'), " ", wordwrap('The quick brown fox sat over the lazy dog', 15, "\n", true), "\n";
+echo wordwrap('A very long woooooooooooord.', 8, "\n", true), "\n", wordwrap('A very long woooooooooooord.', 8), "\n";
+echo strspn('42 is the answer', '1234567890'), strcspn('abcd', 'cd'), " ", strpbrk('This is a test', 'st'), " ", substr_compare('Hello', 'ello', 1), substr_compare('Hello', 'ELLO', 1, 4, true), "\n";
+echo similar_text('World', 'Word', $pct), " ", round($pct, 2), " ", levenshtein('kitten', 'sitting'), " ", soundex('Robert'), soundex('Tymczak'), " ", str_word_count("Hello fri3nd, you're looking good today!"), "\n";
+print_r(str_word_count("Hello World again", 1)); print_r(count_chars('abca', 1)); echo count_chars('abca', 3), "\n";
+echo quotemeta('1+1=2?'), " ", addcslashes("foo[bar]\n", 'A..Z'), " ", addcslashes("zoo['.']", 'z..A'), " ", stripcslashes('a\tb\x41\101'), "\n";
+var_dump(strnatcmp('img12.png', 'img10.png'), strnatcmp('img2', 'img10'), strcmp('img2', 'img10'), strnatcasecmp('A1', 'a01'));
+$files = ['img12.png', 'img10.png', 'IMG2.png', 'img1.png']; natsort($files); print_r($files); natcasesort($files); print_r($files);
+echo escapeshellarg("it's"), " ", escapeshellcmd('ls; rm -rf *'), "\n";
+var_dump(setlocale(LC_ALL, 'C'), setlocale(LC_ALL, 'xx_YY'), setlocale(LC_ALL, 0), localeconv()['decimal_point']);

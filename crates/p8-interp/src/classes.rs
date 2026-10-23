@@ -197,6 +197,7 @@ impl Context<'_> {
         // the parent's), properties, statics and constants, as the class's.
         let own: Vec<Vec<u8>> = def.methods.iter().map(|m| m.func.name.as_bytes().to_ascii_lowercase()).collect();
         let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::new();
+        let mut trait_order: Vec<Vec<u8>> = Vec::new();
         for tname in &def.traits {
             let t = self.lookup_class(tname)?;
             if t.flags & CLASS_TRAIT == 0 {
@@ -224,6 +225,7 @@ impl Context<'_> {
                     return Ok(());
                 }
                 from_trait.insert(key.clone(), t.name.clone());
+                trait_order.push(key.clone());
                 methods.insert(key, m);
                 Ok(())
             };
@@ -378,6 +380,18 @@ impl Context<'_> {
                 ));
             }
         }
+        // PHP's order: the class's own methods, the inherited ones, then
+        // the traits' (get_class_methods, reflection).
+        let mut ordered = p8_runtime::object::Methods::with_capacity(methods.len());
+        for key in &own {
+            if let Some(m) = methods.shift_remove(key) {
+                ordered.insert(key.clone(), m);
+            }
+        }
+        let traits: Vec<(Vec<u8>, Method)> = trait_order.iter().filter_map(|k| methods.shift_remove(k).map(|m| (k.clone(), m))).collect();
+        ordered.extend(methods);
+        ordered.extend(traits);
+        let methods = ordered;
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,

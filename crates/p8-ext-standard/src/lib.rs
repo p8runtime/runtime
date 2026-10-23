@@ -13,6 +13,9 @@ mod array;
 mod array2;
 mod callback;
 mod file;
+mod hash;
+mod info;
+mod random;
 mod json;
 mod serial;
 mod class;
@@ -20,6 +23,7 @@ pub mod defaults;
 mod math;
 mod misc;
 mod string;
+mod string2;
 mod var;
 
 static BUILTINS: &[Builtin] = &[
@@ -85,6 +89,10 @@ fn register(registry: &mut Registry) {
     registry.add_functions(callback::BUILTINS);
     registry.add_functions(file::BUILTINS);
     registry.add_functions(json::BUILTINS);
+    registry.add_functions(hash::BUILTINS);
+    registry.add_functions(info::BUILTINS);
+    registry.add_functions(string2::BUILTINS);
+    registry.add_functions(random::BUILTINS);
     registry.add_functions(serial::BUILTINS);
     registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);
@@ -95,6 +103,7 @@ fn register(registry: &mut Registry) {
     // These reach the caller's variables or run PHP code (__serialize,
     // jsonSerialize) though they take no callable.
     registry.mark_reenters(array2::REENTER);
+    registry.mark_reenters(info::REENTER);
     registry.mark_reenters(&["func_get_args", "serialize", "unserialize", "json_encode"]);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
