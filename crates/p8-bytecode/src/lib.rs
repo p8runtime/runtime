@@ -145,6 +145,11 @@ pub enum Instr {
     Exit { src: Reg, has: bool },
     /// A `match` with no arm for its subject: throws UnhandledMatchError.
     MatchError { src: Reg },
+    /// `throw $src` (the slot of a handler holds what it caught: this
+    /// throws it on, after a `finally` or when no `catch` matched).
+    Throw { src: Reg },
+    /// The exception in `src` is an instance of `class`: go to `target`.
+    CatchIf { src: Reg, class: u16, target: u32 },
 
     // Classes and objects. A class operand is an index into the
     // function's `classes`; a property name is a register (a constant for
@@ -258,6 +263,7 @@ impl Instr {
     pub fn target_mut(&mut self) -> Option<&mut u32> {
         match self {
             Instr::Jump { target: t }
+            | Instr::CatchIf { target: t, .. }
             | Instr::JumpIf { target: t, .. }
             | Instr::JumpIfNot { target: t, .. }
             | Instr::JumpIfSet { target: t, .. }
@@ -398,6 +404,22 @@ pub struct Function {
     pub required: usize,
     /// The declaration's line (where a missing argument is reported).
     pub line: u32,
+    /// Protected ranges (`try`), any order: an exception thrown in one
+    /// goes to the deepest that covers it.
+    pub handlers: Vec<Handler>,
+}
+
+/// A range of code `try` protects: an exception thrown by an instruction
+/// in `start..end` is put in register `slot` and execution goes on at
+/// `target` (its `catch` tests, or its `finally`).
+#[derive(Debug, Clone, Copy)]
+pub struct Handler {
+    pub start: u32,
+    pub end: u32,
+    pub target: u32,
+    pub slot: Reg,
+    /// How many `try` blocks enclose this one in its function.
+    pub depth: u16,
 }
 
 impl Function {

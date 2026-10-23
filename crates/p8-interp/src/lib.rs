@@ -2,7 +2,9 @@
 //! The p8 interpreter: one loop over register instructions, all frames in
 //! one register file, calls resolved once per call site.
 
+mod builtin_classes;
 mod classes;
+mod throw;
 
 use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
@@ -421,7 +423,9 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::AssignStaticProp { .. }
                 | Instr::AssignStaticPropOp { .. }
                 | Instr::InstanceOf { .. }
-                | Instr::Clone { .. } => return pc,
+                | Instr::Clone { .. }
+                | Instr::Throw { .. }
+                | Instr::CatchIf { .. } => return pc,
                 // Calls and returns leave this loop, so the loop itself
                 // keeps only the code and the registers live.
                 Instr::Call { site, base: args, argc: n, dst } => break Switch::Call(site, args, n, dst),
@@ -691,11 +695,18 @@ pub struct Isolate {
     regs: Vec<Value>,
     /// Set by an InterruptHandle; cleared when a request starts.
     interrupt: Arc<AtomicU64>,
+    /// The classes every request starts with.
+    builtin_classes: builtin_classes::Classes,
 }
 
 impl Isolate {
     pub fn new(registry: Arc<Registry>) -> Isolate {
-        Isolate { registry, regs: Vec::with_capacity(1024), interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)) }
+        Isolate {
+            registry,
+            regs: Vec::with_capacity(1024),
+            interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)),
+            builtin_classes: builtin_classes::build(),
+        }
     }
 
     pub fn registry(&self) -> &Arc<Registry> {
@@ -712,6 +723,7 @@ impl Isolate {
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
         let stop = Arc::clone(&self.interrupt);
+        let classes = self.builtin_classes.clone();
         Context {
             stop,
             isolate: self,
@@ -726,7 +738,8 @@ impl Isolate {
             error_level: E_DEFAULT,
             display_errors: true,
             pc: 0,
-            classes: HashMap::new(),
+            classes,
+            failed_call: None,
             class_defs: Vec::new(),
             declared: Vec::new(),
             ids: Rc::new(Ids::default()),
@@ -763,6 +776,9 @@ pub struct Context<'i> {
     pc: usize,
     /// Linked classes by lowercase name.
     classes: HashMap<Vec<u8>, Rc<Class>>,
+    /// The frame of a call that failed before it ran, for the trace of
+    /// the error it raised (see `failed_call`).
+    failed_call: Option<PhpArray>,
     /// The script's class declarations (DeclareClass indexes them), and
     /// which are linked.
     class_defs: Vec<Arc<ClassDef>>,
@@ -812,7 +828,10 @@ impl Context<'_> {
         let mut regs = std::mem::take(&mut self.isolate.regs);
         self.frames.push(&Closure::new(main), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
-        let result = self.early_bind().and_then(|()| self.execute(&mut regs));
+        let result = match self.early_bind() {
+            Ok(()) => self.execute(&mut regs),
+            Err(e) => Err(self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), e)),
+        };
         // The request's variables go now (the isolate keeps the capacity).
         regs.clear();
         self.frames.clear();
@@ -822,6 +841,15 @@ impl Context<'_> {
             Err(Throw::Exit(status)) => status,
             Err(Throw::Fatal { message, file, line }) => {
                 self.out.write(format!("\nFatal error: {message} in {file} on line {line}\n").as_bytes());
+                255
+            }
+            Err(Throw::Object(e)) => {
+                let shown = builtin_classes::describe(&e);
+                let root: &[u8] = if e.class.is_a(b"exception") { b"exception" } else { b"error" };
+                let file = e.class.read(&e, b"file", root).to_php_string().unwrap_or_else(PhpStr::empty);
+                let line = e.class.read(&e, b"line", root).to_int();
+                let file = String::from_utf8_lossy(file.as_bytes());
+                self.out.write(format!("\nFatal error: Uncaught {shown}\n  thrown in {file} on line {line}\n").as_bytes());
                 255
             }
             Err(Throw::Error { class, message, file, line }) => {
@@ -991,16 +1019,19 @@ impl Context<'_> {
                 && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
             {
                 let w = &mut regs[base..base + func.code.nregs as usize];
-                self.call_builtin(w, i, args, n, dst)?;
-                pc += 1;
+                match self.call_builtin(w, i, args, n, dst) {
+                    Ok(()) => pc += 1,
+                    Err(t) => pc = self.unwind(regs, t, pc)?,
+                }
                 continue;
             }
-            match self.step(regs, &func, base, argc, pc)? {
-                Next::Go(next) => pc = next,
-                Next::Switch => match self.frames.last() {
+            match self.step(regs, &func, base, argc, pc) {
+                Ok(Next::Go(next)) => pc = next,
+                Ok(Next::Switch) => match self.frames.last() {
                     Some(frame) => pc = frame.pc as usize,
                     None => return Ok(()),
                 },
+                Err(t) => pc = self.unwind(regs, t, pc)?,
             }
         }
     }
@@ -1053,8 +1084,12 @@ impl Context<'_> {
                     let v = match fast {
                         Some(v) => v,
                         None => {
-                            let x = self.operand(w, func, a);
-                            let y = self.operand(w, func, b);
+                            let mut x = self.operand(w, func, a);
+                            let mut y = self.operand(w, func, b);
+                            if op == BinOp::Concat {
+                                x = self.object_to_string(x)?;
+                                y = self.object_to_string(y)?;
+                            }
                             let r = ops::binary(op, &x, &y, &mut self.diags);
                             self.report_diags();
                             r.map_err(|e| self.op_error(e))?
@@ -1066,6 +1101,7 @@ impl Context<'_> {
                 Instr::AssignOp { op, var, src } => {
                     let y = self.operand(w, func, src);
                     if op == BinOp::Concat {
+                        let y = self.object_to_string(y)?;
                         // `.=` appends in place when the string is not shared
                         let x = self.take_var(w, func, var);
                         if let Some(e) = ops::object_string_error(&x).or_else(|| ops::object_string_error(&y)) {
@@ -1157,6 +1193,7 @@ impl Context<'_> {
                         CastKind::Float => Value::Float(v.to_float()),
                         CastKind::Bool => Value::Bool(v.to_bool()),
                         CastKind::String => {
+                            let v = self.object_to_string(v)?;
                             if let Some(e) = ops::object_string_error(&v) {
                                 return Err(self.op_error(e));
                             }
@@ -1352,6 +1389,7 @@ impl Context<'_> {
                 }
                 Instr::Echo { src } => {
                     let v = self.operand(w, func, src);
+                    let v = self.object_to_string(v)?;
                     if let Some(e) = ops::object_string_error(&v) {
                         return Err(self.op_error(e));
                     }
@@ -1386,6 +1424,7 @@ impl Context<'_> {
                     let mut bytes = Vec::with_capacity(w[parts].iter().map(ops::string_len_hint).sum());
                     for i in 0..n {
                         let v = self.operand(w, func, start + i as Reg);
+                        let v = self.object_to_string(v)?;
                         if let Some(e) = ops::object_string_error(&v) {
                             return Err(self.op_error(e));
                         }
@@ -1424,7 +1463,10 @@ impl Context<'_> {
                 Instr::DeclareClass { class } => self.declare_class(class as usize)?,
                 Instr::New { dst, class, base: args, argc } => {
                     let class = self.class_of(func, class)?;
-                    let (object, ctor) = self.instantiate(class)?;
+                    let (object, ctor) = {
+                        let read = |i: usize| if i < base { below[i].clone() } else { w[i - base].clone() };
+                        self.instantiate(&read, class)?
+                    };
                     reg!(dst) = Value::Object(object);
                     match ctor {
                         Some(m) => return self.call_method(regs, m, base + args as usize, argc, NO_RET, pc),
@@ -1552,12 +1594,25 @@ impl Context<'_> {
                         return self.call_method(regs, m, base + func.nregs as usize, 0, NO_RET, pc);
                     }
                 }
+                Instr::Throw { src } => {
+                    let v = self.operand(w, func, src);
+                    return Err(match v {
+                        Value::Object(o) if o.class.is_a(b"throwable") => Throw::Object(o),
+                        _ => self.throw("Error", "Can only throw objects"),
+                    });
+                }
+                Instr::CatchIf { src, class, target } => {
+                    if self.instance_of(func, &reg!(src), class) {
+                        pc = target as usize;
+                    }
+                }
                 Instr::Call { site, base: args, argc, dst } => {
                     match self.resolve(clo, site)? {
                         Callee::User(target) => {
                             let target = Rc::clone(&self.closures[target as usize]);
                             if (argc as usize) < target.code.required {
-                                return Err(self.missing_args(&target.code, argc as usize));
+                                let passed = &w[args as usize..args as usize + argc as usize];
+                                return Err(self.missing_args(&target.code, passed, None));
                             }
                             if let Some(caller) = self.frames.last_mut() {
                                 caller.pc = pc as u32;
@@ -1589,19 +1644,46 @@ impl Context<'_> {
     /// (absolute), its result to `ret` (NO_RET: discarded, as a
     /// constructor's is).
     fn call_method(&mut self, regs: &mut Vec<Value>, m: classes::MethodFrame, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
-        if (argc as usize) < m.func.code.required {
-            return Err(self.missing_args(&m.func.code, argc as usize));
+        let func = match m.func {
+            classes::Code::User(func) => func,
+            classes::Code::Native(native) => {
+                let this = m.this.expect("a native method has $this");
+                let passed = &mut regs[args..args + argc as usize];
+                let r = native(self, &this, passed);
+                for v in passed {
+                    clear(v);
+                }
+                self.report_diags();
+                let v = r?;
+                if ret != NO_RET {
+                    regs[ret as usize] = v;
+                }
+                return Ok(Next::Go(pc));
+            }
+        };
+        if (argc as usize) < func.code.required {
+            let class = (m.scope.name.clone(), m.this.is_some());
+            return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], Some((&class.0, class.1))));
         }
         if let Some(caller) = self.frames.last_mut() {
             caller.pc = pc as u32;
         }
-        self.frames.push(&m.func, args, argc as usize, ret);
+        self.frames.push(&func, args, argc as usize, ret);
         let frame = self.frames.last_mut().expect("the frame just pushed");
         frame.this = m.this;
         frame.scope = Some(m.scope);
         frame.called = Some(m.called);
         enter(&mut self.frames, regs);
         Ok(Next::Switch)
+    }
+
+    /// An object as a string, when its class's __toString is native (a
+    /// Throwable's); anything else as it is.
+    fn object_to_string(&mut self, v: Value) -> Result<Value, Throw> {
+        let Value::Object(o) = &v else { return Ok(v) };
+        let Some(native) = o.class.method(b"__tostring").and_then(|m| m.native) else { return Ok(v) };
+        let o = Rc::clone(o);
+        native(self, &o, &mut [])
     }
 
     /// Call builtin `i` on the `argc` arguments at `args`. The builtin
@@ -1619,6 +1701,10 @@ impl Context<'_> {
             let checked = p8_runtime::args::check(sig, args, &mut self.diags);
             self.report_diags();
             if let Err((class, message)) = checked {
+                let name = self.isolate.registry.function(i).name;
+                if !opcode_function(name, args.len()) {
+                    self.failed_call(name.as_bytes(), None, args);
+                }
                 for v in args {
                     clear(v);
                 }
@@ -1626,6 +1712,9 @@ impl Context<'_> {
             }
         }
         let r = (self.isolate.registry.function(i).run)(self, args);
+        if let Err(Throw::Error { .. }) = r {
+            self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args);
+        }
         for v in args {
             clear(v);
         }
@@ -1677,7 +1766,9 @@ impl Context<'_> {
     /// ArgumentCountError for a call passing fewer than `func.required`
     /// arguments: reported at the declaration, naming the call's line.
     #[cold]
-    fn missing_args(&self, func: &Function, passed: usize) -> Throw {
+    fn missing_args(&mut self, func: &Function, args: &[Value], class: Option<(&PhpStr, bool)>) -> Throw {
+        let passed = args.len();
+        self.failed_call(func.name.as_bytes(), class, args);
         let (file, line) = self.location();
         let declared = func.params.iter().filter(|p| !p.variadic).count();
         let exactly = if func.required == declared { "exactly" } else { "at least" };
@@ -2005,6 +2096,13 @@ fn assign(w: &mut [Value], r: Reg, value: Value) {
         Value::Ref(cell) => *cell.borrow_mut() = value,
         _ => *slot = value,
     }
+}
+
+/// Whether PHP compiles a call of builtin `name` with `argc` arguments
+/// to an opcode (zend_try_compile_special_func): its errors then come
+/// with no frame of their own in the trace.
+fn opcode_function(name: &str, argc: usize) -> bool {
+    matches!((name, argc), ("strlen" | "count" | "sizeof", 1) | ("array_key_exists", 2))
 }
 
 /// Whether register `r` holds a temporary (not a variable or constant).

@@ -9,7 +9,7 @@
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
-use p8_bytecode::{CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Instr, MethodDef, Param, PropDef, Reg, Site};
+use p8_bytecode::{CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, Instr, MethodDef, Param, PropDef, Reg, Site};
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_READONLY, Visibility};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
@@ -53,8 +53,30 @@ struct Loop {
     continues: Vec<usize>,
 }
 
+/// A `try` body (or its `catch` bodies, when it has a `finally`) being
+/// compiled. Leaving it by `return`, `break` or `continue` runs its
+/// `finally` there and then (the code is compiled in place), so the
+/// range it protects is the code around those copies: its segments.
+struct TryCtx<'a> {
+    finally: Option<&'a [StmtId<'a>]>,
+    /// Loops open when it started (break/continue out of them leave it).
+    loops: usize,
+    open: Option<u32>,
+    segments: Vec<(u32, u32)>,
+}
+
+impl TryCtx<'_> {
+    fn close(&mut self, at: u32) {
+        if let Some(start) = self.open.take()
+            && at > start
+        {
+            self.segments.push((start, at));
+        }
+    }
+}
+
 /// One function being compiled.
-struct FnBuilder {
+struct FnBuilder<'a> {
     name: Text,
     code: Vec<Instr>,
     lines: Vec<u32>,
@@ -79,9 +101,11 @@ struct FnBuilder {
     /// For a method: its class, as declared.
     class: Option<Text>,
     is_static: bool,
+    tries: Vec<TryCtx<'a>>,
+    handlers: Vec<Handler>,
 }
 
-impl FnBuilder {
+impl FnBuilder<'_> {
     fn new(name: Text) -> Self {
         FnBuilder {
             name,
@@ -104,6 +128,8 @@ impl FnBuilder {
             class_index: HashMap::new(),
             class: None,
             is_static: false,
+            tries: Vec::new(),
+            handlers: Vec::new(),
         }
     }
 
@@ -209,6 +235,9 @@ impl FnBuilder {
         for instr in &mut self.code {
             map_regs(instr, map);
         }
+        for h in &mut self.handlers {
+            h.slot = map(h.slot);
+        }
         fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
@@ -231,6 +260,7 @@ impl FnBuilder {
             classes: self.classes,
             class: self.class,
             is_static: self.is_static,
+            handlers: self.handlers,
         }
     }
 }
@@ -343,6 +373,15 @@ fn thread_returns(code: &mut [Instr]) {
         {
             code[i] = Instr::Return { src };
         }
+    }
+}
+
+/// Reopen the try blocks `leave_tries` left (the code after the exit is
+/// inside them again).
+fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
+    for mut t in left.into_iter().rev() {
+        t.open = Some(f.here());
+        f.tries.push(t);
     }
 }
 
@@ -494,7 +533,9 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *arg = f(*arg);
             *var = f(*var);
         }
-        Return { src } | Echo { src } | Exit { src, .. } | MatchError { src } => *src = f(*src),
+        Return { src } | Echo { src } | Exit { src, .. } | MatchError { src } | Throw { src } | CatchIf { src, .. } => {
+            *src = f(*src)
+        }
         FetchConst { dst, .. } => *dst = f(*dst),
         ConcatN { dst, start, .. } => {
             *dst = f(*dst);
@@ -587,7 +628,7 @@ impl<'src> Compiler<'src> {
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
 
-    fn stmts(&mut self, f: &mut FnBuilder, stmts: &[StmtId]) -> Result<()> {
+    fn stmts<'a>(&mut self, f: &mut FnBuilder<'a>, stmts: &'a [StmtId<'a>]) -> Result<()> {
         for stmt in stmts {
             self.stmt(f, stmt)?;
             f.temps = f.floor;
@@ -595,7 +636,7 @@ impl<'src> Compiler<'src> {
         Ok(())
     }
 
-    fn stmt(&mut self, f: &mut FnBuilder, stmt: &Stmt) -> Result<()> {
+    fn stmt<'a>(&mut self, f: &mut FnBuilder<'a>, stmt: &'a Stmt<'a>) -> Result<()> {
         f.line = self.line(stmt.span());
         match stmt {
             Stmt::Expression { expr, .. } => self.discard(f, expr)?,
@@ -609,6 +650,25 @@ impl<'src> Compiler<'src> {
                 let r = f.constant(Frozen::Str(Text::from(*value)));
                 f.emit(Instr::Echo { src: r });
             }
+            Stmt::Return { expr, .. } if f.tries.iter().any(|t| t.finally.is_some()) => {
+                // The value is taken first; then each `finally` runs.
+                let value = f.temp();
+                match expr {
+                    Some(e) => self.expr_into(f, e, value)?,
+                    None => {
+                        f.emit(Instr::LoadNull { dst: value });
+                    }
+                }
+                let n = f.tries.len();
+                let left = self.leave_tries(f, n)?;
+                f.emit(Instr::Return { src: value });
+                reenter_tries(f, left);
+            }
+            Stmt::Throw { expr, .. } => {
+                let r = self.expr(f, expr)?;
+                f.emit(Instr::Throw { src: r });
+            }
+            Stmt::Try { body, catches, finally, .. } => self.try_stmt(f, body, catches, *finally)?,
             Stmt::Return { expr, .. } => match expr {
                 Some(e) => {
                     let r = self.expr(f, e)?;
@@ -730,8 +790,12 @@ impl<'src> Compiler<'src> {
                         line: self.line(*span),
                     });
                 }
-                let at = f.emit(Instr::Jump { target: 0 });
                 let target = f.loops.len() - depth;
+                // `try` blocks inside the loop it leaves run their `finally`.
+                let n = f.tries.iter().rev().take_while(|t| t.loops > target).count();
+                let left = self.leave_tries(f, n)?;
+                let at = f.emit(Instr::Jump { target: 0 });
+                reenter_tries(f, left);
                 if is_break {
                     f.loops[target].breaks.push(at);
                 } else {
@@ -909,7 +973,107 @@ impl<'src> Compiler<'src> {
         }
     }
 
-    fn loop_body(&mut self, f: &mut FnBuilder, body: &[StmtId], _start: u32) -> Result<()> {
+    /// Leave the innermost `n` try blocks (for a return, break or
+    /// continue): each one's protected range ends here and its `finally`
+    /// runs, innermost first. The caller emits the exit, then reenters.
+    fn leave_tries<'a>(&mut self, f: &mut FnBuilder<'a>, n: usize) -> Result<Vec<TryCtx<'a>>> {
+        let mut left = Vec::with_capacity(n);
+        if !f.tries.iter().rev().take(n).any(|t| t.finally.is_some()) {
+            return Ok(left);
+        }
+        // What the exit uses (a return's value) stays live.
+        let outer_floor = std::mem::replace(&mut f.floor, f.temps);
+        for _ in 0..n {
+            let mut t = f.tries.pop().expect("a try block to leave");
+            t.close(f.here());
+            if let Some(body) = t.finally {
+                self.stmts(f, body)?;
+            }
+            left.push(t);
+        }
+        f.floor = outer_floor;
+        Ok(left)
+    }
+
+    /// `try { } catch (T $e) { } finally { }`. The body is protected by a
+    /// handler going to the catch tests; with a `finally`, the catch
+    /// bodies by one going to the `finally` that throws on. A normal exit
+    /// runs the `finally` and goes on.
+    fn try_stmt<'a>(
+        &mut self,
+        f: &mut FnBuilder<'a>,
+        body: &'a [StmtId<'a>],
+        catches: &'a [p8_syntax::ast::Catch<'a>],
+        finally: Option<&'a [StmtId<'a>]>,
+    ) -> Result<()> {
+        let slot = f.temp();
+        let outer_floor = std::mem::replace(&mut f.floor, f.temps);
+        let depth = f.tries.len() as u16;
+        let open = |f: &mut FnBuilder<'a>| {
+            let ctx = TryCtx { finally, loops: f.loops.len(), open: Some(f.here()), segments: Vec::new() };
+            f.tries.push(ctx);
+        };
+        open(f);
+        self.stmts(f, body)?;
+        let mut protected = f.tries.pop().expect("the try block");
+        protected.close(f.here());
+        let mut to_finally = vec![f.emit(Instr::Jump { target: 0 })];
+        let tests = f.here();
+        let mut matched = Vec::with_capacity(catches.len());
+        for c in catches {
+            let mut jumps = Vec::with_capacity(c.types.len());
+            for ty in c.types {
+                let class = self.class_name_ref(f, ty)?;
+                jumps.push(f.emit(Instr::CatchIf { src: slot, class, target: 0 }));
+            }
+            matched.push(jumps);
+        }
+        let no_match = f.emit(Instr::Jump { target: 0 });
+        if finally.is_some() {
+            open(f);
+        }
+        for (c, jumps) in catches.iter().zip(matched) {
+            f.patch_all(jumps, f.here());
+            f.line = self.line(c.span);
+            if let Some(var) = c.var {
+                let var = f.cv(&self.text(var.span)[1..]);
+                f.emit(Instr::Assign { var, src: slot });
+            }
+            f.emit(Instr::UnsetVar { var: slot });
+            self.stmts(f, c.body)?;
+            to_finally.push(f.emit(Instr::Jump { target: 0 }));
+        }
+        let catching = if finally.is_some() {
+            let mut c = f.tries.pop().expect("the catch blocks");
+            c.close(f.here());
+            c.segments
+        } else {
+            Vec::new()
+        };
+        // An exception no catch took (or one thrown in a catch): the
+        // finally, then it goes on.
+        let rethrow = f.here();
+        f.patch(no_match, rethrow);
+        if let Some(body) = finally {
+            self.stmts(f, body)?;
+        }
+        f.emit(Instr::Throw { src: slot });
+        f.patch_all(to_finally, f.here());
+        if let Some(body) = finally {
+            self.stmts(f, body)?;
+        }
+        let first = if catches.is_empty() { rethrow } else { tests };
+        for (start, end) in protected.segments {
+            f.handlers.push(Handler { start, end, target: first, slot, depth });
+        }
+        for (start, end) in catching {
+            f.handlers.push(Handler { start, end, target: rethrow, slot, depth });
+        }
+        f.floor = outer_floor;
+        Ok(())
+    }
+
+    fn loop_body<'a>(&mut self, f: &mut FnBuilder<'a>, body: &'a [StmtId<'a>], _start: u32) -> Result<()> {
         f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
         self.stmts(f, body)
     }
@@ -1143,6 +1307,13 @@ impl<'src> Compiler<'src> {
             lower => ClassRef::Named(Text::from(lower), Text::from(text)),
         };
         Ok(f.class_ref(class))
+    }
+
+    /// A class a `catch` names.
+    fn class_name_ref(&mut self, f: &mut FnBuilder, name: &p8_syntax::ast::Name) -> Result<u16> {
+        let text = self.text(name.span);
+        let text = text.strip_prefix(b"\\").unwrap_or(text);
+        Ok(f.class_ref(ClassRef::Named(Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text))))
     }
 
     /// A property name: a constant for `->name`, the value for `->$name`

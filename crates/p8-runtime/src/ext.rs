@@ -18,6 +18,9 @@ pub enum Throw {
     /// A fatal error: not an exception, nothing catches it.
     Fatal { message: String, file: Rc<str>, line: u32 },
     Exit(i32),
+    /// A thrown object (a Throwable): what `throw` throws, and what an
+    /// Error becomes once the engine makes its object.
+    Object(Rc<crate::object::Object>),
 }
 
 /// What a builtin can see and do of the request running it.

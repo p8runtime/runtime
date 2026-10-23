@@ -1,0 +1,30 @@
+2
+InvalidArgumentException too big: 5 42 3
+#0 %s(8): f(5)
+#1 {main}
+finally
+multi rt
+g-finally
+try
+h-finally
+catch
+2
+i=0
+f0
+f1
+i=2
+f2
+ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+Division by zero
+DivisionByZeroError: Modulo by zero
+Call to undefined function undefined_fn()
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+my: boom7
+inner finally
+caught deep
+again <- deep
+no var
+done
