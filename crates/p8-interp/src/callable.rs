@@ -273,7 +273,7 @@ impl Context<'_> {
         r
     }
 
-    fn run_nested(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
+    pub(crate) fn run_nested(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
         let top = self.frames.last().expect("a builtin's caller");
         let at = top.base as usize + top.func.code.nregs as usize;
         if regs.len() < at + args.len() + 1 {
@@ -295,7 +295,10 @@ impl Context<'_> {
         // The callee's result lands in its first register (written after
         // its window is cleared).
         let next = self.call_method(regs, m, at, argc, at as u32, caller_pc as usize)?;
-        let Next::Switch = next else { unreachable!("a user function's frame") };
+        if let Next::Go(_) = next {
+            // Nothing to run (a generator function made its Generator).
+            return Ok(std::mem::replace(&mut regs[at], Value::Undef));
+        }
         self.frames.floor = self.frames.len() - 1;
         let r = self.execute(regs);
         self.frames.floor = saved_floor;

@@ -5,6 +5,7 @@
 mod builtin_classes;
 mod callable;
 mod classes;
+mod generators;
 mod include;
 mod refs;
 mod throw;
@@ -71,6 +72,8 @@ struct Frame {
     this: Option<Rc<Object>>,
     scope: Option<Rc<Class>>,
     called: Option<Rc<Class>>,
+    /// The Generator whose code this frame runs, if any.
+    generator: Option<Rc<Object>>,
 }
 
 const NO_RET: u32 = u32::MAX;
@@ -138,6 +141,7 @@ impl Frames {
                 this: None,
                 scope: None,
                 called: None,
+                generator: None,
             }),
         }
         self.len += 1;
@@ -376,6 +380,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     pc += 1;
                 }
                 Instr::IterNext { iter, val, key, has_key, end } => {
+                    // An object (a generator, an Iterator) is `step`'s.
+                    if !matches!(w[iter as usize], Value::Array(_)) {
+                        return pc;
+                    }
                     pc = if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize };
                 }
                 // $var op= number, $var holding a number
@@ -435,6 +443,8 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::IterInitRef { .. }
                 | Instr::IterNextRef { .. }
                 | Instr::StaticVar { .. }
+                | Instr::Yield { .. }
+                | Instr::YieldFrom { .. }
                 | Instr::Unsilence { .. }
                 | Instr::New { .. }
                 | Instr::This { .. }
@@ -468,7 +478,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 // arguments, and no interrupt pending: anything else is `step`'s.
                 let Some(&Callee::User(target)) = clo.sites[site as usize].get() else { return pc };
                 let target = &closures[target as usize];
-                if (n as usize) < target.code.required || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                     return pc;
                 }
                 if let Some(caller) = frames.last_mut() {
@@ -1422,6 +1432,17 @@ impl Context<'_> {
                             reg!(iter + 1) = Value::Int(0);
                         }
                         Value::Array(_) => pc = end as usize,
+                        Value::Object(o) => {
+                            let it = self.iter_object(regs, o)?;
+                            let w = &mut regs[base..base + func.nregs as usize];
+                            match it {
+                                Some(v) => {
+                                    w[iter as usize] = v;
+                                    w[iter as usize + 1] = Value::Int(0);
+                                }
+                                None => pc = end as usize,
+                            }
+                        }
                         other => {
                             self.warn(format!(
                                 "foreach() argument must be of type array|object, {} given",
@@ -1429,6 +1450,22 @@ impl Context<'_> {
                             ));
                             pc = end as usize;
                         }
+                    }
+                }
+                Instr::IterNext { iter, val, key, has_key, end } if matches!(reg!(iter), Value::Object(_)) => {
+                    let Value::Object(object) = reg!(iter).clone() else { unreachable!("an object") };
+                    let first = matches!(reg!(iter + 1), Value::Int(0));
+                    let next = self.iter_object_next(regs, &object, first)?;
+                    let w = &mut regs[base..base + func.nregs as usize];
+                    w[iter as usize + 1] = Value::Int(1);
+                    match next {
+                        Some((v, k)) => {
+                            assign(w, val, v);
+                            if has_key {
+                                assign(w, key, k);
+                            }
+                        }
+                        None => pc = end as usize,
                     }
                 }
                 Instr::IterNext { iter, val, key, has_key, end } => {
@@ -1838,6 +1875,12 @@ impl Context<'_> {
                                 let passed = &w[args as usize..args as usize + argc as usize];
                                 return Err(self.missing_args(&target.code, passed, None));
                             }
+                            if target.code.is_generator {
+                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, captured: Vec::new() };
+                                let g = self.make_generator(regs, m, target, base + args as usize, argc as usize);
+                                regs[base + dst as usize] = Value::Object(g);
+                                return Ok(Next::Go(pc));
+                            }
                             if let Some(caller) = self.frames.last_mut() {
                                 caller.pc = pc as u32;
                             }
@@ -1852,13 +1895,32 @@ impl Context<'_> {
                 }
                 Instr::Return { src } => {
                     let v = self.operand(w, func, src);
+                    if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                        self.finish(&g, v);
+                        leave(&mut self.frames, regs, Value::Null);
+                        return Ok(Next::Switch);
+                    }
                     leave(&mut self.frames, regs, v);
                     return Ok(Next::Switch);
                 }
 
                 Instr::ReturnNull => {
+                    if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                        self.finish(&g, Value::Null);
+                    }
                     leave(&mut self.frames, regs, Value::Null);
                     return Ok(Next::Switch);
+                }
+                Instr::Yield { dst, value, key, has_key } => {
+                    let v = self.operand(w, func, value);
+                    let k = if has_key { Some(self.operand(w, func, key)) } else { None };
+                    return Ok(self.suspend(regs, v, k, pc, Some(dst)));
+                }
+                Instr::YieldFrom { dst, src } => {
+                    match self.yield_from(regs, base, src, at)? {
+                        Ok(next) => return Ok(next),
+                        Err(result) => regs[base + dst as usize] = result,
+                    }
                 }
         }
         Ok(Next::Go(pc))
@@ -1888,6 +1950,14 @@ impl Context<'_> {
             let class = m.scope.as_ref().map(|c| (c.name.clone(), m.this.is_some()));
             let class = class.as_ref().map(|(n, this)| (n, *this));
             return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], class));
+        }
+        if func.code.is_generator {
+            let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, captured: m.captured };
+            let g = self.make_generator(regs, frame, Rc::clone(&func), args, argc as usize);
+            if ret != NO_RET {
+                regs[ret as usize] = Value::Object(g);
+            }
+            return Ok(Next::Go(pc));
         }
         if let Some(caller) = self.frames.last_mut() {
             caller.pc = pc as u32;
@@ -2358,6 +2428,37 @@ impl Ctx for Context<'_> {
 
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw> {
         self.closure_from_callable(callable)
+    }
+
+    fn iterate(&mut self, v: &Value) -> Result<Vec<(Value, Value)>, Throw> {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        if regs.is_empty() {
+            return Err(Ctx::fatal(self, "an iteration with no registers lent".into()));
+        }
+        let r = self.iterate_all(&mut regs, v);
+        self.isolate.regs = regs;
+        r
+    }
+
+    fn generator(&mut self, generator: &Rc<Object>, op: &str, arg: Value) -> Result<Value, Throw> {
+        use generators::Op;
+        let op = match op {
+            "current" => Op::Current,
+            "key" => Op::Key,
+            "next" => Op::Next,
+            "send" => Op::Send,
+            "valid" => Op::Valid,
+            "rewind" => Op::Rewind,
+            "getreturn" => Op::GetReturn,
+            _ => Op::Throw,
+        };
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        if regs.is_empty() {
+            return Err(Ctx::fatal(self, "a generator resumed with no registers lent".into()));
+        }
+        let r = self.generator_op(&mut regs, generator, op, arg);
+        self.isolate.regs = regs;
+        r
     }
 }
 

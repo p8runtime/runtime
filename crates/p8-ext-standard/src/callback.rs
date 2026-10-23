@@ -24,7 +24,30 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "usort", run: usort, by_ref: &[0] },
     Builtin { name: "uasort", run: uasort, by_ref: &[0] },
     Builtin { name: "uksort", run: uksort, by_ref: &[0] },
+    Builtin { name: "iterator_to_array", run: iterator_to_array, by_ref: &[] },
+    Builtin { name: "iterator_count", run: iterator_count, by_ref: &[] },
 ];
+
+/// iterator_to_array(Traversable|array $iterator, bool $preserve_keys = true)
+fn iterator_to_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let preserve = args.len() < 2 || arg(args, 1).to_bool();
+    let mut out = PhpArray::new();
+    for (k, v) in ctx.iterate(&arg(args, 0))? {
+        if preserve {
+            match Key::from_value(&k) {
+                Ok((key, _)) => out.insert(key, v),
+                Err(_) => return Err(ctx.throw("TypeError", "Cannot access offset of type array on array".into())),
+            }
+        } else {
+            let _ = out.push(v);
+        }
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn iterator_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Int(ctx.iterate(&arg(args, 0))?.len() as i64))
+}
 
 fn array(args: &[Value], i: usize) -> Rc<PhpArray> {
     match arg(args, i) {

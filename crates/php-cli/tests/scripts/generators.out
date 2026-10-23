@@ -1,0 +1,25 @@
+0=1 1=2 2=3 
+10
+2
+bool(false)
+NULL
+done
+a:1 b:2 10:x 11:y 
+got hello
+got world
+0 5 15
+0=>1 1=>2 0=>3 x=>X y=>Y 
+caught boom
+99
+made
+start
+1
+bool(true)
+bool(true)
+bool(true)
+Exception: Cannot rewind a generator that was already run
+1,2
+12
+0:0 1:10 2:20 
+a=1 c=3 
+0 1 1 2 3 5 8 13 21 34 

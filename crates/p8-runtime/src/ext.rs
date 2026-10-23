@@ -74,6 +74,12 @@ pub trait Ctx {
     fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
     /// Closure::fromCallable: a Closure calling `callable`.
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw>;
+    /// Every (key, value) going through `v` gives (an array, a generator,
+    /// an Iterator or IteratorAggregate), as foreach does.
+    fn iterate(&mut self, v: &Value) -> Result<Vec<(Value, Value)>, Throw>;
+    /// A Generator method (`op`: current, key, next, send, valid, rewind,
+    /// getreturn, throw).
+    fn generator(&mut self, generator: &Rc<crate::object::Object>, op: &str, arg: Value) -> Result<Value, Throw>;
 }
 
 /// A builtin function: arguments arrive by value (moved out of the caller's
@@ -148,7 +154,10 @@ impl Registry {
             let sig = p8_stubs::lookup(f.name.as_bytes());
             self.sigs.push(sig);
             self.deprecations.push(sig.and_then(p8_stubs::deprecation));
-            self.reenters.push(sig.is_some_and(|s| s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0)));
+            // A callable, or a Traversable (gone through by running its code).
+            self.reenters.push(sig.is_some_and(|s| {
+                s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
+            }));
             self.index.insert(f.name, i);
         }
     }
