@@ -11,7 +11,7 @@
 
 use p8_bytecode::{
     CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
-    CONST_EXPR,
+    CONST_EXPR, RefOp,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
 use p8_runtime::ext::Registry;
@@ -509,6 +509,11 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *dst = f(*dst);
             *src = f(*src);
         }
+        Ref { a, b, c, .. } => {
+            *a = f(*a);
+            *b = f(*b);
+            *c = f(*c);
+        }
         New { dst, .. } => *dst = f(*dst),
         Construct { obj, base, .. } => {
             *obj = f(*obj);
@@ -675,6 +680,15 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
 }
 
 pub use p8_bytecode::Program;
+
+/// Whether `$a[…]…`'s root is a static property (`C::$a[k]`).
+fn dim_root_is_static(c: &Compiler, e: &Expr) -> bool {
+    let mut cur = e;
+    while let Expr::ArrayDimFetch { array, .. } = cur {
+        cur = array;
+    }
+    matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if c.text(*name).starts_with(b"$"))
+}
 
 /// Whether a hook's source uses its property's stored value: `$this->name`,
 /// or `parent::$name::` (a parent's plain property is the stored value).
@@ -905,6 +919,20 @@ impl<'src> Compiler<'src> {
             }
             Stmt::Try { body, catches, finally, .. } => self.try_stmt(f, body, catches, *finally)?,
             Stmt::Return { expr, .. } => match expr {
+                // A function returning by reference returns the place's reference.
+                Some(e)
+                    if f.returns_ref
+                        && match e {
+                            Expr::Variable { name, .. } => self.text(*name).starts_with(b"$") && self.text(*name) != b"$this",
+                            Expr::PropertyFetch { .. } | Expr::StaticCall { .. } | Expr::Call { .. } | Expr::MethodCall { .. } => true,
+                            Expr::ArrayDimFetch { .. } => true,
+                            Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } => self.text(*name).starts_with(b"$"),
+                            _ => false,
+                        } =>
+                {
+                    let (r, _) = self.ref_source(f, e, e.span())?;
+                    f.emit(Instr::reference(RefOp::ReturnRef, r, 0, 0, 0));
+                }
                 Some(e) => {
                     let r = self.expr(f, e)?;
                     f.emit(Instr::Return { src: r });
@@ -2113,6 +2141,86 @@ impl<'src> Compiler<'src> {
         Ok(list)
     }
 
+    /// The register `&e` takes its reference from (BindRef and co. make
+    /// it one), and whether it is a call's result (a reference only when
+    /// the function returns by reference).
+    fn ref_source(&mut self, f: &mut FnBuilder, e: &Expr, span: Span) -> Result<(Reg, bool)> {
+        match e {
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => Ok((f.cv(&self.text(*name)[1..]), false)),
+            Expr::ArrayDimFetch { .. } => {
+                let t = f.temp();
+                let (root, keys, n, append, held) = self.ref_dim_path(f, e)?;
+                f.emit(Instr::RefDim { var: t, root, keys, n, append });
+                if let Some(h) = held {
+                    f.emit(Instr::Free { reg: h });
+                }
+                Ok((t, false))
+            }
+            Expr::PropertyFetch { target, property, .. } => {
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, property)?;
+                let dst = f.temp();
+                f.emit(Instr::reference(RefOp::PropRef, dst, obj, name, 0));
+                Ok((dst, false))
+            }
+            Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                let class = self.class_ref(f, class)?;
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let dst = f.temp();
+                f.emit(Instr::reference(RefOp::StaticRef, dst, name, 0, class));
+                Ok((dst, false))
+            }
+            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => {
+                let r = self.expr(f, e)?;
+                // Mark the call (the last instruction) as wanting a reference.
+                let last = f.code.len() - 1;
+                let writes_r = match f.code[last] {
+                    Instr::Call { dst, .. } | Instr::MethodCall { dst, .. } | Instr::StaticCall { dst, .. } | Instr::CallSpread { dst, .. } => dst == r,
+                    _ => false,
+                };
+                if writes_r {
+                    f.code.insert(last, Instr::reference(RefOp::WantRef, r, 0, 0, 0));
+                    let line = f.lines[last];
+                    f.lines.insert(last, line);
+                }
+                Ok((r, true))
+            }
+            _ => Err(self.unsupported(span, "this assignment by reference")),
+        }
+    }
+
+    /// `var = &…` with the reference source in `src`; the expression's register.
+    fn bind_ref(&mut self, f: &mut FnBuilder, var: &Expr, src: Reg, call: bool, span: Span) -> Result<Reg> {
+        Ok(match var {
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
+                let var = f.cv(&self.text(*name)[1..]);
+                f.emit(if call { Instr::reference(RefOp::BindRefResult, var, src, 0, 0) } else { Instr::BindRef { var, src } });
+                var
+            }
+            Expr::ArrayDimFetch { .. } => {
+                let (root, keys, n, append, held) = self.ref_dim_path(f, var)?;
+                f.emit(Instr::DimSetRef { root, keys, n, append, src });
+                if let Some(h) = held {
+                    f.emit(Instr::Free { reg: h });
+                }
+                src
+            }
+            Expr::PropertyFetch { target, property, .. } => {
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, property)?;
+                f.emit(Instr::reference(RefOp::AssignPropRef, obj, name, src, 0));
+                src
+            }
+            Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                let class = self.class_ref(f, class)?;
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                f.emit(Instr::reference(RefOp::AssignStaticRef, name, src, 0, class));
+                src
+            }
+            _ => return Err(self.unsupported(span, "this assignment by reference")),
+        })
+    }
+
     fn args_by_value(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8)> {
         let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
         for (arg, r) in args.iter().zip(&regs) {
@@ -2179,6 +2287,35 @@ impl<'src> Compiler<'src> {
 
     /// `$v[k1]..[kn]`: the variable, the keys in consecutive temporaries,
     /// and whether the last dimension is `[]`.
+    /// dim_path for a reference (`&$o->a[k]`, `C::$a[k] = &…`): the root
+    /// may be a property, made a reference in a temporary (also returned,
+    /// to release after).
+    fn ref_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, Reg, u8, bool, Option<Reg>)> {
+        if !dim_root_is_prop(e) && !dim_root_is_static(self, e) {
+            let (root, keys, n, append) = self.dim_path(f, e)?;
+            return Ok((root, keys, n, append, None));
+        }
+        let mut dims = Vec::new();
+        let mut cur = e;
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+            dims.push(*dim);
+            cur = array;
+        }
+        dims.reverse();
+        let (root, _) = self.ref_source(f, cur, cur.span())?;
+        let append = dims.last().is_some_and(|d| d.is_none());
+        if dims[..dims.len() - usize::from(append)].iter().any(|d| d.is_none()) {
+            return Err(self.unsupported(e.span(), "[] before the last dimension"));
+        }
+        let keyed: Vec<&Expr> = dims.iter().flatten().copied().collect();
+        let regs: Vec<Reg> = keyed.iter().map(|_| f.temp()).collect();
+        for (r, d) in regs.iter().zip(&keyed) {
+            self.expr_into(f, d, *r)?;
+        }
+        let keys = regs.first().copied().unwrap_or_else(|| f.temp());
+        Ok((root, keys, regs.len() as u8, append, Some(root)))
+    }
+
     fn dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, Reg, u8, bool)> {
         let mut dims = Vec::new();
         let mut cur = e;
@@ -2351,7 +2488,10 @@ impl<'src> Compiler<'src> {
                     f.emit(Instr::DimSetRef { root, keys, n, append, src });
                     src
                 }
-                _ => return Err(self.unsupported(*span, "this assignment by reference")),
+                _ => {
+                    let (src, call) = self.ref_source(f, expr, *span)?;
+                    self.bind_ref(f, var, src, call, *span)?
+                }
             },
             Expr::AssignOp { var, op, expr, span } => {
                 let Some(bin) = assign_binop(*op) else {

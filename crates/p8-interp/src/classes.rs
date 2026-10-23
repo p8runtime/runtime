@@ -745,6 +745,57 @@ impl Context<'_> {
 
     /// Write `value` to property `name` of `object` (checks visibility,
     /// readonly, and that a dynamic property may be created).
+    /// `&$obj->name`: the property made a reference (a dynamic one made).
+    pub(crate) fn prop_ref(&mut self, target: &Value, name: &Value) -> Result<Rc<RefCell<Value>>, Throw> {
+        let name = self.prop_name(name)?;
+        let object = self.target_object(target, &name, "modify")?;
+        if let Some(p) = self.hooked_property(&object, name.as_bytes()) {
+            return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&name))));
+        }
+        match self.prop_slot(&object, name.as_bytes())? {
+            Some((slot, prop)) => {
+                if prop.readonly {
+                    return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
+                }
+                Ok(crate::refs::make_ref(&mut object.slots.borrow_mut()[slot]))
+            }
+            None => {
+                let key = Key::from_string(name.clone());
+                if !object.dynamic.borrow().contains_key(&key) {
+                    if object.class.lower != b"stdclass" {
+                        self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
+                            "Creation of dynamic property {}::${} is deprecated",
+                            text(&object.class.name),
+                            text(&name)
+                        )));
+                        self.report_diags();
+                    }
+                    object.dynamic.borrow_mut().insert(key.clone(), Value::Null);
+                }
+                let mut dynamic = object.dynamic.borrow_mut();
+                let slot = dynamic.get_mut(&key).expect("just made");
+                Ok(crate::refs::make_ref(slot))
+            }
+        }
+    }
+
+    /// `$obj->name = &…`: the property becomes the reference `cell`.
+    pub(crate) fn prop_bind(&mut self, target: &Value, name: &Value, cell: Rc<RefCell<Value>>) -> Result<(), Throw> {
+        let pname = self.prop_name(name)?;
+        let object = self.target_object(target, &pname, "assign")?;
+        if let Some(p) = self.hooked_property(&object, pname.as_bytes()) {
+            return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&pname))));
+        }
+        match self.prop_slot(&object, pname.as_bytes())? {
+            Some((slot, _)) => object.slots.borrow_mut()[slot] = Value::Ref(cell),
+            None => {
+                self.write_prop(target, name, Value::Null)?;
+                object.dynamic.borrow_mut().insert(Key::from_string(pname), Value::Ref(cell));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn write_prop(&mut self, target: &Value, name: &Value, value: Value) -> Result<(), Throw> {
         let name = self.prop_name(name)?;
         let object = self.target_object(target, &name, "assign")?;

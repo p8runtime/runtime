@@ -1,33 +1,25 @@
 <?php
-$a = 1; $b = &$a; $b = 2; echo $a, "\n";
-unset($b); $b = 3; echo $a, "\n";
-$arr = ['x' => 1, 'y' => [1, 2]];
-$r = &$arr['x']; $r = 10;
-$s = &$arr['y'][1]; $s *= 5;
-$n = &$arr['new']['deep']; $n = 'made';
-print_r($arr);
-$v = 'val'; $list = [];
-$list[] = &$v; $list['k'] = &$v; $v = 'changed';
-print_r($list);
-$data = [1, 2, 3];
-foreach ($data as &$item) { $item *= 2; }
-unset($item);
-print_r($data);
-$m = ['a' => 1, 'b' => 2];
-foreach ($m as $k => &$x) { $x = "$k$x"; }
-print_r($m);
-function counter() { static $c = 0; return ++$c; }
-counter(); counter(); echo counter(), "\n";
-function init() { static $calls = [], $n; $calls[] = count($calls); $n++; return [count($calls), $n]; }
-init(); print_r(init());
-class K { function m() { static $x = 10; return $x++; } }
-$k1 = new K; $k2 = new K; echo $k1->m(), $k2->m(), $k1->m(), "\n";
-$stack = [3, 1, 2]; $wrap = ['s' => [5, 4]];
-sort($wrap['s']); print_r($wrap);
-array_push($wrap['s'], 6); echo count($wrap['s']), "\n";
-function addOne(array &$xs) { $xs[] = 1; }
-$h = ['l' => []]; addOne($h['l']); addOne($h['l']); echo count($h['l']), "\n";
-$copy = $data; $ref = &$data[0]; $ref = 'r'; echo $copy[0], $data[0], "\n";
-$x1 = 1; $x2 = &$x1; $x2++; echo $x1, "\n";
-$g = 5; function useGlobal() { global $g; $g++; } useGlobal(); echo $g, "\n";
-$fns = []; for ($i = 0; $i < 3; $i++) { $fns[] = function() use (&$i) { return $i; }; } echo $fns[0](), "\n";
+class O { public $p = 1; public $arr = [1, 2]; public static $s = 's'; }
+$o = new O;
+$x = &$o->p; $x = 10; var_dump($o->p);
+$o->p = 20; var_dump($x);
+$y = 5; $o->q2 = 0; $o->p = &$y; $y = 6; var_dump($o->p);
+$o->self = &$o; var_dump($o->self === $o);
+$a = [1, [2, 3]]; $b = [];
+$b[0] = &$a[1][0]; $b[0] = 'changed'; var_dump($a[1][0]);
+$a[2] = &$a[0]; $a[0] = 'zero'; var_dump($a[2]);
+$r = &O::$s; $r = 'via ref'; var_dump(O::$s);
+$v = 'v'; O::$s = &$v; $v = 'bound'; var_dump(O::$s);
+O::$s = &$o->p; $o->p = 'prop'; var_dump(O::$s);
+$z = &$o->arr[1]; $z = 'elem'; var_dump($o->arr);
+$g = 1;
+function &getRef() { global $g; return $g; }
+function getVal() { global $g; return $g; }
+$gr = &getRef(); $gr = 99; var_dump($g);
+$gv = &getVal(); $gv = 100; var_dump($g);
+$plain = getRef(); $plain = 5; var_dump($g);
+class Store { private $data = ['k' => 1]; function &get($k) { return $this->data[$k]; } function dump() { var_dump($this->data); } }
+$s = new Store; $ref = &$s->get('k'); $ref = 'set via ref'; $s->dump();
+var_dump(strlen(getRef()));
+function &counter() { static $c = 0; $c++; return $c; }
+$c1 = &counter(); $c1 += 10; var_dump(counter());
