@@ -9,8 +9,10 @@
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
-use p8_bytecode::{CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site};
-use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_READONLY, Visibility};
+use p8_bytecode::{
+    CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
+};
+use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_READONLY, CLASS_TRAIT, Visibility};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
 use p8_runtime::frozen::{Frozen, Text};
@@ -162,6 +164,8 @@ impl FnBuilder<'_> {
             ClassRef::Named(lower, _) => lower.as_bytes().to_vec(),
             ClassRef::Forward(lower, _) => [b"forward:", lower.as_bytes()].concat(),
             ClassRef::Static => b"static".to_vec(),
+            ClassRef::Scope => b"scope".to_vec(),
+            ClassRef::ParentScope => b"parent scope".to_vec(),
         };
         let next = self.classes.len() as u16;
         let i = *self.class_index.entry(key).or_insert(next);
@@ -694,6 +698,8 @@ pub struct Compiler<'src> {
 struct ClassScope {
     name: Text,
     parent: Option<Text>,
+    /// A trait: `self` is the class using it, known when the code runs.
+    in_trait: bool,
 }
 
 type Result<T> = std::result::Result<T, CompileError>;
@@ -1167,10 +1173,13 @@ impl<'src> Compiler<'src> {
                 }
             }
             Stmt::Class { modifiers, name, extends, implements, members, .. } => {
-                self.class_decl(f, name.span, modifiers, extends.as_ref(), implements, members, false)?;
+                self.class_decl(f, name.span, modifiers, extends.as_ref(), implements, members, 0)?;
             }
             Stmt::Interface { name, extends, members, .. } => {
-                self.class_decl(f, name.span, &[], None, extends, members, true)?;
+                self.class_decl(f, name.span, &[], None, extends, members, CLASS_INTERFACE)?;
+            }
+            Stmt::Trait { name, members, .. } => {
+                self.class_decl(f, name.span, &[], None, &[], members, CLASS_TRAIT)?;
             }
             Stmt::Nop { .. } => {}
             other => return Err(self.unsupported(other.span(), &format!("this statement ({})", kind(other)))),
@@ -1561,9 +1570,10 @@ impl<'src> Compiler<'src> {
         extends: Option<&p8_syntax::ast::Name>,
         implements: &[p8_syntax::ast::Name],
         members: &[p8_syntax::ast::ClassMember],
-        interface: bool,
+        class_kind: u32,
     ) -> Result<()> {
-        use p8_syntax::ast::ClassMember;
+        use p8_syntax::ast::{ClassMember, TraitAdaptation};
+        let interface = class_kind == CLASS_INTERFACE;
         let display = Text::from(join(&self.ns, self.text(name)).as_slice());
         let name_of = |c: &Self, n: &p8_syntax::ast::Name| Text::from(c.class_name(c.text(n.span)).as_slice());
         let (parent, interfaces) = if interface {
@@ -1571,7 +1581,7 @@ impl<'src> Compiler<'src> {
         } else {
             (extends.map(|n| name_of(self, n)), implements.iter().map(|n| name_of(self, n)).collect())
         };
-        let mut flags = if interface { CLASS_INTERFACE } else { 0 };
+        let mut flags = class_kind;
         for m in modifiers {
             match self.text(m.span).to_ascii_lowercase().as_slice() {
                 b"abstract" => flags |= CLASS_ABSTRACT,
@@ -1580,8 +1590,9 @@ impl<'src> Compiler<'src> {
                 _ => {}
             }
         }
-        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone() });
+        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT });
         let (mut constants, mut properties, mut methods) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut traits, mut trait_rules) = (Vec::new(), Vec::new());
         for member in members {
             match member {
                 ClassMember::Property { modifiers, ty, entries, .. } => {
@@ -1629,6 +1640,32 @@ impl<'src> Compiler<'src> {
                         is_final: has(b"final"),
                     });
                 }
+                ClassMember::TraitUse { traits: used, adaptations, .. } => {
+                    for t in *used {
+                        traits.push(name_of(self, t));
+                    }
+                    for a in *adaptations {
+                        let (method, insteadof, alias, visibility) = match a {
+                            TraitAdaptation::Precedence { method, insteadof, .. } => (method, insteadof.iter().map(|n| name_of(self, n)).collect(), None, None),
+                            TraitAdaptation::Alias { method, alias, visibility, .. } => {
+                                let visibility = visibility.and_then(|v| match self.text(v.span).to_ascii_lowercase().as_slice() {
+                                    b"public" => Some(Visibility::Public),
+                                    b"protected" => Some(Visibility::Protected),
+                                    b"private" => Some(Visibility::Private),
+                                    _ => None,
+                                });
+                                (method, Vec::new(), alias.map(|t| Text::from(self.text(t.span))), visibility)
+                            }
+                        };
+                        trait_rules.push(TraitRule {
+                            trait_name: method.trait_name.as_ref().map(|n| name_of(self, n)),
+                            method: Text::from(self.text(method.method.span)),
+                            insteadof,
+                            alias,
+                            visibility,
+                        });
+                    }
+                }
                 other => {
                     self.scope = saved;
                     return Err(self.unsupported(other_span(other), &format!("this class member ({})", kind(other))));
@@ -1636,7 +1673,7 @@ impl<'src> Compiler<'src> {
             }
         }
         self.scope = saved;
-        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, line: self.line(name) };
+        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, line: self.line(name) };
         let def = Arc::new(def);
         self.classes.push(Arc::clone(&def));
         f.decls.push(def);
@@ -1688,7 +1725,10 @@ impl<'src> Compiler<'src> {
         let text = text.strip_prefix(b"\\").unwrap_or(text);
         let line = self.line(*name);
         let no_scope = |word: &str| CompileError { message: format!("Cannot use \"{word}\" when no class scope is active"), line };
+        let in_trait = self.scope.as_ref().is_some_and(|s| s.in_trait);
         let class = match text.to_ascii_lowercase().as_slice() {
+            b"self" if in_trait => ClassRef::Scope,
+            b"parent" if in_trait => ClassRef::ParentScope,
             b"self" => {
                 let scope = self.scope.as_ref().map(|s| s.name.clone()).or_else(|| f.class.clone()).ok_or_else(|| no_scope("self"))?;
                 ClassRef::Forward(Text::from(scope.as_bytes().to_ascii_lowercase().as_slice()), scope)
@@ -2241,7 +2281,19 @@ impl<'src> Compiler<'src> {
                     },
                     MagicConstKind::Function if f.name.as_bytes() != b"{main}" => f.name.as_bytes().to_vec(),
                     MagicConstKind::Namespace => self.ns.clone(),
+                    // In a trait: the class using it, when the code runs.
+                    MagicConstKind::Class if self.scope.as_ref().is_some_and(|s| s.in_trait) => {
+                        let class = f.class_ref(ClassRef::Scope);
+                        let name = f.constant(Frozen::Str(Text::from("class")));
+                        let dst = f.temp();
+                        f.emit(Instr::ClassConst { dst, class, name });
+                        return Ok(dst);
+                    }
                     MagicConstKind::Class => self.scope.as_ref().map(|s| s.name.as_bytes().to_vec()).unwrap_or_default(),
+                    MagicConstKind::Trait => match &self.scope {
+                        Some(s) if s.in_trait => s.name.as_bytes().to_vec(),
+                        _ => Vec::new(),
+                    },
                     // No classes, traits, namespaces or property hooks yet:
                     // outside them these are empty, as in PHP.
                     _ => Vec::new(),

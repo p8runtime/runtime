@@ -11,7 +11,7 @@ use p8_bytecode::{ClassDef, ClassRef, Function};
 use p8_runtime::array::Key;
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, Class, Constant, Method, Native, Object, Property, Visibility, visible,
+    CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Visibility, visible,
 };
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -79,7 +79,7 @@ impl Context<'_> {
     pub(crate) fn early_bind(&mut self, defs: &[Arc<ClassDef>]) -> Result<(), Throw> {
         for def in defs {
             let known = |n: &p8_runtime::frozen::Text| self.classes.contains_key(&n.as_bytes().to_ascii_lowercase());
-            if def.parent.as_ref().is_none_or(known) && def.interfaces.iter().all(known) {
+            if def.parent.as_ref().is_none_or(known) && def.interfaces.iter().all(known) && def.traits.iter().all(known) {
                 let lower = def.name.as_bytes().to_ascii_lowercase();
                 if self.classes.contains_key(&lower) {
                     continue;
@@ -193,6 +193,83 @@ impl Context<'_> {
                 None => properties.push(prop),
             }
         }
+        // Traits: their methods (the class's own win, then theirs over
+        // the parent's), properties, statics and constants, as the class's.
+        let own: Vec<Vec<u8>> = def.methods.iter().map(|m| m.func.name.as_bytes().to_ascii_lowercase()).collect();
+        let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::new();
+        for tname in &def.traits {
+            let t = self.lookup_class(tname)?;
+            if t.flags & CLASS_TRAIT == 0 {
+                return Err(self.fatal_at(format!("{name} cannot use {} - it is not a trait", text(&t.name)), def.line));
+            }
+            let same = |a: &p8_runtime::frozen::Text, b: &[u8]| a.as_bytes().eq_ignore_ascii_case(b);
+            let mut adopt = |c: &mut Self, key: Vec<u8>, m: Method| -> Result<(), Throw> {
+                if own.contains(&key) {
+                    return Ok(());
+                }
+                if let Some(other) = from_trait.get(&key) {
+                    return Err(c.fatal_at(
+                        format!(
+                            "Trait method {}::{} has not been applied as {name}::{}, because of collision with {}::{}",
+                            text(&t.name),
+                            text(&m.name),
+                            text(&m.name),
+                            text(other),
+                            text(&m.name)
+                        ),
+                        def.line,
+                    ));
+                }
+                if m.is_abstract && methods.get(&key).is_some_and(|x| !x.is_abstract) {
+                    return Ok(());
+                }
+                from_trait.insert(key.clone(), t.name.clone());
+                methods.insert(key, m);
+                Ok(())
+            };
+            for (key, m) in &t.methods {
+                let rule_for = |r: &&p8_bytecode::TraitRule| same(&r.method, m.name.as_bytes()) && r.trait_name.as_ref().is_none_or(|n| same(n, t.name.as_bytes()));
+                let excluded = def
+                    .trait_rules
+                    .iter()
+                    .any(|r| same(&r.method, m.name.as_bytes()) && r.insteadof.iter().any(|x| same(x, t.name.as_bytes())));
+                let mut copy = m.clone();
+                copy.declaring = lower.clone();
+                copy.declaring_name = PhpStr::from(def.name.as_bytes());
+                if !excluded {
+                    let mut plain = copy.clone();
+                    if let Some(v) = def.trait_rules.iter().filter(rule_for).find(|r| r.alias.is_none()).and_then(|r| r.visibility) {
+                        plain.visibility = v;
+                    }
+                    adopt(self, key.clone(), plain)?;
+                }
+                for r in def.trait_rules.iter().filter(rule_for) {
+                    if let Some(alias) = &r.alias {
+                        let mut aliased = copy.clone();
+                        aliased.name = PhpStr::from(alias.as_bytes());
+                        if let Some(v) = r.visibility {
+                            aliased.visibility = v;
+                        }
+                        adopt(self, alias.as_bytes().to_ascii_lowercase(), aliased)?;
+                    }
+                }
+            }
+            for p in &t.properties {
+                if !properties.iter().any(|q| q.name == p.name) {
+                    let mut p = p.clone();
+                    p.declaring = lower.clone();
+                    p.declaring_name = PhpStr::from(def.name.as_bytes());
+                    properties.push(p);
+                }
+            }
+            for (k, (cell, visibility, _)) in &t.statics {
+                let fresh = Rc::new(RefCell::new(cell.borrow().clone()));
+                statics.entry(k.clone()).or_insert((fresh, *visibility, lower.clone()));
+            }
+            for (k, c) in &t.constants {
+                constants.entry(k.clone()).or_insert_with(|| c.clone());
+            }
+        }
         let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
         for (i, p) in properties.iter().enumerate() {
             slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
@@ -230,7 +307,7 @@ impl Context<'_> {
                 },
             );
         }
-        if def.flags & (CLASS_ABSTRACT | CLASS_INTERFACE) == 0 {
+        if def.flags & (CLASS_ABSTRACT | CLASS_INTERFACE | CLASS_TRAIT) == 0 {
             let mut missing: Vec<String> =
                 methods.values().filter(|m| m.is_abstract).map(|m| format!("{}::{}", text(&m.declaring_name), text(&m.name))).collect();
             if !missing.is_empty() {
@@ -269,6 +346,14 @@ impl Context<'_> {
                 Some(c) => Ok(Rc::clone(c)),
                 None => self.find_class(display.as_bytes()),
             },
+            ClassRef::Scope => match self.scope().0 {
+                Some(c) => Ok(c),
+                None => Err(self.throw("Error", "Cannot use \"self\" when no class scope is active")),
+            },
+            ClassRef::ParentScope => match self.scope().0.and_then(|c| c.parent.clone()) {
+                Some(c) => Ok(c),
+                None => Err(self.throw("Error", "Cannot use \"parent\" when current class scope has no parent")),
+            },
             ClassRef::Static => match self.scope().1 {
                 Some(c) => Ok(c),
                 None => Err(self.throw("Error", "Cannot use \"static\" when no class scope is active")),
@@ -283,6 +368,9 @@ impl Context<'_> {
         }
         if class.flags & CLASS_ABSTRACT != 0 {
             return Err(self.throw("Error", format!("Cannot instantiate abstract class {}", text(&class.name))));
+        }
+        if class.flags & CLASS_TRAIT != 0 {
+            return Err(self.throw("Error", format!("Cannot instantiate trait {}", text(&class.name))));
         }
         let object = Object::new(Rc::clone(&class), &self.ids);
         if class.is_a(b"throwable") {
@@ -375,7 +463,7 @@ impl Context<'_> {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
         let this = self.frames.last().and_then(|f| f.this.clone());
-        let forward = matches!(func.classes[class as usize], ClassRef::Forward(..) | ClassRef::Static);
+        let forward = matches!(func.classes[class as usize], ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope);
         let fframe = self.code_of(&method);
         if method.is_static {
             let called = match called {
@@ -658,6 +746,8 @@ impl Context<'_> {
         match &func.classes[class as usize] {
             ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => o.class.is_a(lower.as_bytes()),
             ClassRef::Static => self.scope().1.is_some_and(|c| o.class.is_a(&c.lower)),
+            ClassRef::Scope => self.scope().0.is_some_and(|c| o.class.is_a(&c.lower)),
+            ClassRef::ParentScope => self.scope().0.and_then(|c| c.parent.clone()).is_some_and(|c| o.class.is_a(&c.lower)),
         }
     }
 

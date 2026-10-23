@@ -382,6 +382,10 @@ pub enum ClassRef {
     /// it keeps the caller's called class (late static binding forwards).
     Forward(Text, Text),
     Static,
+    /// `self` / `parent` in a trait: the class using it, or its parent,
+    /// known when the code runs (forwarding, as `self::` does).
+    Scope,
+    ParentScope,
 }
 
 impl ClassRef {
@@ -389,7 +393,7 @@ impl ClassRef {
     pub fn lower(&self) -> Option<&Text> {
         match self {
             ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => Some(lower),
-            ClassRef::Static => None,
+            ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope => None,
         }
     }
 }
@@ -407,7 +411,20 @@ pub struct ClassDef {
     pub constants: Vec<ConstDef>,
     pub properties: Vec<PropDef>,
     pub methods: Vec<MethodDef>,
+    /// `use T1, T2 { … }`: the traits, and their conflict rules.
+    pub traits: Vec<Text>,
+    pub trait_rules: Vec<TraitRule>,
     pub line: u32,
+}
+
+/// `T::m insteadof U` (`insteadof` non-empty) or `[T::]m as [visibility] [alias]`.
+#[derive(Debug)]
+pub struct TraitRule {
+    pub trait_name: Option<Text>,
+    pub method: Text,
+    pub insteadof: Vec<Text>,
+    pub alias: Option<Text>,
+    pub visibility: Option<Visibility>,
 }
 
 #[derive(Debug)]
