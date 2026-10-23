@@ -135,6 +135,23 @@ impl std::fmt::Display for VmError {
 
 impl std::error::Error for VmError {}
 
+/// PHP 8's warning for reading a missing array key: ints bare, strings quoted.
+fn undefined_key_message(key: &ArrayKey) -> String {
+    match key {
+        ArrayKey::Int(i) => format!("Undefined array key {}", i),
+        ArrayKey::Str(s) => format!("Undefined array key \"{}\"", String::from_utf8_lossy(s)),
+    }
+}
+
+/// The source line a frame is executing.
+fn frame_line(frame: &CallFrame) -> u32 {
+    if frame.ip > 0 && frame.ip <= frame.chunk.lines.len() {
+        frame.chunk.lines[frame.ip - 1]
+    } else {
+        0
+    }
+}
+
 /// PHP error levels matching Zend constants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorLevel {
@@ -322,6 +339,8 @@ pub struct VM {
     pub(crate) pending_throw: Option<Handle>,
     /// Counter giving each declared method and property its declaration order.
     decl_counter: u64,
+    /// Exit status set by exit(int).
+    pub exit_status: i32,
     pub silence_stack: Vec<u32>,
     pub pending_calls: Vec<PendingCall>,
     pub output_writer: Box<dyn OutputWriter>,
@@ -384,6 +403,7 @@ impl VM {
             last_return_value: None,
             pending_throw: None,
             decl_counter: 0,
+            exit_status: 0,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -796,6 +816,7 @@ impl VM {
             last_return_value: None,
             pending_throw: None,
             decl_counter: 0,
+            exit_status: 0,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -2933,6 +2954,80 @@ impl VM {
         self.run_loop(0)
     }
 
+    /// Run a script as one request, the way php_execute_script and
+    /// php_request_shutdown do: an uncaught exception or fatal error is
+    /// reported (through the output layer, so into any open buffer), then
+    /// every output buffer is flushed. Returns the process exit status.
+    pub fn run_request(&mut self, chunk: Rc<CodeChunk>) -> i32 {
+        let status = match self.run(chunk) {
+            Ok(()) => self.exit_status,
+            Err(VmError::Exception(ex)) => {
+                self.report_uncaught(ex);
+                255
+            }
+            Err(e) => {
+                let text = format!("\nFatal error: {}\n", e);
+                let _ = self.write_output(text.as_bytes());
+                255
+            }
+        };
+        self.end_output_buffers();
+        let _ = self.output_writer.flush();
+        status
+    }
+
+    /// "Fatal error: Uncaught ..." for an exception no catch handled.
+    /// Reference: $PHP_SRC_PATH/Zend/zend_exceptions.c - zend_exception_error
+    pub(crate) fn report_uncaught(&mut self, ex: Handle) {
+        // The script's frames are gone; __toString runs under an empty frame
+        // (native methods take $this from the current frame).
+        self.frames.clear();
+        self.operand_stack.truncate(0);
+        self.push_frame(CallFrame::new(Rc::new(CodeChunk::default())));
+        let to_string = self.context.interner.intern(b"__toString");
+        let text = match self.call_method(ex, to_string, &[]) {
+            Ok(h) => self.arena.get(h).value.to_php_string_bytes(),
+            Err(_) => b"exception".to_vec(),
+        };
+        self.frames.clear();
+        let (file, line) = self.exception_location(ex);
+        let mut out = b"\nFatal error: Uncaught ".to_vec();
+        out.extend_from_slice(&text);
+        out.extend_from_slice(format!("\n  thrown in {} on line {}\n", file, line).as_bytes());
+        let _ = self.write_output(&out);
+    }
+
+    /// The `file` and `line` properties of an exception.
+    fn exception_location(&self, ex: Handle) -> (String, i64) {
+        let mut file = String::from("Unknown");
+        let mut line = 0;
+        if let Val::Object(payload) = self.arena.get(ex).value
+            && let Val::ObjPayload(obj) = &self.arena.get(payload).value
+        {
+            for (name, h) in &obj.properties {
+                match self.context.interner.lookup(*name) {
+                    Some(b"file") => file = String::from_utf8_lossy(&self.arena.get(*h).value.to_php_string_bytes()).into_owned(),
+                    Some(b"line") => line = self.arena.get(*h).value.to_int(),
+                    _ => {}
+                }
+            }
+        }
+        (file, line)
+    }
+
+    /// Flush and close every output buffer, innermost first (php_output_end_all).
+    pub fn end_output_buffers(&mut self) {
+        while let Some(buffer) = self.output_buffers.pop() {
+            let content = buffer.content;
+            match self.output_buffers.last_mut() {
+                Some(parent) => parent.content.extend_from_slice(&content),
+                None => {
+                    let _ = self.write_output(&content);
+                }
+            }
+        }
+    }
+
     pub fn run_frame(&mut self, frame: CallFrame) -> Result<Handle, VmError> {
         let depth = self.frames.len();
         self.push_frame(frame);
@@ -3016,6 +3111,10 @@ impl VM {
                                 "__toString must return a string".into(),
                             )),
                         }
+                    } else if self.find_native_method(obj_data.class, to_string_magic).is_some() {
+                        // Built-in __toString (Exception, ...)
+                        let ret = self.call_method(handle, to_string_magic, &[])?;
+                        Ok(self.arena.get(ret).value.to_php_string_bytes())
                     } else {
                         // No __toString method - cannot convert
                         let class_name = String::from_utf8_lossy(
@@ -3023,11 +3122,10 @@ impl VM {
                                 .interner
                                 .lookup(obj_data.class)
                                 .unwrap_or(b"Unknown"),
-                        );
-                        Err(VmError::RuntimeError(format!(
-                            "Object of class {} could not be converted to string",
-                            class_name
-                        )))
+                        )
+                        .into_owned();
+                        let msg = format!("Object of class {} could not be converted to string", class_name);
+                        Err(self.throw_error(b"Error", &msg))
                     }
                 } else {
                     Err(VmError::RuntimeError("Invalid object payload".into()))
@@ -3511,7 +3609,84 @@ impl VM {
         if let Val::ObjPayload(obj) = &mut self.arena.get_mut(payload).value {
             obj.properties.insert(message_sym, message_val);
         }
-        self.arena.alloc(Val::Object(payload))
+        let ex = self.arena.alloc(Val::Object(payload));
+        self.locate_throwable(ex);
+        ex
+    }
+
+    /// Record where a Throwable was created: `file`, `line` and `trace`, as
+    /// zend_default_exception_new does. Other objects are left alone.
+    pub(crate) fn locate_throwable(&mut self, obj: Handle) {
+        let throwable = self.context.interner.intern(b"Throwable");
+        if !self.is_instance_of(obj, throwable) {
+            return;
+        }
+        let Val::Object(payload) = self.arena.get(obj).value else { return };
+        let (file, line) = self
+            .frames
+            .last()
+            .map(|f| (f.chunk.file_path.clone().unwrap_or_default(), frame_line(f)))
+            .unwrap_or_default();
+        let trace = self.capture_backtrace();
+        let file = self.arena.alloc(Val::String(file.into_bytes().into()));
+        let line = self.arena.alloc(Val::Int(line as i64));
+        let keys = [b"file".as_slice(), b"line", b"trace"].map(|k| self.context.interner.intern(k));
+        if let Val::ObjPayload(o) = &mut self.arena.get_mut(payload).value {
+            o.properties.insert(keys[0], file);
+            o.properties.insert(keys[1], line);
+            o.properties.insert(keys[2], trace);
+        }
+    }
+
+    /// debug_backtrace()-shaped array of the active calls, innermost first:
+    /// each entry is the call (file and line of the call site, function,
+    /// class, type, args).
+    pub(crate) fn capture_backtrace(&mut self) -> Handle {
+        let mut entries = Vec::new();
+        for i in (1..self.frames.len()).rev() {
+            let frame = &self.frames[i];
+            let Some(func) = frame.func.as_ref() else { continue };
+            let caller = &self.frames[i - 1];
+            let file = caller.chunk.file_path.clone().unwrap_or_default();
+            let line = frame_line(caller);
+            let full = self.context.interner.lookup(func.chunk.name).unwrap_or(b"").to_vec();
+            let (class, function) = match full.windows(2).position(|w| w == b"::") {
+                Some(p) => (Some(full[..p].to_vec()), full[p + 2..].to_vec()),
+                None => (None, full),
+            };
+            let class = frame
+                .called_scope
+                .or(frame.class_scope)
+                .and_then(|c| self.context.interner.lookup(c).map(<[u8]>::to_vec))
+                .or(class)
+                .filter(|_| frame.class_scope.is_some());
+            let kind: &[u8] = if frame.this.is_some() { b"->" } else { b"::" };
+            let args: Vec<Handle> = frame.args.iter().copied().collect();
+            entries.push((file, line, function, class, kind, args));
+        }
+        let mut trace = ArrayData::new();
+        for (file, line, function, class, kind, args) in entries {
+            let mut e = ArrayData::new();
+            let mut put = |vm: &mut VM, k: &[u8], v: Val| {
+                let h = vm.arena.alloc(v);
+                e.insert(ArrayKey::Str(Rc::new(k.to_vec())), h);
+            };
+            put(self, b"file", Val::String(file.into_bytes().into()));
+            put(self, b"line", Val::Int(line as i64));
+            put(self, b"function", Val::String(function.into()));
+            if let Some(class) = class {
+                put(self, b"class", Val::String(class.into()));
+                put(self, b"type", Val::String(kind.to_vec().into()));
+            }
+            let mut arr = ArrayData::new();
+            for a in args {
+                arr.push(a);
+            }
+            put(self, b"args", Val::Array(Rc::new(arr)));
+            let h = self.arena.alloc(Val::Array(Rc::new(e)));
+            trace.push(h);
+        }
+        self.arena.alloc(Val::Array(Rc::new(trace)))
     }
 
     /// Throw `handle` (a Throwable) from inside an opcode handler.
@@ -3604,39 +3779,9 @@ impl VM {
             )));
         }
 
-        // Set exception properties (file, line, trace) at throw time
-        // This mimics PHP's behavior of capturing context when exception is thrown
-        let file_sym = self.context.interner.intern(b"file");
-        let line_sym = self.context.interner.intern(b"line");
-
-        // Get current file and line from frame
-        let (file_path, line_no) = if let Some(frame) = self.frames.last() {
-            let file = frame
-                .chunk
-                .file_path
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            let line = if frame.ip > 0 && frame.ip <= frame.chunk.lines.len() {
-                frame.chunk.lines[frame.ip - 1]
-            } else {
-                0
-            };
-            (file, line)
-        } else {
-            ("unknown".to_string(), 0)
-        };
-
-        // Allocate property values first
-        let file_val = self.arena.alloc(Val::String(file_path.into_bytes().into()));
-        let line_val = self.arena.alloc(Val::Int(line_no as i64));
-
-        // Now mutate the object to set file and line
-        let payload = self.arena.get_mut(payload_handle);
-        if let Val::ObjPayload(ref mut obj_data) = payload.value {
-            obj_data.properties.insert(file_sym, file_val);
-            obj_data.properties.insert(line_sym, line_val);
-        }
-
+        // file, line and trace are recorded when the exception is created
+        // (locate_throwable); a rethrow keeps them.
+        let _ = payload_handle;
         Err(VmError::Exception(ex_handle))
     }
 
@@ -4178,9 +4323,16 @@ impl VM {
 
             OpCode::Echo => self.exec_echo()?,
             OpCode::Exit => {
+                // exit(int) sets the exit status; exit(string) prints it.
                 if let Some(handle) = self.operand_stack.pop() {
-                    let s = self.convert_to_string(handle)?;
-                    self.write_output(&s)?;
+                    match self.arena.get(handle).value {
+                        Val::Int(code) => self.exit_status = code as i32,
+                        Val::Null => {}
+                        _ => {
+                            let s = self.convert_to_string(handle)?;
+                            self.write_output(&s)?;
+                        }
+                    }
                 }
                 self.output_writer.flush()?;
                 self.frames.clear();
@@ -5387,6 +5539,27 @@ impl VM {
             // Array operations - delegated to opcodes::array_ops
             OpCode::InitArray(size) => self.exec_init_array(size)?,
 
+            OpCode::FetchDimArg => {
+                let key = self.peek_operand_at(0)?;
+                let array = self.peek_operand_at(1)?;
+                let slot = match &self.arena.get(array).value {
+                    Val::Array(map) => {
+                        let key_val = self.arena.get(key).value.clone();
+                        self.array_key_from_value(&key_val)
+                            .ok()
+                            .and_then(|k| map.map.get(&k).copied())
+                    }
+                    _ => None,
+                };
+                match slot {
+                    Some(slot) => {
+                        self.operand_stack.pop();
+                        self.operand_stack.pop();
+                        self.operand_stack.push(slot);
+                    }
+                    None => self.execute_opcode(OpCode::FetchDim, target_depth)?,
+                }
+            }
             OpCode::FetchDim => {
                 let key_handle = self
                     .operand_stack
@@ -5403,18 +5576,13 @@ impl VM {
                         let key_val = &self.arena.get(key_handle).value;
                         let key = self.array_key_from_value(key_val)?;
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             // Emit notice for undefined array key
-                            let key_str = match &key {
-                                ArrayKey::Int(i) => i.to_string(),
-                                ArrayKey::Str(s) => String::from_utf8_lossy(s).to_string(),
-                            };
-                            self.report_error(
-                                ErrorLevel::Notice,
-                                &format!("Undefined array key \"{}\"", key_str),
-                            );
+                            let msg = undefined_key_message(&key);
+                            self.report_error(ErrorLevel::Warning, &msg);
                             let null_handle = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null_handle);
                         }
@@ -7482,6 +7650,7 @@ impl VM {
                     let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
                     let obj_val = Val::Object(payload_handle);
                     let obj_handle = self.arena.alloc(obj_val);
+                    self.locate_throwable(obj_handle);
 
                     // Check for constructor
                     let constructor_name = self.context.interner.intern(b"__construct");
@@ -7631,6 +7800,7 @@ impl VM {
                     let payload_handle = self.arena.alloc(Val::ObjPayload(obj_data));
                     let obj_val = Val::Object(payload_handle);
                     let obj_handle = self.arena.alloc(obj_val);
+                    self.locate_throwable(obj_handle);
 
                     // Check for constructor
                     let constructor_name = self.context.interner.intern(b"__construct");
@@ -8565,8 +8735,9 @@ impl VM {
                             _ => ArrayKey::Str(Rc::new(Vec::<u8>::new())),
                         };
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             let null = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null);
@@ -8598,8 +8769,9 @@ impl VM {
                             _ => ArrayKey::Str(Rc::new(Vec::<u8>::new())),
                         };
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             let null = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null);
@@ -8632,19 +8804,14 @@ impl VM {
                         let dim_val = &self.arena.get(dim).value;
                         let key = self.array_key_from_value(dim_val)?;
 
-                        if let Some(val_handle) = map.map.get(&key) {
-                            self.operand_stack.push(*val_handle);
+                        if let Some(&val_handle) = map.map.get(&key) {
+                            let val_handle = self.read_slot(val_handle);
+                            self.operand_stack.push(val_handle);
                         } else {
                             // Emit notice for FetchDimR, but not for isset/empty (FetchDimIs) or unset
                             if is_fetch_r {
-                                let key_str = match &key {
-                                    ArrayKey::Int(i) => i.to_string(),
-                                    ArrayKey::Str(s) => String::from_utf8_lossy(s).to_string(),
-                                };
-                                self.report_error(
-                                    ErrorLevel::Notice,
-                                    &format!("Undefined array key \"{}\"", key_str),
-                                );
+                                let msg = undefined_key_message(&key);
+                                self.report_error(ErrorLevel::Warning, &msg);
                             }
                             let null = self.arena.alloc(Val::Null);
                             self.operand_stack.push(null);
@@ -11269,6 +11436,27 @@ impl VM {
         array_handle: Handle,
         keys: &[Handle],
     ) -> Result<Handle, VmError> {
+        let slot = self.fetch_nested_dim_slot(array_handle, keys)?;
+        Ok(self.read_slot(slot))
+    }
+
+    /// A value read for use as an operand: a reference slot is copied, so a
+    /// later write in the same expression cannot change it (FETCH_*_R's
+    /// ZVAL_COPY_DEREF).
+    pub(crate) fn read_slot(&mut self, slot: Handle) -> Handle {
+        if self.arena.get(slot).is_ref {
+            let val = self.arena.get(slot).value.clone();
+            self.arena.alloc(val)
+        } else {
+            slot
+        }
+    }
+
+    fn fetch_nested_dim_slot(
+        &mut self,
+        array_handle: Handle,
+        keys: &[Handle],
+    ) -> Result<Handle, VmError> {
         let mut current_handle = array_handle;
 
         for key_handle in keys {
@@ -11283,14 +11471,8 @@ impl VM {
                         current_handle = *val;
                     } else {
                         // Undefined index: emit notice and return NULL
-                        let key_str = match &key {
-                            ArrayKey::Int(i) => i.to_string(),
-                            ArrayKey::Str(s) => String::from_utf8_lossy(s).to_string(),
-                        };
-                        self.report_error(
-                            ErrorLevel::Notice,
-                            &format!("Undefined array key \"{}\"", key_str),
-                        );
+                        let msg = undefined_key_message(&key);
+                        self.report_error(ErrorLevel::Warning, &msg);
                         return Ok(self.arena.alloc(Val::Null));
                     }
                 }

@@ -17,5 +17,6 @@ fn main() -> Result<()> {
     }
 
     let script = PathBuf::from(&args[1]);
-    run_script(&script, &args[2..].to_vec())
+    let status = run_script(&script, &args[2..])?;
+    std::process::exit(status);
 }

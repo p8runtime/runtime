@@ -58,6 +58,9 @@ pub enum OpCode {
     // Control Flow
     Jmp(u32),
     Dup2, // [A, B] -> [A, B, A, B]
+    /// [Array, Key] -> [Element slot]: FetchDim for a call argument, without
+    /// copying a reference slot (it may bind to a by-reference parameter).
+    FetchDimArg,
     /// $base[k1]..[kN] = val, keeping the assigned value for the expression result:
     /// [E1..Ee, Array, K1..KN, Val] -> [Val, E1..Ee, NewArray]
     /// (E = operands the store-back needs, e.g. the object for a property base)
