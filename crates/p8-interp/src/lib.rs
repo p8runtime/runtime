@@ -61,6 +61,16 @@ struct Frame {
 
 const NO_RET: u32 = u32::MAX;
 
+/// PHP's error levels (E_*), for error_reporting.
+const E_WARNING: i64 = 2;
+const E_NOTICE: i64 = 8;
+const E_USER_WARNING: i64 = 512;
+const E_USER_NOTICE: i64 = 1024;
+const E_DEPRECATED: i64 = 8192;
+const E_USER_DEPRECATED: i64 = 16384;
+/// The CLI's level with no php.ini: E_ALL except E_STRICT.
+const E_DEFAULT: i64 = 30719;
+
 /// The call stack. A popped frame keeps its slot and the closure in it, so
 /// calling the same function again from the same depth (what a loop does)
 /// reuses the slot without touching the closure's reference count.
@@ -666,6 +676,9 @@ impl Isolate {
             globals: HashMap::new(),
             out: Output { buffers: Vec::new(), host },
             diags: Vec::new(),
+            ini: HashMap::new(),
+            error_level: E_DEFAULT,
+            display_errors: true,
             pc: 0,
         }
     }
@@ -690,6 +703,12 @@ pub struct Context<'i> {
     globals: HashMap<Vec<u8>, Rc<RefCell<Value>>>,
     out: Output<'i>,
     diags: Vec<Diag>,
+    /// ini settings this request changed (ini_set, error_reporting()).
+    ini: HashMap<Vec<u8>, Value>,
+    /// error_reporting's level: which diagnostics are shown.
+    error_level: i64,
+    /// display_errors: whether diagnostics are shown at all.
+    display_errors: bool,
     /// The running frame's pc (Frame.pc is written when it calls out).
     pc: usize,
 }
@@ -790,14 +809,28 @@ impl Context<'_> {
     #[cold]
     #[inline(never)]
     fn print_diags(&mut self) {
-        let (file, line) = self.location();
         for d in std::mem::take(&mut self.diags) {
-            let (label, message) = match d {
-                Diag::Warning(m) => ("Warning", m),
-                Diag::Deprecated(m) => ("Deprecated", m),
-            };
-            self.out.write(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+            match d {
+                Diag::Warning(m) => self.show(E_WARNING, &m),
+                Diag::Deprecated(m) => self.show(E_DEPRECATED, &m),
+            }
         }
+    }
+
+    /// Print a diagnostic of PHP error `level` at the current line, as the
+    /// CLI does, if error_reporting and display_errors let it through.
+    fn show(&mut self, level: i64, message: &str) {
+        if !self.display_errors || self.error_level & level == 0 {
+            return;
+        }
+        let label = match level {
+            E_WARNING | E_USER_WARNING => "Warning",
+            E_NOTICE | E_USER_NOTICE => "Notice",
+            E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
+            _ => "Fatal error",
+        };
+        let (file, line) = self.location();
+        self.out.write(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
     }
 
     fn warn(&mut self, message: impl Into<String>) {
@@ -1341,6 +1374,20 @@ impl Context<'_> {
     #[inline]
     fn call_builtin(&mut self, w: &mut [Value], i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let args = &mut w[args as usize..args as usize + argc as usize];
+        // PHP's argument checks and conversions, from the stub signature.
+        if let Some(message) = self.isolate.registry.deprecation(i) {
+            self.diags.push(Diag::Deprecated(message.to_string()));
+        }
+        if let Some(sig) = self.isolate.registry.sig(i) {
+            let checked = p8_runtime::args::check(sig, args, &mut self.diags);
+            self.report_diags();
+            if let Err((class, message)) = checked {
+                for v in args {
+                    clear(v);
+                }
+                return Err(self.throw(class, message));
+            }
+        }
         let r = (self.isolate.registry.function(i).run)(self, args);
         for v in args {
             clear(v);
@@ -1614,6 +1661,53 @@ impl Ctx for Context<'_> {
 
     fn warn(&mut self, message: &str) {
         Context::warn(self, message);
+    }
+
+    fn deprecated(&mut self, message: &str) {
+        self.diags.push(Diag::Deprecated(message.to_string()));
+        self.report_diags();
+    }
+
+    fn report(&mut self, level: i64, message: &str) {
+        self.report_diags();
+        self.show(level, message);
+    }
+
+    fn fatal(&self, message: String) -> Throw {
+        let (file, line) = self.location();
+        Throw::Fatal { message, file, line }
+    }
+
+    fn ini_get(&self, name: &[u8]) -> Option<Value> {
+        let default = self.isolate.registry.ini_default(name)?;
+        Some(match self.ini.get(name) {
+            Some(v) => v.clone(),
+            None => default.map_or(Value::Null, |d| Value::Str(PhpStr::from(d))),
+        })
+    }
+
+    fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value> {
+        let old = self.ini_get(name)?;
+        let text = value.to_php_string().unwrap_or_else(PhpStr::empty);
+        match name {
+            b"error_reporting" => self.error_level = Value::Str(text.clone()).to_int(),
+            b"display_errors" => {
+                let t = text.as_bytes().to_ascii_lowercase();
+                self.display_errors = !matches!(t.as_slice(), b"" | b"0" | b"off" | b"no" | b"false" | b"stderr");
+            }
+            _ => {}
+        }
+        self.ini.insert(name.to_vec(), Value::Str(text));
+        Some(old)
+    }
+
+    fn error_level(&mut self, new: Option<i64>) -> i64 {
+        let old = self.error_level;
+        if let Some(level) = new {
+            self.error_level = level;
+            self.ini.insert(b"error_reporting".to_vec(), Value::Str(PhpStr::from(level.to_string())));
+        }
+        old
     }
 
     fn constant(&self, name: &[u8]) -> Option<Value> {

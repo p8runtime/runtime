@@ -24,8 +24,10 @@ cargo build --release --bin php-test
 cargo build --release -p php-cli --bin php2
 target/release/php-test ../php-src -r -q --php target/release/php2 \
   --target tests/php-src/target.txt --passes .tmp/p8-passes.txt
-diff tests/php-src/p8-passes.txt .tmp/p8-passes.txt
+diff tests/php-src/p8-passes.txt .tmp/p8-passes.txt   # "<" lines are lost tests
 ```
+
+Compare lists with `diff` (or `LC_ALL=C comm`: the lists are sorted bytewise).
 
 The run writes into the php-src checkout, so reset it afterwards:
 `git checkout -- . && git clean -fd` in php-src.

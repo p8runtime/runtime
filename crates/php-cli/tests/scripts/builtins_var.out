@@ -1,0 +1,94 @@
+NULL null 10000000
+boolean bool 01000010
+boolean bool 01000010
+integer int 00100011
+integer int 00100011
+double float 00010011
+double float 00010011
+double float 00010011
+string string 00001010
+string string 00001011
+string string 00001011
+string string 00001011
+string string 00001010
+string string 00001011
+string string 00001010
+array array 00000100
+array array 00000100
+42 66 34 42 146
+0 26 0 26 42814
+12 18 10 10 38
+0 2833 0 3 14293
+7 7 7 7 7
+-15 -21 -13 -15 -41
+9223372036854775807 9223372036854775807 0 9223372036854775807 9223372036854775807
+0 0 0 0 35
+int(42)
+int(1)
+int(0)
+float(1.5)
+float(0)
+string(1) "1"
+string(3) "0.3"
+bool(false)
+bool(false)
+bool(true)
+1
+1
+|
+|
+text
+Array
+(
+    [0] => 1
+    [1] => 2
+    [2] => Array
+        (
+            [0] => 3
+            [1] => Array
+                (
+                    [0] => 4
+                )
+
+        )
+
+    [k] => v
+    [e] => Array
+        (
+        )
+
+)
+Array
+(
+    [0] => 1
+)
+NULL
+false
+-9223372036854775807-1
+1.0
+0.1
+-0.0
+1.0E+100
+INF
+NAN
+'it\'s a \\ test' . "\0" . 'end'
+array (
+  0 => 1,
+  'a' => 
+  array (
+    0 => true,
+    1 => NULL,
+  ),
+  'it\'s' => 
+  array (
+  ),
+  5 => 1.5,
+)
+array (
+  0 => 
+  array (
+    0 => 
+    array (
+    ),
+  ),
+)

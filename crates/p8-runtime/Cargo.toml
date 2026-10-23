@@ -6,4 +6,5 @@ license = "MIT"
 description = "p8's values: scalars, strings, arrays, references, and PHP 8.4's operators on them"
 
 [dependencies]
+p8-stubs = { path = "../p8-stubs" }
 hashbrown = { version = "0.16", default-features = false }

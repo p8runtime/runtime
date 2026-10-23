@@ -2823,7 +2823,12 @@ name = "p8-runtime"
 version = "0.1.0"
 dependencies = [
  "hashbrown 0.16.1",
+ "p8-stubs",
 ]
+
+[[package]]
+name = "p8-stubs"
+version = "0.1.0"
 
 [[package]]
 name = "p8-syntax"
@@ -3036,6 +3041,7 @@ dependencies = [
  "oracle",
  "p8-ext-standard",
  "p8-runtime",
+ "p8-stubs",
  "p8-syntax",
  "pbkdf2",
  "pcre2",

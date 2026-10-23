@@ -10,7 +10,12 @@ use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
+mod array;
 pub mod defaults;
+mod math;
+mod misc;
+mod string;
+mod var;
 
 static BUILTINS: &[Builtin] = &[
     Builtin { name: "strlen", run: strlen, by_ref: &[] },
@@ -39,8 +44,44 @@ static BUILTINS: &[Builtin] = &[
 /// table examples/gen_defaults.php generates from real PHP).
 pub const EXTENSION: Extension = Extension { name: "standard", register };
 
+/// The constants examples/gen_defaults.php leaves out because they describe
+/// the build and the host rather than PHP: here, p8's own. The version is
+/// the release whose php-src suite p8 is measured against.
+const HOST_CONSTANTS: &[(&str, Constant)] = &[
+    ("PHP_VERSION", Constant::Str(b"8.4.27")),
+    ("PHP_VERSION_ID", Constant::Int(80427)),
+    ("PHP_MAJOR_VERSION", Constant::Int(8)),
+    ("PHP_MINOR_VERSION", Constant::Int(4)),
+    ("PHP_RELEASE_VERSION", Constant::Int(27)),
+    ("PHP_EXTRA_VERSION", Constant::Str(b"")),
+    ("PHP_OS", Constant::Str(if cfg!(target_os = "macos") { b"Darwin" } else { b"Linux" })),
+    ("PHP_OS_FAMILY", Constant::Str(if cfg!(target_os = "macos") { b"Darwin" } else { b"Linux" })),
+    ("PHP_SAPI", Constant::Str(b"cli")),
+    ("PHP_EOL", Constant::Str(b"\n")),
+    ("DIRECTORY_SEPARATOR", Constant::Str(b"/")),
+    ("PATH_SEPARATOR", Constant::Str(b":")),
+    ("PHP_MAXPATHLEN", Constant::Int(if cfg!(target_os = "macos") { 1024 } else { 4096 })),
+    ("PHP_FD_SETSIZE", Constant::Int(1024)),
+    ("PHP_SHLIB_SUFFIX", Constant::Str(b"so")),
+    ("PHP_ZTS", Constant::Bool(false)),
+    ("PHP_DEBUG", Constant::Bool(false)),
+    ("ZEND_THREAD_SAFE", Constant::Bool(false)),
+    ("ZEND_DEBUG_BUILD", Constant::Bool(false)),
+];
+
 fn register(registry: &mut Registry) {
+    for (name, value) in HOST_CONSTANTS {
+        registry.add_constant(name.as_bytes(), *value);
+    }
+    for (_, name, default) in defaults::INI_DEFAULTS {
+        registry.add_ini(name, *default);
+    }
     registry.add_functions(BUILTINS);
+    registry.add_functions(array::BUILTINS);
+    registry.add_functions(math::BUILTINS);
+    registry.add_functions(misc::BUILTINS);
+    registry.add_functions(string::BUILTINS);
+    registry.add_functions(var::BUILTINS);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),

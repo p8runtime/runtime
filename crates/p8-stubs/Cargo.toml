@@ -1,0 +1,8 @@
+[package]
+name = "p8-stubs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "PHP 8.4's builtin function and method signatures, generated from php-src's stubs"
+
+[dependencies]
