@@ -1009,6 +1009,15 @@ impl VM {
         self.arena.len() * ZVAL_SIZE
     }
 
+    /// PHP 8: `$obj[...]` on an object that does not implement ArrayAccess.
+    fn object_as_array_error(&self, class_name: Symbol) -> VmError {
+        let name = self.context.interner.lookup(class_name).unwrap_or(b"Unknown");
+        VmError::RuntimeError(format!(
+            "Cannot use object of type {} as array",
+            String::from_utf8_lossy(name)
+        ))
+    }
+
     /// Check if memory limit has been exceeded
     /// Returns an error if the limit is exceeded and not unlimited (0)
     fn check_memory_limit(&self) -> Result<(), VmError> {
@@ -3357,7 +3366,11 @@ impl VM {
     /// every output buffer is flushed. Returns the process exit status.
     pub fn run_request(&mut self, chunk: Rc<CodeChunk>) -> i32 {
         self.stack_base = Some(stack_position());
-        let status = match self.run(chunk) {
+        let result = match self.compile_failure(&chunk) {
+            Some(failure) => Err(failure),
+            None => self.run(chunk),
+        };
+        let status = match result {
             Ok(()) => self.exit_status,
             Err(VmError::Terminated) => 255,
             Err(VmError::Exception(ex)) => {
@@ -3395,6 +3408,41 @@ impl VM {
         self.end_output_buffers();
         let _ = self.output_writer.flush();
         status
+    }
+
+    /// A file that failed to compile: "Fatal error: msg in FILE on line N" is
+    /// shown and the request ends (E_COMPILE_ERROR).
+    pub(crate) fn compile_failure(&mut self, chunk: &CodeChunk) -> Option<VmError> {
+        let error = chunk.compile_error.as_ref()?;
+        let file = chunk.file_path.as_deref().unwrap_or("Unknown");
+        let text = format!(
+            "\nFatal error: {} in {} on line {}\n",
+            error.message, file, error.line
+        );
+        let _ = self.write_output(text.as_bytes());
+        Some(VmError::Terminated)
+    }
+
+    /// include/require/eval of code that does not parse: a ParseError
+    /// located in that code, as PHP throws.
+    pub(crate) fn parse_error(
+        &mut self,
+        error: &crate::parser::ast::ParseError,
+        source: &[u8],
+        file: &str,
+    ) -> VmError {
+        let ex = self.new_throwable(b"ParseError", error.message);
+        let line = error.span.line_info(source).map_or(1, |info| info.line);
+        let keys = [b"file".as_slice(), b"line"].map(|k| self.context.interner.intern(k));
+        let file = self.arena.alloc(Val::String(file.as_bytes().to_vec().into()));
+        let line = self.arena.alloc(Val::Int(line as i64));
+        if let Val::Object(payload) = self.arena.get(ex).value
+            && let Val::ObjPayload(obj) = &mut self.arena.get_mut(payload).value
+        {
+            obj.properties.insert(keys[0], file);
+            obj.properties.insert(keys[1], line);
+        }
+        VmError::Exception(ex)
     }
 
     /// "Fatal error: msg in FILE on line N" for an error that ended the script,
@@ -3443,6 +3491,15 @@ impl VM {
     /// "Fatal error: Uncaught ..." for an exception no catch handled.
     /// Reference: $PHP_SRC_PATH/Zend/zend_exceptions.c - zend_exception_error
     pub(crate) fn report_uncaught(&mut self, ex: Handle) {
+        // A ParseError is shown as the parse error it stands for.
+        let parse_error = self.context.interner.intern(b"ParseError");
+        if self.is_instance_of(ex, parse_error) {
+            let (file, line) = self.exception_location(ex);
+            let message = self.exception_message(ex);
+            let text = format!("\nParse error: {} in {} on line {}\n", message, file, line);
+            let _ = self.write_output(text.as_bytes());
+            return;
+        }
         // The script's frames are gone; __toString runs under an empty frame
         // (native methods take $this from the current frame).
         self.frames.clear();
@@ -3459,6 +3516,21 @@ impl VM {
         out.extend_from_slice(&text);
         out.extend_from_slice(format!("\n  thrown in {} on line {}\n", file, line).as_bytes());
         let _ = self.write_output(&out);
+    }
+
+    /// The `message` property of an exception.
+    fn exception_message(&self, ex: Handle) -> String {
+        if let Val::Object(payload) = self.arena.get(ex).value
+            && let Val::ObjPayload(obj) = &self.arena.get(payload).value
+        {
+            for (name, h) in &obj.properties {
+                if self.context.interner.lookup(*name) == Some(b"message") {
+                    let bytes = self.arena.get(*h).value.to_php_string_bytes();
+                    return String::from_utf8_lossy(&bytes).into_owned();
+                }
+            }
+        }
+        String::new()
     }
 
     /// The `file` and `line` properties of an exception.
@@ -3961,6 +4033,12 @@ impl VM {
             OpCode::JmpNzEx(target) => self.jump_peek_or_pop(target as usize, |v| v.to_bool())?,
             OpCode::Coalesce(target) => {
                 self.jump_peek_or_pop(target as usize, |v| !matches!(v, Val::Null))?
+            }
+            OpCode::JmpNull(target) => {
+                let handle = self.peek_operand()?;
+                if matches!(self.arena.get(handle).value, Val::Null) {
+                    self.set_ip(target as usize)?;
+                }
             }
             OpCode::JmpFinally(target) => {
                 // Execute finally blocks before jumping (for break/continue)
@@ -4927,6 +5005,7 @@ impl VM {
             | OpCode::JmpZEx(_)
             | OpCode::JmpNzEx(_)
             | OpCode::Coalesce(_)
+            | OpCode::JmpNull(_)
             | OpCode::JmpFinally(_) => self.exec_control_flow(op)?,
 
             OpCode::Echo => self.exec_echo()?,
@@ -5762,17 +5841,17 @@ impl VM {
                 let mut parser = crate::parser::parser::Parser::new(lexer, &arena);
                 let program = parser.parse_program();
 
-                if !program.errors.is_empty() {
-                    return Err(VmError::RuntimeError(format!(
-                        "Parse errors: {:?}",
-                        program.errors
-                    )));
+                if let Some(error) = program.errors.first() {
+                    return Err(self.parse_error(error, &source, &canonical_path));
                 }
 
                 let emitter =
                     crate::compiler::emitter::Emitter::new(&source, &mut self.context.interner)
                         .with_file_path(canonical_path.clone());
                 let (chunk, _) = emitter.compile(program.statements);
+                if let Some(failure) = self.compile_failure(&chunk) {
+                    return Err(failure);
+                }
 
                 // PHP shares the same symbol_table between caller and included code (Zend VM ref).
                 // We clone locals, run the include, then copy them back to persist changes.
@@ -5963,13 +6042,7 @@ impl VM {
                                     self.call_array_access_offset_get(array_handle, key_handle)?;
                                 self.operand_stack.push(result);
                             } else {
-                                // Object doesn't implement ArrayAccess
-                                self.report_error(
-                                    ErrorLevel::Warning,
-                                    "Trying to access array offset on value of type object",
-                                );
-                                let null_handle = self.arena.alloc(Val::Null);
-                                self.operand_stack.push(null_handle);
+                                return Err(self.object_as_array_error(class_name));
                             }
                         } else {
                             // Shouldn't happen, but handle it
@@ -5991,13 +6064,7 @@ impl VM {
                                 self.call_array_access_offset_get(array_handle, key_handle)?;
                             self.operand_stack.push(result);
                         } else {
-                            // Object doesn't implement ArrayAccess
-                            self.report_error(
-                                ErrorLevel::Warning,
-                                "Trying to access array offset on value of type object",
-                            );
-                            let null_handle = self.arena.alloc(Val::Null);
-                            self.operand_stack.push(null_handle);
+                            return Err(self.object_as_array_error(class_name));
                         }
                     }
                     _ => {
@@ -8366,12 +8433,11 @@ impl VM {
                     let mut parser = crate::parser::parser::Parser::new(lexer, &arena);
                     let program = parser.parse_program();
 
-                    if !program.errors.is_empty() {
-                        // Eval error: in PHP 7+ throws ParseError
-                        return Err(VmError::RuntimeError(format!(
-                            "Eval parse errors: {:?}",
-                            program.errors
-                        )));
+                    // PHP names eval()'d code after where eval() ran.
+                    let (caller_file, caller_line) = self.current_location();
+                    let eval_name = format!("{}({}) : eval()'d code", caller_file, caller_line);
+                    if let Some(error) = program.errors.first() {
+                        return Err(self.parse_error(error, &wrapped_source, &eval_name));
                     }
 
                     // Get caller's strict_types to inherit
@@ -8382,15 +8448,16 @@ impl VM {
                         .map(|f| f.chunk.strict_types)
                         .unwrap_or(false);
 
-                    // PHP names eval()'d code after where eval() ran.
-                    let (caller_file, caller_line) = self.current_location();
                     let emitter = crate::compiler::emitter::Emitter::new(
                         &wrapped_source,
                         &mut self.context.interner,
                     )
-                    .with_file_path(format!("{}({}) : eval()'d code", caller_file, caller_line))
+                    .with_file_path(eval_name)
                     .with_inherited_strict_types(caller_strict);
                     let (chunk, _) = emitter.compile(program.statements);
+                    if let Some(failure) = self.compile_failure(&chunk) {
+                        return Err(failure);
+                    }
 
                     let caller_frame_idx = self.frames.len() - 1;
                     let mut frame = CallFrame::new(Rc::new(chunk));
@@ -8510,10 +8577,8 @@ impl VM {
                                     if inserted_once_guard {
                                         self.context.included_files.remove(&canonical_path);
                                     }
-                                    return Err(VmError::RuntimeError(format!(
-                                        "Parse errors in {}: {:?}",
-                                        path_str, program.errors
-                                    )));
+                                    let error = program.errors[0];
+                                    return Err(self.parse_error(&error, &source, &canonical_path));
                                 }
 
                                 let emitter = crate::compiler::emitter::Emitter::new(
@@ -8522,6 +8587,9 @@ impl VM {
                                 )
                                 .with_file_path(canonical_path.clone());
                                 let (chunk, _) = emitter.compile(program.statements);
+                                if let Some(failure) = self.compile_failure(&chunk) {
+                                    return Err(failure);
+                                }
 
                                 let caller_frame_idx = self.frames.len() - 1;
                                 let mut frame = CallFrame::new(Rc::new(chunk));
@@ -9066,15 +9134,7 @@ impl VM {
                                     Err(e) => return Err(e),
                                 }
                             } else {
-                                // Object doesn't implement ArrayAccess
-                                if is_fetch_r {
-                                    self.report_error(
-                                        ErrorLevel::Warning,
-                                        "Trying to access array offset on value of type object",
-                                    );
-                                }
-                                let null = self.arena.alloc(Val::Null);
-                                self.operand_stack.push(null);
+                                return Err(self.object_as_array_error(cls));
                             }
                         } else {
                             // Invalid object structure
@@ -10868,30 +10928,10 @@ impl VM {
                         if let Val::ObjPayload(obj_data) = &payload.value {
                             let class_name = obj_data.class;
                             if self.implements_array_access(class_name) {
-                                // Call offsetExists
-                                match self.call_array_access_offset_exists(array_handle, key_handle)
-                                {
-                                    Ok(exists) => {
-                                        if !exists {
-                                            false
-                                        } else {
-                                            // offsetExists returned true, now check if value is not null
-                                            match self.call_array_access_offset_get(
-                                                array_handle,
-                                                key_handle,
-                                            ) {
-                                                Ok(val_handle) => !matches!(
-                                                    self.arena.get(val_handle).value,
-                                                    Val::Null
-                                                ),
-                                                Err(_) => false,
-                                            }
-                                        }
-                                    }
-                                    Err(_) => false,
-                                }
+                                // isset() asks offsetExists only (zend_std_has_dimension)
+                                self.call_array_access_offset_exists(array_handle, key_handle)?
                             } else {
-                                false
+                                return Err(self.object_as_array_error(class_name));
                             }
                         } else {
                             false
@@ -11322,11 +11362,6 @@ impl VM {
                         .into(),
                 ));
             }
-            OpCode::JmpNull => {
-                return Err(VmError::RuntimeError(
-                    "JmpNull opcode not implemented - requires nullsafe operator support".into(),
-                ));
-            }
             OpCode::GeneratorCreate | OpCode::GeneratorReturn => {
                 return Err(VmError::RuntimeError(format!(
                     "{:?} opcode not implemented - requires generator unwinding semantics",
@@ -11688,12 +11723,7 @@ impl VM {
                             current_handle =
                                 self.call_array_access_offset_get(current_handle, *key_handle)?;
                         } else {
-                            // Object doesn't implement ArrayAccess
-                            self.report_error(
-                                ErrorLevel::Warning,
-                                "Trying to access array offset on value of type object",
-                            );
-                            return Ok(self.arena.alloc(Val::Null));
+                            return Err(self.object_as_array_error(class_name));
                         }
                     } else {
                         self.report_error(
@@ -12878,9 +12908,12 @@ impl VM {
                             .lookup(method_name)
                             .unwrap_or(b"<unknown>"),
                     );
+                    let class_str = String::from_utf8_lossy(
+                        self.context.interner.lookup(class_name).unwrap_or(b""),
+                    );
                     return Err(VmError::RuntimeError(format!(
-                        "Call to undefined method {}",
-                        method_str
+                        "Call to undefined method {}::{}()",
+                        class_str, method_str
                     )));
                 }
             }

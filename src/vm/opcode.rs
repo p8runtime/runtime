@@ -342,7 +342,9 @@ pub enum OpCode {
     SwitchLong,
     SwitchString,
     CaseStrict,
-    JmpNull,
+    /// `?->`: if the value on top is null, jump to the end of the chain
+    /// keeping it (the chain's result); otherwise keep it and go on.
+    JmpNull(u32),
     CheckUndefArgs,
     FetchGlobals,
     VerifyNeverType,

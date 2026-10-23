@@ -1,4 +1,4 @@
-use crate::compiler::chunk::{CatchEntry, CodeChunk, FuncParam, ReturnType, UserFunc};
+use crate::compiler::chunk::{CatchEntry, CodeChunk, CompileError, FuncParam, ReturnType, UserFunc};
 use crate::core::interner::Interner;
 use crate::core::value::{Symbol, Val, Visibility};
 use crate::parser::ast::{
@@ -173,11 +173,15 @@ pub struct Emitter<'src> {
     inherited_strict_types: Option<bool>,
     // Counter for anonymous classes
     anonymous_class_counter: usize,
+    /// Open short-circuit chains: the `?->` jumps to patch at each end.
+    nullsafe_jumps: Vec<Vec<usize>>,
     /// Source line of the statement or expression being emitted; every opcode
     /// is tagged with it (CodeChunk::lines), for errors, exceptions and traces.
     current_line: u32,
     /// Byte offsets where each source line starts, shared with child emitters.
     line_starts: Option<Rc<Vec<usize>>>,
+    /// The file's first compile error, shared with child emitters.
+    compile_error: Rc<RefCell<Option<CompileError>>>,
 }
 
 impl<'src> Emitter<'src> {
@@ -196,8 +200,23 @@ impl<'src> Emitter<'src> {
             current_namespace: None,
             inherited_strict_types: None,
             anonymous_class_counter: 0,
+            nullsafe_jumps: Vec::new(),
             current_line: 1,
             line_starts: None,
+            compile_error: Rc::default(),
+        }
+    }
+
+    /// Record a compile-time error at `offset`; the first one is reported
+    /// and the file does not run (zend_error_noreturn(E_COMPILE_ERROR)).
+    fn compile_error(&mut self, offset: usize, message: impl Into<String>) {
+        let line = self.line_at(offset);
+        let mut slot = self.compile_error.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(CompileError {
+                message: message.into(),
+                line,
+            });
         }
     }
 
@@ -322,6 +341,11 @@ impl<'src> Emitter<'src> {
         };
         self.chunk.name = chunk_name;
         self.chunk.file_path = self.file_path.clone();
+        // Child emitters (function bodies) are gone by the time the file's
+        // own emitter finishes: only it holds the error then, and reports it.
+        if Rc::strong_count(&self.compile_error) == 1 {
+            self.chunk.compile_error = self.compile_error.borrow_mut().take();
+        }
 
         (self.chunk, self.is_generator)
     }
@@ -369,7 +393,9 @@ impl<'src> Emitter<'src> {
 
                     // 2. Create emitter with inherited context
                     let (child_line, child_line_starts) = self.child_lines(name.span.start);
+                    let compile_error = self.compile_error.clone();
                     let mut method_emitter = Emitter::new(self.source, self.interner);
+                    method_emitter.compile_error = compile_error;
                     method_emitter.current_line = child_line;
                     method_emitter.line_starts = child_line_starts;
                     method_emitter.file_path = self.file_path.clone();
@@ -1198,7 +1224,9 @@ impl<'src> Emitter<'src> {
 
                 // 2. Create emitter with inherited context
                 let (child_line, child_line_starts) = self.child_lines(name.span.start);
+                    let compile_error = self.compile_error.clone();
                     let mut func_emitter = Emitter::new(self.source, self.interner);
+                    func_emitter.compile_error = compile_error;
                     func_emitter.current_line = child_line;
                     func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
@@ -1832,6 +1860,7 @@ impl<'src> Emitter<'src> {
             OpCode::JmpZEx(_) => OpCode::JmpZEx(target as u32),
             OpCode::JmpNzEx(_) => OpCode::JmpNzEx(target as u32),
             OpCode::Coalesce(_) => OpCode::Coalesce(target as u32),
+            OpCode::JmpNull(_) => OpCode::JmpNull(target as u32),
             OpCode::IterInit(_) => OpCode::IterInit(target as u32),
             OpCode::IterValid(_) => OpCode::IterValid(target as u32),
             OpCode::JmpFinally(_) => OpCode::JmpFinally(target as u32),
@@ -1862,10 +1891,133 @@ impl<'src> Emitter<'src> {
     }
 
     fn emit_expr(&mut self, expr: &Expr) {
-        self.at_line(expr.span().start, |this| this.emit_expr_inner(expr));
+        self.short_circuit(expr, |this| {
+            this.at_line(expr.span().start, |this| this.emit_expr_inner(expr))
+        });
+    }
+
+    /// The base of a chain link (`$a` in `$a->b`, `$a[1]`, `$a::$b`): part
+    /// of the same short-circuit chain, so a `?->` inside it skips the
+    /// rest of the chain.
+    fn emit_chain_base(&mut self, base: &Expr) {
+        self.at_line(base.span().start, |this| this.emit_expr_inner(base));
+    }
+
+    /// Emit `expr` with `emit`; if it heads a chain that contains `?->`,
+    /// each `?->` that finds null jumps to the end of the chain, null
+    /// being the chain's value (zend_short_circuiting).
+    fn short_circuit(&mut self, expr: &Expr, emit: impl FnOnce(&mut Self)) {
+        if !Self::chain_has_nullsafe(expr) {
+            emit(self);
+            return;
+        }
+        self.nullsafe_jumps.push(Vec::new());
+        emit(self);
+        let end = self.chunk.code.len();
+        for jump in self.nullsafe_jumps.pop().unwrap_or_default() {
+            self.patch_jump(jump, end);
+        }
+    }
+
+    fn chain_has_nullsafe(expr: &Expr) -> bool {
+        match expr {
+            Expr::NullsafePropertyFetch { .. } | Expr::NullsafeMethodCall { .. } => true,
+            Expr::PropertyFetch { target, .. } | Expr::MethodCall { target, .. } => {
+                Self::chain_has_nullsafe(target)
+            }
+            Expr::ArrayDimFetch { array, .. } => Self::chain_has_nullsafe(array),
+            Expr::StaticCall { class, .. } | Expr::ClassConstFetch { class, .. } => {
+                Self::chain_has_nullsafe(class)
+            }
+            _ => false,
+        }
+    }
+
+    /// `->name` / `->$name` / `->{expr}` after the object is on the stack.
+    fn emit_property_fetch_tail(&mut self, property: &Expr) {
+        if let Expr::Variable { span, .. } = property {
+            let name = self.get_text(*span);
+            if !name.starts_with(b"$") {
+                let sym = self.interner.intern(name);
+                self.chunk.code.push(OpCode::FetchProp(sym));
+            } else {
+                // Dynamic property fetch $this->$prop
+                self.emit_expr(property);
+                self.chunk.code.push(OpCode::FetchPropDynamic);
+            }
+        } else {
+            // Handle dynamic property fetch with expression: $this->{$expr}
+            self.emit_expr(property);
+            self.chunk.code.push(OpCode::FetchPropDynamic);
+        }
+    }
+
+    /// `->name(args)` / `->$name(args)` after the object is on the stack.
+    fn emit_method_call_tail(&mut self, method: &Expr, args: &[Arg]) {
+        if let Expr::Variable { span, .. } = method {
+            let name = self.get_text(*span);
+            if !name.starts_with(b"$") {
+                self.emit_call_args(args);
+                let sym = self.interner.intern(name);
+                self.chunk
+                    .code
+                    .push(OpCode::CallMethod(sym, args.len() as u8));
+            } else {
+                // Dynamic method call: $obj->$method()
+                self.emit_expr(method);
+                self.emit_call_args(args);
+                self.chunk
+                    .code
+                    .push(OpCode::CallMethodDynamic(args.len() as u8));
+            }
+        } else {
+            // Dynamic method call with expression: $obj->{$expr}()
+            self.emit_expr(method);
+            self.emit_call_args(args);
+            self.chunk
+                .code
+                .push(OpCode::CallMethodDynamic(args.len() as u8));
+        }
+    }
+
+    /// PHP rejects a `?->` chain as something to write to or reference.
+    fn nullsafe_misuse(expr: &Expr) -> Option<&'static str> {
+        let target = match expr {
+            Expr::Assign { var, .. }
+            | Expr::AssignOp { var, .. }
+            | Expr::PostInc { var, .. }
+            | Expr::PostDec { var, .. } => var,
+            Expr::Unary {
+                op: UnaryOp::PreInc | UnaryOp::PreDec,
+                expr,
+                ..
+            } => expr,
+            Expr::AssignRef { var, expr, .. } => {
+                if Self::chain_has_nullsafe(var) {
+                    return Some("Can't use nullsafe operator in write context");
+                }
+                return Self::chain_has_nullsafe(expr)
+                    .then_some("Cannot take reference of a nullsafe chain");
+            }
+            _ => return None,
+        };
+        Self::chain_has_nullsafe(target).then_some("Can't use nullsafe operator in write context")
+    }
+
+    /// `?->`: the base is on the stack; null ends the chain.
+    fn emit_nullsafe_check(&mut self) {
+        let jump = self.chunk.code.len();
+        self.chunk.code.push(OpCode::JmpNull(0));
+        if let Some(chain) = self.nullsafe_jumps.last_mut() {
+            chain.push(jump);
+        }
     }
 
     fn emit_expr_inner(&mut self, expr: &Expr) {
+        if let Some(message) = Self::nullsafe_misuse(expr) {
+            self.compile_error(expr.span().start, message);
+            return;
+        }
         match expr {
             Expr::Integer { value, .. } => {
                 let idx = self.add_constant(integer_literal(value));
@@ -2616,7 +2768,9 @@ impl<'src> Emitter<'src> {
                 // 2. Create emitter with inherited context (closures inherit context)
                 let closure_sym = self.interner.intern(b"{closure}");
                 let (child_line, child_line_starts) = self.child_lines(span.start);
+                    let compile_error = self.compile_error.clone();
                     let mut func_emitter = Emitter::new(self.source, self.interner);
+                    func_emitter.compile_error = compile_error;
                     func_emitter.current_line = child_line;
                     func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
@@ -2718,7 +2872,9 @@ impl<'src> Emitter<'src> {
             } => {
                 let closure_sym = self.interner.intern(b"{closure}");
                 let (child_line, child_line_starts) = self.child_lines(span.start);
+                let compile_error = self.compile_error.clone();
                 let mut func_emitter = Emitter::new(self.source, self.interner);
+                func_emitter.compile_error = compile_error;
                 func_emitter.current_line = child_line;
                 func_emitter.line_starts = child_line_starts;
                 func_emitter.file_path = self.file_path.clone();
@@ -2850,7 +3006,7 @@ impl<'src> Emitter<'src> {
                 }
             }
             Expr::ArrayDimFetch { array, dim, .. } => {
-                self.emit_expr(array);
+                self.emit_chain_base(array);
                 if let Some(d) = dim {
                     self.emit_expr(d);
                     self.chunk.code.push(OpCode::FetchDim);
@@ -2924,26 +3080,28 @@ impl<'src> Emitter<'src> {
                     self.chunk.code.push(OpCode::NewDynamic(args.len() as u8));
                 }
             }
+            Expr::NullsafePropertyFetch {
+                target, property, ..
+            } => {
+                self.emit_chain_base(target);
+                self.emit_nullsafe_check();
+                self.emit_property_fetch_tail(property);
+            }
             Expr::PropertyFetch {
                 target, property, ..
             } => {
-                self.emit_expr(target);
-                if let Expr::Variable { span, .. } = property {
-                    let name = self.get_text(*span);
-                    if !name.starts_with(b"$") {
-                        let sym = self.interner.intern(name);
-                        self.chunk.code.push(OpCode::FetchProp(sym));
-                    } else {
-                        // Dynamic property fetch $this->$prop
-                        self.emit_expr(property);
-                        self.chunk.code.push(OpCode::FetchPropDynamic);
-                    }
-                } else {
-                    eprintln!("Property is not Variable: {:?}", property);
-                    // Handle dynamic property fetch with expression: $this->{$expr}
-                    self.emit_expr(property);
-                    self.chunk.code.push(OpCode::FetchPropDynamic);
-                }
+                self.emit_chain_base(target);
+                self.emit_property_fetch_tail(property);
+            }
+            Expr::NullsafeMethodCall {
+                target,
+                method,
+                args,
+                ..
+            } => {
+                self.emit_chain_base(target);
+                self.emit_nullsafe_check();
+                self.emit_method_call_tail(method, args);
             }
             Expr::MethodCall {
                 target,
@@ -2951,31 +3109,8 @@ impl<'src> Emitter<'src> {
                 args,
                 ..
             } => {
-                self.emit_expr(target);
-                if let Expr::Variable { span, .. } = method {
-                    let name = self.get_text(*span);
-                    if !name.starts_with(b"$") {
-                        self.emit_call_args(args);
-                        let sym = self.interner.intern(name);
-                        self.chunk
-                            .code
-                            .push(OpCode::CallMethod(sym, args.len() as u8));
-                    } else {
-                        // Dynamic method call: $obj->$method()
-                        self.emit_expr(method);
-                        self.emit_call_args(args);
-                        self.chunk
-                            .code
-                            .push(OpCode::CallMethodDynamic(args.len() as u8));
-                    }
-                } else {
-                    // Dynamic method call with expression: $obj->{$expr}()
-                    self.emit_expr(method);
-                    self.emit_call_args(args);
-                    self.chunk
-                        .code
-                        .push(OpCode::CallMethodDynamic(args.len() as u8));
-                }
+                self.emit_chain_base(target);
+                self.emit_method_call_tail(method, args);
             }
             Expr::StaticCall {
                 class,
@@ -3022,7 +3157,7 @@ impl<'src> Emitter<'src> {
 
                 if !class_emitted {
                     // Dynamic static call: $class::$method()
-                    self.emit_expr(class);
+                    self.emit_chain_base(class);
                     self.emit_expr(method);
                     self.emit_call_args(args);
                     self.chunk
@@ -3078,7 +3213,7 @@ impl<'src> Emitter<'src> {
                 }
 
                 // Dynamic class/object access
-                self.emit_expr(class);
+                self.emit_chain_base(class);
                 if is_class_keyword {
                     self.chunk.code.push(OpCode::GetClass);
                 } else {
@@ -3087,11 +3222,12 @@ impl<'src> Emitter<'src> {
                     } = constant
                     {
                         let const_name = self.get_text(*const_span);
-                        if const_name.starts_with(b"$") {
-                            // TODO: Dynamic class, static property: $obj::$prop
-                            self.chunk.code.push(OpCode::Pop);
-                            let idx = self.add_constant(Val::Null);
+                        if let Some(prop) = const_name.strip_prefix(b"$") {
+                            // Dynamic class, static property: $obj::$prop
+                            let idx = self.add_constant(Val::String(prop.to_vec().into()));
+                            self.chunk.code.push(OpCode::GetClass);
                             self.chunk.code.push(OpCode::Const(idx as u16));
+                            self.chunk.code.push(OpCode::FetchStaticPropR);
                         } else {
                             let const_sym = self.interner.intern(const_name);
                             self.chunk
@@ -3909,6 +4045,10 @@ impl<'src> Emitter<'src> {
     /// their operand (Zend's BP_VAR_IS fetches): an undefined variable, a
     /// missing key or property, or a lookup on null is quietly null.
     fn emit_expr_quiet(&mut self, expr: &Expr) {
+        self.short_circuit(expr, |this| this.emit_expr_quiet_inner(expr));
+    }
+
+    fn emit_expr_quiet_inner(&mut self, expr: &Expr) {
         match expr {
             Expr::Variable { span, .. }
                 if self.get_text(*span).starts_with(b"$") && self.get_text(*span) != b"$this" =>
@@ -3921,14 +4061,20 @@ impl<'src> Emitter<'src> {
                 dim: Some(dim),
                 span,
             } => {
-                self.emit_expr_quiet(array);
+                self.emit_expr_quiet_inner(array);
                 self.emit_expr(dim);
                 self.at_line(span.start, |this| this.chunk.code.push(OpCode::FetchDimIs));
             }
             Expr::PropertyFetch {
                 target, property, span, ..
+            }
+            | Expr::NullsafePropertyFetch {
+                target, property, span, ..
             } => {
-                self.emit_expr_quiet(target);
+                self.emit_expr_quiet_inner(target);
+                if matches!(expr, Expr::NullsafePropertyFetch { .. }) {
+                    self.emit_nullsafe_check();
+                }
                 match property {
                     Expr::Variable { span: name_span, .. }
                         if !self.get_text(*name_span).starts_with(b"$") =>
@@ -3941,7 +4087,7 @@ impl<'src> Emitter<'src> {
                 }
                 self.at_line(span.start, |this| this.chunk.code.push(OpCode::FetchObjIs));
             }
-            _ => self.emit_expr(expr),
+            _ => self.emit_chain_base(expr),
         }
     }
 

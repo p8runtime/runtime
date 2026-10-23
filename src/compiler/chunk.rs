@@ -84,6 +84,13 @@ pub struct CatchEntry {
     pub stack_depth: u32,
 }
 
+/// A compile-time error (E_COMPILE_ERROR): the file does not run.
+#[derive(Debug, Clone)]
+pub struct CompileError {
+    pub message: String,
+    pub line: u32,
+}
+
 #[derive(Debug, Default)]
 pub struct CodeChunk {
     pub name: Symbol,              // File/Func name
@@ -94,4 +101,6 @@ pub struct CodeChunk {
     pub constants: Vec<Val>,       // Literals (Ints, Strings)
     pub lines: Vec<u32>,           // Line numbers for debug
     pub catch_table: Vec<CatchEntry>,
+    /// Set on a file's top-level chunk when compiling it failed.
+    pub compile_error: Option<CompileError>,
 }

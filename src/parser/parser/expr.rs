@@ -260,7 +260,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             Expr::Variable { .. }
             | Expr::IndirectVariable { .. }
             | Expr::ArrayDimFetch { .. }
-            | Expr::PropertyFetch { .. } => true,
+            | Expr::PropertyFetch { .. }
+            // Parsed as a target; the compiler rejects writing through `?->`.
+            | Expr::NullsafePropertyFetch { .. } => true,
             Expr::ClassConstFetch { constant, .. } => {
                 if let Expr::Variable { span, .. } = constant {
                     let slice = self.lexer.slice(*span);
