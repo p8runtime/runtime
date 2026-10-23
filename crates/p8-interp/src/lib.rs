@@ -8,6 +8,8 @@ mod classes;
 mod handlers;
 mod generators;
 mod include;
+mod reflect_info;
+mod reflection;
 mod refs;
 mod throw;
 
@@ -2658,7 +2660,7 @@ impl Context<'_> {
                     properties: Vec::new(),
                     slots: HashMap::new(),
                     methods: Default::default(),
-                    constants: HashMap::new(),
+                    constants: p8_runtime::object::Constants::new(),
                     statics: HashMap::new(),
                     debug_info: None,
                     enum_cases: Vec::new(),
@@ -3119,9 +3121,13 @@ impl Ctx for Context<'_> {
         Context::throw(self, class, message)
     }
 
-    fn class(&self, name: &[u8]) -> Option<Rc<Class>> {
+    fn class(&mut self, name: &[u8]) -> Option<Rc<Class>> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
-        self.classes.get(&name.to_ascii_lowercase()).cloned()
+        let lower = name.to_ascii_lowercase();
+        match self.classes.get(&lower) {
+            Some(c) => Some(Rc::clone(c)),
+            None => self.builtin_on_demand(&lower),
+        }
     }
 
     fn scope(&self) -> Option<Rc<Class>> {
@@ -3168,6 +3174,22 @@ impl Ctx for Context<'_> {
             Some(Err(_)) => Ok(None),
             None => Ok(raw()),
         }
+    }
+
+    fn function_info(&mut self, callee: &p8_runtime::reflect::Callee) -> Option<p8_runtime::reflect::FnInfo> {
+        self.info_of(callee)
+    }
+
+    fn invoke(&mut self, callee: &p8_runtime::reflect::Callee, this: Option<Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
+        self.invoke_callee(callee, this, args)
+    }
+
+    fn new_instance(&mut self, class: &Rc<Class>, args: &mut [Value], construct: bool) -> Result<Rc<Object>, Throw> {
+        self.new_instance_of(class, args, construct)
+    }
+
+    fn closure_of(&mut self, callee: &p8_runtime::reflect::Callee, this: Option<Rc<Object>>) -> Result<Value, Throw> {
+        self.closure_of_callee(callee, this)
     }
 
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {

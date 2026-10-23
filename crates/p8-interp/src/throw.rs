@@ -93,8 +93,9 @@ impl Context<'_> {
     /// The object an engine error (`Throw::Error`) becomes.
     pub(crate) fn exception(&mut self, regs: &dyn Fn(usize) -> Value, t: Throw) -> Throw {
         let Throw::Error { class, message, file, line } = t else { return t };
-        let class = match self.classes.get(class.to_ascii_lowercase().as_bytes()) {
-            Some(c) => Rc::clone(c),
+        let lower = class.to_ascii_lowercase();
+        let class = match self.classes.get(lower.as_bytes()).cloned().or_else(|| self.builtin_on_demand(lower.as_bytes())) {
+            Some(c) => c,
             None => Rc::clone(&self.classes[b"error".as_slice()]),
         };
         let object = Object::new(Rc::clone(&class), &self.ids);

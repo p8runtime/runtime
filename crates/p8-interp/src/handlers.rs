@@ -27,10 +27,31 @@ impl Context<'_> {
         if let Some(c) = self.classes.get(&lower) {
             return Ok(Rc::clone(c));
         }
+        if let Some(c) = self.builtin_on_demand(&lower) {
+            return Ok(c);
+        }
         if !self.autoloaders.is_empty() && self.autoload_tried.insert(lower) {
             return Err(Throw::Autoload(PhpStr::from(name)));
         }
         Err(self.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name))))
+    }
+
+    /// A builtin class declared when first wanted (Reflection, the
+    /// extensions' classes): its parent and interfaces first. Building
+    /// them all at startup cost every run ~0.8M instructions.
+    pub(crate) fn builtin_on_demand(&mut self, lower: &[u8]) -> Option<Rc<Class>> {
+        let spec: &'static p8_runtime::ext::ClassSpec = crate::reflection::CLASSES
+            .iter()
+            .chain(self.isolate.registry.classes().iter().copied())
+            .find(|s| s.name.as_bytes().eq_ignore_ascii_case(lower))?;
+        for dep in spec.parent.iter().chain(spec.interfaces.iter()) {
+            let dep = dep.to_ascii_lowercase().into_bytes();
+            if !self.classes.contains_key(&dep) {
+                self.builtin_on_demand(&dep)?;
+            }
+        }
+        crate::builtin_classes::declare_spec(&mut self.classes, spec);
+        self.classes.get(lower).cloned()
     }
 
     /// The class `name` if declared, after the autoloaders had their go

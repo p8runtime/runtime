@@ -1541,18 +1541,22 @@ impl<'src> Compiler<'src> {
             let text = self.text(p.name.span);
             f.cv(&text[1..]);
             let ty = p.ty.map(|t| self.type_decl(t));
+            let default = p.default.and_then(|d| self.const_value(d).ok());
+            let promoted = visibility_of(self, p.modifiers).is_some();
             f.params.push(Param {
                 name: Text::from(&text[1..]),
                 by_ref: p.by_ref,
                 has_default: p.default.is_some(),
                 variadic: p.variadic,
                 ty,
+                default,
+                promoted,
             });
         }
         // A set hook written without its parameter takes `$value`.
         if std::mem::take(&mut self.hook_value) && params.is_empty() {
             f.cv(b"value");
-            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None });
+            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, promoted: false });
         }
         f.decl_line = f.line;
         if params.last().is_some_and(|p| p.variadic) {

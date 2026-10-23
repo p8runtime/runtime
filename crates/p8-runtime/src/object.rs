@@ -55,6 +55,8 @@ pub const CLASS_DESTRUCTOR: u32 = 128;
 pub const CLASS_LAZY: u32 = 256;
 /// Some property has hooks (get/set run as methods `$name::get`, `$name::set`).
 pub const CLASS_HOOKS: u32 = 512;
+/// A builtin class (not written in PHP).
+pub const CLASS_INTERNAL: u32 = 1024;
 
 /// A property's hooks (Property::hooks): a get hook, a set hook, and
 /// whether it is virtual (no stored value: no hook uses `$this->name`).
@@ -130,6 +132,9 @@ pub struct Method {
     pub declaring_name: PhpStr,
 }
 
+/// A class's constants by name, in the order they were declared.
+pub type Constants = indexmap::IndexMap<Vec<u8>, Constant>;
+
 /// A class constant.
 #[derive(Debug, Clone)]
 pub struct Constant {
@@ -165,7 +170,8 @@ pub struct Class {
     pub slots: HashMap<Vec<u8>, Vec<usize>>,
     /// Lowercase name → method, inherited ones included.
     pub methods: Methods,
-    pub constants: HashMap<Vec<u8>, Constant>,
+    /// In declaration order (reflection lists them so).
+    pub constants: Constants,
     /// Static properties: a subclass shares its parent's cell unless it
     /// redeclares the property.
     pub statics: HashMap<Vec<u8>, Static>,

@@ -558,6 +558,11 @@ pub struct Param {
     pub variadic: bool,
     /// Its declared type, checked when the function is entered.
     pub ty: Option<p8_runtime::types::TypeDecl>,
+    /// Its default when that is a constant value (for reflection; the
+    /// default itself runs as code).
+    pub default: Option<Frozen>,
+    /// A promoted constructor parameter (`public int $x`).
+    pub promoted: bool,
 }
 
 /// A compiled function (or a file's top-level code). Immutable, and shared

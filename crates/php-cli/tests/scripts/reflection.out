@@ -1,0 +1,100 @@
+object(ReflectionClass)#1 (1) {
+  ["name"]=>
+  string(10) "App\Circle"
+}
+string(10) "App\Circle"
+string(6) "Circle"
+string(3) "App"
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+string(8) "App\Base"
+bool(true)
+bool(true)
+array(1) {
+  [0]=>
+  string(9) "App\Shape"
+}
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+App\Circle::__construct public
+App\Circle::area public
+App\Circle::secret private
+App\Circle::make public static
+float(12.56)
+int(7)
+float(28.26)
+string(5) "unset"
+bool(true)
+bool(false)
+int(2)
+int(1)
+bool(true)
+string(2) "s5"
+0 x int false false
+1 rest string true true
+bool(true)
+string(6) "static"
+string(19) "ReflectionUnionType"
+string(10) "string|int"
+string true
+int true
+int(2)
+float(50.24)
+string(1) "r"
+float(1)
+bool(false)
+bool(false)
+string(2) "id"
+int(0)
+bool(true)
+bool(false)
+bool(true)
+float(2)
+string(5) "float"
+bool(false)
+float(314)
+bool(true)
+string(6) "string"
+NULL
+bool(true)
+App\Circle::$r
+App\Circle::$label
+App\Circle::$id
+App\Base::$count
+App\Base::$tag
+array(2) {
+  ["PI"]=>
+  float(3.14)
+  ["KIND"]=>
+  string(4) "base"
+}
+string(4) "base"
+int(0)
+int(2)
+bool(true)
+string(4) "?int"
+int(9)
+array(1) {
+  [0]=>
+  int(1)
+}
+string(6) "strlen"
+bool(true)
+int(1)
+string(6) "string"
+string(3) "int"
+int(4)
+ReflectionException: Class "Nope\Missing" does not exist
+Method App\Circle::zzz() does not exist
+Property App\Circle::$zz does not exist
+string(10) "App\Circle"
+bool(true)
+bool(true)
+bool(true)
