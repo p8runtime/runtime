@@ -13,70 +13,137 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-/// Unescape a double-quoted string, processing escape sequences like \n, \r, \t, etc.
+/// Unescape a double-quoted string (or heredoc / interpolated part) the way
+/// Zend's scanner does: \n \t \r \v \e \f \\ \$ \", octal \[0-7]{1,3},
+/// hex \x[0-9a-f]{1,2} and \u{codepoint}; any other backslash is kept.
+/// Reference: $PHP_SRC_PATH/Zend/zend_language_scanner.l - zend_scan_escape_string
 fn unescape_string(s: &[u8]) -> Vec<u8> {
-    let mut result = Vec::new();
+    let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
-        if s[i] == b'\\' && i + 1 < s.len() {
-            match s[i + 1] {
-                b'n' => result.push(b'\n'),
-                b'r' => result.push(b'\r'),
-                b't' => result.push(b'\t'),
-                b'\\' => result.push(b'\\'),
-                b'$' => result.push(b'$'),
-                b'"' => result.push(b'"'),
-                b'\'' => result.push(b'\''),
-                b'v' => result.push(b'\x0B'), // vertical tab
-                b'e' => result.push(b'\x1B'), // escape
-                b'f' => result.push(b'\x0C'), // form feed
-                b'0' => result.push(b'\0'),   // null byte
-                // Hexadecimal: \xHH
-                b'x' if i + 3 < s.len() => {
-                    if let (Some(h1), Some(h2)) = (
-                        char::from(s[i + 2]).to_digit(16),
-                        char::from(s[i + 3]).to_digit(16),
-                    ) {
-                        result.push((h1 * 16 + h2) as u8);
-                        i += 2; // Skip the two hex digits
-                    } else {
-                        result.push(b'\\');
-                        result.push(s[i + 1]);
-                    }
+        if s[i] != b'\\' || i + 1 >= s.len() {
+            out.push(s[i]);
+            i += 1;
+            continue;
+        }
+        let c = s[i + 1];
+        i += 2;
+        match c {
+            b'n' => out.push(b'\n'),
+            b't' => out.push(b'\t'),
+            b'r' => out.push(b'\r'),
+            b'v' => out.push(0x0B),
+            b'e' => out.push(0x1B),
+            b'f' => out.push(0x0C),
+            b'\\' | b'$' | b'"' => out.push(c),
+            b'0'..=b'7' => {
+                let mut value = u32::from(c - b'0');
+                let mut digits = 1;
+                while digits < 3 && i < s.len() && (b'0'..=b'7').contains(&s[i]) {
+                    value = value * 8 + u32::from(s[i] - b'0');
+                    i += 1;
+                    digits += 1;
                 }
-                // Octal: \nnn (up to 3 digits)
-                b'0'..=b'7' => {
-                    let mut octal_val = s[i + 1] - b'0';
-                    let mut consumed = 1;
-                    if i + 2 < s.len() && (b'0'..=b'7').contains(&s[i + 2]) {
-                        octal_val = octal_val * 8 + (s[i + 2] - b'0');
-                        consumed = 2;
-                        if i + 3 < s.len() && (b'0'..=b'7').contains(&s[i + 3]) {
-                            octal_val = octal_val * 8 + (s[i + 3] - b'0');
-                            consumed = 3;
-                        }
-                    }
-                    result.push(octal_val);
-                    i += consumed;
+                out.push(value as u8); // "\400" wraps, as in PHP
+            }
+            b'x' if i < s.len() && s[i].is_ascii_hexdigit() => {
+                let mut value = 0u32;
+                let mut digits = 0;
+                while digits < 2 && i < s.len() && s[i].is_ascii_hexdigit() {
+                    value = value * 16 + char::from(s[i]).to_digit(16).unwrap_or(0);
+                    i += 1;
+                    digits += 1;
                 }
-                _ => {
-                    // Unknown escape, keep both characters
-                    result.push(b'\\');
-                    result.push(s[i + 1]);
+                out.push(value as u8);
+            }
+            b'u' if s.get(i) == Some(&b'{') => {
+                let end = s[i..].iter().position(|b| *b == b'}').map(|p| i + p);
+                let code = end.and_then(|end| {
+                    std::str::from_utf8(&s[i + 1..end])
+                        .ok()
+                        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                        .and_then(char::from_u32)
+                });
+                match (end, code) {
+                    (Some(end), Some(ch)) => {
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                        i = end + 1;
+                    }
+                    _ => out.extend_from_slice(b"\\u"),
                 }
             }
-            i += 2;
-        } else {
-            result.push(s[i]);
-            i += 1;
+            _ => {
+                out.push(b'\\');
+                out.push(c);
+            }
         }
     }
-    result
+    out
+}
+
+/// The value of an integer literal: decimal, 0x hex, 0b binary, 0o or
+/// leading-0 octal, with `_` separators; too large for an int, it is a float.
+/// Reference: $PHP_SRC_PATH/Zend/zend_language_scanner.l - LNUM/HNUM/BNUM/ONUM
+fn integer_literal(value: &[u8]) -> Val {
+    let digits: Vec<u8> = value.iter().copied().filter(|b| *b != b'_').collect();
+    let (radix, body) = match digits.as_slice() {
+        [b'0', b'x' | b'X', rest @ ..] => (16, rest),
+        [b'0', b'b' | b'B', rest @ ..] => (2, rest),
+        [b'0', b'o' | b'O', rest @ ..] => (8, rest),
+        [b'0', rest @ ..] if !rest.is_empty() => (8, rest),
+        all => (10, all),
+    };
+    let text = std::str::from_utf8(body).unwrap_or("0");
+    match i64::from_str_radix(text, radix) {
+        Ok(i) => Val::Int(i),
+        Err(_) => {
+            let f = text
+                .bytes()
+                .filter_map(|b| char::from(b).to_digit(radix))
+                .fold(0.0, |acc, d| acc * f64::from(radix) + f64::from(d));
+            Val::Float(f)
+        }
+    }
+}
+
+/// The value of a float literal (`_` separators allowed).
+fn float_literal(value: &[u8]) -> f64 {
+    let text: String = value.iter().filter(|b| **b != b'_').map(|b| char::from(*b)).collect();
+    text.parse().unwrap_or(0.0)
+}
+
+/// The value of a string literal token: '...' (only \\ and \' are escapes),
+/// "..." (full escapes) or an unquoted interpolation/heredoc part.
+fn string_literal(value: &[u8]) -> Vec<u8> {
+    let quoted = |q: u8| value.len() >= 2 && value[0] == q && value[value.len() - 1] == q;
+    if quoted(b'\'') {
+        let inner = &value[1..value.len() - 1];
+        let mut out = Vec::with_capacity(inner.len());
+        let mut i = 0;
+        while i < inner.len() {
+            if inner[i] == b'\\' && matches!(inner.get(i + 1), Some(b'\'' | b'\\')) {
+                out.push(inner[i + 1]);
+                i += 2;
+            } else {
+                out.push(inner[i]);
+                i += 1;
+            }
+        }
+        out
+    } else if quoted(b'"') {
+        unescape_string(&value[1..value.len() - 1])
+    } else {
+        unescape_string(value)
+    }
 }
 
 struct LoopInfo {
     break_jumps: Vec<usize>,
     continue_jumps: Vec<usize>,
+    /// Operand-stack values the loop keeps while its body runs (foreach: iterable and
+    /// position; switch: the subject).
+    stack_slots: u32,
 }
 
 #[derive(Clone)]
@@ -104,6 +171,8 @@ pub struct Emitter<'src> {
     current_namespace: Option<Symbol>,
     // For eval(): inherit strict_types from parent scope if not explicitly declared
     inherited_strict_types: Option<bool>,
+    // Counter for anonymous classes
+    anonymous_class_counter: usize,
 }
 
 impl<'src> Emitter<'src> {
@@ -121,6 +190,7 @@ impl<'src> Emitter<'src> {
             current_function: None,
             current_namespace: None,
             inherited_strict_types: None,
+            anonymous_class_counter: 0,
         }
     }
 
@@ -282,7 +352,44 @@ impl<'src> Emitter<'src> {
                         }
                     }
 
+                    // Constructor promotion: `__construct(public $x)` declares the
+                    // property and assigns it before the body runs.
+                    let is_constructor = method_name_str.eq_ignore_ascii_case(b"__construct");
+                    let this_sym = method_emitter.interner.intern(b"this");
+                    for param in params.iter().filter(|p| is_constructor && !p.modifiers.is_empty()) {
+                        let prop_sym = method_emitter.interner.intern(&method_emitter.get_text(param.name.span)[1..]);
+                        method_emitter.chunk.code.push(OpCode::LoadVar(this_sym));
+                        method_emitter.chunk.code.push(OpCode::LoadVar(prop_sym));
+                        method_emitter.chunk.code.push(OpCode::AssignProp(prop_sym));
+                        method_emitter.chunk.code.push(OpCode::Pop);
+                    }
+
                     let (method_chunk, is_generator) = method_emitter.compile(body);
+
+                    for param in params.iter().filter(|p| is_constructor && !p.modifiers.is_empty()) {
+                        let prop_sym = self.interner.intern(&self.get_text(param.name.span)[1..]);
+                        let is_readonly = param.modifiers.iter().any(|t| t.kind == TokenKind::Readonly);
+                        let type_hint = param.ty.and_then(|t| self.convert_type(t));
+                        // A typed (or readonly) promoted property is uninitialized until the constructor runs.
+                        let default = if type_hint.is_some() || is_readonly {
+                            Val::Uninitialized
+                        } else {
+                            Val::Null
+                        };
+                        let default_idx = self.add_constant(default);
+                        let type_hint_idx = match type_hint {
+                            Some(th) => self.add_constant(Val::Resource(Rc::new(th))),
+                            None => self.add_constant(Val::Null),
+                        };
+                        self.chunk.code.push(OpCode::DefProp(
+                            class_sym,
+                            prop_sym,
+                            default_idx as u16,
+                            self.get_visibility(param.modifiers),
+                            type_hint_idx as u32,
+                            is_readonly,
+                        ));
+                    }
 
                     // Convert return type
                     let ret_type = return_type.and_then(|rt| self.convert_type(rt));
@@ -449,10 +556,71 @@ impl<'src> Emitter<'src> {
         }
     }
 
+    /// Declare a class body; shared by `class Foo {}` and `new class {}`.
+    fn emit_class_decl(
+        &mut self,
+        class_sym: Symbol,
+        extends: &Option<crate::parser::ast::Name>,
+        implements: &[crate::parser::ast::Name],
+        attributes: &[AttributeGroup],
+        modifiers: &[Token],
+        members: &[ClassMember],
+    ) {
+        let parent_sym = extends
+            .as_ref()
+            .map(|parent| self.interner.intern(self.get_text(parent.span)));
+        self.chunk
+            .code
+            .push(OpCode::DefClass(class_sym, parent_sym));
+
+        if modifiers.iter().any(|m| m.kind == TokenKind::Abstract) {
+            self.chunk.code.push(OpCode::MarkAbstract(class_sym));
+        }
+        if modifiers.iter().any(|m| m.kind == TokenKind::Final) {
+            self.chunk.code.push(OpCode::MarkFinal(class_sym));
+        }
+
+        for interface in implements {
+            let interface_sym = self.interner.intern(self.get_text(interface.span));
+            self.chunk
+                .code
+                .push(OpCode::AddInterface(class_sym, interface_sym));
+        }
+
+        // Check for #[AllowDynamicProperties] attribute
+        for attr_group in attributes {
+            for attr in attr_group.attributes {
+                let attr_name = self.get_text(attr.name.span);
+                // Check for both fully qualified and simple name
+                if attr_name == b"AllowDynamicProperties"
+                    || attr_name.ends_with(b"\\AllowDynamicProperties")
+                {
+                    self.chunk
+                        .code
+                        .push(OpCode::AllowDynamicProperties(class_sym));
+                    break;
+                }
+            }
+        }
+
+        self.emit_class_attributes(class_sym, attributes);
+
+        // Track class context while emitting members
+        let prev_class = self.current_class;
+        self.current_class = Some(class_sym);
+        self.emit_members(class_sym, members);
+        self.current_class = prev_class;
+
+        // Finalize class: validate interfaces, abstract methods, etc.
+        self.chunk.code.push(OpCode::FinalizeClass(class_sym));
+    }
+
     fn emit_class_attributes(&mut self, class_sym: Symbol, attributes: &[AttributeGroup]) {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
+                // #[\Foo] names the global class Foo
+                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
                 let attr_sym = self.interner.intern(attr_name);
                 let mut args = Vec::new();
 
@@ -478,6 +646,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
+                // #[\Foo] names the global class Foo
+                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
                 let attr_sym = self.interner.intern(attr_name);
                 let mut args = Vec::new();
 
@@ -505,6 +675,8 @@ impl<'src> Emitter<'src> {
         for attr_group in attributes {
             for attr in attr_group.attributes {
                 let attr_name = self.get_text(attr.name.span);
+                // #[\Foo] names the global class Foo
+                let attr_name = attr_name.strip_prefix(b"\\").unwrap_or(attr_name);
                 let attr_sym = self.interner.intern(attr_name);
                 let mut args = Vec::new();
 
@@ -534,19 +706,7 @@ impl<'src> Emitter<'src> {
                     let key = self.get_text(item.key.span);
                     if key.eq_ignore_ascii_case(b"strict_types") {
                         if let Expr::Integer { value, .. } = item.value {
-                            // Integers may contain '_' separators.
-                            let mut num: u64 = 0;
-                            for b in *value {
-                                if *b == b'_' {
-                                    continue;
-                                }
-                                if !b.is_ascii_digit() {
-                                    num = 0;
-                                    break;
-                                }
-                                num = num.saturating_mul(10).saturating_add((b - b'0') as u64);
-                            }
-                            self.chunk.strict_types = num == 1;
+                            self.chunk.strict_types = integer_literal(value) == Val::Int(1);
                         }
                     }
                 }
@@ -991,64 +1151,7 @@ impl<'src> Emitter<'src> {
             } => {
                 let class_name_str = self.get_text(name.span);
                 let class_sym = self.interner.intern(class_name_str);
-
-                let parent_sym = if let Some(parent_name) = extends {
-                    let parent_str = self.get_text(parent_name.span);
-                    Some(self.interner.intern(parent_str))
-                } else {
-                    None
-                };
-
-                self.chunk
-                    .code
-                    .push(OpCode::DefClass(class_sym, parent_sym));
-
-                // Check if class is abstract
-                let is_abstract = modifiers.iter().any(|m| m.kind == TokenKind::Abstract);
-                if is_abstract {
-                    self.chunk.code.push(OpCode::MarkAbstract(class_sym));
-                }
-
-                // Check if class is final
-                let is_final = modifiers.iter().any(|m| m.kind == TokenKind::Final);
-                if is_final {
-                    self.chunk.code.push(OpCode::MarkFinal(class_sym));
-                }
-
-                for interface in *implements {
-                    let interface_str = self.get_text(interface.span);
-                    let interface_sym = self.interner.intern(interface_str);
-                    self.chunk
-                        .code
-                        .push(OpCode::AddInterface(class_sym, interface_sym));
-                }
-
-                // Check for #[AllowDynamicProperties] attribute
-                for attr_group in *attributes {
-                    for attr in attr_group.attributes {
-                        let attr_name = self.get_text(attr.name.span);
-                        // Check for both fully qualified and simple name
-                        if attr_name == b"AllowDynamicProperties"
-                            || attr_name.ends_with(b"\\AllowDynamicProperties")
-                        {
-                            self.chunk
-                                .code
-                                .push(OpCode::AllowDynamicProperties(class_sym));
-                            break;
-                        }
-                    }
-                }
-
-                self.emit_class_attributes(class_sym, attributes);
-
-                // Track class context while emitting members
-                let prev_class = self.current_class;
-                self.current_class = Some(class_sym);
-                self.emit_members(class_sym, members);
-                self.current_class = prev_class;
-
-                // Finalize class: validate interfaces, abstract methods, etc.
-                self.chunk.code.push(OpCode::FinalizeClass(class_sym));
+                self.emit_class_decl(class_sym, extends, implements, attributes, modifiers, members);
             }
             Stmt::Interface {
                 name,
@@ -1135,6 +1238,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 0,
                 });
 
                 for stmt in *body {
@@ -1162,6 +1266,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 0,
                 });
 
                 for stmt in *body {
@@ -1211,6 +1316,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 0,
                 });
 
                 for stmt in *body {
@@ -1316,6 +1422,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 2, // iterable + position
                 });
 
                 // Body
@@ -1362,6 +1469,7 @@ impl<'src> Emitter<'src> {
                 self.loop_stack.push(LoopInfo {
                     break_jumps: Vec::new(),
                     continue_jumps: Vec::new(),
+                    stack_slots: 1,
                 });
 
                 for case in *cases {
@@ -1425,6 +1533,7 @@ impl<'src> Emitter<'src> {
                 ..
             } => {
                 let try_start = self.chunk.code.len() as u32;
+                let stack_depth: u32 = self.loop_stack.iter().map(|l| l.stack_slots).sum();
 
                 // If there's a finally block, we need to track it BEFORE emitting the try body
                 // so that break/continue inside the try body know they're inside a final context
@@ -1462,6 +1571,7 @@ impl<'src> Emitter<'src> {
                         let type_sym = self.interner.intern(type_name);
 
                         self.chunk.catch_table.push(CatchEntry {
+                            stack_depth,
                             start: try_start,
                             end: try_end,
                             target: catch_start,
@@ -1536,6 +1646,7 @@ impl<'src> Emitter<'src> {
                     // Add a finally-only entry for the try block
                     // This ensures finally executes even on uncaught exceptions
                     self.chunk.catch_table.push(CatchEntry {
+                        stack_depth,
                         start: try_start,
                         end: try_end,
                         target: finally_start,
@@ -1547,6 +1658,7 @@ impl<'src> Emitter<'src> {
                     // Also add entries for catch blocks to ensure finally runs during their unwinding
                     for (catch_start, catch_end) in catch_ranges {
                         self.chunk.catch_table.push(CatchEntry {
+                            stack_depth,
                             start: catch_start,
                             end: catch_end,
                             target: finally_start,
@@ -1585,6 +1697,7 @@ impl<'src> Emitter<'src> {
             OpCode::IterInit(_) => OpCode::IterInit(target as u32),
             OpCode::IterValid(_) => OpCode::IterValid(target as u32),
             OpCode::JmpFinally(_) => OpCode::JmpFinally(target as u32),
+            OpCode::DeclareAnonClass(sym, _) => OpCode::DeclareAnonClass(sym, target as u32),
             _ => panic!("Cannot patch non-jump opcode: {:?}", op),
         };
         self.chunk.code[idx] = new_op;
@@ -1592,48 +1705,9 @@ impl<'src> Emitter<'src> {
 
     fn get_literal_value(&self, expr: &Expr) -> Option<Val> {
         match expr {
-            Expr::Integer { value, .. } => {
-                let s = std::str::from_utf8(value).ok()?;
-                let i: i64 = s.parse().ok()?;
-                Some(Val::Int(i))
-            }
+            Expr::Integer { value, .. } => Some(integer_literal(value)),
             Expr::String { value, .. } => {
-                let s = if value.len() >= 2 {
-                    let first = value[0];
-                    let last = value[value.len() - 1];
-                    if first == b'"' && last == b'"' {
-                        let inner = &value[1..value.len() - 1];
-                        unescape_string(inner)
-                    } else if first == b'\'' && last == b'\'' {
-                        let inner = &value[1..value.len() - 1];
-                        let mut result = Vec::new();
-                        let mut i = 0;
-                        while i < inner.len() {
-                            if inner[i] == b'\\' && i + 1 < inner.len() {
-                                if inner[i + 1] == b'\'' || inner[i + 1] == b'\\' {
-                                    result.push(inner[i + 1]);
-                                    i += 2;
-                                } else {
-                                    result.push(inner[i]);
-                                    i += 1;
-                                }
-                            } else {
-                                result.push(inner[i]);
-                                i += 1;
-                            }
-                        }
-                        result
-                    } else {
-                        // No quotes - this is from string interpolation (EncapsedAndWhitespace)
-                        // These strings need unescaping too
-                        unescape_string(value)
-                    }
-                } else if !value.is_empty() {
-                    // Short string without quotes - also from interpolation
-                    unescape_string(value)
-                } else {
-                    value.to_vec()
-                };
+                let s = string_literal(value);
                 Some(Val::String(s.into()))
             }
             Expr::Boolean { value, .. } => Some(Val::Bool(*value)),
@@ -1652,56 +1726,16 @@ impl<'src> Emitter<'src> {
     fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Integer { value, .. } => {
-                let s = std::str::from_utf8(value).unwrap_or("0");
-                let i: i64 = s.parse().unwrap_or(0);
-                let idx = self.add_constant(Val::Int(i));
+                let idx = self.add_constant(integer_literal(value));
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
             Expr::Float { value, .. } => {
-                let s = std::str::from_utf8(value).unwrap_or("0.0");
-                let f: f64 = s.parse().unwrap_or(0.0);
+                let f = float_literal(value);
                 let idx = self.add_constant(Val::Float(f));
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
             Expr::String { value, .. } => {
-                let s = if value.len() >= 2 {
-                    let first = value[0];
-                    let last = value[value.len() - 1];
-                    if first == b'"' && last == b'"' {
-                        // Double-quoted string: unescape escape sequences
-                        let inner = &value[1..value.len() - 1];
-                        unescape_string(inner)
-                    } else if first == b'\'' && last == b'\'' {
-                        // Single-quoted string: no escape processing (except \' and \\)
-                        let inner = &value[1..value.len() - 1];
-                        let mut result = Vec::new();
-                        let mut i = 0;
-                        while i < inner.len() {
-                            if inner[i] == b'\\' && i + 1 < inner.len() {
-                                if inner[i + 1] == b'\'' || inner[i + 1] == b'\\' {
-                                    result.push(inner[i + 1]);
-                                    i += 2;
-                                } else {
-                                    result.push(inner[i]);
-                                    i += 1;
-                                }
-                            } else {
-                                result.push(inner[i]);
-                                i += 1;
-                            }
-                        }
-                        result
-                    } else {
-                        // No quotes - this is from string interpolation (EncapsedAndWhitespace)
-                        // These strings need unescaping too
-                        unescape_string(value)
-                    }
-                } else if !value.is_empty() {
-                    // Short string without quotes - also from interpolation
-                    unescape_string(value)
-                } else {
-                    value.to_vec()
-                };
+                let s = string_literal(value);
                 let idx = self.add_constant(Val::String(s.into()));
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
@@ -1911,12 +1945,14 @@ impl<'src> Emitter<'src> {
                             self.chunk.code.push(OpCode::MakeRef);
                         }
                     }
-                    UnaryOp::Minus => {
-                        // 0 - expr
-                        let idx = self.add_constant(Val::Int(0));
-                        self.chunk.code.push(OpCode::Const(idx as u16));
+                    UnaryOp::Minus | UnaryOp::Plus => {
+                        // expr * -1 / expr * 1, as Zend compiles them (keeps -0.0,
+                        // converts numeric strings, operand order in errors)
                         self.emit_expr(expr);
-                        self.chunk.code.push(OpCode::Sub);
+                        let factor = if matches!(op, UnaryOp::Minus) { -1 } else { 1 };
+                        let idx = self.add_constant(Val::Int(factor));
+                        self.chunk.code.push(OpCode::Const(idx as u16));
+                        self.chunk.code.push(OpCode::Mul);
                     }
                     UnaryOp::Not => {
                         self.emit_expr(expr);
@@ -2004,9 +2040,6 @@ impl<'src> Emitter<'src> {
                         self.chunk.code.push(OpCode::BeginSilence);
                         self.emit_expr(expr);
                         self.chunk.code.push(OpCode::EndSilence);
-                    }
-                    _ => {
-                        self.emit_expr(expr);
                     }
                 }
             }
@@ -2561,7 +2594,48 @@ impl<'src> Emitter<'src> {
                 }
             }
             Expr::New { class, args, .. } => {
-                if let Expr::Variable { span, .. } = class {
+                if let Expr::AnonymousClass {
+                    attributes,
+                    modifiers,
+                    extends,
+                    implements,
+                    members,
+                    span,
+                    ..
+                } = class
+                {
+                    // Zend's naming: `<parent or first interface or "class">@anonymous`,
+                    // then NUL, the declaring file, line and a per-file counter.
+                    let base = extends
+                        .as_ref()
+                        .or(implements.first())
+                        .map(|n| String::from_utf8_lossy(self.get_text(n.span)).into_owned())
+                        .unwrap_or_else(|| "class".to_string());
+                    let line = span.line_info(self.source).map_or(0, |info| info.line);
+                    let anon_name = format!(
+                        "{}@anonymous\0{}:{}${:x}",
+                        base,
+                        self.file_path.as_deref().unwrap_or(""),
+                        line,
+                        self.anonymous_class_counter
+                    );
+                    self.anonymous_class_counter += 1;
+                    let class_sym = self.interner.intern(anon_name.as_bytes());
+
+                    // Declared once, the first time the expression runs (ZEND_DECLARE_ANON_CLASS).
+                    let skip = self.chunk.code.len();
+                    self.chunk.code.push(OpCode::DeclareAnonClass(class_sym, 0));
+                    self.emit_class_decl(class_sym, extends, implements, attributes, modifiers, members);
+                    let end = self.chunk.code.len();
+                    self.patch_jump(skip, end);
+
+                    for arg in *args {
+                        self.emit_expr(arg.value);
+                    }
+                    self.chunk
+                        .code
+                        .push(OpCode::New(class_sym, args.len() as u8));
+                } else if let Expr::Variable { span, .. } = class {
                     let name = self.get_text(*span);
                     if !name.starts_with(b"$") {
                         let class_sym = self.interner.intern(name);
@@ -2808,13 +2882,14 @@ impl<'src> Emitter<'src> {
                     target, property, ..
                 } => {
                     self.emit_expr(target);
-                    self.emit_expr(expr);
-                    if let Expr::Variable { span, .. } = property {
-                        let name = self.get_text(*span);
-                        if !name.starts_with(b"$") {
-                            let sym = self.interner.intern(name);
-                            self.chunk.code.push(OpCode::AssignProp(sym));
-                        }
+                    if let Some(sym) = self.static_prop_name(property) {
+                        self.emit_expr(expr);
+                        self.chunk.code.push(OpCode::AssignProp(sym));
+                    } else {
+                        // $obj->$name = v, $obj->{expr} = v
+                        self.emit_expr(property);
+                        self.emit_expr(expr);
+                        self.chunk.code.push(OpCode::AssignPropDynamic);
                     }
                 }
                 Expr::ClassConstFetch {
@@ -2842,68 +2917,7 @@ impl<'src> Emitter<'src> {
                         }
                     }
                 }
-                Expr::ArrayDimFetch { .. } => {
-                    let (base, keys) = Self::flatten_dim_fetch(var);
-
-                    if let Expr::PropertyFetch {
-                        target, property, ..
-                    } = base
-                    {
-                        self.emit_expr(target);
-                        self.chunk.code.push(OpCode::Dup);
-
-                        if let Expr::Variable { span, .. } = property {
-                            let name = self.get_text(*span);
-                            if !name.starts_with(b"$") {
-                                let sym = self.interner.intern(name);
-                                self.chunk.code.push(OpCode::FetchProp(sym));
-
-                                for key in &keys {
-                                    if let Some(k) = key {
-                                        self.emit_expr(k);
-                                    } else {
-                                        let idx = self.add_constant(Val::AppendPlaceholder);
-                                        self.chunk.code.push(OpCode::Const(idx as u16));
-                                    }
-                                }
-
-                                self.emit_expr(expr);
-
-                                self.chunk
-                                    .code
-                                    .push(OpCode::StoreNestedDim(keys.len() as u8));
-
-                                self.chunk.code.push(OpCode::AssignProp(sym));
-                            }
-                        }
-                    } else {
-                        self.emit_expr(base);
-                        for key in &keys {
-                            if let Some(k) = key {
-                                self.emit_expr(k);
-                            } else {
-                                let idx = self.add_constant(Val::AppendPlaceholder);
-                                self.chunk.code.push(OpCode::Const(idx as u16));
-                            }
-                        }
-
-                        self.emit_expr(expr);
-
-                        self.chunk
-                            .code
-                            .push(OpCode::StoreNestedDim(keys.len() as u8));
-
-                        if let Expr::Variable { span, .. } = base {
-                            let name = self.get_text(*span);
-                            if name.starts_with(b"$") {
-                                let var_name = &name[1..];
-                                let sym = self.interner.intern(var_name);
-                                self.chunk.code.push(OpCode::StoreVar(sym));
-                                self.chunk.code.push(OpCode::LoadVar(sym));
-                            }
-                        }
-                    }
-                }
+                Expr::ArrayDimFetch { .. } => self.emit_assign_dim(var, expr),
                 Expr::Array { items, .. } => {
                     // list($a, $b, $c) = expr
                     // Emit the right-hand side expression (should be an array)
@@ -2950,7 +2964,7 @@ impl<'src> Emitter<'src> {
                         }
 
                         if !handled {
-                            self.emit_expr(expr);
+                            self.emit_expr_for_write(expr);
                             self.chunk.code.push(OpCode::MakeRef);
                         }
 
@@ -2986,7 +3000,7 @@ impl<'src> Emitter<'src> {
                         }
 
                         if !handled {
-                            self.emit_expr(expr);
+                            self.emit_expr_for_write(expr);
                             self.chunk.code.push(OpCode::MakeRef);
                         }
 
@@ -3005,8 +3019,38 @@ impl<'src> Emitter<'src> {
                             self.chunk.code.push(OpCode::Pop);
                         }
                     }
+                    Expr::PropertyFetch {
+                        target, property, ..
+                    } => {
+                        // $obj->p = &source
+                        self.emit_expr(target);
+                        if let Some(sym) = self.static_prop_name(property) {
+                            let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                            let idx = self.add_constant(Val::String(name.into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        } else {
+                            self.emit_expr(property);
+                        }
+                        self.emit_ref_source(expr);
+                        self.chunk.code.push(OpCode::AssignObjRef);
+                    }
+                    Expr::ClassConstFetch {
+                        class, constant, ..
+                    } if self.static_member(class, constant).is_some() => {
+                        // A::$p = &source
+                        let (class_sym, prop_sym) = self.static_member(class, constant).unwrap();
+                        for sym in [class_sym, prop_sym] {
+                            let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                            let idx = self.add_constant(Val::String(name.into()));
+                            self.chunk.code.push(OpCode::Const(idx as u16));
+                        }
+                        self.emit_ref_source(expr);
+                        self.chunk.code.push(OpCode::AssignStaticPropRef);
+                    }
                     _ => {
-                        // TODO: Support other targets for reference assignment
+                        // Unsupported target: evaluate the source so the expression
+                        // still leaves one value.
+                        self.emit_expr(expr);
                     }
                 }
             }
@@ -3120,6 +3164,30 @@ impl<'src> Emitter<'src> {
                         target, property, ..
                     } => {
                         self.emit_expr(target);
+
+                        if self.static_prop_name(property).is_none() {
+                            // $obj->$name op= expr
+                            self.emit_expr(property);
+                            self.chunk.code.push(OpCode::Dup2);
+                            if let AssignOp::Coalesce = op {
+                                // $obj->$name = $obj->$name ?? expr
+                                self.chunk.code.push(OpCode::FetchPropDynamic);
+                                let skip = self.chunk.code.len();
+                                self.chunk.code.push(OpCode::Coalesce(0));
+                                self.emit_expr(expr);
+                                let assign = self.chunk.code.len();
+                                self.patch_jump(skip, assign);
+                                self.chunk.code.push(OpCode::AssignPropDynamic);
+                            } else {
+                                self.chunk.code.push(OpCode::FetchPropDynamic);
+                                self.emit_expr(expr);
+                                if let Some(code) = Self::assign_op_opcode(op) {
+                                    self.chunk.code.push(code);
+                                }
+                                self.chunk.code.push(OpCode::AssignPropDynamic);
+                            }
+                            return;
+                        }
                         self.chunk.code.push(OpCode::Dup);
 
                         if let Expr::Variable { span, .. } = property {
@@ -3469,6 +3537,204 @@ impl<'src> Emitter<'src> {
         }
     }
 
+    /// Push the right-hand side of `= &expr` as a reference.
+    fn emit_ref_source(&mut self, expr: &Expr) {
+        if let Expr::Variable { span, .. } = expr
+            && self.get_text(*span).starts_with(b"$")
+        {
+            let sym = self.interner.intern(&self.get_text(*span)[1..]);
+            self.chunk.code.push(OpCode::MakeVarRef(sym));
+        } else {
+            self.emit_expr_for_write(expr);
+            self.chunk.code.push(OpCode::MakeRef);
+        }
+    }
+
+    /// Push the slot an lvalue lives in (not a copy of its value), creating it
+    /// when missing, as Zend's FETCH_*_W opcodes do: `&$a['k']`, `&$o->p`,
+    /// `&A::$p`. Anything else is evaluated normally.
+    fn emit_expr_for_write(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Variable { span, .. } if self.get_text(*span).starts_with(b"$") => {
+                let name = &self.get_text(*span)[1..];
+                if name == b"this" || name == b"GLOBALS" {
+                    self.emit_expr(expr);
+                } else {
+                    let sym = self.interner.intern(name);
+                    self.chunk.code.push(OpCode::FetchW(sym));
+                }
+            }
+            Expr::ArrayDimFetch { array, dim, .. } => {
+                self.emit_expr_for_write(array);
+                match dim {
+                    Some(d) => self.emit_expr(d),
+                    None => {
+                        let idx = self.add_constant(Val::AppendPlaceholder);
+                        self.chunk.code.push(OpCode::Const(idx as u16));
+                    }
+                }
+                self.chunk.code.push(OpCode::FetchDimW);
+            }
+            Expr::PropertyFetch {
+                target, property, ..
+            } => {
+                self.emit_expr(target);
+                if let Some(sym) = self.static_prop_name(property) {
+                    let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                    let idx = self.add_constant(Val::String(name.into()));
+                    self.chunk.code.push(OpCode::Const(idx as u16));
+                } else {
+                    self.emit_expr(property);
+                }
+                self.chunk.code.push(OpCode::FetchObjW);
+            }
+            Expr::ClassConstFetch {
+                class, constant, ..
+            } if self.static_member(class, constant).is_some() => {
+                let (class_sym, prop_sym) = self.static_member(class, constant).unwrap();
+                for sym in [class_sym, prop_sym] {
+                    let name = self.interner.lookup(sym).unwrap_or(b"").to_vec();
+                    let idx = self.add_constant(Val::String(name.into()));
+                    self.chunk.code.push(OpCode::Const(idx as u16));
+                }
+                self.chunk.code.push(OpCode::FetchStaticPropW);
+            }
+            _ => self.emit_expr(expr),
+        }
+    }
+
+    /// The binary opcode behind a compound assignment (`+=` -> Add); None for `??=`.
+    fn assign_op_opcode(op: &AssignOp) -> Option<OpCode> {
+        Some(match op {
+            AssignOp::Plus => OpCode::Add,
+            AssignOp::Minus => OpCode::Sub,
+            AssignOp::Mul => OpCode::Mul,
+            AssignOp::Div => OpCode::Div,
+            AssignOp::Mod => OpCode::Mod,
+            AssignOp::Concat => OpCode::Concat,
+            AssignOp::Pow => OpCode::Pow,
+            AssignOp::BitAnd => OpCode::BitwiseAnd,
+            AssignOp::BitOr => OpCode::BitwiseOr,
+            AssignOp::BitXor => OpCode::BitwiseXor,
+            AssignOp::ShiftLeft => OpCode::ShiftLeft,
+            AssignOp::ShiftRight => OpCode::ShiftRight,
+            _ => return None,
+        })
+    }
+
+    /// The name of `$obj->name` when it is a literal identifier.
+    fn static_prop_name(&mut self, property: &Expr) -> Option<Symbol> {
+        if let Expr::Variable { span, .. } = property {
+            let name = self.get_text(*span);
+            if !name.starts_with(b"$") {
+                return Some(self.interner.intern(name));
+            }
+        }
+        None
+    }
+
+    /// `Class::$prop` with a literal class name, as (class, prop).
+    fn static_member(&mut self, class: &Expr, constant: &Expr) -> Option<(Symbol, Symbol)> {
+        let (Expr::Variable { span: class_span, .. }, Expr::Variable { span: prop_span, .. }) =
+            (class, constant)
+        else {
+            return None;
+        };
+        let class_name = self.get_text(*class_span);
+        let prop_name = self.get_text(*prop_span);
+        if class_name.starts_with(b"$") || !prop_name.starts_with(b"$") {
+            return None;
+        }
+        Some((self.interner.intern(class_name), self.interner.intern(&prop_name[1..])))
+    }
+
+    /// `$base[k1]..[kN] = expr`: read the base, update a copy, store it back
+    /// into the base, and leave the assigned value as the result.
+    fn emit_assign_dim(&mut self, var: &Expr, expr: &Expr) {
+        enum StoreBack {
+            Var(Symbol),
+            Prop(Symbol),
+            PropDynamic,
+            StaticProp(Symbol, Symbol),
+            Discard,
+        }
+        let (base, keys) = Self::flatten_dim_fetch(var);
+
+        // Push the operands the store-back needs, then the current array.
+        let (store, extras) = match base {
+            Expr::Variable { span, .. } if self.get_text(*span).starts_with(b"$") => {
+                let name = &self.get_text(*span)[1..];
+                let sym = self.interner.intern(name);
+                if name == b"GLOBALS" || name == b"this" {
+                    self.emit_expr(base);
+                } else {
+                    // Writing creates the variable without an "undefined" notice.
+                    self.chunk.code.push(OpCode::FetchW(sym));
+                }
+                (StoreBack::Var(sym), 0)
+            }
+            Expr::PropertyFetch {
+                target, property, ..
+            } => {
+                self.emit_expr(target);
+                if let Some(sym) = self.static_prop_name(property) {
+                    self.chunk.code.push(OpCode::Dup);
+                    self.chunk.code.push(OpCode::FetchProp(sym));
+                    (StoreBack::Prop(sym), 1)
+                } else {
+                    self.emit_expr(property);
+                    self.chunk.code.push(OpCode::Dup2);
+                    self.chunk.code.push(OpCode::FetchPropDynamic);
+                    (StoreBack::PropDynamic, 2)
+                }
+            }
+            Expr::ClassConstFetch {
+                class, constant, ..
+            } if self.static_member(class, constant).is_some() => {
+                let (class_sym, prop_sym) = self.static_member(class, constant).unwrap();
+                self.emit_expr(base);
+                (StoreBack::StaticProp(class_sym, prop_sym), 0)
+            }
+            _ => {
+                self.emit_expr(base);
+                (StoreBack::Discard, 0)
+            }
+        };
+
+        for key in &keys {
+            if let Some(k) = key {
+                self.emit_expr(k);
+            } else {
+                let idx = self.add_constant(Val::AppendPlaceholder);
+                self.chunk.code.push(OpCode::Const(idx as u16));
+            }
+        }
+        self.emit_expr(expr);
+        self.chunk
+            .code
+            .push(OpCode::AssignNestedDim(keys.len() as u8, extras));
+
+        // Stack: [value, extras.., new array]; store back, leaving [value].
+        match store {
+            StoreBack::Var(sym) => self.chunk.code.push(OpCode::StoreVar(sym)),
+            StoreBack::Prop(sym) => {
+                self.chunk.code.push(OpCode::AssignProp(sym));
+                self.chunk.code.push(OpCode::Pop);
+            }
+            StoreBack::PropDynamic => {
+                self.chunk.code.push(OpCode::AssignPropDynamic);
+                self.chunk.code.push(OpCode::Pop);
+            }
+            StoreBack::StaticProp(class_sym, prop_sym) => {
+                self.chunk
+                    .code
+                    .push(OpCode::AssignStaticProp(class_sym, prop_sym));
+                self.chunk.code.push(OpCode::Pop);
+            }
+            StoreBack::Discard => self.chunk.code.push(OpCode::Pop),
+        }
+    }
+
     fn flatten_dim_fetch<'a, 'ast>(
         mut expr: &'a Expr<'ast>,
     ) -> (&'a Expr<'ast>, Vec<Option<&'a Expr<'ast>>>) {
@@ -3488,33 +3754,9 @@ impl<'src> Emitter<'src> {
 
     fn eval_constant_expr(&self, expr: &Expr) -> Val {
         match expr {
-            Expr::Integer { value, .. } => {
-                let s_str = std::str::from_utf8(value).unwrap_or("0");
-                if let Ok(i) = s_str.parse::<i64>() {
-                    Val::Int(i)
-                } else {
-                    Val::Int(0)
-                }
-            }
-            Expr::Float { value, .. } => {
-                let s_str = std::str::from_utf8(value).unwrap_or("0.0");
-                if let Ok(f) = s_str.parse::<f64>() {
-                    Val::Float(f)
-                } else {
-                    Val::Float(0.0)
-                }
-            }
-            Expr::String { value, .. } => {
-                let s = value;
-                if s.len() >= 2
-                    && ((s[0] == b'"' && s[s.len() - 1] == b'"')
-                        || (s[0] == b'\'' && s[s.len() - 1] == b'\''))
-                {
-                    Val::String(s[1..s.len() - 1].to_vec().into())
-                } else {
-                    Val::String(s.to_vec().into())
-                }
-            }
+            Expr::Integer { value, .. } => integer_literal(value),
+            Expr::Float { value, .. } => Val::Float(float_literal(value)),
+            Expr::String { value, .. } => Val::String(string_literal(value).into()),
             Expr::Boolean { value, .. } => Val::Bool(*value),
             Expr::Null { .. } => Val::Null,
             Expr::Array { items, .. } => {

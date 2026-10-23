@@ -19,6 +19,7 @@ pub mod openssl;
 pub mod output_control;
 pub mod pcre;
 pub mod reflection;
+pub mod serialize;
 #[cfg(feature = "pdo")]
 pub mod pdo;
 pub mod spl;

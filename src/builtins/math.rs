@@ -63,11 +63,11 @@ pub fn php_max(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         let val = vm.arena.get(args[0]);
         if let Val::Array(arr_rc) = &val.value {
             if arr_rc.map.is_empty() {
-                return Err("max(): Array must contain at least one element".into());
+                return Err(vm.throw_from_native(b"ValueError", "max(): Argument #1 ($value) must contain at least one element"));
             }
             let mut max_handle = *arr_rc.map.values().next().unwrap();
             for &handle in arr_rc.map.values().skip(1) {
-                if compare_values(vm, handle, max_handle) > 0 {
+                if vm.php_compare(handle, max_handle) > 0 {
                     max_handle = handle;
                 }
             }
@@ -75,10 +75,15 @@ pub fn php_max(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         }
     }
 
-    // Multiple arguments
+    // Two arguments: PHP 8.4's frameless max() returns the first on a tie.
+    if let [lhs, rhs] = args {
+        return Ok(if vm.php_compare(*lhs, *rhs) >= 0 { *lhs } else { *rhs });
+    }
+
+    // More arguments: the first of equal values wins.
     let mut max_handle = args[0];
     for &handle in &args[1..] {
-        if compare_values(vm, handle, max_handle) > 0 {
+        if vm.php_compare(handle, max_handle) > 0 {
             max_handle = handle;
         }
     }
@@ -95,11 +100,11 @@ pub fn php_min(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         let val = vm.arena.get(args[0]);
         if let Val::Array(arr_rc) = &val.value {
             if arr_rc.map.is_empty() {
-                return Err("min(): Array must contain at least one element".into());
+                return Err(vm.throw_from_native(b"ValueError", "min(): Argument #1 ($value) must contain at least one element"));
             }
             let mut min_handle = *arr_rc.map.values().next().unwrap();
             for &handle in arr_rc.map.values().skip(1) {
-                if compare_values(vm, handle, min_handle) < 0 {
+                if vm.php_compare(handle, min_handle) < 0 {
                     min_handle = handle;
                 }
             }
@@ -107,43 +112,19 @@ pub fn php_min(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         }
     }
 
-    // Multiple arguments
+    // Two arguments: PHP 8.4's frameless min() returns the second on a tie.
+    if let [lhs, rhs] = args {
+        return Ok(if vm.php_compare(*lhs, *rhs) < 0 { *lhs } else { *rhs });
+    }
+
+    // More arguments: the first of equal values wins.
     let mut min_handle = args[0];
     for &handle in &args[1..] {
-        if compare_values(vm, handle, min_handle) < 0 {
+        if vm.php_compare(handle, min_handle) < 0 {
             min_handle = handle;
         }
     }
     Ok(min_handle)
-}
-
-fn compare_values(vm: &VM, a: Handle, b: Handle) -> i32 {
-    let a_val = vm.arena.get(a);
-    let b_val = vm.arena.get(b);
-
-    match (&a_val.value, &b_val.value) {
-        (Val::Int(i1), Val::Int(i2)) => i1.cmp(i2) as i32,
-        (Val::Float(f1), Val::Float(f2)) => {
-            if f1 < f2 {
-                -1
-            } else if f1 > f2 {
-                1
-            } else {
-                0
-            }
-        }
-        (Val::Int(i), Val::Float(f)) | (Val::Float(f), Val::Int(i)) => {
-            let i_f = *i as f64;
-            if i_f < *f {
-                -1
-            } else if i_f > *f {
-                1
-            } else {
-                0
-            }
-        }
-        _ => 0,
-    }
 }
 
 pub fn php_pi(vm: &mut VM, _args: &[Handle]) -> Result<Handle, String> {

@@ -20,6 +20,11 @@ impl Stack {
         self.values.pop()
     }
 
+    /// Drop everything above `len` values.
+    pub fn truncate(&mut self, len: usize) {
+        self.values.truncate(len);
+    }
+
     pub fn len(&self) -> usize {
         self.values.len()
     }

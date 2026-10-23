@@ -318,6 +318,10 @@ pub struct VM {
     pub frames: Vec<CallFrame>,
     pub context: RequestContext,
     pub last_return_value: Option<Handle>,
+    /// A Throwable raised by a builtin via `throw_from_native`, thrown when the builtin returns.
+    pub(crate) pending_throw: Option<Handle>,
+    /// Counter giving each declared method and property its declaration order.
+    decl_counter: u64,
     pub silence_stack: Vec<u32>,
     pub pending_calls: Vec<PendingCall>,
     pub output_writer: Box<dyn OutputWriter>,
@@ -357,12 +361,12 @@ pub struct VM {
 }
 
 impl VM {
-    const ATTR_TARGET_CLASS: i64 = 1;
-    const ATTR_TARGET_METHOD: i64 = 2;
-    const ATTR_TARGET_FUNCTION: i64 = 4;
-    const ATTR_TARGET_PROPERTY: i64 = 8;
-    const ATTR_TARGET_CLASS_CONSTANT: i64 = 16;
-    const ATTR_TARGET_PARAMETER: i64 = 32;
+    pub(crate) const ATTR_TARGET_CLASS: i64 = 1;
+    pub(crate) const ATTR_TARGET_METHOD: i64 = 2;
+    pub(crate) const ATTR_TARGET_FUNCTION: i64 = 4;
+    pub(crate) const ATTR_TARGET_PROPERTY: i64 = 8;
+    pub(crate) const ATTR_TARGET_CLASS_CONSTANT: i64 = 16;
+    pub(crate) const ATTR_TARGET_PARAMETER: i64 = 32;
     const ATTR_TARGET_ALL: i64 = 63;
     const ATTR_IS_REPEATABLE: i64 = 64;
 
@@ -378,6 +382,8 @@ impl VM {
             frames: Vec::new(),
             context: RequestContext::new(engine_context),
             last_return_value: None,
+            pending_throw: None,
+            decl_counter: 0,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -788,6 +794,8 @@ impl VM {
             frames: Vec::new(),
             context,
             last_return_value: None,
+            pending_throw: None,
+            decl_counter: 0,
             silence_stack: Vec::new(),
             pending_calls: Vec::new(),
             output_writer: Box::new(StdoutWriter::default()),
@@ -1146,7 +1154,7 @@ impl VM {
             .into_owned()
     }
 
-    fn trigger_autoload(&mut self, class_name: Symbol) -> Result<(), VmError> {
+    pub(crate) fn trigger_autoload(&mut self, class_name: Symbol) -> Result<(), VmError> {
         let callsite_strict_types = self
             .frames
             .last()
@@ -1278,6 +1286,17 @@ impl VM {
         obj_handle: Handle,
         method_name: Symbol,
     ) -> Result<Handle, VmError> {
+        self.call_method(obj_handle, method_name, &[])
+    }
+
+    /// Call a method on an object from native code: user-defined methods
+    /// first, then native ones.
+    pub(crate) fn call_method(
+        &mut self,
+        obj_handle: Handle,
+        method_name: Symbol,
+        args: &[Handle],
+    ) -> Result<Handle, VmError> {
         let class_name = if let Val::Object(h) = self.arena.get(obj_handle).value {
             if let Val::ObjPayload(data) = &self.arena.get(h).value {
                 data.class
@@ -1297,6 +1316,7 @@ impl VM {
             frame.class_scope = Some(declaring_class);
             frame.called_scope = Some(class_name);
             frame.stack_base = Some(self.operand_stack.len());
+            frame.args = args.to_vec().into();
             let depth = self.frames.len();
             self.push_frame(frame);
             self.run_loop(depth)?;
@@ -1314,7 +1334,7 @@ impl VM {
             if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = Some(obj_handle);
             }
-            let result = (native_entry.handler)(self, &[]).map_err(VmError::RuntimeError)?;
+            let result = (native_entry.handler)(self, args).map_err(|e| self.native_error(e))?;
             if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.this = saved_this;
             }
@@ -1682,7 +1702,7 @@ impl VM {
                 match &val {
                     Val::String(_) => Ok(None), // Already string
                     Val::Int(i) => Ok(Some(Val::String(i.to_string().into_bytes().into()))),
-                    Val::Float(f) => Ok(Some(Val::String(f.to_string().into_bytes().into()))),
+                    Val::Float(f) => Ok(Some(Val::String(crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes().into()))),
                     Val::Bool(b) => Ok(Some(Val::String(
                         (if *b { "1" } else { "" }).as_bytes().to_vec().into(),
                     ))),
@@ -1784,7 +1804,7 @@ impl VM {
     }
 
     /// Convert type hint to string for error messages
-    fn type_hint_to_string(&self, hint: &TypeHint) -> String {
+    pub(crate) fn type_hint_to_string(&self, hint: &TypeHint) -> String {
         match hint {
             TypeHint::Int => "int".to_string(),
             TypeHint::Float => "float".to_string(),
@@ -2059,6 +2079,36 @@ impl VM {
         Ok((prop_name, defining_class, current_val))
     }
 
+    /// Store `val` in a static property's slot (shared with any references to it).
+    pub(crate) fn write_static_prop(&mut self, defining_class: Symbol, prop_name: Symbol, val: Val) {
+        let handle = self
+            .context
+            .classes
+            .get(&defining_class)
+            .and_then(|def| def.static_properties.get(&prop_name))
+            .map(|entry| entry.handle);
+        if let Some(handle) = handle {
+            self.arena.get_mut(handle).value = val;
+        }
+    }
+
+    /// The heap slot of a static property, for write fetches and references.
+    pub(crate) fn static_prop_handle(
+        &mut self,
+        class_name: Symbol,
+        prop_name: Symbol,
+    ) -> Result<Handle, VmError> {
+        let resolved_class = self.resolve_class_name(class_name)?;
+        let (_, visibility, defining_class) = self.find_static_prop(resolved_class, prop_name)?;
+        self.check_const_visibility(defining_class, visibility)?;
+        self.context
+            .classes
+            .get(&defining_class)
+            .and_then(|def| def.static_properties.get(&prop_name))
+            .map(|entry| entry.handle)
+            .ok_or_else(|| VmError::RuntimeError("Static property not found".into()))
+    }
+
     pub(crate) fn find_static_prop(
         &self,
         start_class: Symbol,
@@ -2068,10 +2118,11 @@ impl VM {
         let found = self.walk_inheritance_chain(start_class, |def, cls| {
             def.static_properties
                 .get(&prop_name)
-                .map(|entry| (entry.value.clone(), entry.visibility, cls))
+                .map(|entry| (entry.handle, entry.visibility, cls))
         });
 
-        if let Some((val, vis, defining_class)) = found {
+        if let Some((handle, vis, defining_class)) = found {
+            let val = self.arena.get(handle).value.clone();
             // Check visibility using same logic as instance properties
             let caller_scope = self.get_current_class();
             if !self.property_visible_to(defining_class, vis, caller_scope) {
@@ -2251,6 +2302,22 @@ impl VM {
         {
             return Ok(Self::ATTR_TARGET_CLASS);
         }
+        // The other attributes PHP declares itself, with their #[Attribute] flags.
+        let internal = [
+            (&b"Override"[..], Self::ATTR_TARGET_METHOD),
+            (b"ReturnTypeWillChange", Self::ATTR_TARGET_METHOD),
+            (b"SensitiveParameter", Self::ATTR_TARGET_PARAMETER),
+            (
+                b"Deprecated",
+                Self::ATTR_TARGET_METHOD | Self::ATTR_TARGET_FUNCTION | Self::ATTR_TARGET_CLASS_CONSTANT,
+            ),
+        ];
+        if let Some((_, flags)) = internal
+            .iter()
+            .find(|(n, _)| name_bytes.eq_ignore_ascii_case(n))
+        {
+            return Ok(*flags);
+        }
 
         let class_def = self.context.classes.get(&attr_name).ok_or_else(|| {
             VmError::RuntimeError(format!(
@@ -2288,12 +2355,41 @@ impl VM {
         }
     }
 
+    /// Declaration-time check. Zend validates only its own attributes
+    /// (#[Attribute], #[AllowDynamicProperties], ...) when code is compiled;
+    /// a user attribute is checked by ReflectionAttribute::newInstance().
     fn validate_attribute_use(
         &self,
         attr: &AttributeInstance,
         target_flag: i64,
         existing: &[AttributeInstance],
     ) -> Result<(), VmError> {
+        let name = self.context.interner.lookup(attr.name).unwrap_or(b"");
+        let name = name.rsplit(|b| *b == b'\\').next().unwrap_or(name);
+        let internal = [
+            &b"Attribute"[..],
+            b"AllowDynamicProperties",
+            b"ReturnTypeWillChange",
+            b"SensitiveParameter",
+            b"Override",
+            b"Deprecated",
+        ];
+        if !internal.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            return Ok(());
+        }
+        self.check_attribute_use(attr.name, target_flag, existing.iter().any(|e| e.name == attr.name))
+    }
+
+    /// Whether attribute `name` may be used on `target_flag` (and repeated):
+    /// the errors PHP raises from ReflectionAttribute::newInstance().
+    pub(crate) fn check_attribute_use(
+        &self,
+        name: Symbol,
+        target_flag: i64,
+        repeated: bool,
+    ) -> Result<(), VmError> {
+        let attr = AttributeInstance { name, args: Vec::new() };
+        let existing: Vec<AttributeInstance> = if repeated { vec![attr.clone()] } else { Vec::new() };
         let flags = self.resolve_attribute_flags(attr.name)?;
         let is_repeatable = (flags & Self::ATTR_IS_REPEATABLE) != 0;
         if !is_repeatable && existing.iter().any(|entry| entry.name == attr.name) {
@@ -2434,7 +2530,7 @@ impl VM {
         false
     }
 
-    fn is_instance_of(&self, obj_handle: Handle, class_sym: Symbol) -> bool {
+    pub(crate) fn is_instance_of(&self, obj_handle: Handle, class_sym: Symbol) -> bool {
         let obj_val = self.arena.get(obj_handle);
         if let Val::Object(payload_handle) = obj_val.value {
             if let Val::ObjPayload(data) = &self.arena.get(payload_handle).value {
@@ -2448,12 +2544,16 @@ impl VM {
         false
     }
 
-    fn handle_exception(&mut self, ex_handle: Handle) -> bool {
+    /// Find a catch for `ex_handle` in the frames this run loop owns (index >=
+    /// `base_depth`). Frames below belong to an outer loop (a builtin called back
+    /// into PHP), so when nothing here catches, only this loop's frames are
+    /// unwound and the exception propagates to the caller.
+    fn handle_exception(&mut self, ex_handle: Handle, base_depth: usize) -> bool {
         // Validate that the exception is a Throwable
         let throwable_sym = self.context.interner.intern(b"Throwable");
         if !self.is_instance_of(ex_handle, throwable_sym) {
             // Not a valid exception object - this shouldn't happen if Throw validates properly
-            self.frames.clear();
+            self.frames.truncate(base_depth);
             return false;
         }
 
@@ -2461,7 +2561,7 @@ impl VM {
         let mut finally_blocks = Vec::new(); // Track finally blocks to execute
 
         // Unwind stack, collecting finally blocks
-        while frame_idx > 0 {
+        while frame_idx > base_depth {
             frame_idx -= 1;
 
             let (ip, chunk) = {
@@ -2488,26 +2588,29 @@ impl VM {
                     }
 
                     // Check for matching catch block
-                    if let Some(type_sym) = entry.catch_type {
-                        if self.is_instance_of(ex_handle, type_sym) {
-                            // Execute any finally blocks collected so far before entering catch
-                            self.execute_finally_blocks(&finally_blocks);
-                            finally_blocks.clear();
+                    if let Some(type_sym) = entry.catch_type
+                        && self.is_instance_of(ex_handle, type_sym)
+                    {
+                        // Execute any finally blocks collected so far before entering catch
+                        self.execute_finally_blocks(&finally_blocks);
+                        finally_blocks.clear();
 
-                            // Found matching catch block
-                            self.frames.truncate(frame_idx + 1);
-                            let frame = &mut self.frames[frame_idx];
-                            frame.ip = entry.target as usize;
-                            self.operand_stack.push(ex_handle);
+                        // Found matching catch block; drop the temporaries of the
+                        // interrupted expression (e.g. a half-built call).
+                        self.frames.truncate(frame_idx + 1);
+                        let frame = &mut self.frames[frame_idx];
+                        frame.ip = entry.target as usize;
+                        let depth = frame.stack_base.unwrap_or(0) + entry.stack_depth as usize;
+                        self.operand_stack.truncate(depth);
+                        self.operand_stack.push(ex_handle);
 
-                            // Mark finally for execution after catch completes
-                            if let Some(finally_tgt) = entry.finally_target {
-                                frame.pending_finally = Some(finally_tgt as usize);
-                            }
-
-                            found_catch = true;
-                            break;
+                        // Mark finally for execution after catch completes
+                        if let Some(finally_tgt) = entry.finally_target {
+                            frame.pending_finally = Some(finally_tgt as usize);
                         }
+
+                        found_catch = true;
+                        break;
                     }
                 }
             }
@@ -2521,7 +2624,10 @@ impl VM {
         // In PHP, finally blocks execute from innermost to outermost
         // We've already collected them in the correct order during iteration
         self.execute_finally_blocks(&finally_blocks);
-        self.frames.clear();
+        if let Some(base) = self.frames.get(base_depth).and_then(|f| f.stack_base) {
+            self.operand_stack.truncate(base);
+        }
+        self.frames.truncate(base_depth);
         false
     }
 
@@ -2872,7 +2978,7 @@ impl VM {
         match val {
             Val::String(s) => Ok(s.to_vec()),
             Val::Int(i) => Ok(i.to_string().into_bytes()),
-            Val::Float(f) => Ok(f.to_string().into_bytes()),
+            Val::Float(f) => Ok(crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::ECHO, 'E').into_bytes()),
             Val::Bool(b) => Ok(if b { b"1".to_vec() } else { vec![] }),
             Val::Null => Ok(vec![]),
             Val::Object(h) => {
@@ -3028,7 +3134,7 @@ impl VM {
         for h in self.context.globals.values() {
             push(*h);
         }
-        for h in [self.last_return_value, self.finally_return_value]
+        for h in [self.last_return_value, self.finally_return_value, self.pending_throw]
             .into_iter()
             .flatten()
         {
@@ -3061,7 +3167,7 @@ impl VM {
                 entry.value.trace_handles(&mut push);
             }
             for entry in class_def.static_properties.values() {
-                entry.value.trace_handles(&mut push);
+                push(entry.handle);
             }
             for method in class_def.methods.values() {
                 trace_user_func(&method.func, &mut push);
@@ -3137,7 +3243,7 @@ impl VM {
             if let Err(e) = res {
                 match e {
                     VmError::Exception(h) => {
-                        if !self.handle_exception(h) {
+                        if !self.handle_exception(h, target_depth) {
                             return Err(VmError::Exception(h));
                         }
                     }
@@ -3230,6 +3336,11 @@ impl VM {
     fn exec_control_flow(&mut self, op: OpCode) -> Result<(), VmError> {
         match op {
             OpCode::Jmp(target) => self.set_ip(target as usize)?,
+            OpCode::DeclareAnonClass(name, target) => {
+                if self.context.classes.contains_key(&name) {
+                    self.set_ip(target as usize)?;
+                }
+            }
             OpCode::JmpIfFalse(target) => self.jump_if(target as usize, |v| !v.to_bool())?,
             OpCode::JmpIfTrue(target) => self.jump_if(target as usize, |v| v.to_bool())?,
             OpCode::JmpZEx(target) => self.jump_peek_or_pop(target as usize, |v| !v.to_bool())?,
@@ -3248,6 +3359,205 @@ impl VM {
             _ => unreachable!("Not a control flow op"),
         }
         Ok(())
+    }
+
+    /// `$obj->name = $val`, with __set, visibility, readonly and type checks;
+    /// pushes the assigned value.
+    fn assign_prop(
+        &mut self,
+        obj_handle: Handle,
+        prop_name: Symbol,
+        val_handle: Handle,
+    ) -> Result<(), VmError> {
+
+        let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
+            h
+        } else {
+            return Err(VmError::RuntimeError(
+                "Attempt to assign property on non-object".into(),
+            ));
+        };
+
+        // Extract data
+        let (class_name, prop_exists) = {
+            let payload_zval = self.arena.get(payload_handle);
+            if let Val::ObjPayload(obj_data) = &payload_zval.value {
+                (obj_data.class, obj_data.properties.contains_key(&prop_name))
+            } else {
+                return Err(VmError::RuntimeError("Invalid object payload".into()));
+            }
+        };
+
+        let current_scope = self.get_current_class();
+        let visibility_check =
+            self.check_prop_visibility(class_name, prop_name, current_scope);
+
+        let mut use_magic = false;
+
+        if prop_exists {
+            if visibility_check.is_err() {
+                use_magic = true;
+            }
+        } else {
+            use_magic = true;
+        }
+
+        if use_magic {
+            let magic_set = self.context.interner.intern(b"__set");
+            if let Some((method, _, _, defined_class)) =
+                self.find_method(class_name, magic_set)
+            {
+                let prop_name_bytes = self
+                    .context
+                    .interner
+                    .lookup(prop_name)
+                    .unwrap_or(b"")
+                    .to_vec();
+                let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
+
+                let mut frame = CallFrame::new(method.chunk.clone());
+                frame.func = Some(method.clone());
+                frame.this = Some(obj_handle);
+                frame.class_scope = Some(defined_class);
+                frame.called_scope = Some(class_name);
+                frame.discard_return = true;
+
+                if let Some(param) = method.params.first() {
+                    frame.locals.insert(param.name, name_handle);
+                }
+                if let Some(param) = method.params.get(1) {
+                    frame.locals.insert(param.name, val_handle);
+                }
+
+                self.operand_stack.push(val_handle);
+                self.push_frame(frame);
+            } else {
+                visibility_check?;
+
+                // Check for dynamic property deprecation (PHP 8.2+)
+                if !prop_exists {
+                    self.check_dynamic_property_write(obj_handle, prop_name);
+                }
+
+                // Check readonly constraint
+                let prop_info = self.walk_inheritance_chain(class_name, |def, cls| {
+                    def.properties
+                        .get(&prop_name)
+                        .map(|entry| (entry.is_readonly, cls))
+                });
+
+                // A readonly property can only be set while uninitialized
+                if let Some((true, defining_class)) = prop_info
+                    && let Val::ObjPayload(obj_data) = &self.arena.get(payload_handle).value
+                    && let Some(current_handle) = obj_data.properties.get(&prop_name)
+                    && !matches!(self.arena.get(*current_handle).value, Val::Uninitialized)
+                {
+                    let class_str = String::from_utf8_lossy(
+                        self.context
+                            .interner
+                            .lookup(defining_class)
+                            .unwrap_or(b"???"),
+                    );
+                    let prop_str = String::from_utf8_lossy(
+                        self.context.interner.lookup(prop_name).unwrap_or(b"???"),
+                    );
+                    return Err(VmError::RuntimeError(format!(
+                        "Cannot modify readonly property {}::${}",
+                        class_str, prop_str
+                    )));
+                }
+
+                // Validate property type (check class definition for type hint)
+                self.validate_property_type(class_name, prop_name, val_handle)?;
+
+                let payload_zval = self.arena.get_mut(payload_handle);
+                if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                    obj_data.properties.insert(prop_name, val_handle);
+                }
+                self.operand_stack.push(val_handle);
+            }
+        } else {
+            // Check for dynamic property deprecation (PHP 8.2+)
+            if !prop_exists {
+                self.check_dynamic_property_write(obj_handle, prop_name);
+            }
+
+            // Validate property type (check class definition for type hint)
+            self.validate_property_type(class_name, prop_name, val_handle)?;
+
+            let payload_zval = self.arena.get_mut(payload_handle);
+            if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
+                obj_data.properties.insert(prop_name, val_handle);
+            } else {
+                return Err(VmError::RuntimeError("Invalid object payload".into()));
+            }
+            self.operand_stack.push(val_handle);
+        }
+        Ok(())
+    }
+
+    /// A new instance of a built-in Throwable class with `message` set.
+    fn new_throwable(&mut self, class: &[u8], message: &str) -> Handle {
+        let class_sym = self.context.interner.intern(class);
+        let properties = self.collect_properties(class_sym, PropertyCollectionMode::All);
+        let payload = self.arena.alloc(Val::ObjPayload(ObjectData {
+            class: class_sym,
+            properties,
+            internal: None,
+            dynamic_properties: std::collections::HashSet::new(),
+        }));
+        let message_sym = self.context.interner.intern(b"message");
+        let message_val = self.arena.alloc(Val::String(message.as_bytes().to_vec().into()));
+        if let Val::ObjPayload(obj) = &mut self.arena.get_mut(payload).value {
+            obj.properties.insert(message_sym, message_val);
+        }
+        self.arena.alloc(Val::Object(payload))
+    }
+
+    /// Throw `handle` (a Throwable) from inside an opcode handler.
+    fn throw_handle(&mut self, handle: Handle) -> VmError {
+        self.operand_stack.push(handle);
+        match self.exec_throw() {
+            Err(e) => e,
+            Ok(()) => VmError::RuntimeError("throw did not raise".into()),
+        }
+    }
+
+    /// Raise a built-in Throwable as if by `throw new $class($message)`, from
+    /// inside an opcode handler: `return Err(vm.throw_error(b"TypeError", msg))`.
+    pub(crate) fn throw_error(&mut self, class: &[u8], message: &str) -> VmError {
+        let handle = self.new_throwable(class, message);
+        self.throw_handle(handle)
+    }
+
+    /// Raise a built-in Throwable from a builtin function or method:
+    /// `return Err(vm.throw_from_native(b"ValueError", msg))`. The exception is
+    /// thrown when the builtin returns.
+    pub fn throw_from_native(&mut self, class: &[u8], message: &str) -> String {
+        let handle = self.new_throwable(class, message);
+        self.pending_throw = Some(handle);
+        message.to_string()
+    }
+
+    /// A VmError from PHP code a builtin called back into (a callback, a magic
+    /// method), as the builtin's error string. A thrown exception stays pending,
+    /// so it propagates out of the builtin to the PHP caller.
+    pub fn callback_error(&mut self, e: VmError) -> String {
+        match e {
+            VmError::Exception(h) => {
+                self.pending_throw = Some(h);
+                "uncaught exception".into()
+            }
+            other => format!("{:?}", other),
+        }
+    }
+
+    /// Turn a builtin's error into a VmError, throwing its pending Throwable if it raised one.
+    pub(crate) fn native_error(&mut self, message: String) -> VmError {
+        match self.pending_throw.take() {
+            Some(handle) => self.throw_handle(handle),
+            None => VmError::RuntimeError(message),
+        }
     }
 
     fn exec_throw(&mut self) -> Result<(), VmError> {
@@ -3858,6 +4168,7 @@ impl VM {
             }
 
             OpCode::Jmp(_)
+            | OpCode::DeclareAnonClass(..)
             | OpCode::JmpIfFalse(_)
             | OpCode::JmpIfTrue(_)
             | OpCode::JmpZEx(_)
@@ -5573,6 +5884,25 @@ impl VM {
             }
 
             OpCode::StoreNestedDim(depth) => self.exec_assign_nested_dim(depth)?,
+            OpCode::AssignNestedDim(key_count, extras) => {
+                let val_handle = self.pop_operand_required()?;
+                let keys = self.pop_n_operands(key_count as usize)?;
+                let array_handle = self.pop_operand_required()?;
+                let extra = self.pop_n_operands(extras as usize)?;
+                let new_handle = self.assign_nested_recursive(array_handle, &keys, val_handle)?;
+                self.operand_stack.push(val_handle);
+                for h in extra {
+                    self.operand_stack.push(h);
+                }
+                self.operand_stack.push(new_handle);
+            }
+            OpCode::Dup2 => {
+                let b = self.pop_operand_required()?;
+                let a = self.pop_operand_required()?;
+                for h in [a, b, a, b] {
+                    self.operand_stack.push(h);
+                }
+            }
 
             OpCode::FetchNestedDim(depth) => self.exec_fetch_nested_dim_op(depth)?,
 
@@ -6666,85 +6996,85 @@ impl VM {
                     let frame = self.frames.last().unwrap();
                     frame.chunk.constants[func_idx as usize].clone()
                 };
-                if let Val::Resource(rc) = val {
-                    if let Ok(func) = rc.downcast::<UserFunc>() {
-                        for param in &func.params {
-                            let mut seen = Vec::new();
-                            for attr in &param.attributes {
-                                self.validate_attribute_use(
-                                    attr,
-                                    Self::ATTR_TARGET_PARAMETER,
-                                    &seen,
-                                )?;
-                                seen.push(attr.clone());
-                            }
+                if let Val::Resource(rc) = val
+                    && let Ok(func) = rc.downcast::<UserFunc>()
+                {
+                    for param in &func.params {
+                        let mut seen = Vec::new();
+                        for attr in &param.attributes {
+                            self.validate_attribute_use(
+                                attr,
+                                Self::ATTR_TARGET_PARAMETER,
+                                &seen,
+                            )?;
+                            seen.push(attr.clone());
                         }
+                    }
 
-                        let lower_key = self.intern_lowercase_symbol(method_name)?;
+                    let lower_key = self.intern_lowercase_symbol(method_name)?;
 
-                        // Build signature from UserFunc data
-                        let signature = MethodSignature {
-                            parameters: func
-                                .params
-                                .iter()
-                                .map(|p| ParameterInfo {
-                                    name: p.name,
-                                    type_hint: p
-                                        .param_type
-                                        .clone()
-                                        .and_then(|rt| self.return_type_to_type_hint(&rt)),
-                                    is_reference: p.by_ref,
-                                    is_variadic: p.is_variadic,
-                                    default_value: p.default_value.clone(),
-                                    attributes: p.attributes.clone(),
-                                })
-                                .collect(),
-                            return_type: func
-                                .return_type
-                                .as_ref()
-                                .and_then(|rt| self.return_type_to_type_hint(rt)),
+                    // Build signature from UserFunc data
+                    let signature = MethodSignature {
+                        parameters: func
+                            .params
+                            .iter()
+                            .map(|p| ParameterInfo {
+                                name: p.name,
+                                type_hint: p
+                                    .param_type
+                                    .clone()
+                                    .and_then(|rt| self.return_type_to_type_hint(&rt)),
+                                is_reference: p.by_ref,
+                                is_variadic: p.is_variadic,
+                                default_value: p.default_value.clone(),
+                                attributes: p.attributes.clone(),
+                            })
+                            .collect(),
+                        return_type: func
+                            .return_type
+                            .as_ref()
+                            .and_then(|rt| self.return_type_to_type_hint(rt)),
+                    };
+
+                    // Check if parent class has this method - validate override compatibility
+                    if let Some(class_def) = self.context.classes.get(&class_name)
+                        && let Some(parent_sym) = class_def.parent
+                        && let Some((parent_method, parent_vis, parent_static, _)) =
+                            self.find_method(parent_sym, lower_key)
+                    {
+                        self.validate_method_override(
+                            class_name,
+                            method_name,
+                            &signature,
+                            is_static,
+                            visibility,
+                            &parent_method,
+                            parent_static,
+                            parent_vis,
+                        )?;
+                    }
+
+                    if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                        self.decl_counter += 1;
+                        let entry = MethodEntry {
+                            decl_order: self.decl_counter,
+                            name: method_name,
+                            func,
+                            visibility,
+                            is_static,
+                            declaring_class: class_name,
+                            is_abstract,
+                            signature,
+                            attributes: Vec::new(),
                         };
+                        class_def.methods.insert(lower_key, entry.clone());
 
-                        // Check if parent class has this method - validate override compatibility
-                        if let Some(class_def) = self.context.classes.get(&class_name) {
-                            if let Some(parent_sym) = class_def.parent {
-                                if let Some((parent_method, parent_vis, parent_static, _)) =
-                                    self.find_method(parent_sym, lower_key)
-                                {
-                                    self.validate_method_override(
-                                        class_name,
-                                        method_name,
-                                        &signature,
-                                        is_static,
-                                        visibility,
-                                        &parent_method,
-                                        parent_static,
-                                        parent_vis,
-                                    )?;
-                                }
-                            }
-                        }
-
-                        if let Some(class_def) = self.context.classes.get_mut(&class_name) {
-                            let entry = MethodEntry {
-                                name: method_name,
-                                func,
-                                visibility,
-                                is_static,
-                                declaring_class: class_name,
-                                is_abstract,
-                                signature,
-                                attributes: Vec::new(),
-                            };
-                            class_def.methods.insert(lower_key, entry.clone());
-
-                            // Track abstract methods or remove from inherited abstract methods if implemented
-                            if is_abstract {
-                                class_def.abstract_methods.insert(lower_key);
-                            } else {
-                                // If this method implements an inherited abstract method, remove it
-                                class_def.abstract_methods.remove(&lower_key);
-                            }
+                        // Track abstract methods or remove from inherited abstract methods if implemented
+                        if is_abstract {
+                            class_def.abstract_methods.insert(lower_key);
+                        } else {
+                            // If this method implements an inherited abstract method, remove it
+                            class_def.abstract_methods.remove(&lower_key);
                         }
                     }
                 }
@@ -6771,10 +7101,13 @@ impl VM {
                         None
                     }
                 };
+                self.decl_counter += 1;
+                let decl_order = self.decl_counter;
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.properties.insert(
                         prop_name,
                         PropertyEntry {
+                            decl_order,
                             default_value: val,
                             visibility,
                             type_hint,
@@ -6928,11 +7261,16 @@ impl VM {
                         None
                     }
                 };
+                // Materialize constant-array defaults into a real heap array.
+                let handle = self.deep_clone_val(&val);
+                self.decl_counter += 1;
+                let decl_order = self.decl_counter;
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.static_properties.insert(
                         prop_name,
                         StaticPropertyEntry {
-                            value: val,
+                            decl_order,
+                            handle,
                             visibility,
                             type_hint,
                             attributes: Vec::new(),
@@ -7003,11 +7341,7 @@ impl VM {
                 // Get the (possibly coerced) value
                 let val = self.arena.get(val_handle).value.clone();
 
-                if let Some(class_def) = self.context.classes.get_mut(&defining_class) {
-                    if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
-                        entry.value = val.clone();
-                    }
-                }
+                self.write_static_prop(defining_class, prop_name, val.clone());
 
                 let res_handle = self.arena.alloc(val);
                 self.operand_stack.push(res_handle);
@@ -7036,19 +7370,19 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                // Ensure value is a reference
+                // Rebind the property's slot to the referenced value (A::$p = &$x).
                 self.arena.get_mut(ref_handle).is_ref = true;
-                let val = self.arena.get(ref_handle).value.clone();
-
                 let resolved_class = self.resolve_class_name(class_name)?;
                 let (_, visibility, defining_class) =
                     self.find_static_prop(resolved_class, prop_name)?;
                 self.check_const_visibility(defining_class, visibility)?;
-
-                if let Some(class_def) = self.context.classes.get_mut(&defining_class) {
-                    if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
-                        entry.value = val.clone();
-                    }
+                if let Some(entry) = self
+                    .context
+                    .classes
+                    .get_mut(&defining_class)
+                    .and_then(|def| def.static_properties.get_mut(&prop_name))
+                {
+                    entry.handle = ref_handle;
                 }
 
                 self.operand_stack.push(ref_handle);
@@ -7078,13 +7412,24 @@ impl VM {
                     _ => return Err(VmError::RuntimeError("Property name must be string".into())),
                 };
 
-                let resolved_class = self.resolve_class_name(class_name)?;
-                let (val, visibility, defining_class) =
-                    self.find_static_prop(resolved_class, prop_name)?;
-                self.check_const_visibility(defining_class, visibility)?;
+                if matches!(
+                    op,
+                    OpCode::FetchStaticPropW
+                        | OpCode::FetchStaticPropRw
+                        | OpCode::FetchStaticPropFuncArg
+                ) {
+                    // Write fetch: the slot itself, so it can be modified or referenced.
+                    let handle = self.static_prop_handle(class_name, prop_name)?;
+                    self.operand_stack.push(handle);
+                } else {
+                    let resolved_class = self.resolve_class_name(class_name)?;
+                    let (val, visibility, defining_class) =
+                        self.find_static_prop(resolved_class, prop_name)?;
+                    self.check_const_visibility(defining_class, visibility)?;
 
-                let handle = self.arena.alloc(val);
-                self.operand_stack.push(handle);
+                    let handle = self.arena.alloc(val);
+                    self.operand_stack.push(handle);
+                }
             }
             OpCode::New(class_name, arg_count) => {
                 // Resolve special class names (self, parent, static)
@@ -7208,7 +7553,7 @@ impl VM {
 
                             // Call native handler
                             let _result = (native_entry.handler)(self, &args)
-                                .map_err(VmError::RuntimeError)?;
+                                .map_err(|e| self.native_error(e))?;
 
                             // Restore previous this
                             if let Some(frame) = self.frames.last_mut() {
@@ -7513,151 +7858,17 @@ impl VM {
                 }
             }
             OpCode::AssignProp(prop_name) => {
-                let val_handle = self
-                    .operand_stack
-                    .pop()
-                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-                let obj_handle = self
-                    .operand_stack
-                    .pop()
-                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-
-                let payload_handle = if let Val::Object(h) = self.arena.get(obj_handle).value {
-                    h
-                } else {
-                    return Err(VmError::RuntimeError(
-                        "Attempt to assign property on non-object".into(),
-                    ));
-                };
-
-                // Extract data
-                let (class_name, prop_exists) = {
-                    let payload_zval = self.arena.get(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                        (obj_data.class, obj_data.properties.contains_key(&prop_name))
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
-                };
-
-                let current_scope = self.get_current_class();
-                let visibility_check =
-                    self.check_prop_visibility(class_name, prop_name, current_scope);
-
-                let mut use_magic = false;
-
-                if prop_exists {
-                    if visibility_check.is_err() {
-                        use_magic = true;
-                    }
-                } else {
-                    use_magic = true;
-                }
-
-                if use_magic {
-                    let magic_set = self.context.interner.intern(b"__set");
-                    if let Some((method, _, _, defined_class)) =
-                        self.find_method(class_name, magic_set)
-                    {
-                        let prop_name_bytes = self
-                            .context
-                            .interner
-                            .lookup(prop_name)
-                            .unwrap_or(b"")
-                            .to_vec();
-                        let name_handle = self.arena.alloc(Val::String(prop_name_bytes.into()));
-
-                        let mut frame = CallFrame::new(method.chunk.clone());
-                        frame.func = Some(method.clone());
-                        frame.this = Some(obj_handle);
-                        frame.class_scope = Some(defined_class);
-                        frame.called_scope = Some(class_name);
-                        frame.discard_return = true;
-
-                        if let Some(param) = method.params.get(0) {
-                            frame.locals.insert(param.name, name_handle);
-                        }
-                        if let Some(param) = method.params.get(1) {
-                            frame.locals.insert(param.name, val_handle);
-                        }
-
-                        self.operand_stack.push(val_handle);
-                        self.push_frame(frame);
-                    } else {
-                        if let Err(e) = visibility_check {
-                            return Err(e);
-                        }
-
-                        // Check for dynamic property deprecation (PHP 8.2+)
-                        if !prop_exists {
-                            self.check_dynamic_property_write(obj_handle, prop_name);
-                        }
-
-                        // Check readonly constraint
-                        let prop_info = self.walk_inheritance_chain(class_name, |def, cls| {
-                            def.properties
-                                .get(&prop_name)
-                                .map(|entry| (entry.is_readonly, cls))
-                        });
-
-                        if let Some((is_readonly, defining_class)) = prop_info {
-                            if is_readonly {
-                                // Check if already initialized in object
-                                let payload_zval = self.arena.get(payload_handle);
-                                if let Val::ObjPayload(obj_data) = &payload_zval.value {
-                                    if let Some(current_handle) =
-                                        obj_data.properties.get(&prop_name)
-                                    {
-                                        let current_val = &self.arena.get(*current_handle).value;
-                                        if !matches!(current_val, Val::Uninitialized) {
-                                            let class_str = String::from_utf8_lossy(
-                                                self.context
-                                                    .interner
-                                                    .lookup(defining_class)
-                                                    .unwrap_or(b"???"),
-                                            );
-                                            let prop_str = String::from_utf8_lossy(
-                                                self.context
-                                                    .interner
-                                                    .lookup(prop_name)
-                                                    .unwrap_or(b"???"),
-                                            );
-                                            return Err(VmError::RuntimeError(format!(
-                                                "Cannot modify readonly property {}::${}",
-                                                class_str, prop_str
-                                            )));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Validate property type (check class definition for type hint)
-                        self.validate_property_type(class_name, prop_name, val_handle)?;
-
-                        let payload_zval = self.arena.get_mut(payload_handle);
-                        if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
-                            obj_data.properties.insert(prop_name, val_handle);
-                        }
-                        self.operand_stack.push(val_handle);
-                    }
-                } else {
-                    // Check for dynamic property deprecation (PHP 8.2+)
-                    if !prop_exists {
-                        self.check_dynamic_property_write(obj_handle, prop_name);
-                    }
-
-                    // Validate property type (check class definition for type hint)
-                    self.validate_property_type(class_name, prop_name, val_handle)?;
-
-                    let payload_zval = self.arena.get_mut(payload_handle);
-                    if let Val::ObjPayload(obj_data) = &mut payload_zval.value {
-                        obj_data.properties.insert(prop_name, val_handle);
-                    } else {
-                        return Err(VmError::RuntimeError("Invalid object payload".into()));
-                    }
-                    self.operand_stack.push(val_handle);
-                }
+                let val_handle = self.pop_operand_required()?;
+                let obj_handle = self.pop_operand_required()?;
+                self.assign_prop(obj_handle, prop_name, val_handle)?;
+            }
+            OpCode::AssignPropDynamic => {
+                let val_handle = self.pop_operand_required()?;
+                let name_handle = self.pop_operand_required()?;
+                let obj_handle = self.pop_operand_required()?;
+                let name = self.convert_to_string(name_handle)?;
+                let prop_name = self.context.interner.intern(&name);
+                self.assign_prop(obj_handle, prop_name, val_handle)?;
             }
             OpCode::CallMethod(method_name, arg_count) => {
                 self.exec_call_method(method_name, arg_count, false)?;
@@ -8577,63 +8788,57 @@ impl VM {
                 }
             }
             OpCode::FetchDimW | OpCode::FetchDimRw | OpCode::FetchDimFuncArg => {
-                let dim = self
-                    .operand_stack
-                    .pop()
-                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
-                let container_handle = self
-                    .operand_stack
-                    .pop()
-                    .ok_or(VmError::RuntimeError("Stack underflow".into()))?;
+                // [Container slot, Dim] -> [Element slot]: the element itself (created
+                // as null when missing), so it can be written or referenced.
+                let dim = self.pop_operand_required()?;
+                let container_handle = self.pop_operand_required()?;
 
-                // 1. Resolve key
-                let key = match &self.arena.get(dim).value {
-                    Val::Int(i) => ArrayKey::Int(*i),
-                    Val::String(s) => ArrayKey::Str(s.clone()),
-                    _ => ArrayKey::Str(Rc::new(Vec::<u8>::new())),
-                };
-
-                // 2. Check if we need to insert (Immutable check)
-                let needs_insert = {
-                    let container = &self.arena.get(container_handle).value;
-                    match container {
-                        Val::Null => true,
-                        Val::Array(map) => !map.map.contains_key(&key),
-                        _ => {
-                            return Err(VmError::RuntimeError(
-                                "Cannot use [] for reading/writing on non-array".into(),
-                            ));
-                        }
-                    }
-                };
-
-                if needs_insert {
-                    // 3. Alloc new value
-                    let val_handle = self.arena.alloc(Val::Null);
-
-                    // 4. Modify container
-                    let container = &mut self.arena.get_mut(container_handle).value;
-                    if let Val::Null = container {
-                        *container = Val::Array(ArrayData::new().into());
-                    }
-
-                    if let Val::Array(map) = container {
-                        Rc::make_mut(map).insert(key, val_handle);
-                        self.operand_stack.push(val_handle);
-                    } else {
-                        // Should not happen due to check above
-                        return Err(VmError::RuntimeError("Container is not an array".into()));
-                    }
+                let append = matches!(self.arena.get(dim).value, Val::AppendPlaceholder);
+                let key = if append {
+                    None
                 } else {
-                    // 5. Get existing value
-                    let container = &self.arena.get(container_handle).value;
-                    if let Val::Array(map) = container {
-                        let val_handle = map.map.get(&key).unwrap();
-                        self.operand_stack.push(*val_handle);
-                    } else {
-                        return Err(VmError::RuntimeError("Container is not an array".into()));
+                    let dim_val = self.arena.get(dim).value.clone();
+                    Some(self.array_key_from_value(&dim_val)?)
+                };
+
+                let (existing, shared) = match &self.arena.get(container_handle).value {
+                    Val::Null => (None, false),
+                    Val::Array(arr) => (
+                        key.as_ref().and_then(|k| arr.map.get(k).copied()),
+                        Rc::strong_count(arr) > 1,
+                    ),
+                    _ => {
+                        return Err(VmError::RuntimeError(
+                            "Cannot use a scalar value as an array".into(),
+                        ));
+                    }
+                };
+
+                // An element shared with another copy of the array is separated
+                // first, unless it is already a reference (those stay shared).
+                let element = match existing {
+                    Some(h) if !shared || self.arena.get(h).is_ref => h,
+                    Some(h) => {
+                        let val = self.arena.get(h).value.clone();
+                        self.arena.alloc(val)
+                    }
+                    None => self.arena.alloc(Val::Null),
+                };
+
+                let container = &mut self.arena.get_mut(container_handle).value;
+                if let Val::Null = container {
+                    *container = Val::Array(ArrayData::new().into());
+                }
+                if let Val::Array(map) = container {
+                    let map = Rc::make_mut(map);
+                    match key {
+                        Some(k) => {
+                            map.insert(k, element);
+                        }
+                        None => map.push(element),
                     }
                 }
+                self.operand_stack.push(element);
             }
             OpCode::FetchObjR | OpCode::FetchObjIs | OpCode::FetchObjUnset => {
                 let prop = self
@@ -9378,11 +9583,7 @@ impl VM {
 
                 let res = op_type.apply(current_val.clone(), val)?;
 
-                if let Some(class_def) = self.context.classes.get_mut(&defining_class) {
-                    if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
-                        entry.value = res.clone();
-                    }
-                }
+                self.write_static_prop(defining_class, prop_name, res.clone());
 
                 let res_handle = self.arena.alloc(res);
                 self.operand_stack.push(res_handle);
@@ -9394,11 +9595,7 @@ impl VM {
                 use crate::vm::inc_dec::increment_value;
                 let new_val = increment_value(current_val, &mut *self.error_handler)?;
 
-                if let Some(class_def) = self.context.classes.get_mut(&defining_class) {
-                    if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
-                        entry.value = new_val.clone();
-                    }
-                }
+                self.write_static_prop(defining_class, prop_name, new_val.clone());
 
                 let res_handle = self.arena.alloc(new_val);
                 self.operand_stack.push(res_handle);
@@ -9410,11 +9607,7 @@ impl VM {
                 use crate::vm::inc_dec::decrement_value;
                 let new_val = decrement_value(current_val, &mut *self.error_handler)?;
 
-                if let Some(class_def) = self.context.classes.get_mut(&defining_class) {
-                    if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
-                        entry.value = new_val.clone();
-                    }
-                }
+                self.write_static_prop(defining_class, prop_name, new_val.clone());
 
                 let res_handle = self.arena.alloc(new_val);
                 self.operand_stack.push(res_handle);
@@ -9426,11 +9619,7 @@ impl VM {
                 use crate::vm::inc_dec::increment_value;
                 let new_val = increment_value(current_val.clone(), &mut *self.error_handler)?;
 
-                if let Some(class_def) = self.context.classes.get_mut(&defining_class) {
-                    if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
-                        entry.value = new_val;
-                    }
-                }
+                self.write_static_prop(defining_class, prop_name, new_val);
 
                 // Post-increment returns the OLD value
                 let res_handle = self.arena.alloc(current_val);
@@ -9443,11 +9632,7 @@ impl VM {
                 use crate::vm::inc_dec::decrement_value;
                 let new_val = decrement_value(current_val.clone(), &mut *self.error_handler)?;
 
-                if let Some(class_def) = self.context.classes.get_mut(&defining_class) {
-                    if let Some(entry) = class_def.static_properties.get_mut(&prop_name) {
-                        entry.value = new_val;
-                    }
-                }
+                self.write_static_prop(defining_class, prop_name, new_val);
 
                 // Post-decrement returns the OLD value
                 let res_handle = self.arena.alloc(current_val);
@@ -10783,7 +10968,6 @@ impl VM {
             // Class/function declaration opcodes that may need implementation
             OpCode::DeclareLambdaFunction
             | OpCode::DeclareClassDelayed
-            | OpCode::DeclareAnonClass
             | OpCode::DeclareAttributedConst => {
                 return Err(VmError::RuntimeError(format!(
                     "{:?} opcode not implemented - declaration semantics need modeling",
@@ -11525,7 +11709,7 @@ impl VM {
     }
 
     #[inline]
-    fn array_key_from_value(&self, value: &Val) -> Result<ArrayKey, VmError> {
+    pub(crate) fn array_key_from_value(&self, value: &Val) -> Result<ArrayKey, VmError> {
         match value {
             Val::Int(i) => Ok(ArrayKey::Int(*i)),
             Val::Bool(b) => Ok(ArrayKey::Int(if *b { 1 } else { 0 })),
@@ -12204,7 +12388,7 @@ impl VM {
             }
 
             // Call native handler
-            let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+            let result = (native_entry.handler)(self, &args).map_err(|e| self.native_error(e))?;
 
             // Restore previous this
             if let Some(frame) = self.frames.get_mut(frame_idx) {
@@ -12357,7 +12541,7 @@ impl VM {
                 frame.class_scope = Some(native_entry.declaring_class);
             }
 
-            let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+            let result = (native_entry.handler)(self, &args).map_err(|e| self.native_error(e))?;
 
             if let Some(frame) = self.frames.get_mut(frame_idx) {
                 frame.called_scope = saved_called_scope;

@@ -3,142 +3,191 @@ use crate::vm::engine::VM;
 use std::rc::Rc;
 
 pub fn php_var_dump(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    for arg in args {
-        // Check for __debugInfo
-        let class_sym = if let Val::Object(obj_handle) = vm.arena.get(*arg).value {
-            if let Val::ObjPayload(obj_data) = &vm.arena.get(obj_handle).value {
-                Some((obj_handle, obj_data.class))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some((obj_handle, class)) = class_sym {
-            let debug_info_sym = vm.context.interner.intern(b"__debugInfo");
-            if let Some((method, _, _, _)) = vm.find_method(class, debug_info_sym) {
-                let mut frame = crate::vm::frame::CallFrame::new(method.chunk.clone());
-                frame.func = Some(method.clone());
-                frame.this = Some(obj_handle);
-                frame.class_scope = Some(class);
-
-                let res = vm.run_frame(frame);
-                if let Ok(res_handle) = res {
-                    let res_val = vm.arena.get(res_handle);
-                    if let Val::Array(arr) = &res_val.value {
-                        println!(
-                            "object({}) ({}) {{",
-                            String::from_utf8_lossy(
-                                vm.context.interner.lookup(class).unwrap_or(b"")
-                            ),
-                            arr.map.len()
-                        );
-                        for (key, val_handle) in arr.map.iter() {
-                            match key {
-                                crate::core::value::ArrayKey::Int(i) => print!("  [{}]=>\n", i),
-                                crate::core::value::ArrayKey::Str(s) => {
-                                    print!("  [\"{}\"]=>\n", String::from_utf8_lossy(s))
-                                }
-                            }
-                            dump_value(vm, *val_handle, 1);
-                        }
-                        println!("}}");
-                        continue;
-                    }
-                }
-            }
-        }
-
-        dump_value(vm, *arg, 0);
+    for &arg in args {
+        let mut out = Vec::new();
+        let mut dumper = Dumper { out: &mut out, visiting: Vec::new() };
+        dumper.value(vm, arg, 0)?;
+        vm.print_bytes(&out)?;
     }
     Ok(vm.arena.alloc(Val::Null))
 }
 
-fn dump_value(vm: &VM, handle: Handle, depth: usize) {
-    let val = vm.arena.get(handle);
-    let indent = "  ".repeat(depth);
+/// var_dump's writer.
+/// Reference: $PHP_SRC_PATH/ext/standard/var.c - php_var_dump
+struct Dumper<'a> {
+    out: &'a mut Vec<u8>,
+    /// Arrays and objects being dumped, to print *RECURSION* on a cycle.
+    visiting: Vec<Handle>,
+}
 
-    match &val.value {
-        Val::String(s) => {
-            println!(
-                "{}string({}) \"{}\"",
-                indent,
-                s.len(),
-                String::from_utf8_lossy(s)
-            );
-        }
-        Val::Int(i) => {
-            println!("{}int({})", indent, i);
-        }
-        Val::Float(f) => {
-            println!("{}float({})", indent, f);
-        }
-        Val::Bool(b) => {
-            println!("{}bool({})", indent, b);
-        }
-        Val::Null => {
-            println!("{}NULL", indent);
-        }
-        Val::ConstArray(arr) => {
-            // ConstArray shouldn't appear at runtime, but handle it just in case
-            println!("{}array({}) {{ /* const array */ }}", indent, arr.len());
-        }
-        Val::Array(arr) => {
-            println!("{}array({}) {{", indent, arr.map.len());
-            for (key, val_handle) in arr.map.iter() {
-                match key {
-                    crate::core::value::ArrayKey::Int(i) => print!("{}  [{}]=>\n", indent, i),
-                    crate::core::value::ArrayKey::Str(s) => {
-                        print!("{}  [\"{}\"]=>\n", indent, String::from_utf8_lossy(s))
-                    }
-                }
-                dump_value(vm, *val_handle, depth + 1);
+impl Dumper<'_> {
+    fn line(&mut self, indent: usize, text: &[u8]) {
+        self.out.extend(std::iter::repeat_n(b' ', indent));
+        self.out.extend_from_slice(text);
+        self.out.push(b'\n');
+    }
+
+    fn key(&mut self, indent: usize, key: &crate::core::value::ArrayKey) {
+        let mut text = Vec::new();
+        match key {
+            crate::core::value::ArrayKey::Int(i) => text.extend_from_slice(format!("[{}]=>", i).as_bytes()),
+            crate::core::value::ArrayKey::Str(s) => {
+                text.extend_from_slice(b"[\"");
+                text.extend_from_slice(s);
+                text.extend_from_slice(b"\"]=>");
             }
-            println!("{}}}", indent);
         }
-        Val::Object(handle) => {
-            // Dereference the object payload
-            let payload_val = vm.arena.get(*handle);
-            if let Val::ObjPayload(obj) = &payload_val.value {
-                let class_name = vm
-                    .context
-                    .interner
-                    .lookup(obj.class)
-                    .unwrap_or(b"<unknown>");
-                println!(
-                    "{}object({})#{} ({}) {{",
-                    indent,
-                    String::from_utf8_lossy(class_name),
-                    handle.index(),
-                    obj.properties.len()
+        self.line(indent, &text);
+    }
+
+    fn value(&mut self, vm: &mut VM, handle: Handle, indent: usize) -> Result<(), String> {
+        let val = vm.arena.get(handle).value.clone();
+        match val {
+            Val::Null | Val::AppendPlaceholder => self.line(indent, b"NULL"),
+            Val::Uninitialized => self.line(indent, b"uninitialized"),
+            Val::Bool(b) => self.line(indent, if b { b"bool(true)" } else { b"bool(false)" }),
+            Val::Int(i) => self.line(indent, format!("int({})", i).as_bytes()),
+            Val::Float(f) => {
+                let text = crate::core::value::php_float_to_string(
+                    f,
+                    crate::core::value::FloatPrecision::Shortest,
+                    'E',
                 );
-                for (prop_sym, prop_handle) in &obj.properties {
-                    let prop_name = vm
-                        .context
-                        .interner
-                        .lookup(*prop_sym)
-                        .unwrap_or(b"<unknown>");
-                    println!("{}  [\"{}\"]=>", indent, String::from_utf8_lossy(prop_name));
-                    dump_value(vm, *prop_handle, depth + 1);
+                self.line(indent, format!("float({})", text).as_bytes());
+            }
+            Val::String(s) => {
+                let mut text = format!("string({}) \"", s.len()).into_bytes();
+                text.extend_from_slice(&s);
+                text.push(b'"');
+                self.line(indent, &text);
+            }
+            Val::Resource(_) => self.line(indent, b"resource(0) of type (Unknown)"),
+            Val::ConstArray(_) | Val::ObjPayload(_) => self.line(indent, b"NULL"),
+            Val::Array(arr) => {
+                if self.visiting.contains(&handle) {
+                    self.line(indent, b"*RECURSION*");
+                    return Ok(());
                 }
-                println!("{}}}", indent);
+                self.line(indent, format!("array({}) {{", arr.map.len()).as_bytes());
+                self.visiting.push(handle);
+                for (key, &element) in arr.map.iter() {
+                    self.key(indent + 2, key);
+                    self.value(vm, element, indent + 2)?;
+                }
+                self.visiting.pop();
+                self.line(indent, b"}");
+            }
+            Val::Object(payload) => self.object(vm, handle, payload, indent)?,
+        }
+        Ok(())
+    }
+
+    fn object(&mut self, vm: &mut VM, handle: Handle, payload: Handle, indent: usize) -> Result<(), String> {
+        let (class, props) = match &vm.arena.get(payload).value {
+            Val::ObjPayload(obj) => (obj.class, obj.properties.clone()),
+            _ => {
+                self.line(indent, b"NULL");
+                return Ok(());
+            }
+        };
+        let class_name = vm.context.interner.lookup(class).unwrap_or(b"").to_vec();
+        let shown = display_class_name(&class_name).to_vec();
+
+        if let Some(def) = vm.context.classes.get(&class).filter(|d| d.is_enum) {
+            let case = def
+                .enum_cases
+                .iter()
+                .find(|c| vm.arena.get(c.handle).value == Val::Object(payload))
+                .and_then(|c| vm.context.interner.lookup(c.name))
+                .unwrap_or(b"")
+                .to_vec();
+            let mut text = b"enum(".to_vec();
+            text.extend_from_slice(&shown);
+            text.extend_from_slice(b"::");
+            text.extend_from_slice(&case);
+            text.push(b')');
+            self.line(indent, &text);
+            return Ok(());
+        }
+        if self.visiting.contains(&payload) {
+            self.line(indent, b"*RECURSION*");
+            return Ok(());
+        }
+
+        // __debugInfo() replaces the property table.
+        let debug_info = vm.context.interner.intern(b"__debugInfo");
+        let entries: Vec<(Vec<u8>, Handle, Option<crate::core::value::Symbol>)> = if vm.find_method(class, debug_info).is_some() {
+            let res = vm
+                .call_method(handle, debug_info, &[])
+                .map_err(|e| format!("{:?}", e))?;
+            match vm.arena.get(res).value.clone() {
+                Val::Array(arr) => arr
+                    .map
+                    .iter()
+                    .map(|(k, v)| {
+                        let name = match k {
+                            crate::core::value::ArrayKey::Int(i) => format!("[{}]=>", i).into_bytes(),
+                            crate::core::value::ArrayKey::Str(s) => {
+                                [b"[\"".as_slice(), s, b"\"]=>"].concat()
+                            }
+                        };
+                        (name, *v, None)
+                    })
+                    .collect(),
+                _ => {
+                    let msg = "__debuginfo() must return an array";
+                    return Err(vm.throw_from_native(b"Error", msg));
+                }
+            }
+        } else {
+            props
+                .iter()
+                .map(|(prop, v)| {
+                    let name = vm.context.interner.lookup(*prop).unwrap_or(b"").to_vec();
+                    let owner = vm.walk_inheritance_chain(class, |def, cls| {
+                        def.properties.get(prop).map(|entry| (cls, entry.visibility))
+                    });
+                    let label = match owner {
+                        Some((_, crate::core::value::Visibility::Protected)) => {
+                            [b"[\"".as_slice(), &name, b"\":protected]=>"].concat()
+                        }
+                        Some((cls, crate::core::value::Visibility::Private)) => {
+                            let cls = vm.context.interner.lookup(cls).unwrap_or(b"");
+                            [b"[\"".as_slice(), &name, b"\":\"", display_class_name(cls), b"\":private]=>"].concat()
+                        }
+                        _ => [b"[\"".as_slice(), &name, b"\"]=>"].concat(),
+                    };
+                    (label, *v, Some(*prop))
+                })
+                .collect()
+        };
+
+        let initialized = entries
+            .iter()
+            .filter(|(_, v, _)| !matches!(vm.arena.get(*v).value, Val::Uninitialized))
+            .count();
+        let mut header = b"object(".to_vec();
+        header.extend_from_slice(&shown);
+        header.extend_from_slice(format!(")#{} ({}) {{", payload.index(), initialized).as_bytes());
+        self.line(indent, &header);
+        self.visiting.push(payload);
+        for (label, value, prop) in entries {
+            self.line(indent + 2, &label);
+            if let (Val::Uninitialized, Some(prop)) = (&vm.arena.get(value).value, prop) {
+                let ty = vm
+                    .walk_inheritance_chain(class, |def, _| {
+                        def.properties.get(&prop).and_then(|e| e.type_hint.clone())
+                    })
+                    .map(|t| vm.type_hint_to_string(&t))
+                    .unwrap_or_else(|| "mixed".into());
+                self.line(indent + 2, format!("uninitialized({})", ty).as_bytes());
             } else {
-                println!("{}object(INVALID)", indent);
+                self.value(vm, value, indent + 2)?;
             }
         }
-        Val::ObjPayload(_) => {
-            println!("{}ObjPayload(Internal)", indent);
-        }
-        Val::Resource(_) => {
-            println!("{}resource", indent);
-        }
-        Val::AppendPlaceholder => {
-            println!("{}AppendPlaceholder", indent);
-        }
-        Val::Uninitialized => {
-            println!("{}uninitialized", indent);
-        }
+        self.visiting.pop();
+        self.line(indent, b"}");
+        Ok(())
     }
 }
 
@@ -164,7 +213,7 @@ pub fn php_var_export(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if return_res {
         Ok(vm.arena.alloc(Val::String(output.into_bytes().into())))
     } else {
-        print!("{}", output);
+        vm.print_bytes(output.as_bytes())?;
         Ok(vm.arena.alloc(Val::Null))
     }
 }
@@ -187,7 +236,12 @@ fn export_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
             output.push_str(&i.to_string());
         }
         Val::Float(f) => {
-            output.push_str(&f.to_string());
+            let repr = crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::Shortest, 'E');
+            let integral = repr.bytes().all(|b| b.is_ascii_digit() || b == b'-');
+            output.push_str(&repr);
+            if integral {
+                output.push_str(".0");
+            }
         }
         Val::Bool(b) => {
             output.push_str(if *b { "true" } else { "false" });
@@ -213,6 +267,12 @@ fn export_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                     }
                 }
                 output.push_str(" => ");
+                // Nested arrays and objects start on their own line.
+                if matches!(vm.arena.get(*val_handle).value, Val::Array(_) | Val::Object(_)) {
+                    output.push('\n');
+                    output.push_str(&indent);
+                    output.push_str("  ");
+                }
                 export_value(vm, *val_handle, depth + 1, output);
                 output.push_str(",\n");
             }
@@ -296,7 +356,7 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
             output.push_str(&i.to_string());
         }
         Val::Float(f) => {
-            output.push_str(&f.to_string());
+            output.push_str(&crate::core::value::php_float_to_string(*f, crate::core::value::FloatPrecision::ECHO, 'E'));
         }
         Val::Bool(b) => {
             output.push_str(if *b { "1" } else { "" });
@@ -348,7 +408,7 @@ fn print_r_value(vm: &VM, handle: Handle, depth: usize, output: &mut String) {
                     .interner
                     .lookup(obj.class)
                     .unwrap_or(b"<unknown>");
-                output.push_str(&String::from_utf8_lossy(class_name));
+                output.push_str(&String::from_utf8_lossy(display_class_name(class_name)));
                 output.push_str(" Object\n");
                 output.push_str(&indent);
                 output.push_str("(\n");
@@ -860,4 +920,11 @@ pub fn php_error_get_last(vm: &mut VM, args: &[Handle]) -> Result<Handle, String
         // No error recorded yet, return null
         Ok(vm.arena.alloc(Val::Null))
     }
+}
+
+
+/// A class name as var_dump and print_r show it: an anonymous class's name
+/// ends at the NUL that precedes its file and line.
+fn display_class_name(name: &[u8]) -> &[u8] {
+    name.split(|b| *b == 0).next().unwrap_or(name)
 }

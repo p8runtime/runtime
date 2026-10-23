@@ -243,7 +243,7 @@ impl AssignOpType {
             match val {
                 Val::String(s) => String::from_utf8_lossy(&s).to_string(),
                 Val::Int(i) => i.to_string(),
-                Val::Float(f) => f.to_string(),
+                Val::Float(f) => crate::core::value::php_float_to_string(f, crate::core::value::FloatPrecision::ECHO, 'E'),
                 Val::Bool(b) => {
                     if b {
                         "1".parse().unwrap()

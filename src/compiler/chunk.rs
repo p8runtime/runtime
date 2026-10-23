@@ -72,6 +72,9 @@ pub struct CatchEntry {
     pub catch_type: Option<Symbol>,  // None for catch-all
     pub finally_target: Option<u32>, // Finally block target
     pub finally_end: Option<u32>,    // End of finally block (exclusive)
+    /// Operand-stack values live at the try statement (above the frame's base);
+    /// anything above them is dropped when the catch is entered.
+    pub stack_depth: u32,
 }
 
 #[derive(Debug, Default)]

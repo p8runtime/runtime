@@ -64,6 +64,23 @@ pub fn php_spl_autoload_register(vm: &mut VM, args: &[Handle]) -> Result<Handle,
     Ok(vm.arena.alloc(Val::Bool(true)))
 }
 
+/// spl_object_id() - the object's id, as var_dump shows it after `#`
+pub fn php_spl_object_id(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
+    let Some(&target) = args.first() else {
+        return Err("spl_object_id() expects exactly 1 argument, 0 given".to_string());
+    };
+    match vm.arena.get(target).value {
+        Val::Object(payload) => Ok(vm.arena.alloc(Val::Int(i64::from(payload.index())))),
+        ref other => {
+            let msg = format!(
+                "spl_object_id(): Argument #1 ($object) must be of type object, {} given",
+                other.type_name()
+            );
+            Err(vm.throw_from_native(b"TypeError", &msg))
+        }
+    }
+}
+
 /// spl_object_hash() - Retrieve a unique identifier for an object
 pub fn php_spl_object_hash(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     if args.is_empty() {
@@ -83,7 +100,8 @@ pub fn php_spl_object_hash(vm: &mut VM, args: &[Handle]) -> Result<Handle, Strin
         }
     };
 
-    let hash = format!("{:016x}", object_handle.index());
+    // PHP: the object id as 16 hex digits, then 16 zeros
+    let hash = format!("{:016x}{:016x}", object_handle.index(), 0);
     let hash_bytes = Rc::new(hash.into_bytes());
     Ok(vm.arena.alloc(Val::String(hash_bytes)))
 }

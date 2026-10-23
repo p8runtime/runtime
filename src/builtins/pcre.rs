@@ -333,7 +333,7 @@ pub fn preg_replace_callback(vm: &mut VM, args: &[Handle]) -> Result<Handle, Str
             let matches_handle = vm.arena.alloc(Val::Array(Rc::new(match_array)));
             let callback_result = vm
                 .call_callable(callback_handle, smallvec![matches_handle])
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| vm.callback_error(e))?;
             let replacement = vm.value_to_string(callback_result)?;
 
             result.extend_from_slice(&replacement);

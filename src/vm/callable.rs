@@ -153,7 +153,7 @@ impl VM {
             // Set caller's strict_types mode for builtin parameter validation
             // Reference: $PHP_SRC_PATH/Zend/zend_compile.h - ZEND_ARG_USES_STRICT_TYPES()
             self.builtin_call_strict = callsite_strict_types;
-            let res = handler(self, &args).map_err(VmError::RuntimeError)?;
+            let res = handler(self, &args).map_err(|e| self.native_error(e))?;
             self.builtin_call_strict = false; // Reset after call
             self.operand_stack.push(res);
             return Ok(());
@@ -275,7 +275,7 @@ impl VM {
                 // Set caller's strict_types mode for builtin parameter validation
                 self.builtin_call_strict = callsite_strict_types;
                 // Call native handler
-                let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+                let result = (native_entry.handler)(self, &args).map_err(|e| self.native_error(e))?;
                 self.builtin_call_strict = false; // Reset after call
 
                 // Restore previous this
@@ -381,7 +381,7 @@ impl VM {
                 native_entry.visibility,
                 Some(method_sym),
             )?;
-            let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+            let result = (native_entry.handler)(self, &args).map_err(|e| self.native_error(e))?;
             self.operand_stack.push(result);
             return Ok(());
         }
@@ -440,7 +440,7 @@ impl VM {
                 }
 
                 // Call native handler
-                let result = (native_entry.handler)(self, &args).map_err(VmError::RuntimeError)?;
+                let result = (native_entry.handler)(self, &args).map_err(|e| self.native_error(e))?;
 
                 // Restore previous this
                 if let Some(frame) = self.frames.get_mut(frame_idx) {
