@@ -1271,7 +1271,9 @@ impl VM {
         })
     }
 
-    pub(crate) fn call_native_method_simple(
+    /// Call a zero-argument method on an object: user-defined methods first,
+    /// then native ones (Iterator/Countable protocol calls).
+    pub(crate) fn call_method_simple(
         &mut self,
         obj_handle: Handle,
         method_name: Symbol,
@@ -1286,6 +1288,26 @@ impl VM {
             return Err(VmError::RuntimeError("Not an object".into()));
         };
 
+        if let Some((user_func, _, _, declaring_class)) = self.find_method(class_name, method_name)
+        {
+            let saved_return_value = self.last_return_value.take();
+            let mut frame = CallFrame::new(user_func.chunk.clone());
+            frame.func = Some(user_func.clone());
+            frame.this = Some(obj_handle);
+            frame.class_scope = Some(declaring_class);
+            frame.called_scope = Some(class_name);
+            frame.stack_base = Some(self.operand_stack.len());
+            let depth = self.frames.len();
+            self.push_frame(frame);
+            self.run_loop(depth)?;
+            let result = self.last_return_value.take();
+            self.last_return_value = saved_return_value;
+            return Ok(match result {
+                Some(h) => h,
+                None => self.arena.alloc(Val::Null),
+            });
+        }
+
         if let Some(native_entry) = self.find_native_method(class_name, method_name) {
             let frame_idx = self.frames.len().saturating_sub(1);
             let saved_this = self.frames.get(frame_idx).and_then(|f| f.this);
@@ -1299,7 +1321,7 @@ impl VM {
             Ok(result)
         } else {
             Err(VmError::RuntimeError(format!(
-                "Native method not found: {}::{}",
+                "Method not found: {}::{}",
                 String::from_utf8_lossy(
                     self.context
                         .interner
@@ -4066,6 +4088,7 @@ impl VM {
                     is_interface: false,
                     is_trait: false,
                     is_abstract: false,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -5616,9 +5639,9 @@ impl VM {
                                     let rewind_sym = self.context.interner.intern(b"rewind");
                                     let valid_sym = self.context.interner.intern(b"valid");
 
-                                    self.call_native_method_simple(iterable_handle, rewind_sym)?;
+                                    self.call_method_simple(iterable_handle, rewind_sym)?;
                                     let is_valid =
-                                        self.call_native_method_simple(iterable_handle, valid_sym)?;
+                                        self.call_method_simple(iterable_handle, valid_sym)?;
 
                                     if let Val::Bool(false) = self.arena.get(is_valid).value {
                                         self.operand_stack.pop(); // Pop object
@@ -5722,7 +5745,7 @@ impl VM {
                                 if self.is_instance_of(iterable_handle, iterator_sym) {
                                     let valid_sym = self.context.interner.intern(b"valid");
                                     let is_valid =
-                                        self.call_native_method_simple(iterable_handle, valid_sym)?;
+                                        self.call_method_simple(iterable_handle, valid_sym)?;
 
                                     if let Val::Bool(false) = self.arena.get(is_valid).value {
                                         self.operand_stack.pop(); // Pop Index
@@ -5814,7 +5837,7 @@ impl VM {
                                 let iterator_sym = self.context.interner.intern(b"Iterator");
                                 if self.is_instance_of(iterable_handle, iterator_sym) {
                                     let next_sym = self.context.interner.intern(b"next");
-                                    self.call_native_method_simple(iterable_handle, next_sym)?;
+                                    self.call_method_simple(iterable_handle, next_sym)?;
                                     // Push dummy index back
                                     self.operand_stack.push(idx_handle);
                                     handled = true;
@@ -5900,7 +5923,7 @@ impl VM {
                                 if self.is_instance_of(iterable_handle, iterator_sym) {
                                     let current_sym = self.context.interner.intern(b"current");
                                     let val_handle = self
-                                        .call_native_method_simple(iterable_handle, current_sym)?;
+                                        .call_method_simple(iterable_handle, current_sym)?;
                                     let frame = self.frames.last_mut().unwrap();
                                     frame.locals.insert(sym, val_handle);
                                     handled = true;
@@ -6034,7 +6057,7 @@ impl VM {
                                 if self.is_instance_of(array_handle, iterator_sym) {
                                     let key_sym = self.context.interner.intern(b"key");
                                     let key_handle =
-                                        self.call_native_method_simple(array_handle, key_sym)?;
+                                        self.call_method_simple(array_handle, key_sym)?;
                                     let frame = self.frames.last_mut().unwrap();
                                     frame.locals.insert(sym, key_handle);
                                     handled = true;
@@ -6209,6 +6232,7 @@ impl VM {
                     is_interface: false,
                     is_trait: false,
                     is_abstract: false,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -6237,6 +6261,7 @@ impl VM {
                     is_interface: false,
                     is_trait: false,
                     is_abstract: false,
+                    is_final: true,
                     is_enum: true,
                     enum_backed_type,
                     interfaces: Vec::new(),
@@ -6305,6 +6330,7 @@ impl VM {
                     is_interface: true,
                     is_trait: false,
                     is_abstract: true,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -6327,6 +6353,7 @@ impl VM {
                     is_interface: false,
                     is_trait: true,
                     is_abstract: false,
+                    is_final: false,
                     is_enum: false,
                     enum_backed_type: None,
                     interfaces: Vec::new(),
@@ -6351,6 +6378,24 @@ impl VM {
             OpCode::FinalizeClass(class_name) => {
                 // Validate interface implementation after all methods are defined
                 if let Some(class_def) = self.context.classes.get(&class_name) {
+                    if let Some(parent_sym) = class_def.parent
+                        && let Some(parent_def) = self.context.classes.get(&parent_sym)
+                        && parent_def.is_final
+                    {
+                        let name = |sym| {
+                            self.context
+                                .interner
+                                .lookup(sym)
+                                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                                .unwrap_or_else(|| format!("{:?}", sym))
+                        };
+                        return Err(VmError::RuntimeError(format!(
+                            "Class {} cannot extend final class {}",
+                            name(class_name),
+                            name(parent_sym)
+                        )));
+                    }
+
                     for &interface_name in &class_def.interfaces.clone() {
                         self.validate_interface_implementation(class_name, interface_name)?;
                     }
@@ -6499,6 +6544,11 @@ impl VM {
             OpCode::MarkAbstract(class_name) => {
                 if let Some(class_def) = self.context.classes.get_mut(&class_name) {
                     class_def.is_abstract = true;
+                }
+            }
+            OpCode::MarkFinal(class_name) => {
+                if let Some(class_def) = self.context.classes.get_mut(&class_name) {
+                    class_def.is_final = true;
                 }
             }
             OpCode::UseTrait(class_name, trait_name) => {

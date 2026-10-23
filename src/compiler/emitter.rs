@@ -1009,6 +1009,12 @@ impl<'src> Emitter<'src> {
                     self.chunk.code.push(OpCode::MarkAbstract(class_sym));
                 }
 
+                // Check if class is final
+                let is_final = modifiers.iter().any(|m| m.kind == TokenKind::Final);
+                if is_final {
+                    self.chunk.code.push(OpCode::MarkFinal(class_sym));
+                }
+
                 for interface in *implements {
                     let interface_str = self.get_text(interface.span);
                     let interface_sym = self.interner.intern(interface_str);

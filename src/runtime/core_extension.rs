@@ -343,6 +343,12 @@ impl Extension for CoreExtension {
         registry.register_function(b"is_float", variable::php_is_float);
         registry.register_function(b"is_numeric", variable::php_is_numeric);
         registry.register_function(b"is_scalar", variable::php_is_scalar);
+        registry.register_function(b"is_resource", variable::php_is_resource);
+        registry.register_function(b"strval", variable::php_strval);
+        registry.register_function(b"intval", variable::php_intval);
+        registry.register_function(b"floatval", variable::php_floatval);
+        registry.register_function(b"doubleval", variable::php_floatval);
+        registry.register_function(b"boolval", variable::php_boolval);
         registry.register_function(b"define", variable::php_define);
         registry.register_function(b"defined", variable::php_defined);
         registry.register_function(b"constant", variable::php_constant);
@@ -444,8 +450,17 @@ impl Extension for CoreExtension {
         registry.register_function(b"get_called_class", class::php_get_called_class);
 
         // PCRE functions
-        registry.register_function(b"preg_match", pcre::preg_match);
-        registry.register_function(b"preg_replace", pcre::preg_replace);
+        registry.register_function_with_by_ref(b"preg_match", pcre::preg_match, vec![2]);
+        registry.register_function_with_by_ref(b"preg_match_all", pcre::preg_match_all, vec![2]);
+        registry.register_function_with_by_ref(b"preg_replace", pcre::preg_replace, vec![4]);
+        registry.register_function(b"preg_replace_callback", pcre::preg_replace_callback);
+        registry.register_constant(b"PREG_PATTERN_ORDER", Val::Int(1));
+        registry.register_constant(b"PREG_SET_ORDER", Val::Int(2));
+        registry.register_constant(b"PREG_OFFSET_CAPTURE", Val::Int(1 << 8));
+        registry.register_constant(b"PREG_UNMATCHED_AS_NULL", Val::Int(1 << 9));
+        registry.register_constant(b"PREG_SPLIT_NO_EMPTY", Val::Int(1));
+        registry.register_constant(b"PREG_SPLIT_DELIM_CAPTURE", Val::Int(1 << 1));
+        registry.register_constant(b"PREG_SPLIT_OFFSET_CAPTURE", Val::Int(1 << 2));
         registry.register_function(b"preg_split", pcre::preg_split);
         registry.register_function(b"preg_quote", pcre::preg_quote);
 
@@ -516,6 +531,10 @@ impl Extension for CoreExtension {
         registry.register_function(b"mkdir", filesystem::php_mkdir);
         registry.register_function(b"rmdir", filesystem::php_rmdir);
         registry.register_function(b"scandir", filesystem::php_scandir);
+        registry.register_function(b"opendir", filesystem::php_opendir);
+        registry.register_function(b"readdir", filesystem::php_readdir);
+        registry.register_function(b"rewinddir", filesystem::php_rewinddir);
+        registry.register_function(b"closedir", filesystem::php_closedir);
         registry.register_function(b"getcwd", filesystem::php_getcwd);
         registry.register_function(b"chdir", filesystem::php_chdir);
 

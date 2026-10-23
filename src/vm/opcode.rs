@@ -123,6 +123,7 @@ pub enum OpCode {
     AllowDynamicProperties(Symbol), // Mark class as allowing dynamic properties (for #[AllowDynamicProperties])
     AddClassAttribute(Symbol, u16), // (class_name, attr_const_idx)
     MarkAbstract(Symbol),           // Mark class as abstract
+    MarkFinal(Symbol),              // Mark class as final
     FinalizeClass(Symbol), // Validate class after all methods are defined (interfaces, abstract methods)
     DefMethod(Symbol, Symbol, u32, Visibility, bool, bool), // (class_name, method_name, func_idx, visibility, is_static, is_abstract)
     DefProp(Symbol, Symbol, u16, Visibility, u32, bool), // (class_name, prop_name, default_val_idx, visibility, type_hint_idx, is_readonly)

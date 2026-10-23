@@ -198,7 +198,8 @@ pub fn php_extension_loaded(vm: &mut VM, args: &[Handle]) -> Result<Handle, Stri
 
     // Fallback to hardcoded always-on extensions
     let is_loaded = is_loaded || {
-        const ALWAYS_ON: [&str; 2] = ["core", "standard"];
+        // Built into the core extension rather than registered separately.
+        const ALWAYS_ON: [&str; 4] = ["core", "standard", "pcre", "bcmath"];
         ALWAYS_ON.contains(&ext_name_str.as_str())
     };
 

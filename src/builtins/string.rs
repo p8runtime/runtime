@@ -148,8 +148,8 @@ pub fn php_implode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
 }
 
 pub fn php_explode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
-    if args.len() != 2 {
-        return Err("explode() expects exactly 2 parameters".into());
+    if args.len() < 2 || args.len() > 3 {
+        return Err("explode() expects 2 or 3 parameters".into());
     }
 
     let sep = match &vm.arena.get(args[0]).value {
@@ -166,6 +166,17 @@ pub fn php_explode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
         _ => return Err("explode(): Parameter 2 must be string".into()),
     };
 
+    // Get limit parameter (optional, default is i64::MAX)
+    let limit = if args.len() >= 3 {
+        match &vm.arena.get(args[2]).value {
+            Val::Int(i) => *i,
+            Val::Float(f) => *f as i64,
+            _ => i64::MAX,
+        }
+    } else {
+        i64::MAX
+    };
+
     // Naive implementation for Vec<u8>
     let mut result_arr = indexmap::IndexMap::new();
     let mut idx = 0;
@@ -180,14 +191,52 @@ pub fn php_explode(vm: &mut VM, args: &[Handle]) -> Result<Handle, String> {
     let mut current_slice = &s[..];
     let mut offset = 0;
 
-    while let Some(pos) = find_subsequence(current_slice, &sep) {
-        let part = &current_slice[..pos];
-        let val = vm.arena.alloc(Val::String(part.to_vec().into()));
-        result_arr.insert(crate::core::value::ArrayKey::Int(idx), val);
-        idx += 1;
+    // Handle positive limit
+    if limit > 0 {
+        while let Some(pos) = find_subsequence(current_slice, &sep) {
+            if idx >= limit - 1 {
+                // Reached limit-1, put rest in last element
+                break;
+            }
+            let part = &current_slice[..pos];
+            let val = vm.arena.alloc(Val::String(part.to_vec().into()));
+            result_arr.insert(crate::core::value::ArrayKey::Int(idx), val);
+            idx += 1;
 
-        offset += pos + sep.len();
-        current_slice = &s[offset..];
+            offset += pos + sep.len();
+            current_slice = &s[offset..];
+        }
+    } else if limit < 0 {
+        // Negative limit: remove last -limit elements
+        let mut temp_parts = Vec::new();
+        while let Some(pos) = find_subsequence(current_slice, &sep) {
+            let part = current_slice[..pos].to_vec();
+            temp_parts.push(part);
+            offset += pos + sep.len();
+            current_slice = &s[offset..];
+        }
+        temp_parts.push(current_slice.to_vec());
+        
+        // Remove last -limit elements
+        let remove_count = (-limit) as usize;
+        if temp_parts.len() > remove_count {
+            temp_parts.truncate(temp_parts.len() - remove_count);
+            for part in temp_parts {
+                let val = vm.arena.alloc(Val::String(part.into()));
+                result_arr.insert(crate::core::value::ArrayKey::Int(idx), val);
+                idx += 1;
+            }
+        }
+        return Ok(vm.arena.alloc(Val::Array(
+            crate::core::value::ArrayData::from(result_arr).into(),
+        )));
+    } else {
+        // limit == 0 acts like limit == 1 in PHP
+        let val = vm.arena.alloc(Val::String(Rc::new(s.to_vec())));
+        result_arr.insert(crate::core::value::ArrayKey::Int(0), val);
+        return Ok(vm.arena.alloc(Val::Array(
+            crate::core::value::ArrayData::from(result_arr).into(),
+        )));
     }
 
     // Last part
