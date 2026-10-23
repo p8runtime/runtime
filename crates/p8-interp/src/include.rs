@@ -17,6 +17,8 @@ use std::sync::Arc;
 /// Compiles a file's source: the embedder's compiler, given to a context.
 pub trait Loader {
     fn load(&self, source: &[u8], file: &str) -> Result<Arc<Program>, LoadError>;
+    /// eval()'s code (no `<?php`; it returns null unless it returns).
+    fn load_eval(&self, code: &[u8], file: &str) -> Result<Arc<Program>, LoadError>;
 }
 
 /// A file that does not compile.
@@ -82,6 +84,31 @@ impl Context<'_> {
         }
         self.early_bind(&program.classes)?;
         Ok(Some(Ok(program)))
+    }
+}
+
+impl Context<'_> {
+    /// eval(): the code compiled, its functions and classes declared. A
+    /// parse error is a ParseError thrown where eval() was called.
+    pub(crate) fn load_eval(&mut self, code: &Value) -> Result<Arc<Program>, Throw> {
+        let code = code.to_php_string().unwrap_or_else(PhpStr::empty);
+        let (file, line) = self.location();
+        let name = format!("{file}({line}) : eval()'d code");
+        let Some(loader) = self.loader.clone() else {
+            return Err(self.throw("Error", "eval() needs a compiler"));
+        };
+        let program = match loader.load_eval(code.as_bytes(), &name) {
+            Ok(p) => p,
+            Err(e) if e.parse => return Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(name.as_str()), line: e.line }),
+            Err(e) => return Err(Throw::Fatal { message: e.message, file: Rc::from(name.as_str()), line: e.line }),
+        };
+        for f in &program.functions {
+            if let Err(message) = self.declare(Arc::clone(f)) {
+                return Err(Throw::Fatal { message, file: Rc::from(&*f.file), line: f.line });
+            }
+        }
+        self.early_bind(&program.classes)?;
+        Ok(program)
     }
 }
 
