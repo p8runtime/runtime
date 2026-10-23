@@ -276,7 +276,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *src = f(*src);
         }
         LoadNull { dst } | NewArray { dst } => *dst = f(*dst),
-        Binary { dst, a, b, .. } | Compare { dst, a, b, .. } => {
+        Binary { dst, a, b, .. } | Add { dst, a, b } | Sub { dst, a, b } | Mul { dst, a, b } | Compare { dst, a, b, .. } => {
             *dst = f(*dst);
             *a = f(*a);
             *b = f(*b);
@@ -1096,7 +1096,7 @@ impl<'src> Compiler<'src> {
             let a = self.expr(f, left)?;
             let b = self.expr(f, right)?;
             let dst = out(f, hint, mark);
-            f.emit(Instr::Binary { op: bin, dst, a, b });
+            f.emit(Instr::binary(bin, dst, a, b));
             return Ok(dst);
         }
         let cmp = match op {

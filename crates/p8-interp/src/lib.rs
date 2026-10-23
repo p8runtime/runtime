@@ -161,6 +161,21 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 }
             };
         }
+        // `dst = a op b` on numbers (and `.` on strings).
+        macro_rules! arith {
+            ($op:expr, $dst:expr, $a:expr, $b:expr) => {
+                match num_op($op, &w[$a as usize], &w[$b as usize]) {
+                    // A variable holding a reference is written through it (`step`).
+                    Some(_) if matches!(w[$dst as usize], Value::Ref(_)) => return pc,
+                    Some(r) => {
+                        w[$dst as usize] = r;
+                        pc += 1;
+                    }
+                    None if $op == BinOp::Concat && concat(w, $dst, $a, $b) => pc += 1,
+                    None => return pc,
+                }
+            };
+        }
         // A fused step and test (`IncJumpLt` and co.) on ints: step, then
         // jump or go past the test. A non-int bound leaves the test to the
         // next instruction; a non-int variable leaves both to `step`.
@@ -223,18 +238,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     }
                     _ => return pc,
                 },
-                Instr::Binary { op, dst, a, b } => {
-                    match num_op(op, &w[a as usize], &w[b as usize]) {
-                        // A variable holding a reference is written through it (`step`).
-                        Some(_) if matches!(w[dst as usize], Value::Ref(_)) => return pc,
-                        Some(r) => {
-                            w[dst as usize] = r;
-                            pc += 1;
-                        }
-                        None if op == BinOp::Concat && concat(w, dst, a, b) => pc += 1,
-                        None => return pc,
-                    }
-                }
+                Instr::Binary { op, dst, a, b } => arith!(op, dst, a, b),
+                Instr::Add { dst, a, b } => arith!(BinOp::Add, dst, a, b),
+                Instr::Sub { dst, a, b } => arith!(BinOp::Sub, dst, a, b),
+                Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b),
                 Instr::ConcatN { dst, start, n } => {
                     if !concat_n(w, dst, start, n) {
                         return pc;
@@ -895,7 +902,11 @@ impl Context<'_> {
         if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
             return Err(self.interrupted());
         }
-        let instr = func.code[at];
+        // The one-operator arithmetic opcodes run here as `Binary`.
+        let instr = match func.code[at].as_binary() {
+            Some((op, dst, a, b)) => Instr::Binary { op, dst, a, b },
+            None => func.code[at],
+        };
         let mut pc = at + 1;
         // `w` is this frame's window (registers are frame-relative); `below`
         // holds the frames under it, the main frame's globals first.
@@ -917,6 +928,7 @@ impl Context<'_> {
                     assign(w, var, v);
                 }
                 Instr::LoadNull { dst } => reg!(dst) = Value::Null,
+                Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => unreachable!("normalized to Binary above"),
                 Instr::Binary { op, dst, a, b } => {
                     // Fast paths for the common int cases.
                     let fast = match (&reg!(a), &reg!(b), op) {

@@ -49,6 +49,11 @@ pub enum Instr {
     Assign { var: Reg, src: Reg },
     LoadNull { dst: Reg },
     Binary { op: BinOp, dst: Reg, a: Reg, b: Reg },
+    /// `Binary` for `+`, `-` and `*`, one opcode each (the commonest
+    /// arithmetic, so the interpreter does not dispatch on the operator)
+    Add { dst: Reg, a: Reg, b: Reg },
+    Sub { dst: Reg, a: Reg, b: Reg },
+    Mul { dst: Reg, a: Reg, b: Reg },
     /// `var op= src` (the expression's value is the variable itself)
     AssignOp { op: BinOp, var: Reg, src: Reg },
     Compare { cmp: Cmp, dst: Reg, a: Reg, b: Reg },
@@ -163,6 +168,27 @@ impl Instr {
             (Cmp::Identical, true) => Instr::JumpIdentical { a, b, target },
             (Cmp::Identical, false) => Instr::JumpNotIdentical { a, b, target },
             (other, _) => unreachable!("{other:?} is not a branch condition"),
+        }
+    }
+
+    /// `Binary` for any binary arithmetic instruction: (op, dst, a, b).
+    pub fn as_binary(&self) -> Option<(BinOp, Reg, Reg, Reg)> {
+        Some(match *self {
+            Instr::Binary { op, dst, a, b } => (op, dst, a, b),
+            Instr::Add { dst, a, b } => (BinOp::Add, dst, a, b),
+            Instr::Sub { dst, a, b } => (BinOp::Sub, dst, a, b),
+            Instr::Mul { dst, a, b } => (BinOp::Mul, dst, a, b),
+            _ => return None,
+        })
+    }
+
+    /// The instruction for `dst = a op b`.
+    pub fn binary(op: BinOp, dst: Reg, a: Reg, b: Reg) -> Instr {
+        match op {
+            BinOp::Add => Instr::Add { dst, a, b },
+            BinOp::Sub => Instr::Sub { dst, a, b },
+            BinOp::Mul => Instr::Mul { dst, a, b },
+            op => Instr::Binary { op, dst, a, b },
         }
     }
 
