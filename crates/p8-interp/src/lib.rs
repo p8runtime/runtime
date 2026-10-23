@@ -443,6 +443,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::IterInitRef { .. }
                 | Instr::IterNextRef { .. }
                 | Instr::StaticVar { .. }
+                | Instr::FetchList { .. }
                 | Instr::Yield { .. }
                 | Instr::YieldFrom { .. }
                 | Instr::Unsilence { .. }
@@ -1651,6 +1652,16 @@ impl Context<'_> {
                         }
                         None => pc = end as usize,
                     }
+                }
+                Instr::FetchList { dst, arr, key } => {
+                    let container = match &reg!(arr) {
+                        Value::Ref(cell) => cell.borrow().clone(),
+                        v => v.clone(),
+                    };
+                    reg!(dst) = match container {
+                        Value::Array(_) => self.fetch_dim(&container, w, func, key, false)?,
+                        _ => Value::Null,
+                    };
                 }
                 Instr::StaticVar { var, index, skip } => {
                     let (cell, new) = self.static_var(func, index);

@@ -191,6 +191,9 @@ pub enum Instr {
     /// `yield from src` (an array or a generator): yields each of its
     /// elements, then `dst` gets the inner generator's return value.
     YieldFrom { dst: Reg, src: Reg },
+    /// An element for destructuring (`[$a, $b] = $arr`): a missing key of
+    /// an array warns; anything but an array gives null, silently.
+    FetchList { dst: Reg, arr: Reg, key: Reg },
     /// `f(...)`: a Closure of the callable in `src` (Closure::fromCallable).
     FromCallable { dst: Reg, src: Reg },
     /// `include`, `require` (and `_once`): dst gets the file's result.

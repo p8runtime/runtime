@@ -65,6 +65,7 @@ Zend/tests/bug26696.phpt
 Zend/tests/bug26698.phpt
 Zend/tests/bug26801.phpt
 Zend/tests/bug27304.phpt
+Zend/tests/bug27598.phpt
 Zend/tests/bug27731.phpt
 Zend/tests/bug27798.phpt
 Zend/tests/bug28072.phpt
@@ -112,10 +113,12 @@ Zend/tests/bug38234.phpt
 Zend/tests/bug38287.phpt
 Zend/tests/bug38469.phpt
 Zend/tests/bug39018_2.phpt
+Zend/tests/bug39304.phpt
 Zend/tests/bug40261.phpt
 Zend/tests/bug40621.phpt
 Zend/tests/bug40757.phpt
 Zend/tests/bug40809.phpt
+Zend/tests/bug40899.phpt
 Zend/tests/bug41351.phpt
 Zend/tests/bug41351_2.phpt
 Zend/tests/bug41351_3.phpt
@@ -187,6 +190,7 @@ Zend/tests/bug55135.phpt
 Zend/tests/bug55445.phpt
 Zend/tests/bug55705.phpt
 Zend/tests/bug60161.phpt
+Zend/tests/bug60169.phpt
 Zend/tests/bug60350.phpt
 Zend/tests/bug60569.phpt
 Zend/tests/bug60598.phpt
@@ -209,6 +213,7 @@ Zend/tests/bug64821.2.phpt
 Zend/tests/bug64966.phpt
 Zend/tests/bug65108.phpt
 Zend/tests/bug65911.phpt
+Zend/tests/bug65969.phpt
 Zend/tests/bug66286.phpt
 Zend/tests/bug66608.phpt
 Zend/tests/bug67111.phpt
@@ -254,6 +259,7 @@ Zend/tests/bug72215.phpt
 Zend/tests/bug72216.phpt
 Zend/tests/bug72335.phpt
 Zend/tests/bug72373.phpt
+Zend/tests/bug72395.phpt
 Zend/tests/bug72496.phpt
 Zend/tests/bug72508.phpt
 Zend/tests/bug72543.phpt
@@ -270,6 +276,7 @@ Zend/tests/bug74840.phpt
 Zend/tests/bug74862.phpt
 Zend/tests/bug74862_2.phpt
 Zend/tests/bug74947.phpt
+Zend/tests/bug76439.phpt
 Zend/tests/bug76754.phpt
 Zend/tests/bug76869.phpt
 Zend/tests/bug76946.phpt
@@ -319,6 +326,7 @@ Zend/tests/clone_003.phpt
 Zend/tests/closure_001.phpt
 Zend/tests/closure_002.phpt
 Zend/tests/closure_003.phpt
+Zend/tests/closure_004.phpt
 Zend/tests/closure_006.phpt
 Zend/tests/closure_007.phpt
 Zend/tests/closure_009.phpt
@@ -459,6 +467,9 @@ Zend/tests/foreach_011.phpt
 Zend/tests/foreach_012.phpt
 Zend/tests/foreach_013.phpt
 Zend/tests/foreach_014.phpt
+Zend/tests/foreach_list_001.phpt
+Zend/tests/foreach_list_002.phpt
+Zend/tests/foreach_list_keyed.phpt
 Zend/tests/foreach_over_null.phpt
 Zend/tests/foreach_shadowed_property.phpt
 Zend/tests/foreach_undefined.phpt
@@ -495,6 +506,7 @@ Zend/tests/generators/dynamic_call.phpt
 Zend/tests/generators/errors/count_error.phpt
 Zend/tests/generators/errors/generator_extend_error.phpt
 Zend/tests/generators/errors/resume_running_generator_error_002.phpt
+Zend/tests/generators/fibonacci.phpt
 Zend/tests/generators/finally/return_return.phpt
 Zend/tests/generators/finally/return_yield.phpt
 Zend/tests/generators/finally/throw_yield.phpt
@@ -551,6 +563,8 @@ Zend/tests/gh11244-001.phpt
 Zend/tests/gh11244-002.phpt
 Zend/tests/gh11244-003.phpt
 Zend/tests/gh11244-005.phpt
+Zend/tests/gh11320_1.phpt
+Zend/tests/gh11320_2.phpt
 Zend/tests/gh12457.phpt
 Zend/tests/gh13178_3.phpt
 Zend/tests/gh14003.phpt
@@ -613,6 +627,18 @@ Zend/tests/inter_04.phpt
 Zend/tests/interface_exists_001.phpt
 Zend/tests/interface_exists_002.phpt
 Zend/tests/line_const_in_array.phpt
+Zend/tests/list_001.phpt
+Zend/tests/list_002.phpt
+Zend/tests/list_003.phpt
+Zend/tests/list_004.phpt
+Zend/tests/list_006.phpt
+Zend/tests/list_keyed.phpt
+Zend/tests/list_keyed_evaluation_order_2.phpt
+Zend/tests/list_keyed_evaluation_order_3.phpt
+Zend/tests/list_keyed_trailing_comma.phpt
+Zend/tests/list_keyed_undefined.phpt
+Zend/tests/list_mixed_nested_keyed_unkeyed.phpt
+Zend/tests/list_self_assign.phpt
 Zend/tests/live_range_phi_leak.phpt
 Zend/tests/loop_free_on_return.phpt
 Zend/tests/lsb_001.phpt
@@ -1129,9 +1155,11 @@ ext/opcache/tests/opt/assign_op_002.phpt
 ext/opcache/tests/opt/block_pass_006.phpt
 ext/opcache/tests/opt/dce_010.phpt
 ext/opcache/tests/opt/dce_012.phpt
+ext/opcache/tests/opt/dce_013.phpt
 ext/opcache/tests/opt/gh8074.phpt
 ext/opcache/tests/opt/gh8140b.phpt
 ext/opcache/tests/opt/inference_001.phpt
+ext/opcache/tests/opt/inference_005.phpt
 ext/opcache/tests/opt/inference_006.phpt
 ext/opcache/tests/opt/inference_008.phpt
 ext/opcache/tests/opt/inference_009.phpt
@@ -1854,6 +1882,7 @@ ext/standard/tests/strings/vsprintf_basic6.phpt
 ext/standard/tests/strings/vsprintf_basic7_64bit.phpt
 ext/standard/tests/strings/vsprintf_basic8.phpt
 ext/standard/tests/strings/vsprintf_basic9.phpt
+ext/standard/tests/time/001.phpt
 ext/standard/tests/versioning/php_sapi_name.phpt
 ext/standard/tests/versioning/phpversion.phpt
 sapi/cli/tests/bug77561.phpt
@@ -2033,6 +2062,7 @@ tests/lang/comments.phpt
 tests/lang/comments2.phpt
 tests/lang/compare_objects_basic1.phpt
 tests/lang/constants/PHP_INT_64bit.phpt
+tests/lang/engine_assignExecutionOrder_004.phpt
 tests/lang/engine_assignExecutionOrder_009.phpt
 tests/lang/execution_order.phpt
 tests/lang/foreachLoop.005.phpt

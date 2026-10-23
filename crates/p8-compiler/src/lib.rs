@@ -456,6 +456,11 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *key = f(*key);
         }
         StaticVar { var, .. } => *var = f(*var),
+        FetchList { dst, arr, key } => {
+            *dst = f(*dst);
+            *arr = f(*arr);
+            *key = f(*key);
+        }
         Yield { dst, value, key, .. } => {
             *dst = f(*dst);
             *value = f(*value);
@@ -933,10 +938,18 @@ impl<'src> Compiler<'src> {
                 // The iterator's two registers stay live through the body.
                 let iter = f.temp();
                 let _pos = f.temp();
+                // `as [$a, $b]`: the element lands here, then is taken apart.
+                let pattern = match value_var {
+                    Expr::Array { items, .. } => Some((*items, f.temp())),
+                    _ => None,
+                };
                 let saved = f.temps;
                 let init = f.emit(Instr::IterInit { src, iter, end: 0 });
                 let start = f.here();
-                let val = self.var_target(f, value_var)?;
+                let val = match pattern {
+                    Some((_, r)) => r,
+                    None => self.var_target(f, value_var)?,
+                };
                 let key = match key_var {
                     Some(k) => Some(self.var_target(f, k)?),
                     None => None,
@@ -944,6 +957,10 @@ impl<'src> Compiler<'src> {
                 let next = f.emit(Instr::IterNext { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
                 f.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
+                if let Some((items, r)) = pattern {
+                    self.destructure(f, items, r, None)?;
+                    f.temps = f.floor;
+                }
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
                 f.emit(Instr::Jump { target: start });
@@ -1423,6 +1440,69 @@ impl<'src> Compiler<'src> {
         Ok((f.finish(self.file.clone()), captures))
     }
 
+    /// Take apart the array in `src` into the targets of `items` (keyed,
+    /// or by position; an empty slot is skipped; nested patterns too).
+    fn destructure(&mut self, f: &mut FnBuilder, items: &[p8_syntax::ast::ArrayItem], src: Reg, root: Option<Reg>) -> Result<()> {
+        let mut index = 0;
+        for item in items {
+            if let Expr::Error { .. } = item.value {
+                index += 1;
+                continue;
+            }
+            if item.unpack || (item.by_ref && root.is_none()) {
+                return Err(self.unsupported(item.span, "this destructuring by reference"));
+            }
+            let key = match item.key {
+                Some(k) => self.expr(f, k)?,
+                None => {
+                    let k = f.constant(Frozen::Int(index));
+                    index += 1;
+                    k
+                }
+            };
+            if let (true, Some(root), Expr::Variable { name, .. }) = (item.by_ref, root, item.value) {
+                let var = f.cv(&self.text(*name)[1..]);
+                f.emit(Instr::RefDim { var, root, keys: key, n: 1, append: false });
+                continue;
+            }
+            let elem = f.temp();
+            f.emit(Instr::FetchList { dst: elem, arr: src, key });
+            match item.value {
+                Expr::Array { items, .. } => self.destructure(f, items, elem, None)?,
+                target => self.assign_from(f, target, elem)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// `target = <the value in val>`, for destructuring.
+    fn assign_from(&mut self, f: &mut FnBuilder, target: &Expr, val: Reg) -> Result<()> {
+        match target {
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
+                let var = f.cv(&self.text(*name)[1..]);
+                f.emit(Instr::Assign { var, src: val });
+            }
+            Expr::ArrayDimFetch { .. } if dim_root_is_prop(target) => {
+                let (base, n, append) = self.prop_dim_path(f, target)?;
+                let dst = f.temp();
+                f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+            }
+            Expr::ArrayDimFetch { .. } => {
+                let (var, keys, n, append) = self.dim_path(f, target)?;
+                let dst = f.temp();
+                f.emit(Instr::AssignDim { var, keys, n, append, val, dst });
+            }
+            Expr::PropertyFetch { target: obj, property, .. } => {
+                let obj = self.expr(f, obj)?;
+                let name = self.prop_name(f, property)?;
+                let dst = f.temp();
+                f.emit(Instr::AssignProp { obj, name, val, dst });
+            }
+            other => return Err(self.unsupported(other.span(), "this destructuring target")),
+        }
+        Ok(())
+    }
+
     /// `MakeClosure` of `func` into a new temporary (not a variable: a
     /// `use` of the variable being assigned takes its old value).
     fn make_closure(&mut self, f: &mut FnBuilder, func: Function, is_static: bool) -> Reg {
@@ -1769,6 +1849,27 @@ impl<'src> Compiler<'src> {
                 }
             }
             Expr::Assign { var, expr, .. } => match var {
+                // `[$a, $b] = …` / `list($a, $b) = …`: the value first, then
+                // each target left to right; the result is the value.
+                Expr::Array { items, .. } => {
+                    // By-reference items bind into the source variable itself.
+                    let root = match expr {
+                        Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
+                            Some(f.cv(&self.text(*name)[1..]))
+                        }
+                        _ => None,
+                    };
+                    let src = self.expr(f, expr)?;
+                    let value = if src >> KIND_SHIFT == TEMP {
+                        src
+                    } else {
+                        let t = f.temp();
+                        f.emit(Instr::Move { dst: t, src });
+                        t
+                    };
+                    self.destructure(f, items, value, root)?;
+                    value
+                }
                 Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
                     let target = f.cv(&self.text(*name)[1..]);
                     // Arithmetic and comparisons are one instruction that
