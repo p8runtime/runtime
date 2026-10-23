@@ -681,6 +681,11 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
 
 pub use p8_bytecode::Program;
 
+/// Whether a call's arguments go as one array (`...` or a named argument).
+fn needs_spread(args: &[p8_syntax::ast::Arg]) -> bool {
+    args.iter().any(|a| a.unpack || a.name.is_some())
+}
+
 /// Whether `$a[…]…`'s root is a static property (`C::$a[k]`).
 fn dim_root_is_static(c: &Compiler, e: &Expr) -> bool {
     let mut cur = e;
@@ -1705,7 +1710,7 @@ impl<'src> Compiler<'src> {
             _ => f.temp(),
         };
         f.emit(Instr::New { dst, class });
-        if args.iter().any(|a| a.unpack) {
+        if needs_spread(args) {
             let list = self.spread_list(f, args)?;
             f.emit(Instr::ConstructSpread { obj: dst, args: list });
         } else {
@@ -2131,12 +2136,29 @@ impl<'src> Compiler<'src> {
     fn spread_list(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
         let list = f.temp();
         f.emit(Instr::NewArray { dst: list });
+        let mut named = false;
         for arg in args {
-            if arg.name.is_some() {
-                return Err(self.unsupported(arg.span, "named arguments"));
+            let line = self.line(arg.span);
+            if named && arg.name.is_none() {
+                let message = if arg.unpack { "Cannot use argument unpacking after named arguments" } else { "Cannot use positional argument after named argument" };
+                return Err(CompileError { message: message.into(), line });
             }
             let v = self.expr(f, arg.value)?;
-            f.emit(if arg.unpack { Instr::ArrayUnpack { arr: list, src: v } } else { Instr::ArrayPush { arr: list, val: v } });
+            match arg.name {
+                // A named argument: its name is the key (matched to the
+                // parameters when the call is made).
+                Some(n) => {
+                    named = true;
+                    let key = f.constant(Frozen::Str(Text::from(self.text(n.span))));
+                    f.emit(Instr::ArraySet { arr: list, key, val: v });
+                }
+                None if arg.unpack => {
+                    f.emit(Instr::ArrayUnpack { arr: list, src: v });
+                }
+                None => {
+                    f.emit(Instr::ArrayPush { arr: list, val: v });
+                }
+            }
         }
         Ok(list)
     }
@@ -2817,7 +2839,7 @@ impl<'src> Compiler<'src> {
                     _ => f.temp(),
                 };
                 f.emit(Instr::New { dst, class });
-                if args.iter().any(|a| a.unpack) {
+                if needs_spread(args) {
                     let list = self.spread_list(f, args)?;
                     f.emit(Instr::ConstructSpread { obj: dst, args: list });
                 } else {
@@ -2833,7 +2855,7 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
                 dst
             }
-            Expr::MethodCall { target, method, args, .. } if args.iter().any(|a| a.unpack) => {
+            Expr::MethodCall { target, method, args, .. } if needs_spread(args) => {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
@@ -2843,7 +2865,7 @@ impl<'src> Compiler<'src> {
                 self.spread_call(f, pair, args)?
             }
             Expr::StaticCall { class: Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
-                if args.iter().any(|a| a.unpack) =>
+                if needs_spread(args) =>
             {
                 let class = self.text(*class);
                 let class = match class.to_ascii_lowercase().as_slice() {
@@ -3278,7 +3300,7 @@ impl<'src> Compiler<'src> {
             Expr::Variable { name, .. } => self.text(*name).starts_with(b"$"),
             _ => true,
         };
-        if args.iter().any(|a| a.unpack) {
+        if needs_spread(args) {
             let callee = match func {
                 Expr::Variable { name, .. } if !dynamic => {
                     let (full, _) = self.ns_name(self.text(*name), &self.use_functions, true);
