@@ -78,6 +78,17 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
     if let Value::Ref(cell) = b {
         return binary(op, a, &cell.borrow(), diags);
     }
+    // An object with a scalar cast (SimpleXML) takes part as its string.
+    if let Value::Object(x) = a
+        && let Some(cast) = x.class.cast_string
+    {
+        return binary(op, &Value::Str(cast(x)), b, diags);
+    }
+    if let Value::Object(y) = b
+        && let Some(cast) = y.class.cast_string
+    {
+        return binary(op, a, &Value::Str(cast(y)), diags);
+    }
     match op {
         BinOp::Concat => {
             if let Some(e) = object_string_error(a).or_else(|| object_string_error(b)) {
@@ -300,7 +311,7 @@ fn bytewise(op: BinOp, x: &[u8], y: &[u8]) -> PhpStr {
 /// is called by the engine: an object without it can't be converted).
 pub fn object_string_error(v: &Value) -> Option<OpError> {
     match v {
-        Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => None,
+        Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 || o.class.cast_string.is_some() => None,
         Value::Object(o) => Some(OpError::Error(format!(
             "Object of class {} could not be converted to string",
             String::from_utf8_lossy(o.class.name.as_bytes())

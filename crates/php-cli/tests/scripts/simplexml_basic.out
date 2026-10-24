@@ -1,0 +1,75 @@
+main library 2
+1:Dune 2:Emma 
+Emma 10.5 19
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+string(0) ""
+book book empty 
+id=1 lang=en 
+
+Warning: SimpleXMLElement::addChild(): unterminated entity reference           Shiny in %s on line 23
+<?xml version="1.0"?>
+<library name="main" added="yes">
+  <book id="1" lang="en"><title>Dune Messiah</title><price>9.5</price></book>
+  <book id="two"><title>Emma</title><price>4</price></book>
+  <!-- note -->
+  
+<book id="3"><title/></book></library>
+<book id="1" lang="en"><title>Dune Messiah</title><price>9.5</price></book>
+SimpleXMLElement Object
+(
+    [@attributes] => Array
+        (
+            [id] => two
+        )
+
+    [title] => Emma
+    [price] => 4
+)
+SimpleXMLElement Object
+(
+    [@attributes] => Array
+        (
+            [id] => 1
+            [lang] => en
+        )
+
+    [title] => Dune Messiah
+    [price] => 9.5
+)
+
+string(55) "{"@attributes":{"id":"two"},"title":"Emma","price":"4"}"
+array(1) {
+  [0]=>
+  string(12) "Dune Messiah"
+}
+
+Warning: simplexml_load_string(): Entity: line 1: parser error : Premature end of data in tag b line 1 in %s on line 32
+
+Warning: simplexml_load_string(): <a><b> in %s on line 32
+
+Warning: simplexml_load_string():       ^ in %s on line 32
+bool(false)
+
+Warning: SimpleXMLElement::__construct(): Entity: line 1: parser error : Start tag expected, '<' not found in %s on line 34
+
+Warning: SimpleXMLElement::__construct(): nope in %s on line 34
+
+Warning: SimpleXMLElement::__construct(): ^ in %s on line 34
+Exception: String could not be parsed as XML
+array(1) {
+  ["x"]=>
+  string(5) "urn:x"
+}
+array(1) {
+  ["x"]=>
+  string(5) "urn:x"
+}
+int(1)
+string(1) "1"

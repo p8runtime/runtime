@@ -264,6 +264,14 @@ impl Encoder<'_> {
             self.seen.pop();
             return r;
         }
+        // A native class's own view of its properties (SimpleXML).
+        if let Some(props) = o.class.get_properties {
+            let entries = props(o).iter().map(|(k, v)| (k, v.clone())).collect();
+            self.seen.push(ptr);
+            let r = self.container(entries, false, out);
+            self.seen.pop();
+            return r;
+        }
         // Public properties (initialized), then dynamic ones.
         let mut entries = Vec::new();
         for (i, p) in o.class.properties.iter().enumerate() {

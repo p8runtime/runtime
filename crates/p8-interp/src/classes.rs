@@ -450,9 +450,10 @@ impl Context<'_> {
             || parent.as_ref().is_some_and(|p| p.flags & CLASS_LAZY != 0);
         let destructor = destructor | if lazy { CLASS_LAZY } else { 0 };
         let destructor = destructor | if properties.iter().any(|p| p.hooks != 0) { p8_runtime::object::CLASS_HOOKS } else { 0 };
-        let destructor = destructor | if [&b"__get"[..], b"__set", b"__isset", b"__unset"].iter().any(|m| methods.contains_key(*m)) { p8_runtime::object::CLASS_MAGIC_PROPS } else { 0 };
+        let destructor = destructor | if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| methods.contains_key(*m)) { p8_runtime::object::CLASS_MAGIC_PROPS } else { 0 };
         let destructor = destructor | parent.as_ref().map_or(0, |p| p.flags & p8_runtime::object::CLASS_UNCLONEABLE);
         let make_data = parent.as_ref().and_then(|p| p.make_data);
+        let (inherited_props, inherited_bool, inherited_string) = parent.as_ref().map_or((None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string));
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,
@@ -465,6 +466,9 @@ impl Context<'_> {
             constants,
             statics,
             debug_info: None,
+            get_properties: inherited_props,
+            cast_bool: inherited_bool,
+            cast_string: inherited_string,
             make_data,
             native_dtor,
             enum_cases: def.cases.iter().map(|(n, _)| PhpStr::from(n.as_bytes())).collect(),
@@ -1115,7 +1119,9 @@ impl Context<'_> {
         if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 {
             return None;
         }
-        let m = o.class.method(kind.method())?;
+        // A native class's handler (`$*::get`: hidden, as PHP's internal
+        // read_property is no method), else the class's __get.
+        let m = o.class.method(kind.native()).or_else(|| o.class.method(kind.method()))?;
         let name = name.to_php_string()?;
         let key = (Rc::as_ptr(o) as usize, name.clone(), kind);
         if self.magic_guard.contains(&key) {
@@ -1417,6 +1423,9 @@ impl Context<'_> {
 /// `(array) $object`: initialized properties under PHP's mangled names
 /// ("\0A\0p" private to A, "\0*\0p" protected), then dynamic ones.
 pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
+    if let Some(props) = o.class.get_properties {
+        return props(o);
+    }
     let mut out = p8_runtime::array::PhpArray::new();
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
@@ -1471,6 +1480,16 @@ impl Magic {
             Magic::Set => b"__set",
             Magic::Isset => b"__isset",
             Magic::Unset => b"__unset",
+        }
+    }
+
+    /// A native class's handler method for it.
+    pub(crate) fn native(self) -> &'static [u8] {
+        match self {
+            Magic::Get => b"$*::get",
+            Magic::Set => b"$*::set",
+            Magic::Isset => b"$*::isset",
+            Magic::Unset => b"$*::unset",
         }
     }
 }

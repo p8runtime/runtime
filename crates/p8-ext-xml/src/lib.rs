@@ -8,6 +8,7 @@ mod dom;
 mod encoding;
 mod errors;
 mod parser;
+mod simplexml;
 mod writer;
 mod xml;
 mod xmlwriter;
@@ -31,4 +32,9 @@ fn register(registry: &mut Registry) {
     }
     registry.add_module("xml");
     dom::register(registry);
+    registry.add_functions(simplexml::BUILTINS);
+    registry.add_classes(simplexml::CLASSES);
+    registry.add_data("SimpleXMLElement", simplexml::make_sxe);
+    registry.add_hooks("SimpleXMLElement", simplexml::HOOKS);
+    registry.add_module("SimpleXML");
 }

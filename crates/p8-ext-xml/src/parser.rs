@@ -55,6 +55,59 @@ pub(crate) struct XmlError {
     pub line: i32,
     pub column: i32,
     pub file: Option<String>,
+    /// The source line around the error and the column of the problem in
+    /// it, as xmlParserPrintFileContextInternal prints them (generic
+    /// error reports: SimpleXML's warnings).
+    pub context: Vec<u8>,
+    pub context_col: usize,
+}
+
+impl XmlError {
+    /// libxml2's generic report of this error (xmlReportError), one entry
+    /// per line it prints: `Entity: line 1: parser error : ...`, the
+    /// source line, a caret under the problem.
+    pub(crate) fn report_lines(&self) -> Vec<String> {
+        let file = self.file.as_deref().unwrap_or("Entity");
+        let domain = match self.domain {
+            FROM_NAMESPACE => "namespace ",
+            FROM_DTD => "validity ",
+            _ => "parser ",
+        };
+        let level = if self.level == LEVEL_WARNING { "warning" } else { "error" };
+        let mut lines = vec![format!("{file}: line {}: {domain}{level} : {}", self.line, self.message.trim_end_matches('\n'))];
+        let content = String::from_utf8_lossy(&self.context).into_owned();
+        let mut caret: String = content.chars().take(self.context_col).map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
+        caret.push('^');
+        lines.push(content);
+        lines.push(caret);
+        lines
+    }
+}
+
+/// The line around `cur` in `buf` and the column of `cur` in it (at most 80
+/// bytes), as xmlParserPrintFileContextInternal takes them.
+fn file_context(buf: &[u8], cur: usize) -> (Vec<u8>, usize) {
+    let at = |i: usize| buf.get(i).copied().unwrap_or(0);
+    let mut c = cur.min(buf.len());
+    while c > 0 && matches!(at(c), b'\n' | b'\r') {
+        c -= 1;
+    }
+    let mut n = 0;
+    while n < 80 && c > 0 && !matches!(at(c), b'\n' | b'\r') {
+        c -= 1;
+        n += 1;
+    }
+    if matches!(at(c), b'\n' | b'\r') {
+        c += 1;
+    }
+    let col = cur.saturating_sub(c);
+    let mut content = Vec::new();
+    while at(c) != 0 && !matches!(at(c), b'\n' | b'\r') && content.len() < 80 {
+        content.push(at(c));
+        c += 1;
+    }
+    let col = col.min(content.len());
+    (content, col)
 }
 
 /// A namespace binding: (prefix, URI).
@@ -547,7 +600,8 @@ impl Parser {
     pub(crate) fn raise(&mut self, domain: i32, code: i32, level: i32, message: String) {
         let n = self.inputs.len();
         let input = if self.inputs[n - 1].filename.is_none() && n > 1 { &self.inputs[n - 2] } else { &self.inputs[n - 1] };
-        let e = XmlError { domain, code, level, message, line: input.line, column: input.col, file: input.filename.clone() };
+        let (context, context_col) = file_context(&input.buf, input.cur);
+        let e = XmlError { domain, code, level, message, line: input.line, column: input.col, file: input.filename.clone(), context, context_col };
         self.last_error = Some(e.clone());
         self.errors.push(e);
     }

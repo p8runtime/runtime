@@ -221,6 +221,9 @@ fn get_parent_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
 /// initialized ones only, by their plain names.
 fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    if let Some(props) = o.class.get_properties {
+        return Ok(Value::Array(Rc::new(props(&o))));
+    }
     let scope = ctx.scope();
     let mut out = PhpArray::new();
     for (i, p) in o.class.properties.iter().enumerate() {

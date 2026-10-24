@@ -27,6 +27,7 @@ fn declare(
 ) {
     let lower = name.to_ascii_lowercase().into_bytes();
     let parent = parent.map(|p| Rc::clone(&classes[p.to_ascii_lowercase().as_bytes()]));
+    let (inherited_props, inherited_bool, inherited_string) = parent.as_ref().map_or((None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string));
     let mut all_interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
     let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
     for i in interfaces {
@@ -79,6 +80,9 @@ fn declare(
         constants: p8_runtime::object::Constants::new(),
         statics: HashMap::new(),
         debug_info: None,
+        get_properties: inherited_props,
+        cast_bool: inherited_bool,
+        cast_string: inherited_string,
         make_data: None,
         native_dtor: None,
         enum_cases: Vec::new(),
@@ -275,6 +279,9 @@ pub(crate) fn declare_spec(
     }
     if class.properties.iter().any(|p| p.hooks != 0) {
         class.flags |= CLASS_HOOKS;
+    }
+    if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| class.methods.contains_key(*m)) {
+        class.flags |= p8_runtime::object::CLASS_MAGIC_PROPS;
     }
     class.make_data = make_data.or_else(|| class.parent.as_ref().and_then(|p| p.make_data));
     class.native_dtor = dtor.or_else(|| class.parent.as_ref().and_then(|p| p.native_dtor));
