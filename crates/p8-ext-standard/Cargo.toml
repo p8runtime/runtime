@@ -12,6 +12,8 @@ md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
 crc32fast = "1.5"
+# zlib: compression in pure Rust (miniz_oxide; zlib-rs would export C-ABI symbols from p8)
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 sha3 = "0.10"
 ripemd = "0.1"
 whirlpool = "0.10"

@@ -35,6 +35,7 @@ mod ctype;
 mod string;
 mod string2;
 mod var;
+mod zlib;
 
 static BUILTINS: &[Builtin] = &[
     Builtin { name: "strlen", run: strlen, by_ref: &[] },
@@ -110,8 +111,15 @@ fn register(registry: &mut Registry) {
     registry.add_functions(array::BUILTINS);
     registry.add_functions(callback::BUILTINS);
     registry.add_functions(ctype::BUILTINS);
+    registry.add_functions(zlib::BUILTINS);
+    registry.add_classes(zlib::CLASSES);
+    registry.add_data("DeflateContext", zlib::make_deflate);
+    registry.add_data("InflateContext", zlib::make_inflate);
+    for (name, value) in zlib::CONSTANTS {
+        registry.add_constant(name.as_bytes(), *value);
+    }
     // The PHP modules this extension provides, in PHP's order.
-    for module in ["Core", "date", "hash", "json", "random", "Reflection", "SPL", "standard", "ctype"] {
+    for module in ["Core", "date", "hash", "json", "random", "Reflection", "SPL", "standard", "ctype", "zlib"] {
         registry.add_module(module);
     }
     registry.add_functions(file::BUILTINS);

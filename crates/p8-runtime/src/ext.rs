@@ -83,6 +83,9 @@ pub trait Ctx {
     fn define(&mut self, name: &[u8], value: Value) -> bool;
     /// Whether a function `name` exists (any case, optional leading `\`).
     fn function_exists(&self, name: &[u8]) -> bool;
+    /// The name the running builtin was called by (an alias's own name:
+    /// gzread, not fread), for its messages.
+    fn builtin_name(&self) -> &'static str;
     /// The PHP modules the process's extensions provide (extension_loaded,
     /// get_loaded_extensions), in the order they registered.
     fn modules(&self) -> &[&'static str];

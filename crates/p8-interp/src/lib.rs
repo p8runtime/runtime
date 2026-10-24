@@ -3477,6 +3477,11 @@ impl Ctx for Context<'_> {
         true
     }
 
+    fn builtin_name(&self) -> &'static str {
+        // The innermost builtin call (as stack traces record it).
+        self.natives.last().map_or("", |n| n.name)
+    }
+
     fn modules(&self) -> &[&'static str] {
         self.isolate.registry.modules()
     }
