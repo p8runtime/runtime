@@ -17,6 +17,12 @@ struct Inner {
 #[derive(Clone)]
 pub struct PhpStr(Rc<Inner>);
 
+impl Default for PhpStr {
+    fn default() -> Self {
+        PhpStr::empty()
+    }
+}
+
 impl PhpStr {
     pub fn new(bytes: Vec<u8>) -> Self {
         PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes }))

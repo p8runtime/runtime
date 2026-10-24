@@ -170,7 +170,7 @@ pub struct Constant {
 pub type Static = (Rc<RefCell<Value>>, Visibility, Vec<u8>);
 
 /// A class as linked for one request.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Class {
     /// As declared.
     pub name: PhpStr,
@@ -224,6 +224,12 @@ pub struct Class {
 }
 
 impl Class {
+    /// A plain class with nothing declared (for tests).
+    #[cfg(test)]
+    pub(crate) fn stub(name: &str) -> Class {
+        Class { name: PhpStr::from(name), lower: name.to_ascii_lowercase().into_bytes(), ..Class::default() }
+    }
+
     /// The name as PHP prints it with "%s": up to a NUL (an anonymous
     /// class's name goes on with where it was declared).
     pub fn shown(&self) -> &[u8] {
@@ -322,6 +328,9 @@ pub struct Ids {
     /// Every object with a destructor, for the ones the script leaves
     /// alive (PHP destructs them at its end, oldest first).
     live: RefCell<Vec<std::rc::Weak<Object>>>,
+    /// Every object, by id (an id is one live object's at a time):
+    /// gc_collect_cycles walks them.
+    all: RefCell<Vec<std::rc::Weak<Object>>>,
 }
 
 impl Ids {
@@ -368,7 +377,20 @@ impl Ids {
         out
     }
 
+    /// Every object still alive (for the cycle collector).
+    pub fn all_live(&self) -> Vec<Rc<Object>> {
+        self.all.borrow().iter().filter_map(std::rc::Weak::upgrade).collect()
+    }
+
     fn track(&self, o: &Rc<Object>) {
+        {
+            let mut all = self.all.borrow_mut();
+            let i = o.id as usize;
+            if all.len() <= i {
+                all.resize(i + 1, std::rc::Weak::new());
+            }
+            all[i] = Rc::downgrade(o);
+        }
         if o.class.flags & CLASS_DESTRUCTOR != 0 {
             let mut live = self.live.borrow_mut();
             // Drop the dead now and then, so the list stays the size of the living.

@@ -991,6 +991,8 @@ impl Isolate {
             fiber_suspended: None,
             fiber_throw: None,
             fiber_exit: None,
+            gc_runs: 0,
+            gc_collected: 0,
         }
     }
 }
@@ -1100,6 +1102,9 @@ pub struct Context<'i> {
     fiber_throw: Option<Rc<Object>>,
     /// The exit unwinding a fiber being destroyed (no catch matches it).
     fiber_exit: Option<Rc<Object>>,
+    /// gc_status(): collections run, values they freed.
+    gc_runs: i64,
+    gc_collected: i64,
 }
 
 impl Context<'_> {
@@ -4103,6 +4108,49 @@ impl Ctx for Context<'_> {
 
     fn fiber_op(&mut self, fiber: Option<&Rc<Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
         Context::fiber_op(self, fiber, op, args)
+    }
+
+    fn gc_collect(&mut self) -> Result<i64, Throw> {
+        let garbage = p8_runtime::gc::find_cycles(&self.ids);
+        if garbage.objects.is_empty() {
+            return Ok(0);
+        }
+        // Destructors first, oldest first; one may keep an object alive
+        // (store it somewhere), so the garbage is found again after.
+        let mut ran = false;
+        for o in &garbage.objects {
+            if o.destructed.get() || o.class.method(b"__destruct").is_none() || o.lazy.get() != 0 {
+                continue;
+            }
+            o.destructed.set(true);
+            ran = true;
+            let m = self.method_frame(&Value::Object(Rc::clone(o)), b"__destruct", b"__destruct")?;
+            let mut regs = std::mem::take(&mut self.isolate.regs);
+            let r = self.run_nested(&mut regs, m, &mut []);
+            self.isolate.regs = regs;
+            r?;
+        }
+        let garbage = if ran {
+            drop(garbage);
+            // PHP counts the pass after destructors as a run of its own.
+            self.gc_runs += 1;
+            p8_runtime::gc::find_cycles(&self.ids)
+        } else {
+            garbage
+        };
+        for o in &garbage.objects {
+            o.destructed.set(true);
+            p8_runtime::gc::clear(o);
+        }
+        let count = garbage.count as i64;
+        drop(garbage);
+        self.gc_runs += 1;
+        self.gc_collected += count;
+        Ok(count)
+    }
+
+    fn gc_counts(&self) -> (i64, i64) {
+        (self.gc_runs, self.gc_collected)
     }
 
     fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<Object>, Throw> {
