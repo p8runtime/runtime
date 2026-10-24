@@ -61,6 +61,7 @@ impl Context<'_> {
             c.get_properties = h.get_properties;
             c.cast_bool = h.cast_bool;
             c.cast_string = h.cast_string;
+            c.clone_data = h.clone_data;
         }
         self.classes.get(lower).cloned()
     }

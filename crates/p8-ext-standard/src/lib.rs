@@ -35,6 +35,7 @@ mod ctype;
 mod string;
 mod string2;
 mod var;
+mod weak;
 mod zlib;
 
 static BUILTINS: &[Builtin] = &[
@@ -135,6 +136,11 @@ fn register(registry: &mut Registry) {
     registry.add_functions(spl::BUILTINS);
     registry.add_classes(spl::CLASSES);
     registry.add_classes(spl_iter::CLASSES);
+    registry.add_classes(weak::CLASSES);
+    registry.add_data("WeakReference", weak::make_weakref);
+    registry.add_data("WeakMap", weak::make_weakmap);
+    registry.add_hooks("WeakMap", weak::WEAKMAP_HOOKS);
+    registry.add_data("InternalIterator", weak::make_internal);
     registry.mark_reenters(spl::REENTER);
     registry.add_classes(datetime::CLASSES);
     registry.add_functions(serial::BUILTINS);

@@ -3111,6 +3111,7 @@ impl Context<'_> {
                     get_properties: None,
                     cast_bool: None,
                     cast_string: None,
+                    clone_data: None,
                     make_data: None,
                     native_dtor: None,
                     enum_cases: Vec::new(),

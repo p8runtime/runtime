@@ -251,6 +251,7 @@ pub struct ClassHooks {
     pub get_properties: Option<fn(&crate::object::Object) -> crate::array::PhpArray>,
     pub cast_bool: Option<fn(&crate::object::Object) -> bool>,
     pub cast_string: Option<fn(&crate::object::Object) -> crate::string::PhpStr>,
+    pub clone_data: Option<crate::object::CloneData>,
 }
 
 pub struct ClassSpec {

@@ -1,0 +1,44 @@
+bool(true)
+bool(true)
+NULL
+Direct instantiation of WeakReference is not allowed, use WeakReference::create instead
+Trying to clone an uncloneable object of class WeakReference
+int(2)
+string(1) "A"
+bool(true)
+bool(false)
+stdClass => "A"
+ArrayObject => [1,2]
+object(WeakMap)#3 (2) {
+  [0]=>
+  array(2) {
+    ["key"]=>
+    object(stdClass)#4 (0) {
+    }
+    ["value"]=>
+    string(1) "A"
+  }
+  [1]=>
+  array(2) {
+    ["key"]=>
+    object(ArrayObject)#5 (1) {
+      ["storage":"ArrayObject":private]=>
+      array(0) {
+      }
+    }
+    ["value"]=>
+    array(2) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+    }
+  }
+}
+int(1)
+int(1)
+int(0)
+int(1)
+ok
+WeakMap key must be an object
+Cannot append to WeakMap

@@ -778,6 +778,16 @@ fn uses_own_property(source: &[u8], name: &[u8]) -> bool {
     word_at(&[b"$this->".as_slice(), name].concat()) || word_at(&[b"parent::$".as_slice(), name].concat())
 }
 
+/// After an operator used a value an expression made (a call's result,
+/// a new object) from a temporary: release it, as PHP frees the operand
+/// at once (a destructor runs before the statement goes on). Not when
+/// the operator wrote its result into the same register.
+fn free_operand(f: &mut FnBuilder, e: &Expr, val: Reg, dst: Reg) {
+    if val != dst {
+        free_made(f, e, val);
+    }
+}
+
 /// After storing a value an expression made (an object, likely) from a
 /// temporary: release the temporary's copy.
 fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
@@ -3675,6 +3685,8 @@ impl<'src> Compiler<'src> {
             let a = self.expr(f, left)?;
             let b = self.expr(f, right)?;
             let dst = out(f, hint, mark);
+            // Arithmetic and string operators get numbers and strings, whose
+            // release can't be seen: no Free on this hot path.
             f.emit(Instr::binary(bin, dst, a, b));
             return Ok(dst);
         }
@@ -3687,6 +3699,8 @@ impl<'src> Compiler<'src> {
             let b = self.expr(f, right)?;
             let dst = out(f, hint, mark);
             f.emit(Instr::Compare { cmp, dst, a, b });
+            free_operand(f, left, a, dst);
+            free_operand(f, right, b, dst);
             return Ok(dst);
         }
         if op == BinaryOp::Instanceof {
@@ -3694,6 +3708,7 @@ impl<'src> Compiler<'src> {
             let class = self.class_ref(f, right)?;
             let dst = out(f, hint, mark);
             f.emit(Instr::InstanceOf { dst, src, class });
+            free_operand(f, left, src, dst);
             return Ok(dst);
         }
         let dst = f.temp();
@@ -3702,6 +3717,7 @@ impl<'src> Compiler<'src> {
                 let is_and = matches!(op, BinaryOp::And | BinaryOp::LogicalAnd);
                 let a = self.expr(f, left)?;
                 f.emit(Instr::ToBool { dst, src: a });
+                free_operand(f, left, a, dst);
                 let end = f.emit(if is_and {
                     Instr::JumpIfNot { cond: dst, target: 0 }
                 } else {
@@ -3709,6 +3725,7 @@ impl<'src> Compiler<'src> {
                 });
                 let b = self.expr(f, right)?;
                 f.emit(Instr::ToBool { dst, src: b });
+                free_operand(f, right, b, dst);
                 f.patch(end, f.here());
             }
             BinaryOp::LogicalXor => {
