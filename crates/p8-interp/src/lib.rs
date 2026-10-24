@@ -949,6 +949,7 @@ impl Isolate {
             lambdas: HashMap::new(),
             natives: Vec::new(),
             statics: HashMap::new(),
+            magic_guard: Vec::new(),
         }
     }
 }
@@ -1045,6 +1046,9 @@ pub struct Context<'i> {
     natives: Vec<NativeCall>,
     /// `static` variables, by function and index.
     statics: HashMap<(usize, u16), Rc<RefCell<Value>>>,
+    /// The magic property methods running: (object, property, which), so
+    /// a property access inside `__get('x')` is a plain one (zend's guards).
+    magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
 }
 
 impl Context<'_> {
@@ -1569,6 +1573,48 @@ impl Context<'_> {
             Ok(()) => Ok(pc),
             Err(t) => self.unwind(regs, t, at),
         }
+    }
+
+    /// Runs a magic property method found by prop_magic, its guard held.
+    fn run_magic(&mut self, regs: &mut Vec<Value>, found: (crate::classes::MethodFrame, (usize, PhpStr, crate::classes::Magic)), args: &mut [Value]) -> Result<Value, Throw> {
+        let (m, key) = found;
+        self.magic_guard.push(key.clone());
+        let r = self.run_nested(regs, m, args);
+        if let Some(i) = self.magic_guard.iter().rposition(|k| *k == key) {
+            self.magic_guard.remove(i);
+        }
+        r
+    }
+
+    /// `$o->p op= …`, `$o->p++` on an overloaded property: read through
+    /// __get (or the property), compute, write through __set (or the
+    /// property). None: no magic method takes part.
+    fn magic_update(
+        &mut self,
+        regs: &mut Vec<Value>,
+        target: &Value,
+        name: &Value,
+        compute: impl FnOnce(&mut Self, &Value) -> Result<(Value, Value), Throw>,
+    ) -> Result<Option<Value>, Throw> {
+        use crate::classes::Magic;
+        let get = self.prop_magic(target, name, Magic::Get);
+        let has_set = self.prop_magic(target, name, Magic::Set).is_some();
+        if get.is_none() && !has_set {
+            return Ok(None);
+        }
+        let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+        let x = match get {
+            Some(found) => self.run_magic(regs, found, &mut [pname.clone()])?.deref(),
+            None => self.read_for_update(target, name)?,
+        };
+        let (stored, result) = compute(self, &x)?;
+        match self.prop_magic(target, name, Magic::Set) {
+            Some(found) => {
+                self.run_magic(regs, found, &mut [pname, stored])?;
+            }
+            None => self.write_prop(target, name, stored)?,
+        }
+        Ok(Some(result))
     }
 
     /// `$o->p op= …`, `$o->p++` on a hooked property: read through its get
@@ -2528,6 +2574,29 @@ impl Context<'_> {
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
                     }
+                    if let Value::Object(o) = &target
+                        && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0
+                        && (self.prop_magic(&target, &name, crate::classes::Magic::Get).is_some() || (quiet && self.prop_magic(&target, &name, crate::classes::Magic::Isset).is_some()))
+                    {
+                        use crate::classes::Magic;
+                        let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+                        // `??`: __isset decides when there is one, then __get reads.
+                        let set = if quiet {
+                            match self.prop_magic(&target, &name, Magic::Isset) {
+                                Some(found) => self.run_magic(regs, found, &mut [pname.clone()])?.to_bool(),
+                                None => true,
+                            }
+                        } else {
+                            true
+                        };
+                        let v = match self.prop_magic(&target, &name, Magic::Get) {
+                            Some(found) if set => self.run_magic(regs, found, &mut [pname])?.deref(),
+                            Some(_) => Value::Null,
+                            None => self.fetch_prop(&target, &name, quiet)?,
+                        };
+                        regs[base + dst as usize] = v;
+                        return Ok(Next::Go(pc));
+                    }
                     reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
                 }
                 Instr::AssignProp { obj, name, val, dst } => {
@@ -2536,6 +2605,12 @@ impl Context<'_> {
                     let name = reg!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
+                        regs[base + dst as usize] = v;
+                        return Ok(Next::Go(pc));
+                    }
+                    if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Set) {
+                        let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+                        self.run_magic(regs, found, &mut [pname, v.clone()])?;
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
                     }
@@ -2555,6 +2630,15 @@ impl Context<'_> {
                         regs[base + dst as usize] = v.unwrap_or(Value::Null);
                         return Ok(Next::Go(pc));
                     }
+                    if self.prop_magic(&target, &name, crate::classes::Magic::Get).is_some() || self.prop_magic(&target, &name, crate::classes::Magic::Set).is_some() {
+                        let v = self.magic_update(regs, &target, &name, |c, x| {
+                            let r = ops::binary(op, x, &y, &mut c.diags);
+                            c.report_diags();
+                            r.map(|v| (v.clone(), v)).map_err(|e| c.op_error(e))
+                        })?;
+                        regs[base + dst as usize] = v.unwrap_or(Value::Null);
+                        return Ok(Next::Go(pc));
+                    }
                     let x = self.read_for_update(&target, &name)?;
                     let r = ops::binary(op, &x, &y, &mut self.diags);
                     self.report_diags();
@@ -2571,6 +2655,15 @@ impl Context<'_> {
                         c.report_diags();
                         r.map(|new| (new.clone(), if post { x.clone() } else { new })).map_err(|e| c.op_error(e))
                     })?;
+                        regs[base + dst as usize] = v.unwrap_or(Value::Null);
+                        return Ok(Next::Go(pc));
+                    }
+                    if self.prop_magic(&target, &name, crate::classes::Magic::Get).is_some() || self.prop_magic(&target, &name, crate::classes::Magic::Set).is_some() {
+                        let v = self.magic_update(regs, &target, &name, |c, x| {
+                            let r = if inc { ops::increment(x, &mut c.diags) } else { ops::decrement(x, &mut c.diags) };
+                            c.report_diags();
+                            r.map(|new| (new.clone(), if post { x.clone() } else { new })).map_err(|e| c.op_error(e))
+                        })?;
                         regs[base + dst as usize] = v.unwrap_or(Value::Null);
                         return Ok(Next::Go(pc));
                     }
@@ -2596,6 +2689,23 @@ impl Context<'_> {
                         path.push(self.key(w, func, at + 2 + i as Reg)?);
                     }
                     let v = self.operand(w, func, val);
+                    // An overloaded property: __get's value is written into
+                    // only when it is an object; otherwise nothing changes.
+                    if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Get) {
+                        let pname = name.to_php_string().unwrap_or_else(PhpStr::empty);
+                        let mut got = self.run_magic(regs, found, &mut [Value::Str(pname.clone())])?;
+                        if matches!(got, Value::Object(_)) {
+                            regs[base + dst as usize] = self.update_path(&mut got, &path, append, v, op)?;
+                        } else {
+                            let class = match &target {
+                                Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                                _ => String::new(),
+                            };
+                            self.notice(&format!("Indirect modification of overloaded property {class}::${} has no effect", String::from_utf8_lossy(pname.as_bytes())));
+                            regs[base + dst as usize] = v;
+                        }
+                        return Ok(Next::Go(pc));
+                    }
                     reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
                 }
                 Instr::IssetProp { dst, obj, name } => {
@@ -2604,6 +2714,12 @@ impl Context<'_> {
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = Value::Bool(!matches!(v.deref(), Value::Null | Value::Undef));
+                        return Ok(Next::Go(pc));
+                    }
+                    if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Isset) {
+                        let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+                        let v = self.run_magic(regs, found, &mut [pname])?;
+                        regs[base + dst as usize] = Value::Bool(v.to_bool());
                         return Ok(Next::Go(pc));
                     }
                     reg!(dst) = Value::Bool(self.isset_prop(&target, &name)?);
@@ -2616,6 +2732,11 @@ impl Context<'_> {
                     {
                         let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
                         return Err(self.throw("Error", format!("Cannot unset hooked property {class}::${}", String::from_utf8_lossy(n.as_bytes()))));
+                    }
+                    if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Unset) {
+                        let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+                        self.run_magic(regs, found, &mut [pname])?;
+                        return Ok(Next::Go(pc));
                     }
                     self.unset_prop(&target, &name)?;
                 }
