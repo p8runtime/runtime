@@ -202,6 +202,9 @@ pub struct Class {
     /// `(int)`, `(float)`, arithmetic and comparisons with scalars read. None:
     /// no such cast.
     pub cast_string: Option<fn(&Object) -> PhpStr>,
+    /// The native state a clone gets (zend's clone_obj for internal
+    /// classes): None shares the original's.
+    pub clone_data: Option<CloneData>,
     /// A native class's per-object Rust state, made for each new object
     /// (of it or a subclass): see [`Data`].
     pub make_data: Option<MakeData>,
@@ -381,6 +384,9 @@ pub struct Data(pub Rc<dyn std::any::Any>);
 /// Makes a new object's [`Data`] (a native class's state).
 pub type MakeData = fn() -> Rc<dyn std::any::Any>;
 
+/// A native class's state for a clone (see [`Class::clone_data`]).
+pub type CloneData = fn(&Object) -> Rc<dyn std::any::Any>;
+
 impl std::fmt::Debug for Data {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Data")
@@ -440,7 +446,10 @@ impl Object {
     pub fn copy(&self) -> Rc<Object> {
         let o = Rc::new(Object {
             class: Rc::clone(&self.class),
-            data: self.data.as_ref().map(|d| Data(Rc::clone(&d.0))),
+            data: match self.class.clone_data {
+                Some(clone) => Some(Data(clone(self))),
+                None => self.data.as_ref().map(|d| Data(Rc::clone(&d.0))),
+            },
             slots: RefCell::new(self.slots.borrow().clone()),
             dynamic: RefCell::new(self.dynamic.borrow().clone()),
             id: self.ids.take(),

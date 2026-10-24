@@ -27,7 +27,7 @@ fn declare(
 ) {
     let lower = name.to_ascii_lowercase().into_bytes();
     let parent = parent.map(|p| Rc::clone(&classes[p.to_ascii_lowercase().as_bytes()]));
-    let (inherited_props, inherited_bool, inherited_string) = parent.as_ref().map_or((None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string));
+    let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
     let mut all_interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
     let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
     for i in interfaces {
@@ -83,6 +83,7 @@ fn declare(
         get_properties: inherited_props,
         cast_bool: inherited_bool,
         cast_string: inherited_string,
+        clone_data: inherited_clone,
         make_data: None,
         native_dtor: None,
         enum_cases: Vec::new(),
