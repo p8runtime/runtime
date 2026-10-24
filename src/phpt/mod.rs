@@ -4,6 +4,8 @@ pub mod executor;
 pub mod matcher;
 pub mod parser;
 pub mod results;
+pub mod schedule;
+pub mod suite;
 
 pub use executor::{PhptExecutor, TestResult};
 pub use matcher::{ExpectationType, match_output};

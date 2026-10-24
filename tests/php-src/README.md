@@ -1,36 +1,55 @@
 # php-src: the compatibility target
 
 p8's correctness gate (APS 7) is php-src's own test suite, at the version p8
-targets (PHP 8.4.27).
+targets (PHP 8.4.27). The target and p8's recorded results live in
+[addiscorp/p8-test-suite](https://github.com/addiscorp/p8-test-suite):
 
-## Files
+- `target.txt`: the **16,077 tests that real PHP 8.4.27 passes**. "100%" for
+  p8 means passing every one. `make-target.sh` here regenerates it (php-src's
+  `run-tests.php` in the official `php:8.4-cli` image; a test counts when its
+  JUnit entry has no failure, error or skip).
+- `results.txt` and `run.json`: p8's state for each target test at a `main`
+  commit. **A change may not lose a test that passes there.**
+- `php-src.json`: the php-src release, which the checkout must be at.
 
-- `target.txt` lists the **16,077 tests that real PHP 8.4.27 passes**.
-  - Real PHP runs the suite with php-src's `run-tests.php` in the official
-    `php:8.4-cli` image.
-  - A test counts as passing when its JUnit entry has no failure, error or
-    skip.
-  - "100%" for p8 means passing every test on this list.
-- `make-target.sh` regenerates `target.txt` from a php-src checkout at the
-  same tag.
-- `p8-passes.txt` is the target tests p8 passes today, sorted. **A change may
-  not lose a test from it.** A change that gains tests updates it, and the PR
-  shows the difference.
+p8-test-suite.addis.gg draws the results.
 
 ## Running it
+
+Check out p8-test-suite and php-src (at the suite's `php-src.json` commit)
+next to this repository, then:
 
 ```sh
 cargo build --release --bin php-test
 cargo build --release -p php-cli --bin php2
-target/release/php-test ../php-src -r -q --php target/release/php2 \
-  --target tests/php-src/target.txt --passes .tmp/p8-passes.txt
-diff tests/php-src/p8-passes.txt .tmp/p8-passes.txt   # "<" lines are lost tests
+target/release/php-test ../php-src --suite ../p8-test-suite --php target/release/php2
 ```
 
-Compare lists with `diff` (or `LC_ALL=C comm`: the lists are sorted bytewise).
+Every target test runs, compared with the suite's results: the tests gained
+and lost, and a table of the areas that changed. A lost test makes it exit
+1. A full run takes a few minutes; for quick feedback narrow it:
 
-The run writes into the php-src checkout, so reset it afterwards:
-`git checkout -- . && git clean -fd` in php-src.
+- `-f ext/zlib`: tests whose path contains the text (an area, one test).
+- `--only fail` (or `pass`, `skip`): tests the suite records in that state.
+  `--only pass` is a quick check that nothing was lost.
+- `--outputs .tmp/out`: for every test that doesn't pass, what it expected
+  and what p8 printed, as `.tmp/out/<test path>.exp` and `.out`.
+- `-v`: print the expected and actual output of failures inline.
 
-`php-test` spawns the engine once per test, as php-src's own runner does, so
-one test can't crash or stall the others. Each test has a timeout.
+Tests not run keep their recorded state in the target total.
+
+`--write` records a full run in the suite's `results.txt` and `run.json`,
+against this checkout's HEAD (it must be clean): a new p8-test-suite release
+is a pull request with that change, tagged `results-<commit>` once merged.
+
+## How tests run
+
+- Like php-src's `run-tests.php -j`: a worker takes a batch of up to 32
+  consecutive tests and runs them in order (neighbouring tests share files);
+  `CONFLICTS` files and `--CONFLICTS--` sections keep tests with the same key
+  apart; tests with the key `all` run last, alone.
+- `php-test` spawns the engine once per test, as php-src's runner does, so
+  one test can't crash or stall the others. Each test has a timeout and caps
+  on memory and processes (`-j` at most half the cores).
+- Tests write into the php-src checkout, so `--suite` resets it
+  (`git checkout -- . && git clean -fd`) before and after a run.
