@@ -451,7 +451,7 @@ impl Context<'_> {
         let destructor = destructor | if lazy { CLASS_LAZY } else { 0 };
         let destructor = destructor | if properties.iter().any(|p| p.hooks != 0) { p8_runtime::object::CLASS_HOOKS } else { 0 };
         let destructor = destructor | if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| methods.contains_key(*m)) { p8_runtime::object::CLASS_MAGIC_PROPS } else { 0 };
-        let destructor = destructor | parent.as_ref().map_or(0, |p| p.flags & p8_runtime::object::CLASS_UNCLONEABLE);
+        let destructor = destructor | parent.as_ref().map_or(0, |p| p.flags & (p8_runtime::object::CLASS_UNCLONEABLE | p8_runtime::object::CLASS_ALLOW_DYNAMIC));
         let make_data = parent.as_ref().and_then(|p| p.make_data);
         let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
         Ok(Rc::new(Class {
@@ -816,7 +816,7 @@ impl Context<'_> {
             None => {
                 let key = Key::from_string(name.clone());
                 if !object.dynamic.borrow().contains_key(&key) {
-                    if object.class.lower != b"stdclass" {
+                    if object.class.lower != b"stdclass" && object.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 {
                         self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
                             "Creation of dynamic property {}::${} is deprecated",
                             text(&object.class.name),
@@ -901,7 +901,7 @@ impl Context<'_> {
             None => {
                 let key = Key::from_string(name.clone());
                 let exists = object.dynamic.borrow().contains_key(&key);
-                if !exists && object.class.lower != b"stdclass" {
+                if !exists && object.class.lower != b"stdclass" && object.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 {
                     self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
                         "Creation of dynamic property {}::${} is deprecated",
                         text(&object.class.name),
@@ -1131,6 +1131,11 @@ impl Context<'_> {
         let scope = self.scope().0;
         match o.class.slot(name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) {
             Some(slot) => {
+                // A lazy property is uninitialized, not unset: initialization
+                // comes before any magic method.
+                if o.lazy_slot(slot) {
+                    return None;
+                }
                 let prop = &o.class.properties[slot];
                 let declaring = self.declaring(&o.class, &prop.declaring);
                 if visible(prop.visibility, &declaring, scope.as_deref()) && !(prop.ty.is_none() && matches!(o.slots.borrow()[slot], Value::Undef)) {
@@ -1406,6 +1411,20 @@ impl Context<'_> {
         };
         if o.class.flags & p8_runtime::object::CLASS_UNCLONEABLE != 0 {
             return Err(self.throw("Error", format!("Trying to clone an uncloneable object of class {}", text(&o.class.name))));
+        }
+        // An initialized lazy proxy: a new proxy for a clone of the instance;
+        // the instance's __clone runs, the proxy's doesn't.
+        if let Some(inst) = o.proxy_instance() {
+            let (inst_copy, hook) = self.clone_object(&Value::Object(inst))?;
+            let copy = o.copy();
+            copy.lazy.set(p8_runtime::object::LAZY_PROXY);
+            *copy.lazy_info.borrow_mut() = Some(Box::new(p8_runtime::object::Lazy {
+                initializer: Value::Null,
+                options: o.lazy_info.borrow().as_ref().map_or(0, |l| l.options),
+                lazy_slots: vec![true; o.class.properties.len()],
+                instance: Some(inst_copy),
+            }));
+            return Ok((copy, hook));
         }
         let copy = o.copy();
         let Some(method) = o.class.method(b"__clone").cloned() else { return Ok((copy, None)) };

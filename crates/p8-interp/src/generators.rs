@@ -394,7 +394,8 @@ impl Context<'_> {
     /// are gone through as they are; an IteratorAggregate's iterator is;
     /// any other object's visible properties are.
     pub(crate) fn iter_object(&mut self, regs: &mut Vec<Value>, object: Rc<Object>) -> Result<Option<Value>, Throw> {
-        let mut object = object;
+        // A lazy object is initialized first; a proxy iterates its instance.
+        let mut object = if object.lazy.get() != 0 { self.lazy_init(regs, &object)? } else { object };
         loop {
             if gen_of(&object).is_some() {
                 self.generator_op(regs, &object, Op::Rewind, Value::Null)?;
