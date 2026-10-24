@@ -53,6 +53,8 @@ impl Context<'_> {
             let handler: &[u8] = match name {
                 "offsetGet" => b"$[]::get",
                 "offsetExists" => b"$[]::has",
+                "offsetSet" => b"$[]::set",
+                "offsetUnset" => b"$[]::unset",
                 _ => b"",
             };
             if let Some(native) = o.class.method(handler).and_then(|m| m.native) {

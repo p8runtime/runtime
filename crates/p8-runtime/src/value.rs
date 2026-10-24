@@ -86,7 +86,7 @@ impl Value {
             Value::Float(f) => *f != 0.0,
             Value::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
             Value::Array(a) => !a.is_empty(),
-            Value::Object(_) => true,
+            Value::Object(o) => o.class.cast_bool.is_none_or(|cast| cast(o)),
             Value::Ref(cell) => cell.borrow().to_bool(),
         }
     }
@@ -107,6 +107,7 @@ impl Value {
             Value::Array(a) => i64::from(!a.is_empty()),
             // A resource is its number.
             Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => i64::from(o.id),
+            Value::Object(o) if o.class.cast_string.is_some() => Value::Str(o.class.cast_string.expect("checked")(o)).to_int(),
             // PHP warns "could not be converted to int" (the engine reports it).
             Value::Object(_) => 1,
             Value::Ref(cell) => cell.borrow().to_int(),
@@ -127,6 +128,7 @@ impl Value {
             },
             Value::Array(a) => f64::from(u8::from(!a.is_empty())),
             Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => f64::from(o.id),
+            Value::Object(o) if o.class.cast_string.is_some() => Value::Str(o.class.cast_string.expect("checked")(o)).to_float(),
             Value::Object(_) => 1.0,
             Value::Ref(cell) => cell.borrow().to_float(),
         }
@@ -146,6 +148,7 @@ impl Value {
             Value::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Value::Str(s) => s.clone(),
             Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
+            Value::Object(o) if o.class.cast_string.is_some() => o.class.cast_string.expect("checked")(o),
             // An object's string comes from __toString, which the engine
             // calls; neither converts here.
             Value::Array(_) | Value::Object(_) => return None,
@@ -191,6 +194,13 @@ impl Value {
         Some(match (self, other) {
             (Ref(a), _) => return a.borrow().compare(other),
             (_, Ref(b)) => return self.compare(&b.borrow()),
+            // An object with a scalar cast against a scalar: compared as its string.
+            (Object(o), x) if !matches!(x, Object(_) | Array(_) | Null | Undef | Bool(_)) && o.class.cast_string.is_some() => {
+                return Str(o.class.cast_string.expect("checked")(o)).compare(other);
+            }
+            (x, Object(o)) if !matches!(x, Object(_) | Array(_) | Null | Undef | Bool(_)) && o.class.cast_string.is_some() => {
+                return self.compare(&Str(o.class.cast_string.expect("checked")(o)));
+            }
             (Undef, _) => return Null.compare(other),
             (_, Undef) => return self.compare(&Null),
             (Int(a), Int(b)) => a.cmp(b),

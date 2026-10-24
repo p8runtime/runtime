@@ -2693,9 +2693,18 @@ impl Context<'_> {
                     // only when it is an object; otherwise nothing changes.
                     if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Get) {
                         let pname = name.to_php_string().unwrap_or_else(PhpStr::empty);
-                        let mut got = self.run_magic(regs, found, &mut [Value::Str(pname.clone())])?;
+                        let got = self.run_magic(regs, found, &mut [Value::Str(pname.clone())])?;
                         if matches!(got, Value::Object(_)) {
-                            regs[base + dst as usize] = self.update_path(&mut got, &path, append, v, op)?;
+                            // Into the object as `$obj[k]... = v` writes (ArrayAccess, SimpleXML).
+                            let keys: Vec<Value> = path.iter().map(|k| match k {
+                                Key::Int(i) => Value::Int(*i),
+                                Key::Str(s) => Value::Str(s.clone()),
+                            }).collect();
+                            let dim_op = match op {
+                                Some(op) => arrayaccess::DimOp::Op(op, v),
+                                None => arrayaccess::DimOp::Set(v),
+                            };
+                            regs[base + dst as usize] = self.aa_write(regs, &got, &keys, append, dim_op)?;
                         } else {
                             let class = match &target {
                                 Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
@@ -3099,6 +3108,9 @@ impl Context<'_> {
                     constants: p8_runtime::object::Constants::new(),
                     statics: HashMap::new(),
                     debug_info: None,
+                    get_properties: None,
+                    cast_bool: None,
+                    cast_string: None,
                     make_data: None,
                     native_dtor: None,
                     enum_cases: Vec::new(),

@@ -455,7 +455,7 @@ fn case_name(o: &Object) -> PhpStr {
 
 fn entries(o: &Object) -> Vec<Entry> {
     let mut list = Vec::new();
-    if let Some(info) = o.class.debug_info {
+    if let Some(info) = o.class.debug_info.or(o.class.get_properties) {
         for (k, v) in info(o).iter() {
             let numeric = matches!(k, Key::Int(_));
             let name = match k {

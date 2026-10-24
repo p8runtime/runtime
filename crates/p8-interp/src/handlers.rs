@@ -52,7 +52,16 @@ impl Context<'_> {
         }
         let make_data = self.isolate.registry.data_maker(spec.name);
         let dtor = self.isolate.registry.native_dtor(spec.name);
+        let hooks = self.isolate.registry.class_hooks(spec.name);
         crate::builtin_classes::declare_spec(&mut self.classes, spec, make_data, dtor);
+        if let Some(h) = hooks
+            && let Some(c) = self.classes.get_mut(spec.name.to_ascii_lowercase().as_bytes())
+            && let Some(c) = Rc::get_mut(c)
+        {
+            c.get_properties = h.get_properties;
+            c.cast_bool = h.cast_bool;
+            c.cast_string = h.cast_string;
+        }
         self.classes.get(lower).cloned()
     }
 

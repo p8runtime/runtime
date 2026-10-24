@@ -192,6 +192,16 @@ pub struct Class {
     /// What var_dump and print_r show of an object instead of its
     /// properties (a Closure's name, file, bindings).
     pub debug_info: Option<fn(&Object) -> PhpArray>,
+    /// A native class's properties as PHP sees them ((array), var_dump,
+    /// get_object_vars, json_encode): zend's get_properties handler.
+    pub get_properties: Option<fn(&Object) -> PhpArray>,
+    /// `(bool)` of its objects: zend's cast_object to bool (an empty
+    /// SimpleXML element is false). None: always true.
+    pub cast_bool: Option<fn(&Object) -> bool>,
+    /// Its objects as a scalar (zend's cast_object to string): what
+    /// `(int)`, `(float)`, arithmetic and comparisons with scalars read. None:
+    /// no such cast.
+    pub cast_string: Option<fn(&Object) -> PhpStr>,
     /// A native class's per-object Rust state, made for each new object
     /// (of it or a subclass): see [`Data`].
     pub make_data: Option<MakeData>,
@@ -397,6 +407,12 @@ impl Object {
     pub fn new(class: Rc<Class>, ids: &Rc<Ids>) -> Rc<Object> {
         let data = class.make_data.map(|make| make());
         Object::with_data(class, ids, data)
+    }
+
+    /// A new object of `class` beside this one (same id space), holding
+    /// `data`: for native code that has an object but no context.
+    pub fn sibling(&self, class: Rc<Class>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
+        Object::with_data(class, &self.ids, data)
     }
 
     /// This object's native state, if it is a `T`.

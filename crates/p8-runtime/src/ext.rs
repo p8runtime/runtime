@@ -236,12 +236,23 @@ pub struct Registry {
     data: HashMap<&'static str, crate::object::MakeData>,
     /// Native classes' cleanups on destruction, by class name.
     dtors: HashMap<&'static str, crate::object::NativeMethod>,
+    /// Native classes' object handlers, by class name.
+    hooks: HashMap<&'static str, ClassHooks>,
     /// The PHP modules provided ("standard", "json", ...), in order.
     modules: Vec<&'static str>,
 }
 
 /// A class an extension declares: its methods are Rust. The engine links
 /// it with the core classes, after them (so it may extend Exception).
+/// A native class's object handlers (zend_object_handlers' get_properties
+/// and cast_object): see [`crate::object::Class`].
+#[derive(Clone, Copy, Default)]
+pub struct ClassHooks {
+    pub get_properties: Option<fn(&crate::object::Object) -> crate::array::PhpArray>,
+    pub cast_bool: Option<fn(&crate::object::Object) -> bool>,
+    pub cast_string: Option<fn(&crate::object::Object) -> crate::string::PhpStr>,
+}
+
 pub struct ClassSpec {
     pub name: &'static str,
     pub parent: Option<&'static str>,
@@ -290,6 +301,16 @@ impl Registry {
     /// subclass) is destroyed, before any __destruct.
     pub fn add_dtor(&mut self, class: &'static str, dtor: crate::object::NativeMethod) {
         self.dtors.insert(class, dtor);
+    }
+
+    /// Object handlers for native class `class` (and its subclasses).
+    pub fn add_hooks(&mut self, class: &'static str, hooks: ClassHooks) {
+        self.hooks.insert(class, hooks);
+    }
+
+    /// The handlers `add_hooks` registered for `class`.
+    pub fn class_hooks(&self, class: &str) -> Option<ClassHooks> {
+        self.hooks.get(class).copied()
     }
 
     /// The cleanup `add_dtor` registered for `class`.
