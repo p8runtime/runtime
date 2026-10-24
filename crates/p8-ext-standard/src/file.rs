@@ -83,7 +83,17 @@ fn text(s: &PhpStr) -> String {
 
 /// The stream resource in argument `i`: TypeError for anything else, and
 /// for a closed one.
+/// The name the running builtin was called by (an alias, gzread for
+/// fread, names itself), else `default`.
+fn called<'a>(ctx: &dyn Ctx, default: &'a str) -> &'a str {
+    match ctx.builtin_name() {
+        "" => default,
+        name => name,
+    }
+}
+
 pub(crate) fn stream_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value], i: usize) -> Result<Rc<Object>, Throw> {
+    let func = called(ctx, func);
     let v = arg(args, i);
     match resource_of(&v) {
         Some(o) if resource(&o).is_some_and(|r| !r.closed.get()) => Ok(o),
@@ -100,12 +110,12 @@ fn with_stream<R>(o: &Object, f: impl FnOnce(&mut Stream) -> R) -> R {
     f(&mut r.stream.borrow_mut())
 }
 
-fn new_stream(ctx: &mut dyn Ctx, stream: Stream) -> Value {
+pub(crate) fn new_stream(ctx: &mut dyn Ctx, stream: Stream) -> Value {
     ctx.new_resource(Resource { kind: "stream", closed: Cell::new(false), stream: RefCell::new(stream) })
 }
 
 /// The OS error PHP shows ("No such file or directory").
-fn os_error(e: &std::io::Error) -> String {
+pub(crate) fn os_error(e: &std::io::Error) -> String {
     match e.kind() {
         std::io::ErrorKind::NotFound => "No such file or directory".into(),
         std::io::ErrorKind::PermissionDenied => "Permission denied".into(),
@@ -126,6 +136,9 @@ fn os_error(e: &std::io::Error) -> String {
 /// Open `path` with an fopen mode (php:// names included).
 fn open(ctx: &mut dyn Ctx, func: &str, path: &PhpStr, mode: &str) -> Result<Option<Stream>, Throw> {
     let p = text(path);
+    if let Some(gz) = p.strip_prefix("compress.zlib://") {
+        return Ok(crate::zlib::open_gz(ctx, func, gz, mode));
+    }
     let lower = p.to_ascii_lowercase();
     if let Some(rest) = lower.strip_prefix("php://") {
         let target = match rest.split('/').next().unwrap_or("") {
@@ -189,18 +202,17 @@ fn fopen(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
 }
 
-fn fclose(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn fclose(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fclose", args, 0)?;
     let r = resource(&o).expect("a stream resource");
-    let _ = r.stream.borrow_mut().flush();
     r.closed.set(true);
     // The file itself closes now (the resource value lives on, closed).
-    r.stream.borrow_mut().target = Target::Memory(Vec::new());
+    r.stream.borrow_mut().close();
     Ok(Value::Bool(true))
 }
 
 /// fwrite(resource $stream, string $data, ?int $length = null)
-fn fwrite(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn fwrite(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fwrite", args, 0)?;
     let data = str_arg(args, 1);
     let mut bytes = data.as_bytes();
@@ -208,7 +220,11 @@ fn fwrite(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         let n = arg(args, 2).to_int().max(0) as usize;
         bytes = &bytes[..n.min(bytes.len())];
     }
-    let writable = with_stream(&o, |s| s.writable());
+    let (writable, zlib) = with_stream(&o, |s| (s.writable(), s.zlib));
+    if !writable && zlib {
+        // A gzip file being read takes nothing.
+        return Ok(Value::Int(0));
+    }
     if !writable {
         ctx.report(8, &format!("fwrite(): Write of {} bytes failed with errno=9 Bad file descriptor", bytes.len()));
         return Ok(Value::Bool(false));
@@ -218,23 +234,26 @@ fn fwrite(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
 }
 
-fn fread(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn fread(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fread", args, 0)?;
     let n = arg(args, 1).to_int();
     if n <= 0 {
-        return Err(ctx.throw("ValueError", "fread(): Argument #2 ($length) must be greater than 0".into()));
+        return Err(ctx.throw("ValueError", format!("{}(): Argument #2 ($length) must be greater than 0", called(ctx, "fread"))));
+    }
+    if with_stream(&o, |s| s.zlib && !s.readable()) {
+        return Ok(Value::Bool(false));
     }
     Ok(Value::Str(PhpStr::new(with_stream(&o, |s| s.read(n as usize)))))
 }
 
-fn fgets(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn fgets(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fgets", args, 0)?;
     let limit = match args.get(1).map(Value::deref) {
         None | Some(Value::Null) => None,
         Some(v) => {
             let n = v.to_int();
             if n <= 0 {
-                return Err(ctx.throw("ValueError", "fgets(): Argument #2 ($length) must be greater than 0".into()));
+                return Err(ctx.throw("ValueError", format!("{}(): Argument #2 ($length) must be greater than 0", called(ctx, "fgets"))));
             }
             Some(n as usize)
         }
@@ -242,13 +261,13 @@ fn fgets(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(with_stream(&o, |s| s.gets(limit)).map_or(Value::Bool(false), |b| Value::Str(PhpStr::new(b))))
 }
 
-fn fgetc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn fgetc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fgetc", args, 0)?;
     let b = with_stream(&o, |s| s.read(1));
     Ok(if b.is_empty() { Value::Bool(false) } else { Value::Str(PhpStr::new(b)) })
 }
 
-fn feof(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn feof(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "feof", args, 0)?;
     Ok(Value::Bool(with_stream(&o, |s| s.at_end())))
 }
@@ -258,20 +277,35 @@ fn fflush(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(with_stream(&o, |s| s.flush())))
 }
 
-fn ftell(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn ftell(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "ftell", args, 0)?;
     Ok(Value::Int(with_stream(&o, |s| s.tell())))
 }
 
-fn fseek(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn fseek(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fseek", args, 0)?;
     let offset = arg(args, 1).to_int();
     let whence = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+    if with_stream(&o, |s| s.zlib) {
+        if whence == 2 {
+            ctx.warn(&format!("{}(): SEEK_END is not supported", called(ctx, "gzseek")));
+            return Ok(Value::Int(-1));
+        }
+        // Writing, zlib only goes forward.
+        let (writing, here) = with_stream(&o, |s| (s.writable(), s.tell()));
+        let to = if whence == 1 { here + offset } else { offset };
+        if writing && to < here {
+            return Ok(Value::Int(-1));
+        }
+    }
     Ok(Value::Int(if with_stream(&o, |s| s.seek(offset, whence)) { 0 } else { -1 }))
 }
 
-fn rewind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn rewind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "rewind", args, 0)?;
+    if with_stream(&o, |s| s.zlib && s.writable()) {
+        return Ok(Value::Bool(false));
+    }
     Ok(Value::Bool(with_stream(&o, |s| s.seek(0, 0))))
 }
 
@@ -298,7 +332,7 @@ fn fprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(bytes.len() as i64))
 }
 
-fn fpassthru(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn fpassthru(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fpassthru", args, 0)?;
     let rest = with_stream(&o, |s| s.read_all());
     ctx.echo(&rest);
@@ -336,6 +370,9 @@ fn read_path(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Result<Option<Vec<
     let p = text(path);
     if p.starts_with("php://") {
         return Ok(open(ctx, func, path, "r")?.map(|mut s| s.read_all()));
+    }
+    if let Some(gz) = p.strip_prefix("compress.zlib://") {
+        return Ok(crate::zlib::open_gz(ctx, func, gz, "r").map(|mut s| s.read_all()));
     }
     let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
     if Path::new(&p).is_dir() {
@@ -488,6 +525,14 @@ fn rename(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn copy(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (from, to) = (text(&str_arg(args, 0)), text(&str_arg(args, 1)));
+    if from.contains("://") || to.contains("://") {
+        // Through the streams: a wrapper (compress.zlib://, php://) at either end.
+        let Some(bytes) = read_path(ctx, "copy", &str_arg(args, 0))? else { return Ok(Value::Bool(false)) };
+        let Some(mut out) = open(ctx, "copy", &str_arg(args, 1), "wb")? else { return Ok(Value::Bool(false)) };
+        let ok = out.write(ctx, &bytes).is_some();
+        out.close();
+        return Ok(Value::Bool(ok));
+    }
     match std::fs::copy(&from, &to) {
         Ok(_) => Ok(Value::Bool(true)),
         Err(e) => {

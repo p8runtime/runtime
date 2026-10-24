@@ -48,6 +48,9 @@ pub enum Target {
     Stderr,
 }
 
+/// What runs with a stream's bytes when it closes.
+pub type OnClose = Box<dyn FnOnce(&[u8])>;
+
 pub struct Stream {
     pub target: Target,
     pub path: String,
@@ -57,11 +60,31 @@ pub struct Stream {
     pub eof: bool,
     /// Read ahead of what the script has taken (fgets reads past the line).
     pub buffer: Vec<u8>,
+    /// Runs with a Memory target's bytes when the stream closes (or goes
+    /// away): a gzip file compressed and written on gzclose.
+    pub on_close: Option<OnClose>,
+    /// A zlib (gzip file) stream: one way only, no SEEK_END.
+    pub zlib: bool,
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 impl Stream {
     pub fn new(target: Target, path: &str, mode: &str) -> Stream {
-        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new() }
+        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false }
+    }
+
+    /// Close: flushed, the close hook run, the target let go.
+    pub fn close(&mut self) {
+        let _ = self.flush();
+        let target = std::mem::replace(&mut self.target, Target::Memory(Vec::new()));
+        if let (Some(finish), Target::Memory(data)) = (self.on_close.take(), &target) {
+            finish(data);
+        }
     }
 
     pub fn readable(&self) -> bool {
