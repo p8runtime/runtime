@@ -306,12 +306,19 @@ pub enum Rare {
     /// declared return type.
     VerifyReturn,
     /// `$$name` written: a gets a reference to the variable named by b
-    /// (made, if the code never names it).
+    /// (made, if the code never names it); c 1: the global variable
+    /// (`$GLOBALS[name]`).
     VarRef,
-    /// `$$name` read: a = the variable named by b (c: 1 quietly, for isset).
+    /// `$$name` read: a = the variable named by b (c bit 0: quietly, for
+    /// isset; bit 1: the global variable).
     VarGet,
-    /// `unset($$name)`: the variable named by a.
+    /// `unset($$name)`: the variable named by a (b 1: the global one).
     VarUnset,
+    /// `$GLOBALS` read whole: a = a copy of the global variables.
+    Globals,
+    /// `$GLOBALS[name] = &$v`: the global variable named by a becomes the
+    /// reference in b.
+    GlobalBind,
 }
 
 impl Instr {

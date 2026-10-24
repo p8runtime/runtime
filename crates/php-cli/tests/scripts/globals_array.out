@@ -1,0 +1,16 @@
+1
+bool(true)
+bool(false)
+string(1) "d"
+
+Warning: Undefined global variable $nope in %s on line 3
+bool(false)
+int(2)
+array(1) {
+  ["k"]=>
+  int(3)
+}
+bool(true)
+bool(true)
+bool(false)
+bool(true)

@@ -402,6 +402,9 @@ fn has_inner_append(e: &Expr) -> bool {
 fn dim_root_is_var(c: &Compiler, e: &Expr) -> bool {
     let mut cur = e;
     while let Expr::ArrayDimFetch { array, .. } = cur {
+        if c.globals_dim(cur).is_some() {
+            return true;
+        }
         cur = array;
     }
     matches!(cur, Expr::Variable { name, .. } if c.text(*name).starts_with(b"$") && c.text(*name) != b"$this")
@@ -800,6 +803,9 @@ fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
 
 pub struct Compiler<'src> {
     source: &'src [u8],
+    /// The assignment being compiled is a statement's: its value is not
+    /// used, so the variable itself can stand for it.
+    unused_result: bool,
     /// Where the data after `__halt_compiler();` starts (__COMPILER_HALT_OFFSET__).
     halt_offset: Option<usize>,
     /// The builtins (their by-reference parameters are known when compiling).
@@ -857,6 +863,7 @@ impl<'src> Compiler<'src> {
         line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
         Compiler {
             source,
+            unused_result: false,
             registry,
             file: Arc::from(file),
             line_starts,
@@ -1374,6 +1381,11 @@ impl<'src> Compiler<'src> {
             }
             Stmt::Unset { vars, .. } => {
                 for v in *vars {
+                    if let Some(name) = self.globals_dim(v) {
+                        let n = self.expr(f, name)?;
+                        f.emit(Instr::rare(Rare::VarUnset, n, 1, 0, 0));
+                        continue;
+                    }
                     match v {
                         Expr::Variable { name, .. } => {
                             let var = f.cv(&self.text(*name)[1..]);
@@ -1447,7 +1459,9 @@ impl<'src> Compiler<'src> {
                 f.emit(if matches!(op, UnaryOp::PreInc) { Instr::IncVar { var } } else { Instr::DecVar { var } });
             }
             _ => {
+                self.unused_result = matches!(e, Expr::Assign { .. } | Expr::AssignRef { .. });
                 let r = self.expr(f, e)?;
+                self.unused_result = false;
                 if r >> KIND_SHIFT == TEMP {
                     f.emit(Instr::Free { reg: r });
                 }
@@ -1801,7 +1815,9 @@ impl<'src> Compiler<'src> {
         let mut outer = Vec::new();
         let mut cur = target;
         let mut split = None;
-        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur
+            && self.globals_dim(cur).is_none()
+        {
             if dim.is_none() && !outer.is_empty() {
                 split = Some((cur, outer.len()));
             }
@@ -1830,6 +1846,11 @@ impl<'src> Compiler<'src> {
     }
 
     fn assign_from(&mut self, f: &mut FnBuilder, target: &Expr, val: Reg) -> Result<()> {
+        if let Some(name) = self.globals_dim(target) {
+            let var = self.global_ref(f, name)?;
+            f.emit(Instr::Assign { var, src: val });
+            return Ok(());
+        }
         if self.assign_inner_append(f, target, val)? {
             return Ok(());
         }
@@ -2385,6 +2406,9 @@ impl<'src> Compiler<'src> {
     /// it one), and whether it is a call's result (a reference only when
     /// the function returns by reference).
     fn ref_source(&mut self, f: &mut FnBuilder, e: &Expr, span: Span) -> Result<(Reg, bool)> {
+        if let Some(name) = self.globals_dim(e) {
+            return Ok((self.global_ref(f, name)?, false));
+        }
         match e {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => Ok((f.cv(&self.text(*name)[1..]), false)),
             Expr::ArrayDimFetch { .. } => {
@@ -2564,7 +2588,9 @@ impl<'src> Compiler<'src> {
     fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, u8, bool)> {
         let mut dims = Vec::new();
         let mut cur = e;
-        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur
+            && self.globals_dim(cur).is_none()
+        {
             dims.push(*dim);
             cur = array;
         }
@@ -2623,7 +2649,9 @@ impl<'src> Compiler<'src> {
         }
         let mut dims = Vec::new();
         let mut cur = e;
-        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur
+            && self.globals_dim(cur).is_none()
+        {
             dims.push(*dim);
             cur = array;
         }
@@ -2645,7 +2673,9 @@ impl<'src> Compiler<'src> {
     fn dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, Reg, u8, bool)> {
         let mut dims = Vec::new();
         let mut cur = e;
-        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur
+            && self.globals_dim(cur).is_none()
+        {
             dims.push(*dim);
             cur = array;
         }
@@ -2689,6 +2719,31 @@ impl<'src> Compiler<'src> {
         Ok(dst)
     }
 
+    /// `$GLOBALS[name]`: the name expression. It is the global variable of
+    /// that name, read, written and unset in place (PHP 8.1's $GLOBALS).
+    fn globals_dim<'e>(&self, e: &Expr<'e>) -> Option<&'e Expr<'e>> {
+        match e {
+            Expr::ArrayDimFetch { array: Expr::Variable { name, .. }, dim: Some(d), .. } if self.text(*name) == b"$GLOBALS" => Some(*d),
+            _ => None,
+        }
+    }
+
+    /// The global variable `name` (an expression) as a reference.
+    fn global_ref(&mut self, f: &mut FnBuilder, name: &Expr) -> Result<Reg> {
+        let n = self.expr(f, name)?;
+        let dst = f.temp();
+        f.emit(Instr::rare(Rare::VarRef, dst, n, 1, 0));
+        Ok(dst)
+    }
+
+    /// The global variable `name`'s value (quietly for isset and ??).
+    fn global_get(&mut self, f: &mut FnBuilder, name: &Expr, quiet: bool) -> Result<Reg> {
+        let n = self.expr(f, name)?;
+        let dst = f.temp();
+        f.emit(Instr::rare(Rare::VarGet, dst, n, Reg::from(quiet) | 2, 0));
+        Ok(dst)
+    }
+
     /// `$$name` read (quietly for isset and ??).
     fn var_get(&mut self, f: &mut FnBuilder, name: &Expr, quiet: bool) -> Result<Reg> {
         if let Some(cv) = self.literal_var(f, name) {
@@ -2721,6 +2776,9 @@ impl<'src> Compiler<'src> {
     /// temporary holding `$this`, a reference to a static property, or a
     /// call's result (written to and dropped, unless it is an object).
     fn dim_root(&mut self, f: &mut FnBuilder, root: &Expr) -> Result<Reg> {
+        if let Some(name) = self.globals_dim(root) {
+            return self.global_ref(f, name);
+        }
         match root {
             Expr::Variable { name, .. } if self.text(*name) == b"$this" => {
                 let dst = f.temp();
@@ -2775,7 +2833,16 @@ impl<'src> Compiler<'src> {
         if let Some(v) = self.literal(e) {
             return Ok(f.constant(v));
         }
+        if let Some(name) = self.globals_dim(e) {
+            return self.global_get(f, name, false);
+        }
         Ok(match e {
+            // `$GLOBALS` as a whole: a read-only copy of the global variables.
+            Expr::Variable { name, .. } if self.text(*name) == b"$GLOBALS" => {
+                let dst = out(f, hint, mark);
+                f.emit(Instr::rare(Rare::Globals, dst, 0, 0, 0));
+                dst
+            }
             Expr::Variable { name, span } => {
                 let text = self.text(*name);
                 if let Some(var) = text.strip_prefix(b"$") {
@@ -2790,7 +2857,21 @@ impl<'src> Compiler<'src> {
                     self.constant_fetch(f, text)
                 }
             }
-            Expr::Assign { var, expr, .. } => match var {
+            Expr::Assign { var, expr, .. } => match (var, std::mem::take(&mut self.unused_result)) {
+                // A used value: the value assigned, even when a destructor
+                // the overwrite runs changes the variable (PHP's result).
+                (Expr::Variable { name, .. }, false) if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" && !matches!(expr, Expr::Binary { .. }) => {
+                    let target = f.cv(&self.text(*name)[1..]);
+                    let src = self.expr(f, expr)?;
+                    if src >> KIND_SHIFT == TEMP {
+                        f.emit(Instr::Assign { var: target, src });
+                        src
+                    } else {
+                        f.emit(Instr::Assign { var: target, src });
+                        target
+                    }
+                }
+                (var, _) => match var {
                 // `[$a, $b] = …` / `list($a, $b) = …`: the value first, then
                 // each target left to right; the result is the value.
                 Expr::Array { items, .. } => {
@@ -2830,6 +2911,12 @@ impl<'src> Compiler<'src> {
                     }
                     let src = self.expr(f, expr)?;
                     f.emit(if src >> KIND_SHIFT == TEMP { Instr::AssignTake { var: target, src } } else { Instr::Assign { var: target, src } });
+                    target
+                }
+                Expr::ArrayDimFetch { array: Expr::Variable { name: g, .. }, dim: Some(name), .. } if self.text(*g) == b"$GLOBALS" => {
+                    let target = self.global_ref(f, name)?;
+                    let src = self.expr(f, expr)?;
+                    f.emit(Instr::Assign { var: target, src });
                     target
                 }
                 Expr::IndirectVariable { name, .. } => {
@@ -2879,6 +2966,15 @@ impl<'src> Compiler<'src> {
                 }
                 other => return Err(self.unsupported(other.span(), "this assignment")),
             },
+            },
+            Expr::AssignRef { var, expr, span } if self.globals_dim(var).is_some() => {
+                let _ = std::mem::take(&mut self.unused_result);
+                let name = self.globals_dim(var).expect("checked");
+                let (src, _) = self.ref_source(f, expr, *span)?;
+                let n = self.expr(f, name)?;
+                f.emit(Instr::rare(Rare::GlobalBind, n, src, 0, 0));
+                src
+            }
             Expr::AssignRef { var, expr, span } => match (var, expr) {
                 (Expr::Variable { name, .. }, Expr::Variable { name: src, .. })
                     if self.text(*name).starts_with(b"$") && self.text(*src).starts_with(b"$") && self.text(*src) != b"$this" =>
@@ -2901,8 +2997,18 @@ impl<'src> Compiler<'src> {
                     src
                 }
                 _ => {
+                    let unused = std::mem::take(&mut self.unused_result);
                     let (src, call) = self.ref_source(f, expr, *span)?;
-                    self.bind_ref(f, var, src, call, *span)?
+                    // `$a =& f()` whose value is used: the value, even when
+                    // a destructor the rebinding runs unsets $a.
+                    if call && !unused && matches!(var, Expr::Variable { .. }) {
+                        let held = f.temp();
+                        f.emit(Instr::Move { dst: held, src });
+                        self.bind_ref(f, var, src, call, *span)?;
+                        held
+                    } else {
+                        self.bind_ref(f, var, src, call, *span)?
+                    }
                 }
             },
             Expr::AssignOp { var, op, expr, span } => {
@@ -2921,6 +3027,12 @@ impl<'src> Compiler<'src> {
                 match var {
                     Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
                         let target = f.cv(&self.text(*name)[1..]);
+                        let src = self.expr(f, expr)?;
+                        f.emit(Instr::AssignOp { op: bin, var: target, src });
+                        target
+                    }
+                    Expr::ArrayDimFetch { array: Expr::Variable { name: g, .. }, dim: Some(name), .. } if self.text(*g) == b"$GLOBALS" => {
+                        let target = self.global_ref(f, name)?;
                         let src = self.expr(f, expr)?;
                         f.emit(Instr::AssignOp { op: bin, var: target, src });
                         target
@@ -3017,7 +3129,7 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: target @ Expr::ArrayDimFetch { .. }, .. }
-                if !dim_root_is_prop(target) =>
+                if !dim_root_is_prop(target) && self.globals_dim(target).is_none() =>
             {
                 let (var, keys, n, append) = self.dim_path(f, target)?;
                 if append {
@@ -3028,7 +3140,7 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::PostInc { var: target @ Expr::ArrayDimFetch { .. }, .. } | Expr::PostDec { var: target @ Expr::ArrayDimFetch { .. }, .. }
-                if !dim_root_is_prop(target) =>
+                if !dim_root_is_prop(target) && self.globals_dim(target).is_none() =>
             {
                 let (var, keys, n, append) = self.dim_path(f, target)?;
                 if append {
@@ -3456,6 +3568,10 @@ impl<'src> Compiler<'src> {
                 let mut ends = Vec::new();
                 for (i, v) in vars.iter().enumerate() {
                     match v {
+                        Expr::ArrayDimFetch { array: Expr::Variable { name: g, .. }, dim: Some(name), .. } if self.text(*g) == b"$GLOBALS" => {
+                            let var = self.global_get(f, name, true)?;
+                            f.emit(Instr::IssetVar { dst, var });
+                        }
                         Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
                             let var = f.cv(&self.text(*name)[1..]);
                             f.emit(Instr::IssetVar { dst, var });
@@ -3628,6 +3744,9 @@ impl<'src> Compiler<'src> {
     }
 
     fn inc_target(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        if let Some(name) = self.globals_dim(e) {
+            return self.global_ref(f, name);
+        }
         match e {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => Ok(f.cv(&self.text(*name)[1..])),
             Expr::IndirectVariable { name, .. } => self.var_ref(f, name),
@@ -3750,6 +3869,9 @@ impl<'src> Compiler<'src> {
 
     /// `e` read without "undefined" warnings (the left of ??, isset).
     fn quiet(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        if let Some(name) = self.globals_dim(e) {
+            return self.global_get(f, name, true);
+        }
         match e {
             Expr::ArrayDimFetch { array, dim: Some(dim), .. } => {
                 let arr = self.quiet(f, array)?;
