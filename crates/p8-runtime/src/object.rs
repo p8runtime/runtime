@@ -61,6 +61,8 @@ pub const CLASS_INTERNAL: u32 = 1024;
 pub const CLASS_UNCLONEABLE: u32 = 2048;
 /// serialize() and unserialize() refuse it (a native class's state).
 pub const CLASS_NOT_SERIALIZABLE: u32 = 4096;
+/// Has __get, __set, __isset or __unset (its own or inherited).
+pub const CLASS_MAGIC_PROPS: u32 = 8192;
 
 /// A property's hooks (Property::hooks): a get hook, a set hook, and
 /// whether it is virtual (no stored value: no hook uses `$this->name`).

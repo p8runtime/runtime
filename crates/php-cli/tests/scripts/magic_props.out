@@ -1,0 +1,49 @@
+get a
+get missing
+int(1)
+NULL
+string(1) "p"
+set b
+get b
+int(2)
+isset a
+isset zz
+bool(true)
+bool(false)
+bool(true)
+isset a
+get a
+isset zz
+int(1)
+string(7) "default"
+get a
+set a
+get a
+int(11)
+get a
+set a
+get a
+int(12)
+unset a
+isset a
+bool(false)
+get secret
+NULL
+set secret
+get removed
+NULL
+get arr
+
+Notice: Indirect modification of overloaded property A::$arr has no effect in %s on line 28
+isset b
+get b
+bool(false)
+G get x
+
+Warning: Undefined property: G::$x in %s on line 31
+NULL
+bool(false)
+string(1) "v"
+
+Deprecated: Creation of dynamic property OnlyGet::$y is deprecated in %s on line 38
+int(5)
