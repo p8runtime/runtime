@@ -11,6 +11,7 @@ mod parser;
 mod simplexml;
 mod writer;
 mod xml;
+mod xpath;
 mod xmlwriter;
 
 use p8_runtime::ext::{Extension, Registry};

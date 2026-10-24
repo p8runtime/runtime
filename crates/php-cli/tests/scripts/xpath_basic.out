@@ -1,0 +1,27 @@
+Dune Emma 
+3 2 Emma
+float(3816)
+bool(true)
+string(17) "0.333333333333333"
+string(5) "x:tag"
+t=Wired
+sf 2
+int(0)
+int(0)
+
+Warning: DOMXPath::evaluate(): Invalid expression in %s on line 12
+bool(false)
+
+Warning: DOMXPath::query(): Undefined namespace prefix in %s on line 13
+bool(false)
+string(6) ""it's""
+string(10) "'say "hi"'"
+string(25) "concat("both ' and ",'"')"
+bool(true)
+bool(true)
+1x 2y 3z 
+1,2,3,
+1 y
+
+Warning: SimpleXMLElement::xpath(): Invalid expression in %s on line 21
+bool(false)

@@ -46,6 +46,8 @@ pub struct Sxe {
     iter: RefCell<Iter>,
     /// The iterator's current item.
     data: RefCell<Option<Rc<Object>>>,
+    /// registerXPathNamespace's prefixes.
+    xpath_ns: RefCell<Vec<(Vec<u8>, Vec<u8>)>>,
 }
 
 pub fn make_sxe() -> Rc<dyn std::any::Any> {
@@ -202,6 +204,7 @@ fn wrap(this: &Object, r: &NodeRef, id: Id, kind: IterKind, name: Option<Vec<u8>
         node: RefCell::new(Some(r.at(id))),
         iter: RefCell::new(Iter { kind, name, ns: ns.filter(|n| !n.is_empty()), is_prefix }),
         data: RefCell::new(None),
+        xpath_ns: RefCell::new(Vec::new()),
     };
     Value::Object(this.sibling(Rc::clone(&this.class), Some(Rc::new(data))))
 }
@@ -1254,6 +1257,52 @@ fn get_children(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     Ok(sxe(this).data.borrow().clone().map_or(Value::Null, Value::Object))
 }
 
+/// SimpleXMLElement::xpath: the matching nodes as SimpleXMLElements (a
+/// text node as its parent, an attribute as its element's attribute list
+/// of that name), false for an invalid expression.
+fn xpath(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    if sxe(this).iter.borrow().kind == IterKind::AttrList {
+        return Ok(Value::Null);
+    }
+    let Some((r, node, _)) = this_first(ctx, this)? else { return Ok(Value::Null) };
+    let expr = bytes(&arg(args, 0));
+    let registered = sxe(this).xpath_ns.borrow().clone();
+    let v = match crate::dom::xpath::evaluate_at(&r, Some(r.at(node)), &expr, &registered, true) {
+        Ok(v) => v,
+        Err(e) => {
+            ctx.warn(&format!("SimpleXMLElement::xpath(): {}", e.message()));
+            return Ok(Value::Bool(false));
+        }
+    };
+    let mut out = PhpArray::new();
+    if let crate::xpath::XValue::Nodes(ids) = v {
+        let d = r.doc.borrow();
+        for id in ids {
+            let n = d.node(id);
+            let item = match n.kind {
+                Kind::Text => d.parent(id).map(|p| wrap(this, &r, p, IterKind::None, None, None, false)),
+                Kind::Attribute => d.parent(id).map(|p| wrap(this, &r, p, IterKind::AttrList, Some(n.name.clone()), n.ns.clone(), false)),
+                Kind::Element | Kind::Pi | Kind::Comment => Some(wrap(this, &r, id, IterKind::None, None, None, false)),
+                _ => None,
+            };
+            if let Some(item) = item {
+                let _ = out.push(item);
+            }
+        }
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn register_xpath_namespace(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let (prefix, uri) = (bytes(&arg(args, 0)), bytes(&arg(args, 1)));
+    let mut ns = sxe(this).xpath_ns.borrow_mut();
+    match ns.iter_mut().find(|(p, _)| *p == prefix) {
+        Some(e) => e.1 = uri,
+        None => ns.push((prefix, uri)),
+    }
+    Ok(Value::Bool(true))
+}
+
 fn debug_info_method(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     Ok(Value::Array(Rc::new(debug_info(this))))
 }
@@ -1416,6 +1465,8 @@ const METHODS: &[(&str, Option<Native>)] = &[
     m!("hasChildren", has_children),
     m!("getChildren", get_children),
     m!("__debugInfo", debug_info_method),
+    m!("xpath", xpath),
+    m!("registerXPathNamespace", register_xpath_namespace),
 ];
 
 pub const CLASSES: &[ClassSpec] = &[
