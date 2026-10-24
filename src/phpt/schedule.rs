@@ -47,7 +47,7 @@ impl Schedule {
     /// The next batch to run. `None` means nothing can start now: either
     /// everything has been handed out, or what's left waits on running
     /// batches (call again after `done`).
-    pub fn next(&mut self) -> Option<Vec<usize>> {
+    pub fn take(&mut self) -> Option<Vec<usize>> {
         let mut batch = Vec::new();
         while batch.len() < self.batch {
             let Some(i) = self.queue.pop_front() else { break };
@@ -77,7 +77,7 @@ impl Schedule {
         Some(batch)
     }
 
-    /// A batch from `next` finished: release its keys.
+    /// A batch from `take` finished: release its keys.
     pub fn done(&mut self, batch: &[usize]) {
         self.running -= 1;
         for &i in batch {
@@ -113,56 +113,56 @@ mod tests {
     fn consecutive_tests_share_a_batch() {
         let mut s = Schedule::new(vec![vec![]; 10], 4);
         // 10 tests over 4 workers: batches of 3, in order.
-        assert_eq!(s.next(), Some(vec![0, 1, 2]));
-        assert_eq!(s.next(), Some(vec![3, 4, 5]));
-        assert_eq!(s.next(), Some(vec![6, 7, 8]));
-        assert_eq!(s.next(), Some(vec![9]));
-        assert_eq!(s.next(), None);
+        assert_eq!(s.take(), Some(vec![0, 1, 2]));
+        assert_eq!(s.take(), Some(vec![3, 4, 5]));
+        assert_eq!(s.take(), Some(vec![6, 7, 8]));
+        assert_eq!(s.take(), Some(vec![9]));
+        assert_eq!(s.take(), None);
         assert!(s.finished());
     }
 
     #[test]
     fn batches_are_at_most_32() {
         let mut s = Schedule::new(vec![vec![]; 1000], 4);
-        assert_eq!(s.next().unwrap().len(), 32);
+        assert_eq!(s.take().unwrap().len(), 32);
     }
 
     #[test]
     fn a_held_key_holds_back_its_other_tests() {
         let mut s = Schedule::new(keys(&[&["db"], &[], &["db"], &[]]), 2);
         // Batches of 2: test 2 waits while test 0 holds "db".
-        let first = s.next().unwrap();
+        let first = s.take().unwrap();
         assert_eq!(first, [0, 1]);
-        assert_eq!(s.next(), Some(vec![3]));
-        assert_eq!(s.next(), None);
+        assert_eq!(s.take(), Some(vec![3]));
+        assert_eq!(s.take(), None);
         assert!(!s.finished());
         s.done(&first);
-        assert_eq!(s.next(), Some(vec![2]));
+        assert_eq!(s.take(), Some(vec![2]));
         assert!(s.finished());
     }
 
     #[test]
     fn all_tests_run_last_and_alone() {
         let mut s = Schedule::new(keys(&[&["all", "server"], &[], &["all"], &[]]), 1);
-        let batch = s.next().unwrap();
+        let batch = s.take().unwrap();
         assert_eq!(batch, [1, 3]);
         // Nothing beside a running batch.
-        assert_eq!(s.next(), None);
+        assert_eq!(s.take(), None);
         s.done(&batch);
-        let a = s.next().unwrap();
+        let a = s.take().unwrap();
         assert_eq!(a, [0]);
-        assert_eq!(s.next(), None);
+        assert_eq!(s.take(), None);
         s.done(&a);
-        assert_eq!(s.next(), Some(vec![2]));
+        assert_eq!(s.take(), Some(vec![2]));
         assert!(s.finished());
     }
 
     #[test]
     fn a_key_listed_twice_is_released() {
         let mut s = Schedule::new(keys(&[&["db", "db"], &["db"]]), 2);
-        let first = s.next().unwrap();
+        let first = s.take().unwrap();
         assert_eq!(first, [0]);
         s.done(&first);
-        assert_eq!(s.next(), Some(vec![1]));
+        assert_eq!(s.take(), Some(vec![1]));
     }
 }

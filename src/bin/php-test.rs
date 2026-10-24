@@ -368,7 +368,7 @@ fn run_all(cli: &Cli, php: PathBuf, files: &[PathBuf]) -> anyhow::Result<Vec<Tes
                     let batch = {
                         let mut s = schedule.lock().unwrap();
                         loop {
-                            if let Some(batch) = s.next() {
+                            if let Some(batch) = s.take() {
                                 break batch;
                             }
                             if s.finished() {
