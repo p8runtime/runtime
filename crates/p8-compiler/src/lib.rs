@@ -1415,9 +1415,10 @@ impl<'src> Compiler<'src> {
                     }
                 }
             }
-            Stmt::Class { modifiers, name, extends, implements, members, .. } => {
+            Stmt::Class { attributes, modifiers, name, extends, implements, members, .. } => {
                 let (display, line) = self.declared_name(name.span);
-                self.class_decl(f, display, line, modifiers, extends.as_ref(), implements, members, 0)?;
+                let flags = if self.has_attribute(attributes, b"allowdynamicproperties") { p8_runtime::object::CLASS_ALLOW_DYNAMIC } else { 0 };
+                self.class_decl(f, display, line, modifiers, extends.as_ref(), implements, members, flags)?;
             }
             Stmt::Interface { name, extends, members, .. } => {
                 let (display, line) = self.declared_name(name.span);
@@ -2717,6 +2718,15 @@ impl<'src> Compiler<'src> {
         let dst = f.temp();
         f.emit(Instr::rare(Rare::VarRef, dst, n, 0, 0));
         Ok(dst)
+    }
+
+    /// Whether the attribute groups name `attr` (lowercase, no namespace:
+    /// the global attribute classes).
+    fn has_attribute(&self, groups: &[p8_syntax::ast::AttributeGroup], attr: &[u8]) -> bool {
+        groups.iter().flat_map(|g| g.attributes.iter()).any(|a| {
+            let name = self.text(a.name.span);
+            name.strip_prefix(b"\\").unwrap_or(name).eq_ignore_ascii_case(attr)
+        })
     }
 
     /// `$GLOBALS[name]`: the name expression. It is the global variable of

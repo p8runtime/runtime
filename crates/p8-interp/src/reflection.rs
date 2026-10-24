@@ -999,6 +999,158 @@ fn rpr_set_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     Ok(Value::Null)
 }
 
+// ---- Lazy objects (PHP 8.4) ----
+
+/// `$object` argument `i` of a lazy-object method: an instance of the class.
+fn lazy_object_arg(ctx: &mut dyn Ctx, args: &[Value], i: usize, class: &Rc<Class>, method: &str) -> Result<Rc<Object>, Throw> {
+    match arg(args, i) {
+        Value::Object(o) if o.class.is_a(&class.lower) => Ok(o),
+        v => Err(ctx.throw(
+            "TypeError",
+            format!(
+                "{method}(): Argument #{} ($object) must be of type {}, {} given",
+                i + 1,
+                String::from_utf8_lossy(class.name.as_bytes()),
+                p8_runtime::args::value_name(&v)
+            ),
+        )),
+    }
+}
+
+/// The options newLazy*/resetAsLazy* take, checked.
+fn lazy_options(ctx: &mut dyn Ctx, v: &Value, method: &str, argn: usize, reset: bool) -> Result<i64, Throw> {
+    let options = match v {
+        Value::Null | Value::Undef => 0,
+        v => v.to_int(),
+    };
+    if options & !(crate::lazy::SKIP_INITIALIZATION_ON_SERIALIZE | crate::lazy::SKIP_DESTRUCTOR) != 0 {
+        return Err(fail(ctx, format!("{method}(): Argument #{argn} ($options) contains invalid flags")));
+    }
+    if !reset && options & crate::lazy::SKIP_DESTRUCTOR != 0 {
+        return Err(fail(ctx, format!("{method}(): Argument #{argn} ($options) does not accept ReflectionClass::SKIP_DESTRUCTOR")));
+    }
+    Ok(options)
+}
+
+fn new_lazy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], proxy: bool) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    let method = if proxy { "ReflectionClass::newLazyProxy" } else { "ReflectionClass::newLazyGhost" };
+    let options = lazy_options(ctx, &arg(args, 1), method, 2, false)?;
+    let o = ctx.lazy_make(&class, None, arg(args, 0), options, proxy)?;
+    Ok(Value::Object(o))
+}
+
+fn rc_new_lazy_ghost(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    new_lazy(ctx, this, args, false)
+}
+
+fn rc_new_lazy_proxy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    new_lazy(ctx, this, args, true)
+}
+
+fn reset_lazy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], proxy: bool) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    let method = if proxy { "ReflectionClass::resetAsLazyProxy" } else { "ReflectionClass::resetAsLazyGhost" };
+    let o = lazy_object_arg(ctx, args, 0, &class, method)?;
+    let options = lazy_options(ctx, &arg(args, 2), method, 3, true)?;
+    if o.is_uninit_lazy() {
+        return Err(fail(ctx, "Object is already lazy".into()));
+    }
+    ctx.lazy_make(&class, Some(o), arg(args, 1), options, proxy)?;
+    Ok(Value::Null)
+}
+
+fn rc_reset_as_lazy_ghost(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    reset_lazy(ctx, this, args, false)
+}
+
+fn rc_reset_as_lazy_proxy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    reset_lazy(ctx, this, args, true)
+}
+
+fn rc_is_uninitialized_lazy_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    let o = lazy_object_arg(ctx, args, 0, &class, "ReflectionClass::isUninitializedLazyObject")?;
+    Ok(Value::Bool(o.is_uninit_lazy()))
+}
+
+fn rc_initialize_lazy_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    let o = lazy_object_arg(ctx, args, 0, &class, "ReflectionClass::initializeLazyObject")?;
+    Ok(Value::Object(ctx.lazy_initialize(&o)?))
+}
+
+fn rc_mark_lazy_object_as_initialized(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    let o = lazy_object_arg(ctx, args, 0, &class, "ReflectionClass::markLazyObjectAsInitialized")?;
+    if o.is_uninit_lazy() {
+        ctx.lazy_mark_initialized(&o)?;
+    }
+    Ok(Value::Object(o.proxy_instance().unwrap_or(o)))
+}
+
+fn rc_get_lazy_initializer(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    let o = lazy_object_arg(ctx, args, 0, &class, "ReflectionClass::getLazyInitializer")?;
+    if !o.is_uninit_lazy() {
+        return Ok(Value::Null);
+    }
+    Ok(o.lazy_info.borrow().as_ref().map_or(Value::Null, |l| l.initializer.clone()))
+}
+
+/// The object a ReflectionProperty lazy method works on (through
+/// initialized proxies) and the property's slot there, checked.
+fn lazy_property_target(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], method: &str) -> Result<(Rc<Object>, usize), Throw> {
+    let (class, name, _) = held_property(ctx, this)?;
+    let mut o = lazy_object_arg(ctx, args, 0, &class, &format!("ReflectionProperty::{method}"))?;
+    while let Some(inst) = o.proxy_instance() {
+        o = inst;
+    }
+    if let Some((_, _, _)) = class.statics.get(name.as_bytes()) {
+        return Err(fail(ctx, format!("Can not use {method} on static property {}::${name}", String::from_utf8_lossy(class.name.as_bytes()))));
+    }
+    let Some(slot) = o.class.slot(name.as_bytes(), Some(&class.lower)) else {
+        return Err(fail(ctx, format!("Can not use {method} on dynamic property {}::${name}", String::from_utf8_lossy(class.name.as_bytes()))));
+    };
+    if o.class.properties[slot].hooks & p8_runtime::object::HOOK_VIRTUAL != 0 {
+        return Err(fail(ctx, format!("Can not use {method} on virtual property {}::${name}", String::from_utf8_lossy(o.class.properties[slot].declaring_name.as_bytes()))));
+    }
+    Ok((o, slot))
+}
+
+fn rpr_skip_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let (o, slot) = lazy_property_target(ctx, this, args, "skipLazyInitialization")?;
+    if !o.lazy_slot(slot) {
+        return Ok(Value::Null);
+    }
+    let defaults = ctx.class_defaults(&o.class)?;
+    o.slots.borrow_mut()[slot] = defaults.get(slot).cloned().unwrap_or(Value::Undef);
+    ctx.lazy_slot_done(&o, slot);
+    Ok(Value::Null)
+}
+
+fn rpr_set_raw_value_without_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let (o, slot) = lazy_property_target(ctx, this, args, "setRawValueWithoutLazyInitialization")?;
+    let was_lazy = o.lazy_slot(slot);
+    o.slots.borrow_mut()[slot] = arg(args, 1);
+    if was_lazy {
+        ctx.lazy_slot_done(&o, slot);
+    }
+    Ok(Value::Null)
+}
+
+fn rpr_is_lazy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let (class, name, _) = held_property(ctx, this)?;
+    let mut o = lazy_object_arg(ctx, args, 0, &class, "ReflectionProperty::isLazy")?;
+    while let Some(inst) = o.proxy_instance() {
+        o = inst;
+    }
+    if class.statics.contains_key(name.as_bytes()) {
+        return Ok(Value::Bool(false));
+    }
+    Ok(Value::Bool(o.class.slot(name.as_bytes(), Some(&class.lower)).is_some_and(|i| o.lazy_slot(i))))
+}
+
 fn rpr_is_initialized(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (class, name, slot) = held_property(ctx, this)?;
     if class.statics.contains_key(name.as_bytes()) {
@@ -1306,6 +1458,14 @@ pub static CLASSES: &[ClassSpec] = &[
             ("newInstance", Some(Native::Method(rc_new_instance))),
             ("newInstanceArgs", Some(Native::Method(rc_new_instance_args))),
             ("newInstanceWithoutConstructor", Some(Native::Method(rc_new_instance_without_constructor))),
+            ("newLazyGhost", Some(Native::Method(rc_new_lazy_ghost))),
+            ("newLazyProxy", Some(Native::Method(rc_new_lazy_proxy))),
+            ("resetAsLazyGhost", Some(Native::Method(rc_reset_as_lazy_ghost))),
+            ("resetAsLazyProxy", Some(Native::Method(rc_reset_as_lazy_proxy))),
+            ("isUninitializedLazyObject", Some(Native::Method(rc_is_uninitialized_lazy_object))),
+            ("initializeLazyObject", Some(Native::Method(rc_initialize_lazy_object))),
+            ("markLazyObjectAsInitialized", Some(Native::Method(rc_mark_lazy_object_as_initialized))),
+            ("getLazyInitializer", Some(Native::Method(rc_get_lazy_initializer))),
             ("getStaticPropertyValue", Some(Native::Method(rc_get_static_property_value))),
             ("setStaticPropertyValue", Some(Native::Method(rc_set_static_property_value))),
             ("getStaticProperties", Some(Native::Method(rc_get_static_properties))),
@@ -1427,6 +1587,9 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getValue", Some(Native::Method(rpr_get_value))),
             ("setValue", Some(Native::Method(rpr_set_value))),
             ("isInitialized", Some(Native::Method(rpr_is_initialized))),
+            ("skipLazyInitialization", Some(Native::Method(rpr_skip_lazy_initialization))),
+            ("setRawValueWithoutLazyInitialization", Some(Native::Method(rpr_set_raw_value_without_lazy_initialization))),
+            ("isLazy", Some(Native::Method(rpr_is_lazy))),
             ("isPublic", Some(Native::Method(rpr_is_public))),
             ("isPrivate", Some(Native::Method(rpr_is_private))),
             ("isProtected", Some(Native::Method(rpr_is_protected))),

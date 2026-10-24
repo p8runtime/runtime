@@ -17,6 +17,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "get_class", run: get_class, by_ref: &[] },
     Builtin { name: "get_parent_class", run: get_parent_class, by_ref: &[] },
     Builtin { name: "get_object_vars", run: get_object_vars, by_ref: &[] },
+    Builtin { name: "get_mangled_object_vars", run: get_mangled_object_vars, by_ref: &[] },
     Builtin { name: "get_class_vars", run: get_class_vars, by_ref: &[] },
     Builtin { name: "method_exists", run: method_exists, by_ref: &[] },
     Builtin { name: "property_exists", run: property_exists, by_ref: &[] },
@@ -217,10 +218,42 @@ fn get_parent_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
     Ok(class.and_then(|c| c.parent.as_deref().map(name)).unwrap_or(Value::Bool(false)))
 }
 
+/// get_mangled_object_vars($object): every initialized property under its
+/// mangled name ("\0A\0p" private, "\0*\0p" protected), then the dynamic
+/// ones, as (array) gives them (but no class's own view of its properties).
+fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let o = if o.lazy.get() != 0 { ctx.lazy_initialize(&o)? } else { o };
+    let mut out = PhpArray::new();
+    let slots = o.slots.borrow();
+    for (p, v) in o.class.properties.iter().zip(slots.iter()) {
+        if matches!(v, Value::Undef) || p.is_internal() {
+            continue;
+        }
+        let mut name = Vec::new();
+        match p.visibility {
+            p8_runtime::object::Visibility::Public => {}
+            p8_runtime::object::Visibility::Protected => name.extend_from_slice(b"\0*\0"),
+            p8_runtime::object::Visibility::Private => {
+                name.push(0);
+                name.extend_from_slice(p.declaring_name.as_bytes());
+                name.push(0);
+            }
+        }
+        name.extend_from_slice(p.name.as_bytes());
+        out.insert(Key::from_string(PhpStr::new(name)), v.clone());
+    }
+    for (k, v) in o.dynamic.borrow().iter() {
+        out.insert(k, v.clone());
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
 /// get_object_vars($object): the properties the calling code can see,
 /// initialized ones only, by their plain names.
 fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let o = if o.lazy.get() != 0 { ctx.lazy_initialize(&o)? } else { o };
     if let Some(props) = o.class.get_properties {
         return Ok(Value::Array(Rc::new(props(&o))));
     }

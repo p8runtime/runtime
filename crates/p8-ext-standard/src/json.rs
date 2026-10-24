@@ -233,6 +233,13 @@ impl Encoder<'_> {
     }
 
     fn object(&mut self, o: &Rc<Object>, out: &mut Vec<u8>) -> Result<(), Throw> {
+        let lazy;
+        let o = if o.lazy.get() != 0 {
+            lazy = self.ctx.lazy_initialize(o)?;
+            &lazy
+        } else {
+            o
+        };
         if o.class.flags & CLASS_RESOURCE != 0 {
             self.fail(8);
             out.extend_from_slice(b"null");

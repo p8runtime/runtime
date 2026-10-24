@@ -325,6 +325,17 @@ fn var_export(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// php_var_export_ex
 fn export(ctx: &mut dyn Ctx, v: &Value, level: usize, out: &mut Vec<u8>) -> Result<(), Throw> {
+    // A lazy object is initialized first.
+    if let Value::Object(o) = v
+        && o.lazy.get() != 0
+    {
+        let real = ctx.lazy_initialize(o)?;
+        return export_value(ctx, &Value::Object(real), level, out);
+    }
+    export_value(ctx, v, level, out)
+}
+
+fn export_value(ctx: &mut dyn Ctx, v: &Value, level: usize, out: &mut Vec<u8>) -> Result<(), Throw> {
     match v {
         // PHP also warns "var_export does not handle resources".
         Value::Null | Value::Undef => out.extend_from_slice(b"NULL"),
@@ -455,6 +466,11 @@ fn case_name(o: &Object) -> PhpStr {
 
 fn entries(o: &Object) -> Vec<Entry> {
     let mut list = Vec::new();
+    // An initialized lazy proxy shows its real instance.
+    if let Some(inst) = o.proxy_instance() {
+        list.push(Entry { numeric: false, name: PhpStr::from("instance"), visibility: Visibility::Public, declaring: PhpStr::empty(), value: Some(Value::Object(inst)), ty: None });
+        return list;
+    }
     if let Some(info) = o.class.debug_info.or(o.class.get_properties) {
         for (k, v) in info(o).iter() {
             let numeric = matches!(k, Key::Int(_));
@@ -570,7 +586,13 @@ fn dump(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>)
             seen.push(Rc::clone(o));
             let list = entries(o);
             let count = list.iter().filter(|e| e.value.is_some()).count();
-            out.extend_from_slice(format!("{pad}object(").as_bytes());
+            // A lazy object (PHP 8.4) says so.
+            let lazy = match o.lazy.get() {
+                0 => "",
+                f if f & p8_runtime::object::LAZY_PROXY != 0 => "lazy proxy ",
+                _ => "lazy ghost ",
+            };
+            out.extend_from_slice(format!("{pad}{lazy}object(").as_bytes());
             out.extend_from_slice(o.class.shown());
             out.extend_from_slice(format!(")#{} ({count}) {{\n", o.id).as_bytes());
             for e in list {

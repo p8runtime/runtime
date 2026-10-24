@@ -174,6 +174,29 @@ pub trait Ctx {
     /// A Generator method (`op`: current, key, next, send, valid, rewind,
     /// getreturn, throw).
     fn generator(&mut self, generator: &Rc<crate::object::Object>, op: &str, arg: Value) -> Result<Value, Throw>;
+
+    /// Lazy objects (ReflectionClass::newLazyGhost and the rest): `obj`, or
+    /// a new instance of `class`, made lazy.
+    fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<crate::object::Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<crate::object::Object>, Throw> {
+        let _ = (class, obj, initializer, options, proxy);
+        Err(self.throw("Error", "Lazy objects are not supported here".into()))
+    }
+
+    /// A lazy object initialized: the object its accesses go to.
+    fn lazy_initialize(&mut self, o: &Rc<crate::object::Object>) -> Result<Rc<crate::object::Object>, Throw> {
+        Ok(Rc::clone(o))
+    }
+
+    /// A lazy object marked initialized (lazy properties take defaults).
+    fn lazy_mark_initialized(&mut self, o: &Rc<crate::object::Object>) -> Result<(), Throw> {
+        let _ = o;
+        Ok(())
+    }
+
+    /// A lazy object's slot stops being lazy (skipLazyInitialization).
+    fn lazy_slot_done(&mut self, o: &Rc<crate::object::Object>, slot: usize) {
+        let _ = (o, slot);
+    }
 }
 
 /// A builtin function: arguments arrive by value (moved out of the caller's

@@ -63,6 +63,9 @@ pub const CLASS_UNCLONEABLE: u32 = 2048;
 pub const CLASS_NOT_SERIALIZABLE: u32 = 4096;
 /// Has __get, __set, __isset or __unset (its own or inherited).
 pub const CLASS_MAGIC_PROPS: u32 = 8192;
+/// #[AllowDynamicProperties] (its own or a parent's): no deprecation for
+/// creating a dynamic property.
+pub const CLASS_ALLOW_DYNAMIC: u32 = 16384;
 
 /// A property's hooks (Property::hooks): a get hook, a set hook, and
 /// whether it is virtual (no stored value: no hook uses `$this->name`).
@@ -384,6 +387,44 @@ pub struct Data(pub Rc<dyn std::any::Any>);
 /// Makes a new object's [`Data`] (a native class's state).
 pub type MakeData = fn() -> Rc<dyn std::any::Any>;
 
+/// The object's initialization is deferred until a lazy property is used.
+pub const LAZY_UNINIT: u8 = 1;
+/// A lazy proxy: once initialized, its properties are its instance's.
+pub const LAZY_PROXY: u8 = 2;
+
+/// A lazy object's state (zend_lazy_object_info).
+#[derive(Debug)]
+pub struct Lazy {
+    /// The initializer (ghost) or factory (proxy) callable.
+    pub initializer: Value,
+    /// ReflectionClass::SKIP_* options given.
+    pub options: i64,
+    /// Which declared property slots are still lazy.
+    pub lazy_slots: Vec<bool>,
+    /// A proxy's real instance, once its factory ran.
+    pub instance: Option<Rc<Object>>,
+}
+
+impl Object {
+    /// Uninitialized (ghost or proxy).
+    pub fn is_uninit_lazy(&self) -> bool {
+        self.lazy.get() & LAZY_UNINIT != 0
+    }
+
+    /// Slot `i` is lazy (not yet initialized, initialization pending).
+    pub fn lazy_slot(&self, i: usize) -> bool {
+        self.lazy.get() != 0 && self.lazy_info.borrow().as_ref().is_some_and(|l| l.lazy_slots.get(i).copied().unwrap_or(false))
+    }
+
+    /// An initialized proxy's real instance.
+    pub fn proxy_instance(&self) -> Option<Rc<Object>> {
+        if self.lazy.get() & (LAZY_PROXY | LAZY_UNINIT) != LAZY_PROXY {
+            return None;
+        }
+        self.lazy_info.borrow().as_ref().and_then(|l| l.instance.clone())
+    }
+}
+
 /// A native class's state for a clone (see [`Class::clone_data`]).
 pub type CloneData = fn(&Object) -> Rc<dyn std::any::Any>;
 
@@ -406,6 +447,10 @@ pub struct Object {
     ids: Rc<Ids>,
     /// Its destructor ran, or must not (its constructor threw).
     pub destructed: Cell<bool>,
+    /// LAZY_UNINIT / LAZY_PROXY (PHP 8.4 lazy objects): 0 for a plain object.
+    pub lazy: Cell<u8>,
+    /// A lazy object's initializer and state (see [`Lazy`]).
+    pub lazy_info: RefCell<Option<Box<Lazy>>>,
 }
 
 impl Object {
@@ -437,6 +482,8 @@ impl Object {
             id: ids.take(),
             ids: Rc::clone(ids),
             destructed: Cell::new(false),
+            lazy: Cell::new(0),
+            lazy_info: RefCell::new(None),
         });
         ids.track(&o);
         o
@@ -455,6 +502,8 @@ impl Object {
             id: self.ids.take(),
             ids: Rc::clone(&self.ids),
             destructed: Cell::new(false),
+            lazy: Cell::new(0),
+            lazy_info: RefCell::new(None),
         });
         self.ids.track(&o);
         o
@@ -463,7 +512,9 @@ impl Object {
 
 impl Drop for Object {
     fn drop(&mut self) {
-        if self.class.flags & CLASS_DESTRUCTOR != 0 && !self.destructed.get() {
+        // A lazy object's destructor never runs (an initialized proxy's real
+        // instance has its own), as zend_objects_destroy_object skips them.
+        if self.class.flags & CLASS_DESTRUCTOR != 0 && !self.destructed.get() && self.lazy.get() == 0 {
             // Its destructor is due: the object lives on (same id, same
             // properties) until the interpreter has run it.
             let revived = Rc::new(Object {
@@ -474,6 +525,8 @@ impl Drop for Object {
                 id: self.id,
                 ids: Rc::clone(&self.ids),
                 destructed: Cell::new(true),
+                lazy: Cell::new(0),
+                lazy_info: RefCell::new(None),
             });
             self.ids.pending.borrow_mut().push_back(revived);
             self.ids.due.set(self.ids.due.get() + 1);

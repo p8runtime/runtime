@@ -8,6 +8,7 @@ mod callable;
 mod classes;
 mod handlers;
 mod generators;
+mod lazy;
 mod include;
 mod reflect_info;
 mod reflection;
@@ -1660,6 +1661,8 @@ impl Context<'_> {
     /// Execute the instruction at `pc` of `func`'s frame (at `base`).
     #[inline(never)]
     fn step(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
+        // This instruction's index (a lazy object's initialization runs it again).
+        let insn_at = at;
         let func = &*clo.code;
         if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
             return Err(self.interrupted());
@@ -1838,7 +1841,12 @@ impl Context<'_> {
                         }
                         CastKind::Array => match v {
                             Value::Array(a) => Value::Array(a),
-                            Value::Object(o) => Value::Array(Rc::new(classes::object_to_array(&o))),
+                            // A lazy object is initialized; a proxy is its instance.
+                            Value::Object(o) if o.is_uninit_lazy() => {
+                                self.lazy_init(regs, &o)?;
+                                return Ok(Next::Go(insn_at));
+                            }
+                            Value::Object(o) => Value::Array(Rc::new(classes::object_to_array(&o.proxy_instance().unwrap_or(o)))),
                             Value::Null => Value::Array(Rc::new(PhpArray::new())),
                             other => Value::Array(Rc::new(PhpArray::from_list(vec![other]))),
                         },
@@ -2184,6 +2192,11 @@ impl Context<'_> {
                             let (dst, obj, name) = (a, b, c);
                         let target = self.operand(w, func, obj);
                         let name = reg!(name).clone();
+                        if let Some(lo) = self.lazy_pending(&target, &name) {
+                            self.lazy_init(regs, &lo)?;
+                            return Ok(Next::Go(insn_at));
+                        }
+                        let target = self.lazy_forward(&target, &name).unwrap_or(target);
                         let cell = self.prop_ref(&target, &name)?;
                         reg!(dst) = Value::Ref(cell);
                     }
@@ -2192,6 +2205,11 @@ impl Context<'_> {
                         let target = self.operand(w, func, obj);
                         let name = reg!(name).clone();
                         let cell = make_ref(w, src);
+                        if let Some(lo) = self.lazy_pending(&target, &name) {
+                            self.lazy_init(regs, &lo)?;
+                            return Ok(Next::Go(insn_at));
+                        }
+                        let target = self.lazy_forward(&target, &name).unwrap_or(target);
                         self.prop_bind(&target, &name, cell)?;
                     }
                     Rare::StaticRef => {
@@ -2633,6 +2651,11 @@ impl Context<'_> {
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
                     }
+                    if let Some(lo) = self.lazy_pending(&target, &name) {
+                        self.lazy_init(regs, &lo)?;
+                        return Ok(Next::Go(insn_at));
+                    }
+                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
                 }
                 Instr::AssignProp { obj, name, val, dst } => {
@@ -2650,6 +2673,11 @@ impl Context<'_> {
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
                     }
+                    if let Some(lo) = self.lazy_pending(&target, &name) {
+                        self.lazy_init(regs, &lo)?;
+                        return Ok(Next::Go(insn_at));
+                    }
+                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     self.write_prop(&target, &name, v.clone())?;
                     reg!(dst) = v;
                 }
@@ -2675,6 +2703,11 @@ impl Context<'_> {
                         regs[base + dst as usize] = v.unwrap_or(Value::Null);
                         return Ok(Next::Go(pc));
                     }
+                    if let Some(lo) = self.lazy_pending(&target, &name) {
+                        self.lazy_init(regs, &lo)?;
+                        return Ok(Next::Go(insn_at));
+                    }
+                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     let x = self.read_for_update(&target, &name)?;
                     let r = ops::binary(op, &x, &y, &mut self.diags);
                     self.report_diags();
@@ -2703,6 +2736,11 @@ impl Context<'_> {
                         regs[base + dst as usize] = v.unwrap_or(Value::Null);
                         return Ok(Next::Go(pc));
                     }
+                    if let Some(lo) = self.lazy_pending(&target, &name) {
+                        self.lazy_init(regs, &lo)?;
+                        return Ok(Next::Go(insn_at));
+                    }
+                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     let old = self.read_for_update(&target, &name)?;
                     let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
                     self.report_diags();
@@ -2751,6 +2789,11 @@ impl Context<'_> {
                         }
                         return Ok(Next::Go(pc));
                     }
+                    if let Some(lo) = self.lazy_pending(&target, &name) {
+                        self.lazy_init(regs, &lo)?;
+                        return Ok(Next::Go(insn_at));
+                    }
+                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
                 }
                 Instr::IssetProp { dst, obj, name } => {
@@ -2767,6 +2810,11 @@ impl Context<'_> {
                         regs[base + dst as usize] = Value::Bool(v.to_bool());
                         return Ok(Next::Go(pc));
                     }
+                    if let Some(lo) = self.lazy_pending(&target, &name) {
+                        self.lazy_init(regs, &lo)?;
+                        return Ok(Next::Go(insn_at));
+                    }
+                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     reg!(dst) = Value::Bool(self.isset_prop(&target, &name)?);
                 }
                 Instr::UnsetProp { obj, name } => {
@@ -2783,6 +2831,11 @@ impl Context<'_> {
                         self.run_magic(regs, found, &mut [pname])?;
                         return Ok(Next::Go(pc));
                     }
+                    if let Some(lo) = self.lazy_pending(&target, &name) {
+                        self.lazy_init(regs, &lo)?;
+                        return Ok(Next::Go(insn_at));
+                    }
+                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     self.unset_prop(&target, &name)?;
                 }
                 Instr::MethodCall { dst, obj, method, base: args, argc } => {
@@ -2878,6 +2931,14 @@ impl Context<'_> {
                 }
                 Instr::Clone { dst, src } => {
                     let v = self.operand(w, func, src);
+                    // A lazy object is initialized before it is cloned.
+                    if let Value::Object(o) = &v
+                        && o.is_uninit_lazy()
+                    {
+                        let o = Rc::clone(o);
+                        self.lazy_init(regs, &o)?;
+                        return Ok(Next::Go(insn_at));
+                    }
                     let (copy, hook) = self.clone_object(&v)?;
                     reg!(dst) = Value::Object(copy);
                     if let Some(m) = hook {
@@ -3976,6 +4037,22 @@ impl Ctx for Context<'_> {
         let r = self.iterate_all(&mut regs, v);
         self.isolate.regs = regs;
         r
+    }
+
+    fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<Object>, Throw> {
+        self.make_lazy(class, obj, initializer, options, proxy)
+    }
+
+    fn lazy_initialize(&mut self, o: &Rc<Object>) -> Result<Rc<Object>, Throw> {
+        self.lazy_init_from_builtin(o)
+    }
+
+    fn lazy_mark_initialized(&mut self, o: &Rc<Object>) -> Result<(), Throw> {
+        Context::lazy_mark_initialized(self, o)
+    }
+
+    fn lazy_slot_done(&mut self, o: &Rc<Object>, slot: usize) {
+        Context::lazy_slot_done(self, o, slot)
     }
 
     fn generator(&mut self, generator: &Rc<Object>, op: &str, arg: Value) -> Result<Value, Throw> {

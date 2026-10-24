@@ -1,0 +1,48 @@
+bool(true)
+lazy ghost object(C)#3 (0) {
+  ["a"]=>
+  uninitialized(int)
+}
+init ghost
+ctor
+5
+bool(false)
+object(C)#3 (2) {
+  ["a"]=>
+  int(5)
+  ["b"]=>
+  NULL
+}
+factory
+ctor
+lazy proxy object(C)#4 (1) {
+  ["instance"]=>
+  object(C)#5 (2) {
+    ["a"]=>
+    int(5)
+    ["b"]=>
+    string(1) "x"
+  }
+}
+string(1) "x"
+bool(false)
+bool(false)
+int(1)
+string(3) "raw"
+boom
+bool(true)
+int(1)
+NULL
+init k
+a
+b
+string(1) "x"
+ReflectionClass::newLazyGhost(): Argument #2 ($options) contains invalid flags
+no deprecation
+end
+dtor 5
+dtor 1
+dtor 1
+dtor 1
+dtor 5
+dtor 5

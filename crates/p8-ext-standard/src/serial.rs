@@ -80,6 +80,14 @@ impl Writer<'_> {
     }
 
     fn object(&mut self, o: &Rc<Object>) -> Result<(), Throw> {
+        // A lazy object is initialized first (unless it asked not to be).
+        let lazy;
+        let o = if o.lazy.get() != 0 && o.lazy_info.borrow().as_ref().is_none_or(|l| l.options & 8 == 0 || !o.is_uninit_lazy()) {
+            lazy = self.ctx.lazy_initialize(o)?;
+            &lazy
+        } else {
+            o
+        };
         let ptr = Rc::as_ptr(o);
         if let Some(&(_, n)) = self.objects.iter().find(|(p, _)| *p == ptr) {
             self.out.extend_from_slice(format!("r:{n};").as_bytes());
