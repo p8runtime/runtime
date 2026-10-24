@@ -7,6 +7,7 @@ pub mod args;
 pub mod array;
 pub mod ext;
 pub mod frozen;
+pub mod gc;
 pub mod number;
 pub mod numeric;
 pub mod object;

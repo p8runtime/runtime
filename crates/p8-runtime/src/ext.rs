@@ -175,6 +175,16 @@ pub trait Ctx {
     /// getreturn, throw).
     fn generator(&mut self, generator: &Rc<crate::object::Object>, op: &str, arg: Value) -> Result<Value, Throw>;
 
+    /// gc_collect_cycles(): garbage cycles freed; how many values they held.
+    fn gc_collect(&mut self) -> Result<i64, Throw> {
+        Ok(0)
+    }
+
+    /// gc_status()'s runs and collected.
+    fn gc_counts(&self) -> (i64, i64) {
+        (0, 0)
+    }
+
     /// Fibers: start, resume, throw, suspend, getCurrent (op), for
     /// `fiber` (None for the static ones).
     fn fiber_op(&mut self, fiber: Option<&Rc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {

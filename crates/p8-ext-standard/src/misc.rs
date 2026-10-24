@@ -7,6 +7,7 @@
 
 use crate::{arg, str_arg};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -24,6 +25,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "getenv", run: getenv, by_ref: &[] },
     Builtin { name: "time", run: time, by_ref: &[] },
     Builtin { name: "gc_collect_cycles", run: gc_collect_cycles, by_ref: &[] },
+    Builtin { name: "gc_status", run: gc_status, by_ref: &[] },
     Builtin { name: "gc_enable", run: gc_switch, by_ref: &[] },
     Builtin { name: "gc_disable", run: gc_switch, by_ref: &[] },
     Builtin { name: "gc_enabled", run: gc_enabled, by_ref: &[] },
@@ -128,10 +130,33 @@ fn time(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(now.as_secs() as i64))
 }
 
-/// p8 frees what reference counting frees; there are no cycles to collect
-/// until objects exist (APS 4).
-fn gc_collect_cycles(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(0))
+/// gc_collect_cycles(): free the garbage cycles reference counting can't
+/// (their destructors run first); how many values they held.
+fn gc_collect_cycles(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Int(ctx.gc_collect()?))
+}
+
+/// gc_status(): the collector's counters, as PHP 8.4 reports them.
+fn gc_status(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let (runs, collected) = ctx.gc_counts();
+    let mut out = PhpArray::new();
+    for (k, v) in [
+        ("running", Value::Bool(false)),
+        ("protected", Value::Bool(false)),
+        ("full", Value::Bool(false)),
+        ("runs", Value::Int(runs)),
+        ("collected", Value::Int(collected)),
+        ("threshold", Value::Int(10001)),
+        ("buffer_size", Value::Int(16384)),
+        ("roots", Value::Int(0)),
+        ("application_time", Value::Float(0.0)),
+        ("collector_time", Value::Float(0.0)),
+        ("dtor_time", Value::Float(0.0)),
+        ("free_time", Value::Float(0.0)),
+    ] {
+        out.insert(Key::from_string(PhpStr::from(k)), v);
+    }
+    Ok(Value::Array(Rc::new(out)))
 }
 
 fn gc_switch(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
