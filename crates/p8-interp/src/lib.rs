@@ -950,6 +950,7 @@ impl Isolate {
             natives: Vec::new(),
             statics: HashMap::new(),
             magic_guard: Vec::new(),
+            deferred_write: None,
         }
     }
 }
@@ -1049,6 +1050,8 @@ pub struct Context<'i> {
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
+    /// A write held back until the error handler has run (`$undef op= v`).
+    deferred_write: Option<(usize, Value)>,
 }
 
 impl Context<'_> {
@@ -1569,6 +1572,14 @@ impl Context<'_> {
     #[cold]
     fn after_errors(&mut self, regs: &mut Vec<Value>, pc: usize, at: usize) -> Result<usize, Throw> {
         let r = if self.pending_errors.is_empty() { Ok(()) } else { self.dispatch_errors(regs) };
+        if let Some((slot, v)) = self.deferred_write.take()
+            && let Some(cell) = regs.get_mut(slot)
+        {
+            match cell {
+                Value::Ref(r) => *r.borrow_mut() = v,
+                other => *other = v,
+            }
+        }
         match r.and_then(|()| self.run_destructors_at(regs, Some(at + 1))) {
             Ok(()) => Ok(pc),
             Err(t) => self.unwind(regs, t, at),
@@ -1733,11 +1744,19 @@ impl Context<'_> {
                         s.push_bytes(tail.as_bytes());
                         assign(w, var, Value::Str(s));
                     } else {
+                        let undefined = matches!(w[var as usize], Value::Undef);
                         let x = self.operand(w, func, var);
                         let r = ops::binary(op, &x, &y, &mut self.diags);
                         self.report_diags();
                         let v = r.map_err(|e| self.op_error(e))?;
-                        assign(w, var, v);
+                        // An undefined variable's warning goes to the error
+                        // handler before the write, as in PHP (it may unset
+                        // the variable): the write waits for it.
+                        if undefined && !self.pending_errors.is_empty() {
+                            self.deferred_write = Some((base + var as usize, v));
+                        } else {
+                            assign(w, var, v);
+                        }
                     }
                 }
                 Instr::Compare { cmp, dst, a, b } => {
@@ -2260,16 +2279,19 @@ impl Context<'_> {
                     }
                     Rare::VarRef => {
                         let name = self.var_name(w, func, b);
-                        let cell = self.var_cell(w, in_main, &name);
+                        let cell = if c == 1 && !in_main { self.global_cell(below, &name) } else { self.var_cell(w, in_main, &name) };
                         reg!(a) = Value::Ref(cell);
                     }
                     Rare::VarGet => {
                         let name = self.var_name(w, func, b);
-                        match self.var_value(w, in_main, &name) {
+                        let global = c & 2 != 0;
+                        let v = if global && !in_main { self.global_value(below, &name) } else { self.var_value(w, in_main, &name) };
+                        match v {
                             Some(v) => reg!(a) = v,
                             None => {
-                                if c == 0 {
-                                    self.warn(format!("Undefined variable ${}", String::from_utf8_lossy(&name)));
+                                if c & 1 == 0 {
+                                    let what = if global { "global variable" } else { "variable" };
+                                    self.warn(format!("Undefined {what} ${}", String::from_utf8_lossy(&name)));
                                 }
                                 reg!(a) = Value::Null;
                             }
@@ -2277,7 +2299,21 @@ impl Context<'_> {
                     }
                     Rare::VarUnset => {
                         let name = self.var_name(w, func, a);
-                        self.var_unset(w, in_main, &name);
+                        if b == 1 && !in_main {
+                            self.global_unset(below, &name);
+                        } else {
+                            self.var_unset(w, in_main, &name);
+                        }
+                    }
+                    Rare::GlobalBind => {
+                        let name = self.var_name(w, func, a);
+                        let cell = make_ref(w, b);
+                        let main: &mut [Value] = if in_main { w } else { below };
+                        self.global_bind(main, &name, cell);
+                    }
+                    Rare::Globals => {
+                        let main: &[Value] = if in_main { w } else { below };
+                        reg!(a) = Value::Array(Rc::new(self.globals_array(main)));
                     }
                     Rare::IssetStatic => {
                         let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
@@ -3338,6 +3374,59 @@ impl Context<'_> {
                 }
             }
         }
+    }
+
+    /// The global variable `name`'s value, if set (`main`: the main frame's window).
+    fn global_value(&self, main: &[Value], name: &[u8]) -> Option<Value> {
+        let code = &self.frames.first()?.func.code;
+        match code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => match main[r].deref() {
+                Value::Undef => None,
+                v => Some(v),
+            },
+            None => self.globals.get(name).map(|c| c.borrow().deref()),
+        }
+    }
+
+    /// The global variable `name` becomes `cell` (a reference binding).
+    fn global_bind(&mut self, main: &mut [Value], name: &[u8], cell: Rc<RefCell<Value>>) {
+        let Some(frame) = self.frames.first() else { return };
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => main[r] = Value::Ref(cell),
+            None => {
+                self.globals.insert(name.to_vec(), cell);
+            }
+        }
+    }
+
+    fn global_unset(&mut self, main: &mut [Value], name: &[u8]) {
+        let Some(frame) = self.frames.first() else { return };
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => main[r] = Value::Undef,
+            None => {
+                self.globals.remove(name);
+            }
+        }
+    }
+
+    /// `$GLOBALS` read whole: the set global variables, by name.
+    fn globals_array(&self, main: &[Value]) -> p8_runtime::array::PhpArray {
+        let mut out = p8_runtime::array::PhpArray::new();
+        if let Some(frame) = self.frames.first() {
+            for (r, n) in frame.func.code.cv_names.iter().enumerate() {
+                if n.as_bytes() == b"GLOBALS" {
+                    continue;
+                }
+                match main.get(r).map(Value::deref) {
+                    None | Some(Value::Undef) => {}
+                    Some(v) => out.insert(Key::from_string(PhpStr::new(n.as_bytes().to_vec())), v),
+                }
+            }
+        }
+        for (n, c) in &self.globals {
+            out.insert(Key::from_string(PhpStr::new(n.clone())), c.borrow().deref());
+        }
+        out
     }
 
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
