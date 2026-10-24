@@ -9,6 +9,7 @@ pub mod lists;
 pub mod node;
 pub mod serialize;
 pub mod tree;
+pub mod xpath;
 
 use document as d;
 use lists as l;
@@ -320,6 +321,16 @@ pub const CLASSES: &[ClassSpec] = &[
         m!("$notationName::get", d::schema_type_info_get),
     ]),
     class("DOMEntityReference", Some("DOMNode"), &[], &[], &[m!("__construct", d::entity_ref_construct)]),
+    class("DOMXPath", None, &[], props!("document", "registerNodeNamespaces"), &[
+        m!("__construct", xpath::construct),
+        m!("$document::get", xpath::document_get),
+        m!("$registerNodeNamespaces::get", xpath::register_node_ns_get),
+        m!("$registerNodeNamespaces::set", xpath::register_node_ns_set),
+        m!("evaluate", xpath::evaluate),
+        m!("query", xpath::query),
+        m!("registerNamespace", xpath::register_namespace),
+        ("quote", Some(Native::Static(xpath::quote))),
+    ]),
     class("DOMProcessingInstruction", Some("DOMNode"), &[], props!("target", "data"), &[
         m!("__construct", d::pi_construct),
         m!("$target::get", d::target_get),
@@ -381,6 +392,7 @@ pub fn register(registry: &mut Registry) {
     registry.add_data("DOMNode", n::make_node);
     registry.add_data("DOMNodeList", l::make_list);
     registry.add_data("DOMNamedNodeMap", l::make_list);
+    registry.add_data("DOMXPath", xpath::make_xpath);
     for (name, value) in CONSTANTS {
         registry.add_constant(name.as_bytes(), Constant::Int(*value));
     }

@@ -24,6 +24,8 @@ pub enum Src {
     Attrs(NodeRef),
     /// A doctype's entities or notations.
     Decls(NodeRef, Kind),
+    /// A fixed list (an XPath query's nodes).
+    Fixed(Vec<NodeRef>),
 }
 
 #[derive(Default)]
@@ -55,6 +57,7 @@ pub fn items(src: &Src) -> Vec<NodeRef> {
     match src {
         Src::Children(r) => r.doc.borrow().node(r.id).children.iter().map(|&c| r.at(c)).collect(),
         Src::Attrs(r) => r.doc.borrow().node(r.id).attrs.iter().map(|&c| r.at(c)).collect(),
+        Src::Fixed(v) => v.clone(),
         Src::Decls(r, kind) => {
             let d = r.doc.borrow();
             d.node(r.id).children.iter().copied().filter(|&c| d.node(c).kind == *kind).map(|c| r.at(c)).collect()

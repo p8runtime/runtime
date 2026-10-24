@@ -1,0 +1,21 @@
+<?php
+$d = new DOMDocument;
+$d->loadXML('<lib xmlns:x="urn:x"><book id="1" year="2001"><t>Dune</t><x:tag>sf</x:tag></book><book id="2" year="1815"><t>Emma</t></book><mag><t>Wired</t></mag></lib>');
+$xp = new DOMXPath($d);
+foreach ($xp->query('//book/t') as $n) echo $n->textContent, " ";
+echo "\n", $xp->query('//t')->length, " ", $xp->evaluate('count(//book)'), " ", $xp->evaluate('string(//book[@year < 2000]/t)'), "\n";
+var_dump($xp->evaluate('sum(//@year)'), $xp->evaluate('//book[1]/@id = 1'), $xp->evaluate('string(1 div 3)'), $xp->evaluate('name(//x:tag)'));
+foreach ($xp->query('t', $d->getElementsByTagName('mag')->item(0)) as $n) echo $n->nodeName, "=", $n->textContent, "\n";
+$xp->registerNamespace('y', 'urn:x');
+echo $xp->query('//y:tag')->item(0)->textContent, " ", $xp->query('//book[last()]/@id')->item(0)->value, "\n";
+var_dump($xp->query('count(//book)')->length, $xp->query('//book[@id="9"]')->length);
+var_dump($xp->evaluate('**'));
+var_dump($xp->query('//q:nope'));
+var_dump(DOMXPath::quote("it's"), DOMXPath::quote('say "hi"'), DOMXPath::quote("both ' and \""));
+var_dump($xp->document === $d, $xp->registerNodeNamespaces);
+$s = simplexml_load_string('<r><a n="1">x</a><a n="2">y</a><b><a n="3">z</a></b></r>');
+foreach ($s->xpath('//a') as $a) echo $a['n'], $a, " ";
+echo "\n";
+foreach ($s->xpath('//a/@n') as $at) echo $at, ",";
+echo "\n", count($s->b->xpath('a')), " ", (string)$s->xpath('//a[2]/text()')[0], "\n";
+var_dump($s->xpath('**'));
