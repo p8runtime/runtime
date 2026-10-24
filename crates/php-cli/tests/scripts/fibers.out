@@ -1,0 +1,38 @@
+bool(false)
+fiber start 5
+inner before 5
+int(10)
+bool(true)
+bool(false)
+inner got 100
+string(6) "second"
+fiber got last, a=101
+NULL
+bool(true)
+string(4) "done"
+caught boom
+string(5) "after"
+Cannot suspend outside of a fiber
+Cannot resume a fiber that is not suspended
+Cannot start a fiber that has already been started
+Cannot get fiber return value: The fiber has not been started
+The "FiberError" class is reserved for internal use and cannot be manually instantiated
+NULL
+inner fiber
+string(1) "i"
+bool(true)
+string(1) "o"
+inner resumed
+string(1) "X"
+escaped out
+bool(true)
+array(4) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+  [3]=>
+  NULL
+}
