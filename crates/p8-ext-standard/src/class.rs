@@ -59,6 +59,8 @@ fn get_class_methods(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
     let names: Vec<Value> = class
         .methods
         .values()
+        // A property hook (`$x::get`) is not a method PHP lists.
+        .filter(|m| !m.name.as_bytes().starts_with(b"$"))
         .filter(|m| visible(m.visibility, declaring(&class, &m.declaring), scope.as_deref()))
         .map(|m| Value::Str(m.name.clone()))
         .collect();
@@ -313,6 +315,9 @@ fn method_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         ));
     }
     let method = str_arg(args, 1).as_bytes().to_ascii_lowercase();
+    if method.starts_with(b"$") {
+        return Ok(Value::Bool(false));
+    }
     Ok(Value::Bool(class_of(ctx, &target).is_some_and(|c| c.method(&method).is_some())))
 }
 

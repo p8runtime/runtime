@@ -48,6 +48,8 @@ pub struct PhptSections {
     pub xfail: Option<String>,
     /// `--EXTENSIONS--`: extensions the test needs loaded.
     pub extensions: Vec<String>,
+    /// `--FILE_EXTERNAL--`: the file holding the code (read into `file`).
+    pub file_external: Option<String>,
     /// `--CONFLICTS--`: keys no other running test may hold at the same time.
     pub conflicts: Vec<String>,
     /// Sections this runner can't honour (CGI requests, stdin, external
@@ -99,6 +101,14 @@ impl PhptTest {
             Self::save_section(&section_name, &current_content, &mut sections, &mut description)?;
         }
 
+        // --FILE_EXTERNAL--: the code is that file, next to the test.
+        if let Some(name) = sections.file_external.take()
+            && sections.file.is_empty()
+        {
+            let dir = file_path.parent().unwrap_or(Path::new("."));
+            sections.file = String::from_utf8_lossy(&fs::read(dir.join(name.trim()))?).into_owned();
+        }
+
         // Validate required sections
         if description.is_empty() {
             return Err(PhptError::MissingSection("TEST".to_string()));
@@ -135,6 +145,9 @@ impl PhptTest {
             }
             "FILE" | "FILEEOF" => {
                 sections.file = trimmed_content.to_string();
+            }
+            "FILE_EXTERNAL" => {
+                sections.file_external = Some(trimmed_content.trim().to_string());
             }
             "EXPECT" => {
                 sections.expect = Some(trimmed_content.to_string());
@@ -205,6 +218,16 @@ pub fn parse_conflicts(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_external_reads_the_named_file() {
+        let dir = std::env::current_dir().unwrap().join(".tmp/phpt-file-external");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("code.inc"), "<?php echo 1;").unwrap();
+        let test = PhptTest::from_string("--TEST--\nx\n--FILE_EXTERNAL--\ncode.inc\n--EXPECT--\n1\n", dir.join("t.phpt")).unwrap();
+        assert_eq!(test.sections.file, "<?php echo 1;");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn test_parse_simple_phpt() {
