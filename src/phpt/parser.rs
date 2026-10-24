@@ -48,6 +48,8 @@ pub struct PhptSections {
     pub xfail: Option<String>,
     /// `--EXTENSIONS--`: extensions the test needs loaded.
     pub extensions: Vec<String>,
+    /// `--CONFLICTS--`: keys no other running test may hold at the same time.
+    pub conflicts: Vec<String>,
     /// Sections this runner can't honour (CGI requests, stdin, external
     /// files); a test with any of them is skipped, not failed.
     pub unsupported: Vec<String>,
@@ -179,13 +181,25 @@ impl PhptTest {
                     .map(str::to_string)
                     .collect();
             }
-            "XLEAK" | "CREDITS" | "DESCRIPTION" | "CONFLICTS" | "FLAKY"
+            "CONFLICTS" => {
+                sections.conflicts = parse_conflicts(trimmed_content);
+            }
+            "XLEAK" | "CREDITS" | "DESCRIPTION" | "FLAKY"
             | "CAPTURE_STDIO" | "WHITESPACE_SENSITIVE" => {}
             other => sections.unsupported.push(other.to_string()),
         }
 
         Ok(())
     }
+}
+
+/// Conflict keys, one per line, `#` starting a comment (a CONFLICTS file or section).
+pub fn parse_conflicts(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 #[cfg(test)]
