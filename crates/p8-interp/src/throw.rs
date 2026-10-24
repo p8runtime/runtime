@@ -25,6 +25,16 @@ impl Context<'_> {
     pub(crate) fn trace(&self, regs: &dyn Fn(usize) -> Value) -> PhpArray {
         let mut trace = PhpArray::new();
         let frames = &self.frames.slots[..self.frames.len()];
+        // An internal method the error was raised in, called from the top frame.
+        if let Some(n) = self.natives.last().filter(|n| n.top && n.depth == frames.len()) {
+            let (file, line) = self.location();
+            let mut entry = PhpArray::new();
+            entry.insert(key("file"), Value::Str(PhpStr::from(&*file)));
+            entry.insert(key("line"), Value::Int(i64::from(line)));
+            entry.insert(key("function"), Value::str(n.name));
+            entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
+            let _ = trace.push(Value::Array(Rc::new(entry)));
+        }
         for k in (1..frames.len()).rev() {
             let (frame, caller) = (&frames[k], &frames[k - 1]);
             // A constant expression's code runs in place: no frame of its own.

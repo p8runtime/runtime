@@ -7,6 +7,7 @@ mod builtin_classes;
 mod callable;
 mod classes;
 mod handlers;
+mod fiber;
 mod generators;
 mod lazy;
 mod include;
@@ -207,6 +208,37 @@ impl Frames {
         &mut self.slots[self.len]
     }
 
+    /// The frames from `from` on, taken out (their slots left empty).
+    fn take_above(&mut self, from: usize) -> Vec<Frame> {
+        let mut out = Vec::with_capacity(self.len.saturating_sub(from));
+        for i in from..self.len {
+            let blank = Frame {
+                func: Rc::clone(&self.slots[i].func),
+                pc: 0,
+                base: 0,
+                ret: NO_RET,
+                argc: 0,
+                extra: None,
+                this: None,
+                scope: None,
+                called: None,
+                generator: None,
+            };
+            out.push(std::mem::replace(&mut self.slots[i], blank));
+        }
+        self.len = from.min(self.len);
+        out
+    }
+
+    /// Put a frame taken out back on top.
+    fn restore(&mut self, frame: Frame) {
+        match self.slots.get_mut(self.len) {
+            Some(slot) => *slot = frame,
+            None => self.slots.push(frame),
+        }
+        self.len += 1;
+    }
+
     /// Drop every frame and slot (and the closures they hold).
     fn clear(&mut self) {
         self.slots.clear();
@@ -221,6 +253,9 @@ struct NativeCall {
     depth: usize,
     name: &'static str,
     args: Vec<Value>,
+    /// Shown in a trace even when the error is raised inside it (no PHP
+    /// frame above): the Fiber methods.
+    top: bool,
 }
 
 /// What `step` leaves the frame loop to do.
@@ -952,6 +987,10 @@ impl Isolate {
             statics: HashMap::new(),
             magic_guard: Vec::new(),
             deferred_write: None,
+            fibers: Vec::new(),
+            fiber_suspended: None,
+            fiber_throw: None,
+            fiber_exit: None,
         }
     }
 }
@@ -1053,6 +1092,14 @@ pub struct Context<'i> {
     magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
     /// A write held back until the error handler has run (`$undef op= v`).
     deferred_write: Option<(usize, Value)>,
+    /// The fibers running, innermost last.
+    fibers: Vec<fiber::FiberRun>,
+    /// Fiber::suspend()'s value, while the running fiber is being left.
+    fiber_suspended: Option<Value>,
+    /// Fiber::throw()'s exception, raised where the fiber goes on.
+    fiber_throw: Option<Rc<Object>>,
+    /// The exit unwinding a fiber being destroyed (no catch matches it).
+    fiber_exit: Option<Rc<Object>>,
 }
 
 impl Context<'_> {
@@ -1504,6 +1551,10 @@ impl Context<'_> {
         let mut pc = self.frames.last().expect("a frame").pc as usize;
         // The function `step` last ran in (refreshed when `fast` switched).
         let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
+        // Fiber::throw(): the exception is raised where the fiber went on.
+        if let Some(e) = self.fiber_throw.take() {
+            pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
+        }
         loop {
             pc = fast(regs, &mut self.frames, &self.closures, pc, &stop, &self.ids);
             if self.ids.has_pending() {
@@ -1533,7 +1584,16 @@ impl Context<'_> {
             }
             let at = pc;
             match self.step(regs, &func, base, argc, pc) {
-                Ok(Next::Go(next)) => pc = next,
+                Ok(Next::Go(next)) => {
+                    pc = next;
+                    // Fiber::suspend(): leave the fiber's frames where they are.
+                    if self.fiber_suspended.is_some() {
+                        if let Some(top) = self.frames.last_mut() {
+                            top.pc = pc as u32;
+                        }
+                        return Ok(());
+                    }
+                }
                 Ok(Next::Switch) => {
                     if self.frames.len() == self.frames.floor {
                         if !self.pending_errors.is_empty() {
@@ -2950,6 +3010,8 @@ impl Context<'_> {
                     let v = self.operand(w, func, src);
                     return Err(match v {
                         Value::Object(o) if o.class.is_a(b"throwable") => Throw::Object(o),
+                        // A force-closed fiber's exit, rethrown past a catch or finally.
+                        Value::Object(o) if self.fiber_exit.as_ref().is_some_and(|m| Rc::ptr_eq(m, &o)) => Throw::Object(o),
                         _ => self.throw("Error", "Can only throw objects"),
                     });
                 }
@@ -3283,7 +3345,7 @@ impl Context<'_> {
         self.isolate.regs = std::mem::take(regs);
         // Running: frames it calls show it in their traces.
         let name = self.isolate.registry.function(i).name;
-        self.natives.push(NativeCall { depth: self.frames.len(), name, args: buf.iter().map(Value::deref).collect() });
+        self.natives.push(NativeCall { depth: self.frames.len(), name, args: buf.iter().map(Value::deref).collect(), top: false });
         let r = self.run_builtin(i, &mut buf);
         self.natives.pop();
         *regs = std::mem::take(&mut self.isolate.regs);
@@ -4037,6 +4099,10 @@ impl Ctx for Context<'_> {
         let r = self.iterate_all(&mut regs, v);
         self.isolate.regs = regs;
         r
+    }
+
+    fn fiber_op(&mut self, fiber: Option<&Rc<Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
+        Context::fiber_op(self, fiber, op, args)
     }
 
     fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<Object>, Throw> {

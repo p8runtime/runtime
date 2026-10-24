@@ -175,6 +175,13 @@ pub trait Ctx {
     /// getreturn, throw).
     fn generator(&mut self, generator: &Rc<crate::object::Object>, op: &str, arg: Value) -> Result<Value, Throw>;
 
+    /// Fibers: start, resume, throw, suspend, getCurrent (op), for
+    /// `fiber` (None for the static ones).
+    fn fiber_op(&mut self, fiber: Option<&Rc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
+        let _ = (fiber, op, args);
+        Err(self.throw("Error", "Fibers are not supported here".into()))
+    }
+
     /// Lazy objects (ReflectionClass::newLazyGhost and the rest): `obj`, or
     /// a new instance of `class`, made lazy.
     fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<crate::object::Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<crate::object::Object>, Throw> {

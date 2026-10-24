@@ -42,6 +42,7 @@ impl Context<'_> {
     pub(crate) fn builtin_on_demand(&mut self, lower: &[u8]) -> Option<Rc<Class>> {
         let spec: &'static p8_runtime::ext::ClassSpec = crate::reflection::CLASSES
             .iter()
+            .chain(crate::fiber::CLASSES.iter())
             .chain(self.isolate.registry.classes().iter().copied())
             .find(|s| s.name.as_bytes().eq_ignore_ascii_case(lower))?;
         for dep in spec.parent.iter().chain(spec.interfaces.iter()) {
@@ -50,8 +51,8 @@ impl Context<'_> {
                 self.builtin_on_demand(&dep)?;
             }
         }
-        let make_data = self.isolate.registry.data_maker(spec.name);
-        let dtor = self.isolate.registry.native_dtor(spec.name);
+        let make_data = self.isolate.registry.data_maker(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData));
+        let dtor = self.isolate.registry.native_dtor(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::destroy as p8_runtime::object::NativeMethod));
         let hooks = self.isolate.registry.class_hooks(spec.name);
         crate::builtin_classes::declare_spec(&mut self.classes, spec, make_data, dtor);
         if let Some(h) = hooks
