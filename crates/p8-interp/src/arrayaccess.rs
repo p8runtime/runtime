@@ -46,7 +46,21 @@ pub(crate) enum DimOp {
 impl Context<'_> {
     /// Call ArrayAccess method `name` of `o` with `args`.
     pub(crate) fn aa_call(&mut self, regs: &mut Vec<Value>, o: &Rc<Object>, name: &str, args: &mut [Value]) -> Result<Value, Throw> {
+        // An internal class that reads dimensions without being ArrayAccess
+        // (DOMNodeList: PHP's read_dimension/has_dimension handlers): its
+        // native `$[]::get` and `$[]::has`. Writes stay errors.
         if !o.class.is_a(b"arrayaccess") {
+            let handler: &[u8] = match name {
+                "offsetGet" => b"$[]::get",
+                "offsetExists" => b"$[]::has",
+                _ => b"",
+            };
+            if let Some(native) = o.class.method(handler).and_then(|m| m.native) {
+                std::mem::swap(&mut self.isolate.regs, regs);
+                let r = self.run_native(native, Some(o), args);
+                std::mem::swap(&mut self.isolate.regs, regs);
+                return r;
+            }
             return Err(self.throw("Error", format!("Cannot use object of type {} as array", String::from_utf8_lossy(o.class.name.as_bytes()))));
         }
         let m = self.method_frame(&Value::Object(Rc::clone(o)), name.to_ascii_lowercase().as_bytes(), name.as_bytes())?;

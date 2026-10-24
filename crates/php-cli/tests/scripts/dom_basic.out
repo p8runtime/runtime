@@ -1,0 +1,36 @@
+root 1
+one,two,
+2 two 2
+bool(true)
+bool(false)
+string(1) "1"
+bool(true)
+bool(true)
+bool(true)
+
+Warning: DOMDocument::createElement(): unterminated entity reference               y in %s on line 12
+<?xml version="1.0"?>
+<root a="1">
+  <item>one</item>
+  <item>two</item>
+  <new>x &amp; y</new>
+</root>
+<new>x &amp; y</new>
+DOMException: Invalid Character Error 5
+Hierarchy Request Error
+NULL
+bool(false)
+bool(true)
+bool(true)
+<root a="1">
+  <f1/>
+  <f2>z</f2>
+</root>
+<root a="1"><f1/>text<!--c--><f2>z</f2></root>
+
+Warning: DOMDocument::loadXML(): Opening and ending tag mismatch: b line 1 and a in Entity, line: 1 in %s on line 28
+
+Warning: DOMDocument::loadXML(): Premature end of data in tag a line 1 in Entity, line: 1 in %s on line 28
+bool(false)
+bool(false)
+bool(false)

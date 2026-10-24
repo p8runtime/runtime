@@ -4,6 +4,7 @@
 //! comes next.
 
 mod constants;
+mod dom;
 mod encoding;
 mod errors;
 mod parser;
@@ -29,4 +30,5 @@ fn register(registry: &mut Registry) {
         registry.add_constant(name.as_bytes(), *value);
     }
     registry.add_module("xml");
+    dom::register(registry);
 }

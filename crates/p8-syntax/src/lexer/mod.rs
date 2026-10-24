@@ -1184,7 +1184,8 @@ impl<'src> Iterator for Lexer<'src> {
                     }
                 }
 
-                if self.input[self.cursor..].starts_with(b"<?php") {
+                // `<?php` in any case (`<?PHP`), as Zend's scanner takes it.
+                if self.input[self.cursor..].get(..5).is_some_and(|t| t.eq_ignore_ascii_case(b"<?php")) {
                     if self.cursor > start {
                         return Some(Token {
                             kind: TokenKind::InlineHtml,

@@ -260,6 +260,22 @@ pub(crate) fn declare_spec(
     declare(c, spec.name, spec.flags, spec.parent, spec.interfaces, props, &methods);
     let class = Rc::get_mut(c.get_mut(spec.name.to_ascii_lowercase().as_bytes()).expect("just declared")).expect("not shared yet");
     class.debug_info = spec.debug_info;
+    // A property with a `$name::get` / `$name::set` native method is a
+    // virtual hooked property: reads and writes run that native code, as
+    // PHP's internal classes (DOM) back their properties.
+    use p8_runtime::object::{CLASS_HOOKS, HOOK_GET, HOOK_SET, HOOK_VIRTUAL};
+    for (n, _, _) in spec.properties {
+        let has = |kind: &str| spec.methods.iter().any(|(m, _)| m.eq_ignore_ascii_case(&format!("${n}::{kind}")));
+        let hooks = if has("get") { HOOK_GET } else { 0 } | if has("set") { HOOK_SET } else { 0 };
+        if hooks != 0
+            && let Some(p) = class.properties.iter_mut().find(|p| p.name.as_bytes() == n.as_bytes())
+        {
+            p.hooks = hooks | HOOK_VIRTUAL;
+        }
+    }
+    if class.properties.iter().any(|p| p.hooks != 0) {
+        class.flags |= CLASS_HOOKS;
+    }
     class.make_data = make_data.or_else(|| class.parent.as_ref().and_then(|p| p.make_data));
     class.native_dtor = dtor.or_else(|| class.parent.as_ref().and_then(|p| p.native_dtor));
     if class.native_dtor.is_some() {
