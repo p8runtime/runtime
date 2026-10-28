@@ -6,4 +6,3 @@ license = "MIT"
 description = "PCRE2-compatible regular expressions in safe Rust: no C, no JIT"
 
 [dependencies]
-memchr = "2.7"

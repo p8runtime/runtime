@@ -2872,9 +2872,6 @@ dependencies = [
 [[package]]
 name = "p8-pcre"
 version = "0.1.0"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "p8-runtime"
