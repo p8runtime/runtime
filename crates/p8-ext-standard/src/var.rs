@@ -5,7 +5,7 @@
 //! Reference: $PHP_SRC_PATH/ext/standard/type.c, var.c;
 //! $PHP_SRC_PATH/Zend/zend.c - print_hash, zend_print_zval_r_to_buf
 
-use crate::{arg, str_arg};
+use crate::arg;
 use p8_runtime::array::Key;
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
@@ -219,8 +219,10 @@ fn floatval(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Float(arg(args, 0).to_float()))
 }
 
-fn strval(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Str(str_arg(args, 0)))
+/// strval(): a string as a string cast makes it (an object's __toString(),
+/// an array "Array" with a warning).
+fn strval(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Str(crate::printf::to_str(ctx, &arg(args, 0))?))
 }
 
 fn boolval(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

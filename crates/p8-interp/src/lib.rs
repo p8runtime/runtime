@@ -1653,6 +1653,8 @@ impl Context<'_> {
     fn operand(&mut self, w: &[Value], func: &Function, r: Reg) -> Value {
         match &w[r as usize] {
             Value::Undef => self.undefined(func, r),
+            // A global slot another file unset.
+            Value::Ref(cell) if matches!(*cell.borrow(), Value::Undef) => self.undefined(func, r),
             Value::Ref(cell) => cell.borrow().clone(),
             v => v.clone(),
         }
@@ -1943,9 +1945,14 @@ impl Context<'_> {
                         None => {
                             let mut x = self.operand(w, func, a);
                             let mut y = self.operand(w, func, b);
-                            if op == BinOp::Concat {
-                                x = self.object_to_string(x)?;
-                                y = self.object_to_string(y)?;
+                            if op == BinOp::Concat && (matches!(x, Value::Object(_)) || matches!(y, Value::Object(_))) {
+                                x = self.string_of(regs, x)?;
+                                y = self.string_of(regs, y)?;
+                                let r = ops::binary(op, &x, &y, &mut self.diags);
+                                self.report_diags();
+                                let v = r.map_err(|e| self.op_error(e))?;
+                                assign(&mut regs[base..], dst, v);
+                                return Ok(Next::Go(pc));
                             }
                             let r = ops::binary(op, &x, &y, &mut self.diags);
                             self.report_diags();
@@ -1958,7 +1965,14 @@ impl Context<'_> {
                 Instr::AssignOp { op, var, src } => {
                     let y = self.operand(w, func, src);
                     if op == BinOp::Concat {
-                        let y = self.object_to_string(y)?;
+                        let y = self.string_of(regs, y)?;
+                        // An object on the left: its __toString() first.
+                        if matches!(regs[base + var as usize].deref(), Value::Object(_)) {
+                            let x = regs[base + var as usize].deref();
+                            let x = self.string_of(regs, x)?;
+                            assign(&mut regs[base..], var, x);
+                        }
+                        let w = &mut regs[base..base + func.nregs as usize];
                         // `.=` appends in place when the string is not shared
                         let x = self.take_var(w, func, var);
                         if let Some(e) = ops::object_string_error(&x).or_else(|| ops::object_string_error(&y)) {
@@ -2051,6 +2065,16 @@ impl Context<'_> {
                     let v = self.operand(w, func, src);
                     reg!(dst) = ops::bit_not(&v).map_err(|e| self.op_error(e))?;
                 }
+                Instr::Cast { kind: CastKind::String, dst, src } => {
+                    let v = self.operand(w, func, src);
+                    let v = self.string_of(regs, v)?;
+                    if let Some(e) = ops::object_string_error(&v) {
+                        return Err(self.op_error(e));
+                    }
+                    let s = ops::to_string_lossy(&v, &mut self.diags);
+                    self.report_diags();
+                    regs[base + dst as usize] = Value::Str(s);
+                }
                 Instr::Cast { kind, dst, src } => {
                     let v = self.operand(w, func, src);
                     reg!(dst) = match kind {
@@ -2119,7 +2143,7 @@ impl Context<'_> {
                         Value::Undef | Value::Null => None,
                         Value::Ref(cell) => {
                             let v = cell.borrow().clone();
-                            (!matches!(v, Value::Null)).then_some(v)
+                            (!matches!(v, Value::Null | Value::Undef)).then_some(v)
                         }
                         v => Some(v.clone()),
                     };
@@ -2229,7 +2253,7 @@ impl Context<'_> {
                 Instr::IssetVar { dst, var } => {
                     let set = match &reg!(var) {
                         Value::Undef | Value::Null => false,
-                        Value::Ref(cell) => !matches!(*cell.borrow(), Value::Null),
+                        Value::Ref(cell) => !matches!(*cell.borrow(), Value::Null | Value::Undef),
                         _ => true,
                     };
                     reg!(dst) = Value::Bool(set);
@@ -2242,7 +2266,7 @@ impl Context<'_> {
                         && let Some(name) = func.cv_names.get(var as usize)
                     {
                         let name = name.as_bytes().to_vec();
-                        self.global_unset(below, &name);
+                        self.global_clear(below, &name);
                     }
                     reg!(var) = Value::Undef;
                 }
@@ -2365,7 +2389,7 @@ impl Context<'_> {
                 }
                 Instr::Echo { src } => {
                     let v = self.operand(w, func, src);
-                    let v = self.object_to_string(v)?;
+                    let v = self.string_of(regs, v)?;
                     if let Some(e) = ops::object_string_error(&v) {
                         return Err(self.op_error(e));
                     }
@@ -2400,6 +2424,20 @@ impl Context<'_> {
                         },
                     };
                     reg!(dst) = v;
+                }
+                Instr::ConcatN { dst, start, n } if w[start as usize..start as usize + n as usize].iter().any(|v| matches!(v.deref(), Value::Object(_))) => {
+                    // An object part: its __toString() may run PHP code.
+                    let values: Vec<Value> = (0..n).map(|i| self.operand(w, func, start + i as Reg)).collect();
+                    let mut bytes = Vec::new();
+                    for v in values {
+                        let v = self.string_of(regs, v)?;
+                        if let Some(e) = ops::object_string_error(&v) {
+                            return Err(self.op_error(e));
+                        }
+                        ops::push_string(&mut bytes, &v, &mut self.diags);
+                    }
+                    self.report_diags();
+                    regs[base + dst as usize] = Value::Str(PhpStr::new(bytes));
                 }
                 Instr::ConcatN { dst, start, n } => {
                     let parts = start as usize..start as usize + n as usize;
@@ -2604,9 +2642,9 @@ impl Context<'_> {
                         let name = self.var_name(w, func, a);
                         let at_global = self.frames.last().is_some_and(|f| f.global);
                         if at_global && !in_main {
-                            // A file included at global scope: the global goes,
-                            // and with it this file's binding to it.
-                            self.global_unset(below, &name);
+                            // A file included at global scope: the global is
+                            // emptied, and this file's binding to it goes.
+                            self.global_clear(below, &name);
                             if let Some(r) = func.cv_names.iter().position(|n| n.as_bytes() == name.as_slice()) {
                                 w[r] = Value::Undef;
                             }
@@ -3576,6 +3614,29 @@ impl Context<'_> {
 
     /// An object as a string, when its class's __toString is native (a
     /// Throwable's); anything else as it is.
+    /// A value in a string context (echo, `.`, interpolation, a string
+    /// cast): an object becomes what its __toString() returns, run here
+    /// as PHP code when it is; one without __toString stays for the caller
+    /// to report.
+    fn string_of(&mut self, regs: &mut Vec<Value>, v: Value) -> Result<Value, Throw> {
+        let v = match v {
+            Value::Ref(cell) => cell.borrow().clone(),
+            v => v,
+        };
+        let Value::Object(o) = &v else { return Ok(v) };
+        if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 || o.class.cast_string.is_some() {
+            return Ok(v);
+        }
+        match o.class.method(b"__tostring") {
+            Some(m) if m.native.is_some() => self.object_to_string(v),
+            Some(_) => {
+                let callable = Value::Array(Rc::new(PhpArray::from_list(vec![v.clone(), Value::Str(PhpStr::from("__toString"))])));
+                self.call_with_regs(regs, &callable, &mut [])
+            }
+            None => Ok(v),
+        }
+    }
+
     fn object_to_string(&mut self, v: Value) -> Result<Value, Throw> {
         let Value::Object(o) = &v else { return Ok(v) };
         let Some(p8_runtime::object::Native::Method(native)) = o.class.method(b"__tostring").and_then(|m| m.native) else {
@@ -3750,7 +3811,7 @@ impl Context<'_> {
                 Value::Undef => None,
                 v => Some(v),
             },
-            None if in_main => self.globals.get(name).map(|c| c.borrow().clone()),
+            None if in_main => self.globals.get(name).map(|c| c.borrow().clone()).filter(|v| !matches!(v, Value::Undef)),
             None => frame.vars()?.get(name).map(|c| c.borrow().clone()),
         }
     }
@@ -3778,7 +3839,7 @@ impl Context<'_> {
                 Value::Undef => None,
                 v => Some(v),
             },
-            None => self.globals.get(name).map(|c| c.borrow().deref()),
+            None => self.globals.get(name).map(|c| c.borrow().deref()).filter(|v| !matches!(v, Value::Undef)),
         }
     }
 
@@ -3803,6 +3864,25 @@ impl Context<'_> {
         }
     }
 
+    /// `unset($x)` in a file included at global scope: the global's slot is
+    /// emptied, not removed, so every file bound to it (and a later
+    /// assignment through any of them) still shares it, as PHP's files share
+    /// symbol-table slots.
+    fn global_clear(&mut self, main: &mut [Value], name: &[u8]) {
+        let Some(frame) = self.frames.first() else { return };
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => match &main[r] {
+                Value::Ref(cell) => *cell.borrow_mut() = Value::Undef,
+                _ => main[r] = Value::Undef,
+            },
+            None => {
+                if let Some(cell) = self.globals.get(name) {
+                    *cell.borrow_mut() = Value::Undef;
+                }
+            }
+        }
+    }
+
     /// `$GLOBALS` read whole: the set global variables, by name.
     fn globals_array(&self, main: &[Value]) -> p8_runtime::array::PhpArray {
         let mut out = p8_runtime::array::PhpArray::new();
@@ -3818,7 +3898,10 @@ impl Context<'_> {
             }
         }
         for (n, c) in &self.globals {
-            out.insert(Key::from_string(PhpStr::new(n.clone())), c.borrow().deref());
+            match c.borrow().deref() {
+                Value::Undef => {}
+                v => out.insert(Key::from_string(PhpStr::new(n.clone())), v),
+            }
         }
         out
     }
@@ -4282,10 +4365,11 @@ impl Ctx for Context<'_> {
             let first: Vec<(PhpStr, Value)> = REQUEST_GLOBALS
                 .iter()
                 .filter_map(|n| self.globals.get(n.as_bytes()).map(|c| (PhpStr::from(*n), c.borrow().clone())))
+                .filter(|(_, v)| !matches!(v, Value::Undef))
                 .collect();
             out.splice(0..0, first);
             for (n, c) in &self.globals {
-                if !REQUEST_GLOBALS.iter().any(|r| r.as_bytes() == n.as_slice()) {
+                if !REQUEST_GLOBALS.iter().any(|r| r.as_bytes() == n.as_slice()) && !matches!(&*c.borrow(), Value::Undef) {
                     out.push((PhpStr::from(n.as_slice()), c.borrow().clone()));
                 }
             }
@@ -4483,7 +4567,7 @@ impl Ctx for Context<'_> {
         let main = self.frames.first()?;
         match main.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => self.isolate.regs.get(r).map(Value::deref).filter(|v| !matches!(v, Value::Undef)),
-            None => self.globals.get(name).map(|c| c.borrow().deref()),
+            None => self.globals.get(name).map(|c| c.borrow().deref()).filter(|v| !matches!(v, Value::Undef)),
         }
     }
 
@@ -4792,7 +4876,9 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
         _ => 0,
     };
     let next = match &w[iter as usize] {
-        Value::Array(a) => a.entry_at(pos).map(|(p, k, v)| (p, k, v.clone())),
+        // By value: an element that is a reference (a by-reference foreach
+        // made it one) gives its value, not the reference.
+        Value::Array(a) => a.entry_at(pos).map(|(p, k, v)| (p, k, v.deref())),
         _ => None,
     };
     let Some((p, k, v)) = next else { return false };
