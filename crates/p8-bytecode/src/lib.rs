@@ -163,6 +163,10 @@ pub enum Instr {
     /// A class declaration runs here (one linked at the file's start is
     /// already there): `class` indexes the function's `decls`.
     DeclareClass { class: u16 },
+    /// A function declared inside a block or another function runs here
+    /// (top-level ones are declared before the file runs): `func`
+    /// indexes the function's `lambdas`.
+    DeclareFunction { func: u16 },
     /// `@`: the error level goes into `saved`, and only fatal errors are
     /// reported until `Unsilence` puts it back.
     Silence { saved: Reg },

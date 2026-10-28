@@ -569,6 +569,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::Exit { .. }
                 | Instr::MatchError { .. }
                 | Instr::DeclareClass { .. }
+                | Instr::DeclareFunction { .. }
                 | Instr::Include { .. }
                 | Instr::Silence { .. }
                 | Instr::MakeClosure { .. }
@@ -1134,8 +1135,13 @@ pub struct Context<'i> {
 impl Context<'_> {
     pub fn declare(&mut self, func: Arc<Function>) -> Result<(), String> {
         let key = func.name.as_bytes().to_ascii_lowercase();
-        if self.functions.contains_key(&key) || self.isolate.registry.lookup(&key).is_some() {
-            return Err(format!("Cannot redeclare function {}()", String::from_utf8_lossy(func.name.as_bytes())));
+        let name = String::from_utf8_lossy(func.name.as_bytes());
+        if let Some(&i) = self.functions.get(&key) {
+            let first = &self.closures[i as usize].code;
+            return Err(format!("Cannot redeclare function {name}() (previously declared in {}:{})", first.file, first.line));
+        }
+        if self.isolate.registry.lookup(&key).is_some() {
+            return Err(format!("Cannot redeclare function {name}()"));
         }
         self.closures.push(Closure::new(func));
         self.functions.insert(key, (self.closures.len() - 1) as u32);
@@ -2350,6 +2356,12 @@ impl Context<'_> {
                 Instr::DeclareClass { class } => {
                     let def = Arc::clone(&func.decls[class as usize]);
                     self.declare_class(&def)?;
+                }
+                Instr::DeclareFunction { func: i } => {
+                    let declared = Arc::clone(&func.lambdas[i as usize]);
+                    if let Err(message) = self.declare(Arc::clone(&declared)) {
+                        return Err(Throw::Fatal { message, file: Rc::from(&*declared.file), line: declared.line });
+                    }
                 }
                 Instr::MakeClosure { dst, func: i, is_static } => {
                     let object = self.make_closure(&func.lambdas[i as usize], is_static);
