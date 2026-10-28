@@ -4125,6 +4125,9 @@ impl Ctx for Context<'_> {
         // Destructors first, oldest first; one may keep an object alive
         // (store it somewhere), so the garbage is found again after.
         let mut ran = false;
+        // A destructor's exception doesn't stop the others: each new one
+        // takes the ones before as its previous.
+        let mut thrown: Option<Rc<Object>> = None;
         for o in &garbage.objects {
             if o.destructed.get() || o.class.method(b"__destruct").is_none() || o.lazy.get() != 0 {
                 continue;
@@ -4132,10 +4135,24 @@ impl Ctx for Context<'_> {
             o.destructed.set(true);
             ran = true;
             let m = self.method_frame(&Value::Object(Rc::clone(o)), b"__destruct", b"__destruct")?;
-            let mut regs = std::mem::take(&mut self.isolate.regs);
-            let r = self.run_nested(&mut regs, m, &mut []);
-            self.isolate.regs = regs;
-            r?;
+            let r = if self.fibers.is_empty() {
+                let mut regs = std::mem::take(&mut self.isolate.regs);
+                let r = self.run_nested(&mut regs, m, &mut []).map(|_| ());
+                self.isolate.regs = regs;
+                r
+            } else {
+                self.destruct_in_fiber(m)
+            };
+            match r {
+                Ok(()) => {}
+                Err(Throw::Object(e)) if e.class.is_a(b"throwable") => {
+                    if let Some(before) = thrown.take() {
+                        builtin_classes::set_previous(&e, before);
+                    }
+                    thrown = Some(e);
+                }
+                Err(t) => return Err(t),
+            }
         }
         let garbage = if ran {
             drop(garbage);
@@ -4153,7 +4170,10 @@ impl Ctx for Context<'_> {
         drop(garbage);
         self.gc_runs += 1;
         self.gc_collected += count;
-        Ok(count)
+        match thrown {
+            Some(e) => Err(Throw::Object(e)),
+            None => Ok(count),
+        }
     }
 
     fn gc_counts(&self) -> (i64, i64) {
