@@ -1,0 +1,3 @@
+gu3 after unset: unset G=unset in vars: n
+gu3: f()=login G=login
+main: action=login G=login v=unset b=b list=[2,4] defined=n

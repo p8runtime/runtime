@@ -1,0 +1,17 @@
+P
+P
+in P and P string
+xPy|PP
+aP
+string(5) "left!"
+P|P|P|[P]|P,P
+PP 1
+calls: 15
+caught: no string
+caught echo: no string
+Error: Object of class stdClass could not be converted to string
+Error: Object of class stdClass could not be converted to string
+Error: Object of class stdClass could not be converted to string
+<deep>
+f: in function
+item e1;item e2;

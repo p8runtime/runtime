@@ -12,6 +12,11 @@ chdir(__DIR__ . '/wordpress');
 require __DIR__ . '/wordpress/wp-load.php';
 require ABSPATH . 'wp-admin/includes/upgrade.php';
 $result = wp_install('p8 blog', 'admin', 'admin@example.com', true, '', 'password');
+// The salts WordPress makes on first use, made now (the gate gives both
+// installs the same ones).
+foreach (['auth', 'secure_auth', 'logged_in', 'nonce'] as $scheme) {
+    wp_salt($scheme);
+}
 echo 'user_id=', $result['user_id'], ' password=', $result['password'], "\n";
 global $wpdb;
 echo 'tables=', count($wpdb->get_col('SHOW TABLES')), ' options=', $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->options}"), ' posts=', $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts}"), "\n";
