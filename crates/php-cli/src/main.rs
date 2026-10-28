@@ -5,8 +5,8 @@
 use std::io::Write;
 
 fn main() {
-    let Some(Cli { dump, path, ini, args }) = Cli::parse(std::env::args().skip(1)) else {
-        eprintln!("usage: php2 [--dump] [-d name=value]... <file> [args...]");
+    let Some(Cli { dump, lint, path, ini, args }) = Cli::parse(std::env::args().skip(1)) else {
+        eprintln!("usage: php2 [--dump] [-l] [-d name=value]... <file> [args...]");
         std::process::exit(64);
     };
     let source = match std::fs::read(&path) {
@@ -18,6 +18,18 @@ fn main() {
     };
     let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::PCRE, p8::extensions::MYSQLI]);
     let file = std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned());
+    // -l: compile only, as `php -l` checks a file's syntax.
+    if lint {
+        match platform.compile(&source, &path) {
+            Ok(_) => println!("No syntax errors detected in {path}"),
+            Err(error) => {
+                let label = if error.kind == p8::ErrorKind::Parse { "Parse error" } else { "Fatal error" };
+                println!("\n{label}: {} in {path} on line {}\nErrors parsing {path}", error.message, error.line);
+                std::process::exit(255);
+            }
+        }
+        return;
+    }
     if dump {
         match platform.compile(&source, &file) {
             Ok(script) => print!("{}", platform.disassemble(&script)),
@@ -54,6 +66,8 @@ fn main() {
 /// script's own arguments.
 struct Cli {
     dump: bool,
+    /// -l: check the file's syntax, run nothing.
+    lint: bool,
     path: String,
     /// `-d name=value` settings, in order (unknown names are ignored).
     ini: Vec<(String, String)>,
@@ -65,6 +79,7 @@ impl Cli {
     fn parse(args: impl Iterator<Item = String>) -> Option<Cli> {
         let mut args = args.peekable();
         let mut dump = false;
+        let mut lint = false;
         let mut ini = Vec::new();
         let mut setting = |text: &str| {
             let (name, value) = text.split_once('=').unwrap_or((text, "1"));
@@ -73,13 +88,14 @@ impl Cli {
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 "--dump" => dump = true,
+                "-l" => lint = true,
                 "-d" => setting(&args.next()?),
                 other if other.starts_with("-d") => setting(&other[2..]),
                 _ => return None,
             }
         }
         let path = args.next()?;
-        Some(Cli { dump, path, ini, args: args.collect() })
+        Some(Cli { dump, lint, path, ini, args: args.collect() })
     }
 }
 
@@ -113,6 +129,8 @@ mod tests {
         let ini: Vec<(&str, &str)> = cli.ini.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
         assert_eq!(ini, [("error_reporting", "0"), ("precision", "14"), ("x", "1")]);
         assert_eq!(parse(&["--dump", "t.php"]), Some((true, "t.php".to_string())));
+        let lint = Cli::parse(["-l", "t.php"].iter().map(|a| a.to_string())).expect("parsed");
+        assert!(lint.lint && !lint.dump && lint.path == "t.php");
         // An unknown option or a missing file is a usage error.
         assert_eq!(parse(&["-x", "t.php"]), None);
         assert_eq!(parse(&["-d"]), None);
