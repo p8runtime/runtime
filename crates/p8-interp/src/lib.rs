@@ -571,6 +571,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::SendVarStatic { .. }
                 | Instr::MethodArgByRef { .. }
                 | Instr::StaticArgByRef { .. }
+                | Instr::FuncArgByRef { .. }
                 | Instr::Echo { .. }
                 | Instr::FetchConst { .. }
                 | Instr::BindGlobal { .. }
@@ -991,6 +992,8 @@ impl Isolate {
             failed_call: None,
             class_defs: Vec::new(),
             declared: HashMap::new(),
+            class_origins: HashMap::new(),
+            binding_file: None,
             loader: None,
             included: std::collections::HashSet::new(),
             included_order: Vec::new(),
@@ -1071,6 +1074,11 @@ pub struct Context<'i> {
     /// Keyed by the declaration's address, holding it so that address
     /// is not reused by another file's class while it is remembered.
     declared: HashMap<usize, Arc<ClassDef>>,
+    /// Where each class this request declared was declared (file, line),
+    /// for "previously declared in"; and the file whose classes are being
+    /// bound before it runs.
+    class_origins: HashMap<Vec<u8>, (Rc<str>, u32)>,
+    binding_file: Option<Rc<str>>,
     /// Compiles the files `include` runs (the embedder's compiler).
     loader: Option<Rc<dyn Loader>>,
     /// Files included so far, for `_once` (resolved paths).
@@ -1456,7 +1464,7 @@ impl Context<'_> {
             }
         }
         let defs = std::mem::take(&mut self.class_defs);
-        let mut result = match self.early_bind(&defs) {
+        let mut result = match self.early_bind(&defs, Some(Rc::from(&*main.file))) {
             Ok(()) => self.execute(&mut regs),
             Err(e) => Err(self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), e)),
         };
@@ -2335,6 +2343,13 @@ impl Context<'_> {
                     reg!(dst) = Value::Bool(match reg!(obj).deref() {
                         Value::Object(o) => self.method_takes_ref(&o.class, site.name.as_bytes(), n as usize),
                         _ => false,
+                    });
+                }
+                Instr::FuncArgByRef { dst, site, n } => {
+                    reg!(dst) = Value::Bool(match self.resolve(clo, site)? {
+                        Callee::User(f) => self.closures[f as usize].code.param_by_ref(n as usize),
+                        Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
+                        Callee::Constant(_) => false,
                     });
                 }
                 Instr::StaticArgByRef { dst, class, method, n } => {
@@ -3498,6 +3513,7 @@ impl Context<'_> {
                     cast_bool: None,
                     cast_string: None,
                     clone_data: None,
+                    forward_calls: None,
                     make_data: None,
                     native_dtor: None,
                     enum_cases: Vec::new(),

@@ -1,0 +1,64 @@
+BASE a.txt txt a BASE/a.txt BASE/a.txt
+int(3)
+string(4) "file"
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+string(10) "BASE/a.txt"
+string(4) "link"
+bool(true)
+bool(true)
+string(10) "BASE/a.txt"
+string(10) "BASE/a.txt"
+["","","","","",""]
+["\/","","\/","","","\/"]
+["x","","x","","x","x"]
+["dir\/","","dir","","dir","dir"]
+["a\/b\/","a","b","","b","a\/b"]
+["\/a\/b.c.d","\/a","b.c.d","d","b.c.d","\/a\/b.c.d"]
+["a\/\/b","a\/","b","","b","a\/\/b"]
+[".hidden","",".hidden","hidden",".hidden",".hidden"]
+["noext.","","noext.","","noext.","noext."]
+bool(false)
+bool(false)
+bool(false)
+RuntimeException: SplFileInfo::getSize(): stat failed for BASE/missing
+RuntimeException: SplFileInfo::getMTime(): stat failed for BASE/missing
+RuntimeException: SplFileInfo::getType(): Lstat failed for BASE/missing
+RuntimeException: SplFileInfo::getPerms(): stat failed for BASE/missing
+RuntimeException: SplFileInfo::getOwner(): stat failed for BASE/missing
+BASE SplFileInfo BASE/a.txt
+string(116) "SplFileInfo Object
+(
+    [pathName:SplFileInfo:private] => BASE/a.txt
+    [fileName:SplFileInfo:private] => a.txt
+)
+"
+DirectoryIterator: .(dot)/=BASE/.:.:, ..(dot)/=BASE/..:..:, a.txt=BASE/a.txt:a.txt:txt, b.html=BASE/b.html:b.html:html, link=BASE/link:link:, sub/=BASE/sub:sub:
+int(0)
+bool(true)
+bool(true)
+int(3)
+Seek position 99 is out of range
+FilesystemIterator: BASE/a.txt=>SplFileInfo:a.txt, BASE/b.html=>SplFileInfo:b.html, BASE/link=>SplFileInfo:link, BASE/sub=>SplFileInfo:sub
+KEY_AS_FILENAME|CURRENT_AS_PATHNAME: ..=>BASE/.., .=>BASE/., a.txt=>BASE/a.txt, b.html=>BASE/b.html, link=>BASE/link, sub=>BASE/sub
+CURRENT_AS_SELF: ., .., a.txt, b.html, link, sub
+int(4096)
+int(4096)
+int(8192)
+Recursive SELF_FIRST: BASE/a.txt, BASE/b.html, BASE/link, BASE/sub/, BASE/sub/c.html, BASE/sub/deeper/, BASE/sub/deeper/d.HTML
+Recursive leaves (with dots): BASE/..||.., BASE/.||., BASE/a.txt||a.txt, BASE/b.html||b.html, BASE/link||link, BASE/sub/..|sub|sub/.., BASE/sub/.|sub|sub/., BASE/sub/c.html|sub|sub/c.html, BASE/sub/deeper/..|sub/deeper|sub/deeper/.., BASE/sub/deeper/.|sub/deeper|sub/deeper/., BASE/sub/deeper/d.HTML|sub/deeper|sub/deeper/d.HTML
+RegexIterator GET_MATCH: BASE/b.html ["BASE\/b.html"], BASE/sub/c.html ["BASE\/sub\/c.html"], BASE/sub/deeper/d.HTML ["BASE\/sub\/deeper\/d.HTML"]
+RecursiveDirectoryIterator sub=sub
+GlobIterator: BASE/a.txt=>a.txt, BASE/b.html=>b.html
+int(2)
+int(2)
+ValueError: DirectoryIterator::__construct(): Argument #1 ($directory) must not be empty
+UnexpectedValueException: DirectoryIterator::__construct(BASE/nope): Failed to open directory: No such file or directory
+Error: Directory object is already initialized
+Error: Object not initialized

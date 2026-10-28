@@ -83,7 +83,7 @@ impl Context<'_> {
                 return Err(Throw::Fatal { message, file: Rc::from(&*f.file), line: f.line });
             }
         }
-        self.early_bind(&program.classes)?;
+        self.early_bind(&program.classes, Some(Rc::from(&*program.main.file)))?;
         Ok(Some(Ok(program)))
     }
 }
@@ -108,7 +108,7 @@ impl Context<'_> {
                 return Err(Throw::Fatal { message, file: Rc::from(&*f.file), line: f.line });
             }
         }
-        self.early_bind(&program.classes)?;
+        self.early_bind(&program.classes, Some(Rc::from(&*program.main.file)))?;
         Ok(program)
     }
 }

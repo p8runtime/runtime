@@ -24,6 +24,7 @@ mod random;
 mod scan;
 mod spl;
 mod spl_iter;
+mod spl_dir;
 mod json;
 mod serial;
 mod class;
@@ -140,6 +141,10 @@ fn register(registry: &mut Registry) {
     registry.add_functions(spl::BUILTINS);
     registry.add_classes(spl::CLASSES);
     registry.add_classes(spl_iter::CLASSES);
+    registry.add_hooks("IteratorIterator", spl_iter::DUAL_HOOKS);
+    registry.add_hooks("RecursiveIteratorIterator", spl_iter::RECURSIVE_HOOKS);
+    registry.add_classes(spl_dir::CLASSES);
+    registry.add_data("SplFileInfo", spl_dir::make);
     registry.add_classes(weak::CLASSES);
     registry.add_data("WeakReference", weak::make_weakref);
     registry.add_data("WeakMap", weak::make_weakmap);

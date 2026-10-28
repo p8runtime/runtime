@@ -214,7 +214,7 @@ fn star(ctx: &mut dyn Ctx, fmt: &[u8], i: &mut usize, args: &mut Args, what: &st
 
 /// zval_get_tmp_string(): a string, an object's __toString(), or "Array"
 /// with a warning.
-fn to_str(ctx: &mut dyn Ctx, v: &Value) -> Result<PhpStr, Throw> {
+pub(crate) fn to_str(ctx: &mut dyn Ctx, v: &Value) -> Result<PhpStr, Throw> {
     match v.deref() {
         Value::Array(_) => {
             ctx.warn("Array to string conversion");

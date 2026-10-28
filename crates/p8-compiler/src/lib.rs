@@ -754,7 +754,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *dst = f(*dst);
             *obj = f(*obj);
         }
-        StaticArgByRef { dst, .. } => *dst = f(*dst),
+        StaticArgByRef { dst, .. } | FuncArgByRef { dst, .. } => *dst = f(*dst),
         Return { src } | Echo { src } | Exit { src, .. } | MatchError { src } | Throw { src } | CatchIf { src, .. } => {
             *src = f(*src)
         }
@@ -1157,8 +1157,34 @@ impl<'src> Compiler<'src> {
                 self.close_loop(f, cont);
             }
             Stmt::Foreach { expr, key_var, value_var: Expr::Unary { op: UnaryOp::Reference, expr: value_var, .. }, body, .. } => {
-                // By reference: the elements of the variable's own array.
-                let src = self.expr(f, expr)?;
+                // By reference: the elements of the array itself, so a
+                // property's or an element's is made a reference first.
+                let src = match expr {
+                    Expr::PropertyFetch { target, property, .. } => {
+                        let r = f.temp();
+                        let obj = self.expr(f, target)?;
+                        let name = self.prop_name(f, property)?;
+                        f.emit(Instr::rare(Rare::PropRef, r, obj, name, 0));
+                        r
+                    }
+                    Expr::ArrayDimFetch { .. } if self.can_ref(expr) => {
+                        let r = f.temp();
+                        let (root, keys, count, append, held) = self.ref_dim_path(f, expr)?;
+                        f.emit(Instr::RefDim { var: r, root, keys, n: count, append });
+                        if let Some(h) = held {
+                            f.emit(Instr::Free { reg: h });
+                        }
+                        r
+                    }
+                    Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                        let r = f.temp();
+                        let class = self.class_ref(f, class)?;
+                        let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                        f.emit(Instr::rare(Rare::StaticRef, r, name, 0, class));
+                        r
+                    }
+                    _ => self.expr(f, expr)?,
+                };
                 let iter = f.temp();
                 let _cell = f.temp();
                 let saved = f.temps;
@@ -2665,25 +2691,7 @@ impl<'src> Compiler<'src> {
                 value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref(value) => {
                     let flag = f.temp();
                     f.emit(asks(flag, n as u8));
-                    let by_value = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
-                    match value {
-                        Expr::PropertyFetch { target, property, .. } => {
-                            let obj = self.expr(f, target)?;
-                            let name = self.prop_name(f, property)?;
-                            f.emit(Instr::rare(Rare::PropRef, *r, obj, name, 0));
-                        }
-                        _ => {
-                            let (root, keys, count, append, held) = self.ref_dim_path(f, value)?;
-                            f.emit(Instr::RefDim { var: *r, root, keys, n: count, append });
-                            if let Some(h) = held {
-                                f.emit(Instr::Free { reg: h });
-                            }
-                        }
-                    }
-                    let end = f.emit(Instr::Jump { target: 0 });
-                    f.patch(by_value, f.here());
-                    self.expr_into(f, value, *r)?;
-                    f.patch(end, f.here());
+                    self.ref_or_value_with(f, value, *r, flag)?;
                 }
                 value => self.expr_into(f, value, *r)?,
             }
@@ -2691,9 +2699,45 @@ impl<'src> Compiler<'src> {
         Ok((regs[0], args.len() as u8))
     }
 
-    /// An element or property argument that can be made a reference: a
-    /// dimension path rooted in a variable or property (no `[]` read), or
-    /// a property of anything.
+    /// Argument `value` into `r`: a reference when `ask` (whose `dst` is
+    /// filled in) says the callee takes one, else its value.
+    fn ref_or_value(&mut self, f: &mut FnBuilder, value: &Expr, r: Reg, ask: Instr) -> Result<()> {
+        let flag = f.temp();
+        let ask = match ask {
+            Instr::FuncArgByRef { site, n, .. } => Instr::FuncArgByRef { dst: flag, site, n },
+            other => other,
+        };
+        f.emit(ask);
+        self.ref_or_value_with(f, value, r, flag)
+    }
+
+    /// The branch on `flag`: the element or property as a reference, or its value.
+    fn ref_or_value_with(&mut self, f: &mut FnBuilder, value: &Expr, r: Reg, flag: Reg) -> Result<()> {
+        let by_value = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
+        match value {
+            Expr::PropertyFetch { target, property, .. } => {
+                let obj = self.expr(f, target)?;
+                let name = self.prop_name(f, property)?;
+                f.emit(Instr::rare(Rare::PropRef, r, obj, name, 0));
+            }
+            _ => {
+                let (root, keys, count, append, held) = self.ref_dim_path(f, value)?;
+                f.emit(Instr::RefDim { var: r, root, keys, n: count, append });
+                if let Some(h) = held {
+                    f.emit(Instr::Free { reg: h });
+                }
+            }
+        }
+        let end = f.emit(Instr::Jump { target: 0 });
+        f.patch(by_value, f.here());
+        self.expr_into(f, value, r)?;
+        f.patch(end, f.here());
+        Ok(())
+    }
+
+    /// An element or property that can be made a reference: a property,
+    /// or a dimension path (no `[]` read) rooted in a variable, a property
+    /// or a static property.
     fn can_ref(&self, e: &Expr) -> bool {
         let mut cur = e;
         while let Expr::ArrayDimFetch { array, dim, .. } = cur {
@@ -2704,7 +2748,8 @@ impl<'src> Compiler<'src> {
         }
         match cur {
             Expr::Variable { name, .. } => self.text(*name).starts_with(b"$") && self.text(*name) != b"$this",
-            Expr::PropertyFetch { .. } => std::ptr::eq(cur, e),
+            Expr::PropertyFetch { .. } => true,
+            Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } => !std::ptr::eq(cur, e) && self.text(*name).starts_with(b"$"),
             _ => false,
         }
     }
@@ -4145,6 +4190,11 @@ impl<'src> Compiler<'src> {
                 Expr::IndirectVariable { name, .. } if modes[n] != Some(false) => {
                     let nm = self.expr(f, name)?;
                     f.emit(Instr::rare(Rare::VarRef, *r, nm, 0, 0));
+                }
+                // An element or property for a function not known yet: the
+                // function, found when the call runs, decides.
+                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if modes[n].is_none() && self.can_ref(value) => {
+                    self.ref_or_value(f, value, *r, Instr::FuncArgByRef { dst: 0, site, n: n as u8 })?;
                 }
                 // An array element or property passed by reference becomes one.
                 Expr::ArrayDimFetch { .. } if modes[n] == Some(true) => {

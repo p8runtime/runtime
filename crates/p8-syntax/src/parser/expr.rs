@@ -1764,6 +1764,87 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
     }
 
+    /// The key of `"$a[key]"` or `"${a[key]}"`: a name (a string), a
+    /// number, a variable, or a negative number.
+    fn parse_string_offset_key(&mut self) -> ExprId<'ast> {
+        match self.current_token.kind {
+            TokenKind::Identifier => {
+                let t = self.current_token;
+                self.bump();
+                self.arena.alloc(Expr::String {
+                    value: self.arena.alloc_slice_copy(self.lexer.slice(t.span)),
+                    span: t.span,
+                }) as &'ast Expr<'ast>
+            }
+            TokenKind::NumString => {
+                let t = self.current_token;
+                self.bump();
+                self.arena.alloc(Expr::Integer {
+                    value: self.arena.alloc_slice_copy(self.lexer.slice(t.span)),
+                    span: t.span,
+                }) as &'ast Expr<'ast>
+            }
+            TokenKind::Variable => {
+                let t = self.current_token;
+                self.bump();
+                self.arena.alloc(Expr::Variable {
+                    name: t.span,
+                    span: t.span,
+                }) as &'ast Expr<'ast>
+            }
+            TokenKind::Minus => {
+                // Handle negative number?
+                let minus = self.current_token;
+                self.bump();
+                if self.current_token.kind == TokenKind::NumString {
+                    let t = self.current_token;
+                    self.bump();
+
+                    let mut value = bumpalo::collections::Vec::with_capacity_in(
+                        (minus.span.end - minus.span.start)
+                            + (t.span.end - t.span.start),
+                        self.arena,
+                    );
+                    value.extend_from_slice(self.lexer.slice(minus.span));
+                    value.extend_from_slice(self.lexer.slice(t.span));
+
+                    self.arena.alloc(Expr::Integer {
+                        value: value.into_bump_slice(),
+                        span: Span::new(minus.span.start, t.span.end),
+                    }) as &'ast Expr<'ast>
+                } else {
+                    self.arena.alloc(Expr::Error {
+                        span: self.current_token.span,
+                    }) as &'ast Expr<'ast>
+                }
+            }
+            _ => {
+                // Error
+                self.arena.alloc(Expr::Error {
+                    span: self.current_token.span,
+                }) as &'ast Expr<'ast>
+            }
+        }
+    }
+
+    /// The rest of `"${name[key]}"` after the name: the element of $name.
+    fn parse_dollar_curly_rest(&mut self, var: ExprId<'ast>) -> ExprId<'ast> {
+        let start = var.span().start;
+        if self.current_token.kind != TokenKind::OpenBracket {
+            return self.arena.alloc(Expr::Error { span: self.current_token.span });
+        }
+        self.bump(); // [
+        let key = self.parse_string_offset_key();
+        if self.current_token.kind == TokenKind::CloseBracket {
+            self.bump();
+        }
+        let end = self.current_token.span.end;
+        if self.current_token.kind == TokenKind::CloseBrace {
+            self.bump();
+        }
+        self.arena.alloc(Expr::ArrayDimFetch { array: var, dim: Some(key), span: Span::new(start, end) })
+    }
+
     fn parse_interpolated_string(&mut self, end_token: TokenKind) -> ExprId<'ast> {
         let start = self.current_token.span.start;
         // `<<<'LABEL'` opens a nowdoc: its text is taken as written.
@@ -1795,65 +1876,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     if self.current_token.kind == TokenKind::OpenBracket {
                         self.bump(); // [
 
-                        // Key
-                        let key = match self.current_token.kind {
-                            TokenKind::Identifier => {
-                                let t = self.current_token;
-                                self.bump();
-                                self.arena.alloc(Expr::String {
-                                    value: self.arena.alloc_slice_copy(self.lexer.slice(t.span)),
-                                    span: t.span,
-                                }) as &'ast Expr<'ast>
-                            }
-                            TokenKind::NumString => {
-                                let t = self.current_token;
-                                self.bump();
-                                self.arena.alloc(Expr::Integer {
-                                    value: self.arena.alloc_slice_copy(self.lexer.slice(t.span)),
-                                    span: t.span,
-                                }) as &'ast Expr<'ast>
-                            }
-                            TokenKind::Variable => {
-                                let t = self.current_token;
-                                self.bump();
-                                self.arena.alloc(Expr::Variable {
-                                    name: t.span,
-                                    span: t.span,
-                                }) as &'ast Expr<'ast>
-                            }
-                            TokenKind::Minus => {
-                                // Handle negative number?
-                                let minus = self.current_token;
-                                self.bump();
-                                if self.current_token.kind == TokenKind::NumString {
-                                    let t = self.current_token;
-                                    self.bump();
-
-                                    let mut value = bumpalo::collections::Vec::with_capacity_in(
-                                        (minus.span.end - minus.span.start)
-                                            + (t.span.end - t.span.start),
-                                        self.arena,
-                                    );
-                                    value.extend_from_slice(self.lexer.slice(minus.span));
-                                    value.extend_from_slice(self.lexer.slice(t.span));
-
-                                    self.arena.alloc(Expr::Integer {
-                                        value: value.into_bump_slice(),
-                                        span: Span::new(minus.span.start, t.span.end),
-                                    }) as &'ast Expr<'ast>
-                                } else {
-                                    self.arena.alloc(Expr::Error {
-                                        span: self.current_token.span,
-                                    }) as &'ast Expr<'ast>
-                                }
-                            }
-                            _ => {
-                                // Error
-                                self.arena.alloc(Expr::Error {
-                                    span: self.current_token.span,
-                                }) as &'ast Expr<'ast>
-                            }
-                        };
+                        let key = self.parse_string_offset_key();
 
                         if self.current_token.kind == TokenKind::CloseBracket {
                             self.bump();
@@ -1895,7 +1918,26 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     parts.push(expr);
                 }
                 TokenKind::DollarOpenCurlyBraces => {
+                    let open = self.current_token.span.start;
                     self.bump();
+                    // ${name}: the variable $name (written as ${'name'}).
+                    if self.current_token.kind == TokenKind::StringVarname {
+                        let token = self.current_token;
+                        self.bump();
+                        if self.current_token.kind == TokenKind::CloseBrace {
+                            let end = self.current_token.span.end;
+                            self.bump();
+                            let quoted = [b"'".as_slice(), self.lexer.slice(token.span), b"'"].concat();
+                            let name = self.arena.alloc(Expr::String { value: self.arena.alloc_slice_copy(&quoted), span: token.span });
+                            parts.push(self.arena.alloc(Expr::IndirectVariable { name, span: Span::new(open, end) }));
+                            continue;
+                        }
+                        // ${name[...]}: the name as an expression, as before.
+                        let name = self.arena.alloc(Expr::String { value: self.arena.alloc_slice_copy(&[b"'".as_slice(), self.lexer.slice(token.span), b"'"].concat()), span: token.span });
+                        let var = self.arena.alloc(Expr::IndirectVariable { name, span: Span::new(open, token.span.end) });
+                        parts.push(self.parse_dollar_curly_rest(var));
+                        continue;
+                    }
                     // ${expr}
                     let expr = self.parse_expr(0);
                     if self.current_token.kind == TokenKind::CloseBrace {
@@ -1939,6 +1981,32 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let parts = match closing_indent {
             Some(indent) => self.heredoc_body(&parts, indent),
             None => parts.into_bump_slice(),
+        };
+
+        // A literal part is text with escapes but no quotes of its own:
+        // decoded now and kept as a single-quoted literal (its \\ and \'
+        // added), so `'y'` in "x{$s}'y'" stays as written.
+        let parts: &'ast [&'ast Expr<'ast>] = if nowdoc {
+            parts
+        } else {
+            let mut decoded: bumpalo::collections::Vec<&'ast Expr<'ast>> = bumpalo::collections::Vec::new_in(self.arena);
+            for part in parts {
+                decoded.push(match part {
+                    Expr::String { value, span } => {
+                        let mut quoted = vec![b'\''];
+                        for c in crate::literal::unescape(value) {
+                            if c == b'\\' || c == b'\'' {
+                                quoted.push(b'\\');
+                            }
+                            quoted.push(c);
+                        }
+                        quoted.push(b'\'');
+                        self.arena.alloc(Expr::String { value: self.arena.alloc_slice_copy(&quoted), span: *span })
+                    }
+                    other => other,
+                });
+            }
+            decoded.into_bump_slice()
         };
 
         if end_token == TokenKind::Backtick {

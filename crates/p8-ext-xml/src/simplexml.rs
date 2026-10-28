@@ -1490,4 +1490,4 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin { name: "dom_import_simplexml", run: dom_import, by_ref: &[] },
 ];
 
-pub const HOOKS: ClassHooks = ClassHooks { get_properties: Some(get_properties), cast_bool: Some(cast_bool), cast_string: Some(cast_string), clone_data: None };
+pub const HOOKS: ClassHooks = ClassHooks { get_properties: Some(get_properties), cast_bool: Some(cast_bool), cast_string: Some(cast_string), clone_data: None, forward_calls: None };

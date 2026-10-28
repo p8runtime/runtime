@@ -208,6 +208,9 @@ pub struct Class {
     /// The native state a clone gets (zend's clone_obj for internal
     /// classes): None shares the original's.
     pub clone_data: Option<CloneData>,
+    /// Where a call to a method the class lacks goes (zend's get_method
+    /// handler of the SPL iterators: their inner iterator).
+    pub forward_calls: Option<ForwardCalls>,
     /// A native class's per-object Rust state, made for each new object
     /// (of it or a subclass): see [`Data`].
     pub make_data: Option<MakeData>,
@@ -446,6 +449,9 @@ impl Object {
         self.lazy_info.borrow().as_ref().and_then(|l| l.instance.clone())
     }
 }
+
+/// The object a call to a missing method goes to (see [`Class::forward_calls`]).
+pub type ForwardCalls = fn(&Object) -> Option<Rc<Object>>;
 
 /// A native class's state for a clone (see [`Class::clone_data`]).
 pub type CloneData = fn(&Object) -> Rc<dyn std::any::Any>;

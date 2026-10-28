@@ -1,0 +1,4 @@
+[["new",0],["new",1]][10,20][-1,-2]
+{"k":[2,3]}{"a":{"x":[9]}}
+[10,200]
+TypeError: f(): Argument #1 ($x) must be of type int, string given, called in F on line 18 and defined in F:17
