@@ -174,7 +174,7 @@ impl Context<'_> {
                 captured: RefCell::new(captured),
                 trampoline,
             },
-            Target::Frame(MethodFrame { func: Code::Native(_), .. }) => {
+            Target::Frame(MethodFrame { func: Code::Native(..), .. }) => {
                 return Err(self.throw("Error", "Cannot make a closure of a builtin class's method yet"));
             }
         };
@@ -298,7 +298,7 @@ impl Context<'_> {
                 std::mem::swap(&mut self.isolate.regs, regs);
                 return r;
             }
-            Target::Frame(MethodFrame { func: Code::Native(native), this, called, .. }) => {
+            Target::Frame(MethodFrame { func: Code::Native(native, _), this, called, .. }) => {
                 let mut passed: Vec<Value> = args.iter().map(Value::deref).collect();
                 let saved = std::mem::replace(&mut self.native_class, called);
                 let r = self.run_native(native, this.as_ref(), &mut passed);
@@ -339,7 +339,7 @@ impl Context<'_> {
         }
         let by_ref = |n: usize| match &m.func {
             Code::User(f) => f.code.param_by_ref(n),
-            Code::Native(_) => false,
+            Code::Native(..) => false,
         };
         for (n, a) in args.iter().enumerate() {
             regs[at + n] = match a {
@@ -459,7 +459,7 @@ impl Context<'_> {
                         .collect();
                     (name, params)
                 }
-                Code::Native(native) => {
+                Code::Native(native, _) => {
                     // A builtin class's method: its stub signature, found by name.
                     let Some(scope) = &m.scope else { return (String::new(), Vec::new()) };
                     let same = |other: &Option<p8_runtime::object::Native>| match (other, native) {

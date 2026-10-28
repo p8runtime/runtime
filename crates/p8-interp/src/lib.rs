@@ -3111,7 +3111,7 @@ impl Context<'_> {
         };
         let func = match m.func {
             classes::Code::User(func) => func,
-            classes::Code::Native(native) => {
+            classes::Code::Native(native, name) => {
                 let mut buf: Vec<Value> = regs[args..args + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)).collect();
                 let saved = std::mem::replace(&mut self.native_class, m.called.clone());
                 // Lent, as to a builtin: Closure::call runs PHP code.
@@ -3119,6 +3119,13 @@ impl Context<'_> {
                 let r = self.run_native(native, m.this.as_ref(), &mut buf);
                 *regs = std::mem::take(&mut self.isolate.regs);
                 self.native_class = saved;
+                // An error the method raised: the trace shows its call on
+                // top (not a hook's, `$name::get`: PHP has no frame there).
+                if let (Err(Throw::Error { .. }), Some(scope)) = (&r, &m.scope)
+                    && name.as_bytes().first() != Some(&b'$')
+                {
+                    self.failed_call(name.as_bytes(), Some((&scope.name, m.this.is_some())), &buf);
+                }
                 drop(buf);
                 let v = r?;
                 if ret != NO_RET {

@@ -1,0 +1,7 @@
+#0 %s(2): intdiv(1, 0)
+#1 %s(3): f()
+#2 {main}
+#0 %s(5): Fiber->getReturn()
+#1 {main}
+#0 %s(6): ArrayIterator->__construct(1)
+#1 {main}

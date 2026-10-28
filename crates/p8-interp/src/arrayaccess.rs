@@ -67,7 +67,7 @@ impl Context<'_> {
         }
         let m = self.method_frame(&Value::Object(Rc::clone(o)), name.to_ascii_lowercase().as_bytes(), name.as_bytes())?;
         match m.func {
-            Code::Native(native) => {
+            Code::Native(native, _) => {
                 let this = m.this.clone();
                 std::mem::swap(&mut self.isolate.regs, regs);
                 let r = self.run_native(native, this.as_ref(), args);
