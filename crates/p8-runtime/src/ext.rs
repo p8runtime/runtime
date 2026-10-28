@@ -191,6 +191,18 @@ pub trait Ctx {
         Vec::new()
     }
 
+    /// A global variable's value (for a builtin marked as reentering:
+    /// the registers are lent to the context then).
+    fn global_value(&self, _name: &[u8]) -> Option<Value> {
+        None
+    }
+
+    /// The request's own $_SERVER['argv'] (not the script's copy of
+    /// $_SERVER), when the host gave a command line and registers it.
+    fn request_argv(&self) -> Option<Vec<String>> {
+        None
+    }
+
     /// Fibers: start, resume, throw, suspend, getCurrent (op), for
     /// `fiber` (None for the static ones).
     fn fiber_op(&mut self, fiber: Option<&Rc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {

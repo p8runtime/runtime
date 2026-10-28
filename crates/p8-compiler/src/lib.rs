@@ -52,6 +52,9 @@ enum ConstKey {
 }
 
 /// A function's body: statements, or an arrow function's expression.
+/// The variables every scope sees as the global one.
+const SUPERGLOBALS: &[&str] = &["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST", "_SESSION"];
+
 enum Body<'a> {
     Stmts(&'a [StmtId<'a>]),
     Expr(&'a Expr<'a>),
@@ -1726,6 +1729,23 @@ impl<'src> Compiler<'src> {
             let text = self.text(u.var.span);
             let r = f.cv(&text[1..]);
             f.bound.push(r & ((1 << KIND_SHIFT) - 1));
+        }
+        // Superglobals: the global variable in every scope, so a function
+        // that names one binds it first thing (as `global $_SERVER;`).
+        let span = match &body {
+            Body::Stmts(stmts) => stmts.first().zip(stmts.last()).map(|(a, b)| (a.span().start, b.span().end)),
+            Body::Expr(e) | Body::Get(e) | Body::Set(_, e) => Some((e.span().start, e.span().end)),
+        };
+        if let Some((start, end)) = span {
+            let text = &self.source[start..end];
+            for name in SUPERGLOBALS {
+                let needle = [b"$".as_slice(), name.as_bytes()].concat();
+                if text.windows(needle.len()).any(|w| w == needle.as_slice()) {
+                    let var = f.cv(name.as_bytes());
+                    let name_reg = f.constant(Frozen::Str(Text::from(*name)));
+                    f.emit(Instr::BindGlobal { var, name: name_reg & ((1 << KIND_SHIFT) - 1) });
+                }
+            }
         }
         let mut captures = Vec::new();
         match body {
