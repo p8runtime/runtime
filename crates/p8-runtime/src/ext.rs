@@ -203,6 +203,11 @@ pub trait Ctx {
         None
     }
 
+    /// Whether `source` parses: its parse error (message, line) if not.
+    fn parse_check(&self, _source: &[u8]) -> Option<(String, u32)> {
+        None
+    }
+
     /// Fibers: start, resume, throw, suspend, getCurrent (op), for
     /// `fiber` (None for the static ones).
     fn fiber_op(&mut self, fiber: Option<&Rc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {

@@ -4305,6 +4305,14 @@ impl Ctx for Context<'_> {
         self.cfg.clone()
     }
 
+    fn parse_check(&self, source: &[u8]) -> Option<(String, u32)> {
+        let loader = self.loader.as_ref()?;
+        match loader.load(source, "") {
+            Err(e) if e.parse => Some((e.message, e.line)),
+            _ => None,
+        }
+    }
+
     fn request_argv(&self) -> Option<Vec<String>> {
         let off = matches!(Ctx::ini_get(self, b"register_argc_argv"), Some(Value::Str(s)) if matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"" | b"0" | b"off" | b"no" | b"false"));
         if off { None } else { self.argv.clone() }
