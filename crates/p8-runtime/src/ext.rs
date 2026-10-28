@@ -14,7 +14,10 @@ use std::rc::Rc;
 /// Something that ends the normal flow: a thrown error, or exit().
 #[derive(Debug, Clone)]
 pub enum Throw {
-    Error { class: &'static str, message: String, file: Rc<str>, line: u32 },
+    /// An exception the engine makes: `props` are what the object gets
+    /// besides its message, file, line and trace (a code, a subclass's own
+    /// property), set as code in the class sees them.
+    Error { class: &'static str, message: String, file: Rc<str>, line: u32, props: Vec<(&'static str, Value)> },
     /// A fatal error: not an exception, nothing catches it.
     Fatal { message: String, file: Rc<str>, line: u32 },
     /// A class that is not declared, which autoloaders may declare: the

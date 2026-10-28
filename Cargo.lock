@@ -2786,6 +2786,7 @@ dependencies = [
  "bumpalo",
  "p8-bytecode",
  "p8-compiler",
+ "p8-ext-mysqli",
  "p8-ext-pcre",
  "p8-ext-standard",
  "p8-ext-tokenizer",
@@ -2810,6 +2811,14 @@ dependencies = [
  "p8-bytecode",
  "p8-runtime",
  "p8-syntax",
+]
+
+[[package]]
+name = "p8-ext-mysqli"
+version = "0.1.0"
+dependencies = [
+ "p8-mysqlnd",
+ "p8-runtime",
 ]
 
 [[package]]
@@ -2867,6 +2876,14 @@ dependencies = [
  "p8-compiler",
  "p8-runtime",
  "p8-syntax",
+]
+
+[[package]]
+name = "p8-mysqlnd"
+version = "0.1.0"
+dependencies = [
+ "sha1",
+ "sha2 0.10.9",
 ]
 
 [[package]]

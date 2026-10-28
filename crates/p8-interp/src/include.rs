@@ -100,7 +100,7 @@ impl Context<'_> {
         };
         let program = match loader.load_eval(code.as_bytes(), &name) {
             Ok(p) => p,
-            Err(e) if e.parse => return Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(name.as_str()), line: e.line }),
+            Err(e) if e.parse => return Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(name.as_str()), line: e.line, props: Vec::new() }),
             Err(e) => return Err(Throw::Fatal { message: e.message, file: Rc::from(name.as_str()), line: e.line }),
         };
         for f in &program.functions {

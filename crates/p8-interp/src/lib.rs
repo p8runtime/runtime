@@ -1507,7 +1507,7 @@ impl Context<'_> {
                 self.write_out(format!("\nFatal error: Uncaught {shown}\n  thrown in {file} on line {line}\n").as_bytes());
                 255
             }
-            Err(Throw::Error { class, message, file, line }) => {
+            Err(Throw::Error { class, message, file, line, .. }) => {
                 self.write_out(
                     format!(
                         "\nFatal error: Uncaught {class}: {message} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}\n"
@@ -1539,7 +1539,7 @@ impl Context<'_> {
 
     fn throw(&self, class: &'static str, message: impl Into<String>) -> Throw {
         let (file, line) = self.location();
-        Throw::Error { class, message: message.into(), file, line }
+        Throw::Error { class, message: message.into(), file, line, props: Vec::new() }
     }
 
     fn location(&self) -> (Rc<str>, u32) {
@@ -3642,6 +3642,7 @@ impl Context<'_> {
             ),
             file: Rc::from(&*func.file),
             line: func.line,
+            props: Vec::new(),
         }
     }
 

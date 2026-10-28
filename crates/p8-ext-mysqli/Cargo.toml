@@ -1,0 +1,10 @@
+[package]
+name = "p8-ext-mysqli"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's mysqli extension: the mysqli, mysqli_result and mysqli_sql_exception API over p8-mysqlnd"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+p8-mysqlnd = { path = "../p8-mysqlnd" }

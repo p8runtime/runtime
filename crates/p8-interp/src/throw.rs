@@ -102,7 +102,7 @@ impl Context<'_> {
 
     /// The object an engine error (`Throw::Error`) becomes.
     pub(crate) fn exception(&mut self, regs: &dyn Fn(usize) -> Value, t: Throw) -> Throw {
-        let Throw::Error { class, message, file, line } = t else { return t };
+        let Throw::Error { class, message, file, line, props } = t else { return t };
         let lower = class.to_ascii_lowercase();
         let class = match self.classes.get(lower.as_bytes()).cloned().or_else(|| self.builtin_on_demand(lower.as_bytes())) {
             Some(c) => c,
@@ -122,6 +122,9 @@ impl Context<'_> {
             trace = with;
         }
         class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
+        for (name, value) in props {
+            class.write(&object, name.as_bytes(), &class.lower, value);
+        }
         Throw::Object(object)
     }
 
