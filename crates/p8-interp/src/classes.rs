@@ -25,7 +25,8 @@ use std::sync::Arc;
 /// What a method runs: user code, or Rust.
 pub(crate) enum Code {
     User(Rc<Closure>),
-    Native(Native),
+    /// A builtin method, and its name as declared (for stack traces).
+    Native(Native, PhpStr),
 }
 
 pub(crate) struct MethodFrame {
@@ -58,7 +59,7 @@ impl Context<'_> {
     /// What method `m` runs.
     pub(crate) fn code_of(&self, m: &Method) -> Code {
         match m.native {
-            Some(n) => Code::Native(n),
+            Some(n) => Code::Native(n, m.name.clone()),
             None => Code::User(Rc::clone(&self.closures[m.func as usize])),
         }
     }

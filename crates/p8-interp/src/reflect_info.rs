@@ -107,7 +107,7 @@ impl Context<'_> {
                 let declaring = self.classes.get(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
                 Some(match self.code_of(&m) {
                     Code::User(clo) => self.user_info(&clo, Some(declaring)),
-                    Code::Native(_) => {
+                    Code::Native(..) => {
                         let stub = format!("{}::{}", String::from_utf8_lossy(m.declaring_name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes()));
                         let mut info = self.stub_info(&stub, m.name.clone(), Some(declaring));
                         info.is_static = m.is_static;
@@ -149,7 +149,7 @@ impl Context<'_> {
                         let frame = MethodFrame::method(self.code_of(&m), this, declaring, called);
                         self.run_nested(&mut regs, frame, args)
                     }
-                    Code::Native(native) => {
+                    Code::Native(native, _) => {
                         std::mem::swap(&mut self.isolate.regs, &mut regs);
                         let r = self.run_native(native, this.as_ref(), args);
                         std::mem::swap(&mut self.isolate.regs, &mut regs);
