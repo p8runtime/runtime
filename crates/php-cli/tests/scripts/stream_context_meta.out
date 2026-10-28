@@ -1,0 +1,50 @@
+string(14) "stream-context"
+bool(true)
+array(1) {
+  ["http"]=>
+  array(2) {
+    ["method"]=>
+    string(4) "POST"
+    ["timeout"]=>
+    int(5)
+  }
+}
+bool(true)
+array(2) {
+  ["notification"]=>
+  string(2) "cb"
+  ["options"]=>
+  array(2) {
+    ["http"]=>
+    array(2) {
+      ["method"]=>
+      string(4) "POST"
+      ["timeout"]=>
+      int(5)
+    }
+    ["ftp"]=>
+    array(1) {
+      ["overwrite"]=>
+      bool(true)
+    }
+  }
+}
+bool(true)
+array(1) {
+  ["http"]=>
+  array(1) {
+    ["user_agent"]=>
+    string(2) "p8"
+  }
+}
+Options should have the form ["wrappername"]["optionname"] = $value
+bool(false)
+string(3) "PHP"
+string(6) "MEMORY"
+string(3) "w+b"
+bool(false)
+string(12) "php://memory"
+string(9) "plainfile"
+string(5) "STDIO"
+string(3) "rb+"
+bool(true)

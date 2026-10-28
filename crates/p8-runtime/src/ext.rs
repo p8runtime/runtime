@@ -185,6 +185,12 @@ pub trait Ctx {
         (0, 0)
     }
 
+    /// The host's configuration (`php -d`) as get_cfg_var() sees it: every
+    /// setting given, known to p8 or not, as given.
+    fn cfg(&self) -> Vec<(Vec<u8>, String)> {
+        Vec::new()
+    }
+
     /// Fibers: start, resume, throw, suspend, getCurrent (op), for
     /// `fiber` (None for the static ones).
     fn fiber_op(&mut self, fiber: Option<&Rc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {

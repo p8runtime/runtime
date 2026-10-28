@@ -27,6 +27,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "fgets", run: fgets, by_ref: &[] },
     Builtin { name: "fgetc", run: fgetc, by_ref: &[] },
     Builtin { name: "feof", run: feof, by_ref: &[] },
+    Builtin { name: "stream_get_meta_data", run: stream_get_meta_data, by_ref: &[] },
     Builtin { name: "fflush", run: fflush, by_ref: &[] },
     Builtin { name: "ftell", run: ftell, by_ref: &[] },
     Builtin { name: "fseek", run: fseek, by_ref: &[] },
@@ -156,7 +157,12 @@ fn open(ctx: &mut dyn Ctx, func: &str, path: &PhpStr, mode: &str) -> Result<Opti
         return Ok(Some(Stream::new(target, &p, mode)));
     }
     let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
-    let base = mode.trim_end_matches(['b', 't']);
+    // The first letter and whether a '+' is anywhere in it ("rb+" is "r+"),
+    // as php_stream_parse_fopen_modes.
+    let first = mode.get(..1).unwrap_or("");
+    let plus = if mode.contains('+') { "+" } else { "" };
+    let base = format!("{first}{plus}");
+    let base = base.as_str();
     let mut options = std::fs::OpenOptions::new();
     match base {
         "r" => options.read(true),
@@ -899,4 +905,39 @@ fn rewinddir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "rewinddir", args, 0)?;
     with_stream(&o, |s| s.seek(0, 0));
     Ok(Value::Null)
+}
+
+/// stream_get_meta_data($stream): what the stream is (wrapper, type, uri,
+/// mode) and where it is (eof, bytes read ahead).
+fn stream_get_meta_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let o = stream_arg(ctx, "stream_get_meta_data", args, 0)?;
+    let entries = with_stream(&o, |s| {
+        let (wrapper, kind, seekable) = match &s.target {
+            Target::File(_) => ("plainfile", "STDIO", true),
+            Target::Memory(_) if s.path.starts_with("php://temp") => ("PHP", "TEMP", true),
+            Target::Memory(_) if s.path.starts_with("php://memory") => ("PHP", "MEMORY", true),
+            Target::Memory(_) if s.path.starts_with("data:") => ("RFC2397", "RFC2397", true),
+            Target::Memory(_) => ("plainfile", "STDIO", true),
+            Target::Stdin | Target::Stdout | Target::Stderr => ("PHP", "STDIO", false),
+        };
+        let text = |t: &str| Value::Str(PhpStr::from(t));
+        vec![
+            ("timed_out", Value::Bool(false)),
+            ("blocked", Value::Bool(true)),
+            // At the end for the script: nothing read ahead is left.
+            ("eof", Value::Bool(s.eof && s.buffer.is_empty())),
+            ("wrapper_type", text(wrapper)),
+            ("stream_type", text(kind)),
+            // Memory and temp streams are always read-write.
+            ("mode", text(if matches!(kind, "MEMORY" | "TEMP") { "w+b" } else { &s.mode })),
+            ("unread_bytes", Value::Int(s.buffer.len() as i64)),
+            ("seekable", Value::Bool(seekable)),
+            ("uri", text(&s.path)),
+        ]
+    });
+    let mut out = PhpArray::new();
+    for (k, v) in entries {
+        out.insert(Key::Str(PhpStr::from(k)), v);
+    }
+    Ok(Value::Array(Rc::new(out)))
 }
