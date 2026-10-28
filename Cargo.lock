@@ -2911,6 +2911,7 @@ name = "p8-interp"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "indexmap",
  "p8-bytecode",
  "p8-compiler",
  "p8-runtime",
