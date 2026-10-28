@@ -3,7 +3,8 @@
 //! Arguments arrive already checked and converted (p8_runtime::args).
 //!
 //! Reference: $PHP_SRC_PATH/Zend/zend_builtin_functions.c,
-//! $PHP_SRC_PATH/main/main.c, $PHP_SRC_PATH/ext/standard/basic_functions.c
+//! $PHP_SRC_PATH/main/main.c, $PHP_SRC_PATH/ext/standard/basic_functions.c,
+//! $PHP_SRC_PATH/ext/standard/versioning.c
 
 use crate::{arg, str_arg};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
@@ -27,6 +28,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "set_time_limit", run: set_time_limit, by_ref: &[] },
     Builtin { name: "php_sapi_name", run: php_sapi_name, by_ref: &[] },
     Builtin { name: "phpversion", run: phpversion, by_ref: &[] },
+    Builtin { name: "version_compare", run: version_compare, by_ref: &[] },
     Builtin { name: "getenv", run: getenv, by_ref: &[] },
     Builtin { name: "time", run: time, by_ref: &[] },
     Builtin { name: "gc_collect_cycles", run: gc_collect_cycles, by_ref: &[] },
@@ -82,6 +84,115 @@ fn error_get_last(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     a.insert(Key::Str(PhpStr::from("file")), Value::Str(PhpStr::from(file.as_str())));
     a.insert(Key::Str(PhpStr::from("line")), Value::Int(line as i64));
     Ok(Value::Array(Rc::new(a)))
+}
+
+fn version_compare(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    // The C code reads each version up to its first NUL byte.
+    let c_str = |v: PhpStr| {
+        let b = v.as_bytes();
+        b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())].to_vec()
+    };
+    let compare = compare_versions(&c_str(str_arg(args, 0)), &c_str(str_arg(args, 1)));
+    if args.len() < 3 || matches!(arg(args, 2), Value::Null) {
+        return Ok(Value::Int(compare as i64));
+    }
+    let op = str_arg(args, 2);
+    Ok(Value::Bool(match op.as_bytes() {
+        b"<" | b"lt" => compare == -1,
+        b"<=" | b"le" => compare != 1,
+        b">" | b"gt" => compare == 1,
+        b">=" | b"ge" => compare != -1,
+        b"==" | b"=" | b"eq" => compare == 0,
+        b"!=" | b"<>" | b"ne" => compare != 0,
+        _ => return Err(ctx.throw("ValueError", "version_compare(): Argument #3 ($operator) must be a valid comparison operator".into())),
+    }))
+}
+
+/// php_canonicalize_version(): `-`, `_`, `+` and other non-alphanumerics
+/// become `.`, and a `.` goes between a digit and a non-digit; no
+/// trailing `.`.
+fn canonicalize_version(v: &[u8]) -> Vec<u8> {
+    let digit = |c: u8| c.is_ascii_digit();
+    let non_digit = |c: u8| !c.is_ascii_digit() && c != b'.';
+    let mut out = Vec::with_capacity(v.len() * 2);
+    let Some((&first, rest)) = v.split_first() else { return out };
+    out.push(first);
+    let mut lp = first;
+    for &c in rest {
+        let need_dot = out[out.len() - 1] != b'.';
+        if matches!(c, b'-' | b'_' | b'+') {
+            if need_dot {
+                out.push(b'.');
+            }
+        } else if non_digit(lp) && digit(c) || digit(lp) && non_digit(c) {
+            if need_dot {
+                out.push(b'.');
+            }
+            out.push(c);
+        } else if !c.is_ascii_alphanumeric() {
+            if need_dot {
+                out.push(b'.');
+            }
+        } else {
+            out.push(c);
+        }
+        lp = c;
+    }
+    if out.last() == Some(&b'.') {
+        out.pop();
+    }
+    out
+}
+
+/// compare_special_version_forms(): by the first form each one starts with.
+fn special_form_order(form: &[u8]) -> i32 {
+    const FORMS: [(&[u8], i32); 10] =
+        [(b"dev", 0), (b"alpha", 1), (b"a", 1), (b"beta", 2), (b"b", 2), (b"RC", 3), (b"rc", 3), (b"#", 4), (b"pl", 5), (b"p", 5)];
+    FORMS.iter().find(|(name, _)| form.starts_with(name)).map_or(-1, |&(_, order)| order)
+}
+
+/// php_version_compare(): -1, 0 or 1.
+fn compare_versions(a: &[u8], b: &[u8]) -> i32 {
+    if a.is_empty() || b.is_empty() {
+        return (!a.is_empty()) as i32 - (!b.is_empty()) as i32;
+    }
+    let canonical = |v: &[u8]| if v[0] == b'#' { v.to_vec() } else { canonicalize_version(v) };
+    let (v1, v2) = (canonical(a), canonical(b));
+    // strtol(): the leading digits, saturating.
+    let number = |part: &[u8]| part.iter().take_while(|c| c.is_ascii_digit()).fold(0i64, |n, &c| n.saturating_mul(10).saturating_add((c - b'0') as i64));
+    let starts_digit = |part: &[u8]| part.first().is_some_and(u8::is_ascii_digit);
+    let (mut p1, mut p2) = (0, 0);
+    let (mut n1, mut n2) = (Some(0), Some(0));
+    let mut compare = 0;
+    while p1 < v1.len() && p2 < v2.len() && n1.is_some() && n2.is_some() {
+        n1 = v1[p1..].iter().position(|&c| c == b'.').map(|i| p1 + i);
+        n2 = v2[p2..].iter().position(|&c| c == b'.').map(|i| p2 + i);
+        let part1 = &v1[p1..n1.unwrap_or(v1.len())];
+        let part2 = &v2[p2..n2.unwrap_or(v2.len())];
+        compare = match (starts_digit(part1), starts_digit(part2)) {
+            (true, true) => number(part1).cmp(&number(part2)) as i32,
+            (false, false) => special_form_order(part1).cmp(&special_form_order(part2)) as i32,
+            (true, false) => special_form_order(b"#N#").cmp(&special_form_order(part2)) as i32,
+            (false, true) => special_form_order(part1).cmp(&special_form_order(b"#N#")) as i32,
+        };
+        if compare != 0 {
+            break;
+        }
+        if let Some(n) = n1 {
+            p1 = n + 1;
+        }
+        if let Some(n) = n2 {
+            p2 = n + 1;
+        }
+    }
+    if compare == 0 {
+        if n1.is_some() {
+            compare = if starts_digit(&v1[p1..]) { 1 } else { compare_versions(&v1[p1..], b"#N#") };
+        } else if n2.is_some() {
+            compare = if starts_digit(&v2[p2..]) { -1 } else { compare_versions(b"#N#", &v2[p2..]) };
+        }
+    }
+    compare
 }
 
 fn error_clear_last(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {

@@ -80,6 +80,11 @@ pub trait Ctx {
     fn last_error(&mut self, _clear: bool) -> Option<(i64, String, String, u32)> {
         None
     }
+    /// Where output first reached the host (file, line; an empty file when
+    /// no code was running), once it has: the headers are sent then.
+    fn output_started(&self) -> Option<(Rc<str>, u32)> {
+        None
+    }
     /// error_reporting(): the current level, after setting `new` if given.
     fn error_level(&mut self, new: Option<i64>) -> i64;
     /// The constant `name` (as written), defined by the script or an extension.
