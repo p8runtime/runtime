@@ -29,6 +29,7 @@ mod serial;
 mod class;
 pub mod defaults;
 mod math;
+mod head;
 mod misc;
 mod process;
 mod csv;
@@ -148,6 +149,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);
     registry.add_functions(math::BUILTINS);
+    registry.add_functions(head::BUILTINS);
     registry.add_functions(misc::BUILTINS);
     registry.add_functions(context::BUILTINS);
     registry.add_functions(process::BUILTINS);

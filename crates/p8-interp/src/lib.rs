@@ -833,14 +833,21 @@ struct Buffer {
 struct Output<'i> {
     buffers: Vec<Buffer>,
     host: &'i mut dyn Host,
+    /// Some output has reached the host (the headers are sent).
+    started: bool,
 }
 
 impl Output<'_> {
     fn write(&mut self, bytes: &[u8]) {
         match self.buffers.last_mut() {
             Some(buffer) => buffer.data.extend_from_slice(bytes),
-            None => self.host.write(bytes),
+            None => self.write_host(bytes),
         }
+    }
+
+    fn write_host(&mut self, bytes: &[u8]) {
+        self.started |= !bytes.is_empty();
+        self.host.write(bytes);
     }
 
     /// Write to the level under the innermost buffer.
@@ -848,7 +855,7 @@ impl Output<'_> {
         let n = self.buffers.len();
         match n.checked_sub(2).and_then(|i| self.buffers.get_mut(i)) {
             Some(below) => below.data.extend_from_slice(bytes),
-            None => self.host.write(bytes),
+            None => self.write_host(bytes),
         }
     }
 
@@ -964,7 +971,8 @@ impl Isolate {
             closures: Vec::new(),
             constants: HashMap::new(),
             globals: HashMap::new(),
-            out: Output { buffers: Vec::new(), host },
+            out: Output { buffers: Vec::new(), host, started: false },
+            output_start: None,
             diags: Vec::new(),
             ini: HashMap::new(),
             error_level: E_DEFAULT,
@@ -1103,6 +1111,8 @@ pub struct Context<'i> {
     pending_errors: Vec<(i64, String, Rc<str>, u32)>,
     /// error_get_last(): the last error that reached the default handler.
     last_error: Option<(i64, String, String, u32)>,
+    /// Where output first reached the host (headers_sent()).
+    output_start: Option<(Rc<str>, u32)>,
     in_handler: bool,
     /// The closure of each function a Closure object runs (by its code).
     lambdas: HashMap<usize, Rc<Closure>>,
@@ -1338,6 +1348,7 @@ impl Context<'_> {
             Ob::Flush => {
                 let out = self.ob_handle(regs, OB_FLUSH)?;
                 self.out.write_below(&out);
+                self.note_output_start();
                 Value::Bool(true)
             }
             Ob::End { flush } => {
@@ -1345,6 +1356,7 @@ impl Context<'_> {
                 let out = self.ob_handle(regs, phase)?;
                 if flush {
                     self.out.write_below(&out);
+                    self.note_output_start();
                 }
                 self.out.buffers.pop();
                 Value::Bool(true)
@@ -1393,8 +1405,23 @@ impl Context<'_> {
 
     /// Write to the output and flush it (messages the host shows as they come).
     pub fn echo_and_flush(&mut self, bytes: &[u8]) {
-        self.out.write(bytes);
+        self.write_out(bytes);
         self.out.flush_all();
+        self.note_output_start();
+    }
+
+    /// Write to the output (the innermost buffer, or the host).
+    fn write_out(&mut self, bytes: &[u8]) {
+        self.out.write(bytes);
+        self.note_output_start();
+    }
+
+    /// The first output to reach the host sends the headers: remember
+    /// where the code was (headers_sent(), "headers already sent").
+    fn note_output_start(&mut self) {
+        if self.out.started && self.output_start.is_none() {
+            self.output_start = Some(self.location());
+        }
     }
 
     /// Run a file's top-level code; returns the exit status.
@@ -1464,11 +1491,11 @@ impl Context<'_> {
             Ok(()) => 0,
             Err(Throw::Exit(status)) => status,
             Err(Throw::Fatal { message, file, line }) => {
-                self.out.write(format!("\nFatal error: {message} in {file} on line {line}\n").as_bytes());
+                self.write_out(format!("\nFatal error: {message} in {file} on line {line}\n").as_bytes());
                 255
             }
             Err(Throw::Parse { message, file, line }) => {
-                self.out.write(format!("\nParse error: {message} in {file} on line {line}\n").as_bytes());
+                self.write_out(format!("\nParse error: {message} in {file} on line {line}\n").as_bytes());
                 255
             }
             Err(Throw::Object(e)) => {
@@ -1477,11 +1504,11 @@ impl Context<'_> {
                 let file = e.class.read(&e, b"file", root).to_php_string().unwrap_or_else(PhpStr::empty);
                 let line = e.class.read(&e, b"line", root).to_int();
                 let file = String::from_utf8_lossy(file.as_bytes());
-                self.out.write(format!("\nFatal error: Uncaught {shown}\n  thrown in {file} on line {line}\n").as_bytes());
+                self.write_out(format!("\nFatal error: Uncaught {shown}\n  thrown in {file} on line {line}\n").as_bytes());
                 255
             }
             Err(Throw::Error { class, message, file, line }) => {
-                self.out.write(
+                self.write_out(
                     format!(
                         "\nFatal error: Uncaught {class}: {message} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}\n"
                     )
@@ -1492,7 +1519,7 @@ impl Context<'_> {
             Err(Throw::Autoload(name)) => {
                 let (file, line) = self.location();
                 let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
-                self.out.write(format!("\nFatal error: Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}\n").as_bytes());
+                self.write_out(format!("\nFatal error: Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}\n").as_bytes());
                 255
             }
         }
@@ -1590,7 +1617,7 @@ impl Context<'_> {
             E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
             _ => "Fatal error",
         };
-        self.out.write(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+        self.write_out(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
     }
 
     fn warn(&mut self, message: impl Into<String>) {
@@ -2281,11 +2308,11 @@ impl Context<'_> {
                         return Err(self.op_error(e));
                     }
                     match &v {
-                        Value::Str(s) => self.out.write(s.as_bytes()),
+                        Value::Str(s) => self.write_out(s.as_bytes()),
                         other => {
                             let s = ops::to_string_lossy(other, &mut self.diags);
                             self.report_diags();
-                            self.out.write(s.as_bytes());
+                            self.write_out(s.as_bytes());
                         }
                     }
                 }
@@ -2346,7 +2373,7 @@ impl Context<'_> {
                         (true, Value::Int(i)) => *i as i32,
                         (true, other) => {
                             let s = ops::to_string_lossy(other, &mut self.diags);
-                            self.out.write(s.as_bytes());
+                            self.write_out(s.as_bytes());
                             0
                         }
                         (false, _) => 0,
@@ -3912,7 +3939,7 @@ impl Context<'_> {
 
 impl Ctx for Context<'_> {
     fn echo(&mut self, bytes: &[u8]) {
-        self.out.write(bytes);
+        self.write_out(bytes);
     }
 
     fn ob(&mut self, op: p8_runtime::ext::Ob) -> Result<Value, Throw> {
@@ -4034,6 +4061,10 @@ impl Ctx for Context<'_> {
 
     fn is_callable(&mut self, v: &Value) -> bool {
         self.callable(v)
+    }
+
+    fn output_started(&self) -> Option<(Rc<str>, u32)> {
+        self.output_start.clone()
     }
 
     fn last_error(&mut self, clear: bool) -> Option<(i64, String, String, u32)> {

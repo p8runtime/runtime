@@ -1,0 +1,19 @@
+int(401)
+int(307)
+int(500)
+int(200)
+
+Warning: Header may not contain NUL bytes in %s on line 12
+
+Warning: Header to delete may not contain colon. in %s on line 14
+setrawcookie(): Argument #2 ($value) cannot contain ",", ";", " ", "\t", "\r", "\n", "\013", or "\014"
+setrawcookie(): "path" option cannot contain ",", ";", " ", "\t", "\r", "\n", "\013", or "\014"
+setrawcookie(): "domain" option cannot contain ",", ";", " ", "\t", "\r", "\n", "\013", or "\014"
+setrawcookie(): "expires" option cannot have a year greater than 9999
+setrawcookie(): option array cannot have numeric keys
+bool(true)
+setcookie(): Expects exactly 3 arguments when argument #3 ($expires_or_options) is an array
+
+Warning: Header may not contain NUL bytes in %s on line 20
+bool(false)
+bool(true)
