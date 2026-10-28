@@ -1,0 +1,10 @@
+[package]
+name = "p8-ext-pcre"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's pcre extension: preg_match() and the rest over p8-pcre"
+
+[dependencies]
+p8-pcre = { path = "../p8-pcre" }
+p8-runtime = { path = "../p8-runtime" }
