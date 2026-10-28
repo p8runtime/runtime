@@ -292,9 +292,13 @@ impl Context<'_> {
         let target = self.resolve_callable(callable)?;
         let m = match target {
             Target::Builtin(i) => {
-                // A builtin that calls back finds the registers lent.
+                // A builtin that calls back finds the registers lent; it is
+                // running, for its messages' prefix and stack traces.
                 std::mem::swap(&mut self.isolate.regs, regs);
+                let name = self.isolate.registry.function(i).name;
+                self.natives.push(crate::NativeCall { depth: self.frames.len(), name, args: args.iter().map(Value::deref).collect(), top: false });
                 let r = self.run_builtin(i, args);
+                self.natives.pop();
                 std::mem::swap(&mut self.isolate.regs, regs);
                 return r;
             }

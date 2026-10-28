@@ -171,6 +171,11 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "date_create", run: date_create, by_ref: &[] },
     Builtin { name: "date_create_immutable", run: date_create_immutable, by_ref: &[] },
     Builtin { name: "date_create_from_format", run: date_create_from_format, by_ref: &[] },
+    Builtin { name: "date_create_immutable_from_format", run: date_create_immutable_from_format, by_ref: &[] },
+    Builtin { name: "date_get_last_errors", run: date_get_last_errors, by_ref: &[] },
+    Builtin { name: "date_isodate_set", run: date_isodate_set, by_ref: &[] },
+    Builtin { name: "timezone_offset_get", run: timezone_offset_get, by_ref: &[] },
+    Builtin { name: "date_interval_create_from_date_string", run: date_interval_create_from_date_string, by_ref: &[] },
     Builtin { name: "date_format", run: date_format, by_ref: &[] },
     Builtin { name: "date_diff", run: date_diff, by_ref: &[] },
     Builtin { name: "date_add", run: date_add, by_ref: &[] },
@@ -1049,6 +1054,35 @@ fn date_create_immutable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 fn date_create_from_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Some(class) = ctx.class(b"DateTime") else { return Ok(Value::Bool(false)) };
     from_format(ctx, &class, args)
+}
+
+fn date_create_immutable_from_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let Some(class) = ctx.class(b"DateTimeImmutable") else { return Ok(Value::Bool(false)) };
+    from_format(ctx, &class, args)
+}
+
+fn date_get_last_errors(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    get_last_errors(ctx, args)
+}
+
+fn date_isodate_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    with_object(ctx, args, set_iso_date)
+}
+
+fn timezone_offset_get(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    with_object(ctx, args, zone_offset)
+}
+
+/// date_interval_create_from_date_string(): DateInterval::createFromDateString(),
+/// with a warning and false where the method throws.
+fn date_interval_create_from_date_string(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    match interval_from_string(ctx, args) {
+        Err(Throw::Error { class: "DateMalformedIntervalStringException", message, .. }) => {
+            ctx.warn(&format!("date_interval_create_from_date_string(): {message}"));
+            Ok(Value::Bool(false))
+        }
+        r => r,
+    }
 }
 
 /// The procedural form of a method: the object first, then the method's arguments.

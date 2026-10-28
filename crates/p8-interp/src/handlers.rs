@@ -63,6 +63,7 @@ impl Context<'_> {
             c.cast_bool = h.cast_bool;
             c.cast_string = h.cast_string;
             c.clone_data = h.clone_data;
+            c.forward_calls = h.forward_calls;
         }
         self.classes.get(lower).cloned()
     }

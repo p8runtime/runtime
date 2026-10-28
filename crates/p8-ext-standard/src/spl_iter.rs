@@ -2,7 +2,8 @@
 //! CallbackFilterIterator, RecursiveFilterIterator,
 //! RecursiveCallbackFilterIterator, ParentIterator, LimitIterator,
 //! CachingIterator, RecursiveCachingIterator, NoRewindIterator,
-//! InfiniteIterator, AppendIterator, EmptyIterator, RecursiveIteratorIterator.
+//! InfiniteIterator, AppendIterator, EmptyIterator, RecursiveIteratorIterator,
+//! RegexIterator, RecursiveRegexIterator.
 //!
 //! They wrap an inner iterator (called as PHP code: a user class, a
 //! builtin, a Generator) and, as PHP does, fetch its valid/current/key
@@ -796,6 +797,171 @@ fn no_op(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Thro
     Ok(Value::Null)
 }
 
+/// The SPL iterators' method forwarding (spl_dual_it_get_method): a call
+/// to a method the iterator lacks goes to its inner iterator.
+fn forward_to_inner(o: &Object) -> Option<Rc<Object>> {
+    inner(o)
+}
+
+pub const DUAL_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks { forward_calls: Some(forward_to_inner), get_properties: None, cast_bool: None, cast_string: None, clone_data: None };
+
+/// RecursiveIteratorIterator's (spl_recursive_it_get_method): to the
+/// iterator at the current level.
+fn forward_to_level(o: &Object) -> Option<Rc<Object>> {
+    match array_of(get(o, "\0stack")).values().last() {
+        Some(Value::Object(i)) => Some(Rc::clone(i)),
+        _ => None,
+    }
+}
+
+pub const RECURSIVE_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks { forward_calls: Some(forward_to_level), get_properties: None, cast_bool: None, cast_string: None, clone_data: None };
+
+// ---------------------------------------------------------------------------
+// RegexIterator: accepts what the regex matches; its mode makes the current
+// value the matches, the split or the replacement. The preg_* functions do
+// the matching, so it is exactly PCRE's.
+
+const REGEX_MODES: i64 = 5;
+const USE_KEY: i64 = 1;
+const INVERT_MATCH: i64 = 2;
+
+fn mode_error(ctx: &mut dyn Ctx, func: &str, n: usize) -> Throw {
+    ctx.throw(
+        "ValueError",
+        format!("{func}(): Argument #{n} ($mode) must be RegexIterator::MATCH, RegexIterator::GET_MATCH, RegexIterator::ALL_MATCHES, RegexIterator::SPLIT, or RegexIterator::REPLACE"),
+    )
+}
+
+fn ri_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    ii_construct(ctx, this, args)?;
+    let regex = arg(args, 1);
+    let mode = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+    if !(0..REGEX_MODES).contains(&mode) {
+        return Err(mode_error(ctx, &format!("{}::__construct", class_of(this)), 3));
+    }
+    // Compile it now: its error is an InvalidArgumentException (PHP turns
+    // pcre's warning into one). The warning is kept from display; a user
+    // error handler still sees it.
+    let level = ctx.error_level(Some(0));
+    let compiled = ctx.call(&Value::str("preg_match"), &mut [regex.clone(), Value::str("")]);
+    ctx.error_level(Some(level));
+    if matches!(compiled?, Value::Bool(false)) {
+        let message = ctx.last_error(false).map(|(_, m, _, _)| m).unwrap_or_default();
+        let reason = message.strip_prefix("preg_match(): ").unwrap_or(&message);
+        return Err(ctx.throw("InvalidArgumentException", format!("{}::__construct(): {reason}", class_of(this))));
+    }
+    set(this, "\0regex", regex);
+    set(this, "\0mode", Value::Int(mode));
+    set(this, "\0flags", Value::Int(if args.len() > 3 { arg(args, 3).to_int() } else { 0 }));
+    set(this, "\0preg_flags", Value::Int(if args.len() > 4 { arg(args, 4).to_int() } else { 0 }));
+    Ok(Value::Null)
+}
+
+fn ri_accept(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    if !get(this, "\0valid").to_bool() {
+        return Ok(Value::Bool(false));
+    }
+    let flags = int(this, "\0flags");
+    let subject = if flags & USE_KEY != 0 {
+        get(this, "\0key")
+    } else {
+        match get(this, "\0cur") {
+            Value::Array(_) => return Ok(Value::Bool(false)),
+            v => v,
+        }
+    };
+    let subject = Value::Str(crate::printf::to_str(ctx, &subject)?);
+    let regex = get(this, "\0regex");
+    let preg_flags = Value::Int(int(this, "\0preg_flags"));
+    let accepted = match int(this, "\0mode") {
+        0 => ctx.call(&Value::str("preg_match"), &mut [regex, subject])?.to_int() > 0,
+        mode @ (1 | 2) => {
+            let matches = Rc::new(std::cell::RefCell::new(Value::Null));
+            let func = if mode == 2 { "preg_match_all" } else { "preg_match" };
+            let n = ctx.call(&Value::str(func), &mut [regex, subject, Value::Ref(Rc::clone(&matches)), preg_flags])?;
+            set(this, "\0cur", matches.borrow().clone());
+            n.to_int() > 0
+        }
+        3 => {
+            let parts = ctx.call(&Value::str("preg_split"), &mut [regex, subject, Value::Int(-1), preg_flags])?;
+            let n = match &parts {
+                Value::Array(a) => a.len(),
+                _ => 0,
+            };
+            set(this, "\0cur", parts);
+            n > 1
+        }
+        _ => {
+            let replacement = crate::spl::get(this, "replacement");
+            let replacement = Value::Str(crate::printf::to_str(ctx, &replacement)?);
+            let count = Rc::new(std::cell::RefCell::new(Value::Int(0)));
+            let result = ctx.call(&Value::str("preg_replace"), &mut [regex, replacement, subject, Value::Int(-1), Value::Ref(Rc::clone(&count))])?;
+            if matches!(result, Value::Null) {
+                return Ok(Value::Bool(false));
+            }
+            set(this, if flags & USE_KEY != 0 { "\0key" } else { "\0cur" }, result);
+            count.borrow().to_int() > 0
+        }
+    };
+    Ok(Value::Bool(accepted != (flags & INVERT_MATCH != 0)))
+}
+
+fn ri_get_mode(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(get(this, "\0mode"))
+}
+
+fn ri_set_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let mode = arg(args, 0).to_int();
+    if !(0..REGEX_MODES).contains(&mode) {
+        return Err(mode_error(ctx, "RegexIterator::setMode", 1));
+    }
+    set(this, "\0mode", Value::Int(mode));
+    Ok(Value::Null)
+}
+
+fn ri_get_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(get(this, "\0flags"))
+}
+
+fn ri_set_flags(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    set(this, "\0flags", Value::Int(arg(args, 0).to_int()));
+    Ok(Value::Null)
+}
+
+fn ri_get_preg_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(get(this, "\0preg_flags"))
+}
+
+fn ri_set_preg_flags(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    set(this, "\0preg_flags", Value::Int(arg(args, 0).to_int()));
+    Ok(Value::Null)
+}
+
+fn ri_get_regex(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(get(this, "\0regex"))
+}
+
+/// RecursiveRegexIterator::accept(): an array (a child's matches) when it
+/// is not empty, else RegexIterator's test.
+fn rri_accept(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    if !get(this, "\0valid").to_bool() {
+        return Ok(Value::Bool(false));
+    }
+    if let Value::Array(a) = get(this, "\0cur") {
+        return Ok(Value::Bool(!a.is_empty()));
+    }
+    ri_accept(ctx, this, args)
+}
+
+/// RecursiveRegexIterator::getChildren(): a new one of this class on the
+/// inner's children, with the same regex, mode and flags.
+fn rri_get_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let children = on_inner(ctx, this, "getChildren", &mut [])?;
+    let class = Rc::clone(&this.class);
+    let mut a = [children, get(this, "\0regex"), get(this, "\0mode"), get(this, "\0flags"), get(this, "\0preg_flags")];
+    Ok(Value::Object(ctx.new_instance(&class, &mut a, true)?))
+}
+
 // ---------------------------------------------------------------------------
 // The classes
 
@@ -847,6 +1013,44 @@ pub static CLASSES: &[ClassSpec] = &[
         ..spec("RecursiveCallbackFilterIterator", Some("CallbackFilterIterator"), &["RecursiveIterator"], 0)
     },
     ClassSpec { methods: &[("accept", Some(Native::Method(pi_accept)))], ..spec("ParentIterator", Some("RecursiveFilterIterator"), &[], 0) },
+    ClassSpec {
+        properties: &[
+            ("\0regex", Constant::Null, H),
+            ("\0mode", Constant::Int(0), H),
+            ("\0flags", Constant::Int(0), H),
+            ("\0preg_flags", Constant::Int(0), H),
+            ("replacement", Constant::Null, PUBLIC),
+        ],
+        constants: &[
+            ("USE_KEY", Constant::Int(USE_KEY)),
+            ("INVERT_MATCH", Constant::Int(INVERT_MATCH)),
+            ("MATCH", Constant::Int(0)),
+            ("GET_MATCH", Constant::Int(1)),
+            ("ALL_MATCHES", Constant::Int(2)),
+            ("SPLIT", Constant::Int(3)),
+            ("REPLACE", Constant::Int(4)),
+        ],
+        methods: &[
+            ("__construct", Some(Native::Method(ri_construct))),
+            ("accept", Some(Native::Method(ri_accept))),
+            ("getMode", Some(Native::Method(ri_get_mode))),
+            ("setMode", Some(Native::Method(ri_set_mode))),
+            ("getFlags", Some(Native::Method(ri_get_flags))),
+            ("setFlags", Some(Native::Method(ri_set_flags))),
+            ("getRegex", Some(Native::Method(ri_get_regex))),
+            ("getPregFlags", Some(Native::Method(ri_get_preg_flags))),
+            ("setPregFlags", Some(Native::Method(ri_set_preg_flags))),
+        ],
+        ..spec("RegexIterator", Some("FilterIterator"), &[], 0)
+    },
+    ClassSpec {
+        methods: &[
+            ("accept", Some(Native::Method(rri_accept))),
+            ("hasChildren", Some(Native::Method(rfi_has_children))),
+            ("getChildren", Some(Native::Method(rri_get_children))),
+        ],
+        ..spec("RecursiveRegexIterator", Some("RegexIterator"), &["RecursiveIterator"], 0)
+    },
     ClassSpec {
         properties: &[("\0offset", Constant::Int(0), H), ("\0count", Constant::Int(-1), H)],
         methods: &[

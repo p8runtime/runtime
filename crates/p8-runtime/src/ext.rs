@@ -328,6 +328,7 @@ pub struct ClassHooks {
     pub cast_bool: Option<fn(&crate::object::Object) -> bool>,
     pub cast_string: Option<fn(&crate::object::Object) -> crate::string::PhpStr>,
     pub clone_data: Option<crate::object::CloneData>,
+    pub forward_calls: Option<crate::object::ForwardCalls>,
 }
 
 pub struct ClassSpec {

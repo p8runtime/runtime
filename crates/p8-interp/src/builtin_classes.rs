@@ -28,10 +28,17 @@ fn declare(
     let lower = name.to_ascii_lowercase().into_bytes();
     let parent = parent.map(|p| Rc::clone(&classes[p.to_ascii_lowercase().as_bytes()]));
     let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
+    let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
     let mut all_interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
     let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
+    // Constants are inherited from the parent and the interfaces, as for
+    // a user class (RecursiveRegexIterator::GET_MATCH is RegexIterator's).
+    let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
     for i in interfaces {
         let iface = &classes[i.to_ascii_lowercase().as_bytes()];
+        for (k, c) in &iface.constants {
+            constants.entry(k.clone()).or_insert_with(|| c.clone());
+        }
         for x in std::iter::once(iface.lower.clone()).chain(iface.interfaces.iter().cloned()) {
             if !all_interfaces.contains(&x) {
                 all_interfaces.push(x);
@@ -77,13 +84,14 @@ fn declare(
         properties: props,
         slots,
         methods: table,
-        constants: p8_runtime::object::Constants::new(),
+        constants,
         statics: HashMap::new(),
         debug_info: None,
         get_properties: inherited_props,
         cast_bool: inherited_bool,
         cast_string: inherited_string,
         clone_data: inherited_clone,
+        forward_calls: inherited_forward,
         make_data: None,
         native_dtor: None,
         enum_cases: Vec::new(),
@@ -576,7 +584,12 @@ pub(crate) fn describe(this: &Rc<Object>) -> String {
     let mut current = Some(Rc::clone(this));
     while let Some(e) = current {
         let class = String::from_utf8_lossy(e.class.name.as_bytes()).into_owned();
-        let message = text(&read(&e, b"message"));
+        let mut message = text(&read(&e, b"message"));
+        // An argument error raised for a call names where the function is
+        // defined next (the " in file:line" that follows).
+        if matches!(e.class.lower.as_slice(), b"typeerror" | b"argumentcounterror") && message.contains(", called in ") {
+            message.push_str(" and defined");
+        }
         let file = text(&read(&e, b"file"));
         let line = read(&e, b"line").to_int();
         let trace = p8_runtime::trace::trace_string(&read(&e, b"trace"));

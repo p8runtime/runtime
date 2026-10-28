@@ -1,0 +1,40 @@
+"apple"=>"a1" "banana"=>"b22" "cherry"=>"c333" "n"=>42 
+"apple"=>["a1","a","1"] "banana"=>["b22","b","22"] "cherry"=>["c333","c","333"] "n"=>["42","4","2"] 
+"apple"=>[["1"]] "banana"=>[["2","2"]] "cherry"=>[["3","3","3"]] "n"=>[["4","2"]] 
+"apple"=>["a",""] "banana"=>["b","",""] "cherry"=>["c","","",""] "n"=>["","",""] 
+"apple"=>"a#" "banana"=>"b##" "cherry"=>"c###" "n"=>"##" 
+"banana"=>"b22" 
+"date"=>"x" 
+"Apple"=>"a1" "bAnAnA"=>"b22" "dAte"=>"x" 
+"apple"=>[["1",1],["1",1]] "banana"=>[["2",1],["2",1]] "cherry"=>[["3",1],["3",1]] "n"=>[["4",0],["4",0]] 
+int(3)
+int(0)
+int(0)
+string(3) "/x/"
+int(0)
+int(2)
+int(256)
+RegexIterator::setMode(): Argument #1 ($mode) must be RegexIterator::MATCH, RegexIterator::GET_MATCH, RegexIterator::ALL_MATCHES, RegexIterator::SPLIT, or RegexIterator::REPLACE
+RegexIterator::__construct(): Argument #3 ($mode) must be RegexIterator::MATCH, RegexIterator::GET_MATCH, RegexIterator::ALL_MATCHES, RegexIterator::SPLIT, or RegexIterator::REPLACE
+InvalidArgumentException: RegexIterator::__construct(): Delimiter must not be alphanumeric, backslash, or NUL byte
+0=>"x1" 0=>"y2" 0=>"w3" 
+0=>["x1"] 0=>["y2"] 0=>["w3"] 
+int(3)
+array(3) {
+  [0]=>
+  int(3)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+Call to undefined method IteratorIterator::nope()
+int(2)
+int(4096)
+int(32)

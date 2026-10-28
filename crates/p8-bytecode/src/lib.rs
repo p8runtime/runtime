@@ -146,6 +146,8 @@ pub enum Instr {
     MethodArgByRef { dst: Reg, obj: Reg, method: u16, n: u8 },
     /// The same for a static call on `class`.
     StaticArgByRef { dst: Reg, class: u16, method: u16, n: u8 },
+    /// The same for call site `site`, a function not known when compiled.
+    FuncArgByRef { dst: Reg, site: u16, n: u8 },
     Return { src: Reg },
     ReturnNull,
     Echo { src: Reg },

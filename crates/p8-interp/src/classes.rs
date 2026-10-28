@@ -50,6 +50,14 @@ impl MethodFrame {
 }
 
 /// As PHP's "%s" prints it: up to a NUL (anonymous class names).
+/// Whether a call to method `lower` on `o` finds something to run: the
+/// method, __call, or an inner object it passes calls to that does.
+fn answers(o: &Object, lower: &[u8]) -> bool {
+    o.class.method(lower).is_some()
+        || o.class.method(b"__call").is_some()
+        || o.class.forward_calls.and_then(|f| f(o)).is_some_and(|inner| answers(&inner, lower))
+}
+
 fn text(s: &PhpStr) -> String {
     let b = s.as_bytes();
     String::from_utf8_lossy(b.iter().position(|&c| c == 0).map_or(b, |i| &b[..i])).into_owned()
@@ -94,7 +102,14 @@ impl Context<'_> {
     /// Link the classes whose parent and interfaces are already known,
     /// in order, before the file runs (PHP's early binding); the others
     /// link when their declaration runs.
-    pub(crate) fn early_bind(&mut self, defs: &[Arc<ClassDef>]) -> Result<(), Throw> {
+    pub(crate) fn early_bind(&mut self, defs: &[Arc<ClassDef>], file: Option<Rc<str>>) -> Result<(), Throw> {
+        let saved = std::mem::replace(&mut self.binding_file, file);
+        let r = self.early_bind_all(defs);
+        self.binding_file = saved;
+        r
+    }
+
+    fn early_bind_all(&mut self, defs: &[Arc<ClassDef>]) -> Result<(), Throw> {
         for def in defs {
             let known = |n: &p8_runtime::frozen::Text| self.classes.contains_key(&n.as_bytes().to_ascii_lowercase());
             if def.parent.as_ref().is_none_or(known) && def.interfaces.iter().all(known) && def.traits.iter().all(known) {
@@ -115,10 +130,24 @@ impl Context<'_> {
             return Ok(());
         }
         let lower = def.name.as_bytes().to_ascii_lowercase();
-        if self.classes.contains_key(&lower) {
-            return Err(self.fatal_at(format!("Cannot declare class {}, because the name is already in use", text_of(&def.name)), def.line));
+        if let Some(existing) = self.classes.get(&lower) {
+            use p8_runtime::object::{CLASS_ENUM, CLASS_INTERFACE, CLASS_TRAIT};
+            let kind = match existing.flags {
+                f if f & CLASS_INTERFACE != 0 => "interface",
+                f if f & CLASS_TRAIT != 0 => "trait",
+                f if f & CLASS_ENUM != 0 => "enum",
+                _ => "class",
+            };
+            let name = String::from_utf8_lossy(existing.name.as_bytes()).into_owned();
+            let message = match self.class_origins.get(&lower) {
+                Some((file, line)) => format!("Cannot redeclare {kind} {name} (previously declared in {file}:{line})"),
+                None => format!("Cannot redeclare {kind} {name}"),
+            };
+            return Err(self.fatal_at(message, def.line));
         }
         let class = self.link(def)?;
+        let file = self.binding_file.clone().unwrap_or_else(|| self.location().0);
+        self.class_origins.insert(lower.clone(), (file, def.line));
         self.classes.insert(lower, class);
         self.declared.insert(key, Arc::clone(def));
         Ok(())
@@ -465,6 +494,7 @@ impl Context<'_> {
         let destructor = destructor | parent.as_ref().map_or(0, |p| p.flags & (p8_runtime::object::CLASS_UNCLONEABLE | p8_runtime::object::CLASS_ALLOW_DYNAMIC));
         let make_data = parent.as_ref().and_then(|p| p.make_data);
         let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
+        let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,
@@ -481,6 +511,7 @@ impl Context<'_> {
             cast_bool: inherited_bool,
             cast_string: inherited_string,
             clone_data: inherited_clone,
+            forward_calls: inherited_forward,
             make_data,
             native_dtor,
             enum_cases: def.cases.iter().map(|(n, _)| PhpStr::from(n.as_bytes())).collect(),
@@ -628,6 +659,14 @@ impl Context<'_> {
         let Some(method) = class.method(lower).cloned() else {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
                 return Ok(m);
+            }
+            // An SPL iterator passes the call on to its inner iterator,
+            // when that can take it (else the error names this class).
+            if let Some(forward) = class.forward_calls
+                && let Some(inner) = forward(&object)
+                && answers(&inner, lower)
+            {
+                return self.method_frame(&Value::Object(inner), lower, display);
             }
             return Err(self.throw(
                 "Error",

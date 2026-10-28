@@ -587,7 +587,7 @@ fn file_exists(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(!p.is_empty() && Path::new(&p).exists()))
 }
 
-fn mode_bits(p: &str) -> Option<u32> {
+pub(crate) fn mode_bits(p: &str) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).ok().map(|m| m.permissions().mode())
 }
@@ -759,7 +759,7 @@ fn pathinfo(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// A directory's entries, "." and ".." included, sorted.
-fn entries(p: &str) -> std::io::Result<Vec<Vec<u8>>> {
+pub(crate) fn entries(p: &str) -> std::io::Result<Vec<Vec<u8>>> {
     use std::os::unix::ffi::OsStrExt;
     let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
     for e in std::fs::read_dir(p)? {
@@ -828,6 +828,12 @@ const GLOB_ONLYDIR: i64 = 1 << 13;
 fn glob(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let pattern = path_arg(args);
     let flags = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
+    let out = glob_paths(&pattern, flags).into_iter().map(|p| Value::Str(PhpStr::from(p))).collect();
+    Ok(Value::Array(Rc::new(PhpArray::from_list(out))))
+}
+
+/// The paths `pattern` matches, sorted (glob(), GlobIterator).
+pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
     let absolute = pattern.starts_with('/');
     let mut found: Vec<String> = vec![if absolute { "/".into() } else { String::new() }];
     for part in pattern.split('/').filter(|s| !s.is_empty()) {
@@ -856,16 +862,15 @@ fn glob(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
         found = next;
     }
-    let mut out: Vec<Value> = Vec::new();
+    let mut out = Vec::new();
     for p in found {
         let dir = Path::new(&p).is_dir();
         if flags & GLOB_ONLYDIR != 0 && !dir {
             continue;
         }
-        let shown = if flags & GLOB_MARK != 0 && dir { format!("{p}/") } else { p };
-        out.push(Value::Str(PhpStr::from(shown)));
+        out.push(if flags & GLOB_MARK != 0 && dir { format!("{p}/") } else { p });
     }
-    Ok(Value::Array(Rc::new(PhpArray::from_list(out))))
+    out
 }
 
 /// opendir: a stream whose lines are the directory's entries (as readdir gives).
