@@ -995,6 +995,7 @@ impl Isolate {
             exception_handlers: Vec::new(),
             shutdown: Vec::new(),
             pending_errors: Vec::new(),
+            last_error: None,
             in_handler: false,
             arg_buf: Vec::new(),
             lambdas: HashMap::new(),
@@ -1099,6 +1100,8 @@ pub struct Context<'i> {
     shutdown: Vec<(Value, Vec<Value>)>,
     /// Diagnostics for the error handler, raised by the running instruction.
     pending_errors: Vec<(i64, String, Rc<str>, u32)>,
+    /// error_get_last(): the last error that reached the default handler.
+    last_error: Option<(i64, String, String, u32)>,
     in_handler: bool,
     /// The closure of each function a Closure object runs (by its code).
     lambdas: HashMap<usize, Rc<Closure>>,
@@ -1570,6 +1573,8 @@ impl Context<'_> {
     /// Print a diagnostic as the CLI does, if error_reporting and
     /// display_errors let it through.
     fn print_diag(&mut self, level: i64, message: &str, file: &str, line: u32) {
+        // Recorded even when silenced (`@`, error_reporting), as PHP does.
+        self.last_error = Some((level, message.to_string(), file.to_string(), line));
         if !self.display_errors || self.error_level & level == 0 {
             return;
         }
@@ -4017,6 +4022,10 @@ impl Ctx for Context<'_> {
 
     fn is_callable(&mut self, v: &Value) -> bool {
         self.callable(v)
+    }
+
+    fn last_error(&mut self, clear: bool) -> Option<(i64, String, String, u32)> {
+        if clear { self.last_error.take() } else { self.last_error.clone() }
     }
 
     fn bind_closure(&mut self, closure: &Rc<Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw> {

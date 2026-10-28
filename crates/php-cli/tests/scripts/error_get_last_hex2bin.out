@@ -1,0 +1,21 @@
+NULL
+string(24) "Undefined variable $nope"
+xbool(false)
+array(4) {
+  ["type"]=>
+  int(2)
+  ["message"]=>
+  string(60) "hex2bin(): Hexadecimal input string must have an even length"
+  ["file"]=>
+  string(26) "error_get_last_hex2bin.php"
+  ["line"]=>
+  int(6)
+}
+NULL
+
+Warning: hex2bin(): Input string must be hexadecimal string in %s on line 12
+string(14) "48656c6c6f00ff"
+bool(false)
+bool(true)
+int(12)
+string(50) "hex2bin(): Input string must be hexadecimal string"

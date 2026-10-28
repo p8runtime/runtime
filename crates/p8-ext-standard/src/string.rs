@@ -54,6 +54,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "addslashes", run: addslashes, by_ref: &[] },
     Builtin { name: "stripslashes", run: stripslashes, by_ref: &[] },
     Builtin { name: "bin2hex", run: bin2hex, by_ref: &[] },
+    Builtin { name: "hex2bin", run: hex2bin, by_ref: &[] },
     Builtin { name: "basename", run: basename, by_ref: &[] },
     Builtin { name: "dirname", run: dirname, by_ref: &[] },
     Builtin { name: "vsprintf", run: vsprintf, by_ref: &[] },
@@ -744,6 +745,27 @@ fn stripslashes(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         } else {
             out.push(bytes[i]);
             i += 1;
+        }
+    }
+    string(out)
+}
+
+/// hex2bin(): false (with a warning) for an odd length or a non-hex digit.
+fn hex2bin(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let s = str_arg(args, 0);
+    let s = s.as_bytes();
+    if !s.len().is_multiple_of(2) {
+        ctx.warn("hex2bin(): Hexadecimal input string must have an even length");
+        return Ok(Value::Bool(false));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for pair in s.chunks(2) {
+        match ((pair[0] as char).to_digit(16), (pair[1] as char).to_digit(16)) {
+            (Some(h), Some(l)) => out.push((h * 16 + l) as u8),
+            _ => {
+                ctx.warn("hex2bin(): Input string must be hexadecimal string");
+                return Ok(Value::Bool(false));
+            }
         }
     }
     string(out)
