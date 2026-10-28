@@ -1,0 +1,27 @@
+array(3) {
+  [0]=>
+  &int(10)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    &int(30)
+  }
+  ["k"]=>
+  array(1) {
+    ["x"]=>
+    &int(40)
+  }
+}
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    &string(4) "made"
+  }
+}
+int(2)
+bool(true)
+g
+bool(true)

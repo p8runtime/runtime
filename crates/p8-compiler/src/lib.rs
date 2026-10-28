@@ -1775,7 +1775,9 @@ impl<'src> Compiler<'src> {
 
     /// Take apart the array in `src` into the targets of `items` (keyed,
     /// or by position; an empty slot is skipped; nested patterns too).
-    fn destructure(&mut self, f: &mut FnBuilder, items: &[p8_syntax::ast::ArrayItem], src: Reg, root: Option<Reg>) -> Result<()> {
+    /// `root`: the variable the array is in and the keys down to it, for
+    /// by-reference targets (`[&$a, [&$b]] = $v` binds into `$v`).
+    fn destructure(&mut self, f: &mut FnBuilder, items: &[p8_syntax::ast::ArrayItem], src: Reg, root: Option<(Reg, &[Reg])>) -> Result<()> {
         let mut index = 0;
         for item in items {
             if let Expr::Error { .. } = item.value {
@@ -1793,15 +1795,36 @@ impl<'src> Compiler<'src> {
                     k
                 }
             };
-            if let (true, Some(root), Expr::Variable { name, .. }) = (item.by_ref, root, item.value) {
+            if let (true, Some((root, path)), Expr::Variable { name, .. }) = (item.by_ref, root, item.value) {
                 let var = f.cv(&self.text(*name)[1..]);
-                f.emit(Instr::RefDim { var, root, keys: key, n: 1, append: false });
+                if path.is_empty() {
+                    f.emit(Instr::RefDim { var, root, keys: key, n: 1, append: false });
+                } else {
+                    // The keys in a run of registers.
+                    let keys: Vec<Reg> = path.iter().chain([&key]).map(|_| f.temp()).collect();
+                    for (&dst, &src) in keys.iter().zip(path.iter().chain([&key])) {
+                        f.emit(Instr::Move { dst, src });
+                    }
+                    f.emit(Instr::RefDim { var, root, keys: keys[0], n: keys.len() as u8, append: false });
+                }
                 continue;
             }
             let elem = f.temp();
-            f.emit(Instr::FetchList { dst: elem, arr: src, key });
             match item.value {
-                Expr::Array { items, .. } => self.destructure(f, items, elem, None)?,
+                // Fetched for writing, its references made below: no warning
+                // when it is not there yet.
+                Expr::Array { items, .. } if root.is_some() && items.iter().any(|i| i.by_ref) => {
+                    f.emit(Instr::FetchDim { dst: elem, arr: src, key, quiet: true });
+                }
+                _ => {
+                    f.emit(Instr::FetchList { dst: elem, arr: src, key });
+                }
+            }
+            match item.value {
+                Expr::Array { items, .. } => {
+                    let path: Vec<Reg> = root.map(|(_, p)| p.iter().copied().chain([key]).collect()).unwrap_or_default();
+                    self.destructure(f, items, elem, root.map(|(r, _)| (r, path.as_slice())))?
+                }
                 target => self.assign_from(f, target, elem)?,
             }
         }
@@ -2429,6 +2452,12 @@ impl<'src> Compiler<'src> {
                 Ok((dst, false))
             }
             Expr::IndirectVariable { name, .. } => Ok((self.var_ref(f, name)?, false)),
+            // `&$this`: a reference to a copy (the object), as in PHP.
+            Expr::Variable { name, .. } if self.text(*name) == b"$this" => {
+                let t = f.temp();
+                f.emit(Instr::This { dst: t });
+                Ok((t, false))
+            }
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
@@ -2900,7 +2929,7 @@ impl<'src> Compiler<'src> {
                         f.emit(Instr::Move { dst: t, src });
                         t
                     };
-                    self.destructure(f, items, value, root)?;
+                    self.destructure(f, items, value, root.map(|r| (r, &[][..])))?;
                     value
                 }
                 Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => {
