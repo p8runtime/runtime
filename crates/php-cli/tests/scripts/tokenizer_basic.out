@@ -1,0 +1,80 @@
+T_OPEN_TAG "<?php\n" L1
+T_NAMESPACE "namespace" L2
+T_WHITESPACE " " L2
+T_NAME_QUALIFIED "App\\Models" L2
+';'
+T_WHITESPACE "\n" L2
+T_DOC_COMMENT "\/** doc *\/" L3
+T_WHITESPACE "\n" L3
+T_CLASS "class" L4
+T_WHITESPACE " " L4
+T_STRING "A" L4
+T_WHITESPACE " " L4
+T_EXTENDS "extends" L4
+T_WHITESPACE " " L4
+T_NAME_FULLY_QUALIFIED "\\Base" L4
+T_WHITESPACE " " L4
+'{'
+T_WHITESPACE " " L4
+T_PUBLIC "public" L4
+T_WHITESPACE " " L4
+T_FUNCTION "function" L4
+T_WHITESPACE " " L4
+T_STRING "f" L4
+'('
+T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG "&" L4
+T_VARIABLE "$x" L4
+','
+T_WHITESPACE " " L4
+T_STRING "int" L4
+T_WHITESPACE " " L4
+T_ELLIPSIS "..." L4
+T_VARIABLE "$r" L4
+')'
+':'
+T_WHITESPACE " " L4
+'?'
+T_STRING "string" L4
+T_WHITESPACE " " L4
+'{'
+T_WHITESPACE " " L4
+T_RETURN "return" L4
+T_WHITESPACE " " L4
+T_VARIABLE "$this" L4
+T_NULLSAFE_OBJECT_OPERATOR "?->" L4
+T_STRING "name" L4
+T_WHITESPACE " " L4
+'.'
+T_WHITESPACE " " L4
+'"'
+T_ENCAPSED_AND_WHITESPACE "v" L4
+T_VARIABLE "$x" L4
+'"'
+T_WHITESPACE " " L4
+T_COALESCE "??" L4
+T_WHITESPACE " " L4
+T_DNUMBER "1.5" L4
+';'
+T_WHITESPACE " " L4
+'}'
+T_WHITESPACE " " L4
+'}'
+T_WHITESPACE "\n" L4
+T_CLOSE_TAG "?>\n" L5
+T_INLINE_HTML "html" L6
+string(14) "T_DOUBLE_COLON"
+string(14) "T_DOUBLE_COLON"
+string(7) "UNKNOWN"
+int(1)
+T_OPEN_TAG true pos=0 -
+T_ECHO false pos=6 match
+T_WHITESPACE true pos=10 -
+T_VARIABLE false pos=11 -
+T_OBJECT_OPERATOR false pos=13 -
+T_STRING false pos=15 -
+; false pos=20 match
+T_WHITESPACE true pos=21 -
+T_COMMENT true pos=22 -
+<?php |echo| |$a|->|class|;| |// hi
+MyToken X
+string(5) "s,1,s"

@@ -1,0 +1,10 @@
+[package]
+name = "p8-ext-tokenizer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's tokenizer extension: token_get_all, token_name and PhpToken, over p8's own lexer"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+p8-syntax = { path = "../p8-syntax" }

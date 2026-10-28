@@ -368,6 +368,16 @@ fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         if i > 0 {
             out.extend_from_slice(sep.as_bytes());
         }
+        // An object: its __toString().
+        if let Value::Object(o) = v.deref() {
+            if o.class.method(b"__tostring").is_none() {
+                return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.name.as_bytes()))));
+            }
+            let method = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::Str(PhpStr::from("__toString"))])));
+            let s = ctx.call(&method, &mut [])?;
+            out.extend_from_slice(s.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes());
+            continue;
+        }
         p8_runtime::ops::push_string(&mut out, v, &mut diags);
     }
     if !diags.is_empty() {
