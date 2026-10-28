@@ -174,6 +174,12 @@ impl Context<'_> {
         self.inner.set_ini(name.as_bytes(), value)
     }
 
+    /// The command line the script sees: `$argv` (the script's path
+    /// first), `$argc`, and `$_SERVER` with them, as the CLI sets them.
+    pub fn set_args(&mut self, argv: Vec<String>) {
+        self.inner.set_args(argv);
+    }
+
     /// Run a script's top-level code; returns the exit status.
     pub fn run(&mut self, script: &Script) -> i32 {
         self.inner.startup_diagnostics();

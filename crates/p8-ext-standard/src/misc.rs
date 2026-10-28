@@ -13,6 +13,7 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "getopt", run: getopt, by_ref: &[2] },
     Builtin { name: "get_cfg_var", run: get_cfg_var, by_ref: &[] },
     Builtin { name: "assert_options", run: assert_options, by_ref: &[] },
     Builtin { name: "error_reporting", run: error_reporting, by_ref: &[] },
@@ -246,4 +247,190 @@ fn get_cfg_var(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         None if !entries.is_empty() => Value::Array(Rc::new(entries)),
         None => Value::Bool(false),
     })
+}
+
+/// One option getopt() knows: a letter or a long name, and whether it
+/// takes a value (1: required, 2: optional).
+struct Opt {
+    short: u8,
+    long: Option<Vec<u8>>,
+    need: u8,
+}
+
+/// getopt($short_options, $long_options = [], &$rest_index = null): the
+/// options in the command line (or $argv), as php_getopt() reads them.
+fn getopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    if let Some(Value::Ref(c)) = args.get(2) {
+        *c.borrow_mut() = Value::Int(1);
+    }
+    // The request's $_SERVER['argv'] (edits to $_SERVER don't reach it),
+    // else the global $argv.
+    let argv = match ctx.request_argv() {
+        Some(a) => Some(Value::Array(Rc::new(PhpArray::from_list(a.iter().map(|s| Value::Str(PhpStr::from(s.as_str()))).collect())))),
+        None => ctx.global_value(b"argv"),
+    };
+    let argv: Vec<Vec<u8>> = match argv {
+        Some(Value::Array(a)) => a.iter().map(|(_, v)| v.deref().to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()).collect(),
+        _ => return Ok(Value::Bool(false)),
+    };
+    // Short options: letters and digits, each with ':' (value) or '::' (optional).
+    let short = str_arg(args, 0);
+    let mut opts: Vec<Opt> = Vec::new();
+    let mut s = short.as_bytes();
+    while let Some((&c, rest)) = s.split_first() {
+        if !c.is_ascii_alphanumeric() {
+            break;
+        }
+        s = rest;
+        let mut need = 0;
+        if s.first() == Some(&b':') {
+            need = 1;
+            s = &s[1..];
+            if s.first() == Some(&b':') {
+                need = 2;
+                s = &s[1..];
+            }
+        }
+        opts.push(Opt { short: c, long: None, need });
+    }
+    if let Value::Array(longs) = arg(args, 1) {
+        for (_, v) in longs.iter() {
+            let mut name = v.deref().to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+            let mut need = 0;
+            if name.last() == Some(&b':') {
+                name.pop();
+                need = 1;
+                if name.last() == Some(&b':') {
+                    name.pop();
+                    need = 2;
+                }
+            }
+            opts.push(Opt { short: 0, long: Some(name), need });
+        }
+    }
+    let mut out = PhpArray::new();
+    let mut add = |name: &[u8], value: Value| {
+        let key = match Key::from_value(&Value::Str(PhpStr::from(name))) {
+            Ok((k @ Key::Int(_), _)) if !(name.len() > 1 && name[0] == b'0') => k,
+            _ => Key::Str(PhpStr::from(name)),
+        };
+        match out.get(&key).cloned() {
+            Some(Value::Array(a)) => {
+                let mut a = (*a).clone();
+                let _ = a.push(value);
+                out.insert(key, Value::Array(Rc::new(a)));
+            }
+            Some(old) => {
+                out.insert(key, Value::Array(Rc::new(PhpArray::from_list(vec![old, value]))));
+            }
+            None => {
+                out.insert(key, value);
+            }
+        }
+    };
+    let byte = |a: &[u8], i: usize| a.get(i).copied().unwrap_or(0);
+    let (mut optind, mut optchr, mut dash) = (1usize, 0usize, false);
+    while optind < argv.len() {
+        let a = &argv[optind];
+        if !dash && (byte(a, 0) != b'-' || byte(a, 1) == 0) {
+            break;
+        }
+        let found: Option<usize>;
+        let arg_start: usize;
+        if byte(a, 0) == b'-' && byte(a, 1) == b'-' {
+            if byte(a, 2) == 0 {
+                optind += 1;
+                break;
+            }
+            // --name or --name=value
+            let body = &a[2..];
+            let (name, mut start) = match body.iter().position(|&c| c == b'=') {
+                Some(p) => (&body[..p], 3),
+                None => (body, 2),
+            };
+            match opts.iter().position(|o| o.long.as_deref() == Some(name)) {
+                Some(i) => {
+                    found = Some(i);
+                    start += name.len();
+                    arg_start = start;
+                    optchr = 0;
+                    dash = false;
+                }
+                None => {
+                    optind += 1;
+                    continue;
+                }
+            }
+        } else {
+            if !dash {
+                dash = true;
+                optchr = 1;
+            }
+            if byte(a, optchr) == b':' {
+                dash = false;
+                optind += 1;
+                continue;
+            }
+            arg_start = 1 + optchr;
+            match opts.iter().position(|o| o.short != 0 && o.short == byte(a, optchr)) {
+                Some(i) => found = Some(i),
+                None => {
+                    if byte(a, optchr + 1) == 0 {
+                        dash = false;
+                        optind += 1;
+                    } else {
+                        optchr += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+        let Some(i) = found else { break };
+        let o = &opts[i];
+        let name: Vec<u8> = match &o.long {
+            Some(n) => n.clone(),
+            None => vec![o.short],
+        };
+        if o.need > 0 {
+            dash = false;
+            let value;
+            if byte(a, arg_start) == 0 {
+                optind += 1;
+                if optind == argv.len() {
+                    if o.need == 1 {
+                        continue;
+                    }
+                    value = Value::Bool(false);
+                } else if o.need == 1 {
+                    value = Value::Str(PhpStr::from(argv[optind].as_slice()));
+                    optind += 1;
+                } else {
+                    value = Value::Bool(false);
+                }
+            } else if byte(a, arg_start) == b'=' {
+                value = Value::Str(PhpStr::from(&a[arg_start + 1..]));
+                optind += 1;
+            } else {
+                value = Value::Str(PhpStr::from(&a[arg_start..]));
+                optind += 1;
+            }
+            add(&name, value);
+        } else {
+            if arg_start >= 2 && !(byte(a, 0) == b'-' && byte(a, 1) == b'-') {
+                if byte(a, optchr + 1) == 0 {
+                    dash = false;
+                    optind += 1;
+                } else {
+                    optchr += 1;
+                }
+            } else {
+                optind += 1;
+            }
+            add(&name, Value::Bool(false));
+        }
+    }
+    if let Some(Value::Ref(c)) = args.get(2) {
+        *c.borrow_mut() = Value::Int(optind as i64);
+    }
+    Ok(Value::Array(Rc::new(out)))
 }

@@ -5,7 +5,7 @@
 use std::io::Write;
 
 fn main() {
-    let Some(Cli { dump, path, ini }) = Cli::parse(std::env::args().skip(1)) else {
+    let Some(Cli { dump, path, ini, args }) = Cli::parse(std::env::args().skip(1)) else {
         eprintln!("usage: php2 [--dump] [-d name=value]... <file> [args...]");
         std::process::exit(64);
     };
@@ -38,6 +38,7 @@ fn main() {
             for (name, value) in &ini {
                 context.set_ini(name, value);
             }
+            context.set_args(std::iter::once(path.clone()).chain(args).collect());
             match platform.compile(&source, &file) {
                 Ok(script) => context.run(&script),
                 Err(error) => context.fail(&error),
@@ -56,6 +57,8 @@ struct Cli {
     path: String,
     /// `-d name=value` settings, in order (unknown names are ignored).
     ini: Vec<(String, String)>,
+    /// The script's own arguments (after the file).
+    args: Vec<String>,
 }
 
 impl Cli {
@@ -75,7 +78,8 @@ impl Cli {
                 _ => return None,
             }
         }
-        Some(Cli { dump, path: args.next()?, ini })
+        let path = args.next()?;
+        Some(Cli { dump, path, ini, args: args.collect() })
     }
 }
 

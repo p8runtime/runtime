@@ -247,6 +247,9 @@ impl Frames {
     }
 }
 
+/// The globals a request starts with, in the order PHP makes them.
+const REQUEST_GLOBALS: &[&str] = &["_GET", "_POST", "_COOKIE", "_FILES", "argv", "argc", "_SERVER", "_ENV", "_REQUEST"];
+
 /// The builtin constants PHP marks deprecated (CONST_DEPRECATED), as one
 /// a FetchConst names (or falls back to).
 fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static str> {
@@ -1006,6 +1009,7 @@ impl Isolate {
             gc_runs: 0,
             gc_collected: 0,
             cfg: Vec::new(),
+            argv: None,
         }
     }
 }
@@ -1120,6 +1124,8 @@ pub struct Context<'i> {
     gc_collected: i64,
     /// The host's settings, as given (get_cfg_var).
     cfg: Vec<(Vec<u8>, String)>,
+    /// The command line, when the host gives one: $argv, $argc, $_SERVER.
+    argv: Option<Vec<String>>,
 }
 
 impl Context<'_> {
@@ -1209,6 +1215,57 @@ impl Context<'_> {
     pub fn set_ini(&mut self, name: &[u8], value: &str) -> bool {
         self.cfg.push((name.to_vec(), value.to_string()));
         Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some()
+    }
+
+    pub fn set_args(&mut self, argv: Vec<String>) {
+        self.argv = Some(argv);
+    }
+
+    /// The globals the CLI starts a script with (php_cli.c and
+    /// php_variables.c): $argv and $argc, $_SERVER (the environment, the
+    /// script's names, the request time, argv/argc), $_ENV when
+    /// variables_order has E, and the empty request arrays.
+    fn request_globals(&mut self) -> Vec<(&'static str, Value)> {
+        let Some(argv) = self.argv.clone() else { return Vec::new() };
+        let text = |s: &str| Value::Str(PhpStr::from(s));
+        let key = |s: &str| Key::Str(PhpStr::from(s));
+        let args = Value::Array(Rc::new(PhpArray::from_list(argv.iter().map(|a| text(a)).collect())));
+        let argc = Value::Int(argv.len() as i64);
+        let mut env = PhpArray::new();
+        for (k, v) in std::env::vars_os() {
+            env.insert(Key::Str(PhpStr::from(k.as_encoded_bytes())), Value::Str(PhpStr::from(v.as_encoded_bytes())));
+        }
+        let mut server = env.clone();
+        let script = argv.first().cloned().unwrap_or_default();
+        for name in ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED"] {
+            server.insert(key(name), text(&script));
+        }
+        server.insert(key("DOCUMENT_ROOT"), text(""));
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        server.insert(key("REQUEST_TIME_FLOAT"), Value::Float(now.as_secs_f64()));
+        server.insert(key("REQUEST_TIME"), Value::Int(now.as_secs() as i64));
+        let register = match Ctx::ini_get(self, b"register_argc_argv") {
+            Some(Value::Str(s)) => !matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"" | b"0" | b"off" | b"no" | b"false"),
+            _ => true,
+        };
+        if register {
+            server.insert(key("argv"), args.clone());
+            server.insert(key("argc"), argc.clone());
+        }
+        let order = match Ctx::ini_get(self, b"variables_order") {
+            Some(Value::Str(s)) => s.as_bytes().to_ascii_uppercase(),
+            _ => b"EGPCS".to_vec(),
+        };
+        let empty = || Value::Array(Rc::new(PhpArray::new()));
+        let mut out = vec![("_SERVER", Value::Array(Rc::new(server)))];
+        if register {
+            out.extend([("argv", args), ("argc", argc)]);
+        }
+        out.push(("_ENV", if order.contains(&b'E') { Value::Array(Rc::new(env)) } else { empty() }));
+        for name in ["_GET", "_POST", "_COOKIE", "_FILES", "_REQUEST"] {
+            out.push((name, empty()));
+        }
+        out
     }
 
     /// What PHP says about the host's settings once they are all set: the
@@ -1342,8 +1399,16 @@ impl Context<'_> {
         let ncv = main.consts_at as usize;
         let here = 0u8;
         self.stack_base = std::ptr::addr_of!(here) as usize;
-        self.frames.push(&Closure::new(main), 0, 0, NO_RET);
+        self.frames.push(&Closure::new(Arc::clone(&main)), 0, 0, NO_RET);
         enter(&mut self.frames, &mut regs);
+        for (name, value) in self.request_globals() {
+            match main.cv_names.iter().position(|n| n.as_bytes() == name.as_bytes()) {
+                Some(r) => regs[r] = value,
+                None => {
+                    self.globals.insert(name.as_bytes().to_vec(), Rc::new(RefCell::new(value)));
+                }
+            }
+        }
         let defs = std::mem::take(&mut self.class_defs);
         let mut result = match self.early_bind(&defs) {
             Ok(()) => self.execute(&mut regs),
@@ -4051,8 +4116,17 @@ impl Ctx for Context<'_> {
             })
             .collect();
         if base == 0 {
+            // The ones the request starts with come first, in the order
+            // PHP makes them; then the others.
+            let first: Vec<(PhpStr, Value)> = REQUEST_GLOBALS
+                .iter()
+                .filter_map(|n| self.globals.get(n.as_bytes()).map(|c| (PhpStr::from(*n), c.borrow().clone())))
+                .collect();
+            out.splice(0..0, first);
             for (n, c) in &self.globals {
-                out.push((PhpStr::from(n.as_slice()), c.borrow().clone()));
+                if !REQUEST_GLOBALS.iter().any(|r| r.as_bytes() == n.as_slice()) {
+                    out.push((PhpStr::from(n.as_slice()), c.borrow().clone()));
+                }
             }
         } else if let Some(vars) = frame.vars() {
             for (n, c) in &vars.0 {
@@ -4229,6 +4303,19 @@ impl Ctx for Context<'_> {
 
     fn cfg(&self) -> Vec<(Vec<u8>, String)> {
         self.cfg.clone()
+    }
+
+    fn request_argv(&self) -> Option<Vec<String>> {
+        let off = matches!(Ctx::ini_get(self, b"register_argc_argv"), Some(Value::Str(s)) if matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"" | b"0" | b"off" | b"no" | b"false"));
+        if off { None } else { self.argv.clone() }
+    }
+
+    fn global_value(&self, name: &[u8]) -> Option<Value> {
+        let main = self.frames.first()?;
+        match main.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => self.isolate.regs.get(r).map(Value::deref).filter(|v| !matches!(v, Value::Undef)),
+            None => self.globals.get(name).map(|c| c.borrow().deref()),
+        }
     }
 
     fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<Object>, Throw> {
