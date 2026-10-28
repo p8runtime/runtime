@@ -36,7 +36,28 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "func_get_arg", run: func_get_arg, by_ref: &[] },
     Builtin { name: "func_num_args", run: func_num_args, by_ref: &[] },
     Builtin { name: "settype", run: settype, by_ref: &[0] },
+    Builtin { name: "array_change_key_case", run: array_change_key_case, by_ref: &[] },
 ];
+
+/// array_change_key_case($array, $case = CASE_LOWER): string keys in ASCII
+/// lower (or upper, CASE_UPPER = 1) case; a later key that comes out the
+/// same overwrites the value, in the first one's place.
+fn array_change_key_case(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let upper = args.len() > 1 && arg(args, 1).to_int() != 0;
+    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Null) };
+    let mut out = PhpArray::new();
+    for (k, v) in a.iter() {
+        let k = match k {
+            Key::Str(s) => {
+                let b = s.as_bytes();
+                Key::Str(PhpStr::from(&*if upper { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() }))
+            }
+            k => k.clone(),
+        };
+        out.insert(k, v.clone());
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
 
 /// The builtins here that reach the caller's variables or run PHP code.
 pub const REENTER: &[&str] = &["compact", "extract", "get_defined_vars", "func_get_arg", "func_num_args"];

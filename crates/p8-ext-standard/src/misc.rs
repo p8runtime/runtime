@@ -13,6 +13,7 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "assert_options", run: assert_options, by_ref: &[] },
     Builtin { name: "error_reporting", run: error_reporting, by_ref: &[] },
     Builtin { name: "ini_get", run: ini_get, by_ref: &[] },
     Builtin { name: "ini_set", run: ini_set, by_ref: &[] },
@@ -179,4 +180,38 @@ fn sleep(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     std::thread::sleep(std::time::Duration::from_secs(seconds as u64));
     Ok(Value::Int(0))
+}
+
+/// assert_options($option, $value): an assert.* setting's old value (and
+/// the new one set): ASSERT_ACTIVE, _CALLBACK, _BAIL, _WARNING, _EXCEPTION.
+fn assert_options(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let name: &[u8] = match arg(args, 0).to_int() {
+        1 => b"assert.active",
+        2 => b"assert.callback",
+        3 => b"assert.bail",
+        4 => b"assert.warning",
+        5 => b"assert.exception",
+        _ => return Err(ctx.throw("ValueError", "assert_options(): Argument #1 ($option) must be an ASSERT_* constant".into())),
+    };
+    let callback = name == b"assert.callback";
+    let old = ctx.ini_get(name).unwrap_or(Value::Null);
+    if args.len() > 1 {
+        let new = match arg(args, 1) {
+            v if callback => v,
+            Value::Bool(b) => Value::Str(PhpStr::from(if b { "1" } else { "0" })),
+            v => match v.to_php_string() {
+                Some(s) => Value::Str(s),
+                None => return Err(ctx.throw("TypeError", "assert_options(): Argument #2 ($value) must be of type string|int|bool|null".into())),
+            },
+        };
+        ctx.ini_set(name, new);
+    }
+    Ok(if callback {
+        match old {
+            Value::Str(s) if s.as_bytes().is_empty() => Value::Null,
+            v => v,
+        }
+    } else {
+        Value::Int(old.to_int())
+    })
 }

@@ -176,6 +176,7 @@ impl Context<'_> {
 
     /// Run a script's top-level code; returns the exit status.
     pub fn run(&mut self, script: &Script) -> i32 {
+        self.inner.startup_diagnostics();
         for f in &script.program.functions {
             if let Err(message) = self.inner.declare(Arc::clone(f)) {
                 self.inner.echo_and_flush(format!("\nFatal error: {message} in {}\n", f.file).as_bytes());
