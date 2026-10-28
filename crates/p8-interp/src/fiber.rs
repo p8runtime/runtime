@@ -169,6 +169,11 @@ impl Context<'_> {
                 };
             }
         };
+        self.fiber_start_frame(regs, fiber, m, args)
+    }
+
+    /// Starts `fiber` on a method's frame.
+    fn fiber_start_frame(&mut self, regs: &mut Vec<Value>, fiber: &Rc<Object>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
         let at = self.window_end();
         if regs.len() < at + args.len() + 1 {
             regs.resize(at + args.len() + 1, Value::Undef);
@@ -187,6 +192,21 @@ impl Context<'_> {
             Ok(_) => self.fiber_execute(regs),
         };
         self.fiber_finish(regs, fiber, at, r)
+    }
+
+    /// A destructor the cycle collector calls from inside a fiber runs in
+    /// a fiber of its own, as PHP's do: if it suspends, that fiber is left
+    /// to whoever kept it (Fiber::getCurrent()) and the collector goes on.
+    pub(crate) fn destruct_in_fiber(&mut self, m: MethodFrame) -> Result<(), Throw> {
+        let class = match self.classes.get(b"fiber".as_slice()).cloned().or_else(|| self.builtin_on_demand(b"fiber")) {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let fiber = Ctx::new_object(self, &class);
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let r = self.fiber_start_frame(&mut regs, &fiber, m, &mut []);
+        self.isolate.regs = regs;
+        r.map(|_| ())
     }
 
     fn fiber_resume(&mut self, regs: &mut Vec<Value>, fiber: &Rc<Object>, value: Value, throw: bool) -> Result<Value, Throw> {

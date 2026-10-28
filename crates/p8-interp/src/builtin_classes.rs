@@ -445,6 +445,22 @@ fn write(o: &Object, name: &[u8], value: Value) {
     o.class.write(o, name, root(o), value);
 }
 
+/// Chains `previous` under `e`, at the end of e's own previous chain (as
+/// zend_exception_set_previous; nothing if it is in that chain already).
+pub(crate) fn set_previous(e: &Rc<Object>, previous: Rc<Object>) {
+    let mut last = Rc::clone(e);
+    loop {
+        if Rc::ptr_eq(&last, &previous) {
+            return;
+        }
+        match read(&last, b"previous") {
+            Value::Object(p) => last = p,
+            _ => break,
+        }
+    }
+    write(&last, b"previous", Value::Object(previous));
+}
+
 /// Exception::__construct(string $message = "", int $code = 0, ?Throwable $previous = null)
 fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = String::from_utf8_lossy(this.class.name.as_bytes()).into_owned();
