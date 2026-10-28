@@ -1005,6 +1005,7 @@ impl Isolate {
             fiber_exit: None,
             gc_runs: 0,
             gc_collected: 0,
+            cfg: Vec::new(),
         }
     }
 }
@@ -1117,6 +1118,8 @@ pub struct Context<'i> {
     /// gc_status(): collections run, values they freed.
     gc_runs: i64,
     gc_collected: i64,
+    /// The host's settings, as given (get_cfg_var).
+    cfg: Vec<(Vec<u8>, String)>,
 }
 
 impl Context<'_> {
@@ -1204,6 +1207,7 @@ impl Context<'_> {
 
     /// An ini setting from the host (`-d`); false when unknown.
     pub fn set_ini(&mut self, name: &[u8], value: &str) -> bool {
+        self.cfg.push((name.to_vec(), value.to_string()));
         Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some()
     }
 
@@ -4221,6 +4225,10 @@ impl Ctx for Context<'_> {
 
     fn gc_counts(&self) -> (i64, i64) {
         (self.gc_runs, self.gc_collected)
+    }
+
+    fn cfg(&self) -> Vec<(Vec<u8>, String)> {
+        self.cfg.clone()
     }
 
     fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<Object>, Throw> {

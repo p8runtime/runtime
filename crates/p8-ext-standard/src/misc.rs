@@ -13,6 +13,7 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "get_cfg_var", run: get_cfg_var, by_ref: &[] },
     Builtin { name: "assert_options", run: assert_options, by_ref: &[] },
     Builtin { name: "error_reporting", run: error_reporting, by_ref: &[] },
     Builtin { name: "ini_get", run: ini_get, by_ref: &[] },
@@ -213,5 +214,36 @@ fn assert_options(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         }
     } else {
         Value::Int(old.to_int())
+    })
+}
+
+/// get_cfg_var($option): a setting as the host gave it (`-d name=value`),
+/// a string; `name[key]=value` ones make an array; false if not given.
+fn get_cfg_var(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let name = str_arg(args, 0);
+    let mut found = None;
+    let mut entries = PhpArray::new();
+    for (n, v) in ctx.cfg() {
+        if n == name.as_bytes() {
+            found = Some(Value::Str(PhpStr::from(v.as_str())));
+        } else if let Some(rest) = n.strip_prefix(name.as_bytes())
+            && let Some(inner) = rest.strip_prefix(b"[").and_then(|r| r.strip_suffix(b"]"))
+        {
+            let key = std::str::from_utf8(inner).ok().map(str::trim).unwrap_or("");
+            let value = Value::Str(PhpStr::from(v.as_str()));
+            match Key::from_value(&Value::Str(PhpStr::from(key))) {
+                Ok((k, _)) if !key.is_empty() => {
+                    entries.insert(k, value);
+                }
+                _ => {
+                    let _ = entries.push(value);
+                }
+            }
+        }
+    }
+    Ok(match found {
+        Some(v) => v,
+        None if !entries.is_empty() => Value::Array(Rc::new(entries)),
+        None => Value::Bool(false),
     })
 }

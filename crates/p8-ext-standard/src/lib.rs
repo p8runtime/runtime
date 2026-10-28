@@ -12,6 +12,7 @@ use std::rc::Rc;
 mod array;
 mod array2;
 mod callback;
+mod context;
 mod dates;
 mod datetime;
 mod file;
@@ -148,6 +149,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(class::BUILTINS);
     registry.add_functions(math::BUILTINS);
     registry.add_functions(misc::BUILTINS);
+    registry.add_functions(context::BUILTINS);
     registry.add_functions(process::BUILTINS);
     registry.add_functions(csv::BUILTINS);
     // The binary running this script (PHP_BINARY), for tests that run PHP again.
