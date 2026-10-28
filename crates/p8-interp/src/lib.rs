@@ -3432,6 +3432,29 @@ impl Context<'_> {
         r
     }
 
+    /// Objects passed to `string` parameters become their __toString(), as
+    /// zend_parse_arg_str does (when the registers are lent, so PHP code
+    /// can run).
+    fn stringify_args(&mut self, sig: &p8_runtime::stubs::Sig, args: &mut [Value]) -> Result<(), Throw> {
+        use p8_runtime::stubs::{T_CALLABLE, T_MIXED, T_OBJECT, T_STRING};
+        if self.isolate.regs.is_empty() {
+            return Ok(());
+        }
+        for (i, arg) in args.iter_mut().enumerate() {
+            let Some(param) = sig.params.get(i).or_else(|| sig.params.last().filter(|p| p.variadic)) else { break };
+            if param.by_ref || param.mask & T_STRING == 0 || param.mask & (T_OBJECT | T_MIXED | T_CALLABLE) != 0 {
+                continue;
+            }
+            let Value::Object(o) = &*arg else { continue };
+            if param.classes.iter().any(|c| o.class.is_a(c.to_ascii_lowercase().as_bytes())) || o.class.method(b"__tostring").is_none() {
+                continue;
+            }
+            let method = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(o)), Value::Str(PhpStr::from("__toString"))])));
+            *arg = self.call_from_builtin(&method, &mut [])?;
+        }
+        Ok(())
+    }
+
     /// An object as a string, when its class's __toString is native (a
     /// Throwable's); anything else as it is.
     fn object_to_string(&mut self, v: Value) -> Result<Value, Throw> {
@@ -3450,7 +3473,10 @@ impl Context<'_> {
     #[inline]
     fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
-        if !self.isolate.registry.reenters(i) {
+        // An object argument may need its __toString() (PHP code) to become
+        // a string parameter: that takes the path that can call back.
+        let objects = regs[start..start + argc as usize].iter().any(|v| matches!(v, Value::Object(_)));
+        if !self.isolate.registry.reenters(i) && !objects {
             // The common case: the builtin works on the registers directly.
             let args = &mut regs[start..start + argc as usize];
             let r = self.run_builtin(i, args);
@@ -3492,6 +3518,7 @@ impl Context<'_> {
             self.diags.push(Diag::Deprecated(message.to_string()));
         }
         if let Some(sig) = self.isolate.registry.sig(i) {
+            self.stringify_args(sig, args)?;
             let checked = p8_runtime::args::check(sig, args, &mut self.diags);
             self.report_diags();
             if let Err((class, message)) = checked {

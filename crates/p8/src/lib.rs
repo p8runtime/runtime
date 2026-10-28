@@ -35,6 +35,7 @@ pub mod extensions {
     pub use p8_ext_standard::EXTENSION as STANDARD;
     pub use p8_ext_xml::EXTENSION as XML;
     pub use p8_ext_tokenizer::EXTENSION as TOKENIZER;
+    pub use p8_ext_pcre::EXTENSION as PCRE;
 }
 
 /// Process-wide state shared by every isolate: the registered extensions.

@@ -1,0 +1,17 @@
+int(11)
+string(11) "HELLO WORLD"
+string(8) "Hello p8"
+int(1)
+array(2) {
+  [0]=>
+  string(5) "World"
+  [1]=>
+  string(2) "or"
+}
+array(2) {
+  [0]=>
+  string(5) "Hello"
+  [1]=>
+  string(5) "World"
+}
+strlen(): Argument #1 ($string) must be of type string, stdClass given

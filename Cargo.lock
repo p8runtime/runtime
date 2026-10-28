@@ -2786,6 +2786,7 @@ dependencies = [
  "bumpalo",
  "p8-bytecode",
  "p8-compiler",
+ "p8-ext-pcre",
  "p8-ext-standard",
  "p8-ext-tokenizer",
  "p8-ext-xml",
@@ -2809,6 +2810,14 @@ dependencies = [
  "p8-bytecode",
  "p8-runtime",
  "p8-syntax",
+]
+
+[[package]]
+name = "p8-ext-pcre"
+version = "0.1.0"
+dependencies = [
+ "p8-pcre",
+ "p8-runtime",
 ]
 
 [[package]]
@@ -2858,6 +2867,13 @@ dependencies = [
  "p8-compiler",
  "p8-runtime",
  "p8-syntax",
+]
+
+[[package]]
+name = "p8-pcre"
+version = "0.1.0"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
