@@ -1,0 +1,10 @@
+bool(true)
+my_f
+bool(false)
+bool(false)
+outer inner
+top hoisted
+2
+made once
+bool(false)
+bool(false)

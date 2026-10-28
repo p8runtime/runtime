@@ -21,7 +21,7 @@ use p8_syntax::literal::{self, Number};
 use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, MagicConstKind, Stmt, StmtId, UnaryOp};
 use p8_syntax::span::Span;
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// What the compiler cannot (yet) compile, or a compile-time error.
@@ -515,7 +515,7 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
 fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
-        DeclareClass { .. } => {}
+        DeclareClass { .. } | DeclareFunction { .. } => {}
         MakeClosure { dst, .. } => *dst = f(*dst),
         BindRef { var, src } => {
             *var = f(*var);
@@ -821,6 +821,9 @@ pub struct Compiler<'src> {
     /// when compiled: its by-value arguments need no runtime check).
     /// (Each parameter's mode, and whether extra arguments go by reference.)
     by_ref: HashMap<Vec<u8>, (Vec<bool>, bool)>,
+    /// The top-level `function` statements (by address): only these are
+    /// declared before the file runs; any other is declared when reached.
+    top_functions: HashSet<usize>,
     /// Every class the file declares, in order.
     classes: Vec<Arc<ClassDef>>,
     /// The class whose members are being compiled (for self and parent).
@@ -872,6 +875,7 @@ impl<'src> Compiler<'src> {
             line_starts,
             functions: Vec::new(),
             by_ref: HashMap::new(),
+            top_functions: HashSet::new(),
             classes: Vec::new(),
             scope: None,
             method: None,
@@ -959,6 +963,7 @@ impl<'src> Compiler<'src> {
         let mut ns: Vec<u8> = Vec::new();
         let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
             if let Stmt::Function { name, params, .. } = stmt {
+                c.top_functions.insert(stmt as *const Stmt as usize);
                 let modes = params.iter().map(|p| p.by_ref).collect();
                 let rest = params.last().is_some_and(|p| p.variadic && p.by_ref);
                 let full = join(ns, c.text(name.span));
@@ -1267,7 +1272,12 @@ impl<'src> Compiler<'src> {
                 let line = self.line(name.span);
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
                 let (function, _) = self.function_with(Text::from(full.as_slice()), line, params, Body::Stmts(body), *by_ref, &[])?;
-                self.functions.push(Arc::new(function));
+                if self.top_functions.contains(&(stmt as *const Stmt as usize)) {
+                    self.functions.push(Arc::new(function));
+                } else {
+                    f.lambdas.push(Arc::new(function));
+                    f.emit(Instr::DeclareFunction { func: (f.lambdas.len() - 1) as u16 });
+                }
             }
             Stmt::Namespace { name, body, .. } => {
                 self.ns = name.map(|n| self.text(n.span).to_vec()).unwrap_or_default();
