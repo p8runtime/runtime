@@ -980,7 +980,7 @@ impl Isolate {
             functions: HashMap::new(),
             closures: Vec::new(),
             constants: HashMap::new(),
-            globals: HashMap::new(),
+            globals: indexmap::IndexMap::new(),
             out: Output { buffers: Vec::new(), host, started: false },
             output_start: None,
             diags: Vec::new(),
@@ -1052,7 +1052,8 @@ pub struct Context<'i> {
     /// Constants the script defined (define(), const).
     constants: HashMap<Vec<u8>, Value>,
     /// Globals not held in the main frame's registers.
-    globals: HashMap<Vec<u8>, Rc<RefCell<Value>>>,
+    /// In the order made, as PHP's symbol table ($GLOBALS, get_defined_vars).
+    globals: indexmap::IndexMap<Vec<u8>, Rc<RefCell<Value>>>,
     out: Output<'i>,
     diags: Vec<Diag>,
     /// ini settings this request changed (ini_set, error_reporting()).
@@ -3821,7 +3822,7 @@ impl Context<'_> {
         match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => w[r] = Value::Undef,
             None if in_main => {
-                self.globals.remove(name);
+                self.globals.shift_remove(name);
             }
             None => {
                 if let Some(e) = &mut frame.extra {
@@ -3859,7 +3860,7 @@ impl Context<'_> {
         match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => main[r] = Value::Undef,
             None => {
-                self.globals.remove(name);
+                self.globals.shift_remove(name);
             }
         }
     }
@@ -3883,9 +3884,19 @@ impl Context<'_> {
         }
     }
 
-    /// `$GLOBALS` read whole: the set global variables, by name.
+    /// `$GLOBALS` read whole: the set global variables, by name, in the
+    /// order get_defined_vars() gives them: the ones the request starts
+    /// with, the main script's, then the others as they were made.
     fn globals_array(&self, main: &[Value]) -> p8_runtime::array::PhpArray {
         let mut out = p8_runtime::array::PhpArray::new();
+        for n in REQUEST_GLOBALS {
+            if let Some(c) = self.globals.get(n.as_bytes()) {
+                match c.borrow().deref() {
+                    Value::Undef => {}
+                    v => out.insert(Key::from_string(PhpStr::from(*n)), v),
+                }
+            }
+        }
         if let Some(frame) = self.frames.first() {
             for (r, n) in frame.func.code.cv_names.iter().enumerate() {
                 if n.as_bytes() == b"GLOBALS" {
