@@ -22,6 +22,9 @@ use std::rc::Rc;
 enum Delegate {
     Array(Rc<PhpArray>, usize),
     Generator(Rc<Object>),
+    /// An Iterator (an IteratorAggregate's), and whether it is on its
+    /// first element (rewound, not moved on yet).
+    Iterator(Rc<Object>, bool),
 }
 
 pub(crate) struct GenState {
@@ -251,9 +254,25 @@ impl Context<'_> {
                     }
                     Delegate::Generator(o)
                 }
+                Value::Object(o) if o.class.is_a(b"traversable") => self.iterator_delegate(regs, o)?,
                 _ => return Err(self.throw("Error", "Can use \"yield from\" only with arrays and Traversables")),
             };
             state.0.borrow_mut().delegate = Some(delegate);
+        }
+        let iterator = match &mut state.0.borrow_mut().delegate {
+            Some(Delegate::Iterator(o, first)) => Some((Rc::clone(o), std::mem::replace(first, false))),
+            _ => None,
+        };
+        if let Some((it, first)) = iterator {
+            let item = self.iter_object_next(regs, &it, first)?;
+            let Some((value, key)) = item else {
+                state.0.borrow_mut().delegate = None;
+                return Ok(Err(Value::Null));
+            };
+            let largest = state.0.borrow().largest;
+            let next = self.suspend(regs, value, Some(key), at, None);
+            state.0.borrow_mut().largest = largest;
+            return Ok(Ok(next));
         }
         let step = match &mut state.0.borrow_mut().delegate {
             Some(Delegate::Array(a, pos)) => match a.entry_at(*pos) {
@@ -264,7 +283,7 @@ impl Context<'_> {
                 None => Err(None),
             },
             Some(Delegate::Generator(inner)) => Err(Some(Rc::clone(inner))),
-            None => unreachable!("set above"),
+            Some(Delegate::Iterator(..)) | None => unreachable!("set above"),
         };
         let item = match step {
             Ok(item) => Some(item),
@@ -298,6 +317,32 @@ impl Context<'_> {
             None => {
                 state.0.borrow_mut().delegate = None;
                 Ok(Err(Value::Null))
+            }
+        }
+    }
+
+    /// What `yield from` goes through for a Traversable object: an
+    /// IteratorAggregate's iterator (in turn), rewound; a generator as one.
+    fn iterator_delegate(&mut self, regs: &mut Vec<Value>, mut object: Rc<Object>) -> Result<Delegate, Throw> {
+        loop {
+            if gen_of(&object).is_some() {
+                return Ok(Delegate::Generator(object));
+            }
+            if object.class.is_a(b"iterator") {
+                self.call_named(regs, &object, b"rewind")?;
+                return Ok(Delegate::Iterator(object, true));
+            }
+            match self.call_named(regs, &object, b"getIterator")? {
+                Value::Object(o) if o.class.is_a(b"traversable") => object = o,
+                _ => {
+                    return Err(self.throw(
+                        "Exception",
+                        format!(
+                            "Objects returned by {}::getIterator() must be traversable or implement interface Iterator",
+                            String::from_utf8_lossy(object.class.name.as_bytes())
+                        ),
+                    ));
+                }
             }
         }
     }
