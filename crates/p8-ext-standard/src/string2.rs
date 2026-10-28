@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "strtok", run: strtok, by_ref: &[] },
     Builtin { name: "strip_tags", run: strip_tags, by_ref: &[] },
     Builtin { name: "html_entity_decode", run: html_entity_decode, by_ref: &[] },
     Builtin { name: "htmlentities", run: htmlentities, by_ref: &[] },
@@ -1157,4 +1158,46 @@ fn localeconv(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     put("grouping", Value::Array(Rc::new(PhpArray::new())));
     put("mon_grouping", Value::Array(Rc::new(PhpArray::new())));
     Ok(Value::Array(Rc::new(out)))
+}
+
+/// strtok($string, $token) starts on a string; strtok($token) goes on with
+/// it: the next run of bytes not in `token` (leading ones skipped), or
+/// false at its end (and the string is forgotten).
+fn strtok(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let token = if args.len() > 1 && !matches!(arg(args, 1), Value::Null) {
+        let s = str_arg(args, 0);
+        *ctx.state("strtok") = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(s), Value::Int(0)])));
+        str_arg(args, 1)
+    } else {
+        str_arg(args, 0)
+    };
+    let (s, mut p) = match &*ctx.state("strtok") {
+        Value::Array(a) => match (a.get(&Key::Int(0)), a.get(&Key::Int(1))) {
+            (Some(Value::Str(s)), Some(Value::Int(p))) => (s.clone(), *p as usize),
+            _ => return Ok(Value::Bool(false)),
+        },
+        _ => {
+            ctx.warn("strtok(): Both arguments must be provided when starting tokenization");
+            return Ok(Value::Bool(false));
+        }
+    };
+    let b = s.as_bytes();
+    let delim = |c: u8| token.as_bytes().contains(&c);
+    if p >= b.len() {
+        return Ok(Value::Bool(false));
+    }
+    while p < b.len() && delim(b[p]) {
+        p += 1;
+    }
+    if p >= b.len() {
+        *ctx.state("strtok") = Value::Null;
+        return Ok(Value::Bool(false));
+    }
+    let start = p;
+    while p < b.len() && !delim(b[p]) {
+        p += 1;
+    }
+    let out = PhpStr::from(&b[start..p]);
+    *ctx.state("strtok") = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(s.clone()), Value::Int(p as i64 + 1)])));
+    Ok(Value::Str(out))
 }

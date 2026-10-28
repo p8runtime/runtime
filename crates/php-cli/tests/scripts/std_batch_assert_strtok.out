@@ -1,0 +1,32 @@
+array(3) {
+  ["one"]=>
+  int(4)
+  ["two"]=>
+  int(2)
+  [3]=>
+  int(3)
+}
+array(1) {
+  ["A"]=>
+  int(1)
+}
+[This]
+[is]
+[an]
+[example]
+[string]
+bool(false)
+
+Deprecated: Constant E_STRICT is deprecated in %s on line 12
+int(2048)
+NULL
+int(1)
+callback: std_batch_assert_strtok.php 17 'assert(1 === 2)'
+
+Warning: assert(): assert(1 === 2) failed in %s on line 17
+bool(false)
+callback: std_batch_assert_strtok.php 18 'custom'
+
+Warning: assert(): custom failed in %s on line 18
+bool(false)
+bool(true)

@@ -650,8 +650,20 @@ fn parse_ini_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 
 /// assert(mixed $assertion, Throwable|string|null $description = null):
 /// the compiler passes the assertion's source as a third argument.
+/// The assert.* settings (assert_options()) apply: off, it passes; failing,
+/// assert.callback is called (file, line, null, description), then an
+/// AssertionError is thrown (assert.exception) or a warning shown
+/// (assert.warning); assert.bail ends the script.
 fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    if arg(args, 0).to_bool() {
+    let setting = |ctx: &mut dyn Ctx, name: &[u8]| match ctx.ini_get(name) {
+        Some(Value::Str(s)) => {
+            let t = s.as_bytes().to_ascii_lowercase();
+            matches!(t.as_slice(), b"true" | b"yes" | b"on") || Value::Str(s).to_int() != 0
+        }
+        Some(v) => v.to_bool(),
+        None => false,
+    };
+    if !setting(ctx, b"assert.active") || arg(args, 0).to_bool() {
         return Ok(Value::Bool(true));
     }
     let message = match arg(args, 1) {
@@ -660,5 +672,29 @@ fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Value::Object(o) if o.class.is_a(b"throwable") => return Err(Throw::Object(o)),
         v => v.to_php_string().unwrap_or_else(PhpStr::empty),
     };
-    Err(ctx.throw("AssertionError", String::from_utf8_lossy(message.as_bytes()).into_owned()))
+    let message = String::from_utf8_lossy(message.as_bytes()).into_owned();
+    match ctx.ini_get(b"assert.callback") {
+        Some(Value::Null) | None => {}
+        Some(Value::Str(s)) if s.as_bytes().is_empty() => {}
+        Some(callback) => {
+            let Throw::Error { file, line, .. } = ctx.throw("Error", String::new()) else { unreachable!("an engine error") };
+            let mut call = vec![Value::Str(PhpStr::from(&*file)), Value::Int(i64::from(line)), Value::Null];
+            // The description: given, or the assertion's source the compiler passes.
+            if args.len() > 2 || (args.len() > 1 && !matches!(arg(args, 1), Value::Null)) {
+                call.push(Value::Str(PhpStr::from(message.as_str())));
+            }
+            ctx.call(&callback, &mut call)?;
+        }
+    }
+    let bail = setting(ctx, b"assert.bail");
+    if setting(ctx, b"assert.exception") {
+        return Err(ctx.throw("AssertionError", message));
+    }
+    if setting(ctx, b"assert.warning") {
+        ctx.warn(&format!("assert(): {message} failed"));
+    }
+    if bail {
+        return Err(Throw::Exit(255));
+    }
+    Ok(Value::Bool(false))
 }

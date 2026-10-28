@@ -247,6 +247,18 @@ impl Frames {
     }
 }
 
+/// The builtin constants PHP marks deprecated (CONST_DEPRECATED), as one
+/// a FetchConst names (or falls back to).
+fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static str> {
+    const DEPRECATED: &[&str] = &[
+        "FILE_TEXT", "FILE_BINARY", "ASSERT_ACTIVE", "ASSERT_CALLBACK", "ASSERT_BAIL", "ASSERT_WARNING", "ASSERT_EXCEPTION",
+        "DOM_PHP_ERR", "SUNFUNCS_RET_TIMESTAMP", "SUNFUNCS_RET_STRING", "SUNFUNCS_RET_DOUBLE", "MT_RAND_PHP", "E_STRICT",
+    ];
+    let global = |n: &[u8]| n.strip_prefix(b"\\").unwrap_or(n).to_vec();
+    let names = [Some(global(name)), fallback.map(global)];
+    DEPRECATED.iter().copied().find(|d| names.iter().flatten().any(|n| n == d.as_bytes()))
+}
+
 /// A builtin that is running PHP code (array_map's callback): where it
 /// was called (the frame count then), its name and arguments.
 struct NativeCall {
@@ -1193,6 +1205,31 @@ impl Context<'_> {
     /// An ini setting from the host (`-d`); false when unknown.
     pub fn set_ini(&mut self, name: &[u8], value: &str) -> bool {
         Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some()
+    }
+
+    /// What PHP says about the host's settings once they are all set: the
+    /// assert.* ones are deprecated away from their defaults (in the order
+    /// ext/standard registers them).
+    pub fn startup_diagnostics(&mut self) {
+        let on = |v: Option<Value>| match v {
+            Some(Value::Str(s)) => {
+                let t = s.as_bytes().to_ascii_lowercase();
+                matches!(t.as_slice(), b"true" | b"yes" | b"on") || Value::Str(s).to_int() != 0
+            }
+            Some(v) => v.to_bool(),
+            None => false,
+        };
+        for (name, default) in [("assert.active", true), ("assert.bail", false), ("assert.warning", true), ("assert.callback", false), ("assert.exception", true)] {
+            let v = Ctx::ini_get(self, name.as_bytes());
+            let deprecated = if name == "assert.callback" {
+                matches!(&v, Some(Value::Str(s)) if !s.as_bytes().is_empty())
+            } else {
+                on(v) != default
+            };
+            if deprecated {
+                self.print_diag(E_DEPRECATED, &format!("PHP Startup: {name} INI setting is deprecated"), "Unknown", 0);
+            }
+        }
     }
 
     /// Run the innermost buffer's handler on its contents (`phase`); what it
@@ -2177,6 +2214,12 @@ impl Context<'_> {
                     let v = match clo.sites[site as usize].get() {
                         Some(Callee::Constant(v)) => v.clone(),
                         _ => match self.constant_value(s.name.as_bytes()).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_value(g.as_bytes()))) {
+                            // Deprecated: said on every fetch, so never cached.
+                            Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.as_bytes())) => {
+                                self.diags.push(Diag::Deprecated(format!("Constant {name} is deprecated")));
+                                self.report_diags();
+                                v
+                            }
                             Some(v) => {
                                 let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
                                 v
