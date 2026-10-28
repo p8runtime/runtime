@@ -29,6 +29,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "php_sapi_name", run: php_sapi_name, by_ref: &[] },
     Builtin { name: "phpversion", run: phpversion, by_ref: &[] },
     Builtin { name: "version_compare", run: version_compare, by_ref: &[] },
+    Builtin { name: "error_log", run: error_log, by_ref: &[] },
     Builtin { name: "getenv", run: getenv, by_ref: &[] },
     Builtin { name: "time", run: time, by_ref: &[] },
     Builtin { name: "gc_collect_cycles", run: gc_collect_cycles, by_ref: &[] },
@@ -84,6 +85,91 @@ fn error_get_last(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     a.insert(Key::Str(PhpStr::from("file")), Value::Str(PhpStr::from(file.as_str())));
     a.insert(Key::Str(PhpStr::from("line")), Value::Int(line as i64));
     Ok(Value::Array(Rc::new(a)))
+}
+
+/// error_log($message, $message_type = 0, $destination = null, $headers = null)
+/// (_php_error_log_ex): 0 the error log, 3 append to a file, 4 the
+/// SAPI's log (stderr); 1 is mail, which p8 cannot send.
+fn error_log(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let message = str_arg(args, 0);
+    let kind = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
+    let destination = match arg(args, 2) {
+        Value::Null => None,
+        v => Some(v.to_php_string().unwrap_or_else(PhpStr::empty)),
+    };
+    Ok(Value::Bool(match kind {
+        1 => false,
+        2 => return Err(ctx.throw("ValueError", "TCP/IP option is not available for error logging".into())),
+        3 => {
+            let path = String::from_utf8_lossy(destination.as_ref().map_or(&b""[..], |d| d.as_bytes())).into_owned();
+            append_log(ctx, &path, message.as_bytes())
+        }
+        4 => {
+            sapi_log(message.as_bytes());
+            true
+        }
+        _ => {
+            log_err(ctx, message.as_bytes());
+            true
+        }
+    }))
+}
+
+/// The CLI's log_message: the message and a newline on stderr.
+fn sapi_log(message: &[u8]) {
+    use std::io::Write;
+    let mut e = std::io::stderr().lock();
+    let _ = e.write_all(message);
+    let _ = e.write_all(b"\n");
+}
+
+/// php_log_err(): to the error_log ini's file, dated, when it is set and
+/// can be opened; else the SAPI's log.
+pub(crate) fn log_err(ctx: &mut dyn Ctx, message: &[u8]) {
+    let file = ctx.ini_get(b"error_log").and_then(|v| v.to_php_string()).filter(|f| !f.is_empty() && f.as_bytes() != b"syslog");
+    if let Some(file) = file {
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let (zone, name) = crate::dates::default_zone(ctx);
+        let date = crate::dates::format(b"d-M-Y H:i:s e", ts, &zone.at(ts), &name);
+        let mut line = b"[".to_vec();
+        line.extend_from_slice(&date);
+        line.extend_from_slice(b"] ");
+        line.extend_from_slice(message);
+        line.push(b'\n');
+        let path = String::from_utf8_lossy(file.as_bytes()).into_owned();
+        let opened = std::fs::OpenOptions::new().create(true).append(true).open(&path);
+        if let Ok(mut f) = opened {
+            use std::io::Write;
+            let _ = f.write_all(&line);
+            return;
+        }
+    }
+    sapi_log(message);
+}
+
+/// error_log() type 3: append to `path` (php://stderr and php://stdout
+/// too), warning as fopen() does when it cannot.
+fn append_log(ctx: &mut dyn Ctx, path: &str, message: &[u8]) -> bool {
+    use std::io::Write;
+    match path {
+        "php://stderr" => std::io::stderr().write_all(message).is_ok(),
+        "php://stdout" | "php://output" => {
+            ctx.write_stdout(message);
+            true
+        }
+        _ => match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            Ok(mut f) => f.write_all(message).is_ok(),
+            Err(e) => {
+                let reason = match e.kind() {
+                    std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+                    std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
+                    _ => e.to_string(),
+                };
+                ctx.warn(&format!("error_log({path}): Failed to open stream: {reason}"));
+                false
+            }
+        },
+    }
 }
 
 fn version_compare(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

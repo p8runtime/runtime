@@ -846,17 +846,14 @@ fn parent(path: &[u8]) -> Vec<u8> {
 
 /// vsprintf($format, $values): sprintf with its arguments in an array.
 fn vsprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut all = vec![arg(args, 0)];
-    if let Value::Array(values) = arg(args, 1) {
-        all.extend(values.values().cloned());
-    }
-    crate::sprintf(ctx, &mut all)
+    let values = crate::printf::array_values(&arg(args, 1));
+    let out = crate::printf::formatted(ctx, "vsprintf", str_arg(args, 0).as_bytes(), &values, crate::printf::Missing::Array)?;
+    string(out)
 }
 
 fn vprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut all = vec![arg(args, 0)];
-    if let Value::Array(values) = arg(args, 1) {
-        all.extend(values.values().cloned());
-    }
-    crate::printf(ctx, &mut all)
+    let values = crate::printf::array_values(&arg(args, 1));
+    let out = crate::printf::formatted(ctx, "vprintf", str_arg(args, 0).as_bytes(), &values, crate::printf::Missing::Array)?;
+    ctx.echo(&out);
+    Ok(Value::Int(out.len() as i64))
 }

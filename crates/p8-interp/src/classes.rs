@@ -57,6 +57,16 @@ fn text(s: &PhpStr) -> String {
 
 impl Context<'_> {
     /// What method `m` runs.
+    /// Whether method `lower` of `class` takes argument `n` by reference
+    /// (no: a method it lacks, which __call or an error answers, and a
+    /// builtin method).
+    pub(crate) fn method_takes_ref(&self, class: &Class, lower: &[u8], n: usize) -> bool {
+        match class.method(lower) {
+            Some(m) if m.native.is_none() => self.closures[m.func as usize].code.param_by_ref(n),
+            _ => false,
+        }
+    }
+
     pub(crate) fn code_of(&self, m: &Method) -> Code {
         match m.native {
             Some(n) => Code::Native(n, m.name.clone()),

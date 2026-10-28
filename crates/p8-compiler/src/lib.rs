@@ -741,10 +741,20 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *base = f(*base);
             *dst = f(*dst);
         }
-        SendVar { arg, var, .. } => {
+        SendVar { arg, var, .. } | SendVarStatic { arg, var, .. } => {
             *arg = f(*arg);
             *var = f(*var);
         }
+        SendVarMethod { obj, arg, var, .. } => {
+            *obj = f(*obj);
+            *arg = f(*arg);
+            *var = f(*var);
+        }
+        MethodArgByRef { dst, obj, .. } => {
+            *dst = f(*dst);
+            *obj = f(*obj);
+        }
+        StaticArgByRef { dst, .. } => *dst = f(*dst),
         Return { src } | Echo { src } | Exit { src, .. } | MatchError { src } | Throw { src } | CatchIf { src, .. } => {
             *src = f(*src)
         }
@@ -2631,6 +2641,74 @@ impl<'src> Compiler<'src> {
         Ok(base)
     }
 
+    /// A method call's arguments. The method is known only when the call
+    /// runs, so an argument that can be a reference is decided then: a
+    /// variable by `send`'s instruction; an element or property by
+    /// `asks`'s, branching to the reference or the value.
+    fn method_args(
+        &mut self,
+        f: &mut FnBuilder,
+        args: &[p8_syntax::ast::Arg],
+        send: impl Fn(u8, Reg, Reg) -> Instr,
+        asks: impl Fn(Reg, u8) -> Instr,
+    ) -> Result<(Reg, u8)> {
+        let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
+        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+            if arg.unpack || arg.name.is_some() {
+                return Err(self.unsupported(arg.span, "spread or named arguments"));
+            }
+            match arg.value {
+                Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
+                    let var = f.cv(&self.text(*name)[1..]);
+                    f.emit(send(n as u8, *r, var));
+                }
+                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref(value) => {
+                    let flag = f.temp();
+                    f.emit(asks(flag, n as u8));
+                    let by_value = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
+                    match value {
+                        Expr::PropertyFetch { target, property, .. } => {
+                            let obj = self.expr(f, target)?;
+                            let name = self.prop_name(f, property)?;
+                            f.emit(Instr::rare(Rare::PropRef, *r, obj, name, 0));
+                        }
+                        _ => {
+                            let (root, keys, count, append, held) = self.ref_dim_path(f, value)?;
+                            f.emit(Instr::RefDim { var: *r, root, keys, n: count, append });
+                            if let Some(h) = held {
+                                f.emit(Instr::Free { reg: h });
+                            }
+                        }
+                    }
+                    let end = f.emit(Instr::Jump { target: 0 });
+                    f.patch(by_value, f.here());
+                    self.expr_into(f, value, *r)?;
+                    f.patch(end, f.here());
+                }
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        Ok((regs[0], args.len() as u8))
+    }
+
+    /// An element or property argument that can be made a reference: a
+    /// dimension path rooted in a variable or property (no `[]` read), or
+    /// a property of anything.
+    fn can_ref(&self, e: &Expr) -> bool {
+        let mut cur = e;
+        while let Expr::ArrayDimFetch { array, dim, .. } = cur {
+            if dim.is_none() {
+                return false;
+            }
+            cur = array;
+        }
+        match cur {
+            Expr::Variable { name, .. } => self.text(*name).starts_with(b"$") && self.text(*name) != b"$this",
+            Expr::PropertyFetch { .. } => std::ptr::eq(cur, e),
+            _ => false,
+        }
+    }
+
     fn args_by_value(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8)> {
         let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
         for (arg, r) in args.iter().zip(&regs) {
@@ -3531,7 +3609,12 @@ impl<'src> Compiler<'src> {
                     return self.call_pair(f, obj, m, args);
                 }
                 let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
-                let (base, argc) = self.args_by_value(f, args)?;
+                let (base, argc) = self.method_args(
+                    f,
+                    args,
+                    |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
+                    |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
+                )?;
                 f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
                 base
             }
@@ -3573,7 +3656,12 @@ impl<'src> Compiler<'src> {
                     return self.call_pair(f, name, m, args);
                 }
                 let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
-                let (base, argc) = self.args_by_value(f, args)?;
+                let (base, argc) = self.method_args(
+                    f,
+                    args,
+                    |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
+                    |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
+                )?;
                 f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
                 base
             }
@@ -3772,7 +3860,12 @@ impl<'src> Compiler<'src> {
                 };
                 let text = self.text(*name);
                 let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
-                let (base, argc) = self.args_by_value(f, args)?;
+                let (base, argc) = self.method_args(
+                    f,
+                    args,
+                    |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
+                    |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
+                )?;
                 f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
                 f.emit(Instr::Move { dst, src: base });
                 let end = f.emit(Instr::Jump { target: 0 });

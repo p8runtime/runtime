@@ -23,6 +23,9 @@ gost94 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh32", "xxh64", "xxh3"] }
 # random_bytes, random_int: the OS's randomness
 getrandom = "0.2"
+# password_hash: bcrypt on RustCrypto's Blowfish (its eksblowfish steps), argon2i/argon2id
+blowfish = { version = "0.9", features = ["bcrypt"] }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 # Dates: time zones (the IANA database, built in)
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }

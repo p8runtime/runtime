@@ -1,0 +1,9 @@
+bool(true)
+bool(true)
+string(7) "one
+two"
+bool(true)
+int(1)
+bool(false)
+error_log(DIR/missing/c.log): Failed to open stream: No such file or directory
+TCP/IP option is not available for error logging

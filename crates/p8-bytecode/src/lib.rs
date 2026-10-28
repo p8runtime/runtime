@@ -135,6 +135,17 @@ pub enum Instr {
     /// Pass variable `var` as argument `n` of `site` into `arg`: by
     /// reference if the callee takes it so, else its value
     SendVar { site: u16, n: u8, arg: Reg, var: Reg },
+    /// The same for a method call on the object in `obj` (site `method`):
+    /// the method, looked up now, decides (PHP's SEND_VAR_EX).
+    SendVarMethod { obj: Reg, method: u16, n: u8, arg: Reg, var: Reg },
+    /// The same for a static call on `class` (a class operand).
+    SendVarStatic { class: u16, method: u16, n: u8, arg: Reg, var: Reg },
+    /// Whether method `method` of the object in `obj` takes argument `n` by
+    /// reference, into `dst` (an element or property argument is made a
+    /// reference only then).
+    MethodArgByRef { dst: Reg, obj: Reg, method: u16, n: u8 },
+    /// The same for a static call on `class`.
+    StaticArgByRef { dst: Reg, class: u16, method: u16, n: u8 },
     Return { src: Reg },
     ReturnNull,
     Echo { src: Reg },
