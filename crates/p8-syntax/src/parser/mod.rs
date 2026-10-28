@@ -80,7 +80,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         } else if self.current_token.kind == TokenKind::CloseTag {
             // Implicit semicolon at close tag
         } else if self.current_token.kind == TokenKind::Eof {
-            // Implicit semicolon at EOF
+            // The file ends where a `;` is needed: only `?>` stands for one.
+            self.errors.push(ParseError { span: self.current_token.span, message: "syntax error, unexpected end of file" });
         } else {
             // Error: Missing semicolon
             self.errors.push(ParseError {
