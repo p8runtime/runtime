@@ -332,7 +332,7 @@ fn flock(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// fprintf(resource $stream, string $format, mixed ...$values)
 fn fprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fprintf", args, 0)?;
-    let bytes = crate::format(&args[1..]);
+    let bytes = crate::printf::formatted(ctx, "fprintf", crate::str_arg(args, 1).as_bytes(), &args[2..], crate::printf::Missing::Count(2))?;
     let r = resource(&o).expect("a stream resource");
     r.stream.borrow_mut().write(ctx, &bytes);
     Ok(Value::Int(bytes.len() as i64))

@@ -1,0 +1,6 @@
+n3: SERVER=array X=set m=main n2=two
+n3 $$: main two
+compact: {"m":"main","n2":"two","ext":"extracted"}
+defined has: m,n2,n3,ext,_SERVER,dyn
+global ext: extracted
+main: m=main n2=two n3=three dyn=dynamic gone=no

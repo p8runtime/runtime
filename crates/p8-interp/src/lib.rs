@@ -82,6 +82,9 @@ struct Frame {
     called: Option<Rc<Class>>,
     /// The Generator whose code this frame runs, if any.
     generator: Option<Rc<Object>>,
+    /// Its variables are the global ones: the main script, and a file
+    /// included at global scope (at any depth of includes).
+    global: bool,
 }
 
 const NO_RET: u32 = u32::MAX;
@@ -183,7 +186,7 @@ impl Frames {
                 if !Rc::ptr_eq(&slot.func, func) {
                     slot.func = Rc::clone(func);
                 }
-                (slot.pc, slot.base, slot.ret, slot.argc) = (0, base as u32, ret, argc as u32);
+                (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);
             }
             None => self.slots.push(Frame {
                 func: Rc::clone(func),
@@ -196,6 +199,7 @@ impl Frames {
                 scope: None,
                 called: None,
                 generator: None,
+                global: false,
             }),
         }
         self.len += 1;
@@ -223,6 +227,7 @@ impl Frames {
                 scope: None,
                 called: None,
                 generator: None,
+                global: false,
             };
             out.push(std::mem::replace(&mut self.slots[i], blank));
         }
@@ -562,6 +567,10 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::UnsetDim { .. }
                 | Instr::IterInit { .. }
                 | Instr::SendVar { .. }
+                | Instr::SendVarMethod { .. }
+                | Instr::SendVarStatic { .. }
+                | Instr::MethodArgByRef { .. }
+                | Instr::StaticArgByRef { .. }
                 | Instr::Echo { .. }
                 | Instr::FetchConst { .. }
                 | Instr::BindGlobal { .. }
@@ -1436,6 +1445,7 @@ impl Context<'_> {
         let here = 0u8;
         self.stack_base = std::ptr::addr_of!(here) as usize;
         self.frames.push(&Closure::new(Arc::clone(&main)), 0, 0, NO_RET);
+        self.frames.last_mut().expect("the main frame").global = true;
         enter(&mut self.frames, &mut regs);
         for (name, value) in self.request_globals() {
             match main.cv_names.iter().position(|n| n.as_bytes() == name.as_bytes()) {
@@ -2216,7 +2226,18 @@ impl Context<'_> {
                     };
                     reg!(dst) = Value::Bool(set);
                 }
-                Instr::UnsetVar { var } => reg!(var) = Value::Undef,
+                Instr::UnsetVar { var } => {
+                    // In a file included at global scope the variable is the
+                    // global itself: unset removes it there too.
+                    if !in_main
+                        && self.frames.last().is_some_and(|f| f.global)
+                        && let Some(name) = func.cv_names.get(var as usize)
+                    {
+                        let name = name.as_bytes().to_vec();
+                        self.global_unset(below, &name);
+                    }
+                    reg!(var) = Value::Undef;
+                }
                 Instr::UnsetDim { var, keys, n } => {
                     let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).clone()).collect();
                     let derefed: Vec<Value> = key_values.iter().map(Value::deref).collect();
@@ -2294,6 +2315,32 @@ impl Context<'_> {
                     } else {
                         self.operand(w, func, var)
                     };
+                }
+                Instr::SendVarMethod { obj, method, n, arg, var } => {
+                    let site = &func.sites[method as usize];
+                    let by_ref = match reg!(obj).deref() {
+                        Value::Object(o) => self.method_takes_ref(&o.class, site.name.as_bytes(), n as usize),
+                        _ => false,
+                    };
+                    reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
+                }
+                Instr::SendVarStatic { class, method, n, arg, var } => {
+                    let site = &func.sites[method as usize];
+                    let target = self.class_of(func, class, w)?;
+                    let by_ref = self.method_takes_ref(&target, site.name.as_bytes(), n as usize);
+                    reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
+                }
+                Instr::MethodArgByRef { dst, obj, method, n } => {
+                    let site = &func.sites[method as usize];
+                    reg!(dst) = Value::Bool(match reg!(obj).deref() {
+                        Value::Object(o) => self.method_takes_ref(&o.class, site.name.as_bytes(), n as usize),
+                        _ => false,
+                    });
+                }
+                Instr::StaticArgByRef { dst, class, method, n } => {
+                    let site = &func.sites[method as usize];
+                    let target = self.class_of(func, class, w)?;
+                    reg!(dst) = Value::Bool(self.method_takes_ref(&target, site.name.as_bytes(), n as usize));
                 }
                 // Passed (and not a hole a named argument skipped): no default.
                 Instr::ArgDefault { n, target } => {
@@ -2518,13 +2565,15 @@ impl Context<'_> {
                     }
                     Rare::VarRef => {
                         let name = self.var_name(w, func, b);
-                        let cell = if c == 1 && !in_main { self.global_cell(below, &name) } else { self.var_cell(w, in_main, &name) };
+                        let global = c == 1 || self.frames.last().is_some_and(|f| f.global);
+                        let cell = if global && !in_main { self.global_cell(below, &name) } else { self.var_cell(w, in_main, &name) };
                         reg!(a) = Value::Ref(cell);
                     }
                     Rare::VarGet => {
                         let name = self.var_name(w, func, b);
                         let global = c & 2 != 0;
-                        let v = if global && !in_main { self.global_value(below, &name) } else { self.var_value(w, in_main, &name) };
+                        let scope = global || self.frames.last().is_some_and(|f| f.global);
+                        let v = if scope && !in_main { self.global_value(below, &name) } else { self.var_value(w, in_main, &name) };
                         match v {
                             Some(v) => reg!(a) = v,
                             None => {
@@ -2538,7 +2587,15 @@ impl Context<'_> {
                     }
                     Rare::VarUnset => {
                         let name = self.var_name(w, func, a);
-                        if b == 1 && !in_main {
+                        let at_global = self.frames.last().is_some_and(|f| f.global);
+                        if at_global && !in_main {
+                            // A file included at global scope: the global goes,
+                            // and with it this file's binding to it.
+                            self.global_unset(below, &name);
+                            if let Some(r) = func.cv_names.iter().position(|n| n.as_bytes() == name.as_slice()) {
+                                w[r] = Value::Undef;
+                            }
+                        } else if b == 1 && !in_main {
                             self.global_unset(below, &name);
                         } else {
                             self.var_unset(w, in_main, &name);
@@ -3324,13 +3381,15 @@ impl Context<'_> {
     /// Run a file's code (include, eval) as a frame above the running one,
     /// with its variables, `$this` and class scope; its result into `dst`.
     fn run_in_scope(&mut self, regs: &mut Vec<Value>, base: usize, func: &Function, main: &Arc<Function>, dst: Reg, pc: usize) -> Next {
-        let in_main = base == 0;
-        let w = &mut regs[base..base + func.nregs as usize];
+        // The file runs in the including code's scope: the globals when
+        // that is global scope (however deep in includes), else its locals.
+        let global = self.frames.last().is_some_and(|f| f.global);
         let mut cells: Vec<Rc<RefCell<Value>>> = Vec::with_capacity(main.cv_names.len());
         for name in &main.cv_names {
             cells.push(match func.cv_names.iter().position(|n| n == name) {
-                Some(r) => make_ref(w, r as Reg),
-                None if in_main => self.global_cell(w, name.as_bytes()),
+                Some(r) => make_ref(&mut regs[base..base + func.nregs as usize], r as Reg),
+                // (The main frame's window starts at register 0.)
+                None if global => self.global_cell(regs, name.as_bytes()),
                 None => self.frames.last_mut().expect("the including frame").vars_mut().cell(name.as_bytes()),
             });
         }
@@ -3348,7 +3407,7 @@ impl Context<'_> {
             regs[at + i] = Value::Ref(cell);
         }
         let frame = self.frames.last_mut().expect("the file's frame");
-        (frame.this, frame.scope, frame.called) = (this, scope, called);
+        (frame.this, frame.scope, frame.called, frame.global) = (this, scope, called, global);
         Next::Switch
     }
 
@@ -4153,7 +4212,7 @@ impl Ctx for Context<'_> {
                 Value::Undef => None,
                 v => Some(v),
             },
-            None if frame.base == 0 => self.globals.get(name).map(|c| c.borrow().clone()),
+            None if frame.global => self.global_value(regs, name),
             None => frame.vars()?.get(name).map(|c| c.borrow().clone()),
         }
     }
@@ -4168,8 +4227,11 @@ impl Ctx for Context<'_> {
                 }
                 true
             }
-            None if base == 0 => {
-                self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).replace(value);
+            None if frame.global => {
+                // (The main frame's window starts at register 0.)
+                let mut regs = std::mem::take(&mut self.isolate.regs);
+                self.global_cell(&mut regs, name).replace(value);
+                self.isolate.regs = regs;
                 true
             }
             None => {
@@ -4182,6 +4244,9 @@ impl Ctx for Context<'_> {
 
     fn locals(&self) -> Vec<(PhpStr, Value)> {
         let Some(frame) = self.frames.last() else { return Vec::new() };
+        // At global scope (a file included there too): the main frame's
+        // variables and the other globals.
+        let frame = if frame.global { self.frames.first().expect("the main frame") } else { frame };
         let regs = &self.isolate.regs;
         let base = frame.base as usize;
         let mut out: Vec<(PhpStr, Value)> = frame

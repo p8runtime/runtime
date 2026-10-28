@@ -31,6 +31,8 @@ pub mod defaults;
 mod math;
 mod head;
 mod misc;
+mod password;
+pub(crate) mod printf;
 mod process;
 mod csv;
 mod ctype;
@@ -151,6 +153,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(math::BUILTINS);
     registry.add_functions(head::BUILTINS);
     registry.add_functions(misc::BUILTINS);
+    registry.add_functions(password::BUILTINS);
     registry.add_functions(context::BUILTINS);
     registry.add_functions(process::BUILTINS);
     registry.add_functions(csv::BUILTINS);
@@ -168,6 +171,8 @@ fn register(registry: &mut Registry) {
     // (count: a Countable's count() is PHP code.)
     // (The ob_* functions run output handlers, PHP code.)
     registry.mark_reenters(&["ob_end_clean", "ob_end_flush", "ob_clean", "ob_flush", "ob_get_clean", "ob_get_flush"]);
+    // (The printf family calls __toString on the values a v* array holds.)
+    registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
     for (_, name, value, _) in defaults::CONSTANTS {
         let value = match value {
@@ -275,118 +280,15 @@ fn number_format(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Str(PhpStr::new(out)))
 }
 
-/// The common subset of sprintf: %s %d %u %x %X %o %b %c %e %f %F %%, with
-/// flags, width and precision.
-fn format(args: &[Value]) -> Vec<u8> {
-    let fmt = str_arg(args, 0);
-    let fmt = fmt.as_bytes();
-    let mut out = Vec::new();
-    let mut next = 1;
-    let mut i = 0;
-    while i < fmt.len() {
-        if fmt[i] != b'%' {
-            out.push(fmt[i]);
-            i += 1;
-            continue;
-        }
-        i += 1;
-        if fmt.get(i) == Some(&b'%') {
-            out.push(b'%');
-            i += 1;
-            continue;
-        }
-        let (mut left, mut plus, mut pad) = (false, false, b' ');
-        while let Some(&c) = fmt.get(i) {
-            match c {
-                b'-' => left = true,
-                b'+' => plus = true,
-                b'0' => pad = b'0',
-                b' ' => pad = b' ',
-                b'\'' => {
-                    i += 1;
-                    pad = fmt.get(i).copied().unwrap_or(b' ');
-                }
-                _ => break,
-            }
-            i += 1;
-        }
-        let digits = |i: &mut usize| {
-            let start = *i;
-            while fmt.get(*i).is_some_and(u8::is_ascii_digit) {
-                *i += 1;
-            }
-            std::str::from_utf8(&fmt[start..*i]).ok().and_then(|t| t.parse::<usize>().ok())
-        };
-        let width = digits(&mut i).unwrap_or(0);
-        let precision = if fmt.get(i) == Some(&b'.') {
-            i += 1;
-            Some(digits(&mut i).unwrap_or(0))
-        } else {
-            None
-        };
-        let conv = fmt.get(i).copied().unwrap_or(b's');
-        i += 1;
-        let v = arg(args, next);
-        next += 1;
-        let mut body: Vec<u8> = match conv {
-            b'd' | b'i' => {
-                let n = v.to_int();
-                if plus && n >= 0 { format!("+{n}") } else { n.to_string() }.into_bytes()
-            }
-            b'u' => (v.to_int() as u64).to_string().into_bytes(),
-            b'x' => format!("{:x}", v.to_int() as u64).into_bytes(),
-            b'X' => format!("{:X}", v.to_int() as u64).into_bytes(),
-            b'o' => format!("{:o}", v.to_int() as u64).into_bytes(),
-            b'b' => format!("{:b}", v.to_int() as u64).into_bytes(),
-            b'c' => vec![v.to_int() as u8],
-            b'f' | b'F' => {
-                let f = v.to_float();
-                let s = format!("{:.*}", precision.unwrap_or(6), f);
-                if plus && f >= 0.0 { format!("+{s}") } else { s }.into_bytes()
-            }
-            b'e' | b'E' => {
-                let s = format!("{:.*e}", precision.unwrap_or(6), v.to_float());
-                let (m, e) = s.split_once('e').unwrap_or((&s, "0"));
-                let e: i32 = e.parse().unwrap_or(0);
-                let mut t = format!("{m}e{}{}", if e < 0 { '-' } else { '+' }, e.abs());
-                if conv == b'E' {
-                    t = t.to_uppercase();
-                }
-                t.into_bytes()
-            }
-            _ => {
-                let s = v.to_php_string().unwrap_or_else(|| PhpStr::from("Array"));
-                let mut b = s.as_bytes().to_vec();
-                if let Some(p) = precision {
-                    b.truncate(p);
-                }
-                b
-            }
-        };
-        if body.len() < width {
-            let fill = vec![pad; width - body.len()];
-            if left {
-                body.extend_from_slice(&vec![b' '; width - body.len()]);
-            } else if pad == b'0' && matches!(body.first(), Some(b'-' | b'+')) && matches!(conv, b'd' | b'f' | b'F' | b'e' | b'E') {
-                let sign = body.remove(0);
-                body = [vec![sign], fill, body].concat();
-            } else {
-                body = [fill, body].concat();
-            }
-        }
-        out.extend_from_slice(&body);
-    }
-    out
-}
-
 fn printf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let out = format(args);
+    let out = printf::formatted(ctx, "printf", str_arg(args, 0).as_bytes(), &args[1..], printf::Missing::Count(1))?;
     ctx.echo(&out);
     Ok(Value::Int(out.len() as i64))
 }
 
-fn sprintf(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::new(format(args))))
+fn sprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let out = printf::formatted(ctx, "sprintf", str_arg(args, 0).as_bytes(), &args[1..], printf::Missing::Count(1))?;
+    Ok(Value::Str(PhpStr::new(out)))
 }
 
 /// ob_start($callback = null, $chunk_size = 0, $flags = PHP_OUTPUT_HANDLER_STDFLAGS)

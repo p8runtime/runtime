@@ -238,11 +238,9 @@ fn vfprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Some(o) = resource_of(&v) else {
         return Err(ctx.throw("TypeError", format!("vfprintf(): Argument #1 ($stream) must be of type resource, {} given", v.type_name())));
     };
-    let mut fmt = vec![arg(args, 1)];
-    if let Value::Array(a) = arg(args, 2) {
-        fmt.extend(a.values().cloned());
-    }
-    let bytes = crate::format(&fmt);
+    let values = crate::printf::array_values(&arg(args, 2));
+    let fmt = arg(args, 1).to_php_string().unwrap_or_else(PhpStr::empty);
+    let bytes = crate::printf::formatted(ctx, "vfprintf", fmt.as_bytes(), &values, crate::printf::Missing::Array)?;
     if let Some(r) = resource(&o) {
         r.stream.borrow_mut().write(ctx, &bytes);
     }

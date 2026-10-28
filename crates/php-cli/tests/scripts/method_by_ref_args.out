@@ -1,0 +1,18 @@
+var: set
+by value: orig
+chained: via
+element: set
+new element: {"new":{"deep":"set"}}
+property: set
+property array: [1,2]
+static: static
+static via object: static
+static element: static
+nullsafe null: orig
+nullsafe: set
+missing: orig
+variadic: a! b!
+foreach ref: [["x"]]
+string(3) "set"
+expression arg: ok
+[[]] [{"terms":[],"field":"id"}]
