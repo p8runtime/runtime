@@ -1,0 +1,10 @@
+[package]
+name = "p8-mysqlnd"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's MySQL client: the wire protocol as PHP's mysqlnd speaks it, over std's sockets"
+
+[dependencies]
+sha1 = "0.10"
+sha2 = "0.10"
