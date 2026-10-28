@@ -21,6 +21,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "ini_set", run: ini_set, by_ref: &[] },
     Builtin { name: "ini_alter", run: ini_set, by_ref: &[] },
     Builtin { name: "trigger_error", run: trigger_error, by_ref: &[] },
+    Builtin { name: "error_get_last", run: error_get_last, by_ref: &[] },
+    Builtin { name: "error_clear_last", run: error_clear_last, by_ref: &[] },
     Builtin { name: "user_error", run: trigger_error, by_ref: &[] },
     Builtin { name: "set_time_limit", run: set_time_limit, by_ref: &[] },
     Builtin { name: "php_sapi_name", run: php_sapi_name, by_ref: &[] },
@@ -71,6 +73,22 @@ const E_USER_NOTICE: i64 = 1024;
 const E_USER_DEPRECATED: i64 = 16384;
 
 /// trigger_error($message, $error_level = E_USER_NOTICE)
+/// error_get_last(): ["type", "message", "file", "line"], or null.
+fn error_get_last(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let Some((level, message, file, line)) = ctx.last_error(false) else { return Ok(Value::Null) };
+    let mut a = PhpArray::new();
+    a.insert(Key::Str(PhpStr::from("type")), Value::Int(level));
+    a.insert(Key::Str(PhpStr::from("message")), Value::Str(PhpStr::from(message.as_str())));
+    a.insert(Key::Str(PhpStr::from("file")), Value::Str(PhpStr::from(file.as_str())));
+    a.insert(Key::Str(PhpStr::from("line")), Value::Int(line as i64));
+    Ok(Value::Array(Rc::new(a)))
+}
+
+fn error_clear_last(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.last_error(true);
+    Ok(Value::Null)
+}
+
 fn trigger_error(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let message = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
     let level = if args.len() > 1 { arg(args, 1).to_int() } else { E_USER_NOTICE };

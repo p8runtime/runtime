@@ -75,6 +75,11 @@ pub trait Ctx {
     /// ini_set(): set a known directive for this request; its old value,
     /// or None for an unknown directive.
     fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value>;
+    /// error_get_last(): the last error not handled by a user handler, as
+    /// (type, message, file, line); error_clear_last() when `clear`.
+    fn last_error(&mut self, _clear: bool) -> Option<(i64, String, String, u32)> {
+        None
+    }
     /// error_reporting(): the current level, after setting `new` if given.
     fn error_level(&mut self, new: Option<i64>) -> i64;
     /// The constant `name` (as written), defined by the script or an extension.
