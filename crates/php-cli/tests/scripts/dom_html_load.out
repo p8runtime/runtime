@@ -889,3 +889,8 @@ Warning: DOMDocument::loadHTML(): Tag foo invalid in Entity, line: 2 in %s on li
 Warning: DOMDocument::loadHTML(): Tag bar invalid in Entity, line: 3 in %s on line 88
 2 76 1 9 Unexpected end tag : b
 1
+n=255 o=0 255 2952
+n=255 o=524288 255 2952
+n=256 o=0 255 2939
+  level 3 code 1: "Excessive depth in document: 256 use XML_PARSE_HUGE option\n"
+n=256 o=524288 256 2963

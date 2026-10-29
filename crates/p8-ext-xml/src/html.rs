@@ -17,6 +17,7 @@ pub const PARSE_RECOVER: i64 = 1;
 pub const PARSE_NODEFDTD: i64 = 4;
 pub const PARSE_NOBLANKS: i64 = 256;
 pub const PARSE_NOIMPLIED: i64 = 8192;
+pub const PARSE_HUGE: i64 = 1 << 19;
 pub const PARSE_IGNORE_ENC: i64 = 1 << 21;
 
 const XML_FROM_HTML: i32 = 5;
@@ -261,7 +262,7 @@ impl Parser<'_> {
     }
 
     fn err_level(&mut self, domain: i32, level: i32, code: i32, message: String) {
-        if self.eof {
+        if self.eof && self.disable_sax {
             return;
         }
         let (line, col) = self.line_col();
@@ -552,6 +553,15 @@ impl Parser<'_> {
 
     /// xmlSAX2StartElement for an HTML document.
     fn sax_start_element(&mut self, full: &[u8], atts: &[Att]) {
+        // nodePush: deeper than 256 stops the parser (unless LIBXML_PARSEHUGE).
+        if self.nodes.len() > 256 && self.options & PARSE_HUGE == 0 {
+            self.err_level(1, 3, 1, "Excessive depth in document: 256 use XML_PARSE_HUGE option\n".into());
+            // xmlHaltParser
+            self.eof = true;
+            self.disable_sax = true;
+            self.pos = self.buf.len();
+            return;
+        }
         let parent = self.nodes.last().copied();
         let mut node = Node::new(Kind::Element, local_name(full));
         node.line = self.line_u16();
@@ -752,17 +762,8 @@ impl Parser<'_> {
         }
         let Some(&node) = self.nodes.last() else { return false };
         let allows = |n: &[u8]| ALLOW_PCDATA.iter().any(|a| a.as_bytes() == n);
-        let mut last = self.doc.node(node).children.last().copied();
-        while let Some(l) = last
-            && self.doc.node(l).kind == Kind::Comment
-        {
-            let p = self.doc.parent(l);
-            last = p.and_then(|p| {
-                let kids = &self.doc.node(p).children;
-                let at = kids.iter().position(|&k| k == l)?;
-                at.checked_sub(1).map(|j| kids[j])
-            });
-        }
+        // The last child that is not a comment.
+        let last = self.doc.node(node).children.iter().rev().copied().find(|&c| self.doc.node(c).kind != Kind::Comment);
         match last {
             None => !allows(name),
             Some(l) if self.doc.node(l).kind == Kind::Text => false,

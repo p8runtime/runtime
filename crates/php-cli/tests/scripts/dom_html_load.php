@@ -93,3 +93,14 @@ libxml_use_internal_errors(true);
 libxml_clear_errors();
 $d->loadHTML("<p>a</b>", LIBXML_NOERROR);
 echo count(libxml_get_errors()), "\n";
+// nesting deeper than 256 stops the parser unless LIBXML_PARSEHUGE
+libxml_clear_errors();
+foreach ([255, 256] as $n) {
+    foreach ([0, LIBXML_PARSEHUGE] as $o) {
+        $d = new DOMDocument();
+        $d->loadHTML(str_repeat('<div>', $n) . 'x' . str_repeat('</div>', $n) . '<p>after</p>', $o);
+        echo "n=$n o=$o ", $d->getElementsByTagName('div')->length, ' ', strlen($d->saveHTML()), "\n";
+        foreach (libxml_get_errors() as $e) echo "  level {$e->level} code {$e->code}: ", json_encode($e->message), "\n";
+        libxml_clear_errors();
+    }
+}
