@@ -1,0 +1,16 @@
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(4) "own2"
+int(3)
+int(2)
+NULL
+int(5)
+bool(false)
+switched
+NULL
+bool(true)
+NULL

@@ -30,8 +30,15 @@ impl Context<'_> {
         if let Some(c) = self.builtin_on_demand(&lower) {
             return Ok(c);
         }
-        if !self.autoloaders.is_empty() && self.autoload_tried.insert(lower) {
-            return Err(Throw::Autoload(PhpStr::from(name)));
+        // Each lookup asks the autoloaders, as PHP's do, except while they
+        // are running for this class (no recursion) and in the retry of
+        // the instruction that asked them.
+        if !self.autoloaders.is_empty() {
+            if self.autoload_retry.as_ref() == Some(&lower) {
+                self.autoload_retry = None;
+            } else if self.autoload_tried.insert(lower) {
+                return Err(Throw::Autoload(PhpStr::from(name)));
+            }
         }
         Err(self.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name))))
     }
@@ -81,13 +88,18 @@ impl Context<'_> {
     /// Run the autoloaders on `name`, in order, until one declares it.
     pub(crate) fn run_autoload(&mut self, regs: &mut Vec<Value>, name: PhpStr) -> Result<(), Throw> {
         let lower = name.as_bytes().to_ascii_lowercase();
+        let mut result = Ok(());
         for loader in self.autoloaders.clone() {
-            self.call_with_regs(regs, &loader, &mut [Value::Str(name.clone())])?;
-            if self.classes.contains_key(&lower) {
+            result = self.call_with_regs(regs, &loader, &mut [Value::Str(name.clone())]).map(|_| ());
+            if result.is_err() || self.classes.contains_key(&lower) {
                 break;
             }
         }
-        Ok(())
+        self.autoload_tried.remove(&lower);
+        if result.is_ok() && !self.classes.contains_key(&lower) {
+            self.autoload_retry = Some(lower);
+        }
+        result
     }
 
     /// Call the error handler for each diagnostic waiting: a handler that
