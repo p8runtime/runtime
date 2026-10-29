@@ -492,6 +492,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cacrt"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de50c589220a5516d733d43e585df9489cd93f373e6f8deead9d16c50d3fa30d"
+
+[[package]]
 name = "cap-fs-ext"
 version = "3.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -748,6 +754,12 @@ name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
+
+[[package]]
+name = "compcol"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "208aade4faee4333e1700258a40e04cf5a98f8f7e7b7c656352c08adfbbbdd35"
 
 [[package]]
 name = "constant_time_eq"
@@ -1463,6 +1475,7 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "pin-utils",
+ "slab",
 ]
 
 [[package]]
@@ -1937,6 +1950,12 @@ checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
 ]
+
+[[package]]
+name = "intl"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb4842b834ce672019651d2dab56a63cb3ab07d222d892eecbf90b45f21256b8"
 
 [[package]]
 name = "io-enum"
@@ -2835,6 +2854,7 @@ dependencies = [
  "bumpalo",
  "p8-bytecode",
  "p8-compiler",
+ "p8-ext-curl",
  "p8-ext-mysqli",
  "p8-ext-pcre",
  "p8-ext-standard",
@@ -2860,6 +2880,14 @@ dependencies = [
  "p8-bytecode",
  "p8-runtime",
  "p8-syntax",
+]
+
+[[package]]
+name = "p8-ext-curl"
+version = "0.1.0"
+dependencies = [
+ "p8-runtime",
+ "rsurl",
 ]
 
 [[package]]
@@ -3375,6 +3403,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl2"
+version = "0.1.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25a9e3857dd99f3007747c14db009c1c78f4f179264f1aa2c827e9534468a947"
+
+[[package]]
 name = "psm"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3413,6 +3447,16 @@ dependencies = [
  "cranelift-bitset",
  "log 0.4.29",
  "sptr",
+]
+
+[[package]]
+name = "purecrypto"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cfef58b59c16bdf2ac2e33bf5d119e4a3126d32537c894d688d0f47a5d8acec"
+dependencies = [
+ "cacrt",
+ "compcol",
 ]
 
 [[package]]
@@ -3824,6 +3868,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsurl"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "664c91916718ff0339cf1ef251e43b8019b02a04ee8f6f8b6474cd4dee83bdce"
+dependencies = [
+ "compcol",
+ "futures-channel",
+ "futures-util",
+ "intl",
+ "js-sys",
+ "psl2",
+ "purecrypto",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "zeroize",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4229,6 +4292,12 @@ name = "siphasher"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
+
+[[package]]
+name = "slab"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slice-group-by"
@@ -5056,6 +5125,19 @@ dependencies = [
  "rustversion",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-futures"
+version = "0.4.56"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "836d9622d604feee9e5de25ac10e3ea5f2d65b41eac0d9ce72eb5deae707ce7c"
+dependencies = [
+ "cfg-if",
+ "js-sys",
+ "once_cell",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

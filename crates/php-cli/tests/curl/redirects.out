@@ -1,0 +1,71 @@
+--- not followed
+string(6) "moved
+"
+int(302)
+string(9) "BASE/echo"
+int(0)
+--- followed
+GET /echo
+int(200)
+string(9) "BASE/echo"
+int(1)
+bool(false)
+--- method after redirect
+301 GET /echo no body
+302 GET /echo no body
+303 GET /echo no body
+307 POST /echo body kept
+308 POST /echo body kept
+POST /echo
+--- headers of every hop
+2 status lines, header size 202
+--- too many redirects
+bool(false)
+int(47)
+string(30) "Maximum (3) redirects followed"
+int(3)
+bool(false)
+int(47)
+string(30) "Maximum (0) redirects followed"
+--- autoreferer
+GET /echo
+accept: */*
+referer: BASE/r/302/echo
+
+--- connection refused
+bool(false)
+int(7)
+Failed to connect to 127.0.0.1 port 1 after N ms: Could not connect to server
+string(27) "Could not connect to server"
+--- unresolvable host
+bool(false)
+int(6)
+string(44) "Could not resolve host: no-such-host.invalid"
+--- timeout
+bool(false)
+int(28)
+Operation timed out after N milliseconds with 0 bytes received
+bool(true)
+--- not a timeout
+string(5) "late
+"
+--- bad urls
+bool(false)
+int(1)
+bool(false)
+int(3)
+bool(false)
+int(3)
+--- error state resets
+bool(true)
+bool(true)
+int(0)
+string(0) ""
+--- multi
+int(0)
+[[0,1,0],[1,1,0],[2,1,0],[3,1,7]]
+GET /echo?n=1|200
+<p>hi</p>|200
+status 404|404
+bool(true)
+bool(false)

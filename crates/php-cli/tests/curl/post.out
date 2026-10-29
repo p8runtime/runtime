@@ -1,0 +1,104 @@
+--- string
+POST /echo
+accept: */*
+content-length: 7
+content-type: application/x-www-form-urlencoded
+
+a=b&c=d--- postfields alone
+POST /echo
+accept: */*
+content-length: 3
+content-type: application/x-www-form-urlencoded
+
+x=1--- empty
+POST /echo
+accept: */*
+content-length: 0
+content-type: application/x-www-form-urlencoded
+
+--- custom content type
+POST /echo
+accept: */*
+content-length: 7
+content-type: application/json
+
+{"a":1}--- array
+POST /echo
+accept: */*
+content-length: 551
+content-type: multipart/form-data; boundary=BOUNDARY
+
+--BOUNDARY
+Content-Disposition: form-data; name="name"
+
+v1
+--BOUNDARY
+Content-Disposition: form-data; name="list"
+
+a
+--BOUNDARY
+Content-Disposition: form-data; name="list"
+
+b
+--BOUNDARY
+Content-Disposition: form-data; name="5"
+
+five
+--BOUNDARY
+Content-Disposition: form-data; name="n"
+
+42
+--BOUNDARY--
+--- files
+POST /echo
+accept: */*
+content-length: 650
+content-type: multipart/form-data; boundary=BOUNDARY
+
+--BOUNDARY
+Content-Disposition: form-data; name="plain"
+
+text
+--BOUNDARY
+Content-Disposition: form-data; name="file"; filename="up.txt"
+Content-Type: text/plain
+
+line1
+line2
+
+--BOUNDARY
+Content-Disposition: form-data; name="default_mime"; filename="d.txt"
+Content-Type: application/octet-stream
+
+line1
+line2
+
+--BOUNDARY
+Content-Disposition: form-data; name="str"; filename="mem.bin"
+Content-Type: application/x-test
+
+in memory
+--BOUNDARY--
+--- post to get
+GET /echo
+accept: */*
+
+--- put
+PUT /echo
+accept: */*
+content-length: 13
+
+uploaded body
+--- put with read function
+PUT /echo
+accept: */*
+content-length: 18
+
+first second third
+--- custom method with body
+PATCH /echo
+accept: */*
+content-length: 7
+content-type: application/x-www-form-urlencoded
+
+patched

@@ -1,0 +1,117 @@
+bool(true)
+Error: Cannot directly construct CurlHandle, use curl_init() instead
+bool(true)
+Exception: Serialization of 'CurlHandle' is not allowed
+ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option
+ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option
+ValueError: curl_setopt(): cURL option must not contain any null bytes
+TypeError: curl_setopt(): The CURLOPT_HTTPHEADER option must have an array value
+bool(true)
+TypeError: curl_setopt(): Argument #3 ($value) must be a valid callback for option CURLOPT_WRITEFUNCTION, function "nope" not found or invalid function name
+TypeError: curl_setopt(): Argument #3 ($value) must be a valid callback for option CURLOPT_HEADERFUNCTION, class stdClass does not have a method "m"
+ValueError: curl_setopt(): Disabling safe uploads is no longer supported
+TypeError: curl_setopt(): supplied argument is not a valid File-Handle resource
+ValueError: curl_setopt(): The provided file handle must be writable
+bool(true)
+bool(true)
+bool(true)
+
+Notice: curl_setopt(): CURLOPT_SSL_VERIFYHOST no longer accepts the value 1, value 2 will be used instead in %s on line 30
+bool(true)
+bool(true)
+array(1) {
+  ["x"]=>
+  int(1)
+}
+bool(true)
+ValueError: curl_setopt_array(): Argument #2 ($options) must contain only valid cURL options
+ValueError: curl_setopt_array(): Argument #2 ($options) contains an invalid cURL option
+bool(true)
+bool(true)
+ValueError: CURLINFO_HEADER_OUT option must not be set when the CURLOPT_DEBUGFUNCTION option is set
+bool(false)
+int(3)
+string(10) "No URL set"
+bool(false)
+int(1)
+string(37) "Protocol "nosuchscheme" not supported"
+int(0)
+string(0) ""
+url,content_type,http_code,header_size,request_size,filetime,ssl_verify_result,redirect_count,total_time,namelookup_time,connect_time,pretransfer_time,size_upload,size_download,speed_download,speed_upload,download_content_length,upload_content_length,starttransfer_time,redirect_time,redirect_url,primary_ip,certinfo,primary_port,local_ip,local_port,http_version,protocol,ssl_verifyresult,scheme,appconnect_time_us,connect_time_us,namelookup_time_us,pretransfer_time_us,redirect_time_us,starttransfer_time_us,posttransfer_time_us,total_time_us,effective_method,capath,cainfo
+string(19) "http://example.com/"
+int(0)
+NULL
+float(-1)
+int(-1)
+string(0) ""
+int(0)
+string(19) "http://example.com/"
+bool(false)
+bool(false)
+string(1) "p"
+string(19) "http://example.com/"
+string(0) ""
+string(19) "http://example.com/"
+NULL
+string(8) "No error"
+string(26) "Could not resolve hostname"
+string(19) "Timeout was reached"
+string(13) "Unknown error"
+string(8) "No error"
+string(50) "The easy handle is already added to a multi handle"
+string(20) "Unknown share option"
+string(18) "CURLSHcode unknown"
+string(30) "a%20b%26c%2Fd~e-f_g.h%20%C3%A9"
+string(12) "a b&c/d%zz%4"
+string(10) "/etc/hosts"
+string(10) "text/plain"
+string(5) "h.txt"
+string(3) "a/b"
+string(1) "p"
+string(1) "x"
+string(0) ""
+string(0) ""
+string(4) "data"
+string(5) "d.txt"
+string(24) "application/octet-stream"
+Exception: Serialization of 'CURLFile' is not allowed
+Exception: Unserialization of 'CURLFile' is not allowed
+int(10002)
+int(19913)
+int(2097154)
+int(28)
+int(6)
+int(2)
+int(0)
+int(1)
+int(1)
+int(2)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+Error: Cannot directly construct CurlMultiHandle, use curl_multi_init() instead
+Error: Trying to clone an uncloneable object of class CurlMultiHandle
+ValueError: curl_multi_setopt(): Argument #2 ($option) is not a valid cURL multi option
+bool(true)
+ValueError: curl_multi_select(): Argument #2 ($timeout) must be between 0 and 2147484
+int(0)
+int(7)
+int(0)
+bool(false)
+int(0)
+bool(true)
+bool(true)
+int(0)
+bool(false)
+int(1)
+ValueError: curl_share_setopt(): Argument #2 ($option) is not a valid cURL share option
+string(10) "file body
+"
+float(10)
+int(0)
+file body
+bool(true)
+bool(false)
+int(37)

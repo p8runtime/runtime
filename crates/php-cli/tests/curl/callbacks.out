@@ -1,0 +1,41 @@
+--- write and header functions
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+body: "<p>hi<\/p>\n"
+bool(true)
+["HTTP\/1.1 200 OK\r\n","X-A: 1\r\n","X-B: two words\r\n","Content-Type: text\/html; charset=utf-8\r\n","Content-Length: 10\r\n","\r\n"]
+--- write function aborts
+bool(false)
+int(23)
+Failure writing output to destination, passed N returned N
+--- header function aborts
+bool(false)
+int(23)
+--- exception in a callback
+RuntimeException: from callback
+--- close and reset in a callback
+curl_close(): Attempt to close cURL handle from a callback
+curl_reset(): Attempt to reset cURL handle from a callback
+bool(true)
+--- setopt in a callback
+first
+bool(true)
+--- big body in pieces
+bool(true)
+int(131072)
+bool(true)
+--- callbacks with a method and a static
+bool(true)
+string(32) "chunk one,chunk two,chunk three
+"
+--- private data and info
+string(3) "tag"
+int(200)
+--- copy keeps options
+GET /echo
+1
+1

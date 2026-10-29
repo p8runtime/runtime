@@ -1,0 +1,110 @@
+GET /echo?a=1&b=two
+accept: */*
+
+BASE/echo?a=1&b=two 200 text/plain 33 33 0 http GET 2 1
+int(0)
+string(0) ""
+--- options
+GET /echo
+accept: text/plain
+cookie: a=1; b=2
+referer: http://ref.example/
+user-agent: p8-test/1.0
+x-empty: 
+x-one: 1
+x-two: two
+
+--- remove default header
+GET /echo
+cookie: a=1; b=2
+referer: http://ref.example/
+user-agent: p8-test/1.0
+
+--- header out
+GET /echo HTTP/1.1
+Host: HOST
+User-Agent: p8-test/1.0
+Accept: */*
+Referer: http://ref.example/
+Cookie: a=1; b=2
+X-One: 1
+
+GET /echo HTTP/1.1
+Host: HOST
+User-Agent: p8-test/1.0
+Accept: */*
+Referer: http://ref.example/
+Cookie: a=1; b=2
+X-One: 1
+
+--- header included
+HTTP/1.1 200 OK
+X-A: 1
+X-B: two words
+Content-Type: text/html; charset=utf-8
+Content-Length: 10
+
+<p>hi</p>
+int(103)
+int(10)
+string(24) "text/html; charset=utf-8"
+--- nobody
+HTTP/1.1 200 OK
+X-A: 1
+X-B: two words
+Content-Type: text/html; charset=utf-8
+Content-Length: 10
+
+string(4) "HEAD"
+float(0)
+--- custom request
+DELETE /echo
+PATCH /echo
+OPTIONS /echo
+--- basic auth
+string(3) "no
+"
+int(401)
+string(31) "authed: Basic dXNlcjpwYSBzcw==
+"
+int(200)
+string(19) "authed: Basic dTpw
+"
+--- status and failonerror
+string(11) "status 404
+"
+int(404)
+int(0)
+bool(false)
+int(404)
+int(22)
+string(37) "The requested URL returned error: 404"
+--- chunked and big
+string(32) "chunk one,chunk two,chunk three
+"
+int(131072)
+string(32) "ced877c812a6b561fa8c28b99fda69f2"
+float(131072)
+--- encoding
+string(6) "plain
+"
+string(11) "hello gzip
+"
+string(11) "hello gzip
+"
+--- cookie engine
+sid=abc; theme=dark
+int(2)
+--- output to a file
+bool(true)
+string(10) "<p>hi</p>
+"
+HTTP/1.1 200 OK
+X-A: 1
+X-B: two words
+Content-Type: text/html; charset=utf-8
+Content-Length: 10
+
+--- stdout
+<p>hi</p>
+bool(true)

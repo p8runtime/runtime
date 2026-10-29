@@ -16,7 +16,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::PCRE, p8::extensions::MYSQLI]);
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL]);
     let file = std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned());
     // -l: compile only, as `php -l` checks a file's syntax.
     if lint {
