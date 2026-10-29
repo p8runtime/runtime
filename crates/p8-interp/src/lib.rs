@@ -3492,6 +3492,18 @@ impl Context<'_> {
                         return Ok(Next::Go(insn_at));
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
+                    // A path into an object (ArrayAccess): `$obj->p[k] = v` is its offsetSet.
+                    let keys: Vec<Value> = path.iter().map(Key::to_value).collect();
+                    if let Some(root) = self.peek_prop(&target, &name)
+                        && arrayaccess::path_has_object(&root, &keys, append)
+                    {
+                        let dim_op = match op {
+                            Some(op) => arrayaccess::DimOp::Op(op, v),
+                            None => arrayaccess::DimOp::Set(v),
+                        };
+                        regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
+                        return Ok(Next::Go(pc));
+                    }
                     reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
                 }
                 Instr::IssetProp { dst, obj, name } => {

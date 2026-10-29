@@ -1,0 +1,47 @@
+offsetSet('Content-Type', 'text/html')
+offsetSet('X-A', '1')
+offsetSet('content-type', 'more')
+offsetSet(NULL, 'appended')
+array(3) {
+  ["content-type"]=>
+  array(2) {
+    [0]=>
+    string(9) "text/html"
+    [1]=>
+    string(4) "more"
+  }
+  ["x-a"]=>
+  array(1) {
+    [0]=>
+    string(1) "1"
+  }
+  [0]=>
+  string(8) "appended"
+}
+offsetSet('Key', 'v')
+array(1) {
+  ["key"]=>
+  array(1) {
+    [0]=>
+    string(1) "v"
+  }
+}
+offsetSet('K', 'deep')
+array(1) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    string(4) "deep"
+  }
+}
+array(1) {
+  ["x"]=>
+  string(2) "ab"
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}

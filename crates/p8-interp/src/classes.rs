@@ -819,6 +819,26 @@ impl Context<'_> {
         Ok(Some((slot, prop)))
     }
 
+    /// What `$obj->name` holds, read without hooks, magic or diagnostics:
+    /// None unless it is a property visible here.
+    pub(crate) fn peek_prop(&self, target: &Value, name: &Value) -> Option<Value> {
+        let Value::Object(object) = target.deref() else { return None };
+        let name = name.to_php_string()?;
+        let scope = self.scope().0;
+        match object.class.slot(name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) {
+            Some(slot) => {
+                let prop = &object.class.properties[slot];
+                let declaring = self.declaring(&object.class, &prop.declaring);
+                if !visible(prop.visibility, &declaring, scope.as_deref()) {
+                    return None;
+                }
+                let v = object.slots.borrow()[slot].deref();
+                Some(v)
+            }
+            None => object.dynamic.borrow().get(&Key::from_string(name)).map(Value::deref),
+        }
+    }
+
     /// `$obj->name`
     pub(crate) fn fetch_prop(&mut self, target: &Value, name: &Value, quiet: bool) -> Result<Value, Throw> {
         let name = self.prop_name(name)?;
