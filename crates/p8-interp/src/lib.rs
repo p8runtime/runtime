@@ -3834,6 +3834,39 @@ impl Context<'_> {
 
     /// Run a file's code (include, eval) as a frame above the running one,
     /// with its variables, `$this` and class scope; its result into `dst`.
+    /// The variable `name` of the scope the running code shares, for a file
+    /// it includes: the running frame's run-time variable, else, where the
+    /// running frame is itself an included file's (one symbol table with
+    /// the code that included it), the including frames' variables, down to
+    /// the function or the globals the chain runs in; made in the running
+    /// frame when none has it. (`global $x` in a file included from a
+    /// function, then `$x = …` in a file that one includes, is that global.)
+    fn shared_scope_cell(&mut self, regs: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
+        let top = self.frames.len - 1;
+        let mut i = top;
+        loop {
+            let frame = &self.frames.slots[i];
+            if let Some(c) = frame.vars().and_then(|v| v.get(name)) {
+                return Rc::clone(c);
+            }
+            if i < top
+                && let Some(r) = frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name)
+            {
+                let base = frame.base as usize;
+                return make_ref(&mut regs[base..], r as Reg);
+            }
+            if frame.global {
+                return self.global_cell(regs, name);
+            }
+            let shared = frame.extra.as_ref().is_some_and(|e| e.shared.is_some());
+            if !shared || i == 0 {
+                break;
+            }
+            i -= 1;
+        }
+        self.frames.slots[top].vars_mut().cell(name)
+    }
+
     fn run_in_scope(&mut self, regs: &mut Vec<Value>, base: usize, func: &Function, main: &Arc<Function>, dst: Reg, pc: usize) -> Next {
         // The file runs in the including code's scope: the globals when
         // that is global scope (however deep in includes), else its locals.
@@ -3852,7 +3885,7 @@ impl Context<'_> {
                 None if global => self.global_cell(regs, name.as_bytes()),
                 None => {
                     origins.push(Origin::Var(name.as_bytes().to_vec()));
-                    self.frames.last_mut().expect("the including frame").vars_mut().cell(name.as_bytes())
+                    self.shared_scope_cell(regs, name.as_bytes())
                 }
             });
         }

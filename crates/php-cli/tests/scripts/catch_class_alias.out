@@ -1,0 +1,8 @@
+caught by alias
+caught by interface alias
+bool(true)
+bool(true)
+falls through
+bool(false)
+bool(true)
+bool(false)

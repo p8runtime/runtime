@@ -461,6 +461,8 @@ fn instance(ctx: &mut dyn Ctx, args: &[Value], allow_string: bool, strict: bool)
     let wanted = str_arg(args, 1);
     let wanted = wanted.as_bytes();
     let wanted = wanted.strip_prefix(b"\\").unwrap_or(wanted).to_ascii_lowercase();
+    // An alias (class_alias) names its class (looked up, not autoloaded).
+    let wanted = ctx.class(&wanted).map_or(wanted, |c| c.lower.clone());
     if strict && class.lower == wanted {
         return Ok(false);
     }
