@@ -9,6 +9,7 @@ pub mod lists;
 pub mod node;
 pub mod serialize;
 pub mod tree;
+pub mod xinclude;
 pub mod xpath;
 
 use document as d;
@@ -174,6 +175,7 @@ const DOCUMENT_METHODS: &[Meth] = concat_meths!(
         m!("importNode", d::import_node),
         m!("adoptNode", d::adopt_node),
         m!("normalizeDocument", d::normalize_document),
+        m!("xinclude", d::xinclude),
         m!("$documentElement::get", d::document_element_get),
         m!("$doctype::get", d::doctype_get),
         m!("$implementation::get", d::implementation_get),

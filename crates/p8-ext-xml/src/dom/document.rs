@@ -331,6 +331,26 @@ pub fn normalize_document(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Valu
     normalize(ctx, this, args)
 }
 
+/// Substitutes the document's XIncludes: their count, false for none, -1 on
+/// an error.
+pub fn xinclude(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let flags = arg(args, 0).to_int();
+    if flags > i64::from(i32::MAX) || flags < i64::from(i32::MIN) {
+        ctx.warn("DOMDocument::xinclude(): Invalid flags");
+        return Ok(Value::Bool(false));
+    }
+    let r = this_doc(this);
+    let (done, diags) = super::xinclude::run(&mut r.doc.borrow_mut(), flags);
+    for diag in &diags {
+        crate::libxml::report(ctx, &diag.error, |ctx| {
+            for line in &diag.warnings {
+                ctx.warn(&format!("DOMDocument::xinclude(): {line}"));
+            }
+        });
+    }
+    Ok(if done == 0 { Value::Bool(false) } else { Value::Int(done) })
+}
+
 getter!(document_element_get, |ctx, r| {
     let root = r.doc.borrow().root();
     wrap_opt(ctx, &r, root)
