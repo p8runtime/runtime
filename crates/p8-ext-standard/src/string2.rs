@@ -399,7 +399,7 @@ fn parse_url(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// urlencode (`raw` false: space as '+') / rawurlencode (RFC 3986).
-fn url_encode(s: &[u8], raw: bool) -> Vec<u8> {
+pub(crate) fn url_encode(s: &[u8], raw: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     for &c in s {
         match c {

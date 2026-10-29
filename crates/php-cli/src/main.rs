@@ -4,11 +4,22 @@
 
 use std::io::Write;
 
+mod http;
+mod mime_types;
+mod server;
+mod status_phrases;
+
 fn main() {
-    let Some(Cli { dump, lint, path, ini, args }) = Cli::parse(std::env::args().skip(1)) else {
-        eprintln!("usage: php2 [--dump] [-l] [-d name=value]... <file> [args...]");
+    let Some(Cli { dump, lint, path, ini, args, serve, docroot, quiet }) = Cli::parse(std::env::args().skip(1)) else {
+        eprintln!("usage: php2 [--dump] [-l] [-d name=value]... <file> [args...]\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]");
         std::process::exit(64);
     };
+    // php -S: the built-in web server (the file, if any, is its router).
+    if let Some(address) = serve {
+        let config = server::Config { address, docroot, router: (!path.is_empty()).then_some(path), quiet, ini };
+        let status = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || server::run(config)).expect("server thread").join().unwrap_or(255);
+        std::process::exit(status);
+    }
     let source = match std::fs::read(&path) {
         Ok(s) => s,
         Err(e) => {
@@ -86,6 +97,12 @@ struct Cli {
     ini: Vec<(String, String)>,
     /// The script's own arguments (after the file).
     args: Vec<String>,
+    /// -S: serve web requests on this address.
+    serve: Option<String>,
+    /// -t: the document root of -S.
+    docroot: Option<String>,
+    /// -q: how many times (a quieter -S log).
+    quiet: u8,
 }
 
 impl Cli {
@@ -98,17 +115,26 @@ impl Cli {
             let (name, value) = text.split_once('=').unwrap_or((text, "1"));
             ini.push((name.trim().to_string(), value.trim().trim_matches('"').to_string()));
         };
+        let (mut serve, mut docroot, mut quiet) = (None, None, 0);
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 "--dump" => dump = true,
                 "-l" => lint = true,
                 "-d" => setting(&args.next()?),
+                "-S" => serve = Some(args.next()?),
+                "-t" => docroot = Some(args.next()?),
+                "-q" => quiet += 1,
+                // No php.ini is read anyway.
+                "-n" => {}
                 other if other.starts_with("-d") => setting(&other[2..]),
+                other if other.starts_with("-S") => serve = Some(other[2..].to_string()),
+                other if other.starts_with("-t") => docroot = Some(other[2..].to_string()),
                 _ => return None,
             }
         }
-        let path = args.next()?;
-        Some(Cli { dump, lint, path, ini, args: args.collect() })
+        // -S takes an optional router; a script is required otherwise.
+        let path = if serve.is_some() { args.next().unwrap_or_default() } else { args.next()? };
+        Some(Cli { dump, lint, path, ini, args: args.collect(), serve, docroot, quiet })
     }
 }
 

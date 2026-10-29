@@ -46,6 +46,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "mkdir", run: mkdir, by_ref: &[] },
     Builtin { name: "rmdir", run: rmdir, by_ref: &[] },
     Builtin { name: "rename", run: rename, by_ref: &[] },
+    Builtin { name: "is_uploaded_file", run: is_uploaded_file, by_ref: &[] },
+    Builtin { name: "move_uploaded_file", run: move_uploaded_file, by_ref: &[] },
     Builtin { name: "copy", run: copy, by_ref: &[] },
     Builtin { name: "touch", run: touch, by_ref: &[] },
     Builtin { name: "is_file", run: is_file, by_ref: &[] },
@@ -142,13 +144,20 @@ fn open(ctx: &mut dyn Ctx, func: &str, path: &PhpStr, mode: &str) -> Result<Opti
         return Ok(crate::zlib::open_gz(ctx, func, gz, mode));
     }
     let lower = p.to_ascii_lowercase();
+    if lower.starts_with("http://") && !mode.starts_with(['w', 'a', 'x', 'c']) {
+        return Ok(http_get(ctx, func, &p).map(|body| Stream::new(Target::Memory(body), &p, mode)));
+    }
     if let Some(rest) = lower.strip_prefix("php://") {
         let target = match rest.split('/').next().unwrap_or("") {
             "memory" | "temp" => Target::Memory(Vec::new()),
             "stdin" => Target::Stdin,
             "stdout" | "output" => Target::Stdout,
             "stderr" => Target::Stderr,
-            "input" => Target::Memory(Vec::new()),
+            // The request body (what the host gave a web request).
+            "input" => Target::Memory(match ctx.state("php_input") {
+                Value::Str(s) => s.as_bytes().to_vec(),
+                _ => Vec::new(),
+            }),
             _ => {
                 ctx.warn(&format!("{func}(): Invalid php:// URL specified"));
                 ctx.warn(&format!("{func}({p}): Failed to open stream: operation failed"));
@@ -381,6 +390,9 @@ fn read_path(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Result<Option<Vec<
     if let Some(gz) = p.strip_prefix("compress.zlib://") {
         return Ok(crate::zlib::open_gz(ctx, func, gz, "r").map(|mut s| s.read_all()));
     }
+    if p.to_ascii_lowercase().starts_with("http://") {
+        return Ok(http_get(ctx, func, &p));
+    }
     let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
     if Path::new(&p).is_dir() {
         ctx.warn(&format!("{func}(): Read of 8192 bytes failed with errno=21 Is a directory"));
@@ -528,6 +540,41 @@ fn rename(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (from, to) = (text(&str_arg(args, 0)), text(&str_arg(args, 1)));
     let r = std::fs::rename(&from, &to);
     Ok(done(ctx, "rename", &format!("{from},{to}"), r))
+}
+
+/// The files a web request's uploads were saved in (the host gives them).
+const UPLOADED: &str = "rfc1867_uploaded_files";
+
+fn is_upload(ctx: &mut dyn Ctx, path: &PhpStr) -> bool {
+    match ctx.state(UPLOADED) {
+        Value::Array(a) => a.values().any(|v| matches!(v, Value::Str(s) if s.as_bytes() == path.as_bytes())),
+        _ => false,
+    }
+}
+
+/// is_uploaded_file(string $filename): whether the request uploaded it.
+fn is_uploaded_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(is_upload(ctx, &str_arg(args, 0))))
+}
+
+/// move_uploaded_file(string $from, string $to): an upload moves, anything
+/// else does not.
+fn move_uploaded_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let (from, to) = (str_arg(args, 0), str_arg(args, 1));
+    if !is_upload(ctx, &from) {
+        return Ok(Value::Bool(false));
+    }
+    let (from_text, to_text) = (text(&from), text(&to));
+    let moved = std::fs::rename(&from_text, &to_text).is_ok() || std::fs::copy(&from_text, &to_text).is_ok() && std::fs::remove_file(&from_text).is_ok();
+    if !moved {
+        ctx.warn(&format!("move_uploaded_file(): Unable to move \"{from_text}\" to \"{to_text}\""));
+        return Ok(Value::Bool(false));
+    }
+    if let Value::Array(a) = ctx.state(UPLOADED) {
+        let rest: Vec<Value> = a.values().filter(|v| !matches!(v, Value::Str(s) if s.as_bytes() == from.as_bytes())).cloned().collect();
+        *a = Rc::new(PhpArray::from_list(rest));
+    }
+    Ok(Value::Bool(true))
 }
 
 fn copy(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -937,6 +984,8 @@ fn stream_get_meta_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
             Target::Memory(_) if s.path.starts_with("data:") => ("RFC2397", "RFC2397", true),
             Target::Memory(_) => ("plainfile", "STDIO", true),
             Target::Stdin | Target::Stdout | Target::Stderr => ("PHP", "STDIO", false),
+            Target::Tcp(_) => ("", "tcp_socket", false),
+            Target::PipeOut(_) | Target::PipeIn(_) | Target::Process(_) => ("", "STDIO", false),
         };
         let text = |t: &str| Value::Str(PhpStr::from(t));
         vec![
@@ -958,4 +1007,72 @@ fn stream_get_meta_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
         out.insert(Key::Str(PhpStr::from(k)), v);
     }
     Ok(Value::Array(Rc::new(out)))
+}
+
+/// The http:// wrapper, for reading: a GET over a plain connection (no
+/// redirects, no TLS). The body, with `$http_response_header` set in the
+/// calling code; None after PHP's warning.
+fn http_get(ctx: &mut dyn Ctx, func: &str, url: &str) -> Option<Vec<u8>> {
+    use std::io::{Read, Write};
+    let rest = url.get(7..)?;
+    let (hostport, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let has_port = match hostport.strip_prefix('[') {
+        Some(v6) => v6.contains("]:"),
+        None => hostport.contains(':'),
+    };
+    let addr = if has_port { hostport.to_string() } else { format!("{hostport}:80") };
+    let timeout = std::time::Duration::from_secs(60);
+    let connected = std::net::ToSocketAddrs::to_socket_addrs(&addr).and_then(|addrs| {
+        let mut last = std::io::Error::from(std::io::ErrorKind::NotFound);
+        for a in addrs {
+            match std::net::TcpStream::connect_timeout(&a, timeout) {
+                Ok(s) => return Ok(s),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    });
+    let mut sock = match connected {
+        Ok(s) => s,
+        Err(e) => {
+            ctx.warn(&format!("{func}({url}): Failed to open stream: {}", os_error(&e)));
+            return None;
+        }
+    };
+    let _ = sock.set_read_timeout(Some(timeout));
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n");
+    let mut raw = Vec::new();
+    if sock.write_all(request.as_bytes()).is_err() || sock.read_to_end(&mut raw).is_err() && raw.is_empty() {
+        ctx.warn(&format!("{func}({url}): Failed to open stream: Connection reset by peer"));
+        return None;
+    }
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").map_or(raw.len(), |i| i + 4);
+    let head = String::from_utf8_lossy(&raw[..split.saturating_sub(4).min(raw.len())]).into_owned();
+    let mut body = raw[split.min(raw.len())..].to_vec();
+    let lines: Vec<&str> = head.split("\r\n").collect();
+    let status = lines.first().copied().unwrap_or("");
+    let code: i64 = status.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+    if lines.iter().any(|l| l.to_ascii_lowercase().replace(' ', "") == "transfer-encoding:chunked") {
+        let mut out = Vec::new();
+        let mut rest = body.as_slice();
+        while let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") {
+            let size = usize::from_str_radix(String::from_utf8_lossy(&rest[..eol]).split(';').next().unwrap_or("0").trim(), 16).unwrap_or(0);
+            if size == 0 || rest.len() < eol + 2 + size {
+                break;
+            }
+            out.extend_from_slice(&rest[eol + 2..eol + 2 + size]);
+            rest = rest.get(eol + 2 + size + 2..).unwrap_or(&[]);
+        }
+        body = out;
+    }
+    let header_lines: Vec<Value> = lines.iter().map(|l| Value::Str(PhpStr::from(*l))).collect();
+    ctx.set_local(b"http_response_header", Value::Array(Rc::new(PhpArray::from_list(header_lines))));
+    if code >= 400 {
+        ctx.warn(&format!("{func}({url}): Failed to open stream: HTTP request failed! {status}\n"));
+        return None;
+    }
+    Some(body)
 }

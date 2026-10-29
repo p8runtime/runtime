@@ -66,9 +66,11 @@ impl Context<'_> {
         if kind.once() && self.included.contains(&real) {
             return Ok(None);
         }
-        self.included_order.push(real.to_string_lossy().into_owned());
+        // The file is known by its resolved path (__FILE__, __DIR__), as PHP
+        // opens it, not as the include named it.
+        let file = real.to_string_lossy().into_owned();
+        self.included_order.push(file.clone());
         self.included.insert(real);
-        let file = path.to_string_lossy().into_owned();
         let loader = match &self.loader {
             Some(l) => Rc::clone(l),
             None => return Err(self.throw("Error", format!("Failed opening required '{shown}' (no compiler)"))),
