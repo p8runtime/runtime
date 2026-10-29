@@ -9,8 +9,8 @@
 # (its tarball, sha1-checked: the tests want built files), and the test
 # dependencies (suite/composer.lock; WordPress ships none).
 #
-# p8 has no gd yet: for p8 alone the bootstrap's required-extension check
-# is skipped (P8_SKIP_REQUIRED_EXTENSIONS), so its image tests fail instead.
+# Both runs use the tests exactly as pinned: any local change to tracked
+# files is undone first.
 #
 # Usage: crates/php-cli/tests/wordpress/suite.sh [path to php2]
 # Needs docker. Takes ~10 minutes under PHP, longer under p8.
@@ -55,10 +55,7 @@ fi
 sed -e "s#dirname( __FILE__ ) . '/src/'#dirname( __FILE__ ) . '/build/'#" -e "s/'youremptytestdbnamehere'/getenv('WPDBNAME')/" \
     -e "s/'yourusernamehere'/'root'/" -e "s/'yourpasswordhere'/'p8root'/" -e "s/'localhost'/getenv('WPDBHOST')/" \
     -e "s#define( 'WP_PHP_BINARY', 'php' );#define( 'WP_PHP_BINARY', getenv('WPPHP') ?: 'php' );#" wp-tests-config-sample.php > wp-tests-config.php
-bootstrap=tests/phpunit/includes/bootstrap.php
-grep -q P8_SKIP_REQUIRED_EXTENSIONS "$bootstrap" ||
-    sed -i '' "s/^if ( defined( 'WP_RUN_CORE_TESTS' ) \&\& WP_RUN_CORE_TESTS ) {$/if ( defined( 'WP_RUN_CORE_TESTS' ) \&\& WP_RUN_CORE_TESTS \&\& ! getenv( 'P8_SKIP_REQUIRED_EXTENSIONS' ) ) {/" "$bootstrap"
-grep -q P8_SKIP_REQUIRED_EXTENSIONS "$bootstrap" || { echo "$bootstrap: the required-extension check moved"; exit 1; }
+git checkout -q -- .
 
 docker network inspect p8net >/dev/null 2>&1 || docker network create p8net >/dev/null
 if ! docker ps --format '{{.Names}}' | grep -qx p8-mariadb; then
@@ -84,7 +81,7 @@ tail -3 "$work/php.txt"
 
 # p8.
 p8_status=0
-P8_SKIP_REQUIRED_EXTENSIONS=1 WPDBHOST=127.0.0.1:3307 WPDBNAME=wptests_p8 WPPHP="$php2" \
+WPDBHOST=127.0.0.1:3307 WPDBNAME=wptests_p8 WPPHP="$php2" \
     "$php2" -d memory_limit=1G vendor/bin/phpunit --log-junit "$work/p8.xml" --log-teamcity "$work/p8.tc" > "$work/p8.txt" 2>&1 || p8_status=$?
 tail -3 "$work/p8.txt"
 
