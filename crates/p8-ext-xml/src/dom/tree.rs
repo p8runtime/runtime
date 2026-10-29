@@ -53,6 +53,9 @@ pub struct Node {
     /// Doctype: public and system ids, internal subset text.
     pub public_id: Option<Vec<u8>>,
     pub system_id: Option<Vec<u8>>,
+    /// An attribute the HTML parser read without a value (<a href>): it has
+    /// no text child, so saveHTML writes the bare name.
+    pub no_value: bool,
 }
 
 impl Node {
@@ -70,6 +73,7 @@ impl Node {
             line: 0,
             public_id: None,
             system_id: None,
+            no_value: false,
         }
     }
 
@@ -127,11 +131,13 @@ pub struct Doc {
     /// No DOMDocument: the home of a node made with `new` (DOMElement,
     /// DOMText, ...) until it is inserted into a document.
     pub orphan: bool,
+    /// An HTML document (libxml2's XML_HTML_DOCUMENT_NODE), made by loadHTML.
+    pub html: bool,
 }
 
 impl Doc {
     pub fn new(class: Vec<u8>) -> Doc {
-        Doc { nodes: vec![Node::new(Kind::Document, Vec::new())], objects: Vec::new(), settings: Settings::default(), class, orphan: false }
+        Doc { nodes: vec![Node::new(Kind::Document, Vec::new())], objects: Vec::new(), settings: Settings::default(), class, orphan: false, html: false }
     }
 
     pub fn add(&mut self, node: Node) -> Id {

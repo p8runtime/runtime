@@ -1,0 +1,105 @@
+<html><body>
+<div data-x="q&quot;r's &amp; &lt;t&gt;">a &amp; b &lt;c&gt; &eacute;</div>
+<p>para</p>
+<p></p>
+<br><script>if (a<b && c) {}</script><a href="http://x.y/a%20b?c=d&amp;e=%C3%A9#f%20" name="a%20b">link</a><!-- c -->cdata <x><?php echo 1;>&nbsp;t&#13;
+x	yz<x:el xmlns:x="urn:x" xmlns:y="urn:y" y:at="v"></x:el><INPUT CHECKED><option selected></option>
+<textarea></textarea><span></span>
+</body></html>
+|
+<html><body><div data-x="q&quot;r's &amp; &lt;t&gt;">a &amp; b &lt;c&gt; &eacute;</div><p>para</p><p></p><br><script>if (a<b && c) {}</script><a href="http://x.y/a%20b?c=d&amp;e=%C3%A9#f%20" name="a%20b">link</a><!-- c -->cdata <x><?php echo 1;>&nbsp;t&#13;
+x	yz<x:el xmlns:x="urn:x" xmlns:y="urn:y" y:at="v"></x:el><INPUT CHECKED><option selected></option><textarea></textarea><span></span></body></html>
+|
+<body><div data-x="q&quot;r's &amp; &lt;t&gt;">a &amp; b &lt;c&gt; é</div><p>para</p><p></p><br><script>if (a<b && c) {}</script><a href="http://x.y/a%20b?c=d&amp;e=%C3%A9#f%20" name="a%20b">link</a><!-- c -->cdata <x><?php echo 1;>&nbsp;t&#13;
+x	yz<x:el xmlns:x="urn:x" xmlns:y="urn:y" y:at="v"></x:el><INPUT CHECKED><option selected></option><textarea></textarea><span></span></body>|
+ href="http://x.y/a%20b?c=d&amp;e=%C3%A9#f%20"|
+<html><body><div data-x="q&quot;r's &amp; &lt;t&gt;">a &amp; b &lt;c&gt; &eacute;</div><p>para</p><p></p><br><script>if (a<b && c) {}</script><a href="http://x.y/a%20b?c=d&amp;e=%C3%A9#f%20" name="a%20b">link</a><!-- c -->cdata <x><?php echo 1;>&nbsp;t&#13;
+x	yz<x:el xmlns:x="urn:x" xmlns:y="urn:y" y:at="v"></x:el><INPUT CHECKED><option selected></option><textarea></textarea><span></span></body></html>
+|
+<i>x</i><u>y</u>|
+Wrong Document Error
+
+Warning: DOMDocument::loadHTML(): htmlParseEntityRef: expecting ';' in Entity, line: 1 in %s on line 47
+<!DOCTYPE html>
+<html><head><title>T</title><meta charset="utf-8"></head><body><form action="a%20b.php?x=1&amp;y=2" method="post"><input type="checkbox" checked disabled name="a b"><select><option selected value="1">One</option><option value="2">Two</option></select><textarea>t</textarea></form><a href="mailto:me@x.y?subject=a%20b">m</a><a href="javascript:void(0)">j</a><img src="x%20y.png" alt="&eacute;"><p>one<br>two</p><pre>p
+ re</pre><ul><li>a</li><li>b</li></ul><table><tr><td>c</td></tr></table></body></html>
+<!DOCTYPE html>
+<html>
+<head>
+<title>T</title>
+<meta charset="utf-8">
+</head>
+<body>
+<form action="a%20b.php?x=1&amp;y=2" method="post">
+<input type="checkbox" checked disabled name="a b"><select><option selected value="1">One</option>
+<option value="2">Two</option></select><textarea>t</textarea>
+</form>
+<a href="mailto:me@x.y?subject=a%20b">m</a><a href="javascript:void(0)">j</a><img src="x%20y.png" alt="&eacute;"><p>one<br>two</p>
+<pre>p
+ re</pre>
+<ul>
+<li>a</li>
+<li>b</li>
+</ul>
+<table><tr><td>c</td></tr></table>
+</body>
+</html>
+<ul>
+<li>a</li>
+<li>b</li>
+</ul>
+|
+<p>one<br>two</p>
+|
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>T</title>
+    <meta charset="utf-8"/>
+  </head>
+  <body>
+    <form action="a b.php?x=1&amp;y=2" method="post">
+      <input type="checkbox" checked="checked" disabled="disabled" name="a b"/>
+      <select>
+        <option selected="selected" value="1">One</option>
+        <option value="2">Two</option>
+      </select>
+      <textarea>t</textarea>
+    </form>
+    <a href="mailto:me@x.y?subject=a b">m</a>
+    <a href="javascript:void(0)">j</a>
+    <img src="  x y.png" alt="é"/>
+    <p>one<br/>two</p>
+    <pre>p
+ re</pre>
+    <ul>
+      <li>a</li>
+      <li>b</li>
+    </ul>
+    <table>
+      <tr>
+        <td>c</td>
+      </tr>
+    </table>
+  </body>
+</html>
+<r xmlns:p="urn:p"><p:a b="1">&eacute;</p:a><br><e></e><p>t</p></r>
+|<r xmlns:p="urn:p"><p:a b="1">é</p:a><br><e></e><p>t</p></r>
+3c21444f43545950452068746d6c205055424c494320222d2f2f5733432f2f4454442048544d4c20342e30205472616e736974696f6e616c2f2f454e222022687474703a2f2f7777772e77332e6f72672f54522f5245432d68746d6c34302f6c6f6f73652e647464223e0a3c68746d6c3e3c686561643e3c2f686561643e3c626f64793e3c703e636166264174696c64653b26636f70793b202661636972633b26233133303b266e6f743b2026616d703b20266c743b20266561637574653b20266575726f3b20264174696c64653b26636f70793b3c2f703e3c2f626f64793e3c2f68746d6c3e0a
+3c703e636166c383c2a920c3a2c282c2ac2026616d703b20266c743b20c3a920e282ac20c383c2a93c2f703e
+3c21444f43545950452068746d6c205055424c494320222d2f2f5733432f2f4454442048544d4c20342e30205472616e736974696f6e616c2f2f454e222022687474703a2f2f7777772e77332e6f72672f54522f5245432d68746d6c34302f6c6f6f73652e647464223e0a3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d7574662d38223e3c2f686561643e3c626f64793e3c703e636166c3a920e282ac2026616d703b20266c743b20c3a920e282ac20c3a93c2f703e3c2f626f64793e3c2f68746d6c3e0a
+3c703e636166c3a920e282ac2026616d703b20266c743b20c3a920e282ac20c3a93c2f703e
+3c21444f43545950452068746d6c205055424c494320222d2f2f5733432f2f4454442048544d4c20342e30205472616e736974696f6e616c2f2f454e222022687474703a2f2f7777772e77332e6f72672f54522f5245432d68746d6c34302f6c6f6f73652e647464223e0a3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d49534f2d383835392d31223e3c2f686561643e3c626f64793e3c703e636166c3a920e282ac2026616d703b20266c743b20e9202623383336343b20c3a93c2f703e3c2f626f64793e3c2f68746d6c3e0a
+3c703e636166c383c2a920c3a2c282c2ac2026616d703b20266c743b20c3a920e282ac20c383c2a93c2f703e
+3c21444f43545950452068746d6c205055424c494320222d2f2f5733432f2f4454442048544d4c20342e30205472616e736974696f6e616c2f2f454e222022687474703a2f2f7777772e77332e6f72672f54522f5245432d68746d6c34302f6c6f6f73652e647464223e0a3c68746d6c3e3c686561643e3c6d65746120636861727365743d2269736f2d383835392d31223e3c2f686561643e3c626f64793e3c703e636166264174696c64653b26636f70793b202661636972633b26233133303b266e6f743b2026616d703b20266c743b20266561637574653b20266575726f3b20264174696c64653b26636f70793b3c2f703e3c2f626f64793e3c2f68746d6c3e0a
+3c703e636166c383c2a920c3a2c282c2ac2026616d703b20266c743b20c3a920e282ac20c383c2a93c2f703e
+int(262)
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><title>x</title></head><body>&Atilde;&copy;&acirc;&#130;&not;</body></html>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><title>x</title></head><body>Ã©â¬</body></html>
+int(224)
+3c21444f43545950452068746d6c205055424c494320222d2f2f5733432f2f4454442048544d4c20342e30205472616e736974696f6e616c2f2f454e222022687474703a2f2f7777772e77332e6f72672f54522f5245432d68746d6c34302f6c6f6f73652e647464223e0a3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d49534f2d383835392d31223e3c2f686561643e3c626f64793ec3a9e282ac3c2f626f64793e3c2f68746d6c3e0a
+int(0)
+DOMDocument::saveHTMLFile(): Argument #1 ($filename) must not be empty
