@@ -1231,8 +1231,8 @@ pub struct Context<'i> {
     lambdas: HashMap<usize, Rc<Closure>>,
     /// Builtins running that may call back into PHP, innermost last.
     natives: Vec<NativeCall>,
-    /// `static` variables, by function and index.
-    statics: HashMap<(usize, u16), Rc<RefCell<Value>>>,
+    /// `static` variables, by function (its code's address) and index.
+    statics: HashMap<usize, HashMap<u16, Rc<RefCell<Value>>>>,
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
@@ -3752,6 +3752,9 @@ impl Context<'_> {
             caller.pc = pc as u32;
         }
         let at = base + func.nregs as usize;
+        // A file's code has new `static` variables each time it runs (its
+        // compiled code may be the last run's, kept by the loader).
+        self.statics.remove(&(Arc::as_ptr(main) as usize));
         self.frames.push(&Closure::new(Arc::clone(main)), at, 0, (base + dst as usize) as u32);
         enter(&mut self.frames, regs);
         for (i, cell) in cells.into_iter().enumerate() {

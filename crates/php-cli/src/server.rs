@@ -493,14 +493,16 @@ pub fn run(config: Config) -> i32 {
     let (tx, rx) = mpsc::channel::<Incoming>();
     std::thread::spawn(move || accept_loop(listener, tx));
 
-    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::SERVER, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL]);
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::SERVER, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL])
+        // Each file is compiled once, and again only when its source changes.
+        .keep_compiled();
     let mut isolate = platform.new_isolate();
     let mut ini: Vec<(String, String)> = SERVER_INI.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
     ini.extend(config.ini.iter().cloned());
     let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u32>().ok()).unwrap_or(0);
     LIMIT_SECONDS.store(limit, Ordering::Relaxed);
     let watchdog = Watchdog::start(isolate.interrupt_handle());
-    let mut server = Server { platform: &platform, host, port, docroot, router: config.router.clone(), ini, cache: Default::default(), watchdog, limit: u64::from(limit) };
+    let mut server = Server { platform: &platform, host, port, docroot, router: config.router.clone(), ini, watchdog, limit: u64::from(limit) };
     for incoming in rx {
         server.handle(&mut isolate, incoming);
     }
@@ -567,12 +569,6 @@ fn close(peer: &str) {
     log(LOG_MESSAGE, &format!("{peer} Closing"));
 }
 
-/// A compiled script and what it was compiled from.
-struct Cached {
-    modified: Option<SystemTime>,
-    len: u64,
-    script: Rc<p8::Script>,
-}
 
 struct Server<'p> {
     platform: &'p p8::Platform,
@@ -581,9 +577,6 @@ struct Server<'p> {
     docroot: String,
     router: Option<String>,
     ini: Vec<(String, String)>,
-    /// Compiled scripts by path: used while the file is unchanged (its
-    /// modification time and size).
-    cache: std::collections::HashMap<PathBuf, Cached>,
     watchdog: Watchdog,
     limit: u64,
 }
@@ -604,21 +597,12 @@ enum CompileFailure {
 }
 
 impl Server<'_> {
-    /// The compiled form of `path`, from the cache when the file is as it was.
+    /// The compiled form of `path` (the platform keeps what it compiled
+    /// while the source is the same).
     fn compile(&mut self, path: &Path) -> Result<Rc<p8::Script>, CompileFailure> {
-        let meta = std::fs::metadata(path).map_err(|_| CompileFailure::Read)?;
-        let modified = meta.modified().ok();
-        if let Some(c) = self.cache.get(path)
-            && c.modified == modified
-            && c.len == meta.len()
-        {
-            return Ok(Rc::clone(&c.script));
-        }
         let source = std::fs::read(path).map_err(|_| CompileFailure::Read)?;
         let file = std::fs::canonicalize(path).map_or_else(|_| path.to_string_lossy().into_owned(), |p| p.to_string_lossy().into_owned());
-        let script = Rc::new(self.platform.compile(&source, &file).map_err(CompileFailure::Source)?);
-        self.cache.insert(path.to_path_buf(), Cached { modified, len: meta.len(), script: Rc::clone(&script) });
-        Ok(script)
+        Ok(Rc::new(self.platform.compile(&source, &file).map_err(CompileFailure::Source)?))
     }
 
     /// $_SERVER as sapi_cli_server_register_variables() builds it.

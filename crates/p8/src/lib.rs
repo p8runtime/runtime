@@ -28,9 +28,10 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Ctx, Registry};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 mod request;
 
@@ -51,24 +52,34 @@ pub mod extensions {
     pub use p8_ext_standard::server::EXTENSION as SERVER;
 }
 
-/// Process-wide state shared by every isolate: the registered extensions.
+/// Process-wide state shared by every isolate: the registered extensions,
+/// and the compiled files when the host keeps them.
 pub struct Platform {
-    registry: Arc<Registry>,
+    compiler: Arc<Compiler>,
 }
 
 impl Platform {
     pub fn new(extensions: &[Extension]) -> Platform {
-        Platform { registry: Arc::new(Registry::new(extensions)) }
+        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None }) }
+    }
+
+    /// Keep every file compiled (the script and what it includes), for
+    /// every isolate, and compile a file again only when its source has
+    /// changed: what opcache is to PHP. Nothing a script can see changes;
+    /// the cost is memory: each kept file's source and code, never let go.
+    pub fn keep_compiled(self) -> Platform {
+        let registry = Arc::clone(&self.compiler.registry);
+        Platform { compiler: Arc::new(Compiler { registry, cache: Some(Mutex::new(HashMap::new())) }) }
     }
 
     /// An engine for the calling thread.
     pub fn new_isolate(&self) -> Isolate {
-        Isolate { inner: p8_interp::Isolate::new(Arc::clone(&self.registry)), registry: Arc::clone(&self.registry) }
+        Isolate { inner: p8_interp::Isolate::new(Arc::clone(&self.compiler.registry)), compiler: Arc::clone(&self.compiler) }
     }
 
     /// Compile a file's source.
     pub fn compile(&self, source: &[u8], file: &str) -> Result<Script, Error> {
-        compile(&self.registry, source, file, false).map(|program| Script { program })
+        self.compiler.file(source, file).map(|program| Script { program })
     }
 
     /// A script's bytecode, as text (for `--dump`).
@@ -77,12 +88,36 @@ impl Platform {
     }
 }
 
-/// What compiles the files a script includes.
-struct Compile(Arc<Registry>);
+/// What compiles a script and the files it includes.
+struct Compiler {
+    registry: Arc<Registry>,
+    cache: Option<Mutex<Kept>>,
+}
 
-impl p8_interp::Loader for Compile {
+/// The compiled files by path, each with the source it was compiled from
+/// (a file is used again only while its source is the same).
+type Kept = HashMap<String, (Vec<u8>, Arc<p8_bytecode::Program>)>;
+
+impl Compiler {
+    fn file(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
+        let Some(cache) = &self.cache else { return compile(&self.registry, source, file, false) };
+        if let Some((kept, program)) = cache.lock().expect("code cache").get(file)
+            && kept.as_slice() == source
+        {
+            return Ok(Arc::clone(program));
+        }
+        let program = compile(&self.registry, source, file, false)?;
+        cache.lock().expect("code cache").insert(file.to_string(), (source.to_vec(), Arc::clone(&program)));
+        Ok(program)
+    }
+}
+
+/// What compiles the files a context's script includes.
+struct Load(Arc<Compiler>);
+
+impl p8_interp::Loader for Load {
     fn load(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, p8_interp::LoadError> {
-        match compile(&self.0, source, file, false) {
+        match self.0.file(source, file) {
             Ok(program) => Ok(program),
             Err(e) => Err(p8_interp::LoadError { parse: e.kind == ErrorKind::Parse, message: e.message, line: e.line }),
         }
@@ -90,7 +125,7 @@ impl p8_interp::Loader for Compile {
 
     fn load_eval(&self, code: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, p8_interp::LoadError> {
         let source = [b"<?php ".as_slice(), code].concat();
-        match compile(&self.0, &source, file, true) {
+        match compile(&self.0.registry, &source, file, true) {
             Ok(program) => Ok(program),
             Err(e) => Err(p8_interp::LoadError { parse: e.kind == ErrorKind::Parse, message: e.message, line: e.line }),
         }
@@ -157,7 +192,7 @@ pub enum ErrorKind {
 /// One engine on one thread; it runs one context (request) at a time.
 pub struct Isolate {
     inner: p8_interp::Isolate,
-    registry: Arc<Registry>,
+    compiler: Arc<Compiler>,
 }
 
 impl Isolate {
@@ -170,9 +205,8 @@ impl Isolate {
     /// Start a request whose output goes to `host`. The context borrows the
     /// isolate until it is dropped, which ends the request.
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
-        let loader = std::rc::Rc::new(Compile(Arc::clone(&self.registry)));
         let mut inner = self.inner.new_context(host);
-        inner.set_loader(loader);
+        inner.set_loader(Rc::new(Load(Arc::clone(&self.compiler))));
         Context { inner, warnings: Vec::new(), uploads: Vec::new() }
     }
 }
