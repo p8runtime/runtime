@@ -1,0 +1,10 @@
+bool(true)
+bool(false)
+bool(false)
+declared InIf
+declared InIfColon
+bool(true)
+string(1) "m"
+bool(false)
+string(10) "InFunction"
+bool(true)

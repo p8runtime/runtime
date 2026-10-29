@@ -837,7 +837,14 @@ pub struct Compiler<'src> {
     /// The top-level `function` statements (by address): only these are
     /// declared before the file runs; any other is declared when reached.
     top_functions: HashSet<usize>,
-    /// Every class the file declares, in order.
+    /// The top-level class, interface, trait and enum statements: only
+    /// these can be bound before the file runs (a class in an `if` is
+    /// declared when reached).
+    top_classes: HashSet<usize>,
+    /// The class statement being compiled is one of those.
+    declaring_top: bool,
+    /// The classes the file declares at its top level, in order (bound
+    /// early when their parents are known).
     classes: Vec<Arc<ClassDef>>,
     /// The class whose members are being compiled (for self and parent).
     scope: Option<ClassScope>,
@@ -890,6 +897,8 @@ impl<'src> Compiler<'src> {
             functions: Vec::new(),
             by_ref: HashMap::new(),
             top_functions: HashSet::new(),
+            top_classes: HashSet::new(),
+            declaring_top: false,
             classes: Vec::new(),
             scope: None,
             method: None,
@@ -976,6 +985,9 @@ impl<'src> Compiler<'src> {
         // Each top-level function's by-reference parameters, by its full name.
         let mut ns: Vec<u8> = Vec::new();
         let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
+            if matches!(stmt, Stmt::Class { .. } | Stmt::Interface { .. } | Stmt::Trait { .. } | Stmt::Enum { .. }) {
+                c.top_classes.insert(stmt as *const Stmt as usize);
+            }
             if let Stmt::Function { name, params, .. } = stmt {
                 c.top_functions.insert(stmt as *const Stmt as usize);
                 let modes = params.iter().map(|p| p.by_ref).collect();
@@ -1335,8 +1347,10 @@ impl<'src> Compiler<'src> {
             Stmt::Use { uses, kind, .. } => {
                 use p8_syntax::ast::UseKind;
                 for u in *uses {
-                    let full = self.text(u.name.span);
-                    let full = full.strip_prefix(b"\\").unwrap_or(full).to_vec();
+                    // From the name's tokens, not its span: a group's item
+                    // (`use A\{B, C}`) spans the braces between them.
+                    let full: Vec<u8> = u.name.parts.iter().flat_map(|t| self.text(t.span).iter().copied()).collect();
+                    let full = full.strip_prefix(b"\\").unwrap_or(&full).to_vec();
                     let alias = match u.alias {
                         Some(a) => self.text(a.span).to_vec(),
                         None => full.rsplit(|&c| c == b'\\').next().unwrap_or(&full).to_vec(),
@@ -1467,6 +1481,12 @@ impl<'src> Compiler<'src> {
                         other => return Err(self.unsupported(other.span(), "this unset")),
                     }
                 }
+            }
+            Stmt::Class { .. } | Stmt::Interface { .. } | Stmt::Trait { .. } | Stmt::Enum { .. } if !self.declaring_top && self.top_classes.contains(&(stmt as *const Stmt as usize)) => {
+                self.declaring_top = true;
+                let r = self.stmt(f, stmt);
+                self.declaring_top = false;
+                r?;
             }
             Stmt::Class { attributes, modifiers, name, extends, implements, members, .. } => {
                 let (display, line) = self.declared_name(name.span);
@@ -2064,6 +2084,8 @@ impl<'src> Compiler<'src> {
         class_kind: u32,
     ) -> Result<Arc<ClassDef>> {
         use p8_syntax::ast::{ClassMember, TraitAdaptation};
+        // Taken now: a class its methods declare is not a top-level one.
+        let top = std::mem::take(&mut self.declaring_top);
         let interface = class_kind == CLASS_INTERFACE;
         let name_of = |c: &Self, n: &p8_syntax::ast::Name| Text::from(c.class_name(c.text(n.span)).as_slice());
         let (parent, interfaces) = if interface {
@@ -2322,7 +2344,9 @@ impl<'src> Compiler<'src> {
         self.scope = saved;
         let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line };
         let def = Arc::new(def);
-        self.classes.push(Arc::clone(&def));
+        if top {
+            self.classes.push(Arc::clone(&def));
+        }
         f.decls.push(Arc::clone(&def));
         f.emit(Instr::DeclareClass { class: (f.decls.len() - 1) as u16 });
         Ok(def)
