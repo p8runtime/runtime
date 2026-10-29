@@ -151,7 +151,8 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
 
 pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
     let mut c = Classes::new();
-    declare(&mut c, "stdClass", 0, None, &[], Vec::new(), &[]);
+    // #[AllowDynamicProperties], which its subclasses inherit.
+    declare(&mut c, "stdClass", p8_runtime::object::CLASS_ALLOW_DYNAMIC, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
     // The builtin attribute classes without state (Attribute and Deprecated: reflection.rs).
     for name in ["ReturnTypeWillChange", "AllowDynamicProperties", "SensitiveParameter", "Override"] {

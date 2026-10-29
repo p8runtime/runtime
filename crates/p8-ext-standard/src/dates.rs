@@ -825,14 +825,17 @@ fn parse(text: &str) -> Option<Parsed> {
         let nums: Vec<&str> = date_part.trim_start_matches('+').split(['-', '/', '.']).collect();
         if nums.len() == 3 && nums.iter().all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit())) {
             let v: Vec<i64> = nums.iter().filter_map(|x| x.parse().ok()).collect();
-            let (y, m, d) = if nums[0].len() == 4 {
+            // With dashes, a year that is not four digits comes first
+            // (timelib's iso8601date2, yy-mm-dd); dd-mm-yyyy otherwise.
+            let year_first = nums[0].len() == 4 || (date_part.contains('-') && nums[2].len() != 4);
+            let (y, m, d) = if year_first {
                 (v[0], v[1], v[2])
             } else if date_part.contains('/') {
                 (v[2], v[0], v[1])
             } else {
                 (v[2], v[1], v[0])
             };
-            let y = if nums[if nums[0].len() == 4 { 0 } else { 2 }].len() <= 2 { if y < 70 { y + 2000 } else { y + 1900 } } else { y };
+            let y = if nums[if year_first { 0 } else { 2 }].len() <= 2 { if y < 70 { y + 2000 } else { y + 1900 } } else { y };
             if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
                 return None;
             }

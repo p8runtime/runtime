@@ -2849,7 +2849,7 @@ impl<'src> Compiler<'src> {
                 return Err(self.unsupported(arg.span, "spread or named arguments"));
             }
             match arg.value {
-                Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
+                Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && !matches!(self.text(*name), b"$this" | b"$GLOBALS") => {
                     let var = f.cv(&self.text(*name)[1..]);
                     f.emit(send(n as u8, *r, var));
                 }
@@ -2929,6 +2929,8 @@ impl<'src> Compiler<'src> {
             cur = array;
         }
         match cur {
+            // `$GLOBALS` as a whole is a read-only copy, never a reference.
+            Expr::Variable { name, .. } if std::ptr::eq(cur, e) && self.text(*name) == b"$GLOBALS" => false,
             Expr::Variable { name, .. } => self.text(*name).starts_with(b"$") && self.text(*name) != b"$this",
             Expr::PropertyFetch { .. } => true,
             Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } => !std::ptr::eq(cur, e) && self.text(*name).starts_with(b"$"),
