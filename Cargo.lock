@@ -2855,6 +2855,7 @@ dependencies = [
  "p8-bytecode",
  "p8-compiler",
  "p8-ext-curl",
+ "p8-ext-mbstring",
  "p8-ext-mysqli",
  "p8-ext-pcre",
  "p8-ext-standard",
@@ -2888,6 +2889,14 @@ version = "0.1.0"
 dependencies = [
  "p8-runtime",
  "rsurl",
+]
+
+[[package]]
+name = "p8-ext-mbstring"
+version = "0.1.0"
+dependencies = [
+ "p8-runtime",
+ "p8-stubs",
 ]
 
 [[package]]

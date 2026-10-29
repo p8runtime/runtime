@@ -1,0 +1,10 @@
+[package]
+name = "p8-ext-mbstring"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's mbstring extension: multibyte strings over UTF-8, the Unicode and single-byte encodings, with php-src's own case and width tables"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+p8-stubs = { path = "../p8-stubs" }

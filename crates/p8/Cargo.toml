@@ -15,6 +15,7 @@ p8-interp = { path = "../p8-interp" }
 p8-runtime = { path = "../p8-runtime" }
 p8-syntax = { path = "../p8-syntax" }
 p8-ext-tokenizer = { path = "../p8-ext-tokenizer" }
+p8-ext-mbstring = { path = "../p8-ext-mbstring" }
 p8-ext-pcre = { path = "../p8-ext-pcre" }
 p8-ext-mysqli = { path = "../p8-ext-mysqli" }
 p8-ext-curl = { path = "../p8-ext-curl" }

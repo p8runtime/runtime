@@ -1,0 +1,107 @@
+string(30) "613f28623f633f643f3f3f653f3f66"
+bool(false)
+int(15)
+string(15) "a?(b?c?d???e??f"
+UTF-16           004100e920ac65e5d83dde000416 | 41c3a9e282ace697a5f09f9880d096
+UTF-16BE         004100e920ac65e5d83dde000416 | 41c3a9e282ace697a5f09f9880d096
+UTF-16LE         4100e900ac20e5653dd800de1604 | 41c3a9e282ace697a5f09f9880d096
+UTF-32           00000041000000e9000020ac000065e50001f60000000416 | 41c3a9e282ace697a5f09f9880d096
+UTF-32LE         41000000e9000000ac200000e565000000f6010016040000 | 41c3a9e282ace697a5f09f9880d096
+UCS-2            004100e920ac65e5003f0416 | 41c3a9e282ace697a53fd096
+UCS-2LE          4100e900ac20e5653f001604 | 41c3a9e282ace697a53fd096
+UCS-4            00000041000000e9000020ac000065e50001f60000000416 | 41c3a9e282ace697a5f09f9880d096
+ASCII            413f3f3f3f3f | 413f3f3f3f3f
+ISO-8859-2       41e93f3f3f3f | 41c3a93f3f3f3f
+ISO-8859-5       413f3f3f3fb6 | 413f3f3f3fd096
+ISO-8859-7       413fa43f3f3f | 413fe282ac3f3f3f
+Windows-1251     413f883f3fc6 | 413fe282ac3f3fd096
+Windows-1252     41e9803f3f3f | 41c3a9e282ac3f3f3f
+Windows-1254     41e9803f3f3f | 41c3a9e282ac3f3f3f
+KOI8-R           413f3f3f3ff6 | 413f3f3f3fd096
+CP850            41823f3f3f3f | 41c3a93f3f3f3f
+CP866            413f3f3f3f86 | 413f3f3f3fd096
+UTF-7            412b414f6b677247586c32443365414151572d | 41c3a9e282ace697a5f09f9880d096
+UTF7-IMAP        4126414f6b677247586c32443365414151572d | 41c3a9e282ace697a5f09f9880d096
+HTML-ENTITIES    41266561637574653b266575726f3b262332363038353b26233132383531323b2623313034363b | 41c3a9e282ace697a5f09f9880d096
+BASE64           51634f70346f4b733570656c384a2b59674e4357 | 41c3a9e282ace697a5f09f9880d096
+Quoted-Printable 413d43333d41393d45323d38323d41433d45363d39373d41353d46303d39463d39383d38303d44303d3936 | 41c3a9e282ace697a5f09f9880d096
+UUENCODE         626567696e20303634342066696c656e616d650a26303e464c593060360a | 41e9ace50016
+7bit             413f3f3f3f3f | 413f3f3f3f3f
+8bit             41e93f3f3f3f | 41c3a93f3f3f3f
+UTF-16BE      f09f98803f3f
+UTF-16LE      3f
+UTF-32BE      3f
+UCS-2BE       3f
+ASCII         3f
+Windows-1252  c281e282ac
+ISO-8859-3    3f
+string(12) "YWJjIGRlZg=="
+string(7) "abc def"
+string(10) "caf=E9 =3D"
+bool(true)
+string(26) "<p>&eacute;&amp;&euro;</p>"
+string(14) "ééé&bogus;&"
+string(19) "Ǆ SS FI ʼN Ϊ́"
+string(6) "i̇ σ"
+string(8) "ǅ ǅ Ss"
+string(9) "ǅ ß ﬁ"
+string(6) "σ i̇"
+string(1) "�"
+string(1) "�"
+int(11)
+string(9) "日本…"
+string(3) "def"
+string(4) "cdef"
+array(2) {
+  [0]=>
+  string(6) "日本"
+  [1]=>
+  string(3) "語"
+}
+string(6) "本語"
+bool(false)
+string(4) "6200"
+string(5) "UTF-8"
+string(10) "ISO-8859-1"
+bool(false)
+string(5) "ASCII"
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+int(2)
+string(1) "�"
+string(2) "c9"
+string(10) "ISO-8859-1"
+string(8) "é日日"
+bool(false)
+bool(true)
+string(10) "ISO-8859-1"
+string(10) "ISO-8859-1"
+string(2) "é"
+array(1) {
+  ["k"]=>
+  string(2) "é"
+}
+array(2) {
+  ["a"]=>
+  string(1) "1"
+  ["b"]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    string(2) "é"
+  }
+}
+string(12) "3f28623f633f"
+string(10) "3f653f3f66"
+int(9)
+int(15)
+int(10)
+int(15)
+string(6) "e697a5"
+int(1)
+int(2)
+int(1)
