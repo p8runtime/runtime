@@ -1,0 +1,25 @@
+n=1 gif total=1 png total=1
+n=2 gif total=2 png total=2
+n=3 gif total=3 png total=3
+n=4 gif total=4 png total=4
+n=5 gif total=5 png total=5
+n=8 gif total=8 png total=8
+n=9 gif total=9 png total=9
+n=17 gif total=17 png total=17
+n=200 gif total=200 png total=200
+n=256 gif total=256 png total=256
+transparent=2 -> 0 [30,40,20,10] px 3201
+alphas -> -1 [[10,100],[30,50],[40,0],[20,0]]
+tc+transp gif -> transp=1 total=2 px 1011
+tc+transp png -> tc=true transp=1056816 102030
+tc alpha127 gif -> transp=-1 total=1
+bool(true)
+tc2pal total=8 tc=false
+imagetruecolortopalette(): Argument #3 ($num_colors) must be greater than 0 and less than 2147483647
+bmp pal: tc=false total=2 1
+bmp pal nc: tc=false total=2
+loaded rgba png: 40ff0000
+blend over: 7e0080
+resave no savealpha call: ff0000
+jpeg alpha: red kept alpha=0
+done

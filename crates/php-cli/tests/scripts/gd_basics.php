@@ -1,0 +1,166 @@
+<?php
+function t($label, callable $f) {
+    echo "== $label: ";
+    try { $r = $f(); echo is_object($r) ? get_class($r) : var_export($r, true); }
+    catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(); }
+    echo "\n";
+}
+set_error_handler(function ($n, $s) { echo "[W: $s] "; return true; });
+t('new', fn() => new GdImage);
+t('tc0', fn() => imagecreatetruecolor(0, 5));
+t('tc0h', fn() => imagecreatetruecolor(5, 0));
+t('pal0', fn() => imagecreate(-1, 5));
+t('huge', fn() => imagecreatetruecolor(PHP_INT_MAX, 5));
+$im = imagecreatetruecolor(10, 8);
+t('size', fn() => [imagesx($im), imagesy($im), imageistruecolor($im)]);
+t('at', fn() => imagecolorat($im, 10, 0));
+t('at2', fn() => imagecolorat($im, -1, 0));
+t('at3', fn() => imagecolorat($im, 3, 3));
+t('alloc', fn() => imagecolorallocate($im, 300, -5, 7));
+t('allocalpha', fn() => imagecolorallocatealpha($im, 1, 2, 3, 200));
+t('forindex', fn() => imagecolorsforindex($im, 0x7f112233));
+t('closest tc', fn() => imagecolorclosest($im, 1, 2, 3));
+t('exact tc', fn() => imagecolorexact($im, 1, 2, 3));
+t('total tc', fn() => imagecolorstotal($im));
+t('dealloc tc', fn() => imagecolordeallocate($im, 0));
+t('transparent', fn() => imagecolortransparent($im));
+t('transparent set', fn() => imagecolortransparent($im, 0x123456));
+t('transparent get', fn() => imagecolortransparent($im));
+t('interlace', fn() => [imageinterlace($im), imageinterlace($im, true), imageinterlace($im, false)]);
+t('interp', fn() => [imagegetinterpolation($im), imagesetinterpolation($im, IMG_NEAREST_NEIGHBOUR), imagegetinterpolation($im), imagesetinterpolation($im, 99), imagesetinterpolation($im, -1), imagegetinterpolation($im), imagesetinterpolation($im, 0), imagegetinterpolation($im)]);
+t('res', fn() => [imageresolution($im), imageresolution($im, 300), imageresolution($im), imageresolution($im, 72, 144), imageresolution($im), imageresolution($im, 0, -4), imageresolution($im)]);
+t('clip', fn() => [imagegetclip($im), imagesetclip($im, -5, 2, 100, 3), imagegetclip($im)]);
+t('flip bad', fn() => imageflip($im, 7));
+t('flip', fn() => imageflip($im, IMG_FLIP_BOTH));
+t('crop miss', fn() => imagecrop($im, ['x' => 1]));
+t('crop miss2', fn() => imagecrop($im, ['x' => 1, 'y' => 1]));
+t('crop miss3', fn() => imagecrop($im, ['x' => 1, 'y' => 1, 'width' => 2]));
+t('crop 0', fn() => imagecrop($im, ['x' => 1, 'y' => 1, 'width' => 0, 'height' => 2]));
+t('crop neg', fn() => imagecrop($im, ['x' => 1, 'y' => 1, 'width' => -3, 'height' => 2]));
+$c = imagecrop($im, ['x' => -5, 'y' => -5, 'width' => 8, 'height' => 8]);
+t('crop out', fn() => [imagesx($c), imagesy($c), dechex(imagecolorat($c, 0, 0)), dechex(imagecolorat($c, 6, 6)), imageistruecolor($c)]);
+$c = imagecrop($im, ['x' => 5, 'y' => 5, 'width' => 20, 'height' => 20]);
+t('crop out2', fn() => [imagesx($c), imagesy($c), dechex(imagecolorat($c, 0, 0)), dechex(imagecolorat($c, 10, 10))]);
+t('scale', fn() => [imagesx($s = imagescale($im, 5)), imagesy($s)]);
+t('scale0', fn() => imagescale($im, 0));
+t('scale h0', fn() => imagescale($im, 5, 0));
+t('scale -', fn() => imagescale($im, -5, 5));
+t('scale mode', fn() => [imagesx($s = imagescale($im, 20, 10, IMG_NEAREST_NEIGHBOUR)), imagesy($s)]);
+t('rot90', fn() => [imagesx($s = imagerotate($im, 90, 0)), imagesy($s)]);
+t('rot45', fn() => [imagesx($s = imagerotate($im, 45, 0)), imagesy($s)]);
+t('rot30', fn() => [imagesx($s = imagerotate($im, 30, 0)), imagesy($s)]);
+t('rot-30', fn() => [imagesx($s = imagerotate($im, -30, 0)), imagesy($s)]);
+t('jpeg q', fn() => imagejpeg($im, null, 101));
+t('jpeg q-2', fn() => imagejpeg($im, null, -2));
+t('png q', fn() => imagepng($im, null, 10));
+t('png q-2', fn() => imagepng($im, null, -2));
+t('webp q-2', fn() => imagewebp($im, null, -2));
+t('jpeg badfile', fn() => imagejpeg($im, '/nonexistent/x.jpg'));
+t('png nul', fn() => imagepng($im, "a\0b"));
+t('fromstring empty', fn() => imagecreatefromstring(''));
+t('fromstring trunc jpg', fn() => imagecreatefromstring("\xff\xd8\xff\xe0xxxx"));
+t('fromstring trunc gif', fn() => imagecreatefromstring("GIF89axxxx"));
+t('fromstring trunc bmp', fn() => imagecreatefromstring("BMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+t('jpeg missing', fn() => imagecreatefromjpeg('/nonexistent.jpg'));
+t('destroy', fn() => imagedestroy($im));
+t('clone', fn() => clone $im);
+t('serialize', fn() => serialize($im));
+t('typeerr', fn() => imagesx('x'));
+t('copyresampled0', fn() => imagecopyresampled($im, $im, 0, 0, 0, 0, 0, 5, 5, 5));
+t('copyresampled0s', fn() => imagecopyresampled($im, $im, 0, 0, 0, 0, 5, 5, 0, 5));
+t('copyresized0', fn() => imagecopyresized($im, $im, 0, 0, 0, 0, 0, 5, 5, 5));
+t('polygon', fn() => imagepolygon($im, [1, 2, 3, 4], 2, 5));
+t('polygon3', fn() => imagepolygon($im, [1, 2, 3, 4, 5, 6], 5));
+t('polygon short', fn() => imagepolygon($im, [1, 2, 3, 4], 5));
+t('pal', function () {
+    $p = imagecreate(4, 4);
+    $r = [imagecolorstotal($p), imagecolorallocate($p, 1, 2, 3), imagecolorallocate($p, 1, 2, 3), imagecolorstotal($p)];
+    $r[] = imagecolorsforindex($p, 0);
+    try { imagecolorsforindex($p, 5); } catch (Throwable $e) { $r[] = $e->getMessage(); }
+    $r[] = imagecolorat($p, 0, 0);
+    $r[] = imagecolorexact($p, 1, 2, 3);
+    $r[] = imagecolorexact($p, 9, 9, 9);
+    $r[] = imagecolorclosest($p, 9, 9, 9);
+    $r[] = imagecolorresolve($p, 9, 9, 9);
+    $r[] = imagecolorstotal($p);
+    $r[] = imagecolortransparent($p, 1);
+    $r[] = imagecolortransparent($p, 7);
+    $r[] = imagecolortransparent($p);
+    $r[] = imagecolorset($p, 0, 10, 20, 30);
+    $r[] = imagecolorset($p, 9, 10, 20, 30);
+    $r[] = imagecolorsforindex($p, 0);
+    $r[] = imagecolordeallocate($p, 0);
+    try { imagecolordeallocate($p, 9); } catch (Throwable $e) { $r[] = $e->getMessage(); }
+    $r[] = imagecolorallocate($p, 5, 5, 5);
+    for ($i = 0; $i < 300; $i++) $x = imagecolorallocate($p, $i % 256, 7, $i);
+    $r[] = $x;
+    $r[] = imagecolorstotal($p);
+    $r[] = imagepalettetotruecolor($p);
+    $r[] = imageistruecolor($p);
+    return $r;
+});
+
+$im = imagecreatetruecolor(10, 8);
+t('res get', fn() => imageresolution($im));
+t('res 300', fn() => [imageresolution($im, 300), imageresolution($im)]);
+t('res 72,144', fn() => [imageresolution($im, 72, 144), imageresolution($im)]);
+t('res 0', fn() => [imageresolution($im, 0), imageresolution($im)]);
+t('res 0,5', fn() => [imageresolution($im, 0, 5), imageresolution($im)]);
+t('res -1', fn() => imageresolution($im, -1));
+t('res big', fn() => [imageresolution($im, 4294967295), imageresolution($im)]);
+t('res big2', fn() => imageresolution($im, 4294967296));
+t('res null,5', fn() => [imageresolution($im, null, 5), imageresolution($im)]);
+t('pal', function () {
+    $p = imagecreate(4, 4);
+    $r = [imagecolorstotal($p), imagecolorallocate($p, 1, 2, 3), imagecolorallocate($p, 1, 2, 3), imagecolorstotal($p)];
+    $r[] = imagecolorsforindex($p, 0);
+    try { imagecolorsforindex($p, 5); } catch (Throwable $e) { $r[] = $e->getMessage(); }
+    $r[] = imagecolorat($p, 0, 0);
+    $r[] = imagecolorexact($p, 1, 2, 3);
+    $r[] = imagecolorexact($p, 9, 9, 9);
+    $r[] = imagecolorclosest($p, 9, 9, 9);
+    $r[] = imagecolorresolve($p, 9, 9, 9);
+    $r[] = imagecolorstotal($p);
+    $r[] = imagecolortransparent($p, 1);
+    $r[] = imagecolortransparent($p, 7);
+    $r[] = imagecolortransparent($p);
+    $r[] = imagecolorset($p, 0, 10, 20, 30);
+    $r[] = imagecolorset($p, 9, 10, 20, 30);
+    $r[] = imagecolorsforindex($p, 0);
+    $r[] = imagecolordeallocate($p, 0);
+    try { imagecolordeallocate($p, 9); } catch (Throwable $e) { $r[] = $e->getMessage(); }
+    $r[] = imagecolorallocate($p, 5, 5, 5);
+    for ($i = 0; $i < 300; $i++) $x = imagecolorallocate($p, $i % 256, 7, $i % 256);
+    $r[] = $x;
+    $r[] = imagecolorstotal($p);
+    $r[] = imagepalettetotruecolor($p);
+    $r[] = imageistruecolor($p);
+    $r[] = imagecolortransparent($p);
+    return $r;
+});
+t('pal2tc transparent', function () {
+    $p = imagecreate(4, 4);
+    $a = imagecolorallocate($p, 10, 20, 30);
+    $b = imagecolorallocate($p, 200, 100, 50);
+    imagecolortransparent($p, $b);
+    imagefill($p, 0, 0, $b);
+    imagesetpixel($p, 1, 1, $a);
+    $r = [imagecolorat($p, 0, 0), imagecolorat($p, 1, 1), imagecolortransparent($p)];
+    imagepalettetotruecolor($p);
+    $r[] = dechex(imagecolorat($p, 0, 0));
+    $r[] = dechex(imagecolorat($p, 1, 1));
+    $r[] = imagecolortransparent($p);
+    return $r;
+});
+// crop out of range with filled image
+$f = imagecreatetruecolor(10, 8);
+imagefill($f, 0, 0, 0x336699);
+t('crop out neg', function () use ($f) { $c = imagecrop($f, ['x' => -5, 'y' => -5, 'width' => 8, 'height' => 8]); return [imagesx($c), imagesy($c), dechex(imagecolorat($c, 0, 0)), dechex(imagecolorat($c, 4, 4)), dechex(imagecolorat($c, 5, 5)),dechex(imagecolorat($c, 7, 7))]; });
+t('crop out pos', function () use ($f) { $c = imagecrop($f, ['x' => 5, 'y' => 5, 'width' => 20, 'height' => 20]); return [imagesx($c), imagesy($c), dechex(imagecolorat($c, 0, 0)), dechex(imagecolorat($c, 4, 2)), dechex(imagecolorat($c, 5, 3)), dechex(imagecolorat($c, 10, 10))]; });
+t('crop pal', function () {
+    $p = imagecreate(10, 8);
+    $a = imagecolorallocate($p, 1, 2, 3);
+    imagefill($p, 0, 0, $a);
+    $c = imagecrop($p, ['x' => 2, 'y' => 2, 'width' => 4, 'height' => 4]);
+    return [imageistruecolor($c), imagecolorstotal($c), imagecolorat($c, 0, 0)];
+});

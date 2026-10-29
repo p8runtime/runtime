@@ -11,6 +11,8 @@
 //! Reference: $PHP_SRC_PATH/ext/gd/gd.c, ext/gd/libgd
 
 mod codec;
+mod exif;
+mod exif_tags;
 mod gd;
 
 use codec::Format;
@@ -36,6 +38,7 @@ const SUPPORTED: i64 = 1 | 2 | 4 | 32 | 64;
 
 fn register(registry: &mut Registry) {
     registry.add_functions(BUILTINS);
+    registry.add_functions(exif::BUILTINS);
     registry.add_classes(CLASSES);
     registry.add_data("GdImage", || Rc::new(Handle::default()));
     for (name, value) in CONSTANTS {
@@ -47,9 +50,21 @@ fn register(registry: &mut Registry) {
     // other wrappers are read and written with PHP's own stream functions.
     registry.mark_reenters(&[
         "imagejpeg", "imagepng", "imagegif", "imagewebp", "imagebmp", "imagecreatefromjpeg", "imagecreatefrompng", "imagecreatefromgif",
-        "imagecreatefromwebp", "imagecreatefrombmp",
+        "imagecreatefromwebp", "imagecreatefrombmp", "exif_read_data", "exif_imagetype", "exif_thumbnail",
     ]);
     registry.add_module("gd");
+    registry.add_module("exif");
+    registry.add_constant(b"EXIF_USE_MBSTRING", Constant::Int(1));
+    for (name, default) in [
+        ("exif.encode_unicode", &b"ISO-8859-15"[..]),
+        ("exif.decode_unicode_motorola", b"UCS-2BE"),
+        ("exif.decode_unicode_intel", b"UCS-2LE"),
+        ("exif.encode_jis", b""),
+        ("exif.decode_jis_motorola", b"JIS"),
+        ("exif.decode_jis_intel", b"JIS"),
+    ] {
+        registry.add_ini(name, Some(default));
+    }
 }
 
 static CLASSES: &[ClassSpec] = &[ClassSpec {
@@ -264,7 +279,8 @@ fn create(ctx: &mut dyn Ctx, args: &[Value], tc: bool) -> R {
         return Err(value_error(ctx, 2, "height", "must be greater than 0"));
     }
     if w.checked_mul(h).is_none_or(|n| n > (1 << 28)) {
-        ctx.warn("Product of memory allocation multiplication would exceed INT_MAX, failing operation gracefully");
+        let f = ctx.builtin_name();
+        ctx.warn(&format!("{f}(): Product of memory allocation multiplication would exceed INT_MAX, failing operation gracefully\n"));
         return Ok(Value::Bool(false));
     }
     let mut im = Img::new(w as i32, h as i32, tc);
@@ -834,7 +850,7 @@ fn imagecrop(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let w = rect_field(ctx, &rect, "width", "imagecrop(): Argument #2 ($rectangle) must have a \"width\" key")?;
     let h = rect_field(ctx, &rect, "height", "imagecrop(): Argument #2 ($rectangle) must have a \"height\" key")?;
     if w <= 0 || h <= 0 {
-        ctx.warn("imagecrop(): One parameter to a memory allocation multiplication is negative or zero, failing operation gracefully");
+        ctx.warn("imagecrop(): One parameter to a memory allocation multiplication is negative or zero, failing operation gracefully\n");
         return Ok(Value::Bool(false));
     }
     if i64::from(w) * i64::from(h) > (1 << 28) {
