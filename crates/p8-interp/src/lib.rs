@@ -1173,8 +1173,9 @@ pub struct Context<'i> {
     /// for "previously declared in"; and the file whose classes are being
     /// bound before it runs.
     class_origins: HashMap<Vec<u8>, (Rc<str>, u32)>,
-    /// The classes the script declared, in order (get_declared_classes()).
-    declared_order: Vec<Rc<Class>>,
+    /// The classes the script declared, in order, each by the name it is
+    /// listed by (an alias by its lowercase name): get_declared_classes().
+    declared_order: Vec<(PhpStr, Rc<Class>)>,
     binding_file: Option<Rc<str>>,
     /// Compiles the files `include` runs (the embedder's compiler).
     loader: Option<Rc<dyn Loader>>,
@@ -4935,10 +4936,15 @@ impl Ctx for Context<'_> {
         self.shutdown.push((callable, args));
     }
 
-    fn declared_classes(&self) -> Vec<Rc<Class>> {
-        let mut internal: Vec<&Rc<Class>> = self.classes.iter().filter(|(k, c)| c.flags & p8_runtime::object::CLASS_INTERNAL != 0 && k.as_slice() == c.name.as_bytes().to_ascii_lowercase()).map(|(_, c)| c).collect();
-        internal.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
-        internal.into_iter().chain(&self.declared_order).cloned().collect()
+    fn declared_classes(&self) -> Vec<(PhpStr, Rc<Class>)> {
+        let mut internal: Vec<(PhpStr, Rc<Class>)> = self
+            .classes
+            .iter()
+            .filter(|(k, c)| c.flags & p8_runtime::object::CLASS_INTERNAL != 0 && k.as_slice() == c.name.as_bytes().to_ascii_lowercase())
+            .map(|(_, c)| (c.name.clone(), Rc::clone(c)))
+            .collect();
+        internal.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        internal.into_iter().chain(self.declared_order.iter().cloned()).collect()
     }
 
     fn class_alias(&mut self, class: Rc<Class>, alias: &[u8]) -> bool {
@@ -4946,6 +4952,7 @@ impl Ctx for Context<'_> {
         if self.classes.contains_key(&lower) {
             return false;
         }
+        self.declared_order.push((PhpStr::from(lower.as_slice()), Rc::clone(&class)));
         self.classes.insert(lower, class);
         true
     }

@@ -443,7 +443,7 @@ fn spl_object_hash(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 
 /// The names of the declared classes whose kind `pick` accepts.
 fn declared(ctx: &mut dyn Ctx, pick: impl Fn(u32) -> bool) -> Value {
-    let names = ctx.declared_classes().iter().filter(|c| pick(c.flags)).map(|c| Value::Str(c.name.clone())).collect();
+    let names = ctx.declared_classes().into_iter().filter(|(_, c)| pick(c.flags)).map(|(name, _)| Value::Str(name)).collect();
     Value::Array(Rc::new(PhpArray::from_list(names)))
 }
 

@@ -1,0 +1,44 @@
+bool(true)
+bool(true)
+bool(false)
+array(4) {
+  [0]=>
+  string(4) "Zeta"
+  [1]=>
+  string(4) "Suit"
+  [2]=>
+  string(4) "Late"
+  [3]=>
+  string(5) "omega"
+}
+array(0) {
+}
+array(0) {
+}
+bool(false)
+array(12) {
+  [0]=>
+  string(7) "running"
+  [1]=>
+  string(9) "protected"
+  [2]=>
+  string(4) "full"
+  [3]=>
+  string(4) "runs"
+  [4]=>
+  string(9) "collected"
+  [5]=>
+  string(9) "threshold"
+  [6]=>
+  string(11) "buffer_size"
+  [7]=>
+  string(5) "roots"
+  [8]=>
+  string(16) "application_time"
+  [9]=>
+  string(14) "collector_time"
+  [10]=>
+  string(15) "destructor_time"
+  [11]=>
+  string(9) "free_time"
+}

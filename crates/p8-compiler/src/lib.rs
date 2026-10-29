@@ -990,7 +990,18 @@ impl<'src> Compiler<'src> {
         // Each top-level function's by-reference parameters, by its full name.
         let mut ns: Vec<u8> = Vec::new();
         let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
-            if matches!(stmt, Stmt::Class { .. } | Stmt::Interface { .. } | Stmt::Trait { .. } | Stmt::Enum { .. }) {
+            // Declared as the file loads (early binding), as PHP does it:
+            // not a class that implements interfaces or uses traits, nor an
+            // enum (it implements UnitEnum); those are declared when their
+            // statement runs.
+            let uses_traits = |members: &[p8_syntax::ast::ClassMember]| members.iter().any(|m| matches!(m, p8_syntax::ast::ClassMember::TraitUse { .. }));
+            let early = match stmt {
+                Stmt::Class { implements, members, .. } => implements.is_empty() && !uses_traits(members),
+                Stmt::Interface { extends, .. } => extends.is_empty(),
+                Stmt::Trait { members, .. } => !uses_traits(members),
+                _ => false,
+            };
+            if early {
                 c.top_classes.insert(stmt as *const Stmt as usize);
             }
             if let Stmt::Function { name, params, .. } = stmt {

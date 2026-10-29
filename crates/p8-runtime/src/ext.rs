@@ -211,9 +211,10 @@ pub trait Ctx {
     /// register_shutdown_function()
     fn on_shutdown(&mut self, callable: Value, args: Vec<Value>);
     /// Every class, interface, trait and enum, as get_declared_classes()
-    /// lists them: the built-in ones (by name), then the script's in the
-    /// order it declared them; no aliases.
-    fn declared_classes(&self) -> Vec<Rc<Class>>;
+    /// lists them, each with the name it is listed by: the built-in ones
+    /// (by name), then the script's in the order it declared them, an
+    /// alias (class_alias) by its lowercase name.
+    fn declared_classes(&self) -> Vec<(PhpStr, Rc<Class>)>;
     /// class_alias(): false when the alias is taken.
     fn class_alias(&mut self, class: Rc<Class>, alias: &[u8]) -> bool;
     /// Every (key, value) going through `v` gives (an array, a generator,
