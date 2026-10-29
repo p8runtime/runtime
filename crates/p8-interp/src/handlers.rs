@@ -121,6 +121,10 @@ impl Context<'_> {
             let r = self.call_with_regs(regs, &handler, &mut args);
             self.in_handler = false;
             if let Value::Bool(false) = r? {
+                // An E_USER_ERROR the handler declines is fatal.
+                if level == 256 {
+                    return Err(Throw::Fatal { message, file, line });
+                }
                 self.print_diag(level, &message, &file, line);
             }
         }

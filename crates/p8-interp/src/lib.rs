@@ -1907,14 +1907,15 @@ impl Context<'_> {
 
     /// Print a diagnostic of PHP error `level` at the current line, as the
     /// CLI does, if error_reporting and display_errors let it through.
+    /// Whether the user error handler takes errors of `level` now.
+    fn user_handles_level(&self, level: i64) -> bool {
+        !self.in_handler && matches!(self.error_handlers.last(), Some((h, mask)) if mask & level != 0 && !matches!(h, Value::Null))
+    }
+
     fn show(&mut self, level: i64, message: &str) {
         // A user error handler gets it (after the instruction), whatever
         // error_reporting says.
-        if !self.in_handler
-            && let Some((_, mask)) = self.error_handlers.last()
-            && mask & level != 0
-            && !matches!(self.error_handlers.last(), Some((Value::Null, _)))
-        {
+        if self.user_handles_level(level) {
             let (file, line) = self.location();
             self.pending_errors.push((level, message.to_string(), file, line));
             return;
@@ -4676,6 +4677,10 @@ impl Ctx for Context<'_> {
     fn report(&mut self, level: i64, message: &str) {
         self.report_diags();
         self.show(level, message);
+    }
+
+    fn user_handles(&self, level: i64) -> bool {
+        self.user_handles_level(level)
     }
 
     fn fatal(&self, message: String) -> Throw {

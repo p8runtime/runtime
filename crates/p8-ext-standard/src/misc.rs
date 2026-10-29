@@ -294,7 +294,13 @@ fn trigger_error(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
             ctx.deprecated(
                 "Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead",
             );
-            Err(ctx.fatal(message))
+            // A user handler takes it (and may throw, or decline: fatal
+            // then); without one it is fatal now.
+            if !ctx.user_handles(E_USER_ERROR) {
+                return Err(ctx.fatal(message));
+            }
+            ctx.report(E_USER_ERROR, &message);
+            Ok(Value::Bool(true))
         }
         E_USER_WARNING | E_USER_NOTICE | E_USER_DEPRECATED => {
             ctx.report(level, &message);

@@ -101,6 +101,9 @@ pub trait Ctx {
     /// Report a diagnostic of PHP error `level` (E_USER_NOTICE, E_WARNING,
     /// ...) at the current line, if error_reporting includes it.
     fn report(&mut self, level: i64, message: &str);
+    /// Whether a user error handler takes errors of `level` now (it runs
+    /// after the builtin returns).
+    fn user_handles(&self, level: i64) -> bool;
     /// A fatal error at the current line: the request ends with it.
     fn fatal(&self, message: String) -> Throw;
     /// ini_get(): the setting's current value as a string (null when PHP
