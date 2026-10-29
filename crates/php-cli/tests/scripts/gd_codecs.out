@@ -1,0 +1,49 @@
+orig 00ff8040 002060c0 00ff8040
+png: 20x12 type=3 bits=8 ch=- mime=image/png len>0=1
+png re 20x12 tc=true 00ff8040 002060c0 00ff8040
+png level 0 ok=true re=00ff8040 002060c0 00ff8040
+png level 1 ok=true re=00ff8040 002060c0 00ff8040
+png level 6 ok=true re=00ff8040 002060c0 00ff8040
+png level 9 ok=true re=00ff8040 002060c0 00ff8040
+png alpha: 4x2 type=3 bits=8 ch=- mime=image/png len>0=1
+png alpha re tc=true 7f0a141e 40646e78 00c8d2dc 7f0a141e
+  re save-alpha then write again: 000a141e 00646e78 00c8d2dc
+png noalpha: 2x1 type=3 bits=8 ch=- mime=image/png len>0=1
+noalpha re 00646e78
+png pal: 6x4 type=3 bits=2 ch=- mime=image/png len>0=1
+pal re tc=false total=3 00000002 00000001 00000000 transp=-1
+pal transp re total=3 transp=0 {"red":255,"green":255,"blue":255,"alpha":127}
+gif pal: 6x4 type=1 bits=2 ch=3 mime=image/gif len>0=1
+gif re tc=false total=3 transp=0 00000000 00000001 00000002
+gif many total=256 tc=false
+jpeg q=-1 20x12 tc=true near=true
+jpeg q=0 20x12 tc=true near=false
+jpeg q=50 20x12 tc=true near=true
+jpeg q=100 20x12 tc=true near=true
+jpeg: 20x12 type=2 bits=8 ch=3 mime=image/jpeg len>0=1
+jpeg magic ffd8ffe0
+jpeg app0 yes
+jpeg pal ok y
+[W: Undefined variable $w] [W: imagecreatefromstring(): Passing null to parameter #1 ($data) of type string is deprecated] [W: imagecreatefromstring(): Data is not in a recognized format] bmp: 20x12 type=6 bits=24 ch=- mime=image/bmp len>0=1
+bmp re 20x12 tc=true 00ff8040 002060c0 00ff8040
+bmp pal: 6x4 type=6 bits=8 ch=- mime=image/bmp len>0=1
+bmp pal re tc=false 00000000 00000001
+bmp nc: 20x12 type=6 bits=24 ch=- mime=image/bmp len>0=1
+bool(true)
+file ok
+file: 20x12 type=3 bits=8 ch=- mime=image/png len>0=1
+from png file 00ff8040 002060c0 00ff8040
+bool(true)
+from jpeg file 20
+bool(true)
+from gif file 20
+bool(true)
+from bmp file 20
+bool(true)
+stream ok
+bool(true)
+mem ok
+
+png res [300,150]
+jpeg res [300,150]
+bmp res [96,96]

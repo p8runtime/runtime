@@ -1184,6 +1184,7 @@ impl Isolate {
             running_builtin: None,
             statics: HashMap::new(),
             magic_guard: Vec::new(),
+            result_reg: 0,
             deferred_write: None,
             fibers: Vec::new(),
             fiber_suspended: None,
@@ -1313,6 +1314,9 @@ pub struct Context<'i> {
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
+    /// The register a running nested call's result lands in: destructors
+    /// that run as its frame goes (after it returned) start above it.
+    result_reg: usize,
     /// A write held back until the error handler has run (`$undef op= v`).
     deferred_write: Option<(usize, Value)>,
     /// The fibers running, innermost last.

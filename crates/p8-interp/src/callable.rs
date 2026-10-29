@@ -352,7 +352,7 @@ impl Context<'_> {
             Some(top) => top.base as usize + top.func.code.nregs as usize,
             None => 0,
         };
-        self.run_nested_at(regs, m, args, at)
+        self.run_nested_at(regs, m, args, at.max(self.result_reg))
     }
 
     fn run_nested_at(&mut self, regs: &mut Vec<Value>, mut m: MethodFrame, args: &mut [Value], at: usize) -> Result<Value, Throw> {
@@ -410,11 +410,17 @@ impl Context<'_> {
             return Ok(std::mem::replace(&mut regs[at], Value::Undef));
         }
         self.frames.floor = self.frames.len() - 1;
+        let saved_result_reg = std::mem::replace(&mut self.result_reg, at + 1);
         let r = self.execute(regs);
+        self.result_reg = saved_result_reg;
         self.frames.floor = saved_floor;
         self.pc = saved_pc;
         if let Some(caller) = self.frames.last_mut() {
             caller.pc = caller_pc;
+        }
+        if r.is_err() {
+            // A result the callee returned before a destructor threw is dropped with the frame.
+            regs[at] = Value::Undef;
         }
         r?;
         let v = std::mem::replace(&mut regs[at], Value::Undef);

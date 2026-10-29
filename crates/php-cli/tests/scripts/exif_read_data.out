@@ -1,0 +1,141 @@
+== big-endian flat
+FileSize = [581]
+FileType = [2]
+MimeType = ["image\/jpeg"]
+SectionsFound = ["ANY_TAG, IFD0, THUMBNAIL, COMMENT, EXIF, GPS, INTEROP"]
+COMPUTED = {"html":"width=\"640\" height=\"480\"","Height":480,"Width":640,"IsColor":1,"ByteOrderMotorola":1,"ApertureFNumber":"f\/2.8","FocusDistance":"5.00m","UserComment":"hello","UserCommentEncoding":"ASCII","Copyright":"Photog, Editor","Copyright.Photographer":"Photog","Copyright.Editor":"Editor","Thumbnail.FileType":2,"Thumbnail.MimeType":"image\/jpeg"}
+BitsPerSample = [8,8,8]
+Make = ["Acme Cameras"]
+Model = ["X-1"]
+Orientation = [6]
+XResolution = ["72\/1"]
+DateTime = ["2020:01:02 03:04:05"]
+Copyright = ["Photog"]
+Exif_IFD_Pointer = [122]
+GPS_IFD_Pointer = [302]
+THUMBNAIL = {"Compression":6,"JPEGInterchangeFormat":374,"JPEGInterchangeFormatLength":4}
+COMMENT = ["a note"]
+ExposureTime = ["1\/125"]
+FNumber = ["28\/10"]
+ISOSpeedRatings = [200]
+ExifVersion = ["0230"]
+DateTimeOriginal = ["2019:12:31 23:59:58"]
+ShutterSpeedValue = ["-3\/1"]
+SubjectDistance = ["5\/1"]
+UserComment = ["ASCII\u0000\u0000\u0000hello"]
+FocalLength = ["50\/1"]
+ExifImageWidth = [640]
+ExifImageLength = [480]
+InteroperabilityOffset = [284]
+UndefinedTag:0xC4A5 = ["abc"]
+GPSLatitudeRef = ["N"]
+GPSLatitude = ["10\/1","20\/1","30\/1"]
+InterOperabilityIndex = ["R98"]
+== big-endian sections
+FILE = {"FileSize":581,"FileType":2,"MimeType":"image\/jpeg","SectionsFound":"ANY_TAG, IFD0, THUMBNAIL, COMMENT, EXIF, GPS, INTEROP"}
+COMPUTED = {"html":"width=\"640\" height=\"480\"","Height":480,"Width":640,"IsColor":1,"ByteOrderMotorola":1,"ApertureFNumber":"f\/2.8","FocusDistance":"5.00m","UserComment":"hello","UserCommentEncoding":"ASCII","Copyright":"Photog, Editor","Copyright.Photographer":"Photog","Copyright.Editor":"Editor","Thumbnail.FileType":2,"Thumbnail.MimeType":"image\/jpeg"}
+IFD0 = {"BitsPerSample":[8,8,8],"Make":"Acme Cameras","Model":"X-1","Orientation":6,"XResolution":"72\/1","DateTime":"2020:01:02 03:04:05","Copyright":"Photog","Exif_IFD_Pointer":122,"GPS_IFD_Pointer":302}
+THUMBNAIL = {"Compression":6,"JPEGInterchangeFormat":374,"JPEGInterchangeFormatLength":4}
+COMMENT = ["a note"]
+EXIF = {"ExposureTime":"1\/125","FNumber":"28\/10","ISOSpeedRatings":200,"ExifVersion":"0230","DateTimeOriginal":"2019:12:31 23:59:58","ShutterSpeedValue":"-3\/1","SubjectDistance":"5\/1","UserComment":"ASCII\u0000\u0000\u0000hello","FocalLength":"50\/1","ExifImageWidth":640,"ExifImageLength":480,"InteroperabilityOffset":284,"UndefinedTag:0xC4A5":"abc"}
+GPS = {"GPSLatitudeRef":"N","GPSLatitude":["10\/1","20\/1","30\/1"]}
+INTEROP = {"InterOperabilityIndex":"R98"}
+== big-endian with thumbnail
+FileSize = [581]
+FileType = [2]
+MimeType = ["image\/jpeg"]
+SectionsFound = ["ANY_TAG, IFD0, THUMBNAIL, COMMENT, EXIF, GPS, INTEROP"]
+COMPUTED = {"html":"width=\"640\" height=\"480\"","Height":480,"Width":640,"IsColor":1,"ByteOrderMotorola":1,"ApertureFNumber":"f\/2.8","FocusDistance":"5.00m","UserComment":"hello","UserCommentEncoding":"ASCII","Copyright":"Photog, Editor","Copyright.Photographer":"Photog","Copyright.Editor":"Editor","Thumbnail.FileType":2,"Thumbnail.MimeType":"image\/jpeg"}
+BitsPerSample = [8,8,8]
+Make = ["Acme Cameras"]
+Model = ["X-1"]
+Orientation = [6]
+XResolution = ["72\/1"]
+DateTime = ["2020:01:02 03:04:05"]
+Copyright = ["Photog"]
+Exif_IFD_Pointer = [122]
+GPS_IFD_Pointer = [302]
+THUMBNAIL = {"Compression":6,"JPEGInterchangeFormat":374,"JPEGInterchangeFormatLength":4,"THUMBNAIL":"hex:ffd8ffd9"}
+COMMENT = ["a note"]
+ExposureTime = ["1\/125"]
+FNumber = ["28\/10"]
+ISOSpeedRatings = [200]
+ExifVersion = ["0230"]
+DateTimeOriginal = ["2019:12:31 23:59:58"]
+ShutterSpeedValue = ["-3\/1"]
+SubjectDistance = ["5\/1"]
+UserComment = ["ASCII\u0000\u0000\u0000hello"]
+FocalLength = ["50\/1"]
+ExifImageWidth = [640]
+ExifImageLength = [480]
+InteroperabilityOffset = [284]
+UndefinedTag:0xC4A5 = ["abc"]
+GPSLatitudeRef = ["N"]
+GPSLatitude = ["10\/1","20\/1","30\/1"]
+InterOperabilityIndex = ["R98"]
+bool(false)
+string(8) "ffd8ffd9"
+int(0)
+int(0)
+int(2)
+bool(true)
+int(5)
+== little-endian flat
+FileSize = [581]
+FileType = [2]
+MimeType = ["image\/jpeg"]
+SectionsFound = ["ANY_TAG, IFD0, THUMBNAIL, COMMENT, EXIF, GPS, INTEROP"]
+COMPUTED = {"html":"width=\"640\" height=\"480\"","Height":480,"Width":640,"IsColor":1,"ByteOrderMotorola":0,"ApertureFNumber":"f\/2.8","FocusDistance":"5.00m","UserComment":"hello","UserCommentEncoding":"ASCII","Copyright":"Photog, Editor","Copyright.Photographer":"Photog","Copyright.Editor":"Editor","Thumbnail.FileType":2,"Thumbnail.MimeType":"image\/jpeg"}
+BitsPerSample = [8,8,8]
+Make = ["Acme Cameras"]
+Model = ["X-1"]
+Orientation = [6]
+XResolution = ["72\/1"]
+DateTime = ["2020:01:02 03:04:05"]
+Copyright = ["Photog"]
+Exif_IFD_Pointer = [122]
+GPS_IFD_Pointer = [302]
+THUMBNAIL = {"Compression":6,"JPEGInterchangeFormat":374,"JPEGInterchangeFormatLength":4}
+COMMENT = ["a note"]
+ExposureTime = ["1\/125"]
+FNumber = ["28\/10"]
+ISOSpeedRatings = [200]
+ExifVersion = ["0230"]
+DateTimeOriginal = ["2019:12:31 23:59:58"]
+ShutterSpeedValue = ["-3\/1"]
+SubjectDistance = ["5\/1"]
+UserComment = ["ASCII\u0000\u0000\u0000hello"]
+FocalLength = ["50\/1"]
+ExifImageWidth = [640]
+ExifImageLength = [480]
+InteroperabilityOffset = [284]
+UndefinedTag:0xC4A5 = ["abc"]
+GPSLatitudeRef = ["N"]
+GPSLatitude = ["10\/1","20\/1","30\/1"]
+InterOperabilityIndex = ["R98"]
+== jpeg without exif
+FileSize = [6]
+FileType = [2]
+MimeType = ["image\/jpeg"]
+SectionsFound = [""]
+COMPUTED = {"IsColor":0}
+[W: exif_read_data(FILE): File not supported] bool(false)
+[W: exif_read_data(FILE): File too small (1)] bool(false)
+[W: exif_read_data(FILE): Unable to open file] bool(false)
+ValueError: exif_read_data(): Argument #1 ($file) must not be empty
+int(2)
+int(1)
+int(3)
+int(6)
+int(7)
+int(8)
+int(18)
+[W: exif_imagetype(FILE): Error reading from TMP!] bool(false)
+[W: exif_imagetype(FILE): Failed to open stream: No such file or directory] bool(false)
+string(4) "Make"
+string(16) "DateTimeOriginal"
+string(22) "InteroperabilityOffset"
+bool(false)
+string(12) "No tag value"
+bool(false)
+bool(false)
