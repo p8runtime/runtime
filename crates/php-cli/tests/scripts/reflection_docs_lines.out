@@ -1,0 +1,81 @@
+bool(true)
+int(29)
+int(67)
+string(41) "/**
+ * The Widget.
+ *
+ * @package lib
+ */"
+array(2) {
+  [0]=>
+  string(10) "Lib\Greets"
+  [1]=>
+  string(8) "Lib\Logs"
+}
+array(2) {
+  [0]=>
+  string(10) "Lib\Greets"
+  [1]=>
+  string(8) "Lib\Logs"
+}
+array(0) {
+}
+string(15) "/** the name */"
+string(25) "/** interface constant */"
+label: string(30) "/**
+     * @var string
+     */"
+plain: bool(false)
+twice: string(13) "/** second */"
+a: string(20) "/** a, b share it */"
+b: bool(false)
+undocumented: bool(false)
+greeting: string(21) "/** trait property */"
+run: 55-58 string(26) "/**
+     * Run it.
+     */"
+oneLine: 60-60 string(15) "/** one line */"
+bare: 62-64 bool(false)
+stat: 66-66 bool(false)
+greet: 14-14 string(19) "/** trait method */"
+bool(true)
+string(20) "/** An interface. */"
+int(70)
+int(73)
+string(15) "/** abstract */"
+string(16) "/**
+ * Suit.
+ */"
+int(78)
+int(85)
+bool(true)
+string(6) "string"
+bool(true)
+bool(false)
+bool(false)
+ReflectionEnumBackedCase Hearts H string(17) "/** hearts doc */"
+ReflectionEnumBackedCase Spades S bool(false)
+enum(Lib\Suit::Spades)
+string(8) "Lib\Suit"
+string(17) "/** enum const */"
+Lib\Suit::Wild is not a case
+Case Lib\Suit::Nope does not exist
+Class "Lib\Widget" is not an enum
+string(17) "/** a function */"
+int(88)
+int(93)
+bool(true)
+bool(false)
+int(95)
+int(95)
+int(155)
+int(157)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)

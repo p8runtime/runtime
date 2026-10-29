@@ -2175,7 +2175,7 @@ impl<'src> Compiler<'src> {
                 ClassMember::Property { attributes, modifiers, ty, entries, doc_comment, .. } => {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
-                    for e in *entries {
+                    for (n, e) in entries.iter().enumerate() {
                         let text = self.text(e.name.span);
                         let (default, code) = match e.default {
                             Some(x) => {
@@ -2185,7 +2185,7 @@ impl<'src> Compiler<'src> {
                             None if ty.is_some() => (None, None),
                             None => (Some(Frozen::Null), None),
                         };
-                        let meta = self.meta_of(attributes, *doc_comment, e.span, 8)?;
+                        let meta = self.meta_of(attributes, if n == 0 { *doc_comment } else { None }, e.span, 8)?;
                         properties.push(PropDef {
                             meta,
                             name: Text::from(text.strip_prefix(b"$").unwrap_or(text)),
@@ -3070,6 +3070,15 @@ impl<'src> Compiler<'src> {
     /// attribute classes are checked against it, as PHP does when compiling.
     fn attr_defs(&mut self, groups: &[p8_syntax::ast::AttributeGroup], target: u32) -> Result<Vec<AttrDef>> {
         let mut out: Vec<AttrDef> = Vec::new();
+        // PHP reports a bad builtin attribute at the declaration it is on: the first
+        // token after the last group.
+        let decl_line = groups.last().map_or(1, |g| {
+            let mut at = g.span.end;
+            while self.source.get(at).is_some_and(u8::is_ascii_whitespace) {
+                at += 1;
+            }
+            self.line(Span::new(at, at))
+        });
         for group in groups {
             for a in group.attributes {
                 let name = Text::from(self.class_name(self.text(a.name.span)).as_slice());
@@ -3078,10 +3087,10 @@ impl<'src> Compiler<'src> {
                     let shown = String::from_utf8_lossy(name.as_bytes());
                     if allowed & target == 0 {
                         let message = format!("Attribute \"{shown}\" cannot target {} (allowed targets: {})", attr_target_names(target), attr_target_names(allowed));
-                        return Err(CompileError { message, line });
+                        return Err(CompileError { message, line: decl_line });
                     }
                     if out.iter().any(|o| o.name.as_bytes().eq_ignore_ascii_case(name.as_bytes())) {
-                        return Err(CompileError { message: format!("Attribute \"{shown}\" must not be repeated"), line });
+                        return Err(CompileError { message: format!("Attribute \"{shown}\" must not be repeated"), line: decl_line });
                     }
                 }
                 let mut args = Vec::with_capacity(a.args.len());
