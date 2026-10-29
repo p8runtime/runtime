@@ -9,7 +9,8 @@
 #   XML-RPC with the admin's password;
 # - the pages that show what they wrote;
 # - each bundled block theme switched to, with the bundled plugins
-#   activated, and the pages they change.
+#   activated, then a classic theme with popular plugins from
+#   wordpress.org, and the pages they change.
 # Every response and mail must be byte-identical, and so must the rows the
 # writes leave, apart from the clock readings. Exit 0 when they all are.
 #
@@ -21,11 +22,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../../.." && pwd)
 php2=${1:-$repo/target/release/php2}
 work=$repo/.tmp/wordpress-gate
-version=6.8.3
+version=7.1.4
 mkdir -p "$work"
 cd "$work"
 
-if [ ! -d wordpress ]; then
+installed=$(sed -n "s/^\$wp_version = '\(.*\)';/\1/p" wordpress/wp-includes/version.php 2>/dev/null || true)
+if [ "$installed" != "$version" ]; then
+    [ -d wordpress ] && find wordpress -delete
     curl -sSfL -o wp.tar.gz "https://wordpress.org/wordpress-$version.tar.gz"
     curl -sSfL -o wp.tar.gz.sha1 "https://wordpress.org/wordpress-$version.tar.gz.sha1"
     [ "$(shasum -a 1 wp.tar.gz | cut -d' ' -f1)" = "$(cat wp.tar.gz.sha1)" ] || { echo "wordpress-$version.tar.gz: sha1 mismatch"; exit 1; }
@@ -33,6 +36,21 @@ if [ ! -d wordpress ]; then
     sed -e "s/'database_name_here'/getenv('WPDBNAME')/" -e "s/'username_here'/'wp'/" -e "s/'password_here'/'wp'/" \
         -e "s/'localhost'/getenv('WPDBHOST')/" wordpress/wp-config-sample.php > wordpress/wp-config.php
 fi
+# Plugins and a classic theme from wordpress.org, pinned: "path sha256".
+mkdir -p dl
+for pin in \
+    plugin/contact-form-7.6.2.3.zip:4766cbc9b433128e43a8af9af8d97b3a7106273e743a19cd645bff5ed2141261 \
+    plugin/classic-editor.1.7.0.zip:7cc7799b0b7d820fbb7528dbff8027c736e52513992416cb37279f44d3d9dd77 \
+    plugin/wordpress-seo.28.8.zip:27cc01cb149db7186ef750552a5cc2ae5028933473886e419918af273b075105 \
+    plugin/woocommerce.11.2.1.zip:5317434cb381b5fdc7c1dd6ee258324f08c390976aaf8d1199f2a0e9a3ab8586 \
+    theme/twentytwentyone.2.9.zip:51d4ac1dcaef18b0e35a1a313bce8115d3aa4ff315bb1143f95c223c38817d8b; do
+    path=${pin%%:*} sum=${pin#*:} zip=dl/$(basename "${pin%%:*}")
+    [ -f "$zip" ] || curl -sSfL -o "$zip" "https://downloads.wordpress.org/$path"
+    [ "$(shasum -a 256 "$zip" | cut -d' ' -f1)" = "$sum" ] || { echo "$zip: sha256 mismatch"; exit 1; }
+    dir=wordpress/wp-content/${path%%/*}s
+    slug=$(basename "$path" .zip)
+    [ -d "$dir/${slug%%.[0-9]*}" ] || unzip -qo "$zip" -d "$dir"
+done
 cp "$here/page.php" "$here/install.php" "$here/setup.php" .
 # A sendmail that keeps what it is given (in $MAILBOX).
 printf '#!/bin/sh\ncat >> "$MAILBOX"\n' > sendmail.sh
@@ -81,12 +99,17 @@ p8() {
 # The time of the request, which wp-admin prints: as timestamps (its user
 # settings, the editor's post lock, the customizer's clock), as the clock, and as the dates of the
 # posts and comments made today (the test content is dated 2026-01-01, so
-# today's date is only ever the clock). A mail's Date and Message-ID and an
-# embed's secret are random, made by random_int().
+# today's date is only ever the clock; the classic editor's time fields and
+# post lock are the clock too). A mail's Date and Message-ID, an embed's
+# secret, a UUID (the customizer's changeset) and the post-by-email
+# suggestions are random, made by random_int().
 today=$(date -u +%Y-%m-%d)
 clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"initialServerTimestamp":[0-9]+/"initialServerTimestamp":T/g' -e 's/"activePostLock":"[0-9]+:/"activePostLock":"T:/g' -e 's#(Universal|Local) time is <code>[^<]*</code>#\1 time is <code>T</code>#g' \
     -e "s/${today}([T ])[0-9]{2}:[0-9]{2}:[0-9]{2}/${today}\\1T/g" -e 's/(_edit_lock[[:space:]])[0-9]+:/\1T:/' \
-    -e 's/^Date: .*/Date: T/' -e 's/^Message-ID: <[^@]*@/Message-ID: <M@/' -e 's/(data-secret=\\?"|secret=)[A-Za-z0-9]{10}/\1S/g' "$1"; }
+    -e 's/^Date: .*/Date: T/' -e 's/^Message-ID: <[^@]*@/Message-ID: <M@/' -e 's/(data-secret=\\?"|secret=)[A-Za-z0-9]{10}/\1S/g' \
+    -e 's/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/UUID/g' \
+    -e 's/(name="(hidden_|cur_)?(hh|mn|ss)" value=")[0-9]{2}"/\1T"/g' -e 's/(id="active_post_lock" value=")[0-9]+:/\1T:/' \
+    -e 's#(random strings you could use: )<kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>#\1R#' "$1"; }
 
 php_ref install.php > install.php.out 2>/dev/null
 p8 install.php > install.p8.out 2>/dev/null
@@ -202,5 +225,13 @@ for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?s=hello 1:/wp-admin/site-editor.php; do
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "twentytwentythree: $url" WPUSER="$user" WPURL="$url"
+done
+setup "Twenty Twenty-One, Classic Editor and Contact Form 7" WPTHEME=twentytwentyone \
+    WPPLUGINS=classic-editor/classic-editor.php,contact-form-7/wp-contact-form-7.php
+for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?cat=1 0:/?p=9999 1:/wp-admin/ 1:/wp-admin/post-new.php '1:/wp-admin/post.php?post=1&action=edit' \
+    '1:/wp-admin/admin.php?page=wpcf7' '1:/wp-admin/admin.php?page=wpcf7-new' 1:/wp-admin/options-writing.php; do
+    user=${req%%:*} url=${req#*:}
+    [ "$user" = 0 ] && user=
+    request "twentytwentyone: $url" WPUSER="$user" WPURL="$url"
 done
 exit $failed

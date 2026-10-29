@@ -276,6 +276,45 @@ fn isset_string_offset(s: &PhpStr, k: &Value) -> Option<Value> {
     (0..len).contains(&at).then(|| Value::Str(PhpStr::from(&s.as_bytes()[at as usize..at as usize + 1])))
 }
 
+/// Whether two callables are one autoloader (spl_autoload_register's
+/// check): the same object, function names equal but for case, or the same
+/// object (or class) and method, however written ("C::m" or ['C', 'm']).
+/// Two closures are never one unless they are the same Closure.
+fn same_autoloader(a: &Value, b: &Value) -> bool {
+    enum Target {
+        Object(Rc<p8_runtime::object::Object>),
+        Name(Vec<u8>),
+    }
+    let name = |s: &[u8]| s.strip_prefix(b"\\").unwrap_or(s).to_ascii_lowercase();
+    let target = |v: &Value| match v.deref() {
+        Value::Object(o) => Some(Target::Object(o)),
+        Value::Str(s) => Some(Target::Name(name(s.as_bytes()))),
+        _ => None,
+    };
+    // (what, method): a function or object has no method.
+    let key = |v: &Value| -> Option<(Target, Option<Vec<u8>>)> {
+        match v.deref() {
+            Value::Object(o) => Some((Target::Object(o), None)),
+            Value::Str(s) => match s.as_bytes().windows(2).position(|w| w == b"::") {
+                Some(i) => Some((Target::Name(name(&s.as_bytes()[..i])), Some(s.as_bytes()[i + 2..].to_ascii_lowercase()))),
+                None => Some((Target::Name(name(s.as_bytes())), None)),
+            },
+            Value::Array(arr) if arr.len() == 2 => {
+                let method = arr.get_int(1)?.deref().to_php_string()?.as_bytes().to_ascii_lowercase();
+                Some((target(arr.get_int(0)?)?, Some(method)))
+            }
+            _ => None,
+        }
+    };
+    let (Some((x, xm)), Some((y, ym))) = (key(a), key(b)) else { return false };
+    let same = match (x, y) {
+        (Target::Object(p), Target::Object(q)) => Rc::ptr_eq(&p, &q),
+        (Target::Name(p), Target::Name(q)) => p == q,
+        _ => false,
+    };
+    same && xm == ym
+}
+
 /// The builtin constants PHP marks deprecated (CONST_DEPRECATED), as one
 /// a FetchConst names (or falls back to).
 fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static str> {
@@ -3424,6 +3463,14 @@ impl Context<'_> {
                 let r = self.run_native(native, m.this.as_ref(), &mut buf);
                 *regs = std::mem::take(&mut self.isolate.regs);
                 self.native_class = saved;
+                if let Err(Throw::Autoload(_)) = r {
+                    // The call runs again after the autoloaders: its
+                    // arguments go back (as call_builtin's do).
+                    for (slot, v) in regs[args..args + argc as usize].iter_mut().zip(buf) {
+                        *slot = v;
+                    }
+                    return r.map(|_| Next::Go(pc));
+                }
                 // An error the method raised: the trace shows its call on
                 // top (not a hook's, `$name::get`: PHP has no frame there).
                 if let (Err(Throw::Error { .. }), Some(scope)) = (&r, &m.scope)
@@ -4509,7 +4556,7 @@ impl Ctx for Context<'_> {
     }
 
     fn autoloader(&mut self, callable: Value, register: Option<bool>) -> bool {
-        let at = self.autoloaders.iter().position(|a| a.identical(&callable) || a.loose_eq(&callable));
+        let at = self.autoloaders.iter().position(|a| same_autoloader(a, &callable));
         match (register, at) {
             (Some(_), Some(_)) => true,
             (Some(true), None) => {

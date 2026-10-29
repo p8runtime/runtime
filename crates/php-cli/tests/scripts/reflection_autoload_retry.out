@@ -1,0 +1,7 @@
+load A3
+string(2) "A3"
+load A4
+bool(true)
+string(2) "A4"
+load A5
+string(2) "A5"
