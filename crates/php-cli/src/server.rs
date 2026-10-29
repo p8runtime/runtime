@@ -633,7 +633,7 @@ impl Server<'_> {
             Some(i) => {
                 let addr = peer[..i].trim_start_matches('[').trim_end_matches(']');
                 known("REMOTE_ADDR", addr.as_bytes());
-                known("REMOTE_PORT", peer[i + 1..].as_bytes());
+                known("REMOTE_PORT", &peer.as_bytes()[i + 1..]);
             }
             None => known("REMOTE_ADDR", peer.as_bytes()),
         }

@@ -389,7 +389,6 @@ fn header_block(cur: &mut Cur, req: &mut HttpRequest, flags: &mut (i64, bool)) -
             if is_length && !(c == b'\r' || c == b'\n') && !c.is_ascii_digit() {
                 return Err(Stop::Bad);
             }
-            let mut c = c;
             loop {
                 if c == b'\r' || c == b'\n' {
                     value = cur.buf[value_start..cur.pos - 1].to_vec();
@@ -503,7 +502,8 @@ mod tests {
         assert_eq!(r.header("host"), Some(&b"localhost:8080"[..]));
         // A repeated header joins; the original-case table keeps both spellings.
         assert_eq!(r.header("x-a"), Some(&b"1, 2"[..]));
-        assert_eq!(r.headers_original.len(), 2);
+        let spelled: Vec<&[u8]> = r.headers_original.iter().map(|(k, _)| k.as_slice()).collect();
+        assert_eq!(spelled, [&b"Host"[..], b"X-A", b"x-a"]);
     }
 
     #[test]

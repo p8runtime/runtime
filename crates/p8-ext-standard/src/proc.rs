@@ -109,7 +109,7 @@ fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             return Err(ctx.throw("ValueError", "proc_open(): Argument #2 ($descriptor_spec) must be an integer indexed array".into()));
         };
         let Some((stdio, is_pipe)) = descriptor(ctx, fd, value)? else {
-            return Err(ctx.throw("ValueError", format!("proc_open(): Argument #2 ($descriptor_spec) must only contain arrays and streams")));
+            return Err(ctx.throw("ValueError", "proc_open(): Argument #2 ($descriptor_spec) must only contain arrays and streams".into()));
         };
         match fd {
             0 => cmd.stdin(stdio),

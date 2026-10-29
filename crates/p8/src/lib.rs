@@ -253,12 +253,12 @@ impl Context<'_> {
         }
         if let Some(auth) = header("authorization") {
             if auth.len() >= 6 && auth[..6].eq_ignore_ascii_case(b"Basic ") {
-                if let Some(decoded) = request::base64_decode(&auth[6..]) {
-                    if let Some(colon) = decoded.iter().position(|&c| c == b':') {
-                        server.insert(Key::Str(PhpStr::from("PHP_AUTH_USER")), Value::Str(PhpStr::from(&decoded[..colon])));
-                        if colon + 1 < decoded.len() {
-                            server.insert(Key::Str(PhpStr::from("PHP_AUTH_PW")), Value::Str(PhpStr::from(&decoded[colon + 1..])));
-                        }
+                if let Some(decoded) = request::base64_decode(&auth[6..])
+                    && let Some(colon) = decoded.iter().position(|&c| c == b':')
+                {
+                    server.insert(Key::Str(PhpStr::from("PHP_AUTH_USER")), Value::Str(PhpStr::from(&decoded[..colon])));
+                    if colon + 1 < decoded.len() {
+                        server.insert(Key::Str(PhpStr::from("PHP_AUTH_PW")), Value::Str(PhpStr::from(&decoded[colon + 1..])));
                     }
                 }
             } else if auth.len() > 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
