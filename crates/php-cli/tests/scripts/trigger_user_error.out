@@ -1,0 +1,12 @@
+handler(8192, 4437): Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead
+caught from handler
+ob-caught
+takes 8192: Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead
+takes 256: handled
+bool(true)
+declines 8192
+
+Deprecated: Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead in %s on line 13
+declines 256
+
+Fatal error: declined in %s on line 13

@@ -420,8 +420,15 @@ fn define(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(true))
 }
 
+/// defined($name): a constant, or a class constant (`A::B`, the class
+/// autoloaded) the running code can see.
 fn defined(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(ctx.constant(str_arg(args, 0).as_bytes()).is_some()))
+    let name = str_arg(args, 0);
+    let text = name.as_bytes();
+    if let Some(at) = text.windows(2).position(|w| w == b"::") {
+        return class::class_constant_defined(ctx, &text[..at], &text[at + 2..]).map(Value::Bool);
+    }
+    Ok(Value::Bool(ctx.constant(text).is_some()))
 }
 
 

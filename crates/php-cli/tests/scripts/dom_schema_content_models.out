@@ -1,0 +1,97 @@
+##### a* z
+<r/> =>   Missing child element(s). Expected is one of ( a, z ).
+<r><a/></r> =>   Missing child element(s). Expected is one of ( a, z ).
+<r><a/><a/><c/></r> =>   This element is not expected. Expected is one of ( a, z ).
+<r><c/></r> =>   This element is not expected. Expected is one of ( a, z ).
+<r><z/><z/></r> =>   This element is not expected.
+<r><a/><z/><a/></r> =>   This element is not expected.
+##### a+ z
+<r/> =>   Missing child element(s). Expected is ( a ).
+<r><a/></r> =>   Missing child element(s). Expected is one of ( a, z ).
+<r><a/><a/><c/></r> =>   This element is not expected. Expected is one of ( a, z ).
+<r><c/></r> =>   This element is not expected. Expected is ( a ).
+<r><z/></r> =>   This element is not expected. Expected is ( a ).
+<r><a/><z/><a/></r> =>   This element is not expected.
+##### a+ only
+<r/> =>   Missing child element(s). Expected is ( a ).
+<r><a/></r> => ok
+<r><a/><c/></r> =>   This element is not expected. Expected is ( a ).
+<r><c/></r> =>   This element is not expected. Expected is ( a ).
+##### a* only
+<r/> => ok
+<r><a/><c/></r> =>   This element is not expected. Expected is ( a ).
+<r><c/></r> =>   This element is not expected. Expected is ( a ).
+##### a{1,3} z
+<r/> =>   Missing child element(s). Expected is ( a ).
+<r><a/></r> =>   Missing child element(s). Expected is ( a ).
+<r><a/><a/><a/><a/></r> =>   This element is not expected. Expected is ( z ).
+<r><a/><c/></r> =>   This element is not expected. Expected is ( z ).
+##### a? z
+<r/> =>   Missing child element(s). Expected is one of ( a, z ).
+<r><a/></r> =>   Missing child element(s). Expected is ( z ).
+<r><c/></r> =>   This element is not expected. Expected is one of ( a, z ).
+<r><a/><c/></r> =>   This element is not expected. Expected is ( z ).
+<r><a/><a/></r> =>   This element is not expected. Expected is ( z ).
+##### (a,b)+ z
+<r/> =>   Missing child element(s). Expected is ( a ).
+<r><a/></r> =>   Missing child element(s). Expected is ( b ).
+<r><a/><b/></r> =>   Missing child element(s). Expected is one of ( a, z ).
+<r><a/><b/><c/></r> =>   This element is not expected. Expected is one of ( a, z ).
+<r><a/><b/><a/></r> =>   Missing child element(s). Expected is ( b ).
+<r><a/><c/></r> =>   This element is not expected. Expected is ( b ).
+##### (a|b)+ z
+<r/> =>   Missing child element(s). Expected is one of ( a, b ).
+<r><a/></r> =>   Missing child element(s). Expected is one of ( a, b ).
+<r><a/><b/></r> =>   Missing child element(s). Expected is one of ( a, b ).
+<r><a/><b/><c/></r> =>   This element is not expected. Expected is ( z ).
+<r><c/></r> =>   This element is not expected. Expected is one of ( a, b ).
+##### choice once
+<r/> =>   Missing child element(s). Expected is one of ( a, b ).
+<r><c/></r> =>   This element is not expected. Expected is one of ( a, b ).
+<r><a/><b/></r> =>   This element is not expected.
+<r><a/><a/></r> =>   This element is not expected.
+##### choice opt then z
+<r/> =>   Missing child element(s). Expected is one of ( a, b, z ).
+<r><c/></r> =>   This element is not expected. Expected is one of ( a, b, z ).
+<r><a/><c/></r> =>   This element is not expected. Expected is ( z ).
+<r><a/></r> =>   Missing child element(s). Expected is ( z ).
+##### a b? c
+<r/> =>   Missing child element(s). Expected is ( a ).
+<r><a/></r> =>   Missing child element(s). Expected is one of ( b, c ).
+<r><a/><b/></r> =>   Missing child element(s). Expected is ( c ).
+<r><a/><x/></r> =>   This element is not expected. Expected is one of ( b, c ).
+<r><a/><b/><x/></r> =>   This element is not expected. Expected is ( c ).
+<r><a/><b/><b/></r> =>   This element is not expected. Expected is ( c ).
+##### a b* c
+<r><a/></r> =>   Missing child element(s). Expected is one of ( b, c ).
+<r><a/><b/></r> =>   Missing child element(s). Expected is one of ( b, c ).
+<r><a/><x/></r> =>   This element is not expected. Expected is one of ( b, c ).
+<r><a/><b/><x/></r> =>   This element is not expected. Expected is one of ( b, c ).
+<r><a/><b/><b/><x/></r> =>   This element is not expected. Expected is one of ( b, c ).
+<r><a/><c/><b/></r> =>   This element is not expected.
+##### a b+ c+
+<r><a/></r> =>   Missing child element(s). Expected is ( b ).
+<r><a/><b/></r> =>   Missing child element(s). Expected is one of ( b, c ).
+<r><a/><b/><c/><x/></r> =>   This element is not expected. Expected is ( c ).
+<r><a/><b/><c/><b/></r> =>   This element is not expected. Expected is ( c ).
+<r><a/><x/></r> =>   This element is not expected. Expected is ( b ).
+##### a{2,} 
+<r/> =>   Missing child element(s). Expected is ( a ).
+<r><a/></r> =>   Missing child element(s). Expected is ( a ).
+<r><a/><a/><x/></r> =>   This element is not expected.
+##### nested choice-seq
+<r/> =>   Missing child element(s). Expected is one of ( a, c ).
+<r><a/></r> =>   Missing child element(s). Expected is ( b ).
+<r><c/></r> =>   Missing child element(s). Expected is ( d ).
+<r><a/><x/></r> =>   This element is not expected. Expected is ( b ).
+<r><a/><d/></r> =>   This element is not expected. Expected is ( b ).
+<r><x/></r> =>   This element is not expected. Expected is one of ( a, c ).
+##### choice unbounded only
+<r><a/><x/></r> =>   This element is not expected.
+<r><x/></r> =>   This element is not expected. Expected is one of ( a, b ).
+<r><a/><b/><a/><x/></r> =>   This element is not expected.
+##### choice unbounded in seq w/ opt
+<r><a/><x/></r> =>   This element is not expected. Expected is ( z ).
+<r><x/></r> =>   This element is not expected. Expected is one of ( a, b, z ).
+<r><z/><x/></r> =>   This element is not expected.
+<r><z/><a/></r> =>   This element is not expected.

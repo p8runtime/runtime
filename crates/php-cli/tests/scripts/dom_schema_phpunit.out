@@ -1,0 +1,310 @@
+== 11.5 minimal
+VALID
+== 11.5 wp92
+INVALID
+  L2 C1866 col0 line14 Element 'phpunit', attribute 'convertErrorsToExceptions': The attribute 'convertErrorsToExceptions' is not allowed.
+  L2 C1866 col0 line14 Element 'phpunit', attribute 'convertWarningsToExceptions': The attribute 'convertWarningsToExceptions' is not allowed.
+  L2 C1866 col0 line14 Element 'phpunit', attribute 'convertNoticesToExceptions': The attribute 'convertNoticesToExceptions' is not allowed.
+  L2 C1866 col0 line14 Element 'phpunit', attribute 'convertDeprecationsToExceptions': The attribute 'convertDeprecationsToExceptions' is not allowed.
+  L2 C1871 col0 line36 Element 'log': This element is not expected.
+  L2 C1871 col0 line41 Element 'filter': This element is not expected.
+== 11.5 typical
+VALID
+== 11.5 unknown_attr
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'colors': 'maybe' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1826 col0 line1 Element 'phpunit', attribute 'columns': 'abc' is not a valid value of the union type 'columnsType'.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'foo': The attribute 'foo' is not allowed.
+== 11.5 unknown_child
+INVALID
+  L2 C1871 col0 line1 Element 'foo': This element is not expected.
+== 11.5 bad_order
+INVALID
+  L2 C1868 col0 line1 Element 'env': The attribute 'value' is required but missing.
+  L2 C1868 col0 line1 Element 'testsuite': The attribute 'name' is required but missing.
+== 11.5 dup_child
+INVALID
+  L2 C1871 col0 line1 Element 'source': This element is not expected.
+== 11.5 text
+INVALID
+  L2 C1843 col0 line1 Element 'phpunit': Character content other than whitespace is not allowed because the content type is 'element-only'.
+  L2 C1843 col0 line1 Element 'testsuite': Character content other than whitespace is not allowed because the content type is 'element-only'.
+== 11.5 testsuites_empty
+INVALID
+  L2 C1871 col0 line1 Element 'testsuites': Missing child element(s). Expected is ( testsuite ).
+== 11.5 bad_enum
+INVALID
+  L2 C1840 col0 line1 Element 'phpunit', attribute 'executionOrder': [facet 'enumeration'] The value 'sideways' is not an element of the set {'default', 'defects', 'defects,random', 'depends', 'depends,defects', 'depends,duration', 'depends,random', 'depends,reverse', 'depends,size', 'duration', 'no-depends', 'no-depends,defects', 'no-depends,duration', 'no-depends,random', 'no-depends,reverse', 'no-depends,size', 'random', 'reverse', 'size'}.
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'cacheDirectory': 'a%zz' is not a valid value of the atomic type 'xs:anyURI'.
+== 11.5 wrong_root
+INVALID
+  L2 C1845 col0 line1 Element 'foo': No matching global declaration available for the validation root.
+== 11.5 groups_bad
+INVALID
+  L2 C1871 col0 line1 Element 'groups': Missing child element(s). Expected is one of ( include, exclude ).
+== 11.5 groups_two
+VALID
+== 11.5 ints
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'shortenArraysForExportThreshold': 'x' is not a valid value of the atomic type 'xs:integer'.
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'timeoutForSmallTests': '1.5' is not a valid value of the atomic type 'xs:integer'.
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'stderr': 'yes' is not a valid value of the atomic type 'xs:boolean'.
+== 11.5 multiline
+INVALID
+  L2 C1824 col0 line3 Element 'phpunit', attribute 'colors': 'x' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1866 col0 line3 Element 'phpunit', attribute 'foo': The attribute 'foo' is not allowed.
+  L2 C1871 col0 line5 Element 'bogus': This element is not expected. Expected is ( testsuite ).
+== 11.5 old9
+INVALID
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'backupStaticAttributes': The attribute 'backupStaticAttributes' is not allowed.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'convertErrorsToExceptions': The attribute 'convertErrorsToExceptions' is not allowed.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'syntaxCheck': The attribute 'syntaxCheck' is not allowed.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'verbose': The attribute 'verbose' is not allowed.
+  L2 C1871 col0 line3 Element 'filter': This element is not expected.
+== 11.5 coverage9
+INVALID
+  L2 C1866 col0 line1 Element 'coverage', attribute 'processUncoveredFiles': The attribute 'processUncoveredFiles' is not allowed.
+  L2 C1866 col0 line1 Element 'coverage', attribute 'cacheDirectory': The attribute 'cacheDirectory' is not allowed.
+  L2 C1871 col0 line1 Element 'include': This element is not expected.
+== 11.5 extensions
+INVALID
+  L2 C1871 col0 line1 Element 'extension': This element is not expected. Expected is ( bootstrap ).
+  L2 C1868 col0 line1 Element 'ini': The attribute 'value' is required but missing.
+== 11.5 default_ns
+INVALID
+  L2 C1845 col0 line1 Element '{http://example.org/ns}phpunit': No matching global declaration available for the validation root.
+== 11.5 comments_pi
+VALID
+== 11.5 whitespace
+VALID
+== 11.5 bad_bool
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'colors': 'TRUE' is not a valid value of the atomic type 'xs:boolean'.
+== 11.5 dup_testsuite_attr
+INVALID
+  L2 C1866 col0 line1 Element 'testsuite', attribute 'name2': The attribute 'name2' is not allowed.
+  L2 C1868 col0 line1 Element 'testsuite': The attribute 'name' is required but missing.
+  L2 C1871 col0 line1 Element 'testsuite': This element is not expected.
+== 11.5 mixed_all
+INVALID
+  L2 C1871 col0 line1 Element 'testsuites': This element is not expected.
+== 11.5 text_in_leaf
+INVALID
+  L2 C1866 col0 line1 Element 'directory', attribute 'bogus': The attribute 'bogus' is not allowed.
+  L2 C1871 col0 line1 Element 'x': This element is not expected.
+== 11.5 php_children
+INVALID
+  L2 C1868 col0 line1 Element 'env': The attribute 'name' is required but missing.
+  L2 C1868 col0 line1 Element 'env': The attribute 'value' is required but missing.
+  L2 C1868 col0 line1 Element 'const': The attribute 'name' is required but missing.
+  L2 C1866 col0 line1 Element 'var', attribute 'extra': The attribute 'extra' is not allowed.
+  L2 C1871 col0 line1 Element 'unknown': This element is not expected.
+== 11.5 logging11
+INVALID
+  L2 C1871 col0 line1 Element 'junit': This element is not expected.
+== 11.5 groups_empty_include
+INVALID
+  L2 C1871 col0 line1 Element 'include': Missing child element(s). Expected is ( group ).
+== 11.5 groups_dup
+INVALID
+  L2 C1871 col0 line1 Element 'include': This element is not expected.
+== 9.6 minimal
+VALID
+== 9.6 wp92
+INVALID
+  L2 C1871 col0 line36 Element 'log': This element is not expected.
+  L2 C1871 col0 line41 Element 'filter': This element is not expected.
+== 9.6 typical
+INVALID
+  L2 C1866 col0 line9 Element 'phpunit', attribute 'cacheDirectory': The attribute 'cacheDirectory' is not allowed.
+  L2 C1871 col0 line17 Element 'source': This element is not expected.
+== 9.6 unknown_attr
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'colors': 'maybe' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1826 col0 line1 Element 'phpunit', attribute 'columns': 'abc' is not a valid value of the union type 'columnsType'.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'foo': The attribute 'foo' is not allowed.
+== 9.6 unknown_child
+INVALID
+  L2 C1871 col0 line1 Element 'foo': This element is not expected.
+== 9.6 bad_order
+INVALID
+  L2 C1868 col0 line1 Element 'env': The attribute 'value' is required but missing.
+  L2 C1868 col0 line1 Element 'testsuite': The attribute 'name' is required but missing.
+== 9.6 dup_child
+INVALID
+  L2 C1871 col0 line1 Element 'source': This element is not expected.
+== 9.6 text
+INVALID
+  L2 C1843 col0 line1 Element 'phpunit': Character content other than whitespace is not allowed because the content type is 'element-only'.
+  L2 C1843 col0 line1 Element 'testsuite': Character content other than whitespace is not allowed because the content type is 'element-only'.
+== 9.6 testsuites_empty
+INVALID
+  L2 C1871 col0 line1 Element 'testsuites': Missing child element(s). Expected is ( testsuite ).
+== 9.6 bad_enum
+INVALID
+  L2 C1840 col0 line1 Element 'phpunit', attribute 'executionOrder': [facet 'enumeration'] The value 'sideways' is not an element of the set {'default', 'defects', 'depends', 'depends,defects', 'depends,duration', 'depends,random', 'depends,reverse', 'depends,size', 'duration', 'no-depends', 'no-depends,defects', 'no-depends,duration', 'no-depends,random', 'no-depends,reverse', 'no-depends,size', 'random', 'reverse', 'size'}.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'cacheDirectory': The attribute 'cacheDirectory' is not allowed.
+== 9.6 wrong_root
+INVALID
+  L2 C1845 col0 line1 Element 'foo': No matching global declaration available for the validation root.
+== 9.6 groups_bad
+INVALID
+  L2 C1871 col0 line1 Element 'groups': Missing child element(s). Expected is one of ( include, exclude ).
+== 9.6 groups_two
+VALID
+== 9.6 ints
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'timeoutForSmallTests': '1.5' is not a valid value of the atomic type 'xs:integer'.
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'stderr': 'yes' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'shortenArraysForExportThreshold': The attribute 'shortenArraysForExportThreshold' is not allowed.
+== 9.6 multiline
+INVALID
+  L2 C1824 col0 line3 Element 'phpunit', attribute 'colors': 'x' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1866 col0 line3 Element 'phpunit', attribute 'foo': The attribute 'foo' is not allowed.
+  L2 C1871 col0 line5 Element 'bogus': This element is not expected. Expected is ( testsuite ).
+== 9.6 old9
+INVALID
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'syntaxCheck': The attribute 'syntaxCheck' is not allowed.
+  L2 C1871 col0 line3 Element 'filter': This element is not expected.
+== 9.6 coverage9
+VALID
+== 9.6 extensions
+INVALID
+  L2 C1871 col0 line1 Element 'bootstrap': This element is not expected. Expected is ( extension ).
+  L2 C1868 col0 line1 Element 'ini': The attribute 'value' is required but missing.
+== 9.6 default_ns
+INVALID
+  L2 C1845 col0 line1 Element '{http://example.org/ns}phpunit': No matching global declaration available for the validation root.
+== 9.6 comments_pi
+VALID
+== 9.6 whitespace
+VALID
+== 9.6 bad_bool
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'colors': 'TRUE' is not a valid value of the atomic type 'xs:boolean'.
+== 9.6 dup_testsuite_attr
+INVALID
+  L2 C1866 col0 line1 Element 'testsuite', attribute 'name2': The attribute 'name2' is not allowed.
+  L2 C1868 col0 line1 Element 'testsuite': The attribute 'name' is required but missing.
+  L2 C1871 col0 line1 Element 'testsuite': This element is not expected.
+== 9.6 mixed_all
+INVALID
+  L2 C1871 col0 line1 Element 'testsuites': This element is not expected.
+== 9.6 text_in_leaf
+INVALID
+  L2 C1871 col0 line1 Element 'source': This element is not expected.
+== 9.6 php_children
+INVALID
+  L2 C1868 col0 line1 Element 'env': The attribute 'name' is required but missing.
+  L2 C1868 col0 line1 Element 'env': The attribute 'value' is required but missing.
+  L2 C1868 col0 line1 Element 'const': The attribute 'name' is required but missing.
+  L2 C1866 col0 line1 Element 'var', attribute 'extra': The attribute 'extra' is not allowed.
+  L2 C1871 col0 line1 Element 'unknown': This element is not expected.
+== 9.6 logging11
+INVALID
+  L2 C1871 col0 line1 Element 'junit': This element is not expected.
+== 9.6 groups_empty_include
+INVALID
+  L2 C1871 col0 line1 Element 'include': Missing child element(s). Expected is ( group ).
+== 9.6 groups_dup
+INVALID
+  L2 C1871 col0 line1 Element 'include': This element is not expected.
+== 9.2 minimal
+VALID
+== 9.2 wp92
+VALID
+== 9.2 typical
+INVALID
+  L2 C1866 col0 line9 Element 'phpunit', attribute 'cacheDirectory': The attribute 'cacheDirectory' is not allowed.
+  L2 C1871 col0 line17 Element 'source': This element is not expected.
+== 9.2 unknown_attr
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'colors': 'maybe' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1826 col0 line1 Element 'phpunit', attribute 'columns': 'abc' is not a valid value of the union type 'columnsType'.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'foo': The attribute 'foo' is not allowed.
+== 9.2 unknown_child
+INVALID
+  L2 C1871 col0 line1 Element 'foo': This element is not expected.
+== 9.2 bad_order
+INVALID
+  L2 C1868 col0 line1 Element 'env': The attribute 'value' is required but missing.
+  L2 C1868 col0 line1 Element 'testsuite': The attribute 'name' is required but missing.
+== 9.2 dup_child
+INVALID
+  L2 C1871 col0 line1 Element 'source': This element is not expected.
+== 9.2 text
+INVALID
+  L2 C1843 col0 line1 Element 'phpunit': Character content other than whitespace is not allowed because the content type is 'element-only'.
+  L2 C1843 col0 line1 Element 'testsuite': Character content other than whitespace is not allowed because the content type is 'element-only'.
+== 9.2 testsuites_empty
+INVALID
+  L2 C1871 col0 line1 Element 'testsuites': Missing child element(s). Expected is ( testsuite ).
+== 9.2 bad_enum
+INVALID
+  L2 C1840 col0 line1 Element 'phpunit', attribute 'executionOrder': [facet 'enumeration'] The value 'sideways' is not an element of the set {'default', 'defects', 'depends', 'depends,defects', 'depends,duration', 'depends,random', 'depends,reverse', 'depends,size', 'duration', 'no-depends', 'no-depends,defects', 'no-depends,duration', 'no-depends,random', 'no-depends,reverse', 'no-depends,size', 'random', 'reverse', 'size'}.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'cacheDirectory': The attribute 'cacheDirectory' is not allowed.
+== 9.2 wrong_root
+INVALID
+  L2 C1845 col0 line1 Element 'foo': No matching global declaration available for the validation root.
+== 9.2 groups_bad
+INVALID
+  L2 C1871 col0 line1 Element 'groups': Missing child element(s). Expected is one of ( include, exclude ).
+== 9.2 groups_two
+VALID
+== 9.2 ints
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'timeoutForSmallTests': '1.5' is not a valid value of the atomic type 'xs:integer'.
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'stderr': 'yes' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'shortenArraysForExportThreshold': The attribute 'shortenArraysForExportThreshold' is not allowed.
+== 9.2 multiline
+INVALID
+  L2 C1824 col0 line3 Element 'phpunit', attribute 'colors': 'x' is not a valid value of the atomic type 'xs:boolean'.
+  L2 C1866 col0 line3 Element 'phpunit', attribute 'foo': The attribute 'foo' is not allowed.
+  L2 C1871 col0 line5 Element 'bogus': This element is not expected. Expected is ( testsuite ).
+== 9.2 old9
+INVALID
+  L2 C1866 col0 line1 Element 'phpunit', attribute 'syntaxCheck': The attribute 'syntaxCheck' is not allowed.
+== 9.2 coverage9
+INVALID
+  L2 C1871 col0 line1 Element 'coverage': This element is not expected.
+== 9.2 extensions
+INVALID
+  L2 C1871 col0 line1 Element 'bootstrap': This element is not expected. Expected is ( extension ).
+  L2 C1868 col0 line1 Element 'ini': The attribute 'value' is required but missing.
+== 9.2 default_ns
+INVALID
+  L2 C1845 col0 line1 Element '{http://example.org/ns}phpunit': No matching global declaration available for the validation root.
+== 9.2 comments_pi
+VALID
+== 9.2 whitespace
+VALID
+== 9.2 bad_bool
+INVALID
+  L2 C1824 col0 line1 Element 'phpunit', attribute 'colors': 'TRUE' is not a valid value of the atomic type 'xs:boolean'.
+== 9.2 dup_testsuite_attr
+INVALID
+  L2 C1866 col0 line1 Element 'testsuite', attribute 'name2': The attribute 'name2' is not allowed.
+  L2 C1868 col0 line1 Element 'testsuite': The attribute 'name' is required but missing.
+  L2 C1871 col0 line1 Element 'testsuite': This element is not expected.
+== 9.2 mixed_all
+INVALID
+  L2 C1871 col0 line1 Element 'testsuites': This element is not expected.
+== 9.2 text_in_leaf
+INVALID
+  L2 C1871 col0 line1 Element 'source': This element is not expected.
+== 9.2 php_children
+INVALID
+  L2 C1868 col0 line1 Element 'env': The attribute 'name' is required but missing.
+  L2 C1868 col0 line1 Element 'env': The attribute 'value' is required but missing.
+  L2 C1868 col0 line1 Element 'const': The attribute 'name' is required but missing.
+  L2 C1866 col0 line1 Element 'var', attribute 'extra': The attribute 'extra' is not allowed.
+  L2 C1871 col0 line1 Element 'unknown': This element is not expected.
+== 9.2 logging11
+INVALID
+  L2 C1871 col0 line1 Element 'junit': This element is not expected. Expected is ( log ).
+== 9.2 groups_empty_include
+INVALID
+  L2 C1871 col0 line1 Element 'include': Missing child element(s). Expected is ( group ).
+== 9.2 groups_dup
+INVALID
+  L2 C1871 col0 line1 Element 'include': This element is not expected.

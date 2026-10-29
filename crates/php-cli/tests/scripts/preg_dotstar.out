@@ -1,0 +1,58 @@
+1000: 2 No error
+20000: 2 No error
+200000: 2 No error
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(3) "abx"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(3) "cdx"
+      [1]=>
+      int(4)
+    }
+  }
+}
+int(2)
+array(2) {
+  [0]=>
+  string(3) "abx"
+  [1]=>
+  string(3) "cdx"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(5) "ab
+cx"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(3) "qbc"
+}
+int(1)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(4)
+  }
+}
+int(1)
+array(2) {
+  [0]=>
+  string(4) "abab"
+  [1]=>
+  string(2) "ab"
+}

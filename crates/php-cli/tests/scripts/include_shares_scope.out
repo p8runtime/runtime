@@ -1,0 +1,9 @@
+string(8) "global g"
+string(8) "global h"
+string(21) "through the reference"
+bool(false)
+string(9) "made here"
+string(20) "from the nested file"
+stop
+string(12) "changed by f"
+string(16) "changed by f too"

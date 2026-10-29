@@ -43,10 +43,7 @@ impl Context<'_> {
     ) -> Result<Option<Result<Arc<Program>, ()>>, Throw> {
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         let shown = String::from_utf8_lossy(name.as_bytes()).into_owned();
-        let include_path = match Ctx::ini_get(self, b"include_path") {
-            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-            _ => ".".to_string(),
-        };
+        let include_path = self.include_path();
         let found = if name.is_empty() { None } else { resolve(&shown, &include_path, current) };
         let source = found.as_ref().and_then(|p| std::fs::read(p).ok().map(|s| (p.clone(), s)));
         let Some((path, source)) = source else {
@@ -91,6 +88,30 @@ impl Context<'_> {
 }
 
 impl Context<'_> {
+    fn include_path(&self) -> String {
+        match Ctx::ini_get(self, b"include_path") {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            _ => ".".to_string(),
+        }
+    }
+
+    /// Where `name` is found the way an include looks for it, as a
+    /// canonical path (stream_resolve_include_path()). Like PHP's
+    /// php_resolve_path, anything that exists counts, a directory too (so
+    /// "" names the first include_path directory).
+    pub(crate) fn resolve_include_path(&self, name: &str) -> Option<PathBuf> {
+        let current = self.location().0;
+        let path = Path::new(name);
+        let candidates: Vec<PathBuf> = if path.is_absolute() || name.starts_with("./") || name.starts_with("../") {
+            vec![path.to_path_buf()]
+        } else {
+            let mut c: Vec<PathBuf> = self.include_path().split(':').filter(|d| !d.is_empty()).map(|d| Path::new(d).join(name)).collect();
+            c.extend(Path::new(&*current).parent().map(|d| d.join(name)));
+            c
+        };
+        candidates.into_iter().find_map(|p| std::fs::canonicalize(p).ok())
+    }
+
     /// eval(): the code compiled, its functions and classes declared. A
     /// parse error is a ParseError thrown where eval() was called.
     pub(crate) fn load_eval(&mut self, code: &Value) -> Result<Arc<Program>, Throw> {

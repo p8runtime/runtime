@@ -1,0 +1,7 @@
+Base::check
+Base::pub
+Base::check
+Child::name
+Child::check
+Child::pub
+Call to protected method Child::check() from global scope

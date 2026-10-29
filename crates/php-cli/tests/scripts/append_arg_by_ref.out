@@ -1,0 +1,13 @@
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  ["k"]=>
+  array(1) {
+    [0]=>
+    string(1) "c"
+  }
+}
+Error: Cannot use [] for reading
+int(4)

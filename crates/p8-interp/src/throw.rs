@@ -179,6 +179,7 @@ impl Context<'_> {
 
 /// Pop the top frame without a result (an exception left it).
 fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
+    crate::give_back_shared(frames, regs);
     let frame = frames.pop();
     frame.extra = None;
     let base = frame.base as usize;

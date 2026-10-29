@@ -10,6 +10,7 @@ mod errors;
 mod parser;
 mod simplexml;
 mod writer;
+mod xsd;
 mod xml;
 mod libxml;
 mod xpath;

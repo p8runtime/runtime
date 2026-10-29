@@ -33,7 +33,10 @@ impl Context<'_> {
         // Each lookup asks the autoloaders, as PHP's do, except while they
         // are running for this class (no recursion) and in the retry of
         // the instruction that asked them.
-        if !self.autoloaders.is_empty() {
+        // Only a name that can be a class's is autoloaded (zend_is_valid_class_name):
+        // never "" or "a-b".
+        let valid = !name.is_empty() && name.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80);
+        if valid && !self.autoloaders.is_empty() {
             if self.autoload_retry.as_ref() == Some(&lower) {
                 self.autoload_retry = None;
             } else if self.autoload_tried.insert(lower) {
@@ -118,6 +121,10 @@ impl Context<'_> {
             let r = self.call_with_regs(regs, &handler, &mut args);
             self.in_handler = false;
             if let Value::Bool(false) = r? {
+                // An E_USER_ERROR the handler declines is fatal.
+                if level == 256 {
+                    return Err(Throw::Fatal { message, file, line });
+                }
                 self.print_diag(level, &message, &file, line);
             }
         }

@@ -74,7 +74,8 @@ impl XmlError {
             _ => "parser ",
         };
         let level = if self.level == LEVEL_WARNING { "warning" } else { "error" };
-        let mut lines = vec![format!("{file}: line {}: {domain}{level} : {}", self.line, self.message.trim_end_matches('\n'))];
+        let place = if self.file.is_some() { format!("{file}:{}:", self.line) } else { format!("{file}: line {}:", self.line) };
+        let mut lines = vec![format!("{place} {domain}{level} : {}", self.message.trim_end_matches('\n'))];
         let content = String::from_utf8_lossy(&self.context).into_owned();
         let mut caret: String = content.chars().take(self.context_col).map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
         caret.push('^');

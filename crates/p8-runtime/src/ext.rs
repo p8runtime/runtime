@@ -101,6 +101,9 @@ pub trait Ctx {
     /// Report a diagnostic of PHP error `level` (E_USER_NOTICE, E_WARNING,
     /// ...) at the current line, if error_reporting includes it.
     fn report(&mut self, level: i64, message: &str);
+    /// Whether a user error handler takes errors of `level` now (it runs
+    /// after the builtin returns).
+    fn user_handles(&self, level: i64) -> bool;
     /// A fatal error at the current line: the request ends with it.
     fn fatal(&self, message: String) -> Throw;
     /// ini_get(): the setting's current value as a string (null when PHP
@@ -127,6 +130,9 @@ pub trait Ctx {
     fn define(&mut self, name: &[u8], value: Value) -> bool;
     /// Whether a function `name` exists (any case, optional leading `\`).
     fn function_exists(&self, name: &[u8]) -> bool;
+    /// Where `include name` would find its file (include_path, then the
+    /// running file's directory), as a canonical path.
+    fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf>;
     /// The name the running builtin was called by (an alias's own name:
     /// gzread, not fread), for its messages.
     fn builtin_name(&self) -> &'static str;

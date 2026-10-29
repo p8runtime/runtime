@@ -95,6 +95,62 @@ const NO_RET: u32 = u32::MAX;
 struct Extra {
     args: Box<[Value]>,
     vars: Vars,
+    /// A file's code included in a function's scope: where each of its
+    /// variables is the including frame's. Their bindings go back there
+    /// when it ends: `global $x`, `$x = &$y`, `unset($x)` in the file
+    /// rebind the function's variable, as one symbol table in PHP.
+    shared: Option<Box<[Origin]>>,
+}
+
+/// Where an included file's variable lives in the scope that included it.
+enum Origin {
+    /// That frame's variable register (absolute).
+    Slot(u32),
+    /// That frame's variable only named at run time.
+    Var(Vec<u8>),
+}
+
+/// The ending frame's variable bindings, back to the scope that included
+/// it (when it is a file's code sharing a function's scope).
+#[inline(always)]
+fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
+    let n = frames.len;
+    let Some(origins) = frames.slots[n - 1].extra.as_mut().and_then(|e| e.shared.take()) else { return };
+    let base = frames.slots[n - 1].base as usize;
+    for (i, origin) in origins.iter().enumerate() {
+        let v = std::mem::take(&mut regs[base + i]);
+        match origin {
+            Origin::Slot(at) => regs[*at as usize] = v,
+            Origin::Var(name) => {
+                let vars = &mut frames.slots[n - 2].vars_mut().0;
+                let at = vars.iter().position(|(n, _)| n == name);
+                match (v, at) {
+                    (Value::Ref(cell), Some(at)) => vars[at].1 = cell,
+                    (Value::Ref(cell), None) => vars.push((name.clone(), cell)),
+                    (_, Some(at)) => {
+                        vars.remove(at);
+                    }
+                    (_, None) => {}
+                }
+            }
+        }
+    }
+    // Its variables only named at run time (a file it included made them)
+    // are the including scope's too.
+    let made = frames.slots[n - 1].extra.as_mut().map(|e| std::mem::take(&mut e.vars.0)).unwrap_or_default();
+    for (name, cell) in made {
+        let below = &mut frames.slots[n - 2];
+        match below.func.code.cv_names.iter().position(|c| c.as_bytes() == name.as_slice()) {
+            Some(r) => regs[below.base as usize + r] = Value::Ref(cell),
+            None => {
+                let vars = &mut below.vars_mut().0;
+                match vars.iter().position(|(n, _)| *n == name) {
+                    Some(at) => vars[at].1 = cell,
+                    None => vars.push((name, cell)),
+                }
+            }
+        }
+    }
 }
 
 impl Frame {
@@ -772,6 +828,7 @@ fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
 /// register; the caller (if any) resumes at its saved pc.
 #[inline(always)]
 fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
+    give_back_shared(frames, regs);
     let frame = frames.pop();
     frame.extra = None;
     // Locals die with the frame (before the result lands: the result
@@ -1850,14 +1907,15 @@ impl Context<'_> {
 
     /// Print a diagnostic of PHP error `level` at the current line, as the
     /// CLI does, if error_reporting and display_errors let it through.
+    /// Whether the user error handler takes errors of `level` now.
+    fn user_handles_level(&self, level: i64) -> bool {
+        !self.in_handler && matches!(self.error_handlers.last(), Some((h, mask)) if mask & level != 0 && !matches!(h, Value::Null))
+    }
+
     fn show(&mut self, level: i64, message: &str) {
         // A user error handler gets it (after the instruction), whatever
         // error_reporting says.
-        if !self.in_handler
-            && let Some((_, mask)) = self.error_handlers.last()
-            && mask & level != 0
-            && !matches!(self.error_handlers.last(), Some((Value::Null, _)))
-        {
+        if self.user_handles_level(level) {
             let (file, line) = self.location();
             self.pending_errors.push((level, message.to_string(), file, line));
             return;
@@ -2924,6 +2982,10 @@ impl Context<'_> {
                         let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
                         reg!(a) = Value::Bool(set);
                     }
+                    Rare::ThrowError => {
+                        let message = reg!(a).to_php_string().unwrap_or_else(PhpStr::empty);
+                        return Err(self.throw("Error", String::from_utf8_lossy(message.as_bytes()).into_owned()));
+                    }
                     Rare::CallableArgByRef => {
                         let callee = reg!(b).clone();
                         let by_ref = self.resolve_callable(&callee).is_ok_and(|t| self.takes_ref(&t, class as usize));
@@ -3750,12 +3812,21 @@ impl Context<'_> {
         // that is global scope (however deep in includes), else its locals.
         let global = self.frames.last().is_some_and(|f| f.global);
         let mut cells: Vec<Rc<RefCell<Value>>> = Vec::with_capacity(main.cv_names.len());
+        let mut origins: Vec<Origin> = Vec::new();
         for name in &main.cv_names {
             cells.push(match func.cv_names.iter().position(|n| n == name) {
-                Some(r) => make_ref(&mut regs[base..base + func.nregs as usize], r as Reg),
+                Some(r) => {
+                    if !global {
+                        origins.push(Origin::Slot((base + r) as u32));
+                    }
+                    make_ref(&mut regs[base..base + func.nregs as usize], r as Reg)
+                }
                 // (The main frame's window starts at register 0.)
                 None if global => self.global_cell(regs, name.as_bytes()),
-                None => self.frames.last_mut().expect("the including frame").vars_mut().cell(name.as_bytes()),
+                None => {
+                    origins.push(Origin::Var(name.as_bytes().to_vec()));
+                    self.frames.last_mut().expect("the including frame").vars_mut().cell(name.as_bytes())
+                }
             });
         }
         let (this, scope, called) = match self.frames.last() {
@@ -3776,6 +3847,9 @@ impl Context<'_> {
         }
         let frame = self.frames.last_mut().expect("the file's frame");
         (frame.this, frame.scope, frame.called, frame.global) = (this, scope, called, global);
+        if !global {
+            frame.extra.get_or_insert_with(Default::default).shared = Some(origins.into_boxed_slice());
+        }
         Next::Switch
     }
 
@@ -4605,6 +4679,10 @@ impl Ctx for Context<'_> {
         self.show(level, message);
     }
 
+    fn user_handles(&self, level: i64) -> bool {
+        self.user_handles_level(level)
+    }
+
     fn fatal(&self, message: String) -> Throw {
         let (file, line) = self.location();
         Throw::Fatal { message, file, line }
@@ -4662,6 +4740,10 @@ impl Ctx for Context<'_> {
 
     fn modules(&self) -> &[&'static str] {
         self.isolate.registry.modules()
+    }
+
+    fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.resolve_include_path(name)
     }
 
     fn function_exists(&self, name: &[u8]) -> bool {
@@ -5193,7 +5275,7 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 /// variadic parameter's `CollectVariadic`).
 #[cold]
 fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
-    Some(Box::new(Extra { args: regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect(), vars: Vars::default() }))
+    Some(Box::new(Extra { args: regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect(), vars: Vars::default(), shared: None }))
 }
 
 /// unset(a[k1]..[kn]) on a value; whether anything changed.

@@ -1059,6 +1059,9 @@ impl<'src> Compiler<'src> {
         }
         let mut f = FnBuilder::new(Text::from("{main}"));
         f.strict = self.strict;
+        // A file's code runs in the scope that includes it, a function's
+        // too: its superglobals are bound like a function's.
+        self.bind_superglobals(&mut f, 0, self.source.len());
         self.stmts(&mut f, stmts)?;
         // A file's code ends returning 1 (what including it gives); eval()'s
         // returns null.
@@ -1753,6 +1756,22 @@ impl<'src> Compiler<'src> {
     /// The file's superglobal references (see `superglobals`): every `$`
     /// followed by a superglobal's name, as a prefix (`$_GETx` counts, as
     /// the body scan it replaces counted it).
+    /// Bind the superglobals named between `start` and `end` of the source
+    /// to the global variables, first thing (as `global $_SERVER;`).
+    fn bind_superglobals(&mut self, f: &mut FnBuilder, start: usize, end: usize) {
+        // Which are named there: from the file's one scan.
+        let refs = self.superglobal_refs();
+        let from = refs.partition_point(|&(at, _)| at < start);
+        let named = refs[from..].iter().take_while(|&&(at, _)| at < end).fold(0u16, |m, &(_, i)| m | 1 << i);
+        for (i, name) in SUPERGLOBALS.iter().enumerate() {
+            if named & (1 << i) != 0 {
+                let var = f.cv(name.as_bytes());
+                let name_reg = f.constant(Frozen::Str(Text::from(*name)));
+                f.emit(Instr::BindGlobal { var, name: name_reg & ((1 << KIND_SHIFT) - 1) });
+            }
+        }
+    }
+
     fn superglobal_refs(&mut self) -> &[(usize, u8)] {
         let source = self.source;
         self.superglobals.get_or_insert_with(|| {
@@ -1875,17 +1894,7 @@ impl<'src> Compiler<'src> {
             Body::Expr(e) | Body::Get(e) | Body::Set(_, e) => Some((e.span().start, e.span().end)),
         };
         if let Some((start, end)) = span {
-            // Which are named in the body: from the file's one scan.
-            let refs = self.superglobal_refs();
-            let from = refs.partition_point(|&(at, _)| at < start);
-            let named = refs[from..].iter().take_while(|&&(at, _)| at < end).fold(0u16, |m, &(_, i)| m | 1 << i);
-            for (i, name) in SUPERGLOBALS.iter().enumerate() {
-                if named & (1 << i) != 0 {
-                    let var = f.cv(name.as_bytes());
-                    let name_reg = f.constant(Frozen::Str(Text::from(*name)));
-                    f.emit(Instr::BindGlobal { var, name: name_reg & ((1 << KIND_SHIFT) - 1) });
-                }
-            }
+            self.bind_superglobals(&mut f, start, end);
         }
         let mut captures = Vec::new();
         match body {
@@ -2844,7 +2853,7 @@ impl<'src> Compiler<'src> {
                     let var = f.cv(&self.text(*name)[1..]);
                     f.emit(send(n as u8, *r, var));
                 }
-                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref(value) => {
+                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref_arg(value) => {
                     let flag = f.temp();
                     f.emit(asks(flag, n as u8));
                     self.ref_or_value_with(f, value, *r, flag)?;
@@ -2870,6 +2879,7 @@ impl<'src> Compiler<'src> {
     /// The branch on `flag`: the element or property as a reference, or its value.
     fn ref_or_value_with(&mut self, f: &mut FnBuilder, value: &Expr, r: Reg, flag: Reg) -> Result<()> {
         let by_value = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
+        let appends = matches!(value, Expr::ArrayDimFetch { dim: None, .. });
         match value {
             Expr::PropertyFetch { target, property, .. } => {
                 let obj = self.expr(f, target)?;
@@ -2886,7 +2896,14 @@ impl<'src> Compiler<'src> {
         }
         let end = f.emit(Instr::Jump { target: 0 });
         f.patch(by_value, f.here());
-        self.expr_into(f, value, r)?;
+        if appends {
+            // `$a[]` to a parameter that takes a value: PHP's error, when
+            // the call shows it.
+            let message = f.constant(Frozen::Str(Text::from("Cannot use [] for reading")));
+            f.emit(Instr::rare(Rare::ThrowError, message, 0, 0, 0));
+        } else {
+            self.expr_into(f, value, r)?;
+        }
         f.patch(end, f.here());
         Ok(())
     }
@@ -2894,6 +2911,15 @@ impl<'src> Compiler<'src> {
     /// An element or property that can be made a reference: a property,
     /// or a dimension path (no `[]` read) rooted in a variable, a property
     /// or a static property.
+    /// An argument whose callee is found as the call runs may be `$a[]`
+    /// (a new element, when the parameter takes a reference).
+    fn can_ref_arg(&self, e: &Expr) -> bool {
+        match e {
+            Expr::ArrayDimFetch { array, dim: None, .. } => self.can_ref(array),
+            _ => self.can_ref(e),
+        }
+    }
+
     fn can_ref(&self, e: &Expr) -> bool {
         let mut cur = e;
         while let Expr::ArrayDimFetch { array, dim, .. } = cur {
@@ -4498,7 +4524,7 @@ impl<'src> Compiler<'src> {
                 }
                 // An element or property for a function not known yet: the
                 // function, found when the call runs, decides.
-                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if modes[n].is_none() && self.can_ref(value) => {
+                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if modes[n].is_none() && self.can_ref_arg(value) => {
                     self.ref_or_value(f, value, *r, Instr::FuncArgByRef { dst: 0, site, n: n as u8 })?;
                 }
                 // An array element or property passed by reference becomes one.

@@ -1,0 +1,175 @@
+bool(false)
+int(-1)
+Warning: DOMDocument::xinclude(): Invalid flags
+bool(false)
+-- relative href, xml and text
+int(3)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><part a="1"><b>x</b></part><inner xmlns:xi="http://www.w3.org/2001/XInclude" xml:base="sub/inner.xml"><deep/><part a="1" xml:base="../part.xml"><b>x</b></part></inner>plain &amp; text
+</root>
+
+-- text encoding
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude">caf&#xE9;
+</root>
+
+-- unsupported encoding
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="latin.txt" parse="text" encoding="nope"/></root>
+
+2 1610 encoding nope not supported | DIR/main.xml:1
+2 1604 could not load DIR/latin.txt, and no fallback was found | DIR/main.xml:1
+-- 2003 namespace
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2003/XInclude"><deep xml:base="sub/deep.xml"/></root>
+
+-- fallback
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><f/>tail</root>
+
+1 1549 failed to load external entity "DIR/gone.xml" | :0
+-- no fallback
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="gone.xml"/></root>
+
+1 1549 failed to load external entity "DIR/gone.xml" | :0
+2 1604 could not load DIR/gone.xml, and no fallback was found | DIR/main.xml:1
+-- fallback with an include, and one that fails
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><part a="1"><b>x</b></part><xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="gone2.xml"/></root>
+
+1 1549 failed to load external entity "DIR/gone.xml" | :0
+1 1549 failed to load external entity "DIR/gone2.xml" | :0
+2 1604 could not load DIR/gone2.xml, and no fallback was found | DIR/main.xml:1
+-- nested fallback in included file
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><f xmlns:xi="http://www.w3.org/2001/XInclude">FB<part a="1"><b>x</b></part></f></root>
+
+1 1549 failed to load external entity "DIR/gone.xml" | :0
+-- local recursion
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="main.xml"/></root>
+
+2 1600 detected a local recursion with no xpointer in DIR/main.xml | DIR/main.xml:1
+-- recursion through a file
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><l xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="loop.xml"/></l></root>
+
+2 1600 detected a local recursion with no xpointer in DIR/loop.xml | DIR/loop.xml:1
+-- not well-formed
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="bad.xml"/></root>
+
+3 77 Premature end of data in tag a line 1 | DIR/bad.xml:1
+2 1604 could not load DIR/bad.xml, and no fallback was found | DIR/main.xml:1
+-- bad parse value
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="part.xml" parse="foo"/></root>
+
+2 1601 invalid value foo for 'parse' | DIR/main.xml:1
+-- fallback outside include
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:fallback/></root>
+
+2 1616 fallback is not the child of an 'include' | DIR/main.xml:1
+-- two fallbacks
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="gone.xml"><xi:fallback/><xi:fallback/></xi:include></root>
+
+2 1615 include has multiple fallback children | DIR/main.xml:1
+-- include in include
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="part.xml"><deep xml:base="sub/deep.xml"/></xi:include></root>
+
+2 1614 include has an 'include' child | DIR/main.xml:1
+-- one failure, one success
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="gone.xml"/><part a="1"><b>x</b></part></root>
+
+1 1549 failed to load external entity "DIR/gone.xml" | :0
+2 1604 could not load DIR/gone.xml, and no fallback was found | DIR/main.xml:1
+-- NOBASEFIX
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><inner xmlns:xi="http://www.w3.org/2001/XInclude"><deep/><part a="1"><b>x</b></part></inner></root>
+
+-- xml:base on the include
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="part.xml" xml:base="elsewhere/"/></root>
+
+1 1549 failed to load external entity "DIR/elsewhere/part.xml" | :0
+2 1604 could not load DIR/elsewhere/part.xml, and no fallback was found | DIR/main.xml:1
+-- xml:base on an ancestor
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude" xml:base="sub/"><x><part a="1" xml:base="../part.xml"><b>x</b></part></x></root>
+
+-- whole document with a comment
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><!-- c --><r2 xmlns:z="urn:z"><k id="1"/><z:k id="2"/></r2></root>
+
+-- xpointer(): elements
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><k id="1"/><z:k xmlns:z="urn:z" id="2"/></root>
+
+-- xpointer in href
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><b>x</b></root>
+
+-- element() child sequence
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><z:k xmlns:z="urn:z" id="2"/></root>
+
+-- xpointer selects nothing
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="doc.xml" xpointer="xpointer(/zzz)"/></root>
+
+2 1612 XPointer evaluation failed: #xpointer(/zzz) | DIR/main.xml:1
+2 1604 could not load DIR/doc.xml, and no fallback was found | DIR/main.xml:1
+-- xpointer names no id
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="doc.xml" xpointer="nothere"/></root>
+
+2 1604 could not load DIR/doc.xml, and no fallback was found | DIR/main.xml:1
+-- xpointer to the document itself
+int(1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><a><b/></a><a><b/></a></root>
+
+-- root is the include
+int(1)
+<?xml version="1.0"?>
+<part a="1"><b>x</b></part>
+
+-- warnings
+Warning: DOMDocument::xinclude(): I/O warning : failed to load external entity "DIR/gone.xml"
+Warning: DOMDocument::xinclude(): could not load DIR/gone.xml, and no fallback was found
+Warning: DOMDocument::xinclude(): DIR/bad.xml:1: parser error : Premature end of data in tag a line 1
+Warning: DOMDocument::xinclude(): <a>
+Warning: DOMDocument::xinclude():    ^
+int(-1)
+<?xml version="1.0"?>
+<root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="gone.xml"/></root>
+

@@ -678,6 +678,17 @@ impl Context<'_> {
                 format!("Call to undefined method {}::{}()", text(&class.name), String::from_utf8_lossy(display)),
             ));
         };
+        // Code of a class calling its own private method on one of its
+        // instances calls that method, even where a subclass declares one
+        // of the same name (zend_std_get_method: the subclass's "changed"
+        // the private one).
+        let method = match self.scope().0 {
+            Some(scope) if method.declaring != scope.lower && class.is_a(&scope.lower) => match scope.methods.get(lower) {
+                Some(own) if own.visibility == Visibility::Private && own.declaring == scope.lower => own.clone(),
+                _ => method,
+            },
+            _ => method,
+        };
         let declaring = self.declaring(&class, &method.declaring);
         if !visible(method.visibility, &declaring, self.scope().0.as_deref()) {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
