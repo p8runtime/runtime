@@ -648,6 +648,23 @@ impl Context<'_> {
         self.classes.get(lower).cloned().unwrap_or_else(|| Rc::clone(class))
     }
 
+    /// The class a method's protected access is checked against: the top
+    /// of the classes declaring it (zend_get_function_root_class), so two
+    /// subclasses of the class that first declared it may call each other's.
+    fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, lower: &[u8]) -> Rc<Class> {
+        let mut root = Rc::clone(declaring);
+        if method.visibility != Visibility::Protected {
+            return root;
+        }
+        while let Some(parent) = root.parent.clone() {
+            match parent.methods.get(lower) {
+                Some(m) if m.visibility != Visibility::Private => root = self.declaring(&parent, &m.declaring),
+                _ => break,
+            }
+        }
+        root
+    }
+
     /// `$obj->method(args)`: the frame to push.
     pub(crate) fn method_frame(&mut self, target: &Value, lower: &[u8], display: &[u8]) -> Result<MethodFrame, Throw> {
         let object = match target {
@@ -690,7 +707,7 @@ impl Context<'_> {
             _ => method,
         };
         let declaring = self.declaring(&class, &method.declaring);
-        if !visible(method.visibility, &declaring, self.scope().0.as_deref()) {
+        if !visible(method.visibility, &self.access_class(&declaring, &method, lower), self.scope().0.as_deref()) {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
                 return Ok(m);
             }
@@ -723,7 +740,7 @@ impl Context<'_> {
         };
         let declaring = self.declaring(&target, &method.declaring);
         let (scope, called) = self.scope();
-        if !visible(method.visibility, &declaring, scope.as_deref()) {
+        if !visible(method.visibility, &self.access_class(&declaring, &method, lower), scope.as_deref()) {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(m);
             }

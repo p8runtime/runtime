@@ -128,6 +128,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(ctype::BUILTINS);
     registry.add_functions(zlib::BUILTINS);
     registry.add_classes(zlib::CLASSES);
+    registry.add_classes(file::CLASSES);
     registry.add_data("DeflateContext", zlib::make_deflate);
     registry.add_data("InflateContext", zlib::make_inflate);
     for (name, value) in zlib::CONSTANTS {

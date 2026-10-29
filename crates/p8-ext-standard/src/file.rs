@@ -9,8 +9,8 @@
 
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::ext::{Builtin, Ctx, Throw};
-use p8_runtime::object::Object;
+use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
+use p8_runtime::object::{Native, Object, Visibility};
 use p8_runtime::stream::{Resource, Stream, Target, resource, resource_of};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -80,6 +80,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "stream_get_wrappers", run: stream_get_wrappers, by_ref: &[] },
     Builtin { name: "readdir", run: readdir, by_ref: &[] },
     Builtin { name: "rewinddir", run: rewinddir, by_ref: &[] },
+    Builtin { name: "dir", run: dir, by_ref: &[] },
     Builtin { name: "closedir", run: fclose, by_ref: &[] },
 ];
 
@@ -973,6 +974,59 @@ fn rewinddir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     with_stream(&o, |s| s.seek(0, 0));
     Ok(Value::Null)
 }
+
+/// dir($directory): a Directory holding opendir()'s handle, or false.
+fn dir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let path = arg(args, 0);
+    let handle = opendir(ctx, args)?;
+    if let Value::Bool(false) = handle {
+        return Ok(handle);
+    }
+    let class = ctx.class(b"Directory").expect("Directory");
+    let o = ctx.new_object(&class);
+    o.class.write(&o, b"path", b"Directory", path);
+    o.class.write(&o, b"handle", b"Directory", handle);
+    Ok(Value::Object(o))
+}
+
+/// A Directory method's handle, while it is open.
+fn dir_handle(ctx: &mut dyn Ctx, this: &Rc<Object>, func: &str) -> Result<Value, Throw> {
+    let handle = this.class.read(this, b"handle", b"Directory");
+    match resource_of(&handle) {
+        Some(o) if resource(&o).is_some_and(|r| !r.closed.get()) => Ok(handle),
+        _ => Err(ctx.throw("TypeError", format!("Directory::{func}(): supplied resource is not a valid Directory resource"))),
+    }
+}
+
+fn directory_read(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let handle = dir_handle(ctx, this, "read")?;
+    readdir(ctx, &mut [handle])
+}
+
+fn directory_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let handle = dir_handle(ctx, this, "rewind")?;
+    rewinddir(ctx, &mut [handle])
+}
+
+fn directory_close(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let handle = dir_handle(ctx, this, "close")?;
+    fclose(ctx, &mut [handle]).map(|_| Value::Null)
+}
+
+pub(crate) static CLASSES: &[ClassSpec] = &[ClassSpec {
+    name: "Directory",
+    parent: None,
+    interfaces: &[],
+    flags: 0,
+    properties: &[("path", Constant::Null, Visibility::Public), ("handle", Constant::Null, Visibility::Public)],
+    methods: &[
+        ("read", Some(Native::Method(directory_read))),
+        ("rewind", Some(Native::Method(directory_rewind))),
+        ("close", Some(Native::Method(directory_close))),
+    ],
+    constants: &[],
+    debug_info: None,
+}];
 
 /// stream_resolve_include_path($filename): where an include would find it.
 fn stream_resolve_include_path(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

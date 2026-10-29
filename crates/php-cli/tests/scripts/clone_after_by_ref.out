@@ -1,0 +1,8 @@
+int(2)
+int(3)
+int(3)
+int(3)
+int(3)
+
+Deprecated: Creation of dynamic property H::$dyn is deprecated in %s on line 16
+int(1)

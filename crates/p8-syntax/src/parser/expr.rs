@@ -1310,7 +1310,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Clone => {
                 self.bump();
-                let expr = self.parse_expr(200);
+                // The operand takes its calls, `[...]`, `->` and `::` (`clone
+                // f()` clones what f returns), not ++/-- or any operator.
+                let expr = self.parse_expr(185);
                 let span = Span::new(token.span.start, expr.span().end);
                 self.arena.alloc(Expr::Clone { expr, span })
             }

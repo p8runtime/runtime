@@ -525,7 +525,9 @@ impl Object {
                 Some(clone) => Some(Data(clone(self))),
                 None => self.data.as_ref().map(|d| Data(Rc::clone(&d.0))),
             },
-            slots: RefCell::new(self.slots.borrow().clone()),
+            // A property once passed by reference (ksort($this->a)) is a
+            // plain value again in the clone, not shared with it.
+            slots: RefCell::new(self.slots.borrow().iter().map(crate::array::dup).collect()),
             dynamic: RefCell::new(self.dynamic.borrow().clone()),
             id: self.ids.take(),
             ids: Rc::clone(&self.ids),
