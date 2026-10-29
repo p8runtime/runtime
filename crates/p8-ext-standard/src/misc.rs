@@ -368,9 +368,11 @@ fn gc_status(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
         ("threshold", Value::Int(10001)),
         ("buffer_size", Value::Int(16384)),
         ("roots", Value::Int(0)),
-        ("application_time", Value::Float(0.0)),
+        // No collector runs (reference counting frees what it can), so all
+        // the time is the application's.
+        ("application_time", Value::Float(ctx.running_for().as_secs_f64())),
         ("collector_time", Value::Float(0.0)),
-        ("dtor_time", Value::Float(0.0)),
+        ("destructor_time", Value::Float(0.0)),
         ("free_time", Value::Float(0.0)),
     ] {
         out.insert(Key::from_string(PhpStr::from(k)), v);

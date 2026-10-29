@@ -28,6 +28,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "fgetc", run: fgetc, by_ref: &[] },
     Builtin { name: "feof", run: feof, by_ref: &[] },
     Builtin { name: "stream_get_meta_data", run: stream_get_meta_data, by_ref: &[] },
+    Builtin { name: "stream_isatty", run: stream_isatty, by_ref: &[] },
     Builtin { name: "fflush", run: fflush, by_ref: &[] },
     Builtin { name: "ftell", run: ftell, by_ref: &[] },
     Builtin { name: "fseek", run: fseek, by_ref: &[] },
@@ -970,6 +971,20 @@ fn rewinddir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "rewinddir", args, 0)?;
     with_stream(&o, |s| s.seek(0, 0));
     Ok(Value::Null)
+}
+
+/// stream_isatty($stream): whether the stream is a terminal (a file opened
+/// on one, or the process's own STDIN/STDOUT/STDERR on one).
+fn stream_isatty(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    use std::io::IsTerminal;
+    let o = stream_arg(ctx, "stream_isatty", args, 0)?;
+    Ok(Value::Bool(with_stream(&o, |s| match &s.target {
+        Target::File(f) => f.is_terminal(),
+        Target::Stdin => std::io::stdin().is_terminal(),
+        Target::Stdout => std::io::stdout().is_terminal(),
+        Target::Stderr => std::io::stderr().is_terminal(),
+        _ => false,
+    })))
 }
 
 /// stream_get_meta_data($stream): what the stream is (wrapper, type, uri,
