@@ -1,0 +1,102 @@
+== <r><color>blue</color></r>
+INVALID
+  L2 C1840 line1 Element 'color': [facet 'enumeration'] The value 'blue' is not an element of the set {'red', 'green'}.
+== <r><small>0</small></r>
+INVALID
+  L2 C1833 line1 Element 'small': [facet 'minInclusive'] The value '0' is less than the minimum value allowed ('1').
+== <r><small>10</small></r>
+INVALID
+  L2 C1836 line1 Element 'small': [facet 'maxExclusive'] The value '10' must be less than '10'.
+== <r><small>abc</small></r>
+INVALID
+  L2 C1824 line1 Element 'small': 'abc' is not a valid value of the atomic type 'small'.
+== <r><code>abc1</code></r>
+INVALID
+  L2 C1839 line1 Element 'code': [facet 'pattern'] The value 'abc1' is not accepted by the pattern '[A-Z]{3}[0-9]+'.
+== <r><code>ABC1234567</code></r>
+INVALID
+  L2 C1832 line1 Element 'code': [facet 'maxLength'] The value has a length of '10'; this exceeds the allowed maximum length of '6'.
+== <r><ints>1 2 x</ints></r>
+INVALID
+  L2 C1824 line1 Element 'ints': 'x' is not a valid value of the atomic type 'xs:integer'.
+  L2 C1825 line1 Element 'ints': '1 2 x' is not a valid value of the list type 'ints'.
+== <r><ints>1 2 3</ints></r>
+VALID
+== <r><u>zzz</u></r>
+INVALID
+  L2 C1826 line1 Element 'u': 'zzz' is not a valid value of the union type 'intorcolor'.
+== <r><dec>12345</dec></r>
+INVALID
+  L2 C1837 line1 Element 'dec': [facet 'totalDigits'] The value '12345' has more digits than are allowed ('4').
+== <r><dec>1.234</dec></r>
+INVALID
+  L2 C1838 line1 Element 'dec': [facet 'fractionDigits'] The value '1.234' has more fractional digits than are allowed ('2').
+== <r><dec>1.2.3</dec></r>
+INVALID
+  L2 C1824 line1 Element 'dec': '1.2.3' is not a valid value of the atomic type 'dec'.
+== <r><len>ab</len></r>
+INVALID
+  L2 C1830 line1 Element 'len': [facet 'length'] The value has a length of '2'; this differs from the allowed length of '3'.
+== <r><minlen>a</minlen></r>
+INVALID
+  L2 C1831 line1 Element 'minlen': [facet 'minLength'] The value has a length of '1'; this underruns the allowed minimum length of '2'.
+== <r><anon>b</anon></r>
+INVALID
+  L2 C1840 line1 Element 'anon': [facet 'enumeration'] The value 'b' is not an element of the set {'a'}.
+== <r><anon2>7</anon2></r>
+INVALID
+  L2 C1834 line1 Element 'anon2': [facet 'maxInclusive'] The value '7' is greater than the maximum value allowed ('5').
+== <r><anon2>x</anon2></r>
+INVALID
+  L2 C1824 line1 Element 'anon2': 'x' is not a valid value of the local atomic type.
+== <r><lt>q</lt></r>
+INVALID
+  L2 C1824 line1 Element 'lt': 'q' is not a valid value of the atomic type 'localtest'.
+== <r><b>200</b></r>
+INVALID
+  L2 C1824 line1 Element 'b': '200' is not a valid value of the atomic type 'xs:byte'.
+== <r><dt>2020-13-01T00:00:00</dt></r>
+INVALID
+  L2 C1824 line1 Element 'dt': '2020-13-01T00:00:00' is not a valid value of the atomic type 'xs:dateTime'.
+== <r><d>2020-02-30</d></r>
+INVALID
+  L2 C1824 line1 Element 'd': '2020-02-30' is not a valid value of the atomic type 'xs:date'.
+== <r><fl>abc</fl></r>
+INVALID
+  L2 C1824 line1 Element 'fl': 'abc' is not a valid value of the atomic type 'xs:float'.
+== <r><hb>abc</hb></r>
+INVALID
+  L2 C1824 line1 Element 'hb': 'abc' is not a valid value of the atomic type 'xs:hexBinary'.
+== <r><tok>1a</tok></r>
+INVALID
+  L2 C1824 line1 Element 'tok': '1a' is not a valid value of the atomic type 'xs:NCName'.
+== <r><ps>0</ps></r>
+INVALID
+  L2 C1824 line1 Element 'ps': '0' is not a valid value of the atomic type 'xs:positiveInteger'.
+== <r><lang>toolonglang1</lang></r>
+INVALID
+  L2 C1824 line1 Element 'lang': 'toolonglang1' is not a valid value of the atomic type 'xs:language'.
+== <r><dur>P</dur></r>
+INVALID
+  L2 C1824 line1 Element 'dur': 'P' is not a valid value of the atomic type 'xs:duration'.
+== <r><nm></nm></r>
+VALID
+== <r c="blue" n="11" l="a b" u="zz" f="x"/>
+INVALID
+  L2 C1840 line1 Element 'r', attribute 'c': [facet 'enumeration'] The value 'blue' is not an element of the set {'red', 'green'}.
+  L2 C1836 line1 Element 'r', attribute 'n': [facet 'maxExclusive'] The value '11' must be less than '10'.
+  L2 C1824 line1 Element 'r', attribute 'l': 'a' is not a valid value of the atomic type 'xs:integer'.
+  L2 C1825 line1 Element 'r', attribute 'l': 'a b' is not a valid value of the list type 'ints'.
+  L2 C1826 line1 Element 'r', attribute 'u': 'zz' is not a valid value of the union type 'intorcolor'.
+  L2 C1874 line1 Element 'r', attribute 'f': The value 'x' does not match the fixed value constraint 'abc'.
+== <r><color> red </color></r>
+INVALID
+  L2 C1840 line1 Element 'color': [facet 'enumeration'] The value ' red ' is not an element of the set {'red', 'green'}.
+== <r><small> 5 </small></r>
+VALID
+== <r><code> ABC1</code></r>
+INVALID
+  L2 C1839 line1 Element 'code': [facet 'pattern'] The value ' ABC1' is not accepted by the pattern '[A-Z]{3}[0-9]+'.
+== <r><color/></r>
+INVALID
+  L2 C1840 line1 Element 'color': [facet 'enumeration'] The value '' is not an element of the set {'red', 'green'}.

@@ -1,0 +1,249 @@
+string that is not a schema
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L3 C4 col1 line1 Start tag expected, '<' not found
+  L2 C3067 col0 line0 Failed to parse the XML resource 'in_memory_buffer'.
+--
+<root/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C1772 col0 line0 The XML document 'in_memory_buffer' is not a schema document.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" type="nope"/></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3004 col0 line1 element decl. 'a', attribute 'type': The QName value 'nope' does not resolve to a(n) type definition.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" type="xs:string" bar="1"/></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3035 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element': The attribute 'bar' is not allowed.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element/></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3036 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element': The attribute 'name' is required but missing.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" minOccurs="2"/></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3035 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element': The attribute 'minOccurs' is not allowed.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" substitutionGroup="b"/><xs:element name="b" type="xs:string"/></xs:schema>
+bool(true)
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" type="xs:int"/><xs:element name="b" type="xs:string" substitutionGroup="a"/></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3047 col0 line1 element decl. 'b': The type definition '{http://www.w3.org/2001/XMLSchema}string' was either rejected by the substitution group affiliation 'a', or not validly derived from its type definition '{http://www.w3.org/2001/XMLSchema}int'.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:simpleType name="s"><xs:restriction base="nope:t"/></xs:simpleType></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3037 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}restriction', attribute 'base': The value 'nope:t' of simple type 'xs:QName' has no corresponding namespace declaration in scope.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType><xs:group ref="g"/></xs:complexType></xs:element></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}group', attribute 'ref': The QName value 'g' does not resolve to a(n) model group definition.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType><xs:attributeGroup ref="g"/></xs:complexType></xs:element></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}attributeGroup', attribute 'ref': The QName value 'g' does not resolve to a(n) attribute group definition.
+--
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="r"><xs:complexType><xs:sequence><xs:element ref="nope"/></xs:sequence></xs:complexType></xs:element></xs:schema>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 31
+bool(false)
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'ref': The QName value 'nope' does not resolve to a(n) element declaration.
+--
+<xs:element name="r"><xs:complexType><xs:sequence><xs:element name="a" type="nope"/></xs:sequence></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'type': References from this schema to components in no namespace are not allowed, since not indicated by an import statement.
+--
+<xs:element name="r"><xs:complexType><xs:attribute name="a" type="nope"/></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 attribute decl. 'a', attribute 'type': The QName value 'nope' does not resolve to a(n) simple type definition.
+--
+<xs:element name="r"><xs:complexType><xs:attribute ref="nope"/></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}attribute', attribute 'ref': References from this schema to components in no namespace are not allowed, since not indicated by an import statement.
+--
+<xs:attribute name="g" type="nope"/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 attribute decl. '{urn:t}g', attribute 'type': The QName value 'nope' does not resolve to a(n) simple type definition.
+--
+<xs:complexType name="c"><xs:complexContent><xs:extension base="nope"/></xs:complexContent></xs:complexType>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 complex type 'c', attribute 'base': The QName value 'nope' does not resolve to a(n) simple type definition.
+--
+<xs:complexType name="c"><xs:simpleContent><xs:extension base="xs:nope"/></xs:simpleContent></xs:complexType>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 complex type 'c', attribute 'base': The QName value '{http://www.w3.org/2001/XMLSchema}nope' does not resolve to a(n) simple type definition.
+--
+<xs:simpleType name="s"><xs:restriction base="xs:nope"/></xs:simpleType>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 simple type 's', attribute 'base': The QName value '{http://www.w3.org/2001/XMLSchema}nope' does not resolve to a(n) simple type definition.
+--
+<xs:simpleType name="s"><xs:list itemType="xs:nope"/></xs:simpleType>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 list type 's', attribute 'itemType': The QName value '{http://www.w3.org/2001/XMLSchema}nope' does not resolve to a(n) simple type definition.
+--
+<xs:simpleType name="s"><xs:union memberTypes="xs:int xs:nope t:nope"/></xs:simpleType>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 union type 's', attribute 'memberTypes': The QName value '{http://www.w3.org/2001/XMLSchema}nope' does not resolve to a(n) simple type definition.
+  L2 C3004 col0 line1 union type 's', attribute 'memberTypes': The QName value '{urn:t}nope' does not resolve to a(n) simple type definition.
+--
+<xs:element name="r" type="t:nope"/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 element decl. '{urn:t}r', attribute 'type': The QName value '{urn:t}nope' does not resolve to a(n) type definition.
+--
+<xs:element name="r" type="t:nope"/><xs:element name="q" type="x:y"/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3037 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'type': The value 'x:y' of simple type 'xs:QName' has no corresponding namespace declaration in scope.
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'type': References from this schema to components in no namespace are not allowed, since not indicated by an import statement.
+--
+<xs:element name="r" substitutionGroup="t:nope"/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line0 element decl. '{urn:t}r', attribute 'substitutionGroup': The QName value '{urn:t}nope' does not resolve to a(n) element declaration.
+--
+<xs:element name="r"><xs:complexType><xs:sequence><xs:element ref="t:nope"/></xs:sequence></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'ref': The QName value '{urn:t}nope' does not resolve to a(n) element declaration.
+--
+<xs:element name="r"><xs:complexType><xs:sequence><xs:element name="a" type="nope"/><xs:element name="b" type="nope2"/></xs:sequence></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'type': References from this schema to components in no namespace are not allowed, since not indicated by an import statement.
+  L2 C3004 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'type': References from this schema to components in no namespace are not allowed, since not indicated by an import statement.
+--
+<xs:element name="r"><xs:foo/></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3033 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element': The content is not valid. Expected is (annotation?, ((simpleType | complexType)?, (unique | key | keyref)*)).
+--
+<xs:element name="r"><xs:complexType><xs:foo/></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3033 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}complexType': The content is not valid. Expected is (annotation?, (simpleContent | complexContent | ((group | all | choice | sequence)?, ((attribute | attributeGroup)*, anyAttribute?)))).
+--
+<xs:foo/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3033 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}schema': The content is not valid. Expected is ((include | import | redefine | annotation)*, (((simpleType | complexType | group | attributeGroup) | element | attribute | notation), annotation*)*).
+--
+<xs:element name="r" default="a" fixed="b"/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3038 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element': The attributes 'default' and 'fixed' are mutually exclusive.
+--
+<xs:element name="r"><xs:complexType><xs:sequence><xs:element name="a" minOccurs="3" maxOccurs="2"/></xs:sequence></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3043 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element', attribute 'minOccurs': The value must not be greater than the value of 'maxOccurs'.
+--
+<xs:element name="r"/><xs:element name="r"/>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C1761 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element': A global element declaration '{urn:t}r' does already exist.
+--
+<xs:complexType name="c"/><xs:simpleType name="c"><xs:restriction base="xs:int"/></xs:simpleType>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C1761 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}simpleType': A global simple type definition '{urn:t}c' does already exist.
+--
+<xs:element name="r"><xs:complexType><xs:sequence><xs:element name="a"/><xs:element name="a" type="xs:int"/></xs:sequence></xs:complexType></xs:element>
+  L2 C1845 col0 line1 Element 'a': No matching global declaration available for the validation root.
+--
+<xs:element name="r"><xs:complexType><xs:all><xs:element name="a" maxOccurs="2"/></xs:all></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3091 col0 line1 Element '{http://www.w3.org/2001/XMLSchema}element': Invalid value for maxOccurs (must be 0 or 1).
+--
+<xs:element name="r"><xs:complexType><xs:attribute name="a"/><xs:attribute name="a"/></xs:complexType></xs:element>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 64
+  L2 C3087 col0 line1 local complex type: Duplicate attribute use 'a'.
+--
+
+Warning: DOMDocument::schemaValidate(): Invalid Schema in %s on line 68
+bool(false)
+  L1 C1549 col0 line0 failed to load external entity "/nonexistent.xsd"
+  L2 C1757 col0 line0 Failed to locate the main schema resource at '/nonexistent.xsd'.
+--
+
+Warning: DOMDocument::schemaValidate(): Invalid Schema in %s on line 72
+bool(false)
+  L3 C4 Start tag expected, '<' not found
+  L2 C3067 Failed to parse the XML resource 'FILE'.
+
+Warning: DOMDocument::schemaValidateSource(): Entity: line 1: parser error : Start tag expected, '<' not found in %s on line 81
+
+Warning: DOMDocument::schemaValidateSource(): string that is not a schema in %s on line 81
+
+Warning: DOMDocument::schemaValidateSource(): ^ in %s on line 81
+
+Warning: DOMDocument::schemaValidateSource(): Failed to parse the XML resource 'in_memory_buffer'. in %s on line 81
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 81
+bool(false)
+
+Warning: DOMDocument::schemaValidateSource(): The XML document 'in_memory_buffer' is not a schema document. in %s on line 82
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 82
+bool(false)
+
+Warning: DOMDocument::schemaValidateSource(): element decl. 'a', attribute 'type': The QName value 'nope' does not resolve to a(n) type definition. in %s on line 83
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 83
+bool(false)
+
+Warning: DOMDocument::schemaValidateSource(): Element 'a': No matching global declaration available for the validation root. in %s on line 84
+bool(false)
+
+Warning: DOMDocument::schemaValidate(): I/O warning : failed to load external entity "/nonexistent.xsd" in %s on line 85
+
+Warning: DOMDocument::schemaValidate(): Failed to locate the main schema resource at '/nonexistent.xsd'. in %s on line 85
+
+Warning: DOMDocument::schemaValidate(): Invalid Schema in %s on line 85
+bool(false)
+
+Warning: DOMDocument::schemaValidateSource(): The document has no document element. in %s on line 87
+bool(false)
+DOMDocument::schemaValidate(): Argument #1 ($filename) must not be empty
+DOMDocument::schemaValidateSource(): Argument #1 ($source) must not be empty
+DOMDocument::schemaValidate(): Argument #1 ($filename) must not contain any null bytes
+
+Warning: DOMDocument::schemaValidateSource(): Entity: line 1: parser error : Start tag expected, '<' not found in %s on line 91
+
+Warning: DOMDocument::schemaValidateSource(): a in %s on line 91
+
+Warning: DOMDocument::schemaValidateSource(): ^ in %s on line 91
+
+Warning: DOMDocument::schemaValidateSource(): Failed to parse the XML resource 'in_memory_buffer'. in %s on line 91
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 91
