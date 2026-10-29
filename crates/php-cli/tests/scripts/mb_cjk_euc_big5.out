@@ -1,0 +1,30 @@
+string(24) "61a4a262b4c1bbfaa5aba5ca"
+string(17) "aあb漢字カナ"
+string(16) "a4a4a4e5b4fab8d5"
+string(6) "中文"
+string(4) "3f78"
+string(4) "3f78"
+string(2) "??"
+bool(true)
+bool(false)
+int(2)
+array(3) {
+  [0]=>
+  string(7) "CN-BIG5"
+  [1]=>
+  string(8) "BIG-FIVE"
+  [2]=>
+  string(7) "BIGFIVE"
+}
+array(4) {
+  [0]=>
+  string(3) "EUC"
+  [1]=>
+  string(6) "EUC_JP"
+  [2]=>
+  string(5) "eucJP"
+  [3]=>
+  string(8) "x-euc-jp"
+}
+string(4) "BIG5"
+string(6) "EUC-JP"

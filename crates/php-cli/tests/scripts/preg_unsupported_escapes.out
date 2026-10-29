@@ -1,0 +1,27 @@
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: PCRE2 does not support \F, \L, \l, \N{name}, \U, or \u at offset 2
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: PCRE2 does not support \F, \L, \l, \N{name}, \U, or \u at offset 2
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: PCRE2 does not support \F, \L, \l, \N{name}, \U, or \u at offset 2
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: PCRE2 does not support \F, \L, \l, \N{name}, \U, or \u at offset 2
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: PCRE2 does not support \F, \L, \l, \N{name}, \U, or \u at offset 2
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: PCRE2 does not support \F, \L, \l, \N{name}, \U, or \u at offset 2
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: \N is not supported in a class at offset 3
+bool(false)
+string(14) "Internal error"
+preg_match(): Compilation failed: unrecognized character follows \ at offset 1
+int(1)
+string(8) "No error"
+preg_match(): Compilation failed: unrecognized character follows \ at offset 1

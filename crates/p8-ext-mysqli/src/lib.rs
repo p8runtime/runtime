@@ -414,6 +414,7 @@ link_op!(query, mysqli_query, m_query, "mysqli_query", "mysqli::query");
 link_op!(select_db, mysqli_select_db, m_select_db, "mysqli_select_db", "mysqli::select_db");
 link_op!(set_charset, mysqli_set_charset, m_set_charset, "mysqli_set_charset", "mysqli::set_charset");
 link_op!(character_set_name, mysqli_character_set_name, m_character_set_name, "mysqli_character_set_name", "mysqli::character_set_name");
+link_op!(get_charset, mysqli_get_charset, m_get_charset, "mysqli_get_charset", "mysqli::get_charset");
 link_op!(escape, mysqli_real_escape_string, m_real_escape_string, "mysqli_real_escape_string", "mysqli::real_escape_string");
 link_op!(errno, mysqli_errno, "mysqli_errno");
 link_op!(error, mysqli_error, "mysqli_error");
@@ -556,9 +557,34 @@ fn character_set_name(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: 
     Ok(Value::str(p8_mysqlnd::charset_by_nr(nr).map_or("", |c| c.name)))
 }
 
+/// get_charset(): the connection's character set (an stdClass, as mysqlnd
+/// describes it).
+fn get_charset(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
+    let l = connected(ctx, this)?;
+    let nr = l.conn.borrow().as_ref().expect("connected").charset;
+    let Some(cs) = p8_mysqlnd::charset_by_nr(nr) else { return Ok(Value::Null) };
+    let class = ctx.class(b"stdClass").expect("stdClass");
+    let o = ctx.new_object(&class);
+    for (k, v) in [
+        ("charset", Value::str(cs.name)),
+        ("collation", Value::str(cs.collation)),
+        ("dir", Value::str("")),
+        ("min_length", Value::Int(1)),
+        ("max_length", Value::Int(i64::from(cs.max_len))),
+        ("number", Value::Int(i64::from(cs.nr))),
+        ("state", Value::Int(1)),
+        ("comment", Value::str(cs.comment)),
+    ] {
+        o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(k)), v);
+    }
+    Ok(Value::Object(o))
+}
+
 fn escape(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], _: &str) -> R {
-    connected(ctx, this)?;
-    Ok(Value::Str(PhpStr::new(p8_mysqlnd::escape(str_arg(args, 0).as_bytes()))))
+    let l = connected(ctx, this)?;
+    let nr = l.conn.borrow().as_ref().expect("connected").charset;
+    let cs = p8_mysqlnd::charset_by_nr(nr).or_else(|| p8_mysqlnd::charset("utf8mb4")).expect("a known charset");
+    Ok(Value::Str(PhpStr::new(p8_mysqlnd::escape(&cs, str_arg(args, 0).as_bytes()))))
 }
 
 fn errno(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
@@ -1012,6 +1038,7 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "mysqli_select_db", run: mysqli_select_db, by_ref: &[] },
     Builtin { name: "mysqli_set_charset", run: mysqli_set_charset, by_ref: &[] },
     Builtin { name: "mysqli_character_set_name", run: mysqli_character_set_name, by_ref: &[] },
+    Builtin { name: "mysqli_get_charset", run: mysqli_get_charset, by_ref: &[] },
     Builtin { name: "mysqli_real_escape_string", run: mysqli_real_escape_string, by_ref: &[] },
     Builtin { name: "mysqli_escape_string", run: mysqli_escape_string, by_ref: &[] },
     Builtin { name: "mysqli_errno", run: mysqli_errno, by_ref: &[] },
@@ -1089,6 +1116,7 @@ static CLASSES: &[ClassSpec] = &[
             ("select_db", Some(Native::Method(m_select_db))),
             ("set_charset", Some(Native::Method(m_set_charset))),
             ("character_set_name", Some(Native::Method(m_character_set_name))),
+            ("get_charset", Some(Native::Method(m_get_charset))),
             ("real_escape_string", Some(Native::Method(m_real_escape_string))),
             ("escape_string", Some(Native::Method(m_real_escape_string))),
             ("close", Some(Native::Method(m_close))),

@@ -2982,6 +2982,7 @@ dependencies = [
 name = "p8-ext-mbstring"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "p8-runtime",
  "p8-stubs",
 ]
