@@ -148,6 +148,7 @@ impl Context<'_> {
         let class = self.link(def)?;
         let file = self.binding_file.clone().unwrap_or_else(|| self.location().0);
         self.class_origins.insert(lower.clone(), (file, def.line));
+        self.declared_order.push(Rc::clone(&class));
         self.classes.insert(lower, class);
         self.declared.insert(key, Arc::clone(def));
         Ok(())
