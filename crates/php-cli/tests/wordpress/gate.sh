@@ -299,12 +299,10 @@ for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?cat=1 0:/?p=9999 1:/wp-admin/ 1:/wp-adm
     [ "$user" = 0 ] && user=
     request "twentytwentyone: $url" WPUSER="$user" WPURL="$url"
 done
-# (Not Yoast's dashboard yet: its support beacon reads curl_version(), and
-# p8 has no curl extension.)
 APPS="Yoast SEO"
 setup "activate Yoast SEO" WPPLUGINS=wordpress-seo/wp-seo.php
 for req in 0:/ 0:/?p=1 0:/?cat=1 0:/?page_id=2 0:/?author=1 0:/?sitemap=index 0:/?feed=rss2 \
-    1:/wp-admin/ '1:/wp-admin/post.php?post=1&action=edit' 1:/wp-admin/edit.php; do
+    1:/wp-admin/ '1:/wp-admin/admin.php?page=wpseo_dashboard' '1:/wp-admin/post.php?post=1&action=edit' 1:/wp-admin/edit.php; do
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "yoast: $url" WPUSER="$user" WPURL="$url"
