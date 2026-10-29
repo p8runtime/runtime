@@ -97,6 +97,8 @@ struct Output {
 
 impl PhptExecutor {
     pub fn new(php: PathBuf, limits: Limits) -> Self {
+        // Absolute: each test runs in its own directory, and tests start it again.
+        let php = std::fs::canonicalize(&php).unwrap_or(php);
         Self {
             php,
             limits,
@@ -252,6 +254,10 @@ impl PhptExecutor {
         if let Some(args) = &test.sections.args {
             cmd.args(args.split_whitespace());
         }
+        // As run-tests.php does: tests that start PHP again find it here.
+        let php = self.php.to_string_lossy();
+        cmd.env("TEST_PHP_EXECUTABLE", &*php)
+            .env("TEST_PHP_EXECUTABLE_ESCAPED", format!("'{}'", php.replace('\'', "'\\''")));
         for (key, value) in &test.sections.env {
             cmd.env(key, value);
         }
