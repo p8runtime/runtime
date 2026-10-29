@@ -187,6 +187,14 @@ pub trait Ctx {
     /// `new C(...args)` as the engine makes it (the instantiation checks,
     /// computed defaults), its constructor run when `construct`.
     fn new_instance(&mut self, class: &Rc<Class>, args: &mut [Value], construct: bool) -> Result<Rc<crate::object::Object>, Throw>;
+    /// `new C(...args)` with the arguments placed by name (string keys)
+    /// and position, as a call with named arguments does.
+    fn new_instance_named(&mut self, class: &Rc<Class>, args: &crate::array::PhpArray) -> Result<Rc<crate::object::Object>, Throw>;
+    /// A declaration's doc comment, attribute names and lines (reflection).
+    fn reflect_meta(&mut self, subject: &crate::reflect::Subject) -> crate::reflect::Meta;
+    /// The arguments of attribute `index` of a declaration, evaluated:
+    /// named ones keyed by name.
+    fn reflect_attr_args(&mut self, subject: &crate::reflect::Subject, index: usize) -> Result<crate::array::PhpArray, Throw>;
     /// The value each property slot of `class` starts with in a new
     /// object, constant-expression defaults computed (Undef: none).
     fn class_defaults(&mut self, class: &Rc<Class>) -> Result<Vec<Value>, Throw>;

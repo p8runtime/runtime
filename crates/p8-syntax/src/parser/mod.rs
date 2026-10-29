@@ -30,6 +30,8 @@ pub struct Parser<'src, 'ast> {
     pub(super) errors: std::vec::Vec<ParseError>,
     pub(super) current_doc_comment: Option<Span>,
     pub(super) next_doc_comment: Option<Span>,
+    /// Where the last consumed token ends.
+    pub(super) prev_end: usize,
     pub(super) seen_non_declare_stmt: bool,
 }
 
@@ -49,6 +51,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             errors: std::vec::Vec::new(),
             current_doc_comment: None,
             next_doc_comment: None,
+            prev_end: 0,
             seen_non_declare_stmt: false,
         };
         parser.bump();
@@ -57,6 +60,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     fn bump(&mut self) {
+        self.prev_end = self.current_token.span.end;
         self.current_token = self.next_token;
         self.current_doc_comment = self.next_doc_comment;
         self.next_doc_comment = None;

@@ -11,6 +11,7 @@ mod fiber;
 mod generators;
 mod lazy;
 mod include;
+mod meta;
 mod reflect_info;
 mod reflection;
 mod refs;
@@ -1084,6 +1085,7 @@ impl Isolate {
             class_defs: Vec::new(),
             declared: HashMap::new(),
             class_origins: HashMap::new(),
+            defs_by_name: HashMap::new(),
             declared_order: Vec::new(),
             binding_file: None,
             loader: None,
@@ -1174,6 +1176,8 @@ pub struct Context<'i> {
     /// for "previously declared in"; and the file whose classes are being
     /// bound before it runs.
     class_origins: HashMap<Vec<u8>, (Rc<str>, u32)>,
+    /// Each declared class's compiled declaration (reflection reads its metadata).
+    defs_by_name: HashMap<Vec<u8>, Arc<ClassDef>>,
     /// The classes the script declared, in order, each by the name it is
     /// listed by (an alias by its lowercase name): get_declared_classes().
     declared_order: Vec<(PhpStr, Rc<Class>)>,
@@ -4745,6 +4749,18 @@ impl Ctx for Context<'_> {
 
     fn new_instance(&mut self, class: &Rc<Class>, args: &mut [Value], construct: bool) -> Result<Rc<Object>, Throw> {
         self.new_instance_of(class, args, construct)
+    }
+
+    fn new_instance_named(&mut self, class: &Rc<Class>, args: &PhpArray) -> Result<Rc<Object>, Throw> {
+        self.new_instance_placed(class, args)
+    }
+
+    fn reflect_meta(&mut self, subject: &p8_runtime::reflect::Subject) -> p8_runtime::reflect::Meta {
+        self.meta_facts(subject)
+    }
+
+    fn reflect_attr_args(&mut self, subject: &p8_runtime::reflect::Subject, index: usize) -> Result<PhpArray, Throw> {
+        self.attr_arguments(subject, index)
     }
 
     fn class_defaults(&mut self, class: &Rc<Class>) -> Result<Vec<Value>, Throw> {

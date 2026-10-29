@@ -53,3 +53,32 @@ pub struct FnInfo {
     pub closure_this: Option<Rc<Object>>,
     pub closure_scope: Option<Rc<Class>>,
 }
+
+/// A declaration whose doc comment, attributes and lines reflection reads.
+#[derive(Clone)]
+pub enum Subject {
+    Class(Rc<Class>),
+    Function(Callee),
+    /// A class's property (its name).
+    Property(Rc<Class>, PhpStr),
+    /// A class constant or enum case.
+    Constant(Rc<Class>, PhpStr),
+    /// A function's parameter, by position.
+    Param(Callee, usize),
+}
+
+/// What the engine knows of a declaration besides its code.
+#[derive(Default)]
+pub struct Meta {
+    /// The `/** ... */` directly before it.
+    pub doc: Option<PhpStr>,
+    /// Its attributes' class names, resolved, in order.
+    pub attrs: Vec<PhpStr>,
+    /// A class's file, first and last line (a function's file and first
+    /// line are in its FnInfo).
+    pub file: Option<PhpStr>,
+    pub line: u32,
+    pub end_line: u32,
+    /// A class's directly used traits, as the class names them.
+    pub traits: Vec<PhpStr>,
+}

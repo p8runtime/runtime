@@ -14,7 +14,7 @@ use p8_runtime::ext::{ClassSpec, Constant, Ctx, Throw};
 use p8_runtime::object::{
     CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_INTERNAL, CLASS_READONLY, CLASS_TRAIT, Class, Native, Object, Visibility,
 };
-use p8_runtime::reflect::{Callee, FnInfo, ParamInfo};
+use p8_runtime::reflect::{Callee, FnInfo, ParamInfo, Subject};
 use p8_runtime::string::PhpStr;
 use p8_runtime::types::TypeDecl;
 use p8_runtime::value::Value;
@@ -92,7 +92,7 @@ fn held_class(ctx: &mut dyn Ctx, o: &Object) -> Result<Rc<Class>, Throw> {
 }
 
 fn new_class_reflection(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Value {
-    let o = make(ctx, b"ReflectionClass");
+    let o = make(ctx, if class.flags & CLASS_ENUM != 0 { b"ReflectionEnum" } else { b"ReflectionClass" });
     set(&o, "name", Value::Str(shown_class(class)));
     set(&o, "\0class", Value::Str(class.name.clone()));
     Value::Object(o)
@@ -452,6 +452,28 @@ class_method!(rc_get_constants, |ctx, class, this, args| {
     }
     Ok(Value::Array(Rc::new(out)))
 });
+fn new_constant(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &[u8]) -> Value {
+    let o = make(ctx, b"ReflectionClassConstant");
+    set(&o, "name", s(name));
+    set(&o, "class", class.constants.get(name).map_or_else(|| Value::Str(class.name.clone()), |c| Value::Str(c.declaring_name.clone())));
+    set(&o, "\0class", Value::Str(class.name.clone()));
+    Value::Object(o)
+}
+
+class_method!(rc_get_reflection_constant, |ctx, class, this, args| {
+    let name = text(&arg(args, 0));
+    Ok(if class.constants.contains_key(name.as_bytes()) { new_constant(ctx, &class, name.as_bytes()) } else { Value::Bool(false) })
+});
+class_method!(rc_get_reflection_constants, |ctx, class, this, args| {
+    let filter = match arg(args, 0) {
+        Value::Null | Value::Undef => None,
+        v => Some(v.to_int()),
+    };
+    let own = class.constants.iter().filter(|(_, c)| c.declaring_name == class.name);
+    let inherited = class.constants.iter().filter(|(_, c)| c.declaring_name != class.name);
+    let names: Vec<Vec<u8>> = own.chain(inherited).filter(|(_, c)| filter.is_none_or(|f| vis_bits(c.visibility) & f != 0)).map(|(k, _)| k.clone()).collect();
+    Ok(list(names.iter().map(|n| new_constant(ctx, &class, n)).collect()))
+});
 class_method!(rc_new_instance, |ctx, class, this, args| {
     check_constructor(ctx, &class)?;
     let mut list: Vec<Value> = args.iter().map(Value::deref).collect();
@@ -517,10 +539,31 @@ class_method!(rc_get_default_properties, |ctx, class, this, args| {
     }
     Ok(Value::Array(Rc::new(out)))
 });
-class_method!(rc_get_file_name, |ctx, class, this, args| Ok(Value::Bool(false)));
-class_method!(rc_get_doc_comment, |ctx, class, this, args| Ok(Value::Bool(false)));
-class_method!(rc_get_attributes, |ctx, class, this, args| Ok(list(Vec::new())));
-class_method!(rc_get_trait_names, |ctx, class, this, args| Ok(list(Vec::new())));
+class_method!(rc_get_file_name, |ctx, class, this, args| Ok(ctx.reflect_meta(&Subject::Class(class)).file.map_or(Value::Bool(false), Value::Str)));
+class_method!(rc_get_start_line, |ctx, class, this, args| {
+    let m = ctx.reflect_meta(&Subject::Class(class));
+    Ok(if m.file.is_some() { Value::Int(i64::from(m.line)) } else { Value::Bool(false) })
+});
+class_method!(rc_get_end_line, |ctx, class, this, args| {
+    let m = ctx.reflect_meta(&Subject::Class(class));
+    Ok(if m.file.is_some() { Value::Int(i64::from(m.end_line)) } else { Value::Bool(false) })
+});
+class_method!(rc_get_doc_comment, |ctx, class, this, args| Ok(doc_value(ctx, Subject::Class(class))));
+class_method!(rc_get_attributes, |ctx, class, this, args| attributes_of(ctx, Subject::Class(class), args, "ReflectionClass"));
+class_method!(rc_get_trait_names, |ctx, class, this, args| {
+    let names: Vec<Value> = ctx.reflect_meta(&Subject::Class(class)).traits.iter().map(|t| ctx.class(t.as_bytes()).map_or_else(|| Value::Str(t.clone()), |c| Value::Str(c.name.clone()))).collect();
+    Ok(list(names))
+});
+class_method!(rc_get_traits, |ctx, class, this, args| {
+    let mut out = PhpArray::new();
+    for t in ctx.reflect_meta(&Subject::Class(class)).traits {
+        if let Some(c) = ctx.class(t.as_bytes()) {
+            let r = new_class_reflection(ctx, &c);
+            out.insert(Key::from_string(c.name.clone()), r);
+        }
+    }
+    Ok(Value::Array(Rc::new(out)))
+});
 class_method!(rc_get_extension_name, |ctx, class, this, args| Ok(Value::Bool(false)));
 
 fn ro_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -674,8 +717,18 @@ fn_method!(fa_is_static, |ctx, info, this, args| Ok(Value::Bool(info.is_static))
 fn_method!(fa_is_deprecated, |ctx, info, this, args| Ok(Value::Bool(false)));
 fn_method!(fa_get_file_name, |ctx, info, this, args| Ok(info.file.clone().map_or(Value::Bool(false), Value::Str)));
 fn_method!(fa_get_start_line, |ctx, info, this, args| Ok(if info.user { Value::Int(i64::from(info.line)) } else { Value::Bool(false) }));
-fn_method!(fa_get_doc_comment, |ctx, info, this, args| Ok(Value::Bool(false)));
-fn_method!(fa_get_attributes, |ctx, info, this, args| Ok(list(Vec::new())));
+fn_method!(fa_get_end_line, |ctx, info, this, args| {
+    let subject = Subject::Function(callee_of(ctx, this)?);
+    Ok(if info.user { Value::Int(i64::from(ctx.reflect_meta(&subject).end_line)) } else { Value::Bool(false) })
+});
+fn_method!(fa_get_doc_comment, |ctx, info, this, args| {
+    let subject = Subject::Function(callee_of(ctx, this)?);
+    Ok(doc_value(ctx, subject))
+});
+fn_method!(fa_get_attributes, |ctx, info, this, args| {
+    let subject = Subject::Function(callee_of(ctx, this)?);
+    attributes_of(ctx, subject, args, "ReflectionFunctionAbstract")
+});
 fn_method!(fa_get_static_variables, |ctx, info, this, args| Ok(list(Vec::new())));
 fn_method!(fa_get_closure_this, |ctx, info, this, args| Ok(info.closure_this.clone().map_or(Value::Null, Value::Object)));
 fn_method!(fa_get_closure_scope_class, |ctx, info, this, args| Ok(match &info.closure_scope {
@@ -868,7 +921,10 @@ param_method!(rp_get_declaring_class, |ctx, p, pos, info, this| Ok(match &info.c
     Some(c) => new_class_reflection(ctx, c),
     None => Value::Null,
 }));
-param_method!(rp_get_attributes, |ctx, p, pos, info, this| Ok(list(Vec::new())));
+fn rp_get_attributes(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let subject = Subject::Param(callee_of(ctx, this)?, get(this, "\0pos").to_int() as usize);
+    attributes_of(ctx, subject, args, "ReflectionParameter")
+}
 
 fn rp_get_declaring_function(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let callee = callee_of(ctx, this)?;
@@ -1219,6 +1275,208 @@ fn rpr_is_promoted(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
     Ok(Value::Bool(info.params.iter().any(|p| p.promoted && p.name.as_bytes() == name.as_bytes())))
 }
 
+fn property_subject(ctx: &mut dyn Ctx, this: &Object) -> Result<Subject, Throw> {
+    let (class, name, _) = held_property(ctx, this)?;
+    Ok(Subject::Property(class, PhpStr::from(name.as_str())))
+}
+
+fn rpr_get_doc_comment(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let subject = property_subject(ctx, this)?;
+    Ok(doc_value(ctx, subject))
+}
+
+fn rpr_get_attributes(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let subject = property_subject(ctx, this)?;
+    attributes_of(ctx, subject, args, "ReflectionProperty")
+}
+
+// ---------------------------------------------------------------------------
+// Doc comments and attributes
+
+/// getDocComment: the `/** ... */` before a declaration, or false.
+fn doc_value(ctx: &mut dyn Ctx, subject: Subject) -> Value {
+    ctx.reflect_meta(&subject).doc.map_or(Value::Bool(false), Value::Str)
+}
+
+/// A hidden-property form of a Subject (a ReflectionAttribute keeps the
+/// declaration it came from).
+fn encode_subject(s: &Subject) -> Value {
+    match s {
+        Subject::Class(c) => list(vec![Value::Int(0), Value::Str(c.name.clone())]),
+        Subject::Function(c) => list(vec![Value::Int(1), encode(c)]),
+        Subject::Property(c, n) => list(vec![Value::Int(2), Value::Str(c.name.clone()), Value::Str(n.clone())]),
+        Subject::Constant(c, n) => list(vec![Value::Int(3), Value::Str(c.name.clone()), Value::Str(n.clone())]),
+        Subject::Param(c, pos) => list(vec![Value::Int(4), encode(c), Value::Int(*pos as i64)]),
+    }
+}
+
+fn decode_subject(ctx: &mut dyn Ctx, v: &Value) -> Result<Subject, Throw> {
+    let parts: Vec<Value> = match v {
+        Value::Array(a) => a.values().cloned().collect(),
+        _ => Vec::new(),
+    };
+    let name = |i: usize| parts.get(i).and_then(Value::to_php_string).unwrap_or_else(PhpStr::empty);
+    Ok(match parts.first().map(Value::to_int) {
+        Some(0) => Subject::Class(class_arg(ctx, &parts[1])?),
+        Some(1) => Subject::Function(decode(ctx, &parts[1])?),
+        Some(2) => Subject::Property(class_arg(ctx, &parts[1])?, name(2)),
+        Some(3) => Subject::Constant(class_arg(ctx, &parts[1])?, name(2)),
+        Some(4) => Subject::Param(decode(ctx, &parts[1])?, parts[2].to_int() as usize),
+        _ => return Err(ctx.throw("Error", "Internal error: Failed to retrieve the reflection object".into())),
+    })
+}
+
+const TARGET_CLASS: i64 = 1;
+const TARGET_FUNCTION: i64 = 2;
+const TARGET_METHOD: i64 = 4;
+const TARGET_PROPERTY: i64 = 8;
+const TARGET_CLASS_CONSTANT: i64 = 16;
+const TARGET_PARAMETER: i64 = 32;
+const TARGET_ALL: i64 = 63;
+const IS_REPEATABLE: i64 = 64;
+
+/// The attribute target a declaration is.
+fn target_of(s: &Subject) -> i64 {
+    match s {
+        Subject::Class(_) => TARGET_CLASS,
+        Subject::Function(Callee::Method(..)) => TARGET_METHOD,
+        Subject::Function(_) => TARGET_FUNCTION,
+        Subject::Property(..) => TARGET_PROPERTY,
+        Subject::Constant(..) => TARGET_CLASS_CONSTANT,
+        Subject::Param(..) => TARGET_PARAMETER,
+    }
+}
+
+/// `getAttributes(?string $name = null, int $flags = 0)`: a
+/// ReflectionAttribute for each attribute of `subject` (filtered by name,
+/// or with IS_INSTANCEOF by the class they are or extend).
+fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &str) -> Result<Value, Throw> {
+    let name = match arg(args, 0) {
+        Value::Null | Value::Undef => None,
+        v => Some(text(&v)),
+    };
+    let flags = arg(args, 1).to_int();
+    if flags & !2 != 0 {
+        return Err(ctx.throw("ValueError", format!("{method}::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag")));
+    }
+    let mut base = None;
+    let mut name = name;
+    if let Some(n) = name.take_if(|_| flags & 2 != 0) {
+        match ctx.class_load(n.as_bytes())? {
+            Some(c) => base = Some(c),
+            None => return Err(ctx.throw("Error", format!("Class \"{n}\" not found"))),
+        }
+    }
+    let names = ctx.reflect_meta(&subject).attrs;
+    let target = target_of(&subject);
+    let encoded = encode_subject(&subject);
+    let mut out = Vec::new();
+    for (i, attr) in names.iter().enumerate() {
+        let lower = attr.as_bytes().to_ascii_lowercase();
+        if let Some(n) = &name
+            && n.to_ascii_lowercase().as_bytes() != lower.as_slice()
+        {
+            continue;
+        }
+        if let Some(base) = &base {
+            match ctx.class_load(attr.as_bytes())? {
+                Some(c) if c.is_a(&base.lower) => {}
+                _ => continue,
+            }
+        }
+        let repeated = names.iter().filter(|o| o.as_bytes().eq_ignore_ascii_case(attr.as_bytes())).count() > 1;
+        let o = make(ctx, b"ReflectionAttribute");
+        set(&o, "name", Value::Str(attr.clone()));
+        set(&o, "\0subject", encoded.clone());
+        set(&o, "\0index", Value::Int(i as i64));
+        set(&o, "\0target", Value::Int(target));
+        set(&o, "\0repeated", Value::Bool(repeated));
+        out.push(Value::Object(o));
+    }
+    Ok(list(out))
+}
+
+fn ra_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Err(fail(ctx, "Cannot directly instantiate ReflectionAttribute".into()))
+}
+
+fn ra_clone(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Err(fail(ctx, "Cannot clone object using __clone()".into()))
+}
+
+fn ra_get_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(get(this, "name"))
+}
+
+fn ra_get_target(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(get(this, "\0target"))
+}
+
+fn ra_is_repeated(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(get(this, "\0repeated"))
+}
+
+fn ra_get_arguments(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let subject = decode_subject(ctx, &get(this, "\0subject"))?;
+    Ok(Value::Array(Rc::new(ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?)))
+}
+
+/// The attribute names of the builtin attribute classes (they take any target).
+const BUILTIN_ATTRIBUTES: [&[u8]; 6] = [b"attribute", b"returntypewillchange", b"allowdynamicproperties", b"sensitiveparameter", b"override", b"deprecated"];
+
+fn target_names(flags: i64) -> String {
+    ["class", "function", "method", "property", "class constant", "parameter"]
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| flags & (1 << i) != 0)
+        .map(|(_, n)| *n)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// How a class can be used as an attribute: Err(()) if it is not one;
+/// Ok(None) for a builtin one; Ok(Some(flags)) for a user class's
+/// `#[Attribute(flags)]`.
+fn attribute_flags(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<Result<Option<i64>, ()>, Throw> {
+    if class.flags & CLASS_INTERNAL != 0 {
+        return Ok(if BUILTIN_ATTRIBUTES.contains(&class.lower.as_slice()) { Ok(None) } else { Err(()) });
+    }
+    let subject = Subject::Class(Rc::clone(class));
+    let Some(at) = ctx.reflect_meta(&subject).attrs.iter().position(|a| a.as_bytes().eq_ignore_ascii_case(b"attribute")) else { return Ok(Err(())) };
+    let args = ctx.reflect_attr_args(&subject, at)?;
+    let Some(flags) = args.get_int(0).or_else(|| args.get(&Key::from_string(PhpStr::from("flags")))).map(Value::deref) else { return Ok(Ok(Some(TARGET_ALL))) };
+    let Value::Int(flags) = flags else {
+        return Err(ctx.throw("Error", format!("Attribute::__construct(): Argument #1 ($flags) must be of type int, {} given", p8_runtime::args::value_name(&flags))));
+    };
+    if flags & !(TARGET_ALL | IS_REPEATABLE) != 0 {
+        return Err(ctx.throw("Error", "Invalid attribute flags specified".into()));
+    }
+    Ok(Ok(Some(flags)))
+}
+
+fn ra_new_instance(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let name = text(&get(this, "name"));
+    let Some(class) = ctx.class_load(name.as_bytes())? else {
+        return Err(ctx.throw("Error", format!("Attribute class \"{name}\" not found")));
+    };
+    let flags = match attribute_flags(ctx, &class)? {
+        Ok(flags) => flags,
+        Err(()) => return Err(ctx.throw("Error", format!("Attempting to use non-attribute class \"{name}\" as attribute"))),
+    };
+    if let Some(flags) = flags {
+        let target = get(this, "\0target").to_int();
+        if flags & target == 0 {
+            return Err(ctx.throw("Error", format!("Attribute \"{name}\" cannot target {} (allowed targets: {})", target_names(target), target_names(flags))));
+        }
+        if flags & IS_REPEATABLE == 0 && get(this, "\0repeated").to_bool() {
+            return Err(ctx.throw("Error", format!("Attribute \"{name}\" must not be repeated")));
+        }
+    }
+    let subject = decode_subject(ctx, &get(this, "\0subject"))?;
+    let args = ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?;
+    Ok(Value::Object(ctx.new_instance_named(&class, &args)?))
+}
+
 // ---------------------------------------------------------------------------
 // ReflectionClassConstant
 
@@ -1267,6 +1525,103 @@ fn rcc_is_protected(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
 
 fn rcc_get_modifiers(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(vis_bits(rcc_visibility(ctx, this)?)))
+}
+
+fn constant_subject(ctx: &mut dyn Ctx, this: &Object) -> Result<Subject, Throw> {
+    Ok(Subject::Constant(held_class(ctx, this)?, PhpStr::from(text(&get(this, "name")).as_str())))
+}
+
+fn rcc_get_doc_comment(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let subject = constant_subject(ctx, this)?;
+    Ok(doc_value(ctx, subject))
+}
+
+fn rcc_get_attributes(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let subject = constant_subject(ctx, this)?;
+    attributes_of(ctx, subject, args, "ReflectionClassConstant")
+}
+
+// ---------------------------------------------------------------------------
+// ReflectionEnum, ReflectionEnumUnitCase, ReflectionEnumBackedCase
+
+fn re_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    rc_construct(ctx, this, args)?;
+    let class = held_class(ctx, this)?;
+    if class.flags & CLASS_ENUM == 0 {
+        return Err(fail(ctx, format!("Class \"{}\" is not an enum", String::from_utf8_lossy(class.name.as_bytes()))));
+    }
+    Ok(Value::Null)
+}
+
+fn is_case(class: &Class, name: &str) -> bool {
+    class.constants.get(name.as_bytes()).is_some_and(|c| c.is_case)
+}
+
+fn new_case(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &str) -> Value {
+    let o = make(ctx, if class.enum_backing.is_some() { b"ReflectionEnumBackedCase" } else { b"ReflectionEnumUnitCase" });
+    set(&o, "name", s(name.as_bytes()));
+    set(&o, "class", Value::Str(class.name.clone()));
+    set(&o, "\0class", Value::Str(class.name.clone()));
+    Value::Object(o)
+}
+
+class_method!(re_has_case, |ctx, class, this, args| Ok(Value::Bool(is_case(&class, &text(&arg(args, 0))))));
+class_method!(re_get_case, |ctx, class, this, args| {
+    let name = text(&arg(args, 0));
+    let shown = String::from_utf8_lossy(class.name.as_bytes()).into_owned();
+    match class.constants.get(name.as_bytes()) {
+        None => Err(fail(ctx, format!("Case {shown}::{name} does not exist"))),
+        Some(c) if !c.is_case => Err(fail(ctx, format!("{shown}::{name} is not a case"))),
+        Some(_) => Ok(new_case(ctx, &class, &name)),
+    }
+});
+class_method!(re_get_cases, |ctx, class, this, args| {
+    let names: Vec<Vec<u8>> = class.constants.iter().filter(|(_, c)| c.is_case).map(|(k, _)| k.clone()).collect();
+    Ok(list(names.iter().map(|n| new_case(ctx, &class, &String::from_utf8_lossy(n))).collect()))
+});
+class_method!(re_is_backed, |ctx, class, this, args| Ok(Value::Bool(class.enum_backing.is_some())));
+class_method!(re_get_backing_type, |ctx, class, this, args| Ok(match &class.enum_backing {
+    Some(t) => named_type(ctx, &String::from_utf8_lossy(t.as_bytes()), false, true),
+    None => Value::Null,
+}));
+
+fn reuc_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    rcc_construct(ctx, this, args)?;
+    let class = held_class(ctx, this)?;
+    let name = text(&get(this, "name"));
+    if !is_case(&class, &name) {
+        return Err(fail(ctx, format!("Constant {}::{} is not a case", String::from_utf8_lossy(class.name.as_bytes()), name)));
+    }
+    Ok(Value::Null)
+}
+
+fn reuc_get_enum(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    Ok(new_class_reflection(ctx, &class))
+}
+
+fn reuc_get_value(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    Ok(ctx.enum_case(&class, text(&get(this, "name")).as_bytes()))
+}
+
+fn rebc_get_backing_value(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let class = held_class(ctx, this)?;
+    Ok(class.constants.get(text(&get(this, "name")).as_bytes()).map_or(Value::Null, |c| c.value.clone()))
+}
+
+// ---------------------------------------------------------------------------
+// Attribute, Deprecated
+
+fn attribute_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    set(this, "flags", Value::Int(if args.is_empty() { TARGET_ALL } else { arg(args, 0).to_int() }));
+    Ok(Value::Null)
+}
+
+fn deprecated_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    set(this, "message", arg(args, 0));
+    set(this, "since", arg(args, 1));
+    Ok(Value::Null)
 }
 
 // ---------------------------------------------------------------------------
@@ -1349,6 +1704,7 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("isDeprecated", Some(Native::Method(fa_is_deprecated))),
     ("getFileName", Some(Native::Method(fa_get_file_name))),
     ("getStartLine", Some(Native::Method(fa_get_start_line))),
+    ("getEndLine", Some(Native::Method(fa_get_end_line))),
     ("getDocComment", Some(Native::Method(fa_get_doc_comment))),
     ("getAttributes", Some(Native::Method(fa_get_attributes))),
     ("getStaticVariables", Some(Native::Method(fa_get_static_variables))),
@@ -1455,6 +1811,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("hasConstant", Some(Native::Method(rc_has_constant))),
             ("getConstant", Some(Native::Method(rc_get_constant))),
             ("getConstants", Some(Native::Method(rc_get_constants))),
+            ("getReflectionConstant", Some(Native::Method(rc_get_reflection_constant))),
+            ("getReflectionConstants", Some(Native::Method(rc_get_reflection_constants))),
             ("newInstance", Some(Native::Method(rc_new_instance))),
             ("newInstanceArgs", Some(Native::Method(rc_new_instance_args))),
             ("newInstanceWithoutConstructor", Some(Native::Method(rc_new_instance_without_constructor))),
@@ -1471,10 +1829,12 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getStaticProperties", Some(Native::Method(rc_get_static_properties))),
             ("getDefaultProperties", Some(Native::Method(rc_get_default_properties))),
             ("getFileName", Some(Native::Method(rc_get_file_name))),
+            ("getStartLine", Some(Native::Method(rc_get_start_line))),
+            ("getEndLine", Some(Native::Method(rc_get_end_line))),
             ("getDocComment", Some(Native::Method(rc_get_doc_comment))),
             ("getAttributes", Some(Native::Method(rc_get_attributes))),
             ("getTraitNames", Some(Native::Method(rc_get_trait_names))),
-            ("getTraits", Some(Native::Method(rc_get_trait_names))),
+            ("getTraits", Some(Native::Method(rc_get_traits))),
             ("getExtensionName", Some(Native::Method(rc_get_extension_name))),
         ],
         constants: &[
@@ -1604,8 +1964,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getModifiers", Some(Native::Method(rpr_get_modifiers))),
             ("getDeclaringClass", Some(Native::Method(rpr_get_declaring_class))),
             ("setAccessible", Some(Native::Method(no_op))),
-            ("getDocComment", Some(Native::Method(rc_get_doc_comment))),
-            ("getAttributes", Some(Native::Method(rp_get_attributes))),
+            ("getDocComment", Some(Native::Method(rpr_get_doc_comment))),
+            ("getAttributes", Some(Native::Method(rpr_get_attributes))),
         ],
         constants: &[
             ("IS_STATIC", Constant::Int(16)),
@@ -1636,10 +1996,98 @@ pub static CLASSES: &[ClassSpec] = &[
             ("isPrivate", Some(Native::Method(rcc_is_private))),
             ("isProtected", Some(Native::Method(rcc_is_protected))),
             ("getModifiers", Some(Native::Method(rcc_get_modifiers))),
-            ("getDocComment", Some(Native::Method(rc_get_doc_comment))),
-            ("getAttributes", Some(Native::Method(rp_get_attributes))),
+            ("getDocComment", Some(Native::Method(rcc_get_doc_comment))),
+            ("getAttributes", Some(Native::Method(rcc_get_attributes))),
         ],
         constants: &[("IS_PUBLIC", Constant::Int(1)), ("IS_PROTECTED", Constant::Int(2)), ("IS_PRIVATE", Constant::Int(4)), ("IS_FINAL", Constant::Int(32))],
         debug_info: Some(info_name_class),
+    },
+    ClassSpec {
+        name: "ReflectionAttribute",
+        parent: None,
+        interfaces: &["Reflector"],
+        flags: 0,
+        properties: &[NAME, ("\0subject", Constant::Null, PUBLIC), ("\0index", Constant::Int(0), PUBLIC), ("\0target", Constant::Int(0), PUBLIC), ("\0repeated", Constant::Bool(false), PUBLIC)],
+        methods: &[
+            ("__construct", Some(Native::Method(ra_construct))),
+            ("__clone", Some(Native::Method(ra_clone))),
+            ("getName", Some(Native::Method(ra_get_name))),
+            ("getTarget", Some(Native::Method(ra_get_target))),
+            ("isRepeated", Some(Native::Method(ra_is_repeated))),
+            ("getArguments", Some(Native::Method(ra_get_arguments))),
+            ("newInstance", Some(Native::Method(ra_new_instance))),
+        ],
+        constants: &[("IS_INSTANCEOF", Constant::Int(2))],
+        debug_info: Some(info_name),
+    },
+    ClassSpec {
+        name: "ReflectionEnum",
+        parent: Some("ReflectionClass"),
+        interfaces: &[],
+        flags: 0,
+        properties: &[],
+        methods: &[
+            ("__construct", Some(Native::Method(re_construct))),
+            ("hasCase", Some(Native::Method(re_has_case))),
+            ("getCase", Some(Native::Method(re_get_case))),
+            ("getCases", Some(Native::Method(re_get_cases))),
+            ("isBacked", Some(Native::Method(re_is_backed))),
+            ("getBackingType", Some(Native::Method(re_get_backing_type))),
+        ],
+        constants: &[],
+        debug_info: Some(info_name),
+    },
+    ClassSpec {
+        name: "ReflectionEnumUnitCase",
+        parent: Some("ReflectionClassConstant"),
+        interfaces: &[],
+        flags: 0,
+        properties: &[],
+        methods: &[
+            ("__construct", Some(Native::Method(reuc_construct))),
+            ("getEnum", Some(Native::Method(reuc_get_enum))),
+            ("getValue", Some(Native::Method(reuc_get_value))),
+        ],
+        constants: &[],
+        debug_info: Some(info_name_class),
+    },
+    ClassSpec {
+        name: "ReflectionEnumBackedCase",
+        parent: Some("ReflectionEnumUnitCase"),
+        interfaces: &[],
+        flags: 0,
+        properties: &[],
+        methods: &[("__construct", Some(Native::Method(reuc_construct))), ("getBackingValue", Some(Native::Method(rebc_get_backing_value)))],
+        constants: &[],
+        debug_info: Some(info_name_class),
+    },
+    ClassSpec {
+        name: "Attribute",
+        parent: None,
+        interfaces: &[],
+        flags: CLASS_FINAL,
+        properties: &[("flags", Constant::Int(TARGET_ALL), PUBLIC)],
+        methods: &[("__construct", Some(Native::Method(attribute_construct)))],
+        constants: &[
+            ("TARGET_CLASS", Constant::Int(TARGET_CLASS)),
+            ("TARGET_FUNCTION", Constant::Int(TARGET_FUNCTION)),
+            ("TARGET_METHOD", Constant::Int(TARGET_METHOD)),
+            ("TARGET_PROPERTY", Constant::Int(TARGET_PROPERTY)),
+            ("TARGET_CLASS_CONSTANT", Constant::Int(TARGET_CLASS_CONSTANT)),
+            ("TARGET_PARAMETER", Constant::Int(TARGET_PARAMETER)),
+            ("TARGET_ALL", Constant::Int(TARGET_ALL)),
+            ("IS_REPEATABLE", Constant::Int(IS_REPEATABLE)),
+        ],
+        debug_info: None,
+    },
+    ClassSpec {
+        name: "Deprecated",
+        parent: None,
+        interfaces: &[],
+        flags: CLASS_FINAL,
+        properties: &[("message", Constant::Null, PUBLIC), ("since", Constant::Null, PUBLIC)],
+        methods: &[("__construct", Some(Native::Method(deprecated_construct)))],
+        constants: &[],
+        debug_info: None,
     },
 ];

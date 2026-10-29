@@ -168,7 +168,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             });
         }
 
-        let end = self.current_token.span.end;
+        let end = self.prev_end;
 
         self.arena.alloc(Stmt::Class {
             attributes,
@@ -380,7 +380,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             });
         }
 
-        let end = self.current_token.span.end;
+        let end = self.prev_end;
 
         self.arena.alloc(Stmt::Interface {
             attributes,
@@ -450,7 +450,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             });
         }
 
-        let end = self.current_token.span.end;
+        let end = self.prev_end;
 
         self.arena.alloc(Stmt::Trait {
             attributes,
@@ -561,7 +561,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             });
         }
 
-        let end = self.current_token.span.end;
+        let end = self.prev_end;
 
         self.arena.alloc(Stmt::Enum {
             attributes,
@@ -795,11 +795,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 &[] as &'ast [StmtId<'ast>]
             };
 
-            let end = if body.is_empty() {
-                self.current_token.span.end
-            } else {
-                body.last().unwrap().span().end
-            };
+            let end = self.prev_end;
 
             self.validate_modifiers(&modifiers, ModifierContext::Method);
 
@@ -1699,7 +1695,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             _ => self.arena.alloc_slice_copy(&[body_stmt]) as &'ast [StmtId<'ast>],
         };
 
-        let end = self.current_token.span.end;
+        let end = self.prev_end;
 
         self.arena.alloc(Stmt::Function {
             attributes,

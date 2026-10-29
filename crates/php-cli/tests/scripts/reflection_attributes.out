@@ -1,0 +1,38 @@
+ReflectionAttribute App\Tag target=1 repeated=true args={"0":"a","weight":5}
+ReflectionAttribute App\Tag target=1 repeated=true args=["b"]
+ReflectionAttribute App\Plain target=1 repeated=false args=[]
+-- name filter (case-insensitive)
+ReflectionAttribute App\Tag target=1 repeated=true args={"0":"a","weight":5}
+ReflectionAttribute App\Tag target=1 repeated=true args=["b"]
+ReflectionAttribute App\Plain target=1 repeated=false args=[]
+-- instances
+string(1) "a"
+int(5)
+string(1) "b"
+int(0)
+-- methods, properties, constants, parameters, functions
+ReflectionAttribute App\Tag target=4 repeated=false args={"0":"m","weight":2}
+ReflectionAttribute App\Tag target=32 repeated=false args=["param"]
+ReflectionAttribute App\Special target=4 repeated=false args=[]
+ReflectionAttribute App\Tag target=4 repeated=false args={"name":"named"}
+ReflectionAttribute App\PropOnly target=8 repeated=false args=[]
+ReflectionAttribute App\Tag target=16 repeated=false args=["const"]
+ReflectionAttribute App\Tag target=2 repeated=true args=["f"]
+ReflectionAttribute App\Special target=2 repeated=false args=[]
+ReflectionAttribute App\Tag target=2 repeated=true args=["g"]
+ReflectionAttribute SensitiveParameter target=32 repeated=false args=[]
+ReflectionAttribute App\Tag target=2 repeated=false args=["closure"]
+App\PropOnly
+-- IS_INSTANCEOF
+ReflectionAttribute App\Special target=4 repeated=false args=[]
+ReflectionAttribute App\Special target=2 repeated=false args=[]
+-- errors
+Error: Attempting to use non-attribute class "App\NotAttr" as attribute
+Error: Attribute class "App\Missing" not found
+Error: Attribute "App\PropOnly" cannot target class (allowed targets: property)
+Error: Attribute "App\Plain" must not be repeated
+Error: Attribute "App\Plain" must not be repeated
+ValueError: ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag
+Error: Class "Nope" not found
+-- builtin attribute classes
+Attribute [1] 1
