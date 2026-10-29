@@ -186,3 +186,22 @@ fn unterminated_heredoc_is_a_parse_error_not_a_hang() {
         }
     }
 }
+
+/// A platform that keeps compiled files: a file included again runs as it
+/// did the first time (its `static` variables start over, as in PHP with
+/// or without opcache), and a file whose source changed between requests
+/// runs its new code.
+#[test]
+fn kept_compiled_files_run_as_new_and_follow_changes() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("keep_compiled");
+    std::fs::create_dir_all(&dir).expect("test dir");
+    let part = dir.join("part.php");
+    let main = format!("<?php include {0:?}; include {0:?}; echo \"\\n\";", part.to_str().expect("utf-8 path"));
+    let platform = platform().keep_compiled();
+    let mut isolate = platform.new_isolate();
+    std::fs::write(&part, "<?php static $n = 0; echo ++$n;").expect("write part");
+    assert_eq!(request(&platform, &mut isolate, &main), (0, "11\n".into()));
+    assert_eq!(request(&platform, &mut isolate, &main), (0, "11\n".into()));
+    std::fs::write(&part, "<?php static $n = 10; echo ++$n;").expect("rewrite part");
+    assert_eq!(request(&platform, &mut isolate, &main), (0, "1111\n".into()));
+}
