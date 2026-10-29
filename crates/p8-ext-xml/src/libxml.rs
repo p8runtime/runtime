@@ -106,7 +106,7 @@ fn libxml_set_streams_context(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 /// Deprecated since 8.0 (the registry warns): returns the previous setting.
 fn libxml_disable_entity_loader(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let was = matches!(ctx.state(DISABLED), Value::Bool(true));
-    let disable = args.first().map_or(true, |v| v.deref().to_bool());
+    let disable = args.first().is_none_or(|v| v.deref().to_bool());
     *ctx.state(DISABLED) = Value::Bool(disable);
     Ok(Value::Bool(was))
 }
