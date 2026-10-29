@@ -79,12 +79,12 @@ p8() {
 # The time of the request, which wp-admin prints: as timestamps (its user
 # settings, the editor's post lock), as the clock, and as the dates of the
 # posts and comments made today (the test content is dated 2026-01-01, so
-# today's date is only ever the clock). A mail's Date and Message-ID (a
-# random one) are the clock too.
+# today's date is only ever the clock). A mail's Date and Message-ID and an
+# embed's secret are random, made by random_int().
 today=$(date -u +%Y-%m-%d)
 clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"activePostLock":"[0-9]+:/"activePostLock":"T:/g' -e 's#(Universal|Local) time is <code>[^<]*</code>#\1 time is <code>T</code>#g' \
     -e "s/${today}([T ])[0-9]{2}:[0-9]{2}:[0-9]{2}/${today}\\1T/g" -e 's/(_edit_lock[[:space:]])[0-9]+:/\1T:/' \
-    -e 's/^Date: .*/Date: T/' -e 's/^Message-ID: <[^@]*@/Message-ID: <M@/' "$1"; }
+    -e 's/^Date: .*/Date: T/' -e 's/^Message-ID: <[^@]*@/Message-ID: <M@/' -e 's/(data-secret=\\?"|secret=)[A-Za-z0-9]{10}/\1S/g' "$1"; }
 
 php_ref install.php > install.php.out 2>/dev/null
 p8 install.php > install.p8.out 2>/dev/null
@@ -163,7 +163,12 @@ for db in wp_php wp_p8; do
     sql "$db" -e "UPDATE wp_posts SET post_date='2026-01-02 12:00:00', post_date_gmt='2026-01-02 12:00:00', post_modified='2026-01-02 12:00:00', post_modified_gmt='2026-01-02 12:00:00' WHERE post_modified_gmt >= '$today';
         UPDATE wp_comments SET comment_date='2026-01-02 12:00:00', comment_date_gmt='2026-01-02 12:00:00' WHERE comment_date_gmt >= '$today';"
 done
-for req in 0:/ 0:/?p=1 0:/?p=$draft 0:/?feed=rss2 0:/?tag=xml-rpc 1:/wp-admin/edit-comments.php 1:/wp-admin/edit.php; do
+for req in 0:/ 0:/?p=1 0:/?p=$draft 0:/?feed=rss2 0:/?tag=xml-rpc 1:/wp-admin/edit-comments.php 1:/wp-admin/edit.php \
+    0:/?cat=1 0:/?tag=rust 0:/?author=1 0:/?p=9999 0:/?m=2026 0:/?page_id=2 0:/?feed=comments-rss2 0:/?feed=atom \
+    '0:/?s=p8&post_type=post' '0:/?p=1&replytocom=1' 0:/wp-login.php?action=lostpassword \
+    0:/wp-sitemap.xml 0:/?sitemap=index '0:/?sitemap=posts&sitemap-subtype=post&paged=1' \
+    0:/?rest_route=/wp/v2/posts 0:/?rest_route=/wp/v2/users 0:/?rest_route=/wp/v2/comments 0:/?rest_route=/wp/v2/categories \
+    0:/?rest_route=/wp/v2/pages/2 0:/?rest_route=/wp/v2/types '0:/?rest_route=/oembed/1.0/embed&url=http%3A%2F%2Flocalhost%2F%3Fp%3D1'; do
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "after: $url" WPUSER="$user" WPURL="$url"
