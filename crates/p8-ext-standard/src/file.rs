@@ -29,6 +29,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "feof", run: feof, by_ref: &[] },
     Builtin { name: "stream_get_meta_data", run: stream_get_meta_data, by_ref: &[] },
     Builtin { name: "stream_isatty", run: stream_isatty, by_ref: &[] },
+    Builtin { name: "stream_resolve_include_path", run: stream_resolve_include_path, by_ref: &[] },
     Builtin { name: "fflush", run: fflush, by_ref: &[] },
     Builtin { name: "ftell", run: ftell, by_ref: &[] },
     Builtin { name: "fseek", run: fseek, by_ref: &[] },
@@ -971,6 +972,16 @@ fn rewinddir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "rewinddir", args, 0)?;
     with_stream(&o, |s| s.seek(0, 0));
     Ok(Value::Null)
+}
+
+/// stream_resolve_include_path($filename): where an include would find it.
+fn stream_resolve_include_path(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let name = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
+    Ok(match ctx.resolve_include(&name) {
+        Some(p) => Value::Str(PhpStr::from(p.to_string_lossy().as_bytes())),
+        None => Value::Bool(false),
+    })
 }
 
 /// stream_isatty($stream): whether the stream is a terminal (a file opened

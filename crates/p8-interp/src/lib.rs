@@ -4664,6 +4664,10 @@ impl Ctx for Context<'_> {
         self.isolate.registry.modules()
     }
 
+    fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.resolve_include_path(name)
+    }
+
     fn function_exists(&self, name: &[u8]) -> bool {
         Context::function_exists(self, name)
     }

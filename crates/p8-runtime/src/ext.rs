@@ -127,6 +127,9 @@ pub trait Ctx {
     fn define(&mut self, name: &[u8], value: Value) -> bool;
     /// Whether a function `name` exists (any case, optional leading `\`).
     fn function_exists(&self, name: &[u8]) -> bool;
+    /// Where `include name` would find its file (include_path, then the
+    /// running file's directory), as a canonical path.
+    fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf>;
     /// The name the running builtin was called by (an alias's own name:
     /// gzread, not fread), for its messages.
     fn builtin_name(&self) -> &'static str;
