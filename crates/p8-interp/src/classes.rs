@@ -1477,14 +1477,21 @@ impl Context<'_> {
         match &func.classes[class as usize] {
             ClassRef::Dynamic(r) => match w[*r as usize].deref() {
                 Value::Object(c) => o.class.is_a(&c.class.lower),
-                Value::Str(name) => o.class.is_a(&name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase()),
+                Value::Str(name) => self.is_a_named(&o.class, &name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase()),
                 _ => false,
             },
-            ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => o.class.is_a(lower.as_bytes()),
+            ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => self.is_a_named(&o.class, lower.as_bytes()),
             ClassRef::Static => self.scope().1.is_some_and(|c| o.class.is_a(&c.lower)),
             ClassRef::Scope => self.scope().0.is_some_and(|c| o.class.is_a(&c.lower)),
             ClassRef::ParentScope => self.scope().0.and_then(|c| c.parent.clone()).is_some_and(|c| o.class.is_a(&c.lower)),
         }
+    }
+
+    /// Whether `class` is the class `lower` names, or one of its subclasses
+    /// or implementers: by name, or through an alias (class_alias) of a
+    /// declared class; never autoloaded (instanceof and catch don't).
+    fn is_a_named(&self, class: &Class, lower: &[u8]) -> bool {
+        class.is_a(lower) || self.classes.get(lower).is_some_and(|c| c.lower != lower && class.is_a(&c.lower))
     }
 
     /// `clone $x`: the copy, and its `__clone`'s frame (if any).
