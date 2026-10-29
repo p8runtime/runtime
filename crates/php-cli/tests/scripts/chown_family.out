@@ -1,0 +1,23 @@
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+
+Warning: chown(): No such file or directory in %s on line 9
+bool(false)
+
+Warning: chown(): Unable to find uid for no-such-user-p8 in %s on line 10
+
+Warning: chgrp(): Unable to find gid for no-such-group-p8 in %s on line 10
+bool(false)
+bool(false)
+
+Deprecated: Creation of dynamic property C::$dyn is deprecated in %s on line 17
+
+Warning: serialize(): "nope" returned as member variable from __sleep() but does not exist in %s on line 18
+
+Warning: serialize(): "x" returned as member variable from __sleep() but does not exist in %s on line 18
+O:1:"C":5:{s:4:"~C~c";i:3;s:1:"a";i:1;s:4:"~*~b";i:2;s:4:"~P~x";s:1:"P";s:3:"dyn";i:4;}
+int(10)
+int(20)
+bool(false)
