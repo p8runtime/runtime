@@ -394,11 +394,15 @@ macro_rules! getter {
 pub(crate) use getter;
 
 getter!(node_name_get, |ctx, r| Ok(str(&node_name(&r.doc.borrow(), r.id))));
-getter!(node_type_get, |ctx, r| Ok(Value::Int(r.kind() as i64)));
+// An HTML document is XML_HTML_DOCUMENT_NODE (13).
+getter!(node_type_get, |ctx, r| Ok(Value::Int(if r.kind() == Kind::Document && r.doc.borrow().html { 13 } else { r.kind() as i64 })));
 getter!(node_value_get, |ctx, r| {
     let d = r.doc.borrow();
     let n = d.node(r.id);
     Ok(match n.kind {
+        // A processing instruction the HTML parser read without data has no content.
+        Kind::Pi if n.no_value && n.value.is_empty() => Value::Null,
+        Kind::Element => str(&d.text_content(r.id)),
         Kind::Text | Kind::CData | Kind::Comment | Kind::Pi | Kind::Attribute => str(&n.value),
         _ => Value::Null,
     })
@@ -861,6 +865,6 @@ getter!(next_element_sibling_get, |ctx, r| {
 impl Doc {
     /// A snapshot to copy from (a node copied within its own document).
     pub fn clone_tree(&self) -> Doc {
-        Doc { nodes: self.nodes.clone(), objects: Vec::new(), settings: self.settings.clone(), class: self.class.clone(), orphan: self.orphan }
+        Doc { nodes: self.nodes.clone(), objects: Vec::new(), settings: self.settings.clone(), class: self.class.clone(), orphan: self.orphan, html: self.html }
     }
 }

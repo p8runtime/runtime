@@ -5,6 +5,7 @@
 
 pub mod build;
 pub mod document;
+pub mod html_out;
 pub mod lists;
 pub mod node;
 pub mod serialize;
@@ -156,10 +157,14 @@ const DOCUMENT_METHODS: &[Meth] = concat_meths!(
     &[
         m!("__construct", d::document_construct),
         m!("loadXML", d::load_xml),
+        m!("loadHTML", d::load_html),
+        m!("loadHTMLFile", d::load_html_file),
         m!("load", d::load_file),
         m!("schemaValidate", d::schema_validate),
         m!("schemaValidateSource", d::schema_validate_source),
         m!("saveXML", d::save_xml),
+        m!("saveHTML", d::save_html),
+        m!("saveHTMLFile", d::save_html_file),
         m!("save", d::save_file),
         m!("createElement", d::create_element),
         m!("createElementNS", d::create_element_ns),

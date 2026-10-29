@@ -7,6 +7,8 @@ mod constants;
 mod dom;
 mod encoding;
 mod errors;
+mod html;
+mod html_tables;
 mod parser;
 mod simplexml;
 mod writer;

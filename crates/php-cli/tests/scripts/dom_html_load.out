@@ -1,0 +1,891 @@
+== "<p>x<\/p>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>x</p></body></html>
+== "<title>x<\/title><p>y" options=0
+13:#document
+ 10:html
+ 1:html
+  1:head
+   1:title
+    3:#text="x"
+  1:body
+   1:p
+    3:#text="y"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><title>x</title></head><body><p>y</p></body></html>
+== "text <b>bold" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="text "
+    1:b
+     3:#text="bold"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>text <b>bold</b></p></body></html>
+== "<head><title>t<\/title><\/head><body>b" options=0
+13:#document
+ 10:html
+ 1:html
+  1:head
+   1:title
+    3:#text="t"
+  1:body
+   3:#text="b"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><title>t</title></head><body>b</body></html>
+== "<html><head><\/head><body><\/body><\/html>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:head
+  1:body
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head></head><body></body></html>
+== "<body><div>x<\/div><\/body><p>after body<\/p>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:div
+    3:#text="x"
+  1:p
+   3:#text="after body"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div>x</div></body><p>after body</p></html>
+== "<html><body>a<\/body><\/html><p>after html<\/p>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   3:#text="a"
+  1:html
+   1:p
+    3:#text="after html"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body>a</body><html><p>after html</p></html></html>
+== "   <p>leading space<\/p>   " options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="leading space"
+   3:#text="   "
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>leading space</p>   </body></html>
+== "<li>a<li>b" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:li
+    3:#text="a"
+   1:li
+    3:#text="b"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><li>a</li><li>b</li></body></html>
+== "<table><tr><td>a<td>b<\/table>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:table
+    1:tr
+     1:td
+      3:#text="a"
+     1:td
+      3:#text="b"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><table><tr><td>a</td><td>b</td></tr></table></body></html>
+== "<select><option>1<option>2<\/select>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:select
+    1:option
+     3:#text="1"
+    1:option
+     3:#text="2"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><select><option>1</option><option>2</option></select></body></html>
+== "<p>a<div>b<\/div>c<\/p>" options=0
+  level 2 code 76 line 1 column 22: "Unexpected end tag : p\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="a"
+   1:div
+    3:#text="b"
+   3:#text="c"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>a</p><div>b</div>c</body></html>
+== "<dl><dt>a<dd>b<dt>c<\/dl>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:dl
+    1:dt
+     3:#text="a"
+    1:dd
+     3:#text="b"
+    1:dt
+     3:#text="c"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><dl><dt>a</dt><dd>b</dd><dt>c</dt></dl></body></html>
+== "<p>a<p>b<p>c" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="a"
+   1:p
+    3:#text="b"
+   1:p
+    3:#text="c"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>a</p><p>b</p><p>c</p></body></html>
+== "<h1>a<h2>b<\/h1>c" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:h1
+    3:#text="a"
+    1:h2
+     3:#text="b"
+   3:#text="c"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><h1>a<h2>b</h2></h1>c</body></html>
+== "<b><i>x<\/b><\/i>" options=0
+  level 2 code 76 line 1 column 12: "Opening and ending tag mismatch: b and i\n"
+  level 2 code 76 line 1 column 16: "Unexpected end tag : i\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:b
+    1:i
+     3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><b><i>x</i></b></body></html>
+== "<\/p>stray" options=0
+  level 2 code 76 line 1 column 5: "Unexpected end tag : p\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="stray"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>stray</p></body></html>
+== "<br\/><hr><img src=\"a.png\" alt=''>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:br
+   1:hr
+   1:img [src="a.png"] [alt=""]
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><br><hr><img src="a.png" alt=""></body></html>
+== "<input disabled value=x><input checked=\"checked\" selected>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:input [disabled="disabled"] [value="x"]
+   1:input [checked="checked"] [selected="selected"]
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><input disabled value="x"><input checked selected></body></html>
+== "<div =x>y<\/div><div \"a\">z<\/div><a b=c d>e<\/a>" options=0
+  level 2 code 68 line 1 column 6: "error parsing attribute name\n"
+  level 2 code 68 line 1 column 21: "error parsing attribute name\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:div
+    3:#text="y"
+   1:div
+    3:#text="z"
+   1:a [b="c"] [d=""]
+    3:#text="e"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div>y</div><div>z</div><a b="c" d>e</a></body></html>
+== "<div a=1 a=2>x<\/div>" options=0
+  level 2 code 42 line 1 column 13: "Attribute a redefined\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:div [a="1"]
+    3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div a="1">x</div></body></html>
+== "<DIV CLASS=A ID=b>x<\/DIV>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:div [class="A"] [id="b"]
+    3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div class="A" id="b">x</div></body></html>
+== "<p\/>x<div\/>text" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+   3:#text="x"
+   1:div
+   3:#text="text"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p></p>x<div></div>text</body></html>
+== "<custom-element data-x=\"1\">y<\/custom-element><section><article>a<\/article><\/section>" options=0
+  level 2 code 801 line 1 column 27: "Tag custom-element invalid\n"
+  level 2 code 801 line 1 column 54: "Tag section invalid\n"
+  level 2 code 801 line 1 column 63: "Tag article invalid\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:custom-element [data-x="1"]
+    3:#text="y"
+   1:section
+    1:article
+     3:#text="a"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><custom-element data-x="1">y</custom-element><section><article>a</article></section></body></html>
+== "<svg:rect width=1><x:y\/><\/svg:rect>" options=0
+  level 2 code 801 line 1 column 18: "Tag svg:rect invalid\n"
+  level 2 code 801 line 1 column 23: "Tag x:y invalid\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:rect [width="1"]
+    1:y
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><rect width="1"><y></y></rect></body></html>
+== "<video controls><source src=a><\/video>" options=0
+  level 2 code 801 line 1 column 16: "Tag video invalid\n"
+  level 2 code 801 line 1 column 30: "Tag source invalid\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:video [controls=""]
+    1:source [src="a"]
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><video controls><source src="a"></source></video></body></html>
+== "<p title=\"&amp; &lt; &quot; &nbsp; &copy; &#169; &#x41; &unknown; & &;\">x<\/p>" options=0
+  level 2 code 68 line 1 column 68: "htmlParseEntityRef: no name\n"
+  level 2 code 68 line 1 column 70: "htmlParseEntityRef: no name\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p [title="& < \" \u00a0 \u00a9 \u00a9 A &unknown; & &;"]
+    3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p title='&amp; &lt; " &nbsp; &copy; &copy; A &amp;unknown; &amp; &amp;;'>x</p></body></html>
+== "<p>&amp; &lt; &gt; &quot; &nbsp; &copy; &#169; &#x41; &unknown; & &; &#0; &#xD800; &#99999999; &eacute &#65<\/p>" options=0
+  level 2 code 68 line 1 column 66: "htmlParseEntityRef: no name\n"
+  level 2 code 68 line 1 column 68: "htmlParseEntityRef: no name\n"
+  level 2 code 9 line 1 column 74: "htmlParseCharRef: invalid xmlChar value 0\n"
+  level 2 code 9 line 1 column 83: "htmlParseCharRef: invalid xmlChar value 55296\n"
+  level 2 code 9 line 1 column 95: "htmlParseCharRef: value too large\n"
+  level 2 code 23 line 1 column 103: "htmlParseEntityRef: expecting ';'\n"
+  level 2 code 7 line 1 column 108: "htmlParseCharRef: missing semicolon\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="& < > \" \u00a0 \u00a9 \u00a9 A &unknown; & &;    &eacute A"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>&amp; &lt; &gt; " &nbsp; &copy; &copy; A &amp;unknown; &amp; &amp;;    &amp;eacute A</p></body></html>
+== "a < b > c & d" options=0
+  level 2 code 68 line 1 column 12: "htmlParseEntityRef: no name\n"
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="a < b > c & d"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>a &lt; b &gt; c &amp; d</p></body></html>
+== "<!-- a -- b --><p>x<!-- unfinished" options=0
+  level 2 code 45 line 1 column 35: "Comment not terminated \n<!-- unfinish\n"
+13:#document
+ 10:html
+ 8:#comment=" a -- b "
+ 1:html
+  1:body
+   1:p
+    3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!-- a -- b --><html><body><p>x</p></body></html>
+== "<!---><p>y<\/p><!--->" options=0
+13:#document
+ 10:html
+ 8:#comment="-><p>y<\/p><!-"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!---><p>y</p><!--->
+== "<?php echo 1; ?><p>z<\/p>" options=0
+13:#document
+ 10:html
+ 7:php="echo 1; ?"
+ 1:html
+  1:body
+   1:p
+    3:#text="z"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<?php echo 1; ?><html><body><p>z</p></body></html>
+== "<p>x<![CDATA[y]]>z<\/p>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="x<![CDATA[y]]>z"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>x&lt;![CDATA[y]]&gt;z</p></body></html>
+== "<!DOCTYPE html PUBLIC \"-\/\/W3C\/\/DTD XHTML 1.0 Strict\/\/EN\" \"http:\/\/www.w3.org\/TR\/xhtml1\/DTD\/xhtml1-strict.dtd\"><html><body>x<\/body><\/html>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:body
+   3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html><body>x</body></html>
+== "<!doctype html><title>t<\/title>" options=0
+13:#document
+ 10:html
+ 1:html
+  1:head
+   1:title
+    3:#text="t"
+<!DOCTYPE html>
+<html><head><title>t</title></head></html>
+== "<script>var a = \"<\/div>\"; if (a<b) { x = \"<p>\"; }<\/script><p>after" options=0
+  level 2 code 76 line 1 column 24: "Unexpected end tag : div\n"
+13:#document
+ 10:html
+ 1:html
+  1:head
+   1:script
+    4:#cdata-section="var a = \"\"; if (a<b) { x = \"<p>\"; }"
+  1:body
+   1:p
+    3:#text="after"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><script>var a = ""; if (a<b) { x = "<p>"; }</script></head><body><p>after</p></body></html>
+== "<style>p > a { }<\/style><textarea> a <b> <\/textarea><pre>\n x<\/pre>" options=0
+  level 2 code 76 line 1 column 53: "Opening and ending tag mismatch: textarea and b\n"
+13:#document
+ 10:html
+ 1:html
+  1:head
+   1:style
+    4:#cdata-section="p > a { }"
+   1:textarea
+    3:#text=" a "
+    1:b
+     3:#text=" "
+  1:body
+   1:pre
+    3:#text="\n x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><style>p > a { }</style><textarea> a <b> </b></textarea></head><body><pre>
+ x</pre></body></html>
+== "<html>\n<head>\n<title>x<\/title>\n<\/head>\n<body>\n<p>a<\/p>\n\n<p>b<\/p>\n<\/body>\n<\/html>\n" options=0
+13:#document
+ 10:html
+ 1:html
+  3:#text="\n"
+  1:head
+   3:#text="\n"
+   1:title
+    3:#text="x"
+   3:#text="\n"
+  3:#text="\n"
+  1:body
+   3:#text="\n"
+   1:p
+    3:#text="a"
+   3:#text="\n\n"
+   1:p
+    3:#text="b"
+   3:#text="\n"
+  3:#text="\n"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html>
+<head>
+<title>x</title>
+</head>
+<body>
+<p>a</p>
+
+<p>b</p>
+</body>
+</html>
+== "<!DOCTYPE HTML PUBLIC \"-\/\/W3C\/\/DTD HTML 4.01\/\/EN\"><html>\n<body>\n <p>a<\/p>\n<\/body><\/html>" options=0
+13:#document
+ 10:HTML
+ 1:html
+  3:#text="\n"
+  1:body
+   3:#text="\n "
+   1:p
+    3:#text="a"
+   3:#text="\n"
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+<body>
+ <p>a</p>
+</body></html>
+== "<p>a<\/p><p>b<\/p>" options=8192
+13:#document
+ 10:html
+ 1:p
+  3:#text="a"
+  1:p
+   3:#text="b"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<p>a<p>b</p></p>
+== "text only" options=8192
+13:#document
+ 10:html
+ 1:p
+  3:#text="text only"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<p>text only</p>
+== "<div>x<\/div> tail" options=8192
+13:#document
+ 10:html
+ 1:div
+  3:#text="x"
+  1:p
+   3:#text=" tail"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<div>x<p> tail</p></div>
+== "<ul>\n <li>a<\/li>\n <li>b<\/li>\n<\/ul>\n" options=8192
+13:#document
+ 10:html
+ 1:ul
+  3:#text="\n "
+  1:li
+   3:#text="a"
+  3:#text="\n "
+  1:li
+   3:#text="b"
+  3:#text="\n"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<ul>
+ <li>a</li>
+ <li>b</li>
+</ul>
+== "<!--c--><span>s<\/span>" options=8192
+13:#document
+ 10:html
+ 8:#comment="c"
+ 1:span
+  3:#text="s"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!--c--><span>s</span>
+== "<title>t<\/title><p>x" options=8192
+13:#document
+ 10:html
+ 1:title
+  3:#text="t"
+  1:p
+   3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<title>t<p>x</p></title>
+== "<tr><td>x" options=8192
+13:#document
+ 10:html
+ 1:tr
+  1:td
+   3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<tr><td>x</td></tr>
+== "<p>a<\/p><p>b<\/p>" options=4
+13:#document
+ 1:html
+  1:body
+   1:p
+    3:#text="a"
+   1:p
+    3:#text="b"
+<html><body><p>a</p><p>b</p></body></html>
+== "text only" options=4
+13:#document
+ 1:html
+  1:body
+   1:p
+    3:#text="text only"
+<html><body><p>text only</p></body></html>
+== "<div>x<\/div> tail" options=4
+13:#document
+ 1:html
+  1:body
+   1:div
+    3:#text="x"
+   3:#text=" tail"
+<html><body><div>x</div> tail</body></html>
+== "<ul>\n <li>a<\/li>\n <li>b<\/li>\n<\/ul>\n" options=4
+13:#document
+ 1:html
+  1:body
+   1:ul
+    3:#text="\n "
+    1:li
+     3:#text="a"
+    3:#text="\n "
+    1:li
+     3:#text="b"
+    3:#text="\n"
+   3:#text="\n"
+<html><body><ul>
+ <li>a</li>
+ <li>b</li>
+</ul>
+</body></html>
+== "<!--c--><span>s<\/span>" options=4
+13:#document
+ 8:#comment="c"
+ 1:html
+  1:body
+   1:span
+    3:#text="s"
+<!--c--><html><body><span>s</span></body></html>
+== "<title>t<\/title><p>x" options=4
+13:#document
+ 1:html
+  1:head
+   1:title
+    3:#text="t"
+  1:body
+   1:p
+    3:#text="x"
+<html><head><title>t</title></head><body><p>x</p></body></html>
+== "<tr><td>x" options=4
+13:#document
+ 1:html
+  1:body
+   1:tr
+    1:td
+     3:#text="x"
+<html><body><tr><td>x</td></tr></body></html>
+== "<p>a<\/p><p>b<\/p>" options=8196
+13:#document
+ 1:p
+  3:#text="a"
+  1:p
+   3:#text="b"
+<p>a<p>b</p></p>
+== "text only" options=8196
+13:#document
+ 1:p
+  3:#text="text only"
+<p>text only</p>
+== "<div>x<\/div> tail" options=8196
+13:#document
+ 1:div
+  3:#text="x"
+  1:p
+   3:#text=" tail"
+<div>x<p> tail</p></div>
+== "<ul>\n <li>a<\/li>\n <li>b<\/li>\n<\/ul>\n" options=8196
+13:#document
+ 1:ul
+  3:#text="\n "
+  1:li
+   3:#text="a"
+  3:#text="\n "
+  1:li
+   3:#text="b"
+  3:#text="\n"
+<ul>
+ <li>a</li>
+ <li>b</li>
+</ul>
+== "<!--c--><span>s<\/span>" options=8196
+13:#document
+ 8:#comment="c"
+ 1:span
+  3:#text="s"
+<!--c--><span>s</span>
+== "<title>t<\/title><p>x" options=8196
+13:#document
+ 1:title
+  3:#text="t"
+  1:p
+   3:#text="x"
+<title>t<p>x</p></title>
+== "<tr><td>x" options=8196
+13:#document
+ 1:tr
+  1:td
+   3:#text="x"
+<tr><td>x</td></tr>
+== "<p>a<\/p><p>b<\/p>" options=256
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="a"
+   1:p
+    3:#text="b"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>a</p><p>b</p></body></html>
+== "text only" options=256
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="text only"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>text only</p></body></html>
+== "<div>x<\/div> tail" options=256
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:div
+    3:#text="x"
+   3:#text=" tail"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div>x</div> tail</body></html>
+== "<ul>\n <li>a<\/li>\n <li>b<\/li>\n<\/ul>\n" options=256
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:ul
+    1:li
+     3:#text="a"
+    3:#text="\n "
+    1:li
+     3:#text="b"
+    3:#text="\n"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><ul><li>a</li>
+ <li>b</li>
+</ul></body></html>
+== "<!--c--><span>s<\/span>" options=256
+13:#document
+ 10:html
+ 8:#comment="c"
+ 1:html
+  1:body
+   1:span
+    3:#text="s"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!--c--><html><body><span>s</span></body></html>
+== "<title>t<\/title><p>x" options=256
+13:#document
+ 10:html
+ 1:html
+  1:head
+   1:title
+    3:#text="t"
+  1:body
+   1:p
+    3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><title>t</title></head><body><p>x</p></body></html>
+== "<tr><td>x" options=256
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:tr
+    1:td
+     3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><tr><td>x</td></tr></body></html>
+== "<p>a<\/p><p>b<\/p>" options=8448
+13:#document
+ 10:html
+ 1:p
+  3:#text="a"
+  1:p
+   3:#text="b"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<p>a<p>b</p></p>
+== "text only" options=8448
+13:#document
+ 10:html
+ 1:p
+  3:#text="text only"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<p>text only</p>
+== "<div>x<\/div> tail" options=8448
+13:#document
+ 10:html
+ 1:div
+  3:#text="x"
+  1:p
+   3:#text=" tail"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<div>x<p> tail</p></div>
+== "<ul>\n <li>a<\/li>\n <li>b<\/li>\n<\/ul>\n" options=8448
+13:#document
+ 10:html
+ 1:ul
+  1:li
+   3:#text="a"
+  3:#text="\n "
+  1:li
+   3:#text="b"
+  3:#text="\n"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<ul><li>a</li>
+ <li>b</li>
+</ul>
+== "<!--c--><span>s<\/span>" options=8448
+13:#document
+ 10:html
+ 8:#comment="c"
+ 1:span
+  3:#text="s"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!--c--><span>s</span>
+== "<title>t<\/title><p>x" options=8448
+13:#document
+ 10:html
+ 1:title
+  3:#text="t"
+  1:p
+   3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<title>t<p>x</p></title>
+== "<tr><td>x" options=8448
+13:#document
+ 10:html
+ 1:tr
+  1:td
+   3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<tr><td>x</td></tr>
+== "<p>a<\/p><p>b<\/p>" options=1
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="a"
+   1:p
+    3:#text="b"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>a</p><p>b</p></body></html>
+== "text only" options=1
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:p
+    3:#text="text only"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>text only</p></body></html>
+== "<div>x<\/div> tail" options=1
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:div
+    3:#text="x"
+   3:#text=" tail"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div>x</div> tail</body></html>
+== "<ul>\n <li>a<\/li>\n <li>b<\/li>\n<\/ul>\n" options=1
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:ul
+    3:#text="\n "
+    1:li
+     3:#text="a"
+    3:#text="\n "
+    1:li
+     3:#text="b"
+    3:#text="\n"
+   3:#text="\n"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><ul>
+ <li>a</li>
+ <li>b</li>
+</ul>
+</body></html>
+== "<!--c--><span>s<\/span>" options=1
+13:#document
+ 10:html
+ 8:#comment="c"
+ 1:html
+  1:body
+   1:span
+    3:#text="s"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!--c--><html><body><span>s</span></body></html>
+== "<title>t<\/title><p>x" options=1
+13:#document
+ 10:html
+ 1:html
+  1:head
+   1:title
+    3:#text="t"
+  1:body
+   1:p
+    3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><title>t</title></head><body><p>x</p></body></html>
+== "<tr><td>x" options=1
+13:#document
+ 10:html
+ 1:html
+  1:body
+   1:tr
+    1:td
+     3:#text="x"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><tr><td>x</td></tr></body></html>
+bool(true)
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+
+DOMDocument::loadHTML(): Argument #1 ($source) must not be empty
+int(13)
+bool(true)
+NULL
+NULL
+string(37) "-//W3C//DTD HTML 4.0 Transitional//EN"
+string(1) "p"
+string(1) "a"
+NULL
+int(0)
+int(1)
+
+Warning: DOMDocument::loadHTML(): Tag foo invalid in Entity, line: 2 in %s on line 88
+
+Warning: DOMDocument::loadHTML(): Tag bar invalid in Entity, line: 3 in %s on line 88
+2 76 1 9 Unexpected end tag : b
+1

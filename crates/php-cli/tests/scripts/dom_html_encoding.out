@@ -1,0 +1,135 @@
+== 3c703e636166e93c2f703e options=0
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>caf&eacute;</p></body></html>
+3c68746d6c3e3c626f64793e3c703e636166c3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c703e636166c3a93c2f703e options=0
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>caf&Atilde;&copy;</p></body></html>
+3c68746d6c3e3c626f64793e3c703e636166c383c2a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120636861727365743d227574662d38223e3c703e636166c3a920e282ac3c2f703e options=0
+encoding='utf-8'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta charset="utf-8"></head><body><p>caf&eacute; &euro;</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120636861727365743d227574662d38223e3c2f686561643e3c626f64793e3c703e636166c3a920e282ac3c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120636861727365743d7574662d383e3c703e636166e93c2f703e options=0
+  level 2 code 81 line 1 column 27: "Input is not proper UTF-8, indicate encoding !\n"
+  level 2 code 81 line 1 column 28: "Input is not proper UTF-8, indicate encoding !\n"
+encoding='utf-8'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta charset="utf-8"></head><body><p>caf&eacute;</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120636861727365743d227574662d38223e3c2f686561643e3c626f64793e3c703e636166c3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f6874 options=0
+encoding='utf-8'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body><p>café</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d7574662d38223e3c2f686561643e3c626f64793e3c703e636166c3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f6874 options=0
+encoding='utf-8;'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8;"></head><body><p>café</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d7574662d383b223e3c2f686561643e3c626f64793e3c703e636166c3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f6874 options=0
+encoding='ISO-8859-1'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"></head><body><p>caf� é</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d49534f2d383835392d31223e3c2f686561643e3c626f64793e3c703e636166c3a920c383c2a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f6874 options=0
+encoding='windows-1252'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252"></head><body><p>caf� �</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d77696e646f77732d31323532223e3c2f686561643e3c626f64793e3c703e636166c3a920e282ac3c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f6874 options=0
+encoding='iso-8859-2'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=iso-8859-2"></head><body><p>caf� �</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d69736f2d383835392d32223e3c2f686561643e3c626f64793e3c703e636166c3a920c4853c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c6d65746120636861727365743d626f6775733e3c703e636166e93c2f703e options=0
+  level 2 code 32 line 1 column 20: "htmlCheckEncoding: unknown encoding bogus\n"
+encoding='bogus'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><meta charset="bogus"></head><body><p>caf&eacute;</p></body></html>
+3c68746d6c3e3c686561643e3c6d65746120636861727365743d22626f677573223e3c2f686561643e3c626f64793e3c703e636166c3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c68746d6c3e3c686561643e3c7469746c653ec3a93c2f7469746c653e3c6d65746120687474702d65717569763d2243 options=0
+encoding='utf-8'
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><title>é</title><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head></html>
+3c68746d6c3e3c686561643e3c7469746c653ec3a93c2f7469746c653e3c6d65746120687474702d65717569763d22436f6e74656e742d547970652220636f6e74656e743d22746578742f68746d6c3b20636861727365743d7574662d38223e3c2f686561643e3c2f68746d6c3e
+== efbbbf3c703e626f6d20c3a93c2f703e options=0
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>bom &eacute;</p></body></html>
+3c68746d6c3e3c626f64793e3c703e626f6d20c3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== fffe3c0070003e00e9003c002f0070003e00 options=0
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>&eacute;</p></body></html>
+3c68746d6c3e3c626f64793e3c703ec3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c3f786d6c20656e636f64696e673d225554462d38223e0a3c703e636166c3a920e282ac20f09f98803c2f703e options=0
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<?xml encoding="UTF-8"><html><body><p>caf&eacute; &euro; &#128512;</p></body></html>
+3c68746d6c3e3c626f64793e3c703e636166c3a920e282ac20f09f98803c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c3f786d6c20656e636f64696e673d225554462d38223e0a3c703e636166e93c2f703e options=0
+  level 2 code 81 line 2 column 7: "Input is not proper UTF-8, indicate encoding !\n"
+  level 2 code 81 line 2 column 8: "Input is not proper UTF-8, indicate encoding !\n"
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<?xml encoding="UTF-8"><html><body><p>caf&eacute;</p></body></html>
+3c68746d6c3e3c626f64793e3c703e636166c3a93c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e3c703e636166c3a93c2f options=8196
+encoding=NULL
+<?xml version="1.0" encoding="UTF-8"?><p>caf&eacute;</p>
+3c703e636166c3a93c2f703e
+== 3c7020636c6173733d22636166c3a922207469746c653d22e9223e783c2f703e options=0
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p class="caf&Atilde;&copy;" title="&eacute;">x</p></body></html>
+3c68746d6c3e3c626f64793e3c7020636c6173733d22636166c383c2a922207469746c653d22c3a9223e783c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c212d2d20636166c3a9202d2d3e3c212d2d20e9202d2d3e3c703e783c2f703e options=0
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!-- caf&Atilde;&copy; --><!-- &eacute; --><html><body><p>x</p></body></html>
+3c68746d6c3e3c626f64793e3c703e783c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c703e6100623c2f703e options=0
+  level 2 code 9 line 1 column 5: "Char 0x0 out of allowed range\n"
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>a b</p></body></html>
+3c68746d6c3e3c626f64793e3c703e6120623c2f703e3c2f626f64793e3c2f68746d6c3e
+== 3c703e0102206374726c3c2f703e options=0
+  level 2 code 9 line 1 column 4: "Invalid char in CDATA 0x1\n"
+  level 2 code 9 line 1 column 5: "Invalid char in CDATA 0x2\n"
+encoding=NULL
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p> ctrl</p></body></html>
+3c68746d6c3e3c626f64793e3c703e206374726c3c2f703e3c2f626f64793e3c2f68746d6c3e
+<?xml encoding="UTF-8"><div class="a"><p>&eacute; &ldquo;q&rdquo; &amp; <img src="x.jpg"><br><span>x</span></p></div><div>2</div>
+
+DOMProcessingInstruction:xml <?xml encoding="UTF-8">
+DOMElement:div <div class="a"><p>é “q” &amp; <img src="x.jpg"><br><span>x</span></p></div>
+DOMElement:div <div>2</div>
+<?xml encoding="UTF-8"><div class="a"><p>&eacute; &ldquo;q&rdquo; &amp; <img src="x.jpg"><br><span>x</span></p></div><div>2</div>
+|<div class="a"><p>é “q” &amp; <img src="x.jpg"><br><span>x</span></p></div>
+Tag header invalid @1:35
+Tag nav invalid @1:40
+Tag main invalid @1:62
+Tag article invalid @1:71
+Tag figure invalid @1:79
+Tag figcaption invalid @1:102
+Tag footer invalid @1:150
+<!DOCTYPE html>
+<html><body><header><nav>x</nav></header><main><article><figure><img src="a"><figcaption>c</figcaption></figure></article></main><footer>f</footer></body></html>
+
+bool(true)
+3:f.html:Tag foo invalid
+f.html
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html>
+<body>
+<foo>x</foo>
+</body></html>
+bool(false)
+DOMDocument::loadHTMLFile(): Argument #1 ($filename) must not be empty
+DOMDocument::loadHTMLFile(): Argument #1 ($filename) must not contain any null bytes

@@ -6,6 +6,7 @@
 
 use super::build;
 use super::node::*;
+use super::html_out::{self, HtmlOut};
 use super::serialize::Out;
 use super::tree::{DOC, Doc, Id, Kind, Node};
 use p8_runtime::ext::{Ctx, Throw};
@@ -117,6 +118,62 @@ pub fn load_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
         }
         Err(_) => {
             ctx.warn(&format!("DOMDocument::load(): I/O warning : failed to load external entity \"{path}\""));
+            Ok(Value::Bool(false))
+        }
+    }
+}
+
+/// Parses HTML into a new tree for `this` document. The parse is never
+/// refused: errors only become warnings (or entries in libxml's list).
+fn load_html_data(ctx: &mut dyn Ctx, this: &Rc<Object>, data: Vec<u8>, filename: Option<String>, flags: i64, func: &str) -> R {
+    let old = this_doc(this);
+    let settings = old.doc.borrow().settings.clone();
+    let mut doc = Doc::new(this.class.name.as_bytes().to_vec());
+    doc.settings = settings;
+    doc.settings.encoding = None;
+    doc.settings.url = None;
+    let errors = crate::html::parse(&mut doc, data, filename.clone(), flags);
+    let where_ = filename.as_deref().unwrap_or("Entity");
+    for e in &errors {
+        // LIBXML_NOERROR drops the warnings, not the errors libxml_get_errors lists.
+        let msg = e.message.trim_end_matches('\n');
+        crate::libxml::report(ctx, e, |ctx| {
+            if flags & 32 == 0 {
+                ctx.warn(&format!("{func}(): {msg} in {where_}, line: {}", e.line));
+            }
+        });
+    }
+    if let Some(f) = filename {
+        doc.settings.url = Some(f.into_bytes());
+    }
+    let r = NodeRef { doc: Rc::new(RefCell::new(doc)), id: DOC };
+    bind(this, &r);
+    Ok(Value::Bool(true))
+}
+
+pub fn load_html(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let source = bytes(&arg(args, 0));
+    if source.is_empty() {
+        return Err(ctx.throw("ValueError", "DOMDocument::loadHTML(): Argument #1 ($source) must not be empty".into()));
+    }
+    load_html_data(ctx, this, source, None, arg(args, 1).to_int(), "DOMDocument::loadHTML")
+}
+
+pub fn load_html_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let name = bytes(&arg(args, 0));
+    if name.is_empty() {
+        return Err(ctx.throw("ValueError", "DOMDocument::loadHTMLFile(): Argument #1 ($filename) must not be empty".into()));
+    }
+    if name.contains(&0) {
+        return Err(ctx.throw("ValueError", "DOMDocument::loadHTMLFile(): Argument #1 ($filename) must not contain any null bytes".into()));
+    }
+    let path = String::from_utf8_lossy(&name).into_owned();
+    match std::fs::read(&path) {
+        Ok(data) => {
+            load_html_data(ctx, this, data, Some(path), arg(args, 1).to_int(), "DOMDocument::loadHTMLFile")
+        }
+        Err(_) => {
+            ctx.warn(&format!("DOMDocument::loadHTMLFile(): I/O warning : failed to load external entity \"{path}\""));
             Ok(Value::Bool(false))
         }
     }
@@ -234,6 +291,84 @@ pub fn save_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
         Ok(()) => Ok(Value::Int(b.len() as i64)),
         Err(_) => Ok(Value::Bool(false)),
     }
+}
+
+/// saveHTML: the document (through the output encoding libxml2 picks from
+/// its meta element) or one node (as it is).
+pub fn save_html(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let node = arg_node(args, 0);
+    let r = this_doc(this);
+    let d = r.doc.borrow();
+    let mut out = HtmlOut::new(&d, d.settings.format_output);
+    match node {
+        Some(n) => {
+            if !n.same_doc(&r) {
+                drop(d);
+                return Err(dom_error(ctx, WRONG_DOCUMENT));
+            }
+            if d.node(n.id).kind == Kind::Fragment {
+                for &c in &d.node(n.id).children {
+                    out.dump(c);
+                }
+            } else {
+                out.dump(n.id);
+            }
+            Ok(str(&out.buf))
+        }
+        None => {
+            out.dump(DOC);
+            let encoding = html_out::meta_encoding(&d);
+            let (bytes, failed) = html_out::encode_output(out.buf, encoding.as_deref());
+            drop(d);
+            if failed {
+                // libxml2's output buffer reports the failed conversion.
+                {
+                    let e = crate::parser::XmlError {
+                        domain: 8,
+                        code: 1544,
+                        level: 2,
+                        message: "encoder error".into(),
+                        line: 0,
+                        column: 0,
+                        file: None,
+                        context: Vec::new(),
+                        context_col: 0,
+                    };
+                    crate::libxml::report(ctx, &e, |ctx| ctx.warn("DOMDocument::saveHTML(): encoder error"));
+                }
+            }
+            Ok(if bytes.is_empty() { Value::Bool(false) } else { str(&bytes) })
+        }
+    }
+}
+
+pub fn save_html_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let name = bytes(&arg(args, 0));
+    if name.is_empty() {
+        return Err(ctx.throw("ValueError", "DOMDocument::saveHTMLFile(): Argument #1 ($filename) must not be empty".into()));
+    }
+    if name.contains(&0) {
+        return Err(ctx.throw("ValueError", "DOMDocument::saveHTMLFile(): Argument #1 ($filename) must not contain any null bytes".into()));
+    }
+    let path = String::from_utf8_lossy(&name).into_owned();
+    let r = this_doc(this);
+    let mut d = r.doc.borrow_mut();
+    // htmlSaveFileFormat records the encoding in the document first.
+    let encoding = html_out::meta_encoding(&d);
+    html_out::set_meta_encoding(&mut d, Some(encoding.as_deref().unwrap_or(b"UTF-8")));
+    let format = d.settings.format_output;
+    let mut out = HtmlOut::new(&d, format);
+    out.dump(DOC);
+    let (bytes, _) = html_out::encode_output(out.buf, encoding.as_deref());
+    Ok(match std::fs::write(&path, &bytes) {
+        Ok(()) => Value::Int(bytes.len() as i64),
+        Err(e) => {
+            let why = e.to_string();
+            let why = why.split(" (os error").next().unwrap_or(&why);
+            ctx.warn(&format!("DOMDocument::saveHTMLFile({path}): Failed to open stream: {why}"));
+            Value::Int(0)
+        }
+    })
 }
 
 /// A new node in `this` document.
@@ -359,8 +494,15 @@ pub fn get_element_by_id(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
         let d = r.doc.borrow();
         let mut all = Vec::new();
         d.descendants(DOC, &mut all);
-        // Only xml:id counts without a DTD declaring ID attributes.
-        all.into_iter().find(|&e| d.attr_ns(e, Some(crate::parser::XML_NS), b"id").is_some_and(|a| d.node(a).value == id))
+        // Only xml:id counts without a DTD declaring ID attributes; in an
+        // HTML document id does, and name on a (xmlIsID).
+        all.into_iter().find(|&e| {
+            if d.html {
+                d.node(e).attrs.iter().any(|&a| is_html_id(&d, e, a) && d.node(a).value == id)
+            } else {
+                d.attr_ns(e, Some(crate::parser::XML_NS), b"id").is_some_and(|a| d.node(a).value == id)
+            }
+        })
     };
     wrap_opt(ctx, &r, found)
 }
@@ -665,6 +807,8 @@ pub fn toggle_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     }
     let force = arg(args, 1);
     let mut d = r.doc.borrow_mut();
+    // An element of an HTML document without a namespace takes a lower-case name.
+    let name = if d.html && d.node(r.id).ns.is_none() { name.to_ascii_lowercase() } else { name };
     let existing = d.attr(r.id, &name);
     match (existing, force) {
         (Some(_), Value::Bool(true)) => Ok(Value::Bool(true)),
@@ -867,8 +1011,16 @@ pub fn attr_value_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
     Ok(Value::Null)
 }
 
-pub fn is_id(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Bool(false))
+/// xmlIsID for an HTML document: id, and name on an a element.
+fn is_html_id(d: &Doc, el: Id, attr: Id) -> bool {
+    let a = d.node(attr);
+    a.ns.is_none() && (a.name == b"id" || (a.name == b"name" && d.node(el).name == b"a"))
+}
+
+pub fn is_id(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
+    let r = this_node(ctx, this)?;
+    let d = r.doc.borrow();
+    Ok(Value::Bool(d.html && d.parent(r.id).is_some_and(|el| is_html_id(&d, el, r.id))))
 }
 
 // ---- DOMCharacterData, DOMText, DOMProcessingInstruction ----
