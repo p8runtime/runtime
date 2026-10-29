@@ -67,9 +67,8 @@ if ! docker ps --format '{{.Names}}' | grep -qx p8-mariadb; then
         -e MARIADB_ROOT_PASSWORD=p8root -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11.4 >/dev/null
     until docker exec p8-mariadb mariadb -uroot -pp8root -e 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
 fi
-if ! docker image inspect p8-php-mysqli >/dev/null 2>&1; then
-    printf 'FROM php:8.4-cli\nRUN docker-php-ext-install mysqli\n' | docker build -q -t p8-php-mysqli - >/dev/null
-fi
+image=p8-php-gate:$(shasum -a 256 "$here/php.Dockerfile" | cut -c1-12)
+docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" -f "$here/php.Dockerfile" "$here" >/dev/null
 
 sql() { docker exec p8-mariadb mariadb -uroot -pp8root "$@"; }
 for db in wp_php wp_p8; do
@@ -89,7 +88,7 @@ php_ref() {
     done
     { printf '%s\n' "$1" sendmail.sh; find wordpress | tail -r; } | COPYFILE_DISABLE=1 tar -cf - --no-recursion -T - 2>/dev/null |
         docker run --rm -i --network p8net --user "$(id -u):$(id -g)" --tmpfs "$top:uid=$(id -u),gid=$(id -g),exec" \
-            ${e[@]+"${e[@]}"} -e WPDBHOST=p8-mariadb -e WPDBNAME=wp_php -e MAILBOX="$work/mailbox" p8-php-mysqli \
+            ${e[@]+"${e[@]}"} -e WPDBHOST=p8-mariadb -e WPDBNAME=wp_php -e MAILBOX="$work/mailbox" "$image" \
             bash -c "mkdir -p '$work' && cd '$work' && tar xf - 2>/dev/null && php -d sendmail_path='$work/sendmail.sh' $1; cat mailbox >&2 2>/dev/null || true"
 }
 p8() {
