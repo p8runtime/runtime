@@ -1,0 +1,126 @@
+bool(true)
+string(5) "UTF-8"
+int(57)
+int(29)
+string(8) "ółć g"
+string(11) "スト 😀"
+string(47) "żółć gęślą jaźń — 日本語テキス"
+string(0) ""
+int(16)
+int(8)
+int(7)
+int(2)
+bool(false)
+string(57) "ZAŻÓŁĆ GĘŚLĄ JAŹŃ — 日本語テキスト 😀"
+string(17) "àéîõü σας"
+string(24) "Hello World O'neil Élan"
+string(7) "STRASSE"
+string(7) "STRAßE"
+string(2) "ǅ"
+string(2) "ss"
+array(3) {
+  [0]=>
+  string(3) "añ"
+  [1]=>
+  string(4) "b日"
+  [2]=>
+  string(4) "😀"
+}
+array(0) {
+}
+int(9)
+string(12) "日本語..."
+string(11) "Hello World"
+string(10) "ab日本ab"
+string(7) "éééx"
+string(6) "日本"
+string(5) "abcxx"
+string(5) "xxabc"
+string(11) "Élan vital"
+string(5) "élan"
+int(3)
+int(3)
+string(12) "@example.com"
+string(4) "user"
+string(2) "/c"
+string(3) "LLo"
+string(3) "aXb"
+int(128512)
+string(4) "😀"
+string(2) "é"
+int(195)
+string(3) "日"
+string(3) "本"
+bool(false)
+bool(true)
+string(3) "a?b"
+string(5) "UTF-8"
+string(5) "ASCII"
+string(10) "ISO-8859-1"
+string(4) "e9a4"
+string(2) "é"
+string(16) "00e920acd83dde00"
+string(2) "e9"
+string(1) "?"
+string(4) "&日"
+int(63)
+string(2) "?a"
+string(7) "U+65E5a"
+string(9) "&#x65E5;a"
+string(1) "a"
+bool(true)
+bool(true)
+array(11) {
+  [0]=>
+  string(14) "ANSI_X3.4-1968"
+  [1]=>
+  string(8) "iso-ir-6"
+  [2]=>
+  string(14) "ANSI_X3.4-1986"
+  [3]=>
+  string(16) "ISO_646.irv:1991"
+  [4]=>
+  string(8) "US-ASCII"
+  [5]=>
+  string(9) "ISO646-US"
+  [6]=>
+  string(2) "us"
+  [7]=>
+  string(6) "IBM367"
+  [8]=>
+  string(7) "IBM-367"
+  [9]=>
+  string(5) "cp367"
+  [10]=>
+  string(7) "csASCII"
+}
+string(5) "UTF-8"
+string(10) "ISO-8859-1"
+mb_strlen(): Argument #2 ($encoding) must be a valid encoding, "nope" given
+mb_substr_count(): Argument #2 ($needle) must not be empty
+mb_str_split(): Argument #2 ($length) must be greater than 0
+mb_convert_case(): Argument #2 ($mode) must be one of the MB_CASE_* constants
+mb_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+mb_substitute_character(): Argument #1 ($substitute_character) must be "none", "long", "entity" or a valid codepoint
+string(15) "a&#233;&#26085;"
+string(6) "&#xE9;"
+string(10) "aé日😀"
+string(36) "=?UTF-8?B?UHLDvGZ1bmcg5pel5pys6Kqe?="
+string(24) "=?UTF-8?Q?Pr=C3=BCfung?="
+string(10) "Prüfung x"
+string(8) "Prüfung"
+string(5) "UTF-8"
+string(7) "neutral"
+string(5) "UTF-8"
+array(2) {
+  [0]=>
+  string(5) "ASCII"
+  [1]=>
+  string(5) "UTF-8"
+}
+int(2)
+int(2)
+int(2)
+string(12) "612b414f6b2d"
+string(2) "é"
+bool(true)

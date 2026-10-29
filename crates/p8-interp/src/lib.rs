@@ -1114,6 +1114,7 @@ impl Isolate {
             arg_buf: Vec::new(),
             lambdas: HashMap::new(),
             natives: Vec::new(),
+            running_builtin: None,
             statics: HashMap::new(),
             magic_guard: Vec::new(),
             deferred_write: None,
@@ -1236,6 +1237,8 @@ pub struct Context<'i> {
     lambdas: HashMap<usize, Rc<Closure>>,
     /// Builtins running that may call back into PHP, innermost last.
     natives: Vec<NativeCall>,
+    /// The builtin running now, innermost (its name for its messages).
+    running_builtin: Option<usize>,
     /// `static` variables, by function (its code's address) and index.
     statics: HashMap<usize, HashMap<u16, Rc<RefCell<Value>>>>,
     /// The magic property methods running: (object, property, which), so
@@ -4021,7 +4024,9 @@ impl Context<'_> {
                 return Err(self.throw(class, message));
             }
         }
+        let outer = self.running_builtin.replace(i);
         let r = (self.isolate.registry.function(i).run)(self, args);
+        self.running_builtin = outer;
         if let Err(Throw::Error { .. }) = r {
             self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args);
         }
@@ -4648,8 +4653,7 @@ impl Ctx for Context<'_> {
     }
 
     fn builtin_name(&self) -> &'static str {
-        // The innermost builtin call (as stack traces record it).
-        self.natives.last().map_or("", |n| n.name)
+        self.running_builtin.map_or("", |i| self.isolate.registry.function(i).name)
     }
 
     fn modules(&self) -> &[&'static str] {
