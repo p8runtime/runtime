@@ -122,6 +122,75 @@ pub fn load_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     }
 }
 
+/// The warning text of a libxml2 error that has no PHP error handler:
+/// parser-level ones print as xmlReportError does (several lines).
+fn schema_warnings(e: &crate::parser::XmlError) -> Vec<String> {
+    match e.domain {
+        crate::parser::FROM_PARSER | crate::parser::FROM_NAMESPACE | crate::parser::FROM_DTD => e.report_lines(),
+        crate::xsd::FROM_IO => vec![format!("I/O {} : {}", if e.level == crate::parser::LEVEL_WARNING { "warning" } else { "error" }, e.message.trim_end_matches('\n'))],
+        _ => vec![e.message.trim_end_matches('\n').to_string()],
+    }
+}
+
+/// DOMDocument::schemaValidate[Source]: compiles the schema (read from
+/// `file`, or `source`) and validates the document against it.
+fn schema_run(ctx: &mut dyn Ctx, this: &Rc<Object>, schema: Result<crate::xsd::Schema, Vec<crate::parser::XmlError>>, flags: i64, func: &str) -> R {
+    let report_all = |ctx: &mut dyn Ctx, errors: &[crate::parser::XmlError]| {
+        for e in errors {
+            crate::libxml::report(ctx, e, |ctx| {
+                for line in schema_warnings(e) {
+                    ctx.warn(&format!("{func}(): {line}"));
+                }
+            });
+        }
+    };
+    let schema = match schema {
+        Ok(s) => s,
+        Err(errors) => {
+            report_all(ctx, &errors);
+            ctx.warn(&format!("{func}(): Invalid Schema"));
+            return Ok(Value::Bool(false));
+        }
+    };
+    let r = this_doc(this);
+    let errors = {
+        let mut d = r.doc.borrow_mut();
+        crate::xsd::validate(&schema, &mut d, flags & 1 != 0)
+    };
+    report_all(ctx, &errors);
+    Ok(Value::Bool(errors.is_empty()))
+}
+
+pub fn schema_validate(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let name = bytes(&arg(args, 0));
+    if name.is_empty() {
+        return Err(ctx.throw("ValueError", "DOMDocument::schemaValidate(): Argument #1 ($filename) must not be empty".into()));
+    }
+    if name.contains(&0) {
+        return Err(ctx.throw("ValueError", "DOMDocument::schemaValidate(): Argument #1 ($filename) must not contain any null bytes".into()));
+    }
+    let path = String::from_utf8_lossy(&name).into_owned();
+    if name.len() > p8_runtime::stream::MAXPATHLEN {
+        ctx.warn("DOMDocument::schemaValidate(): Invalid Schema file source");
+        return Ok(Value::Bool(false));
+    }
+    let full = std::path::absolute(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.clone());
+    let schema = match std::fs::read(&path) {
+        Ok(data) => crate::xsd::compile(data, Some(full)),
+        Err(_) => Err(crate::xsd::load_errors(&path)),
+    };
+    schema_run(ctx, this, schema, arg(args, 1).to_int(), "DOMDocument::schemaValidate")
+}
+
+pub fn schema_validate_source(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    let source = bytes(&arg(args, 0));
+    if source.is_empty() {
+        return Err(ctx.throw("ValueError", "DOMDocument::schemaValidateSource(): Argument #1 ($source) must not be empty".into()));
+    }
+    let schema = crate::xsd::compile(source, None);
+    schema_run(ctx, this, schema, arg(args, 1).to_int(), "DOMDocument::schemaValidateSource")
+}
+
 /// LIBXML_NOEMPTYTAG for saveXML.
 const NOEMPTYTAG: i64 = 4;
 
@@ -501,7 +570,7 @@ pub fn get_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
     let name = bytes(&arg(args, 0));
     Ok(match attr_value(&r.doc.borrow(), r.id, &name) {
         Some(v) => str(&v),
-        None => Value::Null,
+        None => str(b""),
     })
 }
 
@@ -664,7 +733,7 @@ pub fn get_attribute_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     let d = r.doc.borrow();
     Ok(match d.attr_ns(r.id, ns.as_deref(), &local) {
         Some(a) => str(&d.node(a).value),
-        None => Value::Null,
+        None => str(b""),
     })
 }
 

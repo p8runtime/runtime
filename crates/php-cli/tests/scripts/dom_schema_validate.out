@@ -1,0 +1,536 @@
+##### all
+== <r><a/><c/></r>
+VALID
+== <r><c/><b/><a/></r>
+VALID
+== <r><a/></r>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is one of ( b, c ).
+== <r/>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is one of ( a, b, c ).
+== <r><a/><a/><c/></r>
+INVALID
+  L2 C1871 line1 Element 'a': This element is not expected. Expected is one of ( b, c ).
+== <r><a/><x/><c/></r>
+INVALID
+  L2 C1871 line1 Element 'x': This element is not expected. Expected is one of ( b, c ).
+== <r><b/></r>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is one of ( a, c ).
+== <r><a/><c/><d/><b/></r>
+INVALID
+  L2 C1871 line1 Element 'd': This element is not expected.
+##### all optional
+== <r/>
+VALID
+== <r><a/></r>
+VALID
+== <r><b/></r>
+INVALID
+  L2 C1871 line1 Element 'b': This element is not expected. Expected is ( a ).
+##### sequence-bad
+== <r><b/><a/></r>
+INVALID
+  L2 C1871 line1 Element 'b': This element is not expected. Expected is ( a ).
+== <r><a/><b/><b/><c/></r>
+INVALID
+  L2 C1871 line1 Element 'b': This element is not expected.
+== <r><a/><a/></r>
+INVALID
+  L2 C1871 line1 Element 'a': This element is not expected. Expected is ( b ).
+== <r></r>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is ( a ).
+== <r><a/></r>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is ( b ).
+##### star
+== <r><a/><b/><a/><z/></r>
+VALID
+== <r><a/><c/></r>
+INVALID
+  L2 C1871 line1 Element 'c': This element is not expected. Expected is ( z ).
+== <r><a/></r>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is one of ( a, b ).
+== <r><z/><a/></r>
+INVALID
+  L2 C1871 line1 Element 'a': This element is not expected.
+##### counted
+== <r><a/></r>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is ( a ).
+== <r><a/><a/></r>
+VALID
+== <r><a/><a/><a/><a/></r>
+INVALID
+  L2 C1871 line1 Element 'a': This element is not expected. Expected is ( b ).
+== <r><a/><a/><b/><b/></r>
+INVALID
+  L2 C1871 line1 Element 'b': This element is not expected.
+##### empty
+== <r/>
+VALID
+== <r>text</r>
+INVALID
+  L2 C1841 line1 Element 'r': Character content is not allowed, because the content type is empty.
+== <r> </r>
+INVALID
+  L2 C1841 line1 Element 'r': Character content is not allowed, because the content type is empty.
+== <r><a/></r>
+INVALID
+  L2 C1841 line1 Element 'r': Element content is not allowed, because the content type is empty.
+== <r x="1" y="2"/>
+INVALID
+  L2 C1866 line1 Element 'r', attribute 'y': The attribute 'y' is not allowed.
+== <!--c--><r><!--c--></r>
+VALID
+##### mixed
+== <r>text<a/>more</r>
+VALID
+== <r><b/></r>
+INVALID
+  L2 C1871 line1 Element 'b': This element is not expected. Expected is ( a ).
+== <r>x</r>
+VALID
+##### simplecontent
+== <r u="1">5</r>
+VALID
+== <r>5</r>
+INVALID
+  L2 C1868 line1 Element 'r': The attribute 'u' is required but missing.
+== <r u="1">x</r>
+INVALID
+  L2 C1824 line1 Element 'r': 'x' is not a valid value of the atomic type 'xs:int'.
+== <r u="1"><a/></r>
+INVALID
+  L2 C1842 line1 Element 'r': Element content is not allowed, because the content type is a simple type definition.
+  L2 C1824 line1 Element 'r': '' is not a valid value of the atomic type 'xs:int'.
+== <r u="1"/>
+INVALID
+  L2 C1824 line1 Element 'r': '' is not a valid value of the atomic type 'xs:int'.
+##### nested errors
+== <r>
+<a i="x">
+<b>q</b>
+</a>
+<a>
+<c/>
+<b>1</b>
+</a>
+</r>
+INVALID
+  L2 C1824 line2 Element 'a', attribute 'i': 'x' is not a valid value of the atomic type 'xs:int'.
+  L2 C1824 line3 Element 'b': 'q' is not a valid value of the atomic type 'xs:int'.
+  L2 C1868 line5 Element 'a': The attribute 'i' is required but missing.
+  L2 C1871 line6 Element 'c': This element is not expected. Expected is ( b ).
+== <r><a><b>1</b><b>2</b></a></r>
+INVALID
+  L2 C1868 line1 Element 'a': The attribute 'i' is required but missing.
+  L2 C1871 line1 Element 'b': This element is not expected.
+== <r><a i="1"><b>1</b></a><a><b>1</b><x/><y/></a><z/></r>
+INVALID
+  L2 C1868 line1 Element 'a': The attribute 'i' is required but missing.
+  L2 C1871 line1 Element 'x': This element is not expected.
+  L2 C1871 line1 Element 'z': This element is not expected. Expected is ( a ).
+##### attr order
+== <r b="x" z="1"/>
+INVALID
+  L2 C1824 line1 Element 'r', attribute 'b': 'x' is not a valid value of the atomic type 'xs:int'.
+  L2 C1866 line1 Element 'r', attribute 'z': The attribute 'z' is not allowed.
+  L2 C1868 line1 Element 'r': The attribute 'a' is required but missing.
+  L2 C1868 line1 Element 'r': The attribute 'c' is required but missing.
+== <r z="1" b="x" c="y"/>
+INVALID
+  L2 C1824 line1 Element 'r', attribute 'b': 'x' is not a valid value of the atomic type 'xs:int'.
+  L2 C1824 line1 Element 'r', attribute 'c': 'y' is not a valid value of the atomic type 'xs:int'.
+  L2 C1866 line1 Element 'r', attribute 'z': The attribute 'z' is not allowed.
+  L2 C1868 line1 Element 'r': The attribute 'a' is required but missing.
+== <r z="1" y="2"/>
+INVALID
+  L2 C1866 line1 Element 'r', attribute 'z': The attribute 'z' is not allowed.
+  L2 C1866 line1 Element 'r', attribute 'y': The attribute 'y' is not allowed.
+  L2 C1868 line1 Element 'r': The attribute 'a' is required but missing.
+  L2 C1868 line1 Element 'r': The attribute 'c' is required but missing.
+##### ns
+== <r xmlns="urn:t"><a>1</a></r>
+VALID
+== <r xmlns="urn:t"><a>x</a><b/></r>
+INVALID
+  L2 C1824 line1 Element '{urn:t}a': 'x' is not a valid value of the atomic type 'xs:int'.
+  L2 C1871 line1 Element '{urn:t}b': This element is not expected. Expected is ( b ).
+== <r><a>1</a></r>
+INVALID
+  L2 C1845 line1 Element 'r': No matching global declaration available for the validation root.
+== <t:r xmlns:t="urn:t"><t:a>1</t:a><b/></t:r>
+VALID
+== <r xmlns="urn:t" xmlns:t="urn:t" t:q="1" u="2" t:u="3"><a>1</a><c/></r>
+INVALID
+  L2 C1866 line1 Element '{urn:t}r', attribute '{urn:t}u': The attribute '{urn:t}u' is not allowed.
+  L2 C1871 line1 Element '{urn:t}c': This element is not expected. Expected is ( b ).
+== <r xmlns="urn:t"><b/></r>
+INVALID
+  L2 C1871 line1 Element '{urn:t}b': This element is not expected. Expected is ( {urn:t}a ).
+== <x:r xmlns:x="urn:other"/>
+INVALID
+  L2 C1845 line1 Element '{urn:other}r': No matching global declaration available for the validation root.
+##### subst
+== <r><m1>a</m1><m2>3</m2><z/></r>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 6
+INVALID
+  L2 C3047 line1 element decl. 'm2': The type definition '{http://www.w3.org/2001/XMLSchema}int' was either rejected by the substitution group affiliation 'head', or not validly derived from its type definition '{http://www.w3.org/2001/XMLSchema}string'.
+== <r><m2>x</m2><z/></r>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 6
+INVALID
+  L2 C3047 line1 element decl. 'm2': The type definition '{http://www.w3.org/2001/XMLSchema}int' was either rejected by the substitution group affiliation 'head', or not validly derived from its type definition '{http://www.w3.org/2001/XMLSchema}string'.
+== <r><head/><z/></r>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 6
+INVALID
+  L2 C3047 line1 element decl. 'm2': The type definition '{http://www.w3.org/2001/XMLSchema}int' was either rejected by the substitution group affiliation 'head', or not validly derived from its type definition '{http://www.w3.org/2001/XMLSchema}string'.
+== <r><z/></r>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 6
+INVALID
+  L2 C3047 line1 element decl. 'm2': The type definition '{http://www.w3.org/2001/XMLSchema}int' was either rejected by the substitution group affiliation 'head', or not validly derived from its type definition '{http://www.w3.org/2001/XMLSchema}string'.
+== <r><m1/></r>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 6
+INVALID
+  L2 C3047 line1 element decl. 'm2': The type definition '{http://www.w3.org/2001/XMLSchema}int' was either rejected by the substitution group affiliation 'head', or not validly derived from its type definition '{http://www.w3.org/2001/XMLSchema}string'.
+== <r><m1/><m1/><m1/></r>
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 6
+INVALID
+  L2 C3047 line1 element decl. 'm2': The type definition '{http://www.w3.org/2001/XMLSchema}int' was either rejected by the substitution group affiliation 'head', or not validly derived from its type definition '{http://www.w3.org/2001/XMLSchema}string'.
+##### substnoabs
+== <r><m1/></r>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is ( z ).
+== <r><q/></r>
+INVALID
+  L2 C1871 line1 Element 'q': This element is not expected. Expected is one of ( head, m1 ).
+== <head/>
+VALID
+== <m1/>
+VALID
+##### abstract elem root
+== <r/>
+INVALID
+  L2 C1846 line1 Element 'r': The element declaration is abstract.
+##### any
+== <r><a:x xmlns:a="urn:a">1</a:x><z/></r>
+VALID
+== <r><x/></r>
+INVALID
+  L2 C1871 line1 Element 'x': This element is not expected. Expected is one of ( ##other*, z ).
+== <r xmlns:o="urn:o" o:k="1" k="2"/>
+INVALID
+  L2 C1878 line1 Element 'r', attribute '{urn:o}k': No matching global attribute declaration available, but demanded by the strict wildcard.
+  L2 C1867 line1 Element 'r', attribute 'k': The attribute 'k' is not allowed.
+== <r><g xmlns="">5</g></r>
+INVALID
+  L2 C1871 line1 Element 'g': This element is not expected. Expected is one of ( ##other*, z ).
+##### any strict
+== <r><g>x</g></r>
+INVALID
+  L2 C1824 line1 Element 'g': 'x' is not a valid value of the atomic type 'xs:int'.
+== <r><h/></r>
+INVALID
+  L2 C1845 line1 Element 'h': No matching global element declaration available, but demanded by the strict wildcard.
+== <r/>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is one of ( {*}*, * ).
+##### any skip any
+== <r><a/><b/><c/></r>
+INVALID
+  L2 C1871 line1 Element 'c': This element is not expected.
+== <r/>
+INVALID
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is one of ( {*}*, * ).
+##### nillable
+== <r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+VALID
+== <r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true">5</r>
+INVALID
+  L2 C1848 line1 Element 'r': Neither character nor element content is allowed because the element is 'nilled'.
+== <r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="false">5</r>
+VALID
+##### not nillable
+== <r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+INVALID
+  L2 C1847 line1 Element 'r': The element is not 'nillable'.
+  L2 C1824 line1 Element 'r': '' is not a valid value of the atomic type 'xs:int'.
+##### xsi:type
+== <r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="d"><x/><y/></r>
+VALID
+== <r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="o"/>
+INVALID
+  L2 C1852 line1 Element 'r', attribute '{http://www.w3.org/2001/XMLSchema-instance}type': The type definition 'o', specified by xsi:type, is blocked or not validly derived from the type definition of the element declaration.
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is ( x ).
+== <r xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="nope"/>
+INVALID
+  L2 C1851 line1 Element 'r', attribute '{http://www.w3.org/2001/XMLSchema-instance}type': The QName value 'nope' of the xsi:type attribute does not resolve to a type definition.
+  L2 C1871 line1 Element 'r': Missing child element(s). Expected is ( x ).
+== <r><x/><y/></r>
+INVALID
+  L2 C1871 line1 Element 'y': This element is not expected.
+##### ext
+== <r q="1" p="2"><x/><y/></r>
+VALID
+== <r><x/></r>
+INVALID
+  L2 C1868 line1 Element 'r': The attribute 'q' is required but missing.
+== <r q="1"><y/></r>
+INVALID
+  L2 C1871 line1 Element 'y': This element is not expected. Expected is ( x ).
+== <r q="1"><x/><y/><z/></r>
+INVALID
+  L2 C1871 line1 Element 'z': This element is not expected.
+##### restr
+== <r p="1"><x/></r>
+VALID
+== <r><x/><y/></r>
+INVALID
+  L2 C1871 line1 Element 'y': This element is not expected.
+##### group refs
+== <r k="x"><a/><b/><z/></r>
+INVALID
+  L2 C1824 line1 Element 'r', attribute 'k': 'x' is not a valid value of the atomic type 'xs:int'.
+== <r><a/><b/><a/><z/></r>
+INVALID
+  L2 C1871 line1 Element 'a': This element is not expected. Expected is ( z ).
+== <r><z/></r>
+INVALID
+  L2 C1871 line1 Element 'z': This element is not expected. Expected is one of ( a, b ).
+##### default fixed el
+== <r><d/><f>4</f></r>
+INVALID
+  L2 C1858 line1 Element 'f': The actual value '4' does not match the fixed value constraint '3'.
+== <r><d></d><f/></r>
+VALID
+== <r a="x" b="B"><f>3</f></r>
+VALID
+##### default create
+== <r><d/><f/></r>
+VALID
+<?xml version="1.0"?>
+<r a="A" b="B"><d>7</d><f>3</f></r>
+== <r a="x"><d>1</d></r>
+VALID
+<?xml version="1.0"?>
+<r a="x" b="B"><d>1</d></r>
+##### qname attr and id
+== <r><i>a</i><i>b</i></r>
+VALID
+== <r><i>a</i><i>a</i></r>
+VALID
+##### recursion
+== <r v="1"><c><c v="x"/></c><c/></r>
+INVALID
+  L2 C1824 line1 Element 'c', attribute 'v': 'x' is not a valid value of the atomic type 'xs:int'.
+##### anyType
+== <r a="1">text<b><c/></b><k>x</k></r>
+INVALID
+  L2 C1824 line1 Element 'k': 'x' is not a valid value of the atomic type 'xs:int'.
+##### whitespace text
+== <r>
+  <a/>
+</r>
+VALID
+== <r>x<a/>y</r>
+INVALID
+  L2 C1843 line1 Element 'r': Character content other than whitespace is not allowed because the content type is 'element-only'.
+  L2 C1843 line1 Element 'r': Character content other than whitespace is not allowed because the content type is 'element-only'.
+== <r><![CDATA[z]]></r>
+INVALID
+  L2 C1843 line1 Element 'r': Character content other than whitespace is not allowed because the content type is 'element-only'.
+== <r><![CDATA[ ]]></r>
+INVALID
+  L2 C1843 line1 Element 'r': Character content other than whitespace is not allowed because the content type is 'element-only'.
+##### prohibited/attr order
+== <r a="1" b="1"/>
+INVALID
+  L2 C1866 line1 Element 'r', attribute 'a': The attribute 'a' is not allowed.
+== <r/>
+INVALID
+  L2 C1868 line1 Element 'r': The attribute 'b' is required but missing.
+== <r a="x"/>
+INVALID
+  L2 C1866 line1 Element 'r', attribute 'a': The attribute 'a' is not allowed.
+  L2 C1868 line1 Element 'r': The attribute 'b' is required but missing.
+##### anyAttribute variants
+== <r x="1"/>
+VALID
+== <r xmlns:p="urn:p" p:g="1"/>
+VALID
+##### anyAttribute skip
+== <r x="1" y="2"/>
+VALID
+##### dates
+== <r>2019-12-31</r>
+INVALID
+  L2 C1833 line1 Element 'r': [facet 'minInclusive'] The value '2019-12-31' is less than the minimum value allowed ('2020-01-01').
+== <r>2020-06-15</r>
+VALID
+== <r>2021-01-01</r>
+INVALID
+  L2 C1836 line1 Element 'r': [facet 'maxExclusive'] The value '2021-01-01' must be less than '2021-01-01'.
+== <r>2020-06-15Z</r>
+VALID
+##### decimals
+== <r>0</r>
+INVALID
+  L2 C1835 line1 Element 'r': [facet 'minExclusive'] The value '0' must be greater than '0'.
+== <r>0.0001</r>
+VALID
+== <r>99.50</r>
+VALID
+== <r>99.51</r>
+INVALID
+  L2 C1834 line1 Element 'r': [facet 'maxInclusive'] The value '99.51' is greater than the maximum value allowed ('99.5').
+== <r>-1</r>
+INVALID
+  L2 C1835 line1 Element 'r': [facet 'minExclusive'] The value '-1' must be greater than '0'.
+== <r>+5</r>
+VALID
+== <r>.5</r>
+VALID
+== <r>5.</r>
+VALID
+##### enum ints
+== <r>01</r>
+VALID
+== <r>+2</r>
+VALID
+== <r>3</r>
+INVALID
+  L2 C1840 line1 Element 'r': [facet 'enumeration'] The value '3' is not an element of the set {'1', '2'}.
+== <r> 1 </r>
+VALID
+##### pattern forms
+== <r>555-1234</r>
+VALID
+== <r>joe@x.com</r>
+VALID
+== <r>joe@x.org</r>
+INVALID
+  L2 C1839 line1 Element 'r': [facet 'pattern'] The value 'joe@x.org' is not accepted by the pattern '[a-z]+@[a-z]+\.com'.
+== <r>5551234</r>
+INVALID
+  L2 C1839 line1 Element 'r': [facet 'pattern'] The value '5551234' is not accepted by the pattern '[a-z]+@[a-z]+\.com'.
+##### whitespace
+== <r><t>  a  </t><n>a  b</n></r>
+INVALID
+  L2 C1831 line1 Element 't': [facet 'minLength'] The value has a length of '1'; this underruns the allowed minimum length of '2'.
+== <r><t>a</t><n>a
+b</n></r>
+INVALID
+  L2 C1831 line1 Element 't': [facet 'minLength'] The value has a length of '1'; this underruns the allowed minimum length of '2'.
+##### mixed content model
+== <r>x<b/>y<i/>z</r>
+VALID
+== <r>x<u/></r>
+INVALID
+  L2 C1871 line1 Element 'u': This element is not expected. Expected is one of ( b, i ).
+##### multi-line tag
+== <r
+  a="x"
+  b="y"
+>
+</r>
+INVALID
+  L2 C1824 line4 Element 'r', attribute 'a': 'x' is not a valid value of the atomic type 'xs:int'.
+  L2 C1866 line4 Element 'r', attribute 'b': The attribute 'b' is not allowed.
+  L2 C1841 line4 Element 'r': Character content is not allowed, because the content type is empty.
+== <r>
+
+<z>
+</z></r>
+INVALID
+  L2 C1841 line1 Element 'r': Character content is not allowed, because the content type is empty.
+  L2 C1841 line1 Element 'r': Element content is not allowed, because the content type is empty.
+##### qname
+== <r>a:b</r>
+INVALID
+  L2 C1824 line1 Element 'r': The QName value 'a:b' has no corresponding namespace declaration in scope.
+  L2 C1824 line1 Element 'r': 'a:b' is not a valid value of the atomic type 'xs:QName'.
+== <r>a:b:c</r>
+INVALID
+  L2 C1824 line1 Element 'r': 'a:b:c' is not a valid value of the atomic type 'xs:QName'.
+== <r>1a</r>
+INVALID
+  L2 C1824 line1 Element 'r': '1a' is not a valid value of the atomic type 'xs:QName'.
+##### bools
+== <r>true</r>
+VALID
+== <r>True</r>
+INVALID
+  L2 C1824 line1 Element 'r': 'True' is not a valid value of the atomic type 'xs:boolean'.
+== <r> 1 </r>
+VALID
+##### uri
+== <r>http://a/b?c#d</r>
+VALID
+== <r>a b</r>
+VALID
+== <r>%zz</r>
+INVALID
+  L2 C1824 line1 Element 'r': '%zz' is not a valid value of the atomic type 'xs:anyURI'.
+== <r>a#b#c</r>
+INVALID
+  L2 C1824 line1 Element 'r': 'a#b#c' is not a valid value of the atomic type 'xs:anyURI'.
+== <r>\x</r>
+VALID
+== <r></r>
+VALID
+##### nonneg etc
+== <r><u>256</u><n>0</n><l>9223372036854775808</l></r>
+INVALID
+  L2 C1824 line1 Element 'u': '256' is not a valid value of the atomic type 'xs:unsignedByte'.
+  L2 C1824 line1 Element 'n': '0' is not a valid value of the atomic type 'xs:negativeInteger'.
+  L2 C1824 line1 Element 'l': '9223372036854775808' is not a valid value of the atomic type 'xs:long'.
+== <r><u>-1</u><n>-1</n><l>-9223372036854775808</l></r>
+INVALID
+  L2 C1824 line1 Element 'u': '-1' is not a valid value of the atomic type 'xs:unsignedByte'.
+##### doc-level
+== <?xml version="1.0"?><!-- c --><r/>
+VALID
+== <r/><!-- after -->
+VALID
+bool(true)
+bool(false)
+  C1834 Element 'r': [facet 'maxInclusive'] The value '50' is greater than the maximum value allowed ('9').
+bool(true)
+bool(false)
+  C1824 Element '{urn:imp}x': 'q' is not a valid value of the atomic type 'xs:int'.
+
+Warning: DOMDocument::schemaValidateSource(): Element 'b': This element is not expected. Expected is ( a ). in %s on line 157
+bool(false)
+
+Warning: DOMDocument::schemaValidateSource(): element decl. 'r', attribute 'type': The QName value 'nope' does not resolve to a(n) type definition. in %s on line 158
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 158
+bool(false)
+
+Warning: DOMDocument::schemaValidateSource(): The XML document 'in_memory_buffer' is not a schema document. in %s on line 159
+
+Warning: DOMDocument::schemaValidateSource(): Invalid Schema in %s on line 159
+bool(false)
+
+Warning: DOMDocument::schemaValidateSource(): The document has no document element. in %s on line 161
+bool(false)
+##### id attrs
+== <r><i id="a"/><i id="b" ref="a"/></r>
+VALID
+== <r><i id="a"/><i id="a"/></r>
+INVALID
+  L2 C1824 line1 Element 'i', attribute 'id': 'a' is not a valid value of the atomic type 'xs:ID'.
+== <r><i ref="zz"/></r>
+VALID
+== <r><i id="1x"/></r>
+INVALID
+  L2 C1824 line1 Element 'i', attribute 'id': '1x' is not a valid value of the atomic type 'xs:ID'.

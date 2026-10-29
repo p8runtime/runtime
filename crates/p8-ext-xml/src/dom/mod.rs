@@ -156,6 +156,8 @@ const DOCUMENT_METHODS: &[Meth] = concat_meths!(
         m!("__construct", d::document_construct),
         m!("loadXML", d::load_xml),
         m!("load", d::load_file),
+        m!("schemaValidate", d::schema_validate),
+        m!("schemaValidateSource", d::schema_validate_source),
         m!("saveXML", d::save_xml),
         m!("save", d::save_file),
         m!("createElement", d::create_element),
