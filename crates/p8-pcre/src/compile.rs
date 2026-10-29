@@ -153,6 +153,9 @@ pub(crate) struct Prog {
     pub bsr_anycrlf: bool,
     /// Only a match at the start offset can succeed.
     pub anchored: bool,
+    /// A match can start only at the subject's start or after a newline
+    /// (the pattern starts with `.*` and `.` stops at newlines).
+    pub startline: bool,
     /// The bytes a match can start with, when they're known.
     pub first: Option<Box<[bool; 256]>>,
     pub match_limit: Option<u64>,
@@ -211,7 +214,9 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
             *t = target;
         }
     }
-    let anchored = anchored_opt || starts_anchored(&parsed.node);
+    let dotstar = if names_groups(&parsed.node) { None } else { dot_star(&parsed.node) };
+    let anchored = anchored_opt || starts_anchored(&parsed.node) || dotstar == Some(true);
+    let startline = !anchored && dotstar == Some(false);
     let first = if anchored { None } else { first_bytes(&parsed.node, &c) };
     Ok(Prog {
         insts: c.insts,
@@ -224,6 +229,7 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
         newline: parsed.newline,
         bsr_anycrlf: parsed.bsr_anycrlf,
         anchored,
+        startline,
         first,
         match_limit: parsed.match_limit,
         depth_limit: parsed.depth_limit,
@@ -262,6 +268,39 @@ fn check_refs(node: &Node, c: &Compiler, at: usize) -> Result<(), CompileError> 
             Ok(())
         }
         _ => Ok(()),
+    }
+}
+
+/// PCRE's dot-star optimisation: a pattern that starts with `.*` (greedy
+/// or not) can match only where that `.*` could not have started further
+/// left: Some(true) anchored (`.` matches newlines), Some(false) at the
+/// start or after a newline. None when it doesn't start so.
+fn dot_star(node: &Node) -> Option<bool> {
+    match node {
+        Node::Repeat { node, min: 0, max: None, .. } => match **node {
+            Node::Any { nl } => Some(nl),
+            _ => None,
+        },
+        Node::Concat(v) => v.first().and_then(dot_star),
+        Node::Group(b, _) => dot_star(b),
+        Node::Alt(v) => {
+            let all: Option<Vec<bool>> = v.iter().map(dot_star).collect();
+            all.and_then(|kinds| kinds.iter().all(|&k| k == kinds[0]).then(|| kinds[0]))
+        }
+        _ => None,
+    }
+}
+
+/// Whether anything names a group (back reference, subroutine call,
+/// condition) or can move the start (`(*PRUNE)`, `(*SKIP)`), which the
+/// dot-star optimisation must not meet (PCRE leaves it off then too).
+fn names_groups(node: &Node) -> bool {
+    match node {
+        Node::BackRef { .. } | Node::Call(_) | Node::Cond { .. } => true,
+        Node::Verb(Verb::Prune(_) | Verb::Skip(_)) => true,
+        Node::Group(b, _) | Node::Atomic(b) | Node::Look { body: b, .. } | Node::Repeat { node: b, .. } => names_groups(b),
+        Node::Concat(v) | Node::Alt(v) => v.iter().any(names_groups),
+        _ => false,
     }
 }
 

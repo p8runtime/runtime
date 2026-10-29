@@ -96,6 +96,13 @@ pub(crate) fn exec(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions) -> Res
                 break;
             }
         }
+        if p.startline && at > start && !vm.after_newline(at) {
+            if at >= s.len() {
+                break;
+            }
+            at += vm.char_len(at);
+            continue;
+        }
         vm.slots.iter_mut().for_each(|x| *x = None);
         vm.slots[0] = Some(at);
         vm.stack.clear();
