@@ -8,7 +8,7 @@
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
-use p8_runtime::object::{CLASS_INTERFACE, CLASS_TRAIT, Class, visible};
+use p8_runtime::object::{CLASS_ENUM, CLASS_INTERFACE, CLASS_TRAIT, Class, visible};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -26,6 +26,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "get_declared_interfaces", run: get_declared_interfaces, by_ref: &[] },
     Builtin { name: "get_declared_traits", run: get_declared_traits, by_ref: &[] },
     Builtin { name: "interface_exists", run: interface_exists, by_ref: &[] },
+    Builtin { name: "trait_exists", run: trait_exists, by_ref: &[] },
+    Builtin { name: "enum_exists", run: enum_exists, by_ref: &[] },
     Builtin { name: "is_a", run: is_a, by_ref: &[] },
     Builtin { name: "is_subclass_of", run: is_subclass_of, by_ref: &[] },
     Builtin { name: "spl_object_id", run: spl_object_id, by_ref: &[] },
@@ -236,7 +238,15 @@ fn get_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// get_parent_class($object_or_class = ?): the parent's name, or false.
 fn get_parent_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = match args.first().map(Value::deref) {
-        Some(v) => class_loaded(ctx, &v)?,
+        Some(v) => match class_loaded(ctx, &v)? {
+            Some(c) => Some(c),
+            None => {
+                return Err(ctx.throw(
+                    "TypeError",
+                    format!("get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given", v.type_name()),
+                ));
+            }
+        },
         None => ctx.scope(),
     };
     Ok(class.and_then(|c| c.parent.as_deref().map(name)).unwrap_or(Value::Bool(false)))
@@ -411,6 +421,16 @@ fn class_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn interface_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = lookup(ctx, args)?;
     Ok(Value::Bool(class.is_some_and(|c| c.flags & CLASS_INTERFACE != 0)))
+}
+
+fn trait_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let class = lookup(ctx, args)?;
+    Ok(Value::Bool(class.is_some_and(|c| c.flags & CLASS_TRAIT != 0)))
+}
+
+fn enum_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let class = lookup(ctx, args)?;
+    Ok(Value::Bool(class.is_some_and(|c| c.flags & CLASS_ENUM != 0)))
 }
 
 /// is_a($object_or_class, $class, $allow_string = false)

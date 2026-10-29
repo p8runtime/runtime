@@ -233,6 +233,80 @@ fn ao_exchange_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
     Ok(Value::Array(Rc::new(old)))
 }
 
+/// The object's own properties for Serializable's form: those a subclass
+/// declares and the dynamic ones, by their mangled names.
+fn members(o: &Object) -> PhpArray {
+    let mut out = PhpArray::new();
+    let slots = o.slots.borrow();
+    for (p, v) in o.class.properties.iter().zip(slots.iter()) {
+        let name = p.name.as_bytes();
+        if name.starts_with(b"\0") || name == b"storage" || matches!(v, Value::Undef) {
+            continue;
+        }
+        let key = match p.visibility {
+            Visibility::Public => name.to_vec(),
+            Visibility::Protected => [b"\0*\0".as_slice(), name].concat(),
+            Visibility::Private => [b"\0".as_slice(), p.declaring_name.as_bytes(), b"\0", name].concat(),
+        };
+        out.insert(Key::from_string(PhpStr::new(key)), v.clone());
+    }
+    for (k, v) in o.dynamic.borrow().iter() {
+        out.insert(k.clone(), v.clone());
+    }
+    out
+}
+
+/// Serializable::serialize(): `x:i:FLAGS;STORAGE;m:MEMBERS` (spl_array_serialize).
+fn ao_serialize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let mut out = format!("x:i:{};", int(this, "\0flags")).into_bytes();
+    out.extend(crate::serial::serialized(ctx, &get(this, "storage"))?);
+    out.extend_from_slice(b";m:");
+    out.extend(crate::serial::serialized(ctx, &Value::Array(Rc::new(members(this))))?);
+    Ok(Value::Str(PhpStr::new(out)))
+}
+
+/// Serializable::unserialize(): what ao_serialize wrote, back.
+fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let data = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    let bytes = data.as_bytes();
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    let bad = |ctx: &mut dyn Ctx, at: usize| {
+        Err(ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len())))
+    };
+    let Some(rest) = bytes.strip_prefix(b"x:") else { return bad(ctx, 0) };
+    let Some((Value::Int(flags), n)) = crate::serial::read_value(ctx, rest) else { return bad(ctx, 2) };
+    let at = 2 + n;
+    let Some((storage, n)) = crate::serial::read_value(ctx, &bytes[at..]) else { return bad(ctx, at) };
+    let mut at = at + n;
+    if bytes.get(at) == Some(&b';') {
+        at += 1;
+    }
+    let Some(rest) = bytes[at..].strip_prefix(b"m:") else { return bad(ctx, at) };
+    let Some((Value::Array(m), _)) = crate::serial::read_value(ctx, rest) else { return bad(ctx, at + 2) };
+    set(this, "\0flags", Value::Int(flags));
+    set(this, "storage", storage);
+    for (k, v) in m.iter() {
+        let key = match k {
+            Key::Int(i) => i.to_string().into_bytes(),
+            Key::Str(s) => s.as_bytes().to_vec(),
+        };
+        // A mangled name ("\0Class\0p", "\0*\0p") is a declared property's.
+        let name = key.iter().rposition(|&c| c == 0).map_or(key.as_slice(), |i| &key[i + 1..]);
+        if this.class.slots.contains_key(name) {
+            this.class.write(this, name, this.class.name.as_bytes(), v.clone());
+        } else {
+            let k = Key::from_string(PhpStr::from(name));
+            if !this.dynamic.borrow().contains_key(&k) {
+                ctx.deprecated(&format!("Creation of dynamic property {}::${} is deprecated", String::from_utf8_lossy(this.class.name.as_bytes()), String::from_utf8_lossy(name)));
+            }
+            this.dynamic.borrow_mut().insert(k, v.clone());
+        }
+    }
+    Ok(Value::Null)
+}
+
 fn ao_get_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(int(this, "\0flags")))
 }
@@ -1260,6 +1334,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("uksort", Some(Native::Method(ao_uksort))),
             ("natsort", Some(Native::Method(ao_natsort))),
             ("natcasesort", Some(Native::Method(ao_natcasesort))),
+            ("serialize", Some(Native::Method(ao_serialize))),
+            ("unserialize", Some(Native::Method(ao_unserialize))),
         ],
         constants: ARRAY_FLAGS,
         ..spec("ArrayObject", None, &["IteratorAggregate", "ArrayAccess", "Serializable", "Countable"], 0)
@@ -1283,6 +1359,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("uksort", Some(Native::Method(ao_uksort))),
             ("natsort", Some(Native::Method(ao_natsort))),
             ("natcasesort", Some(Native::Method(ao_natcasesort))),
+            ("serialize", Some(Native::Method(ao_serialize))),
+            ("unserialize", Some(Native::Method(ao_unserialize))),
             ("current", Some(Native::Method(ai_current))),
             ("key", Some(Native::Method(ai_key))),
             ("next", Some(Native::Method(ai_next))),

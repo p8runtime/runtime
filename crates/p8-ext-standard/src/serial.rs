@@ -170,6 +170,21 @@ impl Writer<'_> {
     }
 }
 
+/// `v` as serialize() writes it.
+pub(crate) fn serialized(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw> {
+    let mut w = Writer { ctx, out: Vec::new(), count: 0, objects: Vec::new() };
+    w.value(v)?;
+    Ok(w.out)
+}
+
+/// A value read from the start of `data` as unserialize() reads it, and the
+/// offset after it; None where it is not one.
+pub(crate) fn read_value(ctx: &mut dyn Ctx, data: &[u8]) -> Option<(Value, usize)> {
+    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new() };
+    let v = r.value(ctx).ok()?;
+    Some((v, r.at))
+}
+
 fn serialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = arg(args, 0);
     let mut w = Writer { ctx, out: Vec::new(), count: 0, objects: Vec::new() };
