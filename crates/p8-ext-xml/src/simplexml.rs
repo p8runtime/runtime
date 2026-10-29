@@ -1315,9 +1315,11 @@ fn parse_into(ctx: &mut dyn Ctx, func: &str, data: Vec<u8>, filename: Option<Str
     let parser = crate::dom::build::parse(&mut doc, data, filename, options);
     if options & (32 | 64) == 0 {
         for e in &parser.errors {
-            for line in e.report_lines() {
-                ctx.warn(&format!("{func}(): {line}"));
-            }
+            crate::libxml::report(ctx, e, |ctx| {
+                for line in e.report_lines() {
+                    ctx.warn(&format!("{func}(): {line}"));
+                }
+            });
         }
     }
     if !parser.well_formed && options & crate::dom::build::RECOVER == 0 {

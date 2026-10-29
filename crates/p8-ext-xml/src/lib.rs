@@ -11,6 +11,7 @@ mod parser;
 mod simplexml;
 mod writer;
 mod xml;
+mod libxml;
 mod xpath;
 mod xmlwriter;
 
@@ -32,6 +33,9 @@ fn register(registry: &mut Registry) {
         registry.add_constant(name.as_bytes(), *value);
     }
     registry.add_module("xml");
+    registry.add_functions(libxml::BUILTINS);
+    registry.add_classes(libxml::CLASSES);
+    registry.add_module("libxml");
     dom::register(registry);
     registry.add_functions(simplexml::BUILTINS);
     registry.add_classes(simplexml::CLASSES);
