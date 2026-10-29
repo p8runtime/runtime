@@ -729,7 +729,10 @@ fn_method!(fa_get_attributes, |ctx, info, this, args| {
     let subject = Subject::Function(callee_of(ctx, this)?);
     attributes_of(ctx, subject, args, "ReflectionFunctionAbstract")
 });
-fn_method!(fa_get_static_variables, |ctx, info, this, args| Ok(list(Vec::new())));
+fn_method!(fa_get_static_variables, |ctx, info, this, args| {
+    let callee = callee_of(ctx, this)?;
+    Ok(Value::Array(Rc::new(ctx.static_variables(&callee))))
+});
 fn_method!(fa_get_closure_this, |ctx, info, this, args| Ok(info.closure_this.clone().map_or(Value::Null, Value::Object)));
 fn_method!(fa_get_closure_scope_class, |ctx, info, this, args| Ok(match &info.closure_scope {
     Some(c) => new_class_reflection(ctx, c),

@@ -4,6 +4,7 @@
 use crate::callable::closure_data;
 use crate::classes::{Code, MethodFrame};
 use crate::{Closure, Context};
+use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{Class, Object};
 use p8_runtime::reflect::{Callee, FnInfo, ParamInfo};
@@ -11,6 +12,7 @@ use p8_runtime::string::PhpStr;
 use p8_runtime::types::TypeDecl;
 use p8_runtime::value::Value;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// A stub's type as a TypeDecl.
 fn stub_type(mask: u32, classes: &'static [&'static str]) -> Option<TypeDecl> {
@@ -22,6 +24,58 @@ fn stub_type(mask: u32, classes: &'static [&'static str]) -> Option<TypeDecl> {
 }
 
 impl Context<'_> {
+    /// ReflectionFunctionAbstract::getStaticVariables: a closure's `use`
+    /// values, then the `static` variables in the order they are declared.
+    pub(crate) fn static_variables_of(&self, callee: &Callee) -> PhpArray {
+        let mut out = PhpArray::new();
+        let (clo, captured) = match callee {
+            Callee::Function(name) => {
+                let lower = name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase();
+                match self.functions.get(&lower) {
+                    Some(&i) => (Rc::clone(&self.closures[i as usize]), Vec::new()),
+                    None => return out,
+                }
+            }
+            Callee::Method(class, name) => match class.method(&name.as_bytes().to_ascii_lowercase()).map(|m| self.code_of(m)) {
+                Some(Code::User(clo)) => (clo, Vec::new()),
+                _ => return out,
+            },
+            Callee::Closure(o) => match closure_data(o) {
+                Some(data) => match &data.func {
+                    Ok(clo) => (Rc::clone(clo), data.captured.borrow().clone()),
+                    Err(_) => return out,
+                },
+                None => return out,
+            },
+        };
+        let code = &clo.code;
+        let name = |r: u32| PhpStr::from(code.cv_names[r as usize].as_bytes());
+        for (r, v) in code.bound.iter().zip(captured) {
+            out.insert(Key::from_string(name(u32::from(*r))), v);
+        }
+        let statics = self.statics.get(&(Arc::as_ptr(code) as usize));
+        let consts = code.consts_at as usize..code.consts_at as usize + clo.consts.len();
+        for (at, ins) in code.code.iter().enumerate() {
+            if let p8_bytecode::Instr::StaticVar { var, index, .. } = ins {
+                let v = match statics.and_then(|s| s.get(index)) {
+                    Some(cell) => cell.borrow().deref(),
+                    // Not run yet: a constant initializer's value, as PHP shows it.
+                    None => match (code.code.get(at + 1), code.code.get(at + 2)) {
+                        (Some(p8_bytecode::Instr::Assign { var: v, src }), _) if v == var && consts.contains(&(*src as usize)) => {
+                            clo.consts[*src as usize - consts.start].clone()
+                        }
+                        (Some(p8_bytecode::Instr::NewArray { dst }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
+                            Value::Array(Rc::new(PhpArray::new()))
+                        }
+                        _ => Value::Null,
+                    },
+                };
+                out.insert(Key::from_string(name(u32::from(*var))), v);
+            }
+        }
+        out
+    }
+
     /// A user function's declaration.
     fn user_info(&self, clo: &Closure, class: Option<Rc<Class>>) -> FnInfo {
         let code = &clo.code;

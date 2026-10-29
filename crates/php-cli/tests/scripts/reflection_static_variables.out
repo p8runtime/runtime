@@ -1,0 +1,30 @@
+array(2) {
+  ["cache"]=>
+  array(0) {
+  }
+  ["n"]=>
+  int(1)
+}
+array(2) {
+  ["cache"]=>
+  array(2) {
+    ["a"]=>
+    string(1) "A"
+    ["b"]=>
+    string(1) "B"
+  }
+  ["n"]=>
+  int(3)
+}
+array(1) {
+  ["calls"]=>
+  int(2)
+}
+array(3) {
+  ["y"]=>
+  int(5)
+  ["z"]=>
+  &string(2) "zz"
+  ["hits"]=>
+  int(2)
+}

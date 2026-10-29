@@ -191,6 +191,9 @@ pub trait Ctx {
     fn prop_value(&mut self, o: &Rc<crate::object::Object>, slot: usize) -> Result<Option<Value>, Throw>;
     /// Reflection: a function's or method's declaration (None: none such).
     fn function_info(&mut self, callee: &crate::reflect::Callee) -> Option<crate::reflect::FnInfo>;
+    /// Reflection: a function's static variables (a closure's `use` values
+    /// first), by name: their values now, null for one not yet initialized.
+    fn static_variables(&mut self, callee: &crate::reflect::Callee) -> crate::array::PhpArray;
     /// Reflection: call it (whatever its visibility), with `this` for a method.
     fn invoke(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>, args: &mut [Value]) -> Result<Value, Throw>;
     /// `new C(...args)` as the engine makes it (the instantiation checks,
