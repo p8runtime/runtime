@@ -30,6 +30,10 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "phpversion", run: phpversion, by_ref: &[] },
     Builtin { name: "version_compare", run: version_compare, by_ref: &[] },
     Builtin { name: "error_log", run: error_log, by_ref: &[] },
+    Builtin { name: "get_defined_functions", run: get_defined_functions, by_ref: &[] },
+    Builtin { name: "zend_version", run: zend_version, by_ref: &[] },
+    Builtin { name: "quoted_printable_encode", run: quoted_printable_encode, by_ref: &[] },
+    Builtin { name: "quoted_printable_decode", run: quoted_printable_decode, by_ref: &[] },
     Builtin { name: "getenv", run: getenv, by_ref: &[] },
     Builtin { name: "time", run: time, by_ref: &[] },
     Builtin { name: "gc_collect_cycles", run: gc_collect_cycles, by_ref: &[] },
@@ -657,4 +661,109 @@ fn getopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         *c.borrow_mut() = Value::Int(optind as i64);
     }
     Ok(Value::Array(Rc::new(out)))
+}
+
+/// get_defined_functions(): ['internal' => builtins, 'user' => the
+/// script's, lowercase, in the order declared].
+fn get_defined_functions(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let (internal, user) = ctx.defined_functions();
+    let mut out = PhpArray::new();
+    let list = |names: Vec<Value>| Value::Array(Rc::new(PhpArray::from_list(names)));
+    out.insert(Key::from_string(PhpStr::from("internal")), list(internal.into_iter().map(Value::str).collect()));
+    out.insert(Key::from_string(PhpStr::from("user")), list(user.into_iter().map(|n| Value::Str(PhpStr::new(n))).collect()));
+    Ok(Value::Array(Rc::new(out)))
+}
+
+/// zend_version(): the Zend Engine's version (4.4.x for PHP 8.4.x).
+fn zend_version(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let patch = crate::PHP_VERSION.rsplit('.').next().unwrap_or("0");
+    Ok(Value::Str(PhpStr::from(format!("4.4.{patch}"))))
+}
+
+/// quoted_printable_encode() (php_quot_print_encode): RFC 2045 lines of
+/// at most 76, broken softly before a UTF-8 sequence would cross the end.
+fn quoted_printable_encode(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    const MAXL: usize = 75;
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let s = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    let s = s.as_bytes();
+    let mut out = Vec::with_capacity(s.len() * 3);
+    let mut lp = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        let next = s.get(i + 1).copied();
+        if c == b'\r' && next == Some(b'\n') && i + 1 < s.len() {
+            out.extend_from_slice(b"\r\n");
+            i += 2;
+            lp = 0;
+            continue;
+        }
+        if c.is_ascii_control() || c == 0x7f || c & 0x80 != 0 || c == b'=' || (c == b' ' && next == Some(b'\r')) {
+            lp += 3;
+            // A UTF-8 sequence's lead byte breaks the line early when the
+            // whole sequence would not fit.
+            let breaks = match c {
+                0x00..=0x7f => lp > MAXL,
+                0x80..=0xdf => lp + 3 > MAXL,
+                0xe0..=0xef => lp + 6 > MAXL,
+                0xf0..=0xf4 => lp + 9 > MAXL,
+                _ => false,
+            };
+            if breaks {
+                out.extend_from_slice(b"=\r\n");
+                lp = 3;
+            }
+            out.extend_from_slice(&[b'=', HEX[(c >> 4) as usize], HEX[(c & 15) as usize]]);
+        } else {
+            lp += 1;
+            if lp > MAXL {
+                out.extend_from_slice(b"=\r\n");
+                lp = 1;
+            }
+            out.push(c);
+        }
+        i += 1;
+    }
+    Ok(Value::Str(PhpStr::new(out)))
+}
+
+/// quoted_printable_decode(): =XX bytes, soft line breaks (`=` then
+/// optional blanks then CR, LF or CRLF) removed; stops at a NUL byte.
+fn quoted_printable_decode(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let s = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    let s = s.as_bytes();
+    let at = |i: usize| s.get(i).copied().unwrap_or(0);
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while at(i) != 0 {
+        if at(i) != b'=' {
+            out.push(at(i));
+            i += 1;
+            continue;
+        }
+        if let (Some(h), Some(l)) = (hex(at(i + 1)), hex(at(i + 2)))
+            && at(i + 1) != 0
+            && at(i + 2) != 0
+        {
+            out.push(h << 4 | l);
+            i += 3;
+            continue;
+        }
+        let mut k = 1;
+        while matches!(at(i + k), b' ' | b'\t') {
+            k += 1;
+        }
+        match (at(i + k), at(i + k + 1)) {
+            (0, _) => i += k,
+            (b'\r', b'\n') => i += k + 2,
+            (b'\r' | b'\n', _) => i += k + 1,
+            _ => {
+                out.push(b'=');
+                i += 1;
+            }
+        }
+    }
+    Ok(Value::Str(PhpStr::new(out)))
 }

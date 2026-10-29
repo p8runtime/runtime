@@ -130,6 +130,9 @@ pub trait Ctx {
     fn define(&mut self, name: &[u8], value: Value) -> bool;
     /// Whether a function `name` exists (any case, optional leading `\`).
     fn function_exists(&self, name: &[u8]) -> bool;
+    /// get_defined_functions(): the builtins' names, and the script's
+    /// functions (lowercase) in the order declared.
+    fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>);
     /// Where `include name` would find its file (include_path, then the
     /// running file's directory), as a canonical path.
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf>;
@@ -352,6 +355,9 @@ pub struct Extension {
 pub struct Registry {
     /// ini directives PHP knows, with their built-in defaults.
     ini: HashMap<&'static [u8], Option<&'static [u8]>>,
+    /// Where log_errors writes an error (php_log_err: the error_log ini's
+    /// file, dated, or the SAPI's log), as the standard extension does it.
+    error_logger: Option<fn(&mut dyn Ctx, &[u8])>,
     functions: Vec<&'static Builtin>,
     /// Each function's stub signature (its argument checks), by index.
     sigs: Vec<Option<&'static p8_stubs::Sig>>,
@@ -415,6 +421,14 @@ impl Registry {
     }
 
     /// Declare a PHP module (as extension_loaded names it) provided.
+    pub fn set_error_logger(&mut self, log: fn(&mut dyn Ctx, &[u8])) {
+        self.error_logger = Some(log);
+    }
+
+    pub fn error_logger(&self) -> Option<fn(&mut dyn Ctx, &[u8])> {
+        self.error_logger
+    }
+
     pub fn add_module(&mut self, name: &'static str) {
         self.modules.push(name);
     }
@@ -494,6 +508,11 @@ impl Registry {
     pub fn lookup(&self, name: &[u8]) -> Option<usize> {
         let name = std::str::from_utf8(name).ok()?;
         self.index.get(name).copied()
+    }
+
+    /// Every builtin's name, in the order registered.
+    pub fn function_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.functions.iter().map(|f| f.name)
     }
 
     pub fn function(&self, i: usize) -> &'static Builtin {

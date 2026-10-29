@@ -1,0 +1,32 @@
+string(6) "4.4.27"
+array(2) {
+  [0]=>
+  string(8) "internal"
+  [1]=>
+  string(4) "user"
+}
+bool(true)
+bool(true)
+array(1) {
+  [0]=>
+  string(6) "myfunc"
+}
+array(2) {
+  [0]=>
+  string(6) "myfunc"
+  [1]=>
+  string(9) "later_one"
+}
+string(133) "h=E9llo =3D w=00rld=20
+abababababababababababababababababababababababababababababababababababababa=
+babababababababababababab=C3=A9"
+string(188) "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=
+=E2=82=ACyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy=
+yyyyyyyyyyyyyy=F0=9F=98=80=20
+end"
+string(12) "a=bcd=ZZ=4יי"
+string(4) "x=	y"
+string(4) "stop"
+bool(true)
+bool(true)
+bool(true)

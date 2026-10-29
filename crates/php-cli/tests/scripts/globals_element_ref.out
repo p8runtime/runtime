@@ -1,0 +1,17 @@
+int(2)
+int(2)
+string(10) "new global"
+array(1) {
+  ["k"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+string(8) "replaced"
+array(1) {
+  [0]=>
+  string(1) "m"
+}

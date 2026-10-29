@@ -10,27 +10,39 @@ mod server;
 mod status_phrases;
 
 fn main() {
-    let Some(Cli { dump, lint, path, ini, args, serve, docroot, quiet }) = Cli::parse(std::env::args().skip(1)) else {
-        eprintln!("usage: php2 [--dump] [-l] [-d name=value]... <file> [args...]\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]");
+    let Some(Cli { dump, lint, path, code, ini, args, serve, docroot, quiet }) = Cli::parse(std::env::args().skip(1)) else {
+        eprintln!(
+            "usage: php2 [--dump] [-l] [-d name=value]... [-f] <file> [--] [args...]\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]"
+        );
         std::process::exit(64);
     };
     // php -S: the built-in web server (the file, if any, is its router).
     if let Some(address) = serve {
-        let config = server::Config { address, docroot, router: (!path.is_empty()).then_some(path), quiet, ini };
+        let config = server::Config { address, docroot, router: path, quiet, ini };
         let status = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || server::run(config)).expect("server thread").join().unwrap_or(255);
         std::process::exit(status);
     }
-    let source = match std::fs::read(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Could not open input file: {path} ({e})");
-            std::process::exit(1);
+    // The script: a file, -r's code, or what stdin gives (as php names them).
+    let (source, path) = match (code, path) {
+        (Some(code), _) => ([b"<?php ".as_slice(), code.as_bytes()].concat(), "Command line code".to_string()),
+        (None, None) => {
+            let mut source = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut source);
+            (source, STDIN_NAME.to_string())
         }
+        (None, Some(path)) => match std::fs::read(&path) {
+            Ok(s) => (s, path),
+            Err(e) => {
+                eprintln!("Could not open input file: {path} ({e})");
+                std::process::exit(1);
+            }
+        },
     };
+    let named = path == STDIN_NAME || path == "Command line code";
     let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::MBSTRING, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL])
         // A file included again (a template part per post) is not compiled again.
         .keep_compiled();
-    let file = std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned());
+    let file = if named { path.clone() } else { std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };
     // -l: compile only, as `php -l` checks a file's syntax.
     if lint {
         match platform.compile(&source, &path) {
@@ -74,7 +86,9 @@ fn main() {
             for (name, value) in &ini {
                 context.set_ini(name, value);
             }
-            context.set_args(std::iter::once(path.clone()).chain(args).collect());
+            // $argv[0]: the file, or php's name for stdin (-r's too).
+            let argv0 = if named { STDIN_NAME.to_string() } else { path.clone() };
+            context.set_args(std::iter::once(argv0).chain(args).collect());
             match platform.compile(&source, &file) {
                 Ok(script) => context.run(&script),
                 Err(error) => context.fail(&error),
@@ -92,7 +106,10 @@ struct Cli {
     dump: bool,
     /// -l: check the file's syntax, run nothing.
     lint: bool,
-    path: String,
+    /// The script's file; none: -r's code, or the script on stdin.
+    path: Option<String>,
+    /// -r: code to run (without `<?php`).
+    code: Option<String>,
     /// `-d name=value` settings, in order (unknown names are ignored).
     ini: Vec<(String, String)>,
     /// The script's own arguments (after the file).
@@ -116,10 +133,19 @@ impl Cli {
             ini.push((name.trim().to_string(), value.trim().trim_matches('"').to_string()));
         };
         let (mut serve, mut docroot, mut quiet) = (None, None, 0);
+        let (mut path, mut code, mut dashes) = (None, None, false);
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
+                // The script's own arguments follow (its code is on stdin
+                // unless -r or -f gave it).
+                "--" => {
+                    dashes = true;
+                    break;
+                }
                 "--dump" => dump = true,
                 "-l" => lint = true,
+                "-r" => code = Some(args.next()?),
+                "-f" => path = Some(args.next()?),
                 "-d" => setting(&args.next()?),
                 "-S" => serve = Some(args.next()?),
                 "-t" => docroot = Some(args.next()?),
@@ -132,11 +158,17 @@ impl Cli {
                 _ => return None,
             }
         }
-        // -S takes an optional router; a script is required otherwise.
-        let path = if serve.is_some() { args.next().unwrap_or_default() } else { args.next()? };
-        Some(Cli { dump, lint, path, ini, args: args.collect(), serve, docroot, quiet })
+        // A script named after the options (-S: its router), unless -r or -f
+        // gave it, or `--` said the arguments start (the script on stdin).
+        if path.is_none() && code.is_none() && !dashes {
+            path = args.next();
+        }
+        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, docroot, quiet })
     }
 }
+
+/// What php calls a script read from stdin (its __FILE__ and $argv[0]).
+const STDIN_NAME: &str = "Standard input code";
 
 /// The terminal: a request's output goes to stdout.
 struct Stdout(std::io::BufWriter<std::io::Stdout>);
@@ -155,24 +187,41 @@ impl p8::Host for Stdout {
 mod tests {
     use super::Cli;
 
-    fn parse(args: &[&str]) -> Option<(bool, String)> {
+    fn parse(args: &[&str]) -> Option<(bool, Option<String>)> {
         Cli::parse(args.iter().map(|a| a.to_string())).map(|c| (c.dump, c.path))
+    }
+
+    fn t() -> Option<String> {
+        Some("t.php".to_string())
     }
 
     /// What php-src's runner passes: settings, the file, the test's arguments.
     #[test]
     fn takes_the_runners_command_line() {
         let ran = parse(&["-d", "display_errors=1", "-dprecision=14", "-d", "x", "t.php", "a", "-b"]);
-        assert_eq!(ran, Some((false, "t.php".to_string())));
+        assert_eq!(ran, Some((false, t())));
         let cli = Cli::parse(["-d", "error_reporting=0", "-dprecision=14", "-d", "x", "t.php"].iter().map(|a| a.to_string())).expect("parsed");
         let ini: Vec<(&str, &str)> = cli.ini.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
         assert_eq!(ini, [("error_reporting", "0"), ("precision", "14"), ("x", "1")]);
-        assert_eq!(parse(&["--dump", "t.php"]), Some((true, "t.php".to_string())));
+        assert_eq!(parse(&["--dump", "t.php"]), Some((true, t())));
         let lint = Cli::parse(["-l", "t.php"].iter().map(|a| a.to_string())).expect("parsed");
-        assert!(lint.lint && !lint.dump && lint.path == "t.php");
-        // An unknown option or a missing file is a usage error.
+        assert!(lint.lint && !lint.dump && lint.path == t());
+        // An unknown option or a missing value is a usage error.
         assert_eq!(parse(&["-x", "t.php"]), None);
         assert_eq!(parse(&["-d"]), None);
-        assert_eq!(parse(&["-d", "a=1"]), None);
+    }
+
+    /// What PHPUnit runs a test in a separate process with: settings, the
+    /// script on stdin, `--` and arguments; and -r, -f.
+    #[test]
+    fn takes_stdin_and_code() {
+        let stdin = Cli::parse(["-d", "a=1", "--", "x", "y"].iter().map(|a| a.to_string())).expect("parsed");
+        assert!(stdin.path.is_none() && stdin.code.is_none() && stdin.args == ["x", "y"]);
+        let no_file = Cli::parse(["-d", "a=1"].iter().map(|a| a.to_string())).expect("parsed");
+        assert!(no_file.path.is_none() && no_file.args.is_empty());
+        let code = Cli::parse(["-r", "echo 1;", "--", "z"].iter().map(|a| a.to_string())).expect("parsed");
+        assert!(code.code.as_deref() == Some("echo 1;") && code.path.is_none() && code.args == ["z"]);
+        let f = Cli::parse(["-f", "t.php", "--", "a"].iter().map(|a| a.to_string())).expect("parsed");
+        assert!(f.path == t() && f.args == ["a"]);
     }
 }

@@ -371,7 +371,11 @@ fn parse(url: &[u8]) -> Option<Url> {
 fn parse_url(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let url = str_arg(args, 0);
     let component = if args.len() > 1 { arg(args, 1).to_int() } else { -1 };
-    let Some(u) = parse(url.as_bytes()) else { return Ok(Value::Bool(false)) };
+    let Some(mut u) = parse(url.as_bytes()) else { return Ok(Value::Bool(false)) };
+    // An empty URL is an empty path (php_url_parse_ex2).
+    if url.is_empty() {
+        u.path = Some(Vec::new());
+    }
     let s = |v: &Option<Vec<u8>>| v.as_ref().map(|b| Value::Str(PhpStr::from(b.as_slice())));
     let parts = [
         ("scheme", s(&u.scheme)),
