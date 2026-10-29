@@ -816,6 +816,10 @@ fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
 
 pub struct Compiler<'src> {
     source: &'src [u8],
+    /// Where the source names a superglobal (`$_GET`…): (offset, index in
+    /// SUPERGLOBALS), sorted. Made on first use, by one scan of the file
+    /// (each function's body was scanned once per name before).
+    superglobals: Option<Vec<(usize, u8)>>,
     /// The temporaries holding references a spread call's list was given
     /// (freed after the call).
     spread_refs: Vec<Reg>,
@@ -889,6 +893,7 @@ impl<'src> Compiler<'src> {
         line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
         Compiler {
             source,
+            superglobals: None,
             spread_refs: Vec::new(),
             unused_result: false,
             registry,
@@ -1703,6 +1708,23 @@ impl<'src> Compiler<'src> {
     }
 
     /// A user function.
+    /// The file's superglobal references (see `superglobals`): every `$`
+    /// followed by a superglobal's name, as a prefix (`$_GETx` counts, as
+    /// the body scan it replaces counted it).
+    fn superglobal_refs(&mut self) -> &[(usize, u8)] {
+        let source = self.source;
+        self.superglobals.get_or_insert_with(|| {
+            let mut refs = Vec::new();
+            for (at, _) in source.iter().enumerate().filter(|&(_, &c)| c == b'$') {
+                let rest = &source[at + 1..];
+                if let Some(i) = SUPERGLOBALS.iter().position(|name| rest.starts_with(name.as_bytes())) {
+                    refs.push((at, i as u8));
+                }
+            }
+            refs
+        })
+    }
+
     fn function(&mut self, name: Span, params: &[p8_syntax::ast::Param], body: &[StmtId], by_ref: bool) -> Result<Function> {
         let text = Text::from(self.text(name));
         let line = self.line(name);
@@ -1807,10 +1829,12 @@ impl<'src> Compiler<'src> {
             Body::Expr(e) | Body::Get(e) | Body::Set(_, e) => Some((e.span().start, e.span().end)),
         };
         if let Some((start, end)) = span {
-            let text = &self.source[start..end];
-            for name in SUPERGLOBALS {
-                let needle = [b"$".as_slice(), name.as_bytes()].concat();
-                if text.windows(needle.len()).any(|w| w == needle.as_slice()) {
+            // Which are named in the body: from the file's one scan.
+            let refs = self.superglobal_refs();
+            let from = refs.partition_point(|&(at, _)| at < start);
+            let named = refs[from..].iter().take_while(|&&(at, _)| at < end).fold(0u16, |m, &(_, i)| m | 1 << i);
+            for (i, name) in SUPERGLOBALS.iter().enumerate() {
+                if named & (1 << i) != 0 {
                     let var = f.cv(name.as_bytes());
                     let name_reg = f.constant(Frozen::Str(Text::from(*name)));
                     f.emit(Instr::BindGlobal { var, name: name_reg & ((1 << KIND_SHIFT) - 1) });
