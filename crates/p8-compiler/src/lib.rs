@@ -1982,6 +1982,7 @@ impl<'src> Compiler<'src> {
                 let (var, keys, n, append) = self.dim_path(f, target)?;
                 let dst = f.temp();
                 f.emit(Instr::AssignDim { var, keys, n, append, val, dst });
+                self.free_static_root(f, target, var);
             }
             Expr::PropertyFetch { target: obj, property, .. } => {
                 let obj = self.expr(f, obj)?;
@@ -2919,6 +2920,22 @@ impl<'src> Compiler<'src> {
         Ok((root, keys, regs.len() as u8, append, Some(root)))
     }
 
+    /// After the write (or read) through a dim_path rooted in a static
+    /// property: let go of the temporary holding a reference to it, which
+    /// a later expression reusing the register would otherwise write
+    /// through.
+    fn free_static_root(&mut self, f: &mut FnBuilder, e: &Expr, root: Reg) {
+        let mut cur = e;
+        while let Expr::ArrayDimFetch { array, .. } = cur
+            && self.globals_dim(cur).is_none()
+        {
+            cur = array;
+        }
+        if matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$")) {
+            f.emit(Instr::Free { reg: root });
+        }
+    }
+
     fn dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, Reg, u8, bool)> {
         let mut dims = Vec::new();
         let mut cur = e;
@@ -3202,6 +3219,7 @@ impl<'src> Compiler<'src> {
                     let (target, keys, n, append) = self.dim_path(f, var)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignDim { var: target, keys, n, append, val, dst });
+                    self.free_static_root(f, var, target);
                     free_made(f, expr, val);
                     dst
                 }
@@ -3246,12 +3264,14 @@ impl<'src> Compiler<'src> {
                     let var = f.cv(&self.text(*name)[1..]);
                     let (root, keys, n, append) = self.dim_path(f, expr)?;
                     f.emit(Instr::RefDim { var, root, keys, n, append });
+                    self.free_static_root(f, expr, root);
                     var
                 }
                 (Expr::ArrayDimFetch { .. }, Expr::Variable { name: src, .. }) if self.text(*src).starts_with(b"$") && !dim_root_is_prop(var) => {
                     let src = f.cv(&self.text(*src)[1..]);
                     let (root, keys, n, append) = self.dim_path(f, var)?;
                     f.emit(Instr::DimSetRef { root, keys, n, append, src });
+                    self.free_static_root(f, var, root);
                     src
                 }
                 _ => {
@@ -3316,6 +3336,7 @@ impl<'src> Compiler<'src> {
                         let (target, keys, n, _) = self.dim_path(f, var)?;
                         let dst = f.temp();
                         f.emit(Instr::AssignDimOp { op: bin, var: target, keys, n, val, dst });
+                        self.free_static_root(f, var, target);
                         dst
                     }
                     Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
@@ -3664,17 +3685,24 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::ArrayPush { arr: pair, val: name });
                 self.spread_call(f, pair, args)?
             }
-            Expr::StaticCall { class: Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
-                if needs_spread(args) =>
+            // `C::m(...$a)`, `parent::__construct(...$a)`: the callable
+            // [class, 'm']; self, parent and static stay keywords, resolved
+            // where the call runs (as PHP's callables do: $this and the
+            // called class go along).
+            Expr::StaticCall { class: class_expr @ Expr::Variable { .. }, method: Expr::Variable { name: method, .. }, args, .. }
+                if needs_spread(args) && !self.text(*method).starts_with(b"$") =>
             {
-                let class = self.text(*class);
-                let class = match class.to_ascii_lowercase().as_slice() {
-                    b"self" | b"static" | b"parent" => class.to_vec(),
-                    _ => self.class_name(class),
+                let Expr::Variable { name: written, .. } = class_expr else { unreachable!("matched a name") };
+                let written = self.text(*written);
+                let name = if matches!(written.to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") {
+                    // Resolved where the call runs (the callable keeps the keyword).
+                    self.class_ref(f, class_expr)?;
+                    f.constant(Frozen::Str(Text::from(written.to_ascii_lowercase().as_slice())))
+                } else {
+                    f.constant(Frozen::Str(Text::from(self.class_name(written).as_slice())))
                 };
-                let text = [class.as_slice(), b"::", self.text(*method)].concat();
-                let callee = f.constant(Frozen::Str(Text::from(text.as_slice())));
-                self.spread_call(f, callee, args)?
+                let m = f.constant(Frozen::Str(Text::from(self.text(*method))));
+                self.call_pair(f, name, m, args)?
             }
             Expr::MethodCall { target, method, args, .. } if is_placeholder(args) => {
                 // `$o->m(...)`: a Closure of [$o, 'm'].
@@ -3766,6 +3794,14 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
                 base
             }
+            // `C::${expr}`, `C::$$v`: a static property named when it runs.
+            Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                let class_index = self.class_ref(f, class)?;
+                let name = self.expr(f, name)?;
+                let dst = out(f, hint, mark);
+                f.emit(Instr::FetchStaticProp { dst, class: class_index, name });
+                dst
+            }
             Expr::ClassConstFetch { class, constant, .. } => {
                 let Expr::Variable { name, .. } = constant else {
                     return Err(self.unsupported(constant.span(), "a class constant name in an expression"));
@@ -3837,6 +3873,7 @@ impl<'src> Compiler<'src> {
                         Expr::ArrayDimFetch { dim: Some(_), .. } if dim_root_is_var(self, v) => {
                             let (var, keys, n, _) = self.dim_path(f, v)?;
                             f.emit(Instr::IssetDim { dst, var, keys, n });
+                            self.free_static_root(f, v, var);
                         }
                         // `?->` reads as `->` here: null has no property set.
                         Expr::PropertyFetch { target, property, .. } | Expr::NullsafePropertyFetch { target, property, .. } => {
@@ -3847,6 +3884,11 @@ impl<'src> Compiler<'src> {
                         Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                             let class = self.class_ref(f, class)?;
                             let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                            f.emit(Instr::rare(Rare::IssetStatic, dst, name, 0, class));
+                        }
+                        Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                            let class = self.class_ref(f, class)?;
+                            let name = self.expr(f, name)?;
                             f.emit(Instr::rare(Rare::IssetStatic, dst, name, 0, class));
                         }
                         // isset($o->p[k]...): the dimensions of a quietly read root

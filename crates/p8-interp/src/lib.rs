@@ -2258,8 +2258,8 @@ impl Context<'_> {
                         regs[base + dst as usize] = r;
                         return Ok(Next::Go(pc));
                     }
-                    self.assign_dim(w, func, var, keys, n, append, v.clone(), None)?;
-                    reg!(dst) = v;
+                    // The result is what was stored: a string offset's one byte.
+                    reg!(dst) = self.assign_dim(w, func, var, keys, n, append, v, None)?;
                 }
                 Instr::AssignDimOp { op, var, keys, n, val, dst } => {
                     let v = self.operand(w, func, val);
@@ -4114,12 +4114,44 @@ impl Context<'_> {
         val: Value,
         op: Option<BinOp>,
     ) -> Result<Value, Throw> {
+        let slot = var as usize;
+        // `$s[k] = v` on a string: the offset as a string reads it (casts
+        // warn as such), before any array key conversion.
+        let is_str = match &w[slot] {
+            Value::Ref(cell) => matches!(*cell.borrow(), Value::Str(_)),
+            v => matches!(v, Value::Str(_)),
+        };
+        if is_str {
+            if append {
+                return Err(self.throw("Error", "[] operator not supported for strings"));
+            }
+            let raw = self.operand(w, func, keys).deref();
+            let offset = self.string_offset(&raw)?;
+            if n > 1 {
+                return Err(self.throw("Error", "Cannot use string offset as an array"));
+            }
+            if op.is_some() {
+                return Err(self.throw("Error", "Cannot use assign-op operators with string offsets"));
+            }
+            let mut s = match &mut w[slot] {
+                Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                other => std::mem::take(other),
+            };
+            let r = match &mut s {
+                Value::Str(text) => self.assign_string_offset(text, offset, val),
+                _ => unreachable!("checked a string"),
+            };
+            match &mut w[slot] {
+                Value::Ref(cell) => *cell.borrow_mut() = s,
+                other => *other = s,
+            }
+            return r;
+        }
         let mut path = Vec::with_capacity(n as usize);
         for i in 0..n {
             path.push(self.key(w, func, keys + i as Reg)?);
         }
         // Take the variable's value out, update it, put it back.
-        let slot = var as usize;
         let mut root = match &mut w[slot] {
             Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
             other => std::mem::take(other),
@@ -4130,6 +4162,56 @@ impl Context<'_> {
             other => *other = root,
         }
         result
+    }
+
+    /// A string offset written (zend_check_dimension_interned's rules, as
+    /// for a read): an int, a string that is one (junk after it warns),
+    /// a cast scalar (warns); anything else is a TypeError.
+    fn string_offset(&mut self, k: &Value) -> Result<i64, Throw> {
+        match k {
+            Value::Int(i) => Ok(*i),
+            Value::Str(t) => match p8_runtime::numeric::leading_numeric(t.as_bytes()) {
+                Some((p8_runtime::numeric::Number::Int(i), end)) => {
+                    if t.as_bytes()[end..].iter().any(|c| !b" \t\n\r\x0b\x0c".contains(c)) {
+                        self.warn(format!("Illegal string offset \"{}\"", String::from_utf8_lossy(t.as_bytes())));
+                    }
+                    Ok(i)
+                }
+                _ => Err(self.throw("TypeError", "Cannot access offset of type string on string")),
+            },
+            Value::Float(_) | Value::Bool(_) | Value::Null | Value::Undef => {
+                self.warn("String offset cast occurred");
+                Ok(k.to_int())
+            }
+            Value::Object(o) => Err(self.throw("TypeError", format!("Cannot access offset of type {} on string", String::from_utf8_lossy(o.class.name.as_bytes())))),
+            other => Err(self.throw("TypeError", format!("Cannot access offset of type {} on string", other.type_name()))),
+        }
+    }
+
+    /// `$s[offset] = val` (zend_assign_to_string_offset): the value's first
+    /// byte at the offset (from the end when negative), the string padded
+    /// with spaces to reach it; the byte assigned is the result.
+    fn assign_string_offset(&mut self, s: &mut PhpStr, offset: i64, val: Value) -> Result<Value, Throw> {
+        let len = s.len() as i64;
+        let at = if offset < 0 { offset + len } else { offset };
+        if at < 0 {
+            self.warn(format!("Illegal string offset {offset}"));
+            return Ok(Value::Null);
+        }
+        let v = val.deref().to_php_string().unwrap_or_else(PhpStr::empty);
+        let Some(&byte) = v.as_bytes().first() else {
+            return Err(self.throw("Error", "Cannot assign an empty string to a string offset"));
+        };
+        if v.len() > 1 {
+            self.warn("Only the first byte will be assigned to the string offset");
+        }
+        let mut bytes = s.as_bytes().to_vec();
+        if at as usize >= bytes.len() {
+            bytes.resize(at as usize + 1, b' ');
+        }
+        bytes[at as usize] = byte;
+        *s = PhpStr::new(bytes);
+        Ok(Value::Str(PhpStr::new(vec![byte])))
     }
 
     fn update_path(&mut self, target: &mut Value, path: &[Key], append: bool, val: Value, op: Option<BinOp>) -> Result<Value, Throw> {
@@ -4150,7 +4232,21 @@ impl Context<'_> {
                 *target = Value::Array(Rc::new(PhpArray::new()));
                 return self.update_path(target, path, append, val, op);
             }
-            Value::Str(_) => return Err(self.throw("Error", "String offsets are not supported by this engine yet")),
+            Value::Str(text) => {
+                // A string inside an array or a property: its offset from the key.
+                if append {
+                    return Err(self.throw("Error", "[] operator not supported for strings"));
+                }
+                let Some((key, rest)) = path.split_first() else { return Err(self.throw("Error", "[] operator not supported for strings")) };
+                let offset = self.string_offset(&key.to_value())?;
+                if !rest.is_empty() {
+                    return Err(self.throw("Error", "Cannot use string offset as an array"));
+                }
+                if op.is_some() {
+                    return Err(self.throw("Error", "Cannot use assign-op operators with string offsets"));
+                }
+                return self.assign_string_offset(text, offset, val);
+            }
             _ => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
         };
         match path.split_first() {
