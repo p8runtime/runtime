@@ -2435,9 +2435,16 @@ impl<'src> Compiler<'src> {
         let line = self.line(*name);
         let no_scope = |word: &str| CompileError { message: format!("Cannot use \"{word}\" when no class scope is active"), line };
         let in_trait = self.scope.as_ref().is_some_and(|s| s.in_trait);
+        // zend_is_scope_known: a file's own code may be included from a
+        // method and a closure may be bound to a class, so outside a class
+        // their self, parent and static are resolved when they run.
+        let scope_unknown = self.scope.is_none()
+            && f.class.is_none()
+            && (f.name.as_bytes() == b"{main}" || f.name.as_bytes().starts_with(b"{closure"));
         let class = match text.to_ascii_lowercase().as_slice() {
-            b"self" if in_trait => ClassRef::Scope,
-            b"parent" if in_trait => ClassRef::ParentScope,
+            b"self" if in_trait || scope_unknown => ClassRef::Scope,
+            b"parent" if in_trait || scope_unknown => ClassRef::ParentScope,
+            b"static" if scope_unknown => ClassRef::Static,
             b"self" => {
                 let scope = self.scope.as_ref().map(|s| s.name.clone()).or_else(|| f.class.clone()).ok_or_else(|| no_scope("self"))?;
                 ClassRef::Forward(Text::from(scope.as_bytes().to_ascii_lowercase().as_slice()), scope)
@@ -3694,7 +3701,10 @@ impl<'src> Compiler<'src> {
             {
                 let Expr::Variable { name: written, .. } = class_expr else { unreachable!("matched a name") };
                 let written = self.text(*written);
-                let name = if matches!(written.to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") {
+                let name = if written.starts_with(b"$") {
+                    // `$class::m(...$a)`: the class (or object) it holds.
+                    self.expr(f, class_expr)?
+                } else if matches!(written.to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") {
                     // Resolved where the call runs (the callable keeps the keyword).
                     self.class_ref(f, class_expr)?;
                     f.constant(Frozen::Str(Text::from(written.to_ascii_lowercase().as_slice())))
@@ -3754,6 +3764,9 @@ impl<'src> Compiler<'src> {
                     && self.text(*prop).starts_with(b"$")
                     && matches!(self.text(*m).to_ascii_lowercase().as_slice(), b"get" | b"set") =>
             {
+                if self.scope.is_none() {
+                    return Err(CompileError { message: "Cannot use \"parent\" when no class scope is active".into(), line: self.line(*p) });
+                }
                 let class = self.class_ref(f, parent)?;
                 let display = [self.text(*prop), b"::", self.text(*m).to_ascii_lowercase().as_slice()].concat();
                 let site = f.site(false, Text::from(display.to_ascii_lowercase().as_slice()), Text::from(display.as_slice()));
@@ -4232,8 +4245,28 @@ impl<'src> Compiler<'src> {
         if needs_spread(args) {
             let callee = match func {
                 Expr::Variable { name, .. } if !dynamic => {
-                    let (full, _) = self.ns_name(self.text(*name), &self.use_functions, true);
-                    f.constant(Frozen::Str(Text::from(full.as_slice())))
+                    let (full, fallback) = self.ns_name(self.text(*name), &self.use_functions, true);
+                    let full = f.constant(Frozen::Str(Text::from(full.as_slice())));
+                    match fallback {
+                        // `f(...$a)` in a namespace: ns\f when it exists as
+                        // the call runs, else the global f (as any call).
+                        Some(global) => {
+                            let global = f.constant(Frozen::Str(Text::from(global.as_slice())));
+                            let exists = f.constant(Frozen::Str(Text::from("function_exists")));
+                            let base = f.temp();
+                            f.emit(Instr::Move { dst: base, src: full });
+                            f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
+                            let callee = f.temp();
+                            let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
+                            f.emit(Instr::Move { dst: callee, src: full });
+                            let end = f.emit(Instr::Jump { target: 0 });
+                            f.patch(other, f.here());
+                            f.emit(Instr::Move { dst: callee, src: global });
+                            f.patch(end, f.here());
+                            callee
+                        }
+                        None => full,
+                    }
                 }
                 other => self.expr(f, other)?,
             };

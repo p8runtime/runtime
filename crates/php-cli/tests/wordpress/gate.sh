@@ -101,8 +101,9 @@ p8() {
 # posts and comments made today (the test content is dated 2026-01-01, so
 # today's date is only ever the clock; the classic editor's time fields and
 # post lock, and the settings' time format examples, are the clock too). A mail's Date and Message-ID, an embed's
-# secret, a UUID (the customizer's changeset) and the post-by-email
-# suggestions are random, made by random_int().
+# secret, a UUID (the customizer's changeset), the post-by-email
+# suggestions and WooCommerce's share key are random, made by random_int();
+# WooCommerce's install timestamp is the clock (as in its URL-encoded settings).
 today=$(date -u +%Y-%m-%d)
 clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"initialServerTimestamp":[0-9]+/"initialServerTimestamp":T/g' -e 's/"activePostLock":"[0-9]+:/"activePostLock":"T:/g' -e 's#(Universal|Local) time is <code>[^<]*</code>#\1 time is <code>T</code>#g' \
     -e "s/${today}([T ])[0-9]{2}:[0-9]{2}:[0-9]{2}/${today}\\1T/g" -e 's/(_edit_lock[[:space:]])[0-9]+:/\1T:/' \
@@ -110,7 +111,9 @@ clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"initialServerTimesta
     -e 's/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/UUID/g' \
     -e 's/(name="(hidden_|cur_)?(hh|mn|ss)" value=")[0-9]{2}"/\1T"/g' -e 's/(id="active_post_lock" value=")[0-9]+:/\1T:/' \
     -e 's#(random strings you could use: )<kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>#\1R#' \
-    -e 's#(<span class="date-time-text format-i18n">)[^<]*:[^<]*(</span>)#\1T\2#g' "$1"; }
+    -e 's#(<span class="date-time-text format-i18n">)[^<]*:[^<]*(</span>)#\1T\2#g' \
+    -e 's/(install_timestamp%22%3A%22)[0-9]+/\1T/g' -e "s/${today}T[0-9]{2}%3A[0-9]{2}%3A[0-9]{2}/${today}TT/g" \
+    -e 's/(woocommerce_share_key%22%3A%22)[A-Za-z0-9]+/\1S/g' "$1"; }
 
 php_ref install.php > install.php.out 2>/dev/null
 p8 install.php > install.p8.out 2>/dev/null
@@ -243,5 +246,13 @@ for req in 0:/ 0:/?p=1 0:/?cat=1 0:/?page_id=2 0:/?author=1 0:/?sitemap=index 0:
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "yoast: $url" WPUSER="$user" WPURL="$url"
+done
+setup "WooCommerce" WPPLUGINS=woocommerce/woocommerce.php
+for req in 0:/ 0:/?post_type=product 0:/?p=1 '0:/?rest_route=/wc/store/v1/products' \
+    1:/wp-admin/ '1:/wp-admin/edit.php?post_type=product' '1:/wp-admin/post-new.php?post_type=product' \
+    '1:/wp-admin/admin.php?page=wc-settings' '1:/wp-admin/edit.php?post_type=shop_order'; do
+    user=${req%%:*} url=${req#*:}
+    [ "$user" = 0 ] && user=
+    request "woocommerce: $url" WPUSER="$user" WPURL="$url"
 done
 exit $failed

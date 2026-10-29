@@ -1073,6 +1073,7 @@ impl Isolate {
             const_evaluating: Vec::new(),
             autoloaders: Vec::new(),
             autoload_tried: std::collections::HashSet::new(),
+            autoload_retry: None,
             error_handlers: Vec::new(),
             exception_handlers: Vec::new(),
             shutdown: Vec::new(),
@@ -1177,10 +1178,13 @@ pub struct Context<'i> {
     const_cache: HashMap<(Vec<u8>, Vec<u8>), Value>,
     /// The ones being computed (a constant that needs itself is an error).
     const_evaluating: Vec<(Vec<u8>, Vec<u8>)>,
-    /// spl_autoload_register's callables, and the classes they were asked
-    /// for (once each).
+    /// spl_autoload_register's callables, and the classes they are being
+    /// asked for (a lookup of one of those meanwhile fails: no recursion).
     autoloaders: Vec<Value>,
     autoload_tried: std::collections::HashSet<Vec<u8>>,
+    /// The class whose autoloaders just ran: the instruction that asked
+    /// runs again, and its lookup of the class (still missing) fails once.
+    autoload_retry: Option<Vec<u8>>,
     /// set_error_handler's (callable, levels), innermost last.
     error_handlers: Vec<(Value, i64)>,
     exception_handlers: Vec<Value>,
@@ -3289,6 +3293,26 @@ impl Context<'_> {
                 }
                 Instr::ClassConst { dst, class, name } => {
                     let name = reg!(name).clone();
+                    // `self::class` with no class to name (zend_compile's
+                    // ZEND_FETCH_CLASS_NAME): its own error.
+                    let is_class = matches!(&name, Value::Str(n) if n.as_bytes().eq_ignore_ascii_case(b"class"));
+                    if is_class
+                        && matches!(func.classes[class as usize], p8_bytecode::ClassRef::ParentScope)
+                        && self.scope().0.is_some_and(|c| c.parent.is_none())
+                    {
+                        return Err(self.throw("Error", "Cannot use \"parent\" when current class scope has no parent"));
+                    }
+                    if is_class && self.scope().0.is_none() {
+                        let word = match &func.classes[class as usize] {
+                            p8_bytecode::ClassRef::Scope => Some("self"),
+                            p8_bytecode::ClassRef::ParentScope => Some("parent"),
+                            p8_bytecode::ClassRef::Static => Some("static"),
+                            _ => None,
+                        };
+                        if let Some(word) = word {
+                            return Err(self.throw("Error", format!("Cannot use \"{word}\" in the global scope")));
+                        }
+                    }
                     if let Some((thunk, scope, key)) = self.pending_constant(func, class, &name, w)? {
                         self.eval_constant(regs, &thunk, scope, key)?;
                         return Ok(Next::Go(at));
@@ -4004,9 +4028,19 @@ impl Context<'_> {
 
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
         if let Some(r) = self.frames.first().expect("the main frame").func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            // `global $x` makes a global that is not set a null one.
+            match &mut main[r] {
+                Value::Ref(cell) if matches!(*cell.borrow(), Value::Undef) => *cell.borrow_mut() = Value::Null,
+                v @ Value::Undef => *v = Value::Null,
+                _ => {}
+            }
             return make_ref(main, r as Reg);
         }
-        self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone()
+        let cell = self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone();
+        if matches!(*cell.borrow(), Value::Undef) {
+            *cell.borrow_mut() = Value::Null;
+        }
+        cell
     }
 
     /// An array key from register `r`, reporting what PHP reports.

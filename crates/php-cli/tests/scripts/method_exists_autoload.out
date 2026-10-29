@@ -1,0 +1,9 @@
+autoload NS\Lazy
+autoload NS\Missing
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)

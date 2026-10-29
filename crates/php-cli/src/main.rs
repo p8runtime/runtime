@@ -45,6 +45,17 @@ fn main() {
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
             let mut isolate = platform.new_isolate();
+            // max_execution_time (0, the CLI's default: none): a watchdog
+            // ends the run with PHP's fatal error once it has run that long.
+            // (set_time_limit() calls are not followed yet.)
+            let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u64>().ok()).unwrap_or(0);
+            if limit > 0 {
+                let handle = isolate.interrupt_handle();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(limit));
+                    handle.timeout(limit);
+                });
+            }
             let mut stdout = Stdout(std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()));
             let mut context = isolate.new_context(&mut stdout);
             for (name, value) in &ini {

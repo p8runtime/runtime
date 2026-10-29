@@ -1,0 +1,11 @@
+autoload Child
+bool(true)
+autoload Other
+bool(false)
+bool(false)
+autoload Missing
+autoload Missing
+bool(false)
+bool(false)
+bool(true)
+bool(true)
