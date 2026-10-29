@@ -6,5 +6,6 @@ license = "MIT"
 description = "p8's mbstring extension: multibyte strings over UTF-8, the Unicode and single-byte encodings, with php-src's own case and width tables"
 
 [dependencies]
+encoding_rs = "0.8"
 p8-runtime = { path = "../p8-runtime" }
 p8-stubs = { path = "../p8-stubs" }

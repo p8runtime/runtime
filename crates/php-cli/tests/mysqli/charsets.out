@@ -1,0 +1,34 @@
+bool(true)
+string(4) "big5"
+big5 big5_chinese_ci 1 2 [] 1 1
+bool(true)
+string(6) "latin1"
+latin1 latin1_swedish_ci 1 1 [] 8 1
+bool(true)
+string(5) "koi8r"
+koi8r koi8r_general_ci 1 1 [] 7 1
+bool(true)
+string(4) "ujis"
+ujis ujis_japanese_ci 1 3 [] 12 1
+bool(true)
+string(4) "sjis"
+sjis sjis_japanese_ci 1 2 [] 13 1
+bool(true)
+string(3) "gbk"
+gbk gbk_chinese_ci 1 2 [] 28 1
+bool(true)
+string(4) "utf8"
+utf8 utf8_general_ci 1 3 [UTF-8 Unicode] 33 1
+bool(true)
+string(7) "utf8mb4"
+utf8mb4 utf8mb4_general_ci 1 4 [UTF-8 Unicode] 45 1
+bool(true)
+string(4) "big5"
+big5 big5_chinese_ci 1 2 [] 1 1
+61a65c5c27625ca6
+61a64062
+5cbf5c27206f7220313d3120bf5c
+955c5c81
+61ff5c27e282ac5c225c30
+string(7) "utf8mb4"
+2019 Invalid character set was provided

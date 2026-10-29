@@ -1425,11 +1425,12 @@ impl Parser<'_> {
                 self.pos += 1;
                 (c.to_ascii_uppercase() ^ 0x40) as u32
             }
-            b'L' | b'l' | b'U' | b'u' => return Err(err(137, self.pos)),
+            b'F' | b'L' | b'l' | b'U' | b'u' => return Err(err(137, self.pos)),
             b'N' => return Err(err(if in_class { 171 } else { 137 }, self.pos)),
             b'8' | b'9' if in_class => return Err(err(107, self.pos)),
+            // (PCRE2 reports an unknown escape at its letter.)
             _ if b.is_ascii_alphanumeric() => {
-                return Err(err(if in_class { 107 } else { 103 }, self.pos));
+                return Err(if in_class { err(107, self.pos) } else { err(103, self.pos - 1) });
             }
             _ => {
                 self.pos -= 1;

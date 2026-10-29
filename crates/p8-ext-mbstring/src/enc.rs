@@ -38,6 +38,10 @@ pub enum Kind {
     Cp1252,
     Latin1,
     Sb(usize),
+    /// A multi-byte encoding by its WHATWG table (encoding_rs): Big5,
+    /// EUC-JP (the same mappings as libmbfl's for everything but its
+    /// vendor extensions).
+    Table(&'static encoding_rs::Encoding),
 }
 
 pub struct Enc {
@@ -92,6 +96,7 @@ fn all() -> &'static [Enc] {
                     "csASCII",
                 ],
             ),
+            e(Table(encoding_rs::EUC_JP), "EUC-JP", Some("EUC-JP"), &["EUC", "EUC_JP", "eucJP", "x-euc-jp"]),
         ];
         // The order of mbfl_encoding_ptr_list: 1252, 1254, then 8859-1.. and
         // the rest after the CJK ones.
@@ -122,6 +127,7 @@ fn all() -> &'static [Enc] {
             }
         }
         v.extend(rest);
+        v.push(e(Table(encoding_rs::BIG5), "BIG-5", Some("BIG5"), &["CN-BIG5", "BIG-FIVE", "BIGFIVE"]));
         v
     })
 }
@@ -216,6 +222,31 @@ pub fn decode(enc: &Enc, s: &[u8]) -> Vec<u32> {
         HtmlEnt => decode_html(s),
         Utf7 => crate::utf7::decode(s, false),
         Utf7Imap => crate::utf7::decode(s, true),
+        Table(table) => decode_table(table, s),
+    }
+}
+
+/// A multi-byte encoding's bytes as code points, each malformed sequence
+/// BAD (as libmbfl marks them: one per byte it gives up on).
+fn decode_table(table: &'static encoding_rs::Encoding, s: &[u8]) -> Vec<u32> {
+    let mut decoder = table.new_decoder_without_bom_handling();
+    let mut out = Vec::with_capacity(s.len());
+    let mut buf = String::with_capacity(s.len() * 3 + 16);
+    let mut rest = s;
+    loop {
+        buf.clear();
+        let (result, read) = decoder.decode_to_string_without_replacement(rest, &mut buf, true);
+        out.extend(buf.chars().map(|c| c as u32));
+        rest = &rest[read..];
+        match result {
+            encoding_rs::DecoderResult::InputEmpty => return out,
+            encoding_rs::DecoderResult::OutputFull => buf.reserve(rest.len() * 3 + 16),
+            encoding_rs::DecoderResult::Malformed(bad, _) => {
+                for _ in 0..bad {
+                    out.push(BAD);
+                }
+            }
+        }
     }
 }
 
@@ -585,6 +616,15 @@ fn put(enc: &Enc, w: u32, out: &mut Vec<u8>) -> bool {
             }
         }
         Utf7 | Utf7Imap => return false,
+        Table(table) => {
+            let Some(c) = char::from_u32(w) else { return false };
+            let mut text = [0u8; 4];
+            let (bytes, _, unmappable) = table.encode(c.encode_utf8(&mut text));
+            if unmappable {
+                return false;
+            }
+            out.extend_from_slice(&bytes);
+        }
     }
     true
 }

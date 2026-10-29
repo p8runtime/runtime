@@ -38,7 +38,7 @@ const BASE_FLAGS: u32 =
 const MORE_RESULTS: u16 = 0x08;
 
 /// utf8mb4_general_ci, the collation mysqlnd connects with (utf8mb4).
-pub const DEFAULT_CHARSET: u8 = 45;
+pub const DEFAULT_CHARSET: u16 = 45;
 
 // Client error codes (CR_*), with the messages mysqlnd gives them.
 pub const CR_CONNECTION_ERROR: u16 = 2002;
@@ -159,7 +159,7 @@ pub struct Connection {
     pub server_version: String,
     pub thread_id: u32,
     pub host_info: String,
-    pub charset: u8,
+    pub charset: u16,
     pub status: u16,
     pub affected_rows: u64,
     pub insert_id: u64,
@@ -443,7 +443,7 @@ impl Connection {
         let mut out = Vec::new();
         out.extend_from_slice(&flags.to_le_bytes());
         out.extend_from_slice(&0x0100_0000u32.to_le_bytes());
-        out.push(self.charset);
+        out.push(self.charset as u8);
         out.extend_from_slice(&[0; 23]);
         out.extend_from_slice(options.user);
         out.push(0);
@@ -655,7 +655,7 @@ impl Connection {
     /// Change the connection's character set (SET NAMES).
     pub fn set_charset(&mut self, name: &str) -> Result<()> {
         let Some(cs) = charset(name) else {
-            return Err(Error::client(2019, "Invalid characterset or character set not supported"));
+            return Err(Error::client(2019, "Invalid character set was provided"));
         };
         match self.query(format!("SET NAMES {}", cs.name).as_bytes())? {
             Outcome::Done | Outcome::Rows(_) => {}
@@ -674,56 +674,197 @@ fn io_message(e: &io::Error) -> String {
     }
 }
 
-/// A character set mysqlnd knows: its default collation's number, its
-/// name, and the most bytes a character takes.
+/// A character set and collation mysqlnd knows: the collation's number,
+/// the set's name, the most bytes a character takes, and how its
+/// multi-byte characters are told apart (for escaping).
 #[derive(Clone, Copy, Debug)]
 pub struct Charset {
-    pub nr: u8,
+    pub nr: u16,
     pub name: &'static str,
     pub collation: &'static str,
     pub max_len: u8,
     pub comment: &'static str,
+    pub mb: Mb,
+    /// The lowest byte that may start a multi-byte character (0x100: none).
+    pub lowest_mb: u16,
 }
 
-/// The character sets with their default collations (mysqlnd_charset.c).
-pub const CHARSETS: &[Charset] = &[
-    Charset { nr: 8, name: "latin1", collation: "latin1_swedish_ci", max_len: 1, comment: "cp1252 West European" },
-    Charset { nr: 33, name: "utf8", collation: "utf8_general_ci", max_len: 3, comment: "UTF-8 Unicode" },
-    Charset { nr: 45, name: "utf8mb4", collation: "utf8mb4_general_ci", max_len: 4, comment: "UTF-8 Unicode" },
-    Charset { nr: 63, name: "binary", collation: "binary", max_len: 1, comment: "Binary pseudo charset" },
-    Charset { nr: 11, name: "ascii", collation: "ascii_general_ci", max_len: 1, comment: "US ASCII" },
-];
+/// mysqlnd's multi-byte character checks (check_mb_* and mysqlnd_mbcharlen_*).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mb {
+    Null,
+    Big5,
+    Cp932,
+    EucKr,
+    EucJpMs,
+    Gb2312,
+    Gbk,
+    Sjis,
+    Ucs2,
+    Ujis,
+    Utf16,
+    Utf32,
+    Utf8,
+    Utf8Mb3,
+    Gb18030,
+}
 
+mod charsets;
+pub use charsets::CHARSETS;
+
+/// The character set `name` (any case; utf8mb3 is utf8), by its default
+/// collation (the first of the name, as mysqlnd_find_charset_name finds it).
 pub fn charset(name: &str) -> Option<Charset> {
     let lower = name.to_ascii_lowercase();
     let lower = if lower == "utf8mb3" { "utf8".to_string() } else { lower };
     CHARSETS.iter().find(|c| c.name == lower).copied()
 }
 
-pub fn charset_by_nr(nr: u8) -> Option<Charset> {
+pub fn charset_by_nr(nr: u16) -> Option<Charset> {
     CHARSETS.iter().find(|c| c.nr == nr).copied()
 }
 
-/// mysql_real_escape_string() for a connection without
-/// NO_BACKSLASH_ESCAPES: NUL, \n, \r, \, ', " and Ctrl-Z get a backslash.
-/// (UTF-8 and the single-byte sets never hide these bytes inside a
-/// multi-byte character, so going byte by byte is the same.)
-pub fn escape(s: &[u8]) -> Vec<u8> {
+fn utf8_len(s: &[u8], max: usize) -> usize {
+    let Some(&c) = s.first() else { return 0 };
+    let tail = |i: usize| s.get(i).is_some_and(|&b| (b ^ 0x80) < 0x40);
+    match c {
+        0x00..=0x7F => 1,
+        0x80..=0xC1 => 0,
+        0xC2..=0xDF => if tail(1) { 2 } else { 0 },
+        0xE0..=0xEF => if tail(1) && tail(2) && (c >= 0xE1 || s[1] >= 0xA0) { 3 } else { 0 },
+        0xF0..=0xF4 if max == 4 => {
+            if tail(1) && tail(2) && tail(3) && (c >= 0xF1 || s[1] >= 0x90) && (c <= 0xF3 || s[1] <= 0x8F) { 4 } else { 0 }
+        }
+        _ => 0,
+    }
+}
+
+impl Mb {
+    /// check_mb_*: the length of the valid multi-byte character at the
+    /// start of `s`, or 0.
+    fn valid(self, s: &[u8]) -> usize {
+        let at = |i: usize| s.get(i).copied();
+        let two = |head: fn(u8) -> bool, tail: fn(u8) -> bool| match (at(0), at(1)) {
+            (Some(a), Some(b)) if head(a) && tail(b) => 2,
+            _ => 0,
+        };
+        match self {
+            Mb::Null => 0,
+            Mb::Utf8 => match utf8_len(s, 4) { n if n > 1 => n, _ => 0 },
+            Mb::Utf8Mb3 => match utf8_len(s, 3) { n if n > 1 => n, _ => 0 },
+            Mb::Big5 => two(|c| (0xA1..=0xF9).contains(&c), |c| (0x40..=0x7E).contains(&c) || (0xA1..=0xFE).contains(&c)),
+            Mb::Cp932 | Mb::Sjis => two(|c| (0x81..=0x9F).contains(&c) || (0xE0..=0xFC).contains(&c), |c| (0x40..=0x7E).contains(&c) || (0x80..=0xFC).contains(&c)),
+            Mb::Gb2312 => two(|c| (0xA1..=0xF7).contains(&c), |c| (0xA1..=0xFE).contains(&c)),
+            Mb::Gbk => two(|c| (0x81..=0xFE).contains(&c), |c| (0x40..=0x7E).contains(&c) || (0x80..=0xFE).contains(&c)),
+            Mb::EucKr => match (at(0), at(1)) {
+                (Some(a), Some(b)) if a >= 0x80 && (0xA1..=0xFE).contains(&b) => 2,
+                _ => 0,
+            },
+            Mb::EucJpMs | Mb::Ujis => {
+                let valid = |c: Option<u8>| c.is_some_and(|c| (0xA1..=0xFE).contains(&c));
+                let kata = |c: Option<u8>| c.is_some_and(|c| (0xA1..=0xDF).contains(&c));
+                match at(0) {
+                    Some(c) if c < 0x80 => 0,
+                    c if valid(c) && valid(at(1)) => 2,
+                    Some(0x8E) if kata(at(1)) => 2,
+                    Some(0x8F) if valid(at(1)) && valid(at(2)) => 3,
+                    _ => 0,
+                }
+            }
+            Mb::Ucs2 => 2,
+            Mb::Utf32 => 4,
+            Mb::Utf16 => {
+                let high = |c: u8| c & 0xFC == 0xD8;
+                let low = |c: u8| c & 0xFC == 0xDC;
+                match at(0) {
+                    _ if s.len() < 2 => 0,
+                    Some(c) if high(c) => if s.len() >= 4 && low(s[2]) { 4 } else { 0 },
+                    Some(c) if low(c) => 0,
+                    _ => 2,
+                }
+            }
+            Mb::Gb18030 => {
+                let odd = |c: u8| (0x81..=0xFE).contains(&c);
+                let even2 = |c: u8| (0x40..=0x7E).contains(&c) || (0x80..=0xFE).contains(&c);
+                let even4 = |c: u8| (0x30..=0x39).contains(&c);
+                if s.len() <= 1 || !odd(s[0]) {
+                    0
+                } else if even2(s[1]) {
+                    2
+                } else if s.len() > 3 && even4(s[1]) && odd(s[2]) && even4(s[3]) {
+                    4
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
+    /// mysqlnd_mbcharlen_*: how long a character starting with byte `c` is.
+    fn char_len(self, c: u8) -> usize {
+        match self {
+            Mb::Null => 1,
+            Mb::Utf8 | Mb::Utf8Mb3 => match c {
+                0x00..=0x7F => 1,
+                0x80..=0xC1 => 0,
+                0xC2..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                0xF0..=0xF7 if self == Mb::Utf8 => 4,
+                _ => 0,
+            },
+            Mb::Big5 => if (0xA1..=0xF9).contains(&c) { 2 } else { 1 },
+            Mb::Cp932 | Mb::Sjis => if (0x81..=0x9F).contains(&c) || (0xE0..=0xFC).contains(&c) { 2 } else { 1 },
+            Mb::EucKr => if (0xA1..=0xFE).contains(&c) { 2 } else { 1 },
+            Mb::EucJpMs | Mb::Ujis => match c {
+                0xA1..=0xFE | 0x8E => 2,
+                0x8F => 3,
+                _ => 1,
+            },
+            Mb::Gb2312 => if (0xA1..=0xF7).contains(&c) { 2 } else { 1 },
+            Mb::Gbk => if (0x81..=0xFE).contains(&c) { 2 } else { 1 },
+            Mb::Ucs2 => 2,
+            Mb::Utf32 => 4,
+            Mb::Utf16 => if c & 0xFC == 0xD8 { 4 } else { 2 },
+            Mb::Gb18030 => usize::from(!(0x81..=0xFE).contains(&c)),
+        }
+    }
+}
+
+/// mysql_real_escape_string() in the connection's character set, for a
+/// connection without NO_BACKSLASH_ESCAPES (mysqlnd_cset_escape_slashes):
+/// a valid multi-byte character is copied as it is (its trailing byte may
+/// be a \ or a '), the lone start of one gets a backslash; NUL, \n, \r,
+/// \, ', " and Ctrl-Z get a backslash.
+pub fn escape(cs: &Charset, s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len() + s.len() / 8);
-    for &c in s {
-        let e = match c {
-            0 => b'0',
-            b'\n' => b'n',
-            b'\r' => b'r',
-            b'\\' | b'\'' | b'"' => c,
-            0x1A => b'Z',
-            _ => {
-                out.push(c);
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        let mut esc = None;
+        if u16::from(c) >= cs.lowest_mb {
+            let len = cs.mb.valid(&s[i..]);
+            if len > 0 {
+                out.extend_from_slice(&s[i..i + len]);
+                i += len;
                 continue;
             }
-        };
-        out.push(b'\\');
-        out.push(e);
+            if cs.mb.char_len(c) > 1 {
+                esc = Some(c);
+            }
+        }
+        let esc = esc.or(match c {
+            0 => Some(b'0'),
+            b'\n' => Some(b'n'),
+            b'\r' => Some(b'r'),
+            b'\\' | b'\'' | b'"' => Some(c),
+            0x1A => Some(b'Z'),
+            _ => None,
+        });
+        match esc {
+            Some(e) => out.extend_from_slice(&[b'\\', e]),
+            None => out.push(c),
+        }
+        i += 1;
     }
     out
 }
