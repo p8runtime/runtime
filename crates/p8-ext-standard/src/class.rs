@@ -132,6 +132,10 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// can see it (defined()): no error when the class or constant is missing.
 pub(crate) fn class_constant_defined(ctx: &mut dyn Ctx, class_name: &[u8], name: &[u8]) -> Result<bool, Throw> {
     let Some(class) = ctx.class_load(class_name)? else { return Ok(false) };
+    // A trait's constants are its users' (read through the trait, never).
+    if class.flags & CLASS_TRAIT != 0 {
+        return Ok(false);
+    }
     Ok(match class.constants.get(name) {
         Some(c) => {
             let declaring = ctx.class(c.declaring_name.as_bytes()).unwrap_or_else(|| Rc::clone(&class));

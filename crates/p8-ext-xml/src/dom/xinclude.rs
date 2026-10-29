@@ -155,11 +155,7 @@ impl Xi {
     }
 
     fn parse_error(&mut self, e: &XmlError) {
-        let mut lines = e.report_lines();
-        if let Some(file) = &e.file {
-            lines[0] = format!("{file}:{}: {}", e.line, lines[0].splitn(3, ": ").nth(2).unwrap_or_default());
-        }
-        self.diags.push(Diag { error: e.clone(), warnings: lines });
+        self.diags.push(Diag { error: e.clone(), warnings: e.report_lines() });
     }
 
     /// The includes under `start` replaced; how many.
@@ -229,12 +225,12 @@ impl Xi {
             return false;
         }
         let own = target == url;
-        if !own && (self.stack.iter().any(|u| *u == target) || self.stack.len() > MAX_DEPTH) {
+        if !own && (self.stack.contains(&target) || self.stack.len() > MAX_DEPTH) {
             self.error(d, url, inc, RECURSION, format!("detected a recursion in {target}"));
             return false;
         }
 
-        let loaded = if text { self.load_text(d, url, inc, &target) } else { self.load_xml(d, url, inc, &target, own, pointer.as_deref(), &base) };
+        let loaded = if text { self.load_text(d, url, inc, &target) } else { self.load_xml(d, url, inc, &target, pointer.as_deref(), &base) };
         match loaded {
             Some(nodes) => {
                 self.replace(d, inc, nodes);
@@ -276,7 +272,9 @@ impl Xi {
     }
 
     /// parse="xml": copies of the nodes the include selects, in `d`.
-    fn load_xml(&mut self, d: &mut Doc, url: &str, inc: Id, target: &str, own: bool, pointer: Option<&str>, base: &str) -> Option<Vec<Id>> {
+    fn load_xml(&mut self, d: &mut Doc, url: &str, inc: Id, target: &str, pointer: Option<&str>, base: &str) -> Option<Vec<Id>> {
+        // An include of the document itself (an xpointer into it).
+        let own = target == url;
         let src: Doc;
         let src_url: &str;
         if own {
