@@ -418,6 +418,10 @@ impl Context<'_> {
         if let Some(caller) = self.frames.last_mut() {
             caller.pc = caller_pc;
         }
+        if r.is_err() {
+            // A result the callee returned before a destructor threw is dropped with the frame.
+            regs[at] = Value::Undef;
+        }
         r?;
         let v = std::mem::replace(&mut regs[at], Value::Undef);
         Ok(v)
