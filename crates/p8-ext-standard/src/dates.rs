@@ -615,7 +615,11 @@ fn tokens(s: &str) -> Vec<String> {
                 }
                 i += 1;
             }
-        } else if c.is_ascii_digit() || ((c == b'+' || c == b'-' || c == b'@') && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+        } else if c.is_ascii_digit()
+            || ((c == b'+' || c == b'-' || c == b'@') && b.get(i + 1).is_some_and(u8::is_ascii_digit))
+            // `@-1`: a timestamp before 1970.
+            || (c == b'@' && matches!(b.get(i + 1), Some(b'-' | b'+')) && b.get(i + 2).is_some_and(u8::is_ascii_digit))
+        {
             i += 1;
             while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], b':' | b'-' | b'/' | b'.' | b'T' | b't') && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
                 i += 1;
