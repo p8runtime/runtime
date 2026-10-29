@@ -38,11 +38,13 @@ mod misc;
 mod net;
 mod password;
 pub(crate) mod printf;
+mod proc;
 mod process;
 mod csv;
 mod ctype;
 mod string;
 mod string2;
+pub mod server;
 mod var;
 mod weak;
 mod zlib;
@@ -85,11 +87,14 @@ static BUILTINS: &[Builtin] = &[
 /// table examples/gen_defaults.php generates from real PHP).
 pub const EXTENSION: Extension = Extension { name: "standard", register };
 
+/// The PHP release p8 reports (PHP_VERSION).
+pub const PHP_VERSION: &str = "8.4.27";
+
 /// The constants examples/gen_defaults.php leaves out because they describe
 /// the build and the host rather than PHP: here, p8's own. The version is
 /// the release whose php-src suite p8 is measured against.
 const HOST_CONSTANTS: &[(&str, Constant)] = &[
-    ("PHP_VERSION", Constant::Str(b"8.4.27")),
+    ("PHP_VERSION", Constant::Str(PHP_VERSION.as_bytes())),
     ("PHP_VERSION_ID", Constant::Int(80427)),
     ("PHP_MAJOR_VERSION", Constant::Int(8)),
     ("PHP_MINOR_VERSION", Constant::Int(4)),
@@ -133,6 +138,7 @@ fn register(registry: &mut Registry) {
         registry.add_module(module);
     }
     registry.add_functions(file::BUILTINS);
+    registry.add_functions(proc::BUILTINS);
     registry.add_functions(json::BUILTINS);
     registry.add_functions(hash::BUILTINS);
     registry.add_classes(hash::CLASSES);
@@ -382,7 +388,8 @@ fn ob_implicit_flush(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Null)
 }
 
-fn flush(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+fn flush(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    ctx.flush_output();
     Ok(Value::Null)
 }
 

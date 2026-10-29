@@ -54,8 +54,39 @@ pub enum Ob {
     Status { full: bool },
 }
 
+/// A response's head as the script builds it (header(), setcookie(),
+/// http_response_code()), for a host that sends it (a web server). A host
+/// that does not (the CLI) leaves `server` false: the header functions
+/// still check what they are given and keep the response code, but keep no
+/// header.
+#[derive(Debug, Clone, Default)]
+pub struct Response {
+    /// The host sends headers (PHP's cli-server SAPI, not the CLI one).
+    pub server: bool,
+    /// The response code; 0 until set (the CLI has none until a script sets one).
+    pub status: i64,
+    /// A status line the script gave (`header("HTTP/1.1 404 Not Found")`),
+    /// used as it is instead of the default for `status`.
+    pub status_line: Option<Vec<u8>>,
+    /// The header lines (`Name: value`), in the order set.
+    pub headers: Vec<Vec<u8>>,
+    /// No Content-Type header was set: the default one goes out with the
+    /// head (`text/html; charset=UTF-8`; None: none).
+    pub default_content_type: Option<Vec<u8>>,
+    /// The `default_charset` setting, added to a `text/*` Content-Type
+    /// that has no charset.
+    pub default_charset: Vec<u8>,
+    /// A `Location` header under an HTTP/1.1 request that is not GET or
+    /// HEAD answers 303 rather than 302.
+    pub redirect_see_other: bool,
+}
+
 /// What a builtin can see and do of the request running it.
 pub trait Ctx {
+    /// The response being built (see [`Response`]).
+    fn response(&mut self) -> &mut Response;
+    /// flush(): what was echoed reaches the host now, and with it the head.
+    fn flush_output(&mut self) {}
     /// Write to the output (through any output buffers).
     fn echo(&mut self, bytes: &[u8]);
     /// An output buffer operation (the ob_* functions); false when there
