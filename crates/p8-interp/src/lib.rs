@@ -261,6 +261,7 @@ fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static 
     const DEPRECATED: &[&str] = &[
         "FILE_TEXT", "FILE_BINARY", "ASSERT_ACTIVE", "ASSERT_CALLBACK", "ASSERT_BAIL", "ASSERT_WARNING", "ASSERT_EXCEPTION",
         "DOM_PHP_ERR", "SUNFUNCS_RET_TIMESTAMP", "SUNFUNCS_RET_STRING", "SUNFUNCS_RET_DOUBLE", "MT_RAND_PHP", "E_STRICT",
+        "FILTER_SANITIZE_STRING", "FILTER_SANITIZE_STRIPPED",
     ];
     let global = |n: &[u8]| n.strip_prefix(b"\\").unwrap_or(n).to_vec();
     let names = [Some(global(name)), fallback.map(global)];

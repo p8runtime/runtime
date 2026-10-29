@@ -1,0 +1,48 @@
+516 613c623e27222663017fe960
+514 612533436225334525323725323225323663253031253746254539253630
+515 61262336303b62262336323b262333393b262333343b262333383b632623313b7fe960
+522 
+517 616227266360
+518 613c623e2722266360
+519 
+523 613c623e5c275c222663017fe960
+string(8) "a<b>'"&c"
+string(29) "a<b>'"&#38;c&#1;&#127;&#233;`"
+NULL
+string(7) "-153000"
+string(10) "-1.5e3,000"
+string(11) ""&lt;x&gt;""
+string(5) "mixed"
+filter_var(): Option must be a valid callback
+array(4) {
+  ["id"]=>
+  int(7)
+  ["mail"]=>
+  NULL
+  ["tags"]=>
+  array(2) {
+    [0]=>
+    bool(false)
+    [1]=>
+    int(2)
+  }
+  ["missing"]=>
+  NULL
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  bool(false)
+}
+array(0) {
+}
+NULL
+bool(false)
+int(3)
+bool(false)
+NULL
+int(274)
+bool(false)
+int(21)
+bool(true)

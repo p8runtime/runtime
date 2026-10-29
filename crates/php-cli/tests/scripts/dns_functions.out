@@ -1,0 +1,17 @@
+
+Warning: gethostbyaddr(): Address is not a valid IPv4 or IPv6 address in %s on line 3
+bool(false)
+string(8) "10.1.2.3"
+array(1) {
+  [0]=>
+  string(8) "10.1.2.3"
+}
+string(20) "no-such-host.invalid"
+bool(false)
+
+Warning: gethostbyname(): Host name cannot be longer than 255 characters in %s on line 6
+bool(true)
+
+Warning: gethostbynamel(): Host name cannot be longer than 255 characters in %s on line 7
+bool(false)
+bool(true)

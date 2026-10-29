@@ -1,0 +1,12 @@
+bool(true)
+bool(true)
+
+Warning: mail(): Multiple or malformed newlines found in additional_header in %s on line 7
+bool(false)
+ValueError: The additional headers cannot contain the "To" header
+TypeError: Header name cannot be numeric, 1 given
+TypeError: Header "from" must be of type string, array given
+ValueError: Header "X-A" contains LF character that is not allowed in the header
+ValueError: Header name "Bad Name" contains invalid characters
+TypeError: Header "X-N" must be of type array|string, int given
+bool(true)

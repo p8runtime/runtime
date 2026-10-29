@@ -1198,6 +1198,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns-lookup"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf5597a4b7fe5275fc9dcf88ce26326bc8e4cb87d0130f33752d4c5f717793cf"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "socket2 0.6.1",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2875,9 +2887,11 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "crc32fast",
+ "dns-lookup",
  "flate2",
  "getrandom 0.2.16",
  "gost94",
+ "libc",
  "md-5 0.10.6",
  "md2",
  "md4",

@@ -88,9 +88,18 @@ fn putenv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// Run `command` through the shell; its stdout and exit status.
 fn run(ctx: &mut dyn Ctx, command: &[u8]) -> Option<(Vec<u8>, i64)> {
-    let command = std::ffi::OsStr::from_bytes(command);
+    let mut cmd = shell(ctx, command);
+    cmd.stdin(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit());
+    let out = cmd.output().ok()?;
+    let status = out.status.code().unwrap_or(-1);
+    Some((out.stdout, i64::from(status)))
+}
+
+/// `/bin/sh -c command`, in the environment this request sees (putenv's
+/// changes applied).
+pub(crate) fn shell(ctx: &mut dyn Ctx, command: &[u8]) -> std::process::Command {
     let mut cmd = std::process::Command::new("/bin/sh");
-    cmd.arg("-c").arg(command).stdin(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit());
+    cmd.arg("-c").arg(std::ffi::OsStr::from_bytes(command));
     if let Value::Array(changed) = ctx.state(ENV).clone() {
         for (k, v) in changed.iter() {
             let name = std::ffi::OsString::from_vec(k.into_value().to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec());
@@ -104,9 +113,7 @@ fn run(ctx: &mut dyn Ctx, command: &[u8]) -> Option<(Vec<u8>, i64)> {
             }
         }
     }
-    let out = cmd.output().ok()?;
-    let status = out.status.code().unwrap_or(-1);
-    Some((out.stdout, i64::from(status)))
+    cmd
 }
 
 fn command_arg(ctx: &mut dyn Ctx, args: &[Value], func: &str) -> Result<Vec<u8>, Throw> {

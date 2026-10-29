@@ -16,6 +16,7 @@ mod context;
 mod dates;
 mod datetime;
 mod file;
+mod filter;
 mod hash;
 mod hash_algos;
 mod hash_tables;
@@ -26,12 +27,14 @@ mod spl;
 mod spl_iter;
 mod spl_dir;
 mod json;
+mod mail;
 mod serial;
 mod class;
 pub mod defaults;
 mod math;
 mod head;
 mod misc;
+mod net;
 mod password;
 pub(crate) mod printf;
 mod process;
@@ -125,7 +128,7 @@ fn register(registry: &mut Registry) {
         registry.add_constant(name.as_bytes(), *value);
     }
     // The PHP modules this extension provides, in PHP's order.
-    for module in ["Core", "date", "hash", "json", "random", "Reflection", "SPL", "standard", "ctype", "zlib"] {
+    for module in ["Core", "date", "filter", "hash", "json", "random", "Reflection", "SPL", "standard", "ctype", "zlib"] {
         registry.add_module(module);
     }
     registry.add_functions(file::BUILTINS);
@@ -161,6 +164,10 @@ fn register(registry: &mut Registry) {
     registry.add_functions(password::BUILTINS);
     registry.add_functions(context::BUILTINS);
     registry.add_functions(process::BUILTINS);
+    registry.add_functions(mail::BUILTINS);
+    registry.add_functions(net::BUILTINS);
+    registry.add_functions(filter::BUILTINS);
+    registry.mark_reenters(filter::REENTERING);
     registry.add_functions(csv::BUILTINS);
     // The binary running this script (PHP_BINARY), for tests that run PHP again.
     let binary = std::env::current_exe().map(|p| p.into_os_string().into_encoded_bytes()).unwrap_or_default();

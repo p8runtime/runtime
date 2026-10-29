@@ -1,0 +1,28 @@
+argv:
+To: ada@example.com
+Subject: Hi there
+ folded
+From: p8 <p8@example.com>
+X-Test: 1
+
+Line 1
+Line 2
+
+--
+argv:
+To: b@example.com
+Subject: Arr
+From: x@example.com
+X-List: a
+X-List: b
+
+Body
+
+--
+argv:-fsender@example.com
+To: e@example.com
+Subject: Params
+
+Body
+
+--

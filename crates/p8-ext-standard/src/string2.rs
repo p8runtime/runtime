@@ -238,7 +238,13 @@ fn htmlentities(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = str_arg(args, 0);
     let flags = ent_flags(args, 1);
     let double = args.len() < 4 || arg(args, 3).to_bool();
-    let text = String::from_utf8_lossy(s.as_bytes());
+    let clean = if crate::string::utf8_charset(args, 2) {
+        let Some(clean) = crate::string::utf8_scrub(s.as_bytes(), flags) else { return bytes(Vec::new()) };
+        clean
+    } else {
+        s.as_bytes().to_vec()
+    };
+    let text = String::from_utf8_lossy(&clean);
     let mut out = Vec::with_capacity(s.len());
     let src = text.as_bytes();
     let mut i = 0;
@@ -1102,8 +1108,11 @@ fn escapeshellarg(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn escapeshellcmd(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let s = str_arg(args, 0);
-    let b = s.as_bytes();
+    bytes(escape_shell_cmd(str_arg(args, 0).as_bytes()))
+}
+
+/// php_escape_shell_cmd: the shell's metacharacters escaped (mail() uses it too).
+pub(crate) fn escape_shell_cmd(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for (i, &c) in b.iter().enumerate() {
         match c {
@@ -1120,7 +1129,7 @@ fn escapeshellcmd(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             c => out.push(c),
         }
     }
-    bytes(out)
+    out
 }
 
 /// setlocale: p8 runs in the C locale; "C", "POSIX", "" and "0" give it.
