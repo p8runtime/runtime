@@ -340,6 +340,9 @@ pub enum Rare {
     /// argument number `class` by reference (false when it is not callable;
     /// the call reports that).
     CallableArgByRef,
+    /// Throw an Error whose message is the string in a (what PHP finds
+    /// wrong only as the code runs: `f($a[])` when f takes a value).
+    ThrowError,
 }
 
 impl Instr {

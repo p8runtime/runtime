@@ -2853,7 +2853,7 @@ impl<'src> Compiler<'src> {
                     let var = f.cv(&self.text(*name)[1..]);
                     f.emit(send(n as u8, *r, var));
                 }
-                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref(value) => {
+                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref_arg(value) => {
                     let flag = f.temp();
                     f.emit(asks(flag, n as u8));
                     self.ref_or_value_with(f, value, *r, flag)?;
@@ -2879,6 +2879,7 @@ impl<'src> Compiler<'src> {
     /// The branch on `flag`: the element or property as a reference, or its value.
     fn ref_or_value_with(&mut self, f: &mut FnBuilder, value: &Expr, r: Reg, flag: Reg) -> Result<()> {
         let by_value = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
+        let appends = matches!(value, Expr::ArrayDimFetch { dim: None, .. });
         match value {
             Expr::PropertyFetch { target, property, .. } => {
                 let obj = self.expr(f, target)?;
@@ -2895,7 +2896,14 @@ impl<'src> Compiler<'src> {
         }
         let end = f.emit(Instr::Jump { target: 0 });
         f.patch(by_value, f.here());
-        self.expr_into(f, value, r)?;
+        if appends {
+            // `$a[]` to a parameter that takes a value: PHP's error, when
+            // the call shows it.
+            let message = f.constant(Frozen::Str(Text::from("Cannot use [] for reading")));
+            f.emit(Instr::rare(Rare::ThrowError, message, 0, 0, 0));
+        } else {
+            self.expr_into(f, value, r)?;
+        }
         f.patch(end, f.here());
         Ok(())
     }
@@ -2903,6 +2911,15 @@ impl<'src> Compiler<'src> {
     /// An element or property that can be made a reference: a property,
     /// or a dimension path (no `[]` read) rooted in a variable, a property
     /// or a static property.
+    /// An argument whose callee is found as the call runs may be `$a[]`
+    /// (a new element, when the parameter takes a reference).
+    fn can_ref_arg(&self, e: &Expr) -> bool {
+        match e {
+            Expr::ArrayDimFetch { array, dim: None, .. } => self.can_ref(array),
+            _ => self.can_ref(e),
+        }
+    }
+
     fn can_ref(&self, e: &Expr) -> bool {
         let mut cur = e;
         while let Expr::ArrayDimFetch { array, dim, .. } = cur {
@@ -4507,7 +4524,7 @@ impl<'src> Compiler<'src> {
                 }
                 // An element or property for a function not known yet: the
                 // function, found when the call runs, decides.
-                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if modes[n].is_none() && self.can_ref(value) => {
+                value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if modes[n].is_none() && self.can_ref_arg(value) => {
                     self.ref_or_value(f, value, *r, Instr::FuncArgByRef { dst: 0, site, n: n as u8 })?;
                 }
                 // An array element or property passed by reference becomes one.

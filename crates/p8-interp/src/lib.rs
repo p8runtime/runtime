@@ -2981,6 +2981,10 @@ impl Context<'_> {
                         let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
                         reg!(a) = Value::Bool(set);
                     }
+                    Rare::ThrowError => {
+                        let message = reg!(a).to_php_string().unwrap_or_else(PhpStr::empty);
+                        return Err(self.throw("Error", String::from_utf8_lossy(message.as_bytes()).into_owned()));
+                    }
                     Rare::CallableArgByRef => {
                         let callee = reg!(b).clone();
                         let by_ref = self.resolve_callable(&callee).is_ok_and(|t| self.takes_ref(&t, class as usize));
