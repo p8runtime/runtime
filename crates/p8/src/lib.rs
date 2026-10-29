@@ -24,10 +24,19 @@
 //! };
 //! ```
 
-use p8_runtime::ext::Registry;
+use p8_runtime::array::{Key, PhpArray};
+use p8_runtime::ext::{Ctx, Registry};
+use p8_runtime::string::PhpStr;
+use p8_runtime::value::Value;
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
+mod request;
+
 pub use p8_interp::{Host, InterruptHandle};
+pub use p8_ext_standard::PHP_VERSION;
+pub use p8_runtime::ext::Response;
 pub use p8_runtime::ext::Extension;
 
 /// The extensions p8 ships.
@@ -38,6 +47,8 @@ pub mod extensions {
     pub use p8_ext_pcre::EXTENSION as PCRE;
     pub use p8_ext_mysqli::EXTENSION as MYSQLI;
     pub use p8_ext_curl::EXTENSION as CURL;
+    /// What the built-in web server adds (register it after STANDARD).
+    pub use p8_ext_standard::server::EXTENSION as SERVER;
 }
 
 /// Process-wide state shared by every isolate: the registered extensions.
@@ -162,13 +173,26 @@ impl Isolate {
         let loader = std::rc::Rc::new(Compile(Arc::clone(&self.registry)));
         let mut inner = self.inner.new_context(host);
         inner.set_loader(loader);
-        Context { inner }
+        Context { inner, warnings: Vec::new(), uploads: Vec::new() }
     }
 }
 
 /// One request.
 pub struct Context<'i> {
     inner: p8_interp::Context<'i>,
+    /// What parsing a web request's input warned about, shown when it runs.
+    warnings: Vec<String>,
+    /// The temporary files a web request's uploads were saved in: removed
+    /// when the request ends, whatever the script did not move.
+    uploads: Vec<PathBuf>,
+}
+
+impl Drop for Context<'_> {
+    fn drop(&mut self) {
+        for path in &self.uploads {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 impl Context<'_> {
@@ -184,12 +208,139 @@ impl Context<'_> {
         self.inner.set_args(argv);
     }
 
+    /// Make this request a web request: the script sees `request`'s
+    /// variables ($_SERVER, $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST,
+    /// php://input), and the response head it builds (header(),
+    /// http_response_code()) goes to [`Host::head`] with the first output.
+    /// Call it after the settings are made. Needs the [`extensions::SERVER`]
+    /// extension for `PHP_SAPI` and `getallheaders()`.
+    pub fn serve(&mut self, request: &Request, carried: Option<Carried>) {
+        use request::{Input, Limits};
+        let ini = |inner: &p8_interp::Context, name: &str| match Ctx::ini_get(inner, name.as_bytes()) {
+            Some(Value::Str(s)) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
+            Some(Value::Null) | None => None,
+            Some(v) => v.to_php_string().map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned()),
+        };
+        let number = |inner: &p8_interp::Context, name: &str, default: i64| ini(inner, name).map_or(default, |v| ini_number(&v));
+        let limits = Limits {
+            post_max_size: number(&self.inner, "post_max_size", 8 << 20),
+            upload_max_filesize: number(&self.inner, "upload_max_filesize", 2 << 20),
+            max_file_uploads: number(&self.inner, "max_file_uploads", 20),
+            max_input_vars: number(&self.inner, "max_input_vars", 1000),
+            max_input_nesting_level: number(&self.inner, "max_input_nesting_level", 64),
+            max_multipart_body_parts: number(&self.inner, "max_multipart_body_parts", -1),
+            file_uploads: ini(&self.inner, "file_uploads").is_none_or(|v| ini_bool(&v)),
+            upload_tmp_dir: ini(&self.inner, "upload_tmp_dir").filter(|d| !d.is_empty()).map(PathBuf::from),
+            variables_order: ini(&self.inner, "variables_order").unwrap_or_else(|| "EGPCS".into()).into_bytes(),
+            request_order: ini(&self.inner, "request_order").filter(|o| !o.is_empty()).map(String::into_bytes),
+        };
+        let header = |name: &str| request.headers.iter().find(|(k, _)| k == name.as_bytes()).map(|(_, v)| v.as_slice());
+        let content_type = header("content-type");
+        let parsed = request::parse(&Input { method: &request.method, query: request.query.as_deref(), cookie: header("cookie"), content_type, body: &request.body }, &limits);
+        self.warnings = parsed.warnings;
+        self.uploads = parsed.uploads;
+
+        // $_SERVER: the host's variables, the authentication ones, the time, argv.
+        let mut warnings = Vec::new();
+        let mut server = PhpArray::new();
+        for (name, value, known) in &request.server {
+            let value = Value::Str(PhpStr::from(value.as_slice()));
+            if *known {
+                server.insert(Key::Str(PhpStr::from(name.as_slice())), value);
+            } else {
+                request::register_variable(&mut server, name, value, false, limits.max_input_nesting_level, &mut warnings);
+            }
+        }
+        if let Some(auth) = header("authorization") {
+            if auth.len() >= 6 && auth[..6].eq_ignore_ascii_case(b"Basic ") {
+                if let Some(decoded) = request::base64_decode(&auth[6..]) {
+                    if let Some(colon) = decoded.iter().position(|&c| c == b':') {
+                        server.insert(Key::Str(PhpStr::from("PHP_AUTH_USER")), Value::Str(PhpStr::from(&decoded[..colon])));
+                        if colon + 1 < decoded.len() {
+                            server.insert(Key::Str(PhpStr::from("PHP_AUTH_PW")), Value::Str(PhpStr::from(&decoded[colon + 1..])));
+                        }
+                    }
+                }
+            } else if auth.len() > 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
+                server.insert(Key::Str(PhpStr::from("PHP_AUTH_DIGEST")), Value::Str(PhpStr::from(&auth[7..])));
+            }
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        server.insert(Key::Str(PhpStr::from("REQUEST_TIME_FLOAT")), Value::Float(now.as_secs_f64()));
+        server.insert(Key::Str(PhpStr::from("REQUEST_TIME")), Value::Int(now.as_secs() as i64));
+        let register_argv = !matches!(ini(&self.inner, "register_argc_argv").as_deref(), Some("" | "0" | "off" | "no" | "false"));
+        if register_argv {
+            // php_build_argv(): the query string split on '+'.
+            let argv: Vec<Value> = match request.query.as_deref() {
+                Some(q) if !q.is_empty() => q.split(|&c| c == b'+').map(|a| Value::Str(PhpStr::from(a))).collect(),
+                _ => Vec::new(),
+            };
+            let argc = argv.len() as i64;
+            server.insert(Key::Str(PhpStr::from("argv")), Value::Array(Rc::new(PhpArray::from_list(argv))));
+            server.insert(Key::Str(PhpStr::from("argc")), Value::Int(argc));
+        }
+        let mut globals = p8_interp::RequestGlobals { server, get: parsed.get, post: parsed.post, cookie: parsed.cookie, files: parsed.files, request: parsed.request };
+        // A router that declined the request left its arrays as they were.
+        if let Some(Carried(Some(old))) = carried {
+            globals = old;
+        }
+
+        // php://input: the body, except what the multipart parser took.
+        let multipart = content_type.is_some_and(|ct| ct.len() >= 19 && ct[..19].eq_ignore_ascii_case(b"multipart/form-data"));
+        let input = if request.method == "POST" && multipart { Vec::new() } else { request.body.clone() };
+        self.inner.set_state("php_input", Value::Str(PhpStr::new(input)));
+        let mut headers = PhpArray::new();
+        for (name, value) in &request.headers_original {
+            headers.insert(Key::from_string(PhpStr::from(name.as_slice())), Value::Str(PhpStr::from(value.as_slice())));
+        }
+        self.inner.set_state(p8_ext_standard::server::REQUEST_HEADERS, Value::Array(Rc::new(headers)));
+        let uploaded: Vec<Value> = self.uploads.iter().map(|p| Value::Str(PhpStr::from(p.to_string_lossy().as_ref()))).collect();
+        self.inner.set_state("rfc1867_uploaded_files", Value::Array(Rc::new(PhpArray::from_list(uploaded))));
+
+        let version = match Ctx::constant(&self.inner, b"PHP_VERSION") {
+            Some(Value::Str(s)) => s.as_bytes().to_vec(),
+            _ => b"8".to_vec(),
+        };
+        let mut headers = Vec::new();
+        if ini(&self.inner, "expose_php").is_none_or(|v| ini_bool(&v)) {
+            headers.push([b"X-Powered-By: PHP/".as_slice(), &version].concat());
+        }
+        // The CLI server's proto_num is 101 for HTTP/1.1, never > 1000, so
+        // a redirect is never 303.
+        self.inner.serve(globals, 200, headers, false);
+    }
+
+    /// Whether the main script returned `false` (a router script declining
+    /// the request): the request arrays it left, for the script that serves
+    /// the request instead ([`Context::serve`]).
+    pub fn declined(&mut self) -> Option<Carried> {
+        let declined = matches!(self.inner.take_main_return(), Some(Value::Bool(false)));
+        let carried = self.inner.take_carry();
+        declined.then_some(Carried(carried))
+    }
+
+    /// The last error that reached PHP's default handler: type, message,
+    /// file and line (what the built-in server's log adds for a fatal one).
+    pub fn last_error(&self) -> Option<(i64, String, String, u32)> {
+        self.inner.last_error().cloned()
+    }
+
+    /// The response status so far (200 for a web request until the script
+    /// changes it).
+    pub fn status(&self) -> i64 {
+        self.inner.response().status
+    }
+
     /// Run a script's top-level code; returns the exit status.
     pub fn run(&mut self, script: &Script) -> i32 {
         self.inner.startup_diagnostics();
+        for warning in std::mem::take(&mut self.warnings) {
+            self.inner.startup_warning(&warning);
+        }
         for f in &script.program.functions {
             if let Err(message) = self.inner.declare(Arc::clone(f)) {
                 self.inner.echo_and_flush(format!("\nFatal error: {message} in {}\n", f.file).as_bytes());
+                self.inner.finish_response();
                 return 255;
             }
         }
@@ -203,8 +354,51 @@ impl Context<'_> {
             ErrorKind::Parse => "Parse error",
             ErrorKind::Fatal => "Fatal error",
         };
-        let text = format!("\n{label}: {} in {} on line {}\n", error.message, error.file, error.line);
+        let text = self.inner.error_text(label, &error.message, &error.file, error.line, true);
         self.inner.echo_and_flush(text.as_bytes());
+        self.inner.finish_response();
         255
     }
 }
+
+/// A web request, for [`Context::serve`]: what the host read off the
+/// connection, and the `$_SERVER` entries its server software defines.
+pub struct Request {
+    pub method: String,
+    /// The query string, if the request had one.
+    pub query: Option<Vec<u8>>,
+    /// The headers by lowercase name (a repeated one joined with ", "), for
+    /// the cookies, the content type and authentication.
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The headers as the client wrote their names (getallheaders()).
+    pub headers_original: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The `$_SERVER` entries, in order: name, value, and whether the name
+    /// is one the server defines (not mangled like a variable from the
+    /// client, which a header name may be).
+    pub server: Vec<(Vec<u8>, Vec<u8>, bool)>,
+    pub body: Vec<u8>,
+}
+
+/// An ini size: `8M`, `128K`, `1G`, or a plain number.
+fn ini_number(text: &str) -> i64 {
+    let t = text.trim();
+    let digits: String = t.chars().enumerate().take_while(|(i, c)| c.is_ascii_digit() || *i == 0 && (*c == '-' || *c == '+')).map(|(_, c)| c).collect();
+    let n: i64 = digits.parse().unwrap_or(0);
+    match t.chars().last().map(|c| c.to_ascii_lowercase()) {
+        Some('k') => n.saturating_mul(1 << 10),
+        Some('m') => n.saturating_mul(1 << 20),
+        Some('g') => n.saturating_mul(1 << 30),
+        _ => n,
+    }
+}
+
+/// An ini flag: `1`, `On`, `true`, `yes`.
+fn ini_bool(text: &str) -> bool {
+    let t = text.trim().to_ascii_lowercase();
+    matches!(t.as_str(), "on" | "true" | "yes") || t.parse::<i64>().is_ok_and(|n| n != 0)
+}
+
+/// What a router script that declined a request left of the request's
+/// variables: the script that serves the request then sees them as they
+/// were left ([`Context::serve`]).
+pub struct Carried(Option<p8_interp::RequestGlobals>);

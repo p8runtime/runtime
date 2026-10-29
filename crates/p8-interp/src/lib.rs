@@ -888,6 +888,12 @@ fn num_test(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
 pub trait Host {
     fn write(&mut self, bytes: &[u8]);
     fn flush(&mut self) {}
+    /// The response head, once, before the first output reaches the host
+    /// (or at the end of the request when there is none): for a context a
+    /// host made a web request ([`Context::serve`]).
+    fn head(&mut self, response: &p8_runtime::ext::Response) {
+        let _ = response;
+    }
 }
 
 /// An output buffer (ob_start): its contents, and the handler (PHP code)
@@ -906,6 +912,9 @@ struct Output<'i> {
     host: &'i mut dyn Host,
     /// Some output has reached the host (the headers are sent).
     started: bool,
+    /// The response head the script builds, and whether the host has it.
+    response: p8_runtime::ext::Response,
+    head_sent: bool,
 }
 
 impl Output<'_> {
@@ -917,8 +926,26 @@ impl Output<'_> {
     }
 
     fn write_host(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.send_head();
+        }
         self.started |= !bytes.is_empty();
         self.host.write(bytes);
+    }
+
+    /// Hand the host the response head, once (a web request only): the
+    /// default Content-Type joins the headers when the script set none.
+    fn send_head(&mut self) {
+        if !self.response.server || self.head_sent {
+            return;
+        }
+        self.head_sent = true;
+        if let Some(default) = self.response.default_content_type.take() {
+            let mut line = b"Content-type: ".to_vec();
+            line.extend_from_slice(&default);
+            self.response.headers.push(line);
+        }
+        self.host.head(&self.response);
     }
 
     /// Write to the level under the innermost buffer.
@@ -1042,7 +1069,10 @@ impl Isolate {
             closures: Vec::new(),
             constants: HashMap::new(),
             globals: indexmap::IndexMap::new(),
-            out: Output { buffers: Vec::new(), host, started: false },
+            out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false },
+            request: None,
+            main_return: None,
+            carry: None,
             output_start: None,
             diags: Vec::new(),
             ini: HashMap::new(),
@@ -1223,6 +1253,22 @@ pub struct Context<'i> {
     cfg: Vec<(Vec<u8>, String)>,
     /// The command line, when the host gives one: $argv, $argc, $_SERVER.
     argv: Option<Vec<String>>,
+    /// The request arrays a web host gives ([`Context::serve`]).
+    request: Option<RequestGlobals>,
+    /// What the main script returned (a router script's answer).
+    main_return: Option<Value>,
+    /// The request arrays as a main script that returned false left them.
+    carry: Option<RequestGlobals>,
+}
+
+/// The request arrays of a web request: what a host parsed out of it.
+pub struct RequestGlobals {
+    pub server: PhpArray,
+    pub get: PhpArray,
+    pub post: PhpArray,
+    pub cookie: PhpArray,
+    pub files: PhpArray,
+    pub request: PhpArray,
 }
 
 impl Context<'_> {
@@ -1323,11 +1369,124 @@ impl Context<'_> {
         self.argv = Some(argv);
     }
 
+    /// Make this a web request: the response head is built for the host
+    /// ([`Host::head`]), starting at `status` with `headers`, and the
+    /// script sees the request arrays `globals` instead of a command line.
+    /// `default_content_type` goes out when the script sets none;
+    /// `redirect_see_other` is whether a `Location` header answers 303.
+    pub fn serve(&mut self, globals: RequestGlobals, status: i64, headers: Vec<Vec<u8>>, redirect_see_other: bool) {
+        self.request = Some(globals);
+        let mimetype = match Ctx::ini_get(self, b"default_mimetype") {
+            Some(Value::Str(s)) => s.as_bytes().to_vec(),
+            _ => b"text/html".to_vec(),
+        };
+        let charset = match Ctx::ini_get(self, b"default_charset") {
+            Some(Value::Str(s)) => s.as_bytes().to_vec(),
+            _ => b"UTF-8".to_vec(),
+        };
+        // get_default_content_type(): the charset joins a text/* type.
+        let default = if mimetype.is_empty() {
+            None
+        } else if mimetype.starts_with(b"text/") && !charset.is_empty() {
+            let mut line = mimetype;
+            line.extend_from_slice(b"; charset=");
+            line.extend_from_slice(&charset);
+            Some(line)
+        } else {
+            Some(mimetype)
+        };
+        let response = &mut self.out.response;
+        response.server = true;
+        response.status = status;
+        response.headers = headers;
+        response.default_content_type = default;
+        response.default_charset = charset;
+        response.redirect_see_other = redirect_see_other;
+    }
+
+    /// A warning PHP raises while a request starts (an input limit hit):
+    /// shown now, as `Warning: PHP Request Startup: ... in Unknown on line 0`.
+    pub fn startup_warning(&mut self, message: &str) {
+        self.print_diag(E_WARNING, message, "Unknown", 0);
+    }
+
+    /// The end of the request: the host gets the response head if no
+    /// output carried it. Idempotent.
+    pub fn finish_response(&mut self) {
+        self.out.send_head();
+    }
+
+    /// What the main script returned (once): `return false;` in a router.
+    pub fn take_main_return(&mut self) -> Option<Value> {
+        self.main_return.take()
+    }
+
+    /// The request arrays a main script that returned false left (once).
+    pub fn take_carry(&mut self) -> Option<RequestGlobals> {
+        self.carry.take()
+    }
+
+    /// The request arrays as the main frame (registers `w`, from its base)
+    /// holds them: a variable of the main script, or a global.
+    fn capture_request_globals(&self, w: &[Value], main: &Function) -> RequestGlobals {
+        let get = |name: &str| -> PhpArray {
+            let value = match main.cv_names.iter().position(|n| n.as_bytes() == name.as_bytes()) {
+                Some(r) => w.get(r).cloned(),
+                None => self.globals.get(name.as_bytes()).map(|cell| cell.borrow().clone()),
+            };
+            match value.map(|v| v.deref()) {
+                Some(Value::Array(a)) => (*a).clone(),
+                _ => PhpArray::new(),
+            }
+        };
+        RequestGlobals { server: get("_SERVER"), get: get("_GET"), post: get("_POST"), cookie: get("_COOKIE"), files: get("_FILES"), request: get("_REQUEST") }
+    }
+
+    /// Per-request state for an extension (see [`Ctx::state`]).
+    pub fn set_state(&mut self, key: &'static str, value: Value) {
+        self.ext_state.insert(key, value);
+    }
+
+    /// The response being built so far.
+    pub fn response(&self) -> &p8_runtime::ext::Response {
+        &self.out.response
+    }
+
+    /// The last error that reached the default handler (error_get_last()):
+    /// type, message, file, line.
+    pub fn last_error(&self) -> Option<&(i64, String, String, u32)> {
+        self.last_error.as_ref()
+    }
+
     /// The globals the CLI starts a script with (php_cli.c and
     /// php_variables.c): $argv and $argc, $_SERVER (the environment, the
     /// script's names, the request time, argv/argc), $_ENV when
     /// variables_order has E, and the empty request arrays.
     fn request_globals(&mut self) -> Vec<(&'static str, Value)> {
+        if let Some(r) = self.request.take() {
+            // A web request (php_cli_server.c): the host built the arrays;
+            // $_ENV is the environment when variables_order has E.
+            let order = match Ctx::ini_get(self, b"variables_order") {
+                Some(Value::Str(s)) => s.as_bytes().to_ascii_uppercase(),
+                _ => b"EGPCS".to_vec(),
+            };
+            let mut env = PhpArray::new();
+            if order.contains(&b'E') {
+                for (k, v) in std::env::vars_os() {
+                    env.insert(Key::Str(PhpStr::from(k.as_encoded_bytes())), Value::Str(PhpStr::from(v.as_encoded_bytes())));
+                }
+            }
+            let array = |a: PhpArray| Value::Array(Rc::new(a));
+            return vec![
+                ("_SERVER", array(r.server)),
+                ("_ENV", array(env)),
+                ("_GET", array(r.get)),
+                ("_POST", array(r.post)),
+                ("_COOKIE", array(r.cookie)),
+                ("_FILES", array(r.files)),
+                ("_REQUEST", array(r.request)),
+            ];
+        }
         let Some(argv) = self.argv.clone() else { return Vec::new() };
         let text = |s: &str| Value::Str(PhpStr::from(s));
         let key = |s: &str| Key::Str(PhpStr::from(s));
@@ -1565,6 +1724,7 @@ impl Context<'_> {
         self.frames.clear();
         self.isolate.regs = regs;
         self.out.flush_all();
+        self.out.send_head();
         status
     }
 
@@ -1575,11 +1735,15 @@ impl Context<'_> {
             Ok(()) => 0,
             Err(Throw::Exit(status)) => status,
             Err(Throw::Fatal { message, file, line }) => {
-                self.write_out(format!("\nFatal error: {message} in {file} on line {line}\n").as_bytes());
+                let text = self.error_text("Fatal error", &message, &file, line, true);
+                self.write_out(text.as_bytes());
+                self.last_error = Some((1, message, file.to_string(), line));
                 255
             }
             Err(Throw::Parse { message, file, line }) => {
-                self.write_out(format!("\nParse error: {message} in {file} on line {line}\n").as_bytes());
+                let text = self.error_text("Parse error", &message, &file, line, true);
+                self.write_out(text.as_bytes());
+                self.last_error = Some((4, message, file.to_string(), line));
                 255
             }
             Err(Throw::Object(e)) => {
@@ -1588,22 +1752,23 @@ impl Context<'_> {
                 let file = e.class.read(&e, b"file", root).to_php_string().unwrap_or_else(PhpStr::empty);
                 let line = e.class.read(&e, b"line", root).to_int();
                 let file = String::from_utf8_lossy(file.as_bytes());
-                self.write_out(format!("\nFatal error: Uncaught {shown}\n  thrown in {file} on line {line}\n").as_bytes());
+                let text = self.error_text("Fatal error", &format!("Uncaught {shown}\n  thrown"), &file, line as u32, true);
+                self.write_out(text.as_bytes());
+                self.last_error = Some((1, format!("Uncaught {shown}\n  thrown"), file.to_string(), line as u32));
                 255
             }
             Err(Throw::Error { class, message, file, line, .. }) => {
-                self.write_out(
-                    format!(
-                        "\nFatal error: Uncaught {class}: {message} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}\n"
-                    )
-                    .as_bytes(),
-                );
+                let text = self.error_text("Fatal error", &format!("Uncaught {class}: {message} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), &file, line, true);
+                self.write_out(text.as_bytes());
+                self.last_error = Some((1, format!("Uncaught {class}: {message} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), file.to_string(), line));
                 255
             }
             Err(Throw::Autoload(name)) => {
                 let (file, line) = self.location();
                 let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
-                self.write_out(format!("\nFatal error: Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}\n").as_bytes());
+                let text = self.error_text("Fatal error", &format!("Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), &file, line, true);
+                self.write_out(text.as_bytes());
+                self.last_error = Some((1, format!("Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), file.to_string(), line));
                 255
             }
         }
@@ -1689,6 +1854,22 @@ impl Context<'_> {
 
     /// Print a diagnostic as the CLI does, if error_reporting and
     /// display_errors let it through.
+    /// How an error is worded for display: PHP's text, or HTML when
+    /// html_errors is on (a web server's default). The message of a fatal
+    /// error is escaped (`escape`), the others are not, as in php_error_cb().
+    pub fn error_text(&self, label: &str, message: &str, file: &str, line: u32, escape: bool) -> String {
+        let html = match Ctx::ini_get(self, b"html_errors") {
+            Some(Value::Str(s)) => matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"1" | b"on" | b"true" | b"yes"),
+            Some(v) => v.to_bool(),
+            None => false,
+        };
+        if !html {
+            return format!("\n{label}: {message} in {file} on line {line}\n");
+        }
+        let message = if escape { message.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;") } else { message.to_string() };
+        format!("<br />\n<b>{label}</b>:  {message} in <b>{file}</b> on line <b>{line}</b><br />\n")
+    }
+
     fn print_diag(&mut self, level: i64, message: &str, file: &str, line: u32) {
         // Recorded even when silenced (`@`, error_reporting), as PHP does.
         self.last_error = Some((level, message.to_string(), file.to_string(), line));
@@ -1701,7 +1882,8 @@ impl Context<'_> {
             E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
             _ => "Fatal error",
         };
-        self.write_out(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+        let text = self.error_text(label, message, file, line, false);
+        self.write_out(text.as_bytes());
     }
 
     fn warn(&mut self, message: impl Into<String>) {
@@ -3425,6 +3607,12 @@ impl Context<'_> {
                         // The script ends: shutdown functions and destructors,
                         // with its globals still there.
                         self.script_end(regs)?;
+                        if matches!(v, Value::Bool(false)) {
+                            // A router declining the request: the script that
+                            // serves it sees the request arrays as it left them.
+                            self.carry = Some(self.capture_request_globals(&regs[base..], func));
+                        }
+                        self.main_return = Some(v.clone());
                     }
                     if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
                         self.finish(&g, v);
@@ -3676,6 +3864,10 @@ impl Context<'_> {
     /// STDIN, STDOUT, STDERR (resources 1 to 3; the next one is 5, as in the CLI).
     fn standard_streams(&mut self) {
         use p8_runtime::stream::{Resource, Stream, Target};
+        // STDIN, STDOUT and STDERR are the CLI's; a web request has none.
+        if self.out.response.server {
+            return;
+        }
         for (name, target, path, mode) in [
             ("STDIN", Target::Stdin, "php://stdin", "r"),
             ("STDOUT", Target::Stdout, "php://stdout", "w"),
@@ -4354,6 +4546,21 @@ impl Ctx for Context<'_> {
         self.write_out(bytes);
     }
 
+    fn response(&mut self) -> &mut p8_runtime::ext::Response {
+        &mut self.out.response
+    }
+
+    fn flush_output(&mut self) {
+        self.out.send_head();
+        self.out.host.flush();
+        self.note_output_start();
+        // The head went out without output: headers_sent() is true, with
+        // nothing to say about where output started.
+        if self.out.head_sent && self.output_start.is_none() {
+            self.output_start = Some((Rc::from(""), 0));
+        }
+    }
+
     fn ob(&mut self, op: p8_runtime::ext::Ob) -> Result<Value, Throw> {
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let r = self.ob_with(&mut regs, op);
@@ -4652,6 +4859,12 @@ impl Ctx for Context<'_> {
     }
 
     fn write_stdout(&mut self, bytes: &[u8]) {
+        if self.out.response.server {
+            // A web request has no STDOUT of its own: this is the server's.
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(bytes);
+            return;
+        }
         self.out.host.write(bytes);
     }
 

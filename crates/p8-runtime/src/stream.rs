@@ -46,6 +46,71 @@ pub enum Target {
     /// What the host shows (bypassing output buffers, as PHP's STDOUT).
     Stdout,
     Stderr,
+    /// A TCP connection (fsockopen).
+    Tcp(std::net::TcpStream),
+    /// A child process's output pipe, read through a thread.
+    PipeOut(PipeOut),
+    /// A child process's input pipe.
+    PipeIn(std::process::ChildStdin),
+    /// A child process (proc_open); it has no bytes of its own.
+    Process(Box<std::process::Child>),
+}
+
+/// A pipe read on a thread of its own, so that a read can wait or not
+/// (stream_set_blocking) without platform calls: chunks come over a channel,
+/// an empty one is the end.
+pub struct PipeOut {
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    left: Vec<u8>,
+    done: bool,
+}
+
+impl PipeOut {
+    pub fn new(mut reader: impl Read + Send + 'static) -> PipeOut {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = vec![0u8; 8192];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        let _ = tx.send(Vec::new());
+                        break;
+                    }
+                    Ok(n) => {
+                        if tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        PipeOut { rx, left: Vec::new(), done: false }
+    }
+
+    /// Up to `n` bytes (none when it would wait, if `nonblocking`), and
+    /// whether the pipe has ended.
+    fn take(&mut self, n: usize, nonblocking: bool) -> (Vec<u8>, bool) {
+        if self.left.is_empty() {
+            if self.done {
+                return (Vec::new(), true);
+            }
+            let got = if nonblocking { self.rx.try_recv().map_err(|e| e == std::sync::mpsc::TryRecvError::Disconnected) } else { self.rx.recv().map_err(|_| true) };
+            match got {
+                Ok(chunk) if chunk.is_empty() => {
+                    self.done = true;
+                    return (Vec::new(), true);
+                }
+                Ok(chunk) => self.left = chunk,
+                Err(true) => {
+                    self.done = true;
+                    return (Vec::new(), true);
+                }
+                Err(false) => return (Vec::new(), false),
+            }
+        }
+        let k = self.left.len().min(n);
+        (self.left.drain(..k).collect(), false)
+    }
 }
 
 /// What runs with a stream's bytes when it closes.
@@ -65,6 +130,8 @@ pub struct Stream {
     pub on_close: Option<OnClose>,
     /// A zlib (gzip file) stream: one way only, no SEEK_END.
     pub zlib: bool,
+    /// stream_set_blocking(false): a read does not wait (sockets, pipes).
+    pub nonblocking: bool,
 }
 
 impl Drop for Stream {
@@ -75,7 +142,7 @@ impl Drop for Stream {
 
 impl Stream {
     pub fn new(target: Target, path: &str, mode: &str) -> Stream {
-        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false }
+        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false, nonblocking: false }
     }
 
     /// Close: flushed, the close hook run, the target let go.
@@ -116,8 +183,40 @@ impl Stream {
                 buf.truncate(got);
                 buf
             }
-            Target::Stdout | Target::Stderr => Vec::new(),
+            Target::Tcp(sock) => {
+                let _ = sock.set_nonblocking(self.nonblocking);
+                let mut buf = vec![0; n];
+                match sock.read(&mut buf) {
+                    Ok(0) => {
+                        self.eof = true;
+                        Vec::new()
+                    }
+                    Ok(got) => {
+                        buf.truncate(got);
+                        buf
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Vec::new(),
+                    Err(_) => {
+                        self.eof = true;
+                        Vec::new()
+                    }
+                }
+            }
+            Target::PipeOut(pipe) => {
+                let (bytes, ended) = pipe.take(n, self.nonblocking);
+                if ended {
+                    self.eof = true;
+                }
+                bytes
+            }
+            Target::Stdout | Target::Stderr | Target::PipeIn(_) | Target::Process(_) => Vec::new(),
         }
+    }
+
+    /// Whether a short read means the end (files, memory) or only that
+    /// nothing more has arrived yet (sockets and pipes).
+    fn short_read_is_end(&self) -> bool {
+        !matches!(self.target, Target::Tcp(_) | Target::PipeOut(_))
     }
 
     /// fread: up to `n` bytes.
@@ -127,7 +226,7 @@ impl Stream {
             let want = n - out.len();
             let more = self.fill(want);
             // A short read is the end (plain files and memory).
-            if more.len() < want {
+            if more.len() < want && self.short_read_is_end() {
                 self.eof = true;
             }
             out.extend(more);
@@ -148,11 +247,16 @@ impl Stream {
                 return Some(self.buffer.drain(..max).collect());
             }
             let more = self.fill(8192);
-            if more.len() < 8192 {
+            if more.len() < 8192 && self.short_read_is_end() {
                 self.eof = true;
             }
             if more.is_empty() {
                 if self.buffer.is_empty() {
+                    return None;
+                }
+                // Nothing more yet on a socket or pipe: what there is goes
+                // when the stream ended, else the line is not whole.
+                if !self.short_read_is_end() && !self.eof {
                     return None;
                 }
                 return Some(std::mem::take(&mut self.buffer));
@@ -211,7 +315,9 @@ impl Stream {
                 let _ = std::io::stderr().write_all(bytes);
                 Some(bytes.len())
             }
-            Target::Stdin => None,
+            Target::Tcp(sock) => sock.write_all(bytes).ok().map(|()| bytes.len()),
+            Target::PipeIn(pipe) => pipe.write_all(bytes).ok().map(|()| bytes.len()),
+            Target::Stdin | Target::PipeOut(_) | Target::Process(_) => None,
         }
     }
 
@@ -268,6 +374,8 @@ impl Stream {
     pub fn flush(&mut self) -> bool {
         match &mut self.target {
             Target::File(f) => f.flush().is_ok(),
+            Target::Tcp(s) => s.flush().is_ok(),
+            Target::PipeIn(p) => p.flush().is_ok(),
             _ => true,
         }
     }

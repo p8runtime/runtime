@@ -315,8 +315,9 @@ fn set_time_limit(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     Ok(Value::Bool(true))
 }
 
-fn php_sapi_name(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::str("cli"))
+fn php_sapi_name(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    // "cli", or "cli-server" when the host serves web requests.
+    Ok(Value::str(if ctx.response().server { "cli-server" } else { "cli" }))
 }
 
 /// phpversion($extension = null): PHP's version, or an extension's (which
