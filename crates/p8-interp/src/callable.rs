@@ -240,7 +240,22 @@ impl Context<'_> {
     /// `"Class::method"` or `['Class', 'method']`.
     fn static_by_name(&mut self, class: &[u8], lower: &[u8], display: &[u8]) -> Result<Target, Throw> {
         let class = class.strip_prefix(b"\\").unwrap_or(class);
-        let target = self.find_class(class)?;
+        // `self`, `parent` and `static` name classes from where the call is
+        // made, and pass its called class on (late static binding).
+        let (scope, called_here) = self.scope();
+        let keyword = match class.to_ascii_lowercase().as_slice() {
+            b"self" => Some(scope.clone()),
+            b"parent" => Some(scope.as_ref().and_then(|s| s.parent.clone())),
+            b"static" => Some(called_here.clone().or_else(|| scope.clone())),
+            _ => None,
+        };
+        let is_keyword = keyword.is_some();
+        let target = match keyword {
+            Some(Some(c)) => c,
+            Some(None) => return Err(self.throw("Error", format!("Cannot use \"{}\" when no class scope is active", text(&class.to_ascii_lowercase())))),
+            None => self.find_class(class)?,
+        };
+        let forwarded = is_keyword.then_some(called_here).flatten().filter(|c| c.is_a(&target.lower));
         let Some(method) = target.method(lower).cloned() else {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(Target::Frame(m));
@@ -259,7 +274,7 @@ impl Context<'_> {
             ));
         }
         let scope = self.classes.get(&method.declaring).cloned().unwrap_or_else(|| Rc::clone(&target));
-        let called = this.as_ref().map(|t| Rc::clone(&t.class)).unwrap_or(target);
+        let called = this.as_ref().map(|t| Rc::clone(&t.class)).or(forwarded).unwrap_or(target);
         let this = if method.is_static { None } else { this };
         Ok(Target::Frame(MethodFrame::method(self.code_of(&method), this, scope, called)))
     }

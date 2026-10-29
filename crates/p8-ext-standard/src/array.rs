@@ -579,7 +579,14 @@ fn sort_with(args: &[Value], by_key: bool, reverse: bool, keep_keys: bool) -> Re
     let done = with_array(args, |a| {
         let mut entries: Vec<(Key, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
         entries.sort_by(|x, y| {
-            let o = if by_key { cmp(&key_value(&x.0), &key_value(&y.0)) } else { cmp(&x.1, &y.1) };
+            let o = match (&x.0, &y.0) {
+                // Two integer keys compare as integers under every flag
+                // (php_array_key_compare_*: no float, so PHP_INT_MAX - 1
+                // stays below PHP_INT_MAX).
+                (Key::Int(p), Key::Int(q)) if by_key && flags & !8 == 1 => p.cmp(q),
+                _ if by_key => cmp(&key_value(&x.0), &key_value(&y.0)),
+                _ => cmp(&x.1, &y.1),
+            };
             if reverse { o.reverse() } else { o }
         });
         *a = if keep_keys {

@@ -1,0 +1,21 @@
+A()
+B()
+B(1,2)
+B()
+string(1) "B"
+string(1) "B"
+string(1) "B"
+B(3)
+B(4)
+B(5)
+B(6)
+string(1) "B"
+string(1) "B"
+string(1) "B"
+string(1) "B"
+B(7)
+B(8)
+string(1) "B"
+string(1) "B"
+A(9)
+string(1) "A"

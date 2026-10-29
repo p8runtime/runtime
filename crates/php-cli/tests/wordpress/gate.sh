@@ -100,7 +100,7 @@ p8() {
 # settings, the editor's post lock, the customizer's clock), as the clock, and as the dates of the
 # posts and comments made today (the test content is dated 2026-01-01, so
 # today's date is only ever the clock; the classic editor's time fields and
-# post lock are the clock too). A mail's Date and Message-ID, an embed's
+# post lock, and the settings' time format examples, are the clock too). A mail's Date and Message-ID, an embed's
 # secret, a UUID (the customizer's changeset) and the post-by-email
 # suggestions are random, made by random_int().
 today=$(date -u +%Y-%m-%d)
@@ -109,7 +109,8 @@ clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"initialServerTimesta
     -e 's/^Date: .*/Date: T/' -e 's/^Message-ID: <[^@]*@/Message-ID: <M@/' -e 's/(data-secret=\\?"|secret=)[A-Za-z0-9]{10}/\1S/g' \
     -e 's/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/UUID/g' \
     -e 's/(name="(hidden_|cur_)?(hh|mn|ss)" value=")[0-9]{2}"/\1T"/g' -e 's/(id="active_post_lock" value=")[0-9]+:/\1T:/' \
-    -e 's#(random strings you could use: )<kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>#\1R#' "$1"; }
+    -e 's#(random strings you could use: )<kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>#\1R#' \
+    -e 's#(<span class="date-time-text format-i18n">)[^<]*:[^<]*(</span>)#\1T\2#g' "$1"; }
 
 php_ref install.php > install.php.out 2>/dev/null
 p8 install.php > install.p8.out 2>/dev/null
@@ -233,5 +234,14 @@ for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?cat=1 0:/?p=9999 1:/wp-admin/ 1:/wp-adm
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "twentytwentyone: $url" WPUSER="$user" WPURL="$url"
+done
+# (Not Yoast's dashboard yet: its support beacon reads curl_version(), and
+# p8 has no curl extension.)
+setup "Yoast SEO" WPPLUGINS=wordpress-seo/wp-seo.php
+for req in 0:/ 0:/?p=1 0:/?cat=1 0:/?page_id=2 0:/?author=1 0:/?sitemap=index 0:/?feed=rss2 \
+    1:/wp-admin/ '1:/wp-admin/post.php?post=1&action=edit' 1:/wp-admin/edit.php; do
+    user=${req%%:*} url=${req#*:}
+    [ "$user" = 0 ] && user=
+    request "yoast: $url" WPUSER="$user" WPURL="$url"
 done
 exit $failed

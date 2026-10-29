@@ -820,31 +820,41 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     }
                     self.bump();
 
-                    let member = if matches!(
-                        self.current_token.kind,
-                        TokenKind::OpenBrace | TokenKind::DollarOpenCurlyBraces
-                    ) {
+                    // `C::{expr}` (a constant named at run time), `C::${expr}` and
+                    // `C::$$v` (a static property named at run time: an
+                    // IndirectVariable, as `$$v` is).
+                    let member = if self.current_token.kind == TokenKind::OpenBrace {
                         self.bump();
                         let expr = self.parse_expr(0);
                         if self.current_token.kind == TokenKind::CloseBrace {
                             self.bump();
                         }
                         expr
+                    } else if self.current_token.kind == TokenKind::DollarOpenCurlyBraces {
+                        let start = self.current_token.span.start;
+                        self.bump();
+                        let name = self.parse_expr(0);
+                        let end = self.current_token.span.end;
+                        if self.current_token.kind == TokenKind::CloseBrace {
+                            self.bump();
+                        }
+                        self.arena.alloc(Expr::IndirectVariable { name, span: Span::new(start, end) })
                     } else if self.current_token.kind == TokenKind::Dollar {
                         let start = self.current_token.span.start;
                         self.bump();
                         if self.current_token.kind == TokenKind::OpenBrace {
                             self.bump();
-                            let expr = self.parse_expr(0);
+                            let name = self.parse_expr(0);
+                            let end = self.current_token.span.end;
                             if self.current_token.kind == TokenKind::CloseBrace {
                                 self.bump();
                             }
-                            expr
+                            self.arena.alloc(Expr::IndirectVariable { name, span: Span::new(start, end) })
                         } else if self.current_token.kind == TokenKind::Variable {
                             let token = self.current_token;
                             self.bump();
-                            let span = Span::new(start, token.span.end);
-                            self.arena.alloc(Expr::Variable { name: span, span })
+                            let name = self.arena.alloc(Expr::Variable { name: token.span, span: token.span });
+                            self.arena.alloc(Expr::IndirectVariable { name, span: Span::new(start, token.span.end) })
                         } else {
                             self.arena.alloc(Expr::Error {
                                 span: Span::new(start, self.current_token.span.end),
@@ -1263,9 +1273,31 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         });
                     }
 
+                    // `new (expr)(...)`: in parentheses, any expression (calls too).
+                    let parenthesized = self.current_token.kind == TokenKind::OpenParen;
                     let class = self.parse_expr(200); // High binding power to grab the class name
 
-                    let (args, end_pos) = if self.current_token.kind == TokenKind::OpenParen {
+                    // A class reference has no calls in it: `new $o->name()` is
+                    // `new ($o->name)()` and `new $c::$p()` is `new ($c::$p)()`,
+                    // so a call the expression took is the constructor's.
+                    let (class, taken) = match *class {
+                        _ if parenthesized => (class, None),
+                        Expr::MethodCall { target, method, args, .. } => {
+                            let span = Span::new(target.span().start, method.span().end);
+                            (&*self.arena.alloc(Expr::PropertyFetch { target, property: method, span }), Some((args, class.span().end)))
+                        }
+                        Expr::StaticCall { class: of, method: method @ Expr::Variable { .. }, args, .. }
+                            if self.lexer.slice(method.span()).starts_with(b"$") =>
+                        {
+                            let span = Span::new(of.span().start, method.span().end);
+                            (&*self.arena.alloc(Expr::ClassConstFetch { class: of, constant: method, span }), Some((args, class.span().end)))
+                        }
+                        _ => (class, None),
+                    };
+
+                    let (args, end_pos) = if let Some((a, end)) = taken {
+                        (a, end)
+                    } else if self.current_token.kind == TokenKind::OpenParen {
                         let (a, s) = self.parse_call_arguments();
                         (a, s.end)
                     } else {

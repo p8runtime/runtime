@@ -1,0 +1,29 @@
+0: 
+Warning: Only the first byte will be assigned to the string offset in %s on line 4
+["aXc","X"]
+1: "abc  Y"
+2: "abZ"
+3: 
+Warning: Illegal string offset -5 in %s on line 7
+"abc"
+4: 4: Error: Cannot assign an empty string to a string offset
+5: 5: Error: [] operator not supported for strings
+6: 6: Error: Cannot use string offset as an array
+7: 7: Error: Cannot use assign-op operators with string offsets
+8: 8: TypeError: Cannot access offset of type string on string
+9: "adc"
+10: "adc"
+11: 
+Warning: Illegal string offset "1x" in %s on line 15
+"adc"
+12: 
+Warning: String offset cast occurred in %s on line 16
+"adc"
+13: 
+Warning: String offset cast occurred in %s on line 17
+"adc"
+14: "a7c"
+15: "  q"
+16: {"k":"xQz"}
+17: "Qyz"
+18: 18: Error: Cannot increment/decrement string offsets
