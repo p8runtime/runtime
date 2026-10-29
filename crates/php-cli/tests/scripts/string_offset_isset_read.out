@@ -1,0 +1,54 @@
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+string(1) "r"
+bool(true)
+bool(false)
+1: true false 'b'
+'1': true false 'b'
+' 1': true false 'b'
+'1 ': true false 'b'
+'01': true false 'b'
+'-1': true false 'c'
+'1.0': false true 'D'
+'x': false true 'D'
+'': false true 'D'
+1.0: true false 'b'
+true: true false 'b'
+false: true false 'a'
+NULL: true false 'a'
+-3: true false 'a'
+-4: false true 'D'
+3: false true 'D'
+'x' read: Cannot access offset of type string on string
+'0x1' read: 
+Warning: Illegal string offset "0x1" in %s on line 18
+'a'
+'1.0' read: Cannot access offset of type string on string
+' 1' read: 'b'
+'' read: Cannot access offset of type string on string
+1.7 read: 
+Warning: String offset cast occurred in %s on line 18
+'b'
+true read: 
+Warning: String offset cast occurred in %s on line 18
+'b'
+NULL read: 
+Warning: String offset cast occurred in %s on line 18
+'a'
+'2' read: 'c'
+array (
+) read: Cannot access offset of type array on string
+bool(true)
+bool(true)
+bool(false)

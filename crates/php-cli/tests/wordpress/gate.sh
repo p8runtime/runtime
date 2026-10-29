@@ -7,7 +7,9 @@
 # - three writes: a visitor's comment (which mails the moderator), the
 #   admin publishing a post from the edit form, and a post sent over
 #   XML-RPC with the admin's password;
-# - the pages that show what they wrote.
+# - the pages that show what they wrote;
+# - each bundled block theme switched to, with the bundled plugins
+#   activated, and the pages they change.
 # Every response and mail must be byte-identical, and so must the rows the
 # writes leave, apart from the clock readings. Exit 0 when they all are.
 #
@@ -31,7 +33,7 @@ if [ ! -d wordpress ]; then
     sed -e "s/'database_name_here'/getenv('WPDBNAME')/" -e "s/'username_here'/'wp'/" -e "s/'password_here'/'wp'/" \
         -e "s/'localhost'/getenv('WPDBHOST')/" wordpress/wp-config-sample.php > wordpress/wp-config.php
 fi
-cp "$here/page.php" "$here/install.php" .
+cp "$here/page.php" "$here/install.php" "$here/setup.php" .
 # A sendmail that keeps what it is given (in $MAILBOX).
 printf '#!/bin/sh\ncat >> "$MAILBOX"\n' > sendmail.sh
 chmod +x sendmail.sh
@@ -60,7 +62,7 @@ done
 top=/$(printf '%s' "$work" | cut -d/ -f2)
 php_ref() {
     local e=() v
-    for v in WPURL WPUSER WPPOST WPRAW WPNONCE WPIP; do
+    for v in WPURL WPUSER WPPOST WPRAW WPNONCE WPIP WPTHEME WPPLUGINS; do
         [ -n "${!v+x}" ] && e+=(-e "$v=${!v}")
     done
     { printf '%s\n' "$1" sendmail.sh; find wordpress | tail -r; } | COPYFILE_DISABLE=1 tar -cf - --no-recursion -T - 2>/dev/null |
@@ -77,12 +79,12 @@ p8() {
     return $status
 }
 # The time of the request, which wp-admin prints: as timestamps (its user
-# settings, the editor's post lock), as the clock, and as the dates of the
+# settings, the editor's post lock, the customizer's clock), as the clock, and as the dates of the
 # posts and comments made today (the test content is dated 2026-01-01, so
 # today's date is only ever the clock). A mail's Date and Message-ID and an
 # embed's secret are random, made by random_int().
 today=$(date -u +%Y-%m-%d)
-clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"activePostLock":"[0-9]+:/"activePostLock":"T:/g' -e 's#(Universal|Local) time is <code>[^<]*</code>#\1 time is <code>T</code>#g' \
+clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"initialServerTimestamp":[0-9]+/"initialServerTimestamp":T/g' -e 's/"activePostLock":"[0-9]+:/"activePostLock":"T:/g' -e 's#(Universal|Local) time is <code>[^<]*</code>#\1 time is <code>T</code>#g' \
     -e "s/${today}([T ])[0-9]{2}:[0-9]{2}:[0-9]{2}/${today}\\1T/g" -e 's/(_edit_lock[[:space:]])[0-9]+:/\1T:/' \
     -e 's/^Date: .*/Date: T/' -e 's/^Message-ID: <[^@]*@/Message-ID: <M@/' -e 's/(data-secret=\\?"|secret=)[A-Za-z0-9]{10}/\1S/g' "$1"; }
 
@@ -172,5 +174,33 @@ for req in 0:/ 0:/?p=1 0:/?p=$draft 0:/?feed=rss2 0:/?tag=xml-rpc 1:/wp-admin/ed
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "after: $url" WPUSER="$user" WPURL="$url"
+done
+
+# Themes and plugins, switched and activated by WordPress under each.
+setup() {
+    local label=$1
+    shift
+    (export "$@"; php_ref setup.php || true) > setup.php.out 2>/dev/null
+    (export "$@"; p8 setup.php || true) > setup.p8.out 2>/dev/null
+    if cmp -s setup.p8.out setup.php.out; then
+        echo "PASS $label: $(tr '\n' ';' < setup.p8.out)"
+    else
+        echo "FAIL $label"
+        diff setup.p8.out setup.php.out | head -10 || true
+        failed=1
+    fi
+}
+setup "Twenty Twenty-Four, Hello Dolly and Akismet" WPTHEME=twentytwentyfour WPPLUGINS=hello.php,akismet/akismet.php
+for req in 0:/ 0:/?p=1 0:/?cat=1 0:/?page_id=2 0:/?p=9999 1:/wp-admin/ 1:/wp-admin/plugins.php 1:/wp-admin/themes.php \
+    '1:/wp-admin/options-general.php?page=akismet-key-config' 1:/wp-admin/site-editor.php 1:/wp-admin/customize.php; do
+    user=${req%%:*} url=${req#*:}
+    [ "$user" = 0 ] && user=
+    request "twentytwentyfour: $url" WPUSER="$user" WPURL="$url"
+done
+setup "Twenty Twenty-Three" WPTHEME=twentytwentythree
+for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?s=hello 1:/wp-admin/site-editor.php; do
+    user=${req%%:*} url=${req#*:}
+    [ "$user" = 0 ] && user=
+    request "twentytwentythree: $url" WPUSER="$user" WPURL="$url"
 done
 exit $failed
