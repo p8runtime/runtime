@@ -25,10 +25,8 @@ pub const EXTENSION: Extension = Extension { name: "mbstring", register };
 
 fn register(registry: &mut Registry) {
     registry.add_functions(funcs::BUILTINS);
-    // The engine only tells a builtin its own name (for messages) when it
-    // may reenter; mb_parse_str() also runs parse_str() for the caller.
-    let names: Vec<&str> = funcs::BUILTINS.iter().map(|f| f.name).collect();
-    registry.mark_reenters(&names);
+    // mb_parse_str() runs parse_str() for the caller.
+    registry.mark_reenters(&["mb_parse_str"]);
     for (name, v) in [
         (&b"MB_CASE_UPPER"[..], 0),
         (b"MB_CASE_LOWER", 1),
