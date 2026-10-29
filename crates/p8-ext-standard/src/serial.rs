@@ -180,7 +180,7 @@ pub(crate) fn serialized(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw>
 /// A value read from the start of `data` as unserialize() reads it, and the
 /// offset after it; None where it is not one.
 pub(crate) fn read_value(ctx: &mut dyn Ctx, data: &[u8]) -> Option<(Value, usize)> {
-    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new() };
+    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new(), missing: Vec::new() };
     let v = r.value(ctx).ok()?;
     Some((v, r.at))
 }
@@ -199,6 +199,8 @@ struct Reader<'a> {
     values: Vec<Value>,
     allowed: Option<Vec<Vec<u8>>>,
     wakeups: Vec<(Rc<Object>, Option<PhpArray>)>,
+    /// Classes named that are not declared (autoloaded after the read).
+    missing: Vec<Vec<u8>>,
 }
 
 /// Where unserialize stopped: the offset PHP reports.
@@ -310,6 +312,9 @@ impl Reader<'_> {
                 self.expect(b'{')?;
                 let allowed = self.allowed.as_ref().is_none_or(|list| list.iter().any(|c| c.eq_ignore_ascii_case(&name)));
                 let class = if allowed { ctx.class(&name) } else { None };
+                if allowed && class.is_none() {
+                    self.missing.push(name.clone());
+                }
                 let (o, incomplete) = match class {
                     Some(c) => (ctx.new_object(&c), false),
                     None => {
@@ -402,10 +407,14 @@ fn unserialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if data.is_empty() {
         return Ok(Value::Bool(false));
     }
-    // Classes autoload before reading (a missing one is incomplete).
-    let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new() };
+    let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new(), missing: Vec::new() };
     match r.value(ctx) {
         Ok(v) => {
+            // A class it names that is not declared yet is autoloaded, and
+            // the call runs again with it (one still missing is incomplete).
+            for name in std::mem::take(&mut r.missing) {
+                ctx.class_load(&name)?;
+            }
             for (o, data) in std::mem::take(&mut r.wakeups) {
                 match data {
                     Some(d) => {
