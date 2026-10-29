@@ -1265,9 +1265,7 @@ impl Parser<'_> {
             }
             _ => {
                 let alt = trim_junk(&upper);
-                if alt == b"UTF-8" || alt == b"UTF8" {
-                    self.charset_utf8 = true;
-                } else if self.convert_tail(encoding) {
+                if alt == b"UTF-8" || alt == b"UTF8" || self.convert_tail(encoding) {
                     self.charset_utf8 = true;
                 } else {
                     self.err(ERR_UNSUPPORTED_ENCODING, format!("htmlCheckEncoding: unknown encoding {}\n", String::from_utf8_lossy(encoding)));
@@ -1401,7 +1399,7 @@ impl Parser<'_> {
             self.depth -= 1;
             return false;
         }
-        if !self.names.iter().any(|n| *n == name) {
+        if !self.names.contains(&name) {
             self.err(ERR_TAG_NAME_MISMATCH, format!("Unexpected end tag : {}\n", String::from_utf8_lossy(&name)));
             return false;
         }

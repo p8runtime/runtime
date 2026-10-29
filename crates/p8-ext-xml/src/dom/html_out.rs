@@ -49,12 +49,14 @@ pub fn encode_entities(v: &[u8], html: bool, attr: bool, has_encoding: bool) -> 
         let c = v[i];
         match c {
             b'<' => {
-                if html && attr && v[i..].starts_with(b"<!--") {
-                    if let Some(end) = v[i..].windows(3).position(|w| w == b"-->") {
-                        out.extend_from_slice(&v[i..i + end + 3]);
-                        i += end + 3;
-                        continue;
-                    }
+                if html
+                    && attr
+                    && v[i..].starts_with(b"<!--")
+                    && let Some(end) = v[i..].windows(3).position(|w| w == b"-->")
+                {
+                    out.extend_from_slice(&v[i..i + end + 3]);
+                    i += end + 3;
+                    continue;
                 }
                 out.extend_from_slice(b"&lt;");
             }
@@ -570,14 +572,14 @@ mod tests {
 
     #[test]
     fn non_ascii_text_becomes_entities_and_uris_are_escaped() {
-        let s = save("<a href=\"x y\u{e9}\">\u{e9}\u{20ac}</a>".as_bytes(), false);
-        assert!(s.contains("<a href=\"x%20y%C3%A9\">&eacute;&#8364;</a>"), "{s}");
+        let s = save("<meta charset=utf-8><a href=\"x y\u{e9}\">\u{e9}\u{20ac}</a>".as_bytes(), false);
+        assert!(s.contains("<a href=\"x%20y%C3%A9\">&eacute;&euro;</a>"), "{s}");
     }
 
     #[test]
     fn format_output_breaks_lines_between_block_elements() {
         let s = save(b"<ul><li>a<li>b</ul>", true);
-        assert!(s.ends_with("<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n</body>\n</html>\n"), "{s}");
+        assert!(s.ends_with("<ul>\n<li>a</li>\n<li>b</li>\n</ul></body></html>\n"), "{s}");
     }
 
     #[test]

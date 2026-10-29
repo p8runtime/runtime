@@ -1,7 +1,10 @@
 // Generated from libxml2 2.9.14 HTMLparser.c (html40ElementTable, htmlStartClose, html40EntitiesTable).
 
-/// (name, startTag, endTag, saveEndTag, empty, depr, dtd, isinline)
-pub static ELEMENTS: &[(&str, u8, u8, u8, u8, u8, u8, u8)] = &[
+/// One row of libxml2's element table: (name, startTag, endTag, saveEndTag,
+/// empty, depr, dtd, isinline).
+type Row = (&'static str, u8, u8, u8, u8, u8, u8, u8);
+
+pub static ELEMENTS: &[Row] = &[
     ("a", 0, 0, 0, 0, 0, 0, 1),
     ("abbr", 0, 0, 0, 0, 0, 0, 1),
     ("acronym", 0, 0, 0, 0, 0, 0, 1),
