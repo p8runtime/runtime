@@ -153,8 +153,8 @@ pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
     let mut c = Classes::new();
     declare(&mut c, "stdClass", 0, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
-    // The attribute classes (empty here: attributes are not read yet).
-    for name in ["Attribute", "ReturnTypeWillChange", "AllowDynamicProperties", "SensitiveParameter", "Override", "Deprecated"] {
+    // The builtin attribute classes without state (Attribute and Deprecated: reflection.rs).
+    for name in ["ReturnTypeWillChange", "AllowDynamicProperties", "SensitiveParameter", "Override"] {
         declare(&mut c, name, p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
     }
     declare(

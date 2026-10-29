@@ -10,7 +10,7 @@
 //! always the caller's topmost registers: the callee's frame starts there.
 
 use p8_bytecode::{
-    CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
+    AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
     CONST_EXPR, Rare,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
@@ -140,6 +140,7 @@ struct FnBuilder<'a> {
     /// `label:` positions and the loops open there; `goto`s to patch.
     labels: HashMap<Vec<u8>, (u32, Vec<usize>)>,
     gotos: Vec<Goto>,
+    meta: Meta,
 }
 
 /// A `goto` waiting for its label (which may come later).
@@ -186,6 +187,7 @@ impl FnBuilder<'_> {
             loops_made: 0,
             labels: HashMap::new(),
             gotos: Vec::new(),
+            meta: Meta::default(),
         }
     }
 
@@ -358,6 +360,7 @@ impl FnBuilder<'_> {
             lambdas: self.lambdas,
             is_generator: self.is_generator,
             bound: self.bound,
+            meta: self.meta,
             decls: self.decls,
             silences: self.silences,
         }
@@ -422,6 +425,29 @@ fn dim_root_is_prop(e: &Expr) -> bool {
 }
 
 /// The visibility a member's modifiers give it (None: none written).
+/// The targets a builtin attribute class (by resolved name) may be put
+/// on (TARGET_CLASS = 1, FUNCTION 2, METHOD 4, PROPERTY 8, CLASS_CONSTANT
+/// 16, PARAMETER 32); None for any other class.
+fn builtin_attribute_targets(name: &[u8]) -> Option<u32> {
+    Some(match name.to_ascii_lowercase().as_slice() {
+        b"attribute" | b"allowdynamicproperties" => 1,
+        b"returntypewillchange" | b"override" => 4,
+        b"sensitiveparameter" => 32,
+        b"deprecated" => 2 | 4 | 16,
+        _ => return None,
+    })
+}
+
+fn attr_target_names(flags: u32) -> String {
+    ["class", "function", "method", "property", "class constant", "parameter"]
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| flags & (1 << i) != 0)
+        .map(|(_, n)| *n)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn visibility_of(c: &Compiler, modifiers: &[p8_syntax::lexer::token::Token]) -> Option<Visibility> {
     modifiers.iter().find_map(|m| match c.text(m.span).to_ascii_lowercase().as_slice() {
         b"public" | b"var" => Some(Visibility::Public),
@@ -875,6 +901,8 @@ pub struct Compiler<'src> {
     strict: bool,
     /// The declared return type of the function about to be compiled.
     pending_ret: Option<p8_runtime::types::TypeDecl>,
+    /// The doc comment, attributes and last line of the function about to be compiled.
+    pending_meta: Option<Meta>,
 }
 
 /// The class being compiled.
@@ -919,6 +947,7 @@ impl<'src> Compiler<'src> {
             halt_offset: None,
             strict: false,
             pending_ret: None,
+            pending_meta: None,
         }
     }
 
@@ -1324,10 +1353,12 @@ impl<'src> Compiler<'src> {
                     f.loops[target].continues.push(at);
                 }
             }
-            Stmt::Function { name, params, body, by_ref, return_type, .. } => {
+            Stmt::Function { attributes, name, params, body, by_ref, return_type, doc_comment, span } => {
                 let full = join(&self.ns, self.text(name.span));
                 let line = self.line(name.span);
+                let meta = self.meta_of(attributes, *doc_comment, *span, 2)?;
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
+                self.pending_meta = Some(meta);
                 let (function, _) = self.function_with(Text::from(full.as_slice()), line, params, Body::Stmts(body), *by_ref, &[])?;
                 if self.top_functions.contains(&(stmt as *const Stmt as usize)) {
                     self.functions.push(Arc::new(function));
@@ -1493,23 +1524,23 @@ impl<'src> Compiler<'src> {
                 self.declaring_top = false;
                 r?;
             }
-            Stmt::Class { attributes, modifiers, name, extends, implements, members, .. } => {
+            Stmt::Class { attributes, modifiers, name, extends, implements, members, doc_comment, span } => {
                 let (display, line) = self.declared_name(name.span);
                 let flags = if self.has_attribute(attributes, b"allowdynamicproperties") { p8_runtime::object::CLASS_ALLOW_DYNAMIC } else { 0 };
-                self.class_decl(f, display, line, modifiers, extends.as_ref(), implements, members, flags)?;
+                self.class_decl(f, display, line, modifiers, extends.as_ref(), implements, members, flags, (*attributes, *doc_comment, *span))?;
             }
-            Stmt::Interface { name, extends, members, .. } => {
+            Stmt::Interface { attributes, name, extends, members, doc_comment, span } => {
                 let (display, line) = self.declared_name(name.span);
-                self.class_decl(f, display, line, &[], None, extends, members, CLASS_INTERFACE)?;
+                self.class_decl(f, display, line, &[], None, extends, members, CLASS_INTERFACE, (*attributes, *doc_comment, *span))?;
             }
-            Stmt::Trait { name, members, .. } => {
+            Stmt::Trait { attributes, name, members, doc_comment, span } => {
                 let (display, line) = self.declared_name(name.span);
-                self.class_decl(f, display, line, &[], None, &[], members, CLASS_TRAIT)?;
+                self.class_decl(f, display, line, &[], None, &[], members, CLASS_TRAIT, (*attributes, *doc_comment, *span))?;
             }
-            Stmt::Enum { name, backed_type, implements, members, .. } => {
+            Stmt::Enum { attributes, name, backed_type, implements, members, doc_comment, span } => {
                 self.enum_backing = backed_type.map(|t| Text::from(type_text(self, t).to_ascii_lowercase().as_slice()));
                 let (display, line) = self.declared_name(name.span);
-                self.class_decl(f, display, line, &[], None, implements, members, CLASS_ENUM | CLASS_FINAL)?;
+                self.class_decl(f, display, line, &[], None, implements, members, CLASS_ENUM | CLASS_FINAL, (*attributes, *doc_comment, *span))?;
             }
             Stmt::Nop { .. } => {}
             other => return Err(self.unsupported(other.span(), &format!("this statement ({})", kind(other)))),
@@ -1743,6 +1774,7 @@ impl<'src> Compiler<'src> {
         uses: &[p8_syntax::ast::ClosureUse],
     ) -> Result<(Function, Vec<Text>)> {
         let mut f = FnBuilder::new(name);
+        f.meta = self.pending_meta.take().unwrap_or_default();
         f.returns_ref = by_ref;
         f.strict = self.strict;
         f.ret_type = self.pending_ret.take();
@@ -1757,6 +1789,7 @@ impl<'src> Compiler<'src> {
             let ty = p.ty.map(|t| self.type_decl(t));
             let default = p.default.and_then(|d| self.const_value(d).ok());
             let promoted = visibility_of(self, p.modifiers).is_some();
+            let attrs = self.attr_defs(p.attributes, 32)?;
             f.params.push(Param {
                 name: Text::from(&text[1..]),
                 by_ref: p.by_ref,
@@ -1765,12 +1798,13 @@ impl<'src> Compiler<'src> {
                 ty,
                 default,
                 promoted,
+                attrs,
             });
         }
         // A set hook written without its parameter takes `$value`.
         if std::mem::take(&mut self.hook_value) && params.is_empty() {
             f.cv(b"value");
-            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, promoted: false });
+            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, promoted: false, attrs: Vec::new() });
         }
         f.decl_line = f.line;
         if params.last().is_some_and(|p| p.variadic) {
@@ -1807,6 +1841,7 @@ impl<'src> Compiler<'src> {
                 readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
                 ty: p.ty.map(|t| Text::from(type_text(self, t).as_slice())),
                 ty_decl: p.ty.map(|t| self.type_decl(t)),
+                meta: Meta { attrs: f.params[i].attrs.clone(), ..Meta::default() },
             });
             let obj = f.temp();
             f.emit(Instr::This { dst: obj });
@@ -2061,7 +2096,7 @@ impl<'src> Compiler<'src> {
     /// "class@anonymous", or after its parent, then a NUL, where it is),
     /// and make one.
     fn anonymous_class(&mut self, f: &mut FnBuilder, class: &Expr, args: &[p8_syntax::ast::Arg], hint: Option<Reg>) -> Result<Reg> {
-        let Expr::AnonymousClass { modifiers, extends, implements, members, span, .. } = class else { unreachable!("an anonymous class") };
+        let Expr::AnonymousClass { attributes, modifiers, extends, implements, members, span, .. } = class else { unreachable!("an anonymous class") };
         let line = self.line(*span);
         let base = match extends {
             Some(n) => self.class_name(self.text(n.span)),
@@ -2073,7 +2108,7 @@ impl<'src> Compiler<'src> {
         // Its methods are compiled in the middle of this function's code.
         let method = self.method.take();
         let promoted = std::mem::take(&mut self.promoted);
-        let declared = self.class_decl(f, display.clone(), line, modifiers, extends.as_ref(), implements, members, 0);
+        let declared = self.class_decl(f, display.clone(), line, modifiers, extends.as_ref(), implements, members, 0, (*attributes, None, *span));
         self.method = method;
         self.promoted = promoted;
         let def = declared?;
@@ -2107,6 +2142,7 @@ impl<'src> Compiler<'src> {
         implements: &[p8_syntax::ast::Name],
         members: &[p8_syntax::ast::ClassMember],
         class_kind: u32,
+        decl: (&[p8_syntax::ast::AttributeGroup], Option<Span>, Span),
     ) -> Result<Arc<ClassDef>> {
         use p8_syntax::ast::{ClassMember, TraitAdaptation};
         // Taken now: a class its methods declare is not a top-level one.
@@ -2131,10 +2167,12 @@ impl<'src> Compiler<'src> {
         let (mut constants, mut properties, mut methods) = (Vec::new(), Vec::new(), Vec::new());
         let (mut traits, mut trait_rules) = (Vec::new(), Vec::new());
         let mut cases = Vec::new();
+        let mut case_meta = Vec::new();
         let enum_backing = self.enum_backing.take();
+        let class_meta = self.meta_of(decl.0, decl.1, decl.2, 1)?;
         for member in members {
             match member {
-                ClassMember::Property { modifiers, ty, entries, .. } => {
+                ClassMember::Property { attributes, modifiers, ty, entries, doc_comment, .. } => {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
                     for e in *entries {
@@ -2147,7 +2185,9 @@ impl<'src> Compiler<'src> {
                             None if ty.is_some() => (None, None),
                             None => (Some(Frozen::Null), None),
                         };
+                        let meta = self.meta_of(attributes, *doc_comment, e.span, 8)?;
                         properties.push(PropDef {
+                            meta,
                             name: Text::from(text.strip_prefix(b"$").unwrap_or(text)),
                             default,
                             code,
@@ -2160,7 +2200,7 @@ impl<'src> Compiler<'src> {
                         });
                     }
                 }
-                ClassMember::PropertyHook { modifiers, ty, name, default, hooks, .. } => {
+                ClassMember::PropertyHook { attributes, modifiers, ty, name, default, hooks, doc_comment, span } => {
                     let text = self.text(name.span);
                     let pname = Text::from(text.strip_prefix(b"$").unwrap_or(text));
                     let visibility = visibility_of(self, modifiers).unwrap_or(Visibility::Public);
@@ -2290,7 +2330,9 @@ impl<'src> Compiler<'src> {
                         None => (Some(Frozen::Null), None),
                     };
                     if !interface {
+                        let meta = self.meta_of(attributes, *doc_comment, *span, 8)?;
                         properties.push(PropDef {
+                            meta,
                             name: pname,
                             default,
                             code,
@@ -2303,10 +2345,12 @@ impl<'src> Compiler<'src> {
                         });
                     }
                 }
-                ClassMember::Const { modifiers, consts, .. } => {
+                ClassMember::Const { attributes, modifiers, consts, doc_comment, .. } => {
                     for c in *consts {
                         let (value, code) = self.const_init(c.value)?;
+                        let meta = self.meta_of(attributes, *doc_comment, c.span, 16)?;
                         constants.push(ConstDef {
+                            meta,
                             name: Text::from(self.text(c.name.span)),
                             value,
                             code,
@@ -2315,12 +2359,14 @@ impl<'src> Compiler<'src> {
                         });
                     }
                 }
-                ClassMember::Method { modifiers, by_ref, name, params, body, return_type, .. } => {
+                ClassMember::Method { attributes, modifiers, by_ref, name, params, body, return_type, doc_comment, span } => {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
                     let is_static = has(b"static");
+                    let meta = self.meta_of(attributes, *doc_comment, *span, 4)?;
                     self.method = Some((display.clone(), is_static));
                     self.pending_ret = return_type.map(|t| self.type_decl(t));
+                    self.pending_meta = Some(meta);
                     let func = self.function(name.span, params, body, *by_ref)?;
                     properties.append(&mut self.promoted);
                     methods.push(MethodDef {
@@ -2331,11 +2377,12 @@ impl<'src> Compiler<'src> {
                         is_final: has(b"final"),
                     });
                 }
-                ClassMember::Case { name, value, .. } => {
+                ClassMember::Case { attributes, name, value, doc_comment, span } => {
                     let value = match value {
                         Some(v) => Some(self.const_value(v)?),
                         None => None,
                     };
+                    case_meta.push(self.meta_of(attributes, *doc_comment, *span, 16)?);
                     cases.push((Text::from(self.text(name.span)), value));
                 }
                 ClassMember::TraitUse { traits: used, adaptations, .. } => {
@@ -2367,7 +2414,7 @@ impl<'src> Compiler<'src> {
             }
         }
         self.scope = saved;
-        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line };
+        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line, meta: class_meta, case_meta };
         let def = Arc::new(def);
         if top {
             self.classes.push(Arc::clone(&def));
@@ -3014,6 +3061,72 @@ impl<'src> Compiler<'src> {
         let dst = f.temp();
         f.emit(Instr::rare(Rare::VarRef, dst, n, 0, 0));
         Ok(dst)
+    }
+
+    /// The attributes of a declaration: each name resolved, each argument
+    /// a constant expression (computed when reflection asks).
+    ///
+    /// `target` is what the attributes are on (ATTR_TARGET_*): the builtin
+    /// attribute classes are checked against it, as PHP does when compiling.
+    fn attr_defs(&mut self, groups: &[p8_syntax::ast::AttributeGroup], target: u32) -> Result<Vec<AttrDef>> {
+        let mut out: Vec<AttrDef> = Vec::new();
+        for group in groups {
+            for a in group.attributes {
+                let name = Text::from(self.class_name(self.text(a.name.span)).as_slice());
+                let line = self.line(a.span);
+                if let Some(allowed) = builtin_attribute_targets(name.as_bytes()) {
+                    let shown = String::from_utf8_lossy(name.as_bytes());
+                    if allowed & target == 0 {
+                        let message = format!("Attribute \"{shown}\" cannot target {} (allowed targets: {})", attr_target_names(target), attr_target_names(allowed));
+                        return Err(CompileError { message, line });
+                    }
+                    if out.iter().any(|o| o.name.as_bytes().eq_ignore_ascii_case(name.as_bytes())) {
+                        return Err(CompileError { message: format!("Attribute \"{shown}\" must not be repeated"), line });
+                    }
+                }
+                let mut args = Vec::with_capacity(a.args.len());
+                for arg in a.args {
+                    if arg.unpack {
+                        return Err(CompileError { message: "Cannot use unpacking in attribute argument list".into(), line: self.line(arg.span) });
+                    }
+                    self.check_attr_const(arg.value)?;
+                    let (value, code) = self.const_init(arg.value)?;
+                    args.push(AttrArg { name: arg.name.map(|t| Text::from(self.text(t.span))), value, code });
+                }
+                out.push(AttrDef { name, args, line });
+            }
+        }
+        Ok(out)
+    }
+
+    /// An attribute argument is a constant expression: no calls, variables
+    /// or assignments.
+    fn check_attr_const(&self, e: &Expr) -> Result<()> {
+        let invalid = || CompileError { message: "Constant expression contains invalid operations".into(), line: self.line(e.span()) };
+        match e {
+            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::Assign { .. } | Expr::Closure { .. } | Expr::ArrowFunction { .. } => Err(invalid()),
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => Err(invalid()),
+            Expr::Array { items, .. } => {
+                for item in *items {
+                    if let Some(k) = item.key {
+                        self.check_attr_const(k)?;
+                    }
+                    self.check_attr_const(item.value)?;
+                }
+                Ok(())
+            }
+            Expr::Binary { left, right, .. } => self.check_attr_const(left).and_then(|()| self.check_attr_const(right)),
+            Expr::Unary { expr, .. } => self.check_attr_const(expr),
+            _ => Ok(()),
+        }
+    }
+
+    /// What reflection reads of a declaration: its doc comment, attributes
+    /// and (from `span`) last line.
+    fn meta_of(&mut self, groups: &[p8_syntax::ast::AttributeGroup], doc: Option<Span>, span: Span, target: u32) -> Result<Meta> {
+        let attrs = self.attr_defs(groups, target)?;
+        let doc = doc.map(|d| Text::from(self.text(d)));
+        Ok(Meta { doc, attrs, end_line: self.line(Span::new(span.end.saturating_sub(1), span.end)) })
     }
 
     /// Whether the attribute groups name `attr` (lowercase, no namespace:
@@ -3949,11 +4062,13 @@ impl<'src> Compiler<'src> {
                 }
                 dst
             }
-            Expr::Closure { is_static, by_ref, params, uses, body, span, return_type, .. } => {
+            Expr::Closure { attributes, is_static, by_ref, params, uses, body, span, return_type } => {
                 let line = self.line(*span);
                 let name = self.closure_name(f, line);
                 let method = self.method.take();
+                let meta = self.meta_of(attributes, None, *span, 2)?;
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
+                self.pending_meta = Some(meta);
                 let (func, _) = self.function_with(name, line, params, Body::Stmts(body), *by_ref, uses)?;
                 self.method = method;
                 let dst = self.make_closure(f, func, *is_static);
@@ -3963,11 +4078,13 @@ impl<'src> Compiler<'src> {
                 }
                 dst
             }
-            Expr::ArrowFunction { is_static, by_ref, params, expr, span, return_type, .. } => {
+            Expr::ArrowFunction { attributes, is_static, by_ref, params, expr, span, return_type } => {
                 let line = self.line(*span);
                 let name = self.closure_name(f, line);
                 let method = self.method.take();
+                let meta = self.meta_of(attributes, None, *span, 2)?;
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
+                self.pending_meta = Some(meta);
                 let (func, captures) = self.function_with(name, line, params, Body::Expr(expr), *by_ref, &[])?;
                 self.method = method;
                 let dst = self.make_closure(f, func, *is_static);

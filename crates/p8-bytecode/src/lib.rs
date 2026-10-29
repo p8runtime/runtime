@@ -517,6 +517,40 @@ pub struct ClassDef {
     pub cases: Vec<(Text, Option<Frozen>)>,
     pub enum_backing: Option<Text>,
     pub line: u32,
+    /// Its doc comment, attributes and last line (reflection).
+    pub meta: Meta,
+    /// Each enum case's (parallel to `cases`).
+    pub case_meta: Vec<Meta>,
+}
+
+/// What reflection reads of a declaration besides its code.
+#[derive(Debug, Clone, Default)]
+pub struct Meta {
+    /// The `/** ... */` directly before it, as written.
+    pub doc: Option<Text>,
+    pub attrs: Vec<AttrDef>,
+    /// The declaration's last line (its closing brace).
+    pub end_line: u32,
+}
+
+/// One `#[Name(args)]`.
+#[derive(Debug, Clone)]
+pub struct AttrDef {
+    /// The class it names, resolved through the namespace and imports.
+    pub name: Text,
+    pub args: Vec<AttrArg>,
+    pub line: u32,
+}
+
+/// An attribute's argument: a constant expression, evaluated when
+/// reflection asks (as PHP does).
+#[derive(Debug, Clone)]
+pub struct AttrArg {
+    /// Named arguments only.
+    pub name: Option<Text>,
+    pub value: Frozen,
+    /// The code computing it, when it needs other constants or classes.
+    pub code: Option<Arc<Function>>,
 }
 
 /// `T::m insteadof U` (`insteadof` non-empty) or `[T::]m as [visibility] [alias]`.
@@ -538,6 +572,7 @@ pub struct ConstDef {
     pub code: Option<Arc<Function>>,
     pub visibility: Visibility,
     pub is_final: bool,
+    pub meta: Meta,
 }
 
 /// The name of the code a constant expression compiles to (never shown
@@ -562,6 +597,7 @@ pub struct PropDef {
     pub ty: Option<Text>,
     /// The declared type, checked when a value is stored.
     pub ty_decl: Option<p8_runtime::types::TypeDecl>,
+    pub meta: Meta,
 }
 
 #[derive(Debug)]
@@ -598,6 +634,7 @@ pub struct Param {
     pub default: Option<Frozen>,
     /// A promoted constructor parameter (`public int $x`).
     pub promoted: bool,
+    pub attrs: Vec<AttrDef>,
 }
 
 /// A compiled function (or a file's top-level code). Immutable, and shared
@@ -650,6 +687,7 @@ pub struct Function {
     /// `@` expressions: (Silence pc, Unsilence pc, the register saving
     /// the level), so an exception leaving one puts the level back.
     pub silences: Vec<(u32, u32, Reg)>,
+    pub meta: Meta,
 }
 
 /// A compiled file: its top-level code, every function it declares, and
