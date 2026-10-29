@@ -96,12 +96,12 @@ impl Context<'_> {
     /// `static $x`: the cell of static `index` of the running function,
     /// and whether it is new (its initializer runs then).
     pub(crate) fn static_var(&mut self, func: &p8_bytecode::Function, index: u16) -> (Cell, bool) {
-        let key = (func as *const p8_bytecode::Function as usize, index);
-        match self.statics.get(&key) {
+        let statics = self.statics.entry(func as *const p8_bytecode::Function as usize).or_default();
+        match statics.get(&index) {
             Some(cell) => (Rc::clone(cell), false),
             None => {
                 let cell = Rc::new(RefCell::new(Value::Null));
-                self.statics.insert(key, Rc::clone(&cell));
+                statics.insert(index, Rc::clone(&cell));
                 (cell, true)
             }
         }

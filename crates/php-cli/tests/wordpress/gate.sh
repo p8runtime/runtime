@@ -127,7 +127,7 @@ cat install.p8.out
 # The installs differ only in their dates and their generated salts (which
 # nonces are made from): make those the same so the pages compare.
 for db in wp_php wp_p8; do
-    sql "$db" -e "UPDATE wp_posts SET post_date='2026-01-01 12:00:00', post_date_gmt='2026-01-01 12:00:00', post_modified='2026-01-01 12:00:00', post_modified_gmt='2026-01-01 12:00:00'; UPDATE wp_comments SET comment_date='2026-01-01 12:00:00', comment_date_gmt='2026-01-01 12:00:00';"
+    sql "$db" -e "UPDATE wp_posts SET post_date='2026-01-01 12:00:00' + INTERVAL ID SECOND, post_date_gmt='2026-01-01 12:00:00' + INTERVAL ID SECOND, post_modified='2026-01-01 12:00:00' + INTERVAL ID SECOND, post_modified_gmt='2026-01-01 12:00:00' + INTERVAL ID SECOND; UPDATE wp_comments SET comment_date='2026-01-01 12:00:00' + INTERVAL comment_ID SECOND, comment_date_gmt='2026-01-01 12:00:00' + INTERVAL comment_ID SECOND;"
 done
 sql -e "UPDATE wp_p8.wp_options o JOIN wp_php.wp_options r USING (option_name) SET o.option_value = r.option_value WHERE option_name LIKE '%\\_key' OR option_name LIKE '%\\_salt';"
 
@@ -243,11 +243,13 @@ else
     failed=1
 fi
 
-# The pages that show them, with the writes' times (the clock) pinned.
+# The pages that show them, with the writes' times (the clock) pinned: a
+# second apart, by ID, so pages listing by date never meet a tie (MariaDB
+# orders tied rows as it likes, and differently from run to run).
 APPS="WordPress,Twenty Twenty-Five"
 for db in wp_php wp_p8; do
-    sql "$db" -e "UPDATE wp_posts SET post_date='2026-01-02 12:00:00', post_date_gmt='2026-01-02 12:00:00', post_modified='2026-01-02 12:00:00', post_modified_gmt='2026-01-02 12:00:00' WHERE post_modified_gmt >= '$today';
-        UPDATE wp_comments SET comment_date='2026-01-02 12:00:00', comment_date_gmt='2026-01-02 12:00:00' WHERE comment_date_gmt >= '$today';"
+    sql "$db" -e "UPDATE wp_posts SET post_date='2026-01-02 12:00:00' + INTERVAL ID SECOND, post_date_gmt='2026-01-02 12:00:00' + INTERVAL ID SECOND, post_modified='2026-01-02 12:00:00' + INTERVAL ID SECOND, post_modified_gmt='2026-01-02 12:00:00' + INTERVAL ID SECOND WHERE post_modified_gmt >= '$today';
+        UPDATE wp_comments SET comment_date='2026-01-02 12:00:00' + INTERVAL comment_ID SECOND, comment_date_gmt='2026-01-02 12:00:00' + INTERVAL comment_ID SECOND WHERE comment_date_gmt >= '$today';"
 done
 for req in 0:/ 0:/?p=1 0:/?p=$draft 0:/?feed=rss2 0:/?tag=xml-rpc 1:/wp-admin/edit-comments.php 1:/wp-admin/edit.php \
     0:/?cat=1 0:/?tag=rust 0:/?author=1 0:/?p=9999 0:/?m=2026 0:/?page_id=2 0:/?feed=comments-rss2 0:/?feed=atom \
