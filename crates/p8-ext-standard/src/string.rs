@@ -677,7 +677,14 @@ fn htmlspecialchars(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     let s = str_arg(args, 0);
     let flags = if args.len() > 1 { arg(args, 1).to_int() } else { 3 | 8 };
     let double = args.len() < 4 || arg(args, 3).to_bool();
-    let bytes = s.as_bytes();
+    let scrubbed;
+    let bytes = if utf8_charset(args, 2) {
+        let Some(clean) = utf8_scrub(s.as_bytes(), flags) else { return string(Vec::new()) };
+        scrubbed = clean;
+        &scrubbed[..]
+    } else {
+        s.as_bytes()
+    };
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
@@ -699,6 +706,89 @@ fn htmlspecialchars(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         i += 1;
     }
     string(out)
+}
+
+/// Whether the charset argument at `i` is UTF-8 (left out, null or empty:
+/// default_charset, UTF-8).
+pub(crate) fn utf8_charset(args: &[Value], i: usize) -> bool {
+    match args.get(i).map(Value::deref) {
+        None | Some(Value::Null) => true,
+        Some(v) => {
+            let c = v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_ascii_lowercase();
+            c.is_empty() || c == b"utf-8" || c == b"utf8"
+        }
+    }
+}
+
+/// The text with its invalid UTF-8 sequences (as html.c's get_next_char
+/// cuts them) dropped with ENT_IGNORE, made U+FFFD with ENT_SUBSTITUTE;
+/// None (an empty result) with neither.
+pub(crate) fn utf8_scrub(s: &[u8], flags: i64) -> Option<Vec<u8>> {
+    const ENT_IGNORE: i64 = 4;
+    const ENT_SUBSTITUTE: i64 = 8;
+    let lead = |c: u8| c < 0x80 || (0xc2..=0xf4).contains(&c);
+    let trail = |c: u8| (0x80..=0xbf).contains(&c);
+    let mut out = Vec::with_capacity(s.len());
+    let mut pos = 0;
+    while pos < s.len() {
+        let c = s[pos];
+        let avail = s.len() - pos;
+        let at = |i: usize| s.get(pos + i).copied().unwrap_or(0);
+        // Ok(length) of a valid character, Err(bytes) of an invalid sequence.
+        let step: Result<usize, usize> = if c < 0x80 {
+            Ok(1)
+        } else if c < 0xc2 {
+            Err(1)
+        } else if c < 0xe0 {
+            if avail < 2 {
+                Err(1)
+            } else if !trail(at(1)) {
+                Err(if lead(at(1)) { 1 } else { 2 })
+            } else {
+                Ok(2)
+            }
+        } else if c < 0xf0 {
+            if avail < 3 || !trail(at(1)) || !trail(at(2)) {
+                Err(if avail < 2 || lead(at(1)) { 1 } else if avail < 3 || lead(at(2)) { 2 } else { 3 })
+            } else {
+                let cp = (u32::from(c & 0x0f) << 12) | (u32::from(at(1) & 0x3f) << 6) | u32::from(at(2) & 0x3f);
+                if cp < 0x800 || (0xd800..=0xdfff).contains(&cp) { Err(3) } else { Ok(3) }
+            }
+        } else if c < 0xf5 {
+            if avail < 4 || !trail(at(1)) || !trail(at(2)) || !trail(at(3)) {
+                Err(if avail < 2 || lead(at(1)) {
+                    1
+                } else if avail < 3 || lead(at(2)) {
+                    2
+                } else if avail < 4 || lead(at(3)) {
+                    3
+                } else {
+                    4
+                })
+            } else {
+                let cp = (u32::from(c & 0x07) << 18) | (u32::from(at(1) & 0x3f) << 12) | (u32::from(at(2) & 0x3f) << 6) | u32::from(at(3) & 0x3f);
+                if !(0x10000..=0x10ffff).contains(&cp) { Err(4) } else { Ok(4) }
+            }
+        } else {
+            Err(1)
+        };
+        match step {
+            Ok(n) => {
+                out.extend_from_slice(&s[pos..pos + n]);
+                pos += n;
+            }
+            Err(n) => {
+                if flags & ENT_IGNORE != 0 {
+                } else if flags & ENT_SUBSTITUTE != 0 {
+                    out.extend_from_slice("\u{fffd}".as_bytes());
+                } else {
+                    return None;
+                }
+                pos += n.min(avail);
+            }
+        }
+    }
+    Some(out)
 }
 
 /// The length of an entity (`&name;`, `&#123;`, `&#x1F;`) at the start.

@@ -363,6 +363,21 @@ impl Context<'_> {
             Code::User(f) => f.code.param_by_ref(n),
             Code::Native(..) => false,
         };
+        // A value where the parameter takes a reference: PHP warns
+        // (zend_call_function) and passes the value.
+        if let Code::User(f) = &m.func {
+            let code = &f.code;
+            for (n, a) in args.iter().enumerate() {
+                if by_ref(n) && !matches!(a, Value::Ref(_)) {
+                    let name = match &code.class {
+                        Some(class) => format!("{}::{}", text(class.as_bytes()), text(code.name.as_bytes())),
+                        None => text(code.name.as_bytes()),
+                    };
+                    let param = code.params.get(n).or(code.params.last()).map(|p| text(p.name.as_bytes())).unwrap_or_default();
+                    self.warn(format!("{name}(): Argument #{} (${param}) must be passed by reference, value given", n + 1));
+                }
+            }
+        }
         for (n, a) in args.iter().enumerate() {
             regs[at + n] = match a {
                 Value::Ref(_) if by_ref(n) => a.clone(),

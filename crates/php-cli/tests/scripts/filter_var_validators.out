@@ -1,0 +1,95 @@
+257 '42' => 42
+257 ' -7 ' => -7
+257 '+0' => 0
+257 '007' => false
+257 '9223372036854775808' => false
+257 '1e3' => false
+257 '' => false
+257 '0x1A' => false
+257 '0o17' => false
+257 '017' => false
+258 'yes' => true
+258 'Off' => false
+258 ' TRUE ' => true
+258 '' => false
+258 'maybe' => false
+258 '1' => true
+258 '0' => false
+259 '1.5' => 1.5
+259 '-1e3' => -1000.0
+259 '1,000.5' => false
+259 '.5' => 0.5
+259 '1.' => 1.0
+259 'abc' => false
+259 '1e999' => false
+259 ' 2.25 ' => 2.25
+274 'ada@example.com' => 'ada@example.com'
+274 'a.b+c@sub.example.co.uk' => 'a.b+c@sub.example.co.uk'
+274 'wordpress@localhost' => false
+274 'no-at-sign' => false
+274 'a@b..c' => false
+274 '"quoted"@example.com' => '"quoted"@example.com'
+274 'x@[127.0.0.1]' => 'x@[127.0.0.1]'
+273 'http://example.com/path?q=1' => 'http://example.com/path?q=1'
+273 'https://user:pw@host.example:8080/' => 'https://user:pw@host.example:8080/'
+273 'mailto:ada@example.com' => 'mailto:ada@example.com'
+273 'example.com' => false
+273 'http://-bad.example/' => false
+273 'http://[::1]/' => 'http://[::1]/'
+273 'ftp://files.example/x' => 'ftp://files.example/x'
+273 'http://ex ample.com' => false
+275 '127.0.0.1' => '127.0.0.1'
+275 '256.1.1.1' => false
+275 '01.2.3.4' => false
+275 '::1' => '::1'
+275 '2001:db8::ff00:42:8329' => '2001:db8::ff00:42:8329'
+275 '::ffff:192.0.2.1' => '::ffff:192.0.2.1'
+275 '1::2::3' => false
+275 'fe80::1' => 'fe80::1'
+275 '10.0.0.1' => '10.0.0.1'
+276 '01:23:45:67:89:ab' => '01:23:45:67:89:ab'
+276 '01-23-45-67-89-AB' => '01-23-45-67-89-AB'
+276 '0123.4567.89ab' => '0123.4567.89ab'
+276 '01:23:45:67:89' => false
+276 'zz:23:45:67:89:ab' => false
+277 'example.com' => 'example.com'
+277 'a..b' => false
+277 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com' => false
+277 '-x.example' => '-x.example'
+int(26)
+int(15)
+bool(false)
+int(9)
+NULL
+float(1000.5)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+string(17) "ädä@example.com"
+bool(false)
+string(3) "abc"
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  bool(false)
+  [2]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+array(1) {
+  [0]=>
+  int(3)
+}
+bool(false)
+bool(false)
+int(1)
+float(1)
+
+Warning: filter_var(): Unknown filter with ID 9999 in %s on line 36
+bool(false)
+filter_var(): "regexp" option is missing
