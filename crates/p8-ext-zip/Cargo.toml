@@ -1,0 +1,13 @@
+[package]
+name = "p8-ext-zip"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's zip extension: ZipArchive and the zip_* functions over pure-Rust deflate (no libzip)"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+# Pure-Rust deflate and crc32 only; the zip container is written here.
+miniz_oxide = "0.8"
+crc32fast = "1"
+p8-ext-pcre = { path = "../p8-ext-pcre" }

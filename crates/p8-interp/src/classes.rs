@@ -66,12 +66,16 @@ fn text(s: &PhpStr) -> String {
 impl Context<'_> {
     /// What method `m` runs.
     /// Whether method `lower` of `class` takes argument `n` by reference
-    /// (no: a method it lacks, which __call or an error answers, and a
-    /// builtin method).
+    /// (no: a method it lacks, which __call or an error answers; a builtin
+    /// method, when its stub signature says so).
     pub(crate) fn method_takes_ref(&self, class: &Class, lower: &[u8], n: usize) -> bool {
         match class.method(lower) {
             Some(m) if m.native.is_none() => self.closures[m.func as usize].code.param_by_ref(n),
-            _ => false,
+            Some(m) => {
+                let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
+                p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
+            }
+            None => false,
         }
     }
 

@@ -2937,6 +2937,7 @@ dependencies = [
  "p8-ext-standard",
  "p8-ext-tokenizer",
  "p8-ext-xml",
+ "p8-ext-zip",
  "p8-interp",
  "p8-runtime",
  "p8-syntax",
@@ -3042,6 +3043,16 @@ name = "p8-ext-xml"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "p8-runtime",
+]
+
+[[package]]
+name = "p8-ext-zip"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide",
+ "p8-ext-pcre",
  "p8-runtime",
 ]
 

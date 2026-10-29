@@ -50,6 +50,7 @@ pub mod extensions {
     pub use p8_ext_mysqli::EXTENSION as MYSQLI;
     pub use p8_ext_curl::EXTENSION as CURL;
     pub use p8_ext_gd::EXTENSION as GD;
+    pub use p8_ext_zip::EXTENSION as ZIP;
     /// What the built-in web server adds (register it after STANDARD).
     pub use p8_ext_standard::server::EXTENSION as SERVER;
 }
