@@ -45,6 +45,7 @@ pub mod extensions {
     pub use p8_ext_standard::EXTENSION as STANDARD;
     pub use p8_ext_xml::EXTENSION as XML;
     pub use p8_ext_tokenizer::EXTENSION as TOKENIZER;
+    pub use p8_ext_mbstring::EXTENSION as MBSTRING;
     pub use p8_ext_pcre::EXTENSION as PCRE;
     pub use p8_ext_mysqli::EXTENSION as MYSQLI;
     pub use p8_ext_curl::EXTENSION as CURL;
