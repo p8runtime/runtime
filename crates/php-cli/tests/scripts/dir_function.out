@@ -1,0 +1,16 @@
+bool(true)
+bool(true)
+bool(true)
+array(4) {
+  [0]=>
+  string(1) "."
+  [1]=>
+  string(2) ".."
+  [2]=>
+  string(5) "a.txt"
+  [3]=>
+  string(5) "b.txt"
+}
+bool(true)
+TypeError: Directory::read(): supplied resource is not a valid Directory resource
+bool(false)

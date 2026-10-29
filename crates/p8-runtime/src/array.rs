@@ -148,10 +148,11 @@ struct Hashed {
     live: usize,
 }
 
-/// An element as a copy of its array holds it (zend_array_dup): a
-/// reference nothing else holds (its variable gone) is a plain value.
+/// An element as a copy of its array holds it (zend_array_dup), and a
+/// property as a clone holds it (zval_add_ref): a reference nothing else
+/// holds (its variable gone) is a plain value.
 #[inline]
-fn dup(v: &Value) -> Value {
+pub(crate) fn dup(v: &Value) -> Value {
     match v {
         Value::Ref(cell) if std::rc::Rc::strong_count(cell) == 1 => cell.borrow().clone(),
         v => v.clone(),
