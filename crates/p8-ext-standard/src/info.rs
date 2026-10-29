@@ -21,6 +21,10 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "readlink", run: readlink, by_ref: &[] },
     Builtin { name: "fileinode", run: fileinode, by_ref: &[] },
     Builtin { name: "fileowner", run: fileowner, by_ref: &[] },
+    Builtin { name: "chown", run: chown, by_ref: &[] },
+    Builtin { name: "chgrp", run: chgrp, by_ref: &[] },
+    Builtin { name: "lchown", run: lchown, by_ref: &[] },
+    Builtin { name: "lchgrp", run: lchgrp, by_ref: &[] },
     Builtin { name: "filegroup", run: filegroup, by_ref: &[] },
     Builtin { name: "filetype", run: filetype, by_ref: &[] },
     Builtin { name: "debug_backtrace", run: debug_backtrace, by_ref: &[] },
@@ -245,4 +249,58 @@ fn vfprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         r.stream.borrow_mut().write(ctx, &bytes);
     }
     Ok(Value::Int(bytes.len() as i64))
+}
+
+/// A user or group given by number, or by name from /etc/passwd or
+/// /etc/group (the name's third field).
+fn id_of(ctx: &mut dyn Ctx, func: &str, v: &Value, table: &str, what: &str) -> Option<u32> {
+    match v {
+        Value::Int(i) => Some(*i as u32),
+        v => {
+            let name = v.to_php_string().unwrap_or_else(PhpStr::empty);
+            let found = std::fs::read_to_string(table).ok().and_then(|t| {
+                t.lines().filter(|l| !l.starts_with('#')).find_map(|l| {
+                    let mut f = l.split(':');
+                    (f.next()? .as_bytes() == name.as_bytes()).then(|| f.nth(1)?.parse::<u32>().ok()).flatten()
+                })
+            });
+            if found.is_none() {
+                ctx.warn(&format!("{func}(): Unable to find {what} for {}", String::from_utf8_lossy(name.as_bytes())));
+            }
+            found
+        }
+    }
+}
+
+/// chown/chgrp/lchown/lchgrp: the owner or group changed; false (with
+/// the system's reason) when it can't be.
+fn change_owner(ctx: &mut dyn Ctx, args: &mut [Value], func: &str, group: bool, link: bool) -> Result<Value, Throw> {
+    let path = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
+    let id = if group { id_of(ctx, func, &arg(args, 1), "/etc/group", "gid") } else { id_of(ctx, func, &arg(args, 1), "/etc/passwd", "uid") };
+    let Some(id) = id else { return Ok(Value::Bool(false)) };
+    let (uid, gid) = if group { (None, Some(id)) } else { (Some(id), None) };
+    let r = if link { std::os::unix::fs::lchown(&path, uid, gid) } else { std::os::unix::fs::chown(&path, uid, gid) };
+    match r {
+        Ok(()) => Ok(Value::Bool(true)),
+        Err(e) => {
+            ctx.warn(&format!("{func}(): {}", crate::file::os_error(&e)));
+            Ok(Value::Bool(false))
+        }
+    }
+}
+
+fn chown(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    change_owner(ctx, args, "chown", false, false)
+}
+
+fn chgrp(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    change_owner(ctx, args, "chgrp", true, false)
+}
+
+fn lchown(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    change_owner(ctx, args, "lchown", false, true)
+}
+
+fn lchgrp(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    change_owner(ctx, args, "lchgrp", true, true)
 }

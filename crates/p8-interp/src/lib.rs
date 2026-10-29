@@ -824,6 +824,14 @@ fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     }
 }
 
+/// Whether an ini value turns a flag on ("1", "on", "yes", "true").
+fn ini_on(v: &Value) -> bool {
+    match v {
+        Value::Str(s) => matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"1" | b"on" | b"true" | b"yes"),
+        v => v.to_bool(),
+    }
+}
+
 /// Pop the current frame, putting `value` in the caller's result
 /// register; the caller (if any) resumes at its saved pc.
 #[inline(always)]
@@ -1945,7 +1953,7 @@ impl Context<'_> {
     fn print_diag(&mut self, level: i64, message: &str, file: &str, line: u32) {
         // Recorded even when silenced (`@`, error_reporting), as PHP does.
         self.last_error = Some((level, message.to_string(), file.to_string(), line));
-        if !self.display_errors || self.error_level & level == 0 {
+        if self.error_level & level == 0 {
             return;
         }
         let label = match level {
@@ -1954,6 +1962,15 @@ impl Context<'_> {
             E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
             _ => "Fatal error",
         };
+        // log_errors: to error_log too (plain text whatever html_errors says).
+        if let Some(log) = self.isolate.registry.error_logger()
+            && Ctx::ini_get(self, b"log_errors").is_some_and(|v| ini_on(&v))
+        {
+            log(self, format!("PHP {label}:  {message} in {file} on line {line}").as_bytes());
+        }
+        if !self.display_errors {
+            return;
+        }
         let text = self.error_text(label, message, file, line, false);
         self.write_out(text.as_bytes());
     }
@@ -3013,6 +3030,12 @@ impl Context<'_> {
                         let cell = make_ref(w, src);
                         reg!(var) = Value::Ref(cell);
                     }
+                }
+                // No keys and no `[]`: the root itself (`&$GLOBALS['x']` is the
+                // global's reference).
+                Instr::RefDim { var, root, n: 0, append: false, .. } => {
+                    let cell = make_ref(w, root);
+                    reg!(var) = Value::Ref(cell);
                 }
                 Instr::RefDim { var, root, keys, n, append } => {
                     let mut path = Vec::with_capacity(n as usize);
@@ -4740,6 +4763,12 @@ impl Ctx for Context<'_> {
 
     fn modules(&self) -> &[&'static str] {
         self.isolate.registry.modules()
+    }
+
+    fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>) {
+        let mut user: Vec<(&u32, &Vec<u8>)> = self.functions.iter().map(|(k, i)| (i, k)).collect();
+        user.sort();
+        (self.isolate.registry.function_names().collect(), user.into_iter().map(|(_, k)| k.clone()).collect())
     }
 
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf> {

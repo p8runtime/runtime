@@ -13,6 +13,8 @@ use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "gethostname", run: gethostname, by_ref: &[] },
+    Builtin { name: "inet_pton", run: inet_pton, by_ref: &[] },
+    Builtin { name: "inet_ntop", run: inet_ntop, by_ref: &[] },
     Builtin { name: "gethostbyname", run: gethostbyname, by_ref: &[] },
     Builtin { name: "gethostbynamel", run: gethostbynamel, by_ref: &[] },
     Builtin { name: "gethostbyaddr", run: gethostbyaddr, by_ref: &[] },
@@ -83,4 +85,73 @@ fn gethostbyaddr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         Ok((name, _)) => Ok(Value::str(name)),
         Err(_) => Ok(Value::str(ip)),
     }
+}
+
+/// inet_pton($ip): the address in binary (4 or 16 bytes), false when it is
+/// not one (glibc's inet_pton: no leading zeros, IPv4 written in full).
+fn inet_pton(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let text = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    let Ok(text) = std::str::from_utf8(text.as_bytes()) else { return Ok(Value::Bool(false)) };
+    let bytes = if text.contains(':') {
+        text.parse::<std::net::Ipv6Addr>().map(|a| a.octets().to_vec())
+    } else {
+        text.parse::<std::net::Ipv4Addr>().map(|a| a.octets().to_vec())
+    };
+    Ok(bytes.map_or(Value::Bool(false), |b| Value::Str(PhpStr::new(b))))
+}
+
+/// inet_ntop($ip): a 4- or 16-byte address as text, as glibc writes it.
+fn inet_ntop(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let bin = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    Ok(match bin.as_bytes() {
+        [a, b, c, d] => Value::Str(PhpStr::from(format!("{a}.{b}.{c}.{d}"))),
+        b if b.len() == 16 => Value::Str(PhpStr::from(ipv6_text(b))),
+        _ => Value::Bool(false),
+    })
+}
+
+/// glibc's inet_ntop6: groups in lowercase hex without leading zeros, the
+/// longest run of two or more zero groups (the first, on a tie) as `::`,
+/// and an IPv4-mapped (::ffff:0:0/96) or IPv4-compatible address's last
+/// four bytes as a dotted quad.
+fn ipv6_text(b: &[u8]) -> String {
+    let words: Vec<u16> = b.chunks(2).map(|w| u16::from_be_bytes([w[0], w[1]])).collect();
+    let (mut best, mut cur): ((usize, usize), Option<(usize, usize)>) = ((0, 0), None);
+    for (i, &w) in words.iter().enumerate() {
+        if w == 0 {
+            let run = cur.map_or((i, 1), |(s, l)| (s, l + 1));
+            cur = Some(run);
+            if run.1 > best.1 {
+                best = run;
+            }
+        } else {
+            cur = None;
+        }
+    }
+    let zeros = if best.1 >= 2 { Some(best) } else { None };
+    let mut out = String::new();
+    let mut i = 0;
+    while i < 8 {
+        if let Some((start, len)) = zeros
+            && i == start
+        {
+            out.push(':');
+            if start == 0 {
+                out.push(':');
+            }
+            i += len;
+            continue;
+        }
+        // The last two groups of a mapped or compatible address: a.b.c.d.
+        if i == 6 && zeros.is_some_and(|(s, l)| s == 0 && (l == 6 || (l == 5 && words[5] == 0xffff))) {
+            out.push_str(&format!("{}.{}.{}.{}", b[12], b[13], b[14], b[15]));
+            break;
+        }
+        out.push_str(&format!("{:x}", words[i]));
+        if i < 7 {
+            out.push(':');
+        }
+        i += 1;
+    }
+    out
 }

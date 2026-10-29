@@ -137,10 +137,12 @@ impl Writer<'_> {
         } else {
             None
         };
-        let mut props: Vec<(Vec<u8>, Value)> = Vec::new();
+        // Every property by its serialized (mangled) name; an uninitialized
+        // typed one too (Undef: __sleep may name it, then it is left out).
+        let mut all: Vec<(Vec<u8>, Value)> = Vec::new();
         let slots = o.slots.borrow();
         for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-            if p.is_internal() || matches!(v, Value::Undef) || only.as_ref().is_some_and(|names| !names.iter().any(|n| n == &p.name)) {
+            if p.is_internal() {
                 continue;
             }
             let mangled = match p.visibility {
@@ -148,7 +150,7 @@ impl Writer<'_> {
                 Visibility::Protected => [b"\0*\0".as_slice(), p.name.as_bytes()].concat(),
                 Visibility::Private => [b"\0", p.declaring_name.as_bytes(), b"\0", p.name.as_bytes()].concat(),
             };
-            props.push((mangled, v.clone()));
+            all.push((mangled, v.clone()));
         }
         drop(slots);
         for (k, v) in o.dynamic.borrow().iter() {
@@ -156,10 +158,30 @@ impl Writer<'_> {
                 Key::Int(i) => i.to_string().into_bytes(),
                 Key::Str(s) => s.as_bytes().to_vec(),
             };
-            if only.as_ref().is_none_or(|names| names.iter().any(|n| n.as_bytes() == k.as_slice())) {
-                props.push((k, v.clone()));
-            }
+            all.push((k, v.clone()));
         }
+        let props: Vec<(Vec<u8>, Value)> = match only {
+            None => all.into_iter().filter(|(_, v)| !matches!(v, Value::Undef)).collect(),
+            // __sleep's names in its order, each the first of: the public
+            // property, the object's class's private one, the protected one
+            // (a name given mangled is that property); one there is none of
+            // warns and is left out (php_var_serialize_get_sleep_props).
+            Some(names) => {
+                let find = |key: &[u8]| all.iter().find(|(k, _)| k.as_slice() == key).cloned();
+                let mut out = Vec::new();
+                for name in names {
+                    let n = name.as_bytes();
+                    let private = [b"\0", o.class.name.as_bytes(), b"\0", n].concat();
+                    let protected = [b"\0*\0".as_slice(), n].concat();
+                    match find(n).or_else(|| find(&private)).or_else(|| find(&protected)) {
+                        Some((_, Value::Undef)) => {}
+                        Some(found) => out.push(found),
+                        None => self.ctx.warn(&format!("serialize(): \"{}\" returned as member variable from __sleep() but does not exist", text(n))),
+                    }
+                }
+                out
+            }
+        };
         header(self, props.len());
         for (k, v) in props {
             self.string(&k);
@@ -180,7 +202,7 @@ pub(crate) fn serialized(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw>
 /// A value read from the start of `data` as unserialize() reads it, and the
 /// offset after it; None where it is not one.
 pub(crate) fn read_value(ctx: &mut dyn Ctx, data: &[u8]) -> Option<(Value, usize)> {
-    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new() };
+    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new(), missing: Vec::new() };
     let v = r.value(ctx).ok()?;
     Some((v, r.at))
 }
@@ -199,6 +221,8 @@ struct Reader<'a> {
     values: Vec<Value>,
     allowed: Option<Vec<Vec<u8>>>,
     wakeups: Vec<(Rc<Object>, Option<PhpArray>)>,
+    /// Classes named that are not declared (autoloaded after the read).
+    missing: Vec<Vec<u8>>,
 }
 
 /// Where unserialize stopped: the offset PHP reports.
@@ -310,6 +334,9 @@ impl Reader<'_> {
                 self.expect(b'{')?;
                 let allowed = self.allowed.as_ref().is_none_or(|list| list.iter().any(|c| c.eq_ignore_ascii_case(&name)));
                 let class = if allowed { ctx.class(&name) } else { None };
+                if allowed && class.is_none() {
+                    self.missing.push(name.clone());
+                }
                 let (o, incomplete) = match class {
                     Some(c) => (ctx.new_object(&c), false),
                     None => {
@@ -372,14 +399,18 @@ fn set_property(o: &Object, key: Key, v: Value) {
     } else {
         (None, &raw[..])
     };
-    let slot = o.class.properties.iter().position(|p| {
-        p.name.as_bytes() == name
-            && match declaring {
-                Some(b"*") => p.visibility == Visibility::Protected,
-                Some(c) => p.visibility == Visibility::Private && p.declaring_name.as_bytes().eq_ignore_ascii_case(c),
-                None => p.visibility == Visibility::Public,
-            }
-    });
+    let props = &o.class.properties;
+    let slot = match declaring {
+        Some(b"*") => props.iter().position(|p| p.name.as_bytes() == name && p.visibility == Visibility::Protected),
+        Some(c) => props.iter().position(|p| p.name.as_bytes() == name && p.visibility == Visibility::Private && p.declaring_name.as_bytes().eq_ignore_ascii_case(c)),
+        // An unmangled name is the declared property of that name, whatever
+        // its visibility (php_var_unserialize: the class's property info),
+        // the most derived one (properties run parent first).
+        None => {
+            let named = |vis: Visibility| props.iter().rposition(|p| p.name.as_bytes() == name && p.visibility == vis);
+            named(Visibility::Public).or_else(|| named(Visibility::Protected)).or_else(|| named(Visibility::Private))
+        }
+    };
     match slot {
         Some(i) => o.slots.borrow_mut()[i] = v,
         None => {
@@ -402,10 +433,14 @@ fn unserialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if data.is_empty() {
         return Ok(Value::Bool(false));
     }
-    // Classes autoload before reading (a missing one is incomplete).
-    let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new() };
+    let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new(), missing: Vec::new() };
     match r.value(ctx) {
         Ok(v) => {
+            // A class it names that is not declared yet is autoloaded, and
+            // the call runs again with it (one still missing is incomplete).
+            for name in std::mem::take(&mut r.missing) {
+                ctx.class_load(&name)?;
+            }
             for (o, data) in std::mem::take(&mut r.wakeups) {
                 match data {
                     Some(d) => {

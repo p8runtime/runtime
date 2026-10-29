@@ -3,6 +3,7 @@
 //! strings and arrays shared until written, references where a variable is
 //! one. Conversions and comparisons follow zend_operators.c.
 
+pub mod sort;
 pub mod args;
 pub mod array;
 pub mod ext;

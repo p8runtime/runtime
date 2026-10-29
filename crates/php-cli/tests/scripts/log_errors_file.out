@@ -1,0 +1,14 @@
+[TIME] PHP Notice:  a notice in FILE on line 11
+[TIME] PHP Warning:  Undefined variable $undefined in FILE on line 12
+[TIME] PHP Deprecated:  a deprecation in FILE on line 13
+[TIME] direct line
+[TIME] PHP Warning:  html on in FILE on line 17
+array(1) {
+  ["path"]=>
+  string(0) ""
+}
+string(0) ""
+array(1) {
+  ["query"]=>
+  string(0) ""
+}

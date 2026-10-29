@@ -116,6 +116,7 @@ const HOST_CONSTANTS: &[(&str, Constant)] = &[
 ];
 
 fn register(registry: &mut Registry) {
+    registry.set_error_logger(misc::log_err);
     for (name, value) in HOST_CONSTANTS {
         registry.add_constant(name.as_bytes(), *value);
     }

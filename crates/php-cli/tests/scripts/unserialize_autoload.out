@@ -1,0 +1,9 @@
+autoload Later
+autoload Never
+wakeup
+string(5) "Later"
+int(7)
+string(22) "__PHP_Incomplete_Class"
+string(22) "__PHP_Incomplete_Class"
+wakeup
+string(5) "Later"

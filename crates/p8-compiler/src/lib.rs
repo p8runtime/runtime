@@ -3450,7 +3450,10 @@ impl<'src> Compiler<'src> {
                     f.emit(Instr::BindRef { var, src });
                     var
                 }
-                (Expr::Variable { name, .. }, Expr::ArrayDimFetch { .. }) if self.text(*name).starts_with(b"$") && !dim_root_is_prop(expr) => {
+                // (`$v = &$GLOBALS['x']` is the global itself: ref_source.)
+                (Expr::Variable { name, .. }, Expr::ArrayDimFetch { .. })
+                    if self.text(*name).starts_with(b"$") && !dim_root_is_prop(expr) && self.globals_dim(expr).is_none() =>
+                {
                     let var = f.cv(&self.text(*name)[1..]);
                     let (root, keys, n, append) = self.dim_path(f, expr)?;
                     f.emit(Instr::RefDim { var, root, keys, n, append });

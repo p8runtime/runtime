@@ -93,5 +93,6 @@ php_version=$(docker run --rm "$image" php -r 'echo PHP_VERSION;')
 COPYFILE_DISABLE=1 tar --no-xattrs -cf - -C "$here/suite" compare.php -C "$work" php.xml p8.tc |
     docker run --rm -i "$image" bash -c "mkdir /c && cd /c && tar xf - && php compare.php php.xml p8.tc suite.jsonl '$(git -C "$repo" rev-parse HEAD)' '$php_version' '$version' >&2 && cat suite.jsonl" \
     > "$work/suite.jsonl"
-# PHPUnit exits 1 or 2 when tests fail; anything else is a run that stopped.
-[ "$p8_status" -le 2 ] || { echo "the p8 run stopped (exit $p8_status)"; exit 1; }
+# PHPUnit exits 1 or 2 when tests fail, and ends with its summary; a run
+# that stopped (a crash, or PHPUnit's own error exits 2 too) has none.
+{ [ "$p8_status" -le 2 ] && grep -qE '^(Tests: |OK \()' "$work/p8.txt"; } || { echo "the p8 run stopped (exit $p8_status)"; exit 1; }
