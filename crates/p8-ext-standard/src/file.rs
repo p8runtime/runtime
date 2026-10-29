@@ -758,14 +758,15 @@ fn pathinfo(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Array(Rc::new(out)))
 }
 
-/// A directory's entries, "." and ".." included, sorted.
+/// A directory's entries as the system lists them (readdir's order, which
+/// PHP keeps and code like WordPress's theme scan shows), "." and ".."
+/// first.
 pub(crate) fn entries(p: &str) -> std::io::Result<Vec<Vec<u8>>> {
     use std::os::unix::ffi::OsStrExt;
     let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
     for e in std::fs::read_dir(p)? {
         names.push(e?.file_name().as_bytes().to_vec());
     }
-    names.sort();
     Ok(names)
 }
 
@@ -777,8 +778,11 @@ fn scandir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     match entries(&p) {
         Ok(mut names) => {
-            if args.len() > 1 && arg(args, 1).to_int() == 1 {
-                names.reverse();
+            // SCANDIR_SORT_ASCENDING (0), _DESCENDING (1), _NONE (2).
+            match if args.len() > 1 { arg(args, 1).to_int() } else { 0 } {
+                2 => {}
+                1 => names.sort_by(|a, b| b.cmp(a)),
+                _ => names.sort(),
             }
             Ok(Value::Array(Rc::new(PhpArray::from_list(names.into_iter().map(|n| Value::Str(PhpStr::new(n))).collect()))))
         }
@@ -848,7 +852,8 @@ pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
                 }
                 continue;
             }
-            if let Ok(names) = entries(&dir) {
+            if let Ok(mut names) = entries(&dir) {
+                names.sort();
                 for n in names {
                     let n = String::from_utf8_lossy(&n).into_owned();
                     if (n.starts_with('.') && !part.starts_with('.')) || n == "." || n == ".." {

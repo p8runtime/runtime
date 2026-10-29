@@ -3,7 +3,7 @@
 //!
 //! An object holds a file name and its path (SplFileInfo), or a listing
 //! and the entry it is on (the iterators). Directories list as p8's
-//! opendir() does: "." and ".." first, then the names sorted. A glob lists
+//! opendir() does: "." and "..", then the names in the system's order. A glob lists
 //! the matches' names, with the pattern's directory as the path.
 //!
 //! Reference: $PHP_SRC_PATH/ext/spl/spl_directory.c

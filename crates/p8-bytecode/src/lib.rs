@@ -336,6 +336,10 @@ pub enum Rare {
     /// `$GLOBALS[name] = &$v`: the global variable named by a becomes the
     /// reference in b.
     GlobalBind,
+    /// A call with `...` in it: a = whether the callable in b takes its
+    /// argument number `class` by reference (false when it is not callable;
+    /// the call reports that).
+    CallableArgByRef,
 }
 
 impl Instr {

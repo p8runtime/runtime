@@ -114,7 +114,7 @@ fn array_key_exists(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     Ok(Value::Bool(found))
 }
 
-fn matches(needle: &Value, v: &Value, strict: bool) -> bool {
+pub(crate) fn matches(needle: &Value, v: &Value, strict: bool) -> bool {
     if strict { needle.identical(v) } else { needle.loose_eq(v) }
 }
 

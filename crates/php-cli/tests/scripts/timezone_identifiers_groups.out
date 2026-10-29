@@ -1,0 +1,16 @@
+int(419)
+string(14) "Africa/Abidjan"
+string(3) "UTC"
+bool(false)
+bool(false)
+array(1) {
+  [0]=>
+  string(3) "UTC"
+}
+int(58)
+array(1) {
+  [0]=>
+  string(19) "Arctic/Longyearbyen"
+}
+int(63)
+string(32) "2f60348d9b5ead9dfce6e0d775a71569"

@@ -1,0 +1,25 @@
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+array(7) {
+  [0]=>
+  string(1) "."
+  [1]=>
+  string(2) ".."
+  [2]=>
+  string(4) "0num"
+  [3]=>
+  string(3) "Mid"
+  [4]=>
+  string(5) "alpha"
+  [5]=>
+  string(8) "beta.txt"
+  [6]=>
+  string(4) "zeta"
+}
+0num
+Mid
+alpha
+beta.txt
+zeta
