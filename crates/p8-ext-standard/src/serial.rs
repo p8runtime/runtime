@@ -137,11 +137,12 @@ impl Writer<'_> {
         } else {
             None
         };
-        // Every property by its serialized (mangled) name.
+        // Every property by its serialized (mangled) name; an uninitialized
+        // typed one too (Undef: __sleep may name it, then it is left out).
         let mut all: Vec<(Vec<u8>, Value)> = Vec::new();
         let slots = o.slots.borrow();
         for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-            if p.is_internal() || matches!(v, Value::Undef) {
+            if p.is_internal() {
                 continue;
             }
             let mangled = match p.visibility {
@@ -160,7 +161,7 @@ impl Writer<'_> {
             all.push((k, v.clone()));
         }
         let props: Vec<(Vec<u8>, Value)> = match only {
-            None => all,
+            None => all.into_iter().filter(|(_, v)| !matches!(v, Value::Undef)).collect(),
             // __sleep's names in its order, each the first of: the public
             // property, the object's class's private one, the protected one
             // (a name given mangled is that property); one there is none of
@@ -173,6 +174,7 @@ impl Writer<'_> {
                     let private = [b"\0", o.class.name.as_bytes(), b"\0", n].concat();
                     let protected = [b"\0*\0".as_slice(), n].concat();
                     match find(n).or_else(|| find(&private)).or_else(|| find(&protected)) {
+                        Some((_, Value::Undef)) => {}
                         Some(found) => out.push(found),
                         None => self.ctx.warn(&format!("serialize(): \"{}\" returned as member variable from __sleep() but does not exist", text(n))),
                     }
