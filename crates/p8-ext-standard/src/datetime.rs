@@ -903,13 +903,39 @@ fn zone_offset(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
     Ok(Value::Int(i64::from(local_of(&s).offset)))
 }
 
-fn list_identifiers(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let mut names: Vec<&str> = chrono_tz::TZ_VARIANTS
-        .iter()
-        .map(|z| z.name())
-        .filter(|n| n.contains('/') && !n.starts_with("Etc/") && !n.starts_with("US/") && !n.starts_with("SystemV/") || *n == "UTC")
-        .collect();
-    names.sort_unstable();
+/// The zones PHP's timezone database marks canonical, which
+/// DateTimeZone::ALL lists: PHP 8.4.27's (timezonedb 2026.5), one a line.
+/// chrono-tz cannot tell them from the "backward" aliases it also has.
+const CANONICAL_ZONES: &str = include_str!("tz_canonical.txt");
+
+/// DateTimeZone::listIdentifiers($timezoneGroup = ALL): the canonical
+/// zones in the groups (DateTimeZone::AFRICA | ...); ALL_WITH_BC adds the
+/// aliases.
+fn list_identifiers(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    const ALL_WITH_BC: i64 = 4095;
+    const GROUPS: [(i64, &str); 10] = [
+        (1, "Africa/"),
+        (2, "America/"),
+        (4, "Antarctica/"),
+        (8, "Arctic/"),
+        (16, "Asia/"),
+        (32, "Atlantic/"),
+        (64, "Australia/"),
+        (128, "Europe/"),
+        (256, "Indian/"),
+        (512, "Pacific/"),
+    ];
+    let group = if args.is_empty() { 2047 } else { arg(args, 0).to_int() };
+    let names: Vec<&str> = if group == ALL_WITH_BC {
+        let mut all: Vec<&str> = chrono_tz::TZ_VARIANTS.iter().map(|z| z.name()).collect();
+        all.sort_unstable();
+        all
+    } else {
+        CANONICAL_ZONES
+            .lines()
+            .filter(|n| (*n == "UTC" && group & 1024 != 0) || GROUPS.iter().any(|(bit, prefix)| group & bit != 0 && n.starts_with(prefix)))
+            .collect()
+    };
     Ok(Value::Array(Rc::new(PhpArray::from_list(names.into_iter().map(Value::str).collect()))))
 }
 

@@ -2669,6 +2669,11 @@ impl Context<'_> {
                         let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
                         reg!(a) = Value::Bool(set);
                     }
+                    Rare::CallableArgByRef => {
+                        let callee = reg!(b).clone();
+                        let by_ref = self.resolve_callable(&callee).is_ok_and(|t| self.takes_ref(&t, class as usize));
+                        reg!(a) = Value::Bool(by_ref);
+                    }
                     Rare::ReturnRef => {
                             let src = a;
                         let ret = self.frames.last().map_or(NO_RET, |f| f.ret);
@@ -2873,6 +2878,12 @@ impl Context<'_> {
                             let t = self.resolve_callable(&target)?;
                             self.place_args(&t, &a)?
                         }
+                        // References (the arguments compiled as ones) kept
+                        // for the parameters that take them.
+                        Value::Array(a) if a.values().any(|v| matches!(v, Value::Ref(_))) => {
+                            let t = self.resolve_callable(&target)?;
+                            a.values().enumerate().map(|(n, v)| if matches!(v, Value::Ref(_)) && self.takes_ref(&t, n) { v.clone() } else { v.deref() }).collect()
+                        }
                         Value::Array(a) => a.values().map(Value::deref).collect(),
                         _ => Vec::new(),
                     };
@@ -2889,7 +2900,18 @@ impl Context<'_> {
                 Instr::ArrayUnpack { arr, src } => {
                     let v = self.operand(w, func, src);
                     let items = match v {
-                        Value::Array(a) => a.iter().map(|(k, v)| (k.into_value(), v.deref())).collect(),
+                        // A reference held elsewhere too stays one (as PHP's
+                        // unpacking does): a call takes it by reference.
+                        Value::Array(a) => a
+                            .iter()
+                            .map(|(k, v)| {
+                                let v = match v {
+                                    Value::Ref(cell) if Rc::strong_count(cell) > 1 => v.clone(),
+                                    other => other.deref(),
+                                };
+                                (k.into_value(), v)
+                            })
+                            .collect(),
                         Value::Object(ref o) if o.class.is_a(b"traversable") => {
                             let items = self.iterate_all(regs, &v)?;
                             let w = &mut regs[base..base + func.nregs as usize];

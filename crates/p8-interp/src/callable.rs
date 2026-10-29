@@ -181,6 +181,15 @@ impl Context<'_> {
         Ok(self.new_closure(data))
     }
 
+    /// Whether `target` takes its argument `n` by reference.
+    pub(crate) fn takes_ref(&self, target: &Target, n: usize) -> bool {
+        match target {
+            Target::Builtin(i) => self.isolate.registry.by_ref(*i, n),
+            Target::Frame(MethodFrame { func: Code::User(f), .. }) => f.code.param_by_ref(n),
+            Target::Frame(MethodFrame { func: Code::Native(..), .. }) => false,
+        }
+    }
+
     /// What `callable` calls, with PHP's error when it is not callable.
     pub(crate) fn resolve_callable(&mut self, callable: &Value) -> Result<Target, Throw> {
         match callable.deref() {
@@ -260,9 +269,13 @@ impl Context<'_> {
     pub(crate) fn call_value(&mut self, regs: &mut Vec<Value>, callee: &Value, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
         match self.resolve_callable(callee)? {
             Target::Frame(m) => {
-                // Arguments arrive by value: a reference is read through.
-                for r in &mut regs[args..args + argc as usize] {
-                    if let Value::Ref(cell) = r {
+                // Arguments arrive by value: a reference is read through,
+                // unless its parameter takes one (a spread call's).
+                let by_ref = |n: usize| matches!(&m.func, Code::User(f) if f.code.param_by_ref(n));
+                for (n, r) in regs[args..args + argc as usize].iter_mut().enumerate() {
+                    if let Value::Ref(cell) = r
+                        && !by_ref(n)
+                    {
                         let v = cell.borrow().clone();
                         *r = v;
                     }
@@ -294,6 +307,11 @@ impl Context<'_> {
             Target::Builtin(i) => {
                 // A builtin that calls back finds the registers lent; it is
                 // running, for its messages' prefix and stack traces.
+                for (n, a) in args.iter_mut().enumerate() {
+                    if matches!(a, Value::Ref(_)) && !self.isolate.registry.by_ref(i, n) {
+                        *a = a.deref();
+                    }
+                }
                 std::mem::swap(&mut self.isolate.regs, regs);
                 let name = self.isolate.registry.function(i).name;
                 self.natives.push(crate::NativeCall { depth: self.frames.len(), name, args: args.iter().map(Value::deref).collect(), top: false });

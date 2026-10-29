@@ -74,7 +74,9 @@ fn call_user_func(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 
 fn call_user_func_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callable = arg(args, 0);
-    let mut rest: Vec<Value> = array(args, 1).values().map(Value::deref).collect();
+    // References in the list stay ones: the callee takes them where its
+    // parameters do.
+    let mut rest: Vec<Value> = array(args, 1).values().cloned().collect();
     ctx.call(&callable, &mut rest)
 }
 

@@ -816,6 +816,9 @@ fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
 
 pub struct Compiler<'src> {
     source: &'src [u8],
+    /// The temporaries holding references a spread call's list was given
+    /// (freed after the call).
+    spread_refs: Vec<Reg>,
     /// The assignment being compiled is a statement's: its value is not
     /// used, so the variable itself can stand for it.
     unused_result: bool,
@@ -879,6 +882,7 @@ impl<'src> Compiler<'src> {
         line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
         Compiler {
             source,
+            spread_refs: Vec::new(),
             unused_result: false,
             registry,
             file: Arc::from(file),
@@ -2037,7 +2041,7 @@ impl<'src> Compiler<'src> {
         };
         f.emit(Instr::New { dst, class });
         if needs_spread(args) {
-            let list = self.spread_list(f, args)?;
+            let list = self.spread_list(f, args, None)?;
             f.emit(Instr::ConstructSpread { obj: dst, args: list });
         } else {
             let (base, argc) = self.args_by_value(f, args)?;
@@ -2455,22 +2459,60 @@ impl<'src> Compiler<'src> {
     /// A call with `...$spread` arguments: the arguments as one list,
     /// and `callee` called on it.
     fn spread_call(&mut self, f: &mut FnBuilder, callee: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
-        let list = self.spread_list(f, args)?;
+        let outer = std::mem::take(&mut self.spread_refs);
+        let list = self.spread_list(f, args, Some(callee))?;
         let dst = f.temp();
         f.emit(Instr::CallSpread { dst, callee, args: list });
+        // The list and the elements' references in it let go, so a
+        // reference only the call needed is not one after.
+        f.emit(Instr::Free { reg: list });
+        for r in std::mem::replace(&mut self.spread_refs, outer) {
+            f.emit(Instr::Free { reg: r });
+        }
         Ok(dst)
     }
 
-    /// The arguments of a call with `...` in it, as one array.
-    fn spread_list(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
+    /// The arguments of a call with `...` in it, as one array. With the
+    /// `callee`, a variable, element or property passed where it takes a
+    /// reference goes in as one (asked when the call runs).
+    fn spread_list(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg], callee: Option<Reg>) -> Result<Reg> {
         let list = f.temp();
         f.emit(Instr::NewArray { dst: list });
         let mut named = false;
-        for arg in args {
+        for (n, arg) in args.iter().enumerate() {
             let line = self.line(arg.span);
             if named && arg.name.is_none() {
                 let message = if arg.unpack { "Cannot use argument unpacking after named arguments" } else { "Cannot use positional argument after named argument" };
                 return Err(CompileError { message: message.into(), line });
+            }
+            // Positional arguments come before any `...`: n is the parameter.
+            if let Some(callee) = callee
+                && arg.name.is_none()
+                && !arg.unpack
+                && self.can_ref(arg.value)
+            {
+                let flag = f.temp();
+                f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16));
+                let (by_ref, by_value) = match arg.value {
+                    Expr::Variable { name, .. } => (f.cv(&self.text(*name)[1..]), None),
+                    value => {
+                        let r = f.temp();
+                        self.ref_or_value_with(f, value, r, flag)?;
+                        self.spread_refs.push(r);
+                        (r, Some(r))
+                    }
+                };
+                let value_at = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
+                f.emit(Instr::rare(Rare::ArrayPushRef, list, by_ref, 0, 0));
+                let end = f.emit(Instr::Jump { target: 0 });
+                f.patch(value_at, f.here());
+                let v = match by_value {
+                    Some(r) => r,
+                    None => self.expr(f, arg.value)?,
+                };
+                f.emit(Instr::ArrayPush { arr: list, val: v });
+                f.patch(end, f.here());
+                continue;
             }
             let v = self.expr(f, arg.value)?;
             match arg.name {
@@ -3320,27 +3362,17 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::AssignStaticPropOp { op, class, name, val: one, dst: scratch });
                 dst
             }
+            // `++$a[k]`, `$o->p[k]--`, `++C::$s[k]`: a property or static
+            // root is reached through a reference, released after.
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: target @ Expr::ArrayDimFetch { .. }, .. }
-                if !dim_root_is_prop(target) && self.globals_dim(target).is_none() =>
+                if self.globals_dim(target).is_none() =>
             {
-                let (var, keys, n, append) = self.dim_path(f, target)?;
-                if append {
-                    return Err(self.unsupported(target.span(), "++/-- on []"));
-                }
-                let dst = f.temp();
-                f.emit(Instr::DimIncDec { var, keys, n, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
-                dst
+                self.dim_incdec(f, target, matches!(op, UnaryOp::PreInc), false)?
             }
             Expr::PostInc { var: target @ Expr::ArrayDimFetch { .. }, .. } | Expr::PostDec { var: target @ Expr::ArrayDimFetch { .. }, .. }
-                if !dim_root_is_prop(target) && self.globals_dim(target).is_none() =>
+                if self.globals_dim(target).is_none() =>
             {
-                let (var, keys, n, append) = self.dim_path(f, target)?;
-                if append {
-                    return Err(self.unsupported(target.span(), "++/-- on []"));
-                }
-                let dst = f.temp();
-                f.emit(Instr::DimIncDec { var, keys, n, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
-                dst
+                self.dim_incdec(f, target, matches!(e, Expr::PostInc { .. }), true)?
             }
             Expr::Unary { op, expr, span } => match op {
                 UnaryOp::PreInc | UnaryOp::PreDec => {
@@ -3584,7 +3616,7 @@ impl<'src> Compiler<'src> {
                 };
                 f.emit(Instr::New { dst, class });
                 if needs_spread(args) {
-                    let list = self.spread_list(f, args)?;
+                    let list = self.spread_list(f, args, None)?;
                     f.emit(Instr::ConstructSpread { obj: dst, args: list });
                 } else {
                     let (base, argc) = self.args_by_value(f, args)?;
@@ -3948,6 +3980,19 @@ impl<'src> Compiler<'src> {
             Expr::IndirectVariable { name, .. } => self.var_get(f, name, false)?,
             other => return Err(self.unsupported(other.span(), &format!("this expression ({})", kind(other)))),
         })
+    }
+
+    fn dim_incdec(&mut self, f: &mut FnBuilder, target: &Expr, inc: bool, post: bool) -> Result<Reg> {
+        let (var, keys, n, append, held) = self.ref_dim_path(f, target)?;
+        if append {
+            return Err(self.unsupported(target.span(), "++/-- on []"));
+        }
+        let dst = f.temp();
+        f.emit(Instr::DimIncDec { var, keys, n, dst, inc, post });
+        if let Some(h) = held {
+            f.emit(Instr::Free { reg: h });
+        }
+        Ok(dst)
     }
 
     fn inc_target(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {

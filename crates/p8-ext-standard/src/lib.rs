@@ -428,9 +428,17 @@ fn range(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Array(Rc::new(PhpArray::from_list(values))))
 }
 
+/// array_keys($array, $filter_value, $strict = false): with a filter value
+/// (even null), only the keys whose values match it.
 fn array_keys(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let filter = (args.len() > 1).then(|| (arg(args, 1), args.len() > 2 && arg(args, 2).to_bool()));
     Ok(match arg(args, 0) {
-        Value::Array(a) => Value::Array(Rc::new(PhpArray::from_list(a.iter().map(|(k, _)| k.to_value()).collect()))),
+        Value::Array(a) => Value::Array(Rc::new(PhpArray::from_list(
+            a.iter()
+                .filter(|(_, v)| filter.as_ref().is_none_or(|(needle, strict)| array::matches(needle, &v.deref(), *strict)))
+                .map(|(k, _)| k.to_value())
+                .collect(),
+        ))),
         _ => Value::Null,
     })
 }
