@@ -1,0 +1,14 @@
+[package]
+name = "p8-ext-gd"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's gd extension: GdImage and the image* functions over pure-Rust codecs (no libgd)"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+# Pure-Rust codecs only: png, zune-jpeg (+ the crate's own JPEG encoder), gif, image-webp, bmp.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+color_quant = "1"
+png = "0.18"
+gif = "0.14"
