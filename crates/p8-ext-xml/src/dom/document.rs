@@ -83,7 +83,7 @@ fn load(ctx: &mut dyn Ctx, this: &Rc<Object>, data: Vec<u8>, filename: Option<St
             break;
         }
         let msg = e.message.trim_end_matches('\n');
-        ctx.warn(&format!("{func}(): {msg} in {where_}, line: {}", e.line));
+        crate::libxml::report(ctx, e, |ctx| ctx.warn(&format!("{func}(): {msg} in {where_}, line: {}", e.line)));
     }
     if !parser.well_formed && flags & build::RECOVER == 0 {
         return Ok(Value::Bool(false));
@@ -944,7 +944,7 @@ pub fn append_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     let wrapped = [b"<w>".as_slice(), &xml, b"</w>"].concat();
     let parser = build::parse(&mut tmp, wrapped, None, 0);
     for e in &parser.errors {
-        ctx.warn(&format!("DOMDocumentFragment::appendXML(): {} in Entity, line: {}", e.message.trim_end_matches('\n'), e.line));
+        crate::libxml::report(ctx, e, |ctx| ctx.warn(&format!("DOMDocumentFragment::appendXML(): {} in Entity, line: {}", e.message.trim_end_matches('\n'), e.line)));
     }
     if !parser.well_formed {
         return Ok(Value::Bool(false));

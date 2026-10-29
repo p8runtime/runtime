@@ -1,0 +1,98 @@
+bool(true)
+bool(false)
+bool(false)
+array(0) {
+}
+
+Warning: DOMDocument::loadXML(): Opening and ending tag mismatch: b line 1 and a in Entity, line: 1 in %s on line 5
+
+Warning: DOMDocument::loadXML(): Premature end of data in tag a line 1 in Entity, line: 1 in %s on line 5
+bool(false)
+object(LibXMLError)#2 (6) {
+  ["level"]=>
+  int(3)
+  ["code"]=>
+  int(77)
+  ["column"]=>
+  int(11)
+  ["message"]=>
+  string(38) "Premature end of data in tag a line 1
+"
+  ["file"]=>
+  string(0) ""
+  ["line"]=>
+  int(1)
+}
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+int(2)
+bool(false)
+array(3) {
+  [0]=>
+  object(LibXMLError)#4 (6) {
+    ["level"]=>
+    int(3)
+    ["code"]=>
+    int(76)
+    ["column"]=>
+    int(11)
+    ["message"]=>
+    string(48) "Opening and ending tag mismatch: b line 1 and a
+"
+    ["file"]=>
+    string(0) ""
+    ["line"]=>
+    int(1)
+  }
+  [1]=>
+  object(LibXMLError)#3 (6) {
+    ["level"]=>
+    int(3)
+    ["code"]=>
+    int(77)
+    ["column"]=>
+    int(11)
+    ["message"]=>
+    string(38) "Premature end of data in tag a line 1
+"
+    ["file"]=>
+    string(0) ""
+    ["line"]=>
+    int(1)
+  }
+  [2]=>
+  object(LibXMLError)#5 (6) {
+    ["level"]=>
+    int(3)
+    ["code"]=>
+    int(77)
+    ["column"]=>
+    int(4)
+    ["message"]=>
+    string(38) "Premature end of data in tag x line 1
+"
+    ["file"]=>
+    string(0) ""
+    ["line"]=>
+    int(1)
+  }
+}
+array(0) {
+}
+bool(false)
+bool(false)
+bool(true)
+array(0) {
+}
+bool(true)
+
+Deprecated: Function libxml_disable_entity_loader() is deprecated since 8.0, as external entity loading is disabled by default in %s on line 12
+
+Deprecated: Function libxml_disable_entity_loader() is deprecated since 8.0, as external entity loading is disabled by default in %s on line 12
+bool(false)
+bool(true)
+NULL
+bool(true)
+bool(true)
