@@ -14,6 +14,10 @@
 # Every response and mail must be byte-identical, and so must the rows the
 # writes leave, apart from the clock readings. Exit 0 when they all are.
 #
+# Each check is also written to apps.jsonl in the work directory (the
+# p8-test-suite "Real apps" data): the apps it shows working, what it did,
+# and whether it matched.
+#
 # Usage: crates/php-cli/tests/wordpress/gate.sh [path to php2]
 # Needs docker. Works in .tmp/wordpress-gate; MariaDB listens on
 # 127.0.0.1:3307 (container p8-mariadb, network p8net).
@@ -128,6 +132,42 @@ done
 sql -e "UPDATE wp_p8.wp_options o JOIN wp_php.wp_options r USING (option_name) SET o.option_value = r.option_value WHERE option_name LIKE '%\\_key' OR option_name LIKE '%\\_salt';"
 
 failed=0
+# apps.jsonl: the run, each app (name, version from its own header, kind,
+# where it comes from), then a line per check naming the apps in $APPS.
+json() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+version_of() { tr -d '\r' < "$1" | sed -n 's/^[ \t*]*Version:[ \t]*\([^ \t]*\).*/\1/p' | head -1; }
+apps_out=$work/apps.jsonl
+printf '{"type":"run","p8":"%s","php":"8.4.27","wordpress":"%s"}\n' "$(git -C "$repo" rev-parse HEAD)" "$version" > "$apps_out"
+app() {
+    printf '{"type":"app","name":"%s","version":"%s","kind":"%s","source":"%s"}\n' "$(json "$1")" "$(json "$2")" "$3" "$(json "$4")" >> "$apps_out"
+}
+record() {
+    local names="" n first=1 IFS=,
+    for n in $APPS; do
+        [ $first = 1 ] || names="$names,"
+        names="$names\"$(json "$n")\""
+        first=0
+    done
+    printf '{"type":"check","apps":[%s],"check":"%s","what":"%s","as":"%s","status":"%s","bytes":%s}\n' \
+        "$names" "$(json "$1")" "$2" "$3" "$4" "$5" >> "$apps_out"
+}
+themes=wordpress/wp-content/themes plugins=wordpress/wp-content/plugins
+app WordPress "$version" application "https://wordpress.org/wordpress-$version.tar.gz"
+app "Twenty Twenty-Five" "$(version_of $themes/twentytwentyfive/style.css)" theme https://wordpress.org/themes/twentytwentyfive/
+app "Twenty Twenty-Four" "$(version_of $themes/twentytwentyfour/style.css)" theme https://wordpress.org/themes/twentytwentyfour/
+app "Twenty Twenty-Three" "$(version_of $themes/twentytwentythree/style.css)" theme https://wordpress.org/themes/twentytwentythree/
+app "Twenty Twenty-One" "$(version_of $themes/twentytwentyone/style.css)" theme https://wordpress.org/themes/twentytwentyone/
+app Akismet "$(version_of $plugins/akismet/akismet.php)" plugin https://wordpress.org/plugins/akismet/
+app "Hello Dolly" "$(version_of $plugins/hello.php)" plugin https://wordpress.org/plugins/hello-dolly/
+app "Classic Editor" "$(version_of $plugins/classic-editor/classic-editor.php)" plugin https://wordpress.org/plugins/classic-editor/
+app "Contact Form 7" "$(version_of $plugins/contact-form-7/wp-contact-form-7.php)" plugin https://wordpress.org/plugins/contact-form-7/
+app "Yoast SEO" "$(version_of $plugins/wordpress-seo/wp-seo.php)" plugin https://wordpress.org/plugins/wordpress-seo/
+app WooCommerce "$(version_of $plugins/woocommerce/woocommerce.php)" plugin https://wordpress.org/plugins/woocommerce/
+APPS="WordPress"
+install_status=pass
+cmp -s install.p8.out install.php.out || install_status=fail
+record "wp_install()" install admin $install_status "$(wc -c < install.p8.out | tr -d ' ')"
+APPS="WordPress,Twenty Twenty-Five"
 # One request under both, its variables given as NAME=value: the response
 # and the mail it sent must match.
 request() {
@@ -138,6 +178,20 @@ request() {
     (export "$@"; p8 page.php || true) 2> "mail$name.p8.txt" | clock /dev/stdin > "page$name.p8.html"
     clock "mail$name.php.txt" > "mail$name.php.norm"
     clock "mail$name.p8.txt" > "mail$name.p8.norm"
+    local what=page as=visitor bytes status=pass mailed=pass
+    case "$label" in POST*) what=write ;; esac
+    case " $* " in *" WPUSER=1 "*) as=admin ;; esac
+    bytes=$(wc -c < "page$name.p8.html" | tr -d ' ')
+    cmp -s "page$name.p8.html" "page$name.php.html" || status=fail
+    cmp -s "mail$name.p8.norm" "mail$name.php.norm" || mailed=fail
+    # The check's name: the request, without the phase it is grouped under
+    # (the apps say that), and the pages re-read after the writes so marked.
+    local check="${label#*: }"
+    case "$label" in "after: "*) check="$check after the writes" ;; esac
+    record "$check" $what $as $status "$bytes"
+    if [ -s "mail$name.php.txt" ] || [ -s "mail$name.p8.txt" ]; then
+        record "mail sent by $check" mail $as $mailed "$(wc -c < "mail$name.p8.txt" | tr -d ' ')"
+    fi
     if ! cmp -s "page$name.p8.html" "page$name.php.html"; then
         echo "FAIL $label (p8 $(wc -c < "page$name.p8.html" | tr -d ' ') bytes, PHP $(wc -c < "page$name.php.html" | tr -d ' '))"
         diff <(sed 's/></>\n</g' "page$name.p8.html") <(sed 's/></>\n</g' "page$name.php.html") | head -20 || true
@@ -163,6 +217,7 @@ for req in 0:/ 0:/?p=1 0:/?feed=rss2 0:/?rest_route=/ 0:/?s=hello 0:/wp-login.ph
 done
 
 # The writes. The admin publishes the draft post-new.php made above.
+APPS="WordPress"
 draft=$(sql -N -e "SELECT MAX(ID) FROM wp_php.wp_posts WHERE post_status='auto-draft'")
 request "POST /wp-comments-post.php" WPURL=/wp-comments-post.php WPIP=192.0.2.10 \
     WPPOST='comment_post_ID=1&author=Ada&email=ada%40example.com&url=&comment=Hello+from+a+visitor.&submit=Post+Comment&comment_parent=0'
@@ -179,6 +234,7 @@ rows() {
 }
 rows wp_php > rows.php.txt
 rows wp_p8 > rows.p8.txt
+record "rows the writes left (posts, meta, comments, terms)" database admin "$(cmp -s rows.p8.txt rows.php.txt && echo pass || echo fail)" "$(wc -c < rows.p8.txt | tr -d ' ')"
 if cmp -s rows.p8.txt rows.php.txt; then
     echo "PASS the database ($(wc -l < rows.p8.txt | tr -d ' ') rows of posts, meta, comments and terms)"
 else
@@ -188,6 +244,7 @@ else
 fi
 
 # The pages that show them, with the writes' times (the clock) pinned.
+APPS="WordPress,Twenty Twenty-Five"
 for db in wp_php wp_p8; do
     sql "$db" -e "UPDATE wp_posts SET post_date='2026-01-02 12:00:00', post_date_gmt='2026-01-02 12:00:00', post_modified='2026-01-02 12:00:00', post_modified_gmt='2026-01-02 12:00:00' WHERE post_modified_gmt >= '$today';
         UPDATE wp_comments SET comment_date='2026-01-02 12:00:00', comment_date_gmt='2026-01-02 12:00:00' WHERE comment_date_gmt >= '$today';"
@@ -209,6 +266,7 @@ setup() {
     shift
     (export "$@"; php_ref setup.php || true) > setup.php.out 2>/dev/null
     (export "$@"; p8 setup.php || true) > setup.p8.out 2>/dev/null
+    record "$label" activate admin "$(cmp -s setup.p8.out setup.php.out && echo pass || echo fail)" "$(wc -c < setup.p8.out | tr -d ' ')"
     if cmp -s setup.p8.out setup.php.out; then
         echo "PASS $label: $(tr '\n' ';' < setup.p8.out)"
     else
@@ -217,20 +275,23 @@ setup() {
         failed=1
     fi
 }
-setup "Twenty Twenty-Four, Hello Dolly and Akismet" WPTHEME=twentytwentyfour WPPLUGINS=hello.php,akismet/akismet.php
+APPS="Twenty Twenty-Four,Hello Dolly,Akismet"
+setup "switch to Twenty Twenty-Four, activate Hello Dolly and Akismet" WPTHEME=twentytwentyfour WPPLUGINS=hello.php,akismet/akismet.php
 for req in 0:/ 0:/?p=1 0:/?cat=1 0:/?page_id=2 0:/?p=9999 1:/wp-admin/ 1:/wp-admin/plugins.php 1:/wp-admin/themes.php \
     '1:/wp-admin/options-general.php?page=akismet-key-config' 1:/wp-admin/site-editor.php 1:/wp-admin/customize.php; do
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "twentytwentyfour: $url" WPUSER="$user" WPURL="$url"
 done
-setup "Twenty Twenty-Three" WPTHEME=twentytwentythree
+APPS="Twenty Twenty-Three"
+setup "switch to Twenty Twenty-Three" WPTHEME=twentytwentythree
 for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?s=hello 1:/wp-admin/site-editor.php; do
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "twentytwentythree: $url" WPUSER="$user" WPURL="$url"
 done
-setup "Twenty Twenty-One, Classic Editor and Contact Form 7" WPTHEME=twentytwentyone \
+APPS="Twenty Twenty-One,Classic Editor,Contact Form 7"
+setup "switch to Twenty Twenty-One, activate Classic Editor and Contact Form 7" WPTHEME=twentytwentyone \
     WPPLUGINS=classic-editor/classic-editor.php,contact-form-7/wp-contact-form-7.php
 for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?cat=1 0:/?p=9999 1:/wp-admin/ 1:/wp-admin/post-new.php '1:/wp-admin/post.php?post=1&action=edit' \
     '1:/wp-admin/admin.php?page=wpcf7' '1:/wp-admin/admin.php?page=wpcf7-new' 1:/wp-admin/options-writing.php; do
@@ -240,14 +301,16 @@ for req in 0:/ 0:/?p=1 0:/?page_id=2 0:/?cat=1 0:/?p=9999 1:/wp-admin/ 1:/wp-adm
 done
 # (Not Yoast's dashboard yet: its support beacon reads curl_version(), and
 # p8 has no curl extension.)
-setup "Yoast SEO" WPPLUGINS=wordpress-seo/wp-seo.php
+APPS="Yoast SEO"
+setup "activate Yoast SEO" WPPLUGINS=wordpress-seo/wp-seo.php
 for req in 0:/ 0:/?p=1 0:/?cat=1 0:/?page_id=2 0:/?author=1 0:/?sitemap=index 0:/?feed=rss2 \
     1:/wp-admin/ '1:/wp-admin/post.php?post=1&action=edit' 1:/wp-admin/edit.php; do
     user=${req%%:*} url=${req#*:}
     [ "$user" = 0 ] && user=
     request "yoast: $url" WPUSER="$user" WPURL="$url"
 done
-setup "WooCommerce" WPPLUGINS=woocommerce/woocommerce.php
+APPS="WooCommerce"
+setup "activate WooCommerce" WPPLUGINS=woocommerce/woocommerce.php
 for req in 0:/ 0:/?post_type=product 0:/?p=1 '0:/?rest_route=/wc/store/v1/products' \
     1:/wp-admin/ '1:/wp-admin/edit.php?post_type=product' '1:/wp-admin/post-new.php?post_type=product' \
     '1:/wp-admin/admin.php?page=wc-settings' '1:/wp-admin/edit.php?post_type=shop_order'; do
