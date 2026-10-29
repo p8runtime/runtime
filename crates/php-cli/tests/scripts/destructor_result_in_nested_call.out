@@ -1,0 +1,10 @@
+string(6) "object"
+int(42)
+int(42)
+array(2) {
+  [0]=>
+  int(43)
+  [1]=>
+  int(44)
+}
+1,2,3

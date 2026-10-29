@@ -34,7 +34,7 @@ struct Handle {
     im: RefCell<Option<Img>>,
 }
 
-const SUPPORTED: i64 = 1 | 2 | 4 | 32 | 64;
+const SUPPORTED: i64 = 1 | 2 | 4 | 8 | 32 | 64;
 
 fn register(registry: &mut Registry) {
     registry.add_functions(BUILTINS);
@@ -50,7 +50,7 @@ fn register(registry: &mut Registry) {
     // other wrappers are read and written with PHP's own stream functions.
     registry.mark_reenters(&[
         "imagejpeg", "imagepng", "imagegif", "imagewebp", "imagebmp", "imagecreatefromjpeg", "imagecreatefrompng", "imagecreatefromgif",
-        "imagecreatefromwebp", "imagecreatefrombmp", "exif_read_data", "exif_imagetype", "exif_thumbnail",
+        "imagecreatefromwebp", "imagecreatefrombmp", "imagecreatefromwbmp", "imagewbmp", "exif_read_data", "exif_imagetype", "exif_thumbnail",
     ]);
     registry.add_module("gd");
     registry.add_module("exif");
@@ -122,6 +122,9 @@ static BUILTINS: &[Builtin] = &[
     b!("imagecreatefromgif", imagecreatefromgif),
     b!("imagecreatefromwebp", imagecreatefromwebp),
     b!("imagecreatefrombmp", imagecreatefrombmp),
+    b!("imagecreatefromwbmp", imagecreatefromwbmp),
+    b!("imagewbmp", imagewbmp),
+    b!("imagecolormatch", imagecolormatch),
     b!("imagedestroy", imagedestroy),
     b!("imagesx", imagesx),
     b!("imagesy", imagesy),
@@ -160,6 +163,8 @@ static BUILTINS: &[Builtin] = &[
     b!("imagefilledrectangle", imagefilledrectangle),
     b!("imageellipse", imageellipse),
     b!("imagefilledellipse", imagefilledellipse),
+    b!("imagearc", imagearc),
+    b!("imagefilledarc", imagefilledarc),
     b!("imagepolygon", imagepolygon),
     b!("imageopenpolygon", imageopenpolygon),
     b!("imagefilledpolygon", imagefilledpolygon),
@@ -253,7 +258,7 @@ fn gd_info(_: &mut dyn Ctx, _: &mut [Value]) -> R {
     set("GIF Create Support", Value::Bool(true));
     set("JPEG Support", Value::Bool(true));
     set("PNG Support", Value::Bool(true));
-    set("WBMP Support", Value::Bool(false));
+    set("WBMP Support", Value::Bool(true));
     set("XPM Support", Value::Bool(false));
     set("XBM Support", Value::Bool(false));
     set("WebP Support", Value::Bool(true));
@@ -392,6 +397,33 @@ fn imagecreatefrombmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     from_file(ctx, args, "imagecreatefrombmp", Format::Bmp)
 }
 
+fn imagecreatefromwbmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    from_file(ctx, args, "imagecreatefromwbmp", Format::Wbmp)
+}
+
+fn imagewbmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    check_target(ctx, "imagewbmp", &arg(args, 1))?;
+    let fg = if given(args, 2) { ci(args, 2) } else { 0 };
+    let bytes = read(args, 0, |im| codec::encode_wbmp(im, fg));
+    send(ctx, "imagewbmp", &arg(args, 1), &bytes)
+}
+
+fn imagecolormatch(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    let (a, b) = (object(args, 0), object(args, 1));
+    if Rc::ptr_eq(&a, &b) {
+        let tc = read(args, 0, |im| im.tc);
+        return Err(if tc { value_error(ctx, 2, "image2", "must be Palette") } else { value_error(ctx, 1, "image1", "must be TrueColor") });
+    }
+    let first = read(args, 0, Img::clone);
+    match with(args, 1, |second| gd::color_match(&first, second)) {
+        Ok(()) => ok(),
+        Err(-1) => Err(value_error(ctx, 1, "image1", "must be TrueColor")),
+        Err(-2) => Err(value_error(ctx, 2, "image2", "must be Palette")),
+        Err(-3) => Err(value_error(ctx, 2, "image2", "must be the same size as argument #1 ($im1)")),
+        Err(_) => Err(value_error(ctx, 2, "image2", "must have at least one color")),
+    }
+}
+
 fn imagedestroy(_: &mut dyn Ctx, _: &mut [Value]) -> R {
     ok()
 }
@@ -411,7 +443,7 @@ fn imageistruecolor(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imagepalettetotruecolor(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    with(args, 0, |im| im.to_truecolor());
+    with(args, 0, |im| im.make_truecolor());
     ok()
 }
 
@@ -657,10 +689,18 @@ fn imagecolordeallocate(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     ok()
 }
 
-fn imagecolorset(_: &mut dyn Ctx, args: &mut [Value]) -> R {
+fn imagecolorset(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let c = int(args, 1);
-    let ch = |i: usize| int(args, i).clamp(0, 255) as i32;
-    let (r, g, b, a) = (ch(2), ch(3), ch(4), int(args, 5).clamp(0, 127) as i32);
+    for (i, name) in [(2, "red"), (3, "green"), (4, "blue")] {
+        if !(0..=255).contains(&int(args, i)) {
+            return Err(value_error(ctx, i + 1, name, "must be between 0 and 255 (inclusive)"));
+        }
+    }
+    if given(args, 5) && !(0..=127).contains(&int(args, 5)) {
+        return Err(value_error(ctx, 6, "alpha", "must be between 0 and 127 (inclusive)"));
+    }
+    let ch = |i: usize| int(args, i) as i32;
+    let (r, g, b, a) = (ch(2), ch(3), ch(4), int(args, 5) as i32);
     let set = with(args, 0, |im| {
         if !im.tc && c >= 0 && (c as usize) < im.pal.len() {
             im.pal[c as usize] = gd::Pal { r, g, b, a, open: false };
@@ -675,12 +715,10 @@ fn imagecolorset(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn imagecolortransparent(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let set = given(args, 1).then(|| ci(args, 1));
     Ok(Value::Int(i64::from(with(args, 0, |im| {
-        if let Some(c) = set {
-            if im.tc {
-                im.transparent = c;
-            } else if c >= -1 && (c as isize) < im.pal.len() as isize {
-                im.transparent = c;
-            }
+        if let Some(c) = set
+            && (im.tc || (c >= -1 && (c as isize) < im.pal.len() as isize))
+        {
+            im.transparent = c;
         }
         im.transparent
     }))))
@@ -742,6 +780,18 @@ fn poly(ctx: &mut dyn Ctx, args: &[Value]) -> Result<(Vec<(i32, i32)>, i32), Thr
         return Err(value_error(ctx, 2, "points", "must have at least 2 * argument #3 ($num_points_or_color) elements"));
     }
     Ok(((0..num as usize).map(|i| (vals[2 * i], vals[2 * i + 1])).collect(), color))
+}
+
+fn imagearc(_: &mut dyn Ctx, args: &mut [Value]) -> R {
+    let a: Vec<i32> = (1..=7).map(|i| ci(args, i)).collect();
+    with(args, 0, |im| gd::arc(im, a[0], a[1], a[2], a[3], a[4], a[5], a[6], gd::ARC_NOFILL));
+    ok()
+}
+
+fn imagefilledarc(_: &mut dyn Ctx, args: &mut [Value]) -> R {
+    let a: Vec<i32> = (1..=8).map(|i| ci(args, i)).collect();
+    with(args, 0, |im| gd::arc(im, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]));
+    ok()
 }
 
 fn imagepolygon(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -849,6 +899,14 @@ fn imagecrop(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let y = rect_field(ctx, &rect, "y", "imagecrop(): Argument #2 ($rectangle) must have a \"y\" key")?;
     let w = rect_field(ctx, &rect, "width", "imagecrop(): Argument #2 ($rectangle) must have a \"width\" key")?;
     let h = rect_field(ctx, &rect, "height", "imagecrop(): Argument #2 ($rectangle) must have a \"height\" key")?;
+    for (pos, len, p, l) in [(x, w, "x", "width"), (y, h, "y", "height")] {
+        if pos > 0 && len > i32::MAX - pos {
+            return Err(ctx.throw("ValueError", format!("imagecrop(): Argument #2 ($rectangle) overflow with \"{p}\" and \"{l}\" keys")));
+        }
+        if pos < 0 && len < i32::MIN - pos {
+            return Err(ctx.throw("ValueError", format!("imagecrop(): Argument #2 ($rectangle) underflow with \"{p}\" and \"{l}\" keys")));
+        }
+    }
     if w <= 0 || h <= 0 {
         ctx.warn("imagecrop(): One parameter to a memory allocation multiplication is negative or zero, failing operation gracefully\n");
         return Ok(Value::Bool(false));
@@ -867,8 +925,13 @@ fn imagecropauto(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if !(0..=5).contains(&mode) {
         return Err(value_error(ctx, 2, "mode", "must be a valid mode"));
     }
-    if mode == 5 && !(0.0..=1.0).contains(&threshold) {
-        return Err(value_error(ctx, 3, "threshold", "must be between 0.0 and 1.0"));
+    if mode == 5 {
+        if color < 0 {
+            return Err(value_error(ctx, 4, "color", "must be greater than or equal to 0 when using the threshold mode"));
+        }
+        if !(0.0..=1.0).contains(&threshold) {
+            return Err(value_error(ctx, 3, "threshold", "must be between 0.0 and 1.0"));
+        }
     }
     let r = read(args, 0, |im| crop_auto(im, mode, threshold, color));
     match r {
@@ -924,29 +987,51 @@ fn imagescale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let mut w = int(args, 1);
     let mut h = if given(args, 2) { int(args, 2) } else { -1 };
     let mode = if given(args, 3) { int(args, 3) } else { 3 };
+    if !(0..=21).contains(&mode) {
+        return Err(value_error(ctx, 4, "mode", "must be one of the GD_* constants"));
+    }
+    if h < 0 && w < 0 {
+        return Err(ctx.throw("ValueError", "Argument #2 ($width) and argument #3 ($height) cannot be both negative".into()));
+    }
     let (sx, sy) = read(args, 0, |im| (i64::from(im.w), i64::from(im.h)));
-    if h < 0 && w > 0 && sx > 0 {
-        h = w.saturating_mul(sy) / sx;
-    } else if w < 0 && h > 0 && sy > 0 {
-        w = h.saturating_mul(sx) / sy;
+    if h < 0 || w < 0 {
+        if sx != 0 && h < 0 {
+            if w > i64::MAX / sy {
+                return Err(value_error(ctx, 2, "width", &format!("must be less than or equal to {}", i64::MAX / sy)));
+            }
+            h = w * sy / sx;
+        }
+        if sy != 0 && w < 0 {
+            if h > i64::MAX / sx {
+                return Err(value_error(ctx, 3, "height", &format!("must be less than or equal to {}", i64::MAX / sx)));
+            }
+            w = h * sx / sy;
+        }
     }
     let max = i64::from(i32::MAX);
-    if w < 1 || w > max {
+    if w <= 0 || w > max {
         return Err(value_error(ctx, 2, "width", "must be between 1 and 2147483647"));
     }
-    if h < 1 || h > max {
+    if h <= 0 || h > max {
         return Err(value_error(ctx, 3, "height", "must be between 1 and 2147483647"));
     }
     if w * h > (1 << 28) {
         return Ok(Value::Bool(false));
     }
-    let out = read(args, 0, |im| gd::scale(im, w as i32, h as i32, mode == 16, mode == 3 || mode == 5));
+    let out = read(args, 0, |im| gd::scale(im, w as i32, h as i32, mode == 16, mode == 3 || mode == 5 || mode == 0));
     Ok(new_image(ctx, out))
 }
 
 fn imagerotate(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let angle = arg(args, 1).to_float();
+    let (lo, hi) = (i32::MIN / 100, i32::MAX / 100);
+    if angle < f64::from(lo) || angle > f64::from(hi) {
+        return Err(value_error(ctx, 2, "angle", &format!("must be between {lo} and {hi}")));
+    }
     let bg = ci(args, 2);
+    if bg < 0 {
+        return Ok(Value::Bool(false));
+    }
     let out = read(args, 0, |im| gd::rotate(im, angle, bg));
     Ok(new_image(ctx, out))
 }
@@ -960,8 +1045,16 @@ fn imageflip(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     ok()
 }
 
-fn imagegammacorrect(_: &mut dyn Ctx, args: &mut [Value]) -> R {
+fn imagegammacorrect(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let (input, output) = (arg(args, 1).to_float(), arg(args, 2).to_float());
+    for (v, n, name) in [(input, 2, "input_gamma"), (output, 3, "output_gamma")] {
+        if v <= 0.0 {
+            return Err(value_error(ctx, n, name, "must be greater than 0"));
+        }
+        if !v.is_finite() {
+            return Err(value_error(ctx, n, name, "must be finite"));
+        }
+    }
     with(args, 0, |im| {
         let map = |v: i32| ((f64::from(v) / 255.0).powf(input).powf(1.0 / output) * 255.0 + 0.5) as i32;
         if im.tc {
@@ -1022,6 +1115,7 @@ fn convolve(im: &mut Img, m: [[f32; 3]; 3], div: f32, offset: f32) {
 }
 
 /// gdImageSelectiveBlur: neighbours weigh in by how close they are in colour.
+#[allow(clippy::needless_range_loop)] // the 3x3 window indexes the weights and the pixels together
 fn selective_blur(im: &mut Img) {
     let src = im.clone();
     for y in 0..im.h {
@@ -1121,8 +1215,33 @@ fn scatter(im: &mut Img, sub: i32, plus: i32) {
 
 fn imagefilter(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let filter = int(args, 1);
+    if args.len() > 6 {
+        return Err(ctx.throw("ArgumentCountError", "Wrong parameter count for imagefilter()".into()));
+    }
     if !(0..=12).contains(&filter) {
         return Err(value_error(ctx, 2, "filter", "must be one of the IMG_FILTER_* filter constants"));
+    }
+    // Each filter's own parameter list (zend_parse_parameters' arity messages).
+    let (min, max) = match filter {
+        2 | 3 | 10 => (3, 3),
+        4 => (5, 6),
+        11 => (3, 4),
+        12 => (4, 5),
+        _ => (2, 2),
+    };
+    let n = args.len();
+    if n < min || n > max {
+        let (word, expect) = if min == max { ("exactly", min) } else if n < min { ("at least", min) } else { ("at most", max) };
+        let plural = if expect == 1 { "" } else { "s" };
+        return Err(ctx.throw("ArgumentCountError", format!("imagefilter() expects {word} {expect} argument{plural}, {n} given")));
+    }
+    if filter == 12 {
+        for (i, n) in [(2, 3), (3, 4)] {
+            if !(0..=i64::from(i32::MAX)).contains(&int(args, i)) {
+                let f = ctx.builtin_name();
+                return Err(ctx.throw("ValueError", format!("{f}(): Argument #{n} must be between 0 and {}", i32::MAX)));
+            }
+        }
     }
     let (a1, a2, a3) = (ci(args, 2), ci(args, 3), ci(args, 4));
     let smooth = arg(args, 2).to_float() as f32;
@@ -1145,7 +1264,7 @@ fn imagefilter(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         4 => per_pixel(im, |r, g, b, _| (r + a1, g + a2, b + a3)),
         _ => {
             if !im.tc {
-                im.to_truecolor();
+                im.make_truecolor();
             }
             match filter {
                 5 => convolve(im, [[-1.0, 0.0, -1.0], [0.0, 4.0, 0.0], [-1.0, 0.0, -1.0]], 1.0, 127.0),
@@ -1184,10 +1303,20 @@ fn imageconvolution(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             m[j][i] = v.deref().to_float() as f32;
         }
     }
-    let (div, off) = (arg(args, 2).to_float() as f32, arg(args, 3).to_float() as f32);
+    let (d, o) = (arg(args, 2).to_float(), arg(args, 3).to_float());
+    if !d.is_finite() {
+        return Err(value_error(ctx, 3, "divisor", "must be finite"));
+    }
+    if d == 0.0 {
+        return Err(value_error(ctx, 3, "divisor", "must not be 0"));
+    }
+    if !o.is_finite() {
+        return Err(value_error(ctx, 4, "offset", "must be finite"));
+    }
+    let (div, off) = (d as f32, o as f32);
     with(args, 0, |im| {
         if !im.tc {
-            im.to_truecolor();
+            im.make_truecolor();
         }
         convolve(im, m, div, off);
     });
@@ -1242,12 +1371,28 @@ fn send(ctx: &mut dyn Ctx, func: &str, to: &Value, bytes: &[u8]) -> R {
     }
 }
 
+/// The output target's own checks, before any work.
+fn check_target(ctx: &mut dyn Ctx, func: &str, to: &Value) -> Result<(), Throw> {
+    if matches!(to, Value::Null) || p8_runtime::stream::resource_of(to).is_some() {
+        return Ok(());
+    }
+    let path = to.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty);
+    if path.as_bytes().contains(&0) {
+        return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($file) must not contain null bytes")));
+    }
+    if path.as_bytes().is_empty() {
+        return Err(ctx.throw("ValueError", "Path must not be empty".into()));
+    }
+    Ok(())
+}
+
 fn encode_failed(ctx: &mut dyn Ctx, func: &str) -> R {
     ctx.warn(&format!("{func}(): Could not encode the image"));
     Ok(Value::Bool(false))
 }
 
 fn imagejpeg(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    check_target(ctx, "imagejpeg", &arg(args, 1))?;
     let q = if given(args, 2) { int(args, 2) } else { -1 };
     if !(-1..=100).contains(&q) {
         return Err(value_error(ctx, 3, "quality", "must be at between -1 and 100"));
@@ -1260,6 +1405,7 @@ fn imagejpeg(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imagepng(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    check_target(ctx, "imagepng", &arg(args, 1))?;
     let q = if given(args, 2) { int(args, 2) } else { -1 };
     if !(-1..=9).contains(&q) {
         return Err(value_error(ctx, 3, "quality", "must be between -1 and 9"));
@@ -1271,6 +1417,7 @@ fn imagepng(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imagegif(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    check_target(ctx, "imagegif", &arg(args, 1))?;
     match read(args, 0, codec::encode_gif) {
         Some(bytes) => send(ctx, "imagegif", &arg(args, 1), &bytes),
         None => encode_failed(ctx, "imagegif"),
@@ -1278,6 +1425,7 @@ fn imagegif(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imagewebp(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    check_target(ctx, "imagewebp", &arg(args, 1))?;
     let q = if given(args, 2) { int(args, 2) } else { -1 };
     if q < -1 {
         return Err(value_error(ctx, 3, "quality", "must be greater than or equal to -1"));
@@ -1293,6 +1441,7 @@ fn imagewebp(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imagebmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    check_target(ctx, "imagebmp", &arg(args, 1))?;
     let bytes = read(args, 0, codec::encode_bmp);
     send(ctx, "imagebmp", &arg(args, 1), &bytes)
 }

@@ -172,7 +172,7 @@ impl Img {
 
     /// The image as truecolor, in place (gdImagePaletteToTrueColor): the
     /// transparent colour's pixels become fully transparent black.
-    pub fn to_truecolor(&mut self) {
+    pub fn make_truecolor(&mut self) {
         if self.tc {
             return;
         }
@@ -221,77 +221,145 @@ pub fn alpha_blend(dst: i32, src: i32) -> i32 {
 
 // ---- drawing ----
 
+/// gdImageLine: Bresenham from the left (or upper) end, a stroke `thick` wide
+/// across the line's thin direction.
 pub fn line(im: &mut Img, x1: i32, y1: i32, x2: i32, y2: i32, color: i32) {
     let thick = im.thick.max(1);
     let (dx, dy) = ((x2 - x1).abs(), (y2 - y1).abs());
-    if thick > 1 {
-        // Offsets across the line's thin axis, as gd does for vertical and horizontal runs.
-        let (wid, vertical) = if dy <= dx { (thick, true) } else { (thick, false) };
-        let half = wid / 2;
-        for k in 0..wid {
-            let o = k - half;
-            if vertical {
-                thin_line(im, x1, y1 + o, x2, y2 + o, color);
-            } else {
-                thin_line(im, x1 + o, y1, x2 + o, y2, color);
-            }
-        }
+    if dx == 0 {
+        v_line(im, x1, y1, y2, color);
         return;
     }
-    thin_line(im, x1, y1, x2, y2, color);
-}
-
-fn thin_line(im: &mut Img, mut x1: i32, mut y1: i32, x2: i32, y2: i32, color: i32) {
-    let dx = (x2 - x1).abs();
-    let dy = (y2 - y1).abs();
-    let sx = if x1 < x2 { 1 } else { -1 };
-    let sy = if y1 < y2 { 1 } else { -1 };
-    let mut err = dx - dy;
-    loop {
-        im.set_pixel(x1, y1, color);
-        if x1 == x2 && y1 == y2 {
-            break;
+    if dy == 0 {
+        h_line(im, y1, x1, x2, color);
+        return;
+    }
+    if dy <= dx {
+        // More or less horizontal: the stroke is vertical.
+        let ac = f64::from(dy).atan2(f64::from(dx)).cos();
+        let wid = if ac != 0.0 { (f64::from(thick) / ac) as i32 } else { 1 }.max(1);
+        let (mut d, incr1, incr2) = (2 * dy - dx, 2 * dy, 2 * (dy - dx));
+        let (mut x, mut y, ydir, xend) = if x1 > x2 { (x2, y2, -1, x1) } else { (x1, y1, 1, x2) };
+        stroke(im, x, y - wid / 2, wid, true, color);
+        let up = (y2 - y1) * ydir > 0;
+        while x < xend {
+            x += 1;
+            if d < 0 {
+                d += incr1;
+            } else {
+                y += if up { 1 } else { -1 };
+                d += incr2;
+            }
+            stroke(im, x, y - wid / 2, wid, true, color);
         }
-        let e2 = 2 * err;
-        if e2 > -dy {
-            err -= dy;
-            x1 += sx;
-        }
-        if e2 < dx {
-            err += dx;
-            y1 += sy;
+    } else {
+        let a_s = f64::from(dy).atan2(f64::from(dx)).sin();
+        let wid = if a_s != 0.0 { (f64::from(thick) / a_s) as i32 } else { 1 }.max(1);
+        let (mut d, incr1, incr2) = (2 * dx - dy, 2 * dx, 2 * (dx - dy));
+        let (mut x, mut y, xdir, yend) = if y1 > y2 { (x2, y2, -1, y1) } else { (x1, y1, 1, y2) };
+        stroke(im, y, x - wid / 2, wid, false, color);
+        let right = (x2 - x1) * xdir > 0;
+        while y < yend {
+            y += 1;
+            if d < 0 {
+                d += incr1;
+            } else {
+                x += if right { 1 } else { -1 };
+                d += incr2;
+            }
+            stroke(im, y, x - wid / 2, wid, false, color);
         }
     }
 }
 
+/// `wid` pixels from `start` across: a column at `at` (vertical stroke), or a row at `at`.
+fn stroke(im: &mut Img, at: i32, start: i32, wid: i32, column: bool, color: i32) {
+    for w in start..start + wid {
+        if column {
+            im.set_pixel(at, w, color);
+        } else {
+            im.set_pixel(w, at, color);
+        }
+    }
+}
+
+fn h_line(im: &mut Img, y: i32, mut x1: i32, mut x2: i32, color: i32) {
+    if im.thick > 1 {
+        let half = im.thick >> 1;
+        filled_rectangle(im, x1, y - half, x2, y + im.thick - half - 1, color);
+    } else {
+        if x2 < x1 {
+            std::mem::swap(&mut x1, &mut x2);
+        }
+        for x in x1..=x2 {
+            im.set_pixel(x, y, color);
+        }
+    }
+}
+
+fn v_line(im: &mut Img, x: i32, mut y1: i32, mut y2: i32, color: i32) {
+    if im.thick > 1 {
+        let half = im.thick >> 1;
+        filled_rectangle(im, x - half, y1, x + im.thick - half - 1, y2, color);
+    } else {
+        if y2 < y1 {
+            std::mem::swap(&mut y1, &mut y2);
+        }
+        for y in y1..=y2 {
+            im.set_pixel(x, y, color);
+        }
+    }
+}
+
+/// gdImageRectangle.
 pub fn rectangle(im: &mut Img, mut x1: i32, mut y1: i32, mut x2: i32, mut y2: i32, color: i32) {
-    if x1 > x2 {
+    let thick = im.thick.max(1);
+    if x1 == x2 && y1 == y2 && thick == 1 {
+        im.set_pixel(x1, y1, color);
+        return;
+    }
+    if y2 < y1 {
+        std::mem::swap(&mut y1, &mut y2);
         std::mem::swap(&mut x1, &mut x2);
     }
-    if y1 > y2 {
-        std::mem::swap(&mut y1, &mut y2);
-    }
-    let t = im.thick.max(1);
-    if t > 1 {
-        let half = t / 2;
-        let (a, b) = (half, t - half - 1);
-        let (x1o, y1o, x2o, y2o) = (x1 - a, y1 - a, x2 + b, y2 + b);
-        let (x1i, y1i, x2i, y2i) = (x1 + b, y1 + b, x2 - a, y2 - a);
-        filled_rectangle(im, x1o, y1o, x2o, y1i, color);
-        filled_rectangle(im, x1o, y2i, x2o, y2o, color);
-        filled_rectangle(im, x1o, y1i + 1, x1i, y2i - 1, color);
-        filled_rectangle(im, x2i, y1i + 1, x2o, y2i - 1, color);
-        return;
-    }
-    thin_line(im, x1, y1, x2, y1, color);
-    if y2 > y1 {
-        thin_line(im, x1, y2, x2, y2, color);
-    }
-    if y2 - y1 > 1 {
-        thin_line(im, x1, y1 + 1, x1, y2 - 1, color);
-        if x2 > x1 {
-            thin_line(im, x2, y1 + 1, x2, y2 - 1, color);
+    if thick > 1 {
+        let half = thick >> 1;
+        let (x1ul, y1ul, x2lr, y2lr) = (x1 - half, y1 - half, x2 + half, y2 + half);
+        let mut cy = y1ul + thick;
+        while cy > y1ul {
+            cy -= 1;
+            for cx in x1ul..=x2lr {
+                im.set_pixel(cx, cy, color);
+            }
         }
+        cy = y2lr - thick;
+        while cy < y2lr {
+            cy += 1;
+            for cx in x1ul..=x2lr {
+                im.set_pixel(cx, cy, color);
+            }
+        }
+        cy = y1ul + thick - 1;
+        while cy < y2lr - thick {
+            cy += 1;
+            for cx in x1ul..=(x1ul + thick - 1) {
+                im.set_pixel(cx, cy, color);
+            }
+        }
+        cy = y1ul + thick - 1;
+        while cy < y2lr - thick {
+            cy += 1;
+            for cx in (x2lr - thick)..=x2lr {
+                im.set_pixel(cx, cy, color);
+            }
+        }
+    } else if x1 == x2 || y1 == y2 {
+        line(im, x1, y1, x2, y2, color);
+    } else {
+        line(im, x1, y1, x2, y1, color);
+        line(im, x1, y1 + 1, x1, y2 - 1, color);
+        line(im, x2, y2, x1, y2, color);
+        line(im, x2, y2 - 1, x2, y1 + 1, color);
     }
 }
 
@@ -375,68 +443,192 @@ pub fn fill_to_border(im: &mut Img, x: i32, y: i32, border: i32, color: i32) {
     im.blend = blend;
 }
 
-/// An ellipse centred on (cx, cy) with full width `w` and height `h`.
-pub fn ellipse(im: &mut Img, cx: i32, cy: i32, w: i32, h: i32, color: i32, filled: bool) {
-    let (a, b) = (f64::from(w) / 2.0, f64::from(h) / 2.0);
-    if a <= 0.0 || b <= 0.0 {
+/// gdImageEllipse / gdImageFilledEllipse: the midpoint algorithm on the
+/// half axes `w >> 1` and `h >> 1`.
+pub fn ellipse(im: &mut Img, mx: i32, my: i32, w: i32, h: i32, color: i32, filled: bool) {
+    let (a, b) = (i64::from(w >> 1), i64::from(h >> 1));
+    let (mut mx1, mut my1, mut mx2, mut my2) = (mx - a as i32, my, mx + a as i32, my);
+    if filled {
+        for x in mx1..=mx2 {
+            im.set_pixel(x, my, color);
+        }
+    } else {
+        im.set_pixel(mx + a as i32, my, color);
+        im.set_pixel(mx - a as i32, my, color);
+    }
+    let (aq, bq) = (a * a, b * b);
+    let (dx, dy) = (aq << 1, bq << 1);
+    let mut r = a * bq;
+    let mut rx = r << 1;
+    let mut ry = 0i64;
+    let mut x = a;
+    let mut old_y2 = -2;
+    while x > 0 {
+        if r > 0 {
+            my1 += 1;
+            my2 -= 1;
+            ry += dx;
+            r -= ry;
+        }
+        if r <= 0 {
+            x -= 1;
+            mx1 += 1;
+            mx2 -= 1;
+            rx -= dy;
+            r += rx;
+        }
+        if filled {
+            if old_y2 != my2 {
+                for i in mx1..=mx2 {
+                    im.set_pixel(i, my1, color);
+                    im.set_pixel(i, my2, color);
+                }
+            }
+            old_y2 = my2;
+        } else {
+            im.set_pixel(mx1, my1, color);
+            im.set_pixel(mx1, my2, color);
+            im.set_pixel(mx2, my1, color);
+            im.set_pixel(mx2, my2, color);
+        }
+    }
+}
+
+/// libgd's 1024-scaled sine and cosine of whole degrees.
+fn trig(i: i32, cos: bool) -> i64 {
+    let a = f64::from(i.rem_euclid(360)).to_radians();
+    let v = if cos { a.cos() } else { a.sin() };
+    (v * 1024.0) as i64
+}
+
+pub const ARC_CHORD: i32 = 1;
+pub const ARC_NOFILL: i32 = 2;
+pub const ARC_EDGED: i32 = 4;
+
+/// gdImageFilledArc (an outline when `style` has ARC_NOFILL).
+#[allow(clippy::too_many_arguments)] // libgd's own signature
+pub fn arc(im: &mut Img, cx: i32, cy: i32, w: i32, h: i32, mut s: i32, mut e: i32, color: i32, style: i32) {
+    if s % 360 == e % 360 {
+        s = 0;
+        e = 360;
+    } else {
+        if s > 360 {
+            s %= 360;
+        }
+        if e > 360 {
+            e %= 360;
+        }
+        while s < 0 {
+            s += 360;
+        }
+        while e < s {
+            e += 360;
+        }
+        if s == e {
+            s = 0;
+            e = 360;
+        }
+    }
+    let (mut lx, mut ly, mut fx, mut fy) = (0, 0, 0, 0);
+    for i in s..=e {
+        let x = (trig(i, true) * i64::from(w) / 2048) as i32 + cx;
+        let y = (trig(i, false) * i64::from(h) / 2048) as i32 + cy;
+        if i != s {
+            if style & ARC_CHORD == 0 {
+                if style & ARC_NOFILL != 0 {
+                    line(im, lx, ly, x, y, color);
+                } else {
+                    filled_polygon(im, &[(lx, ly), (x, y), (cx, cy)], color);
+                }
+            }
+        } else {
+            fx = x;
+            fy = y;
+        }
+        lx = x;
+        ly = y;
+    }
+    if style & ARC_CHORD != 0 {
+        if style & ARC_NOFILL != 0 {
+            if style & ARC_EDGED != 0 {
+                line(im, cx, cy, lx, ly, color);
+                line(im, cx, cy, fx, fy, color);
+            }
+            line(im, fx, fy, lx, ly, color);
+        } else {
+            filled_polygon(im, &[(fx, fy), (lx, ly), (cx, cy)], color);
+        }
+    } else if style & ARC_NOFILL != 0 && style & ARC_EDGED != 0 {
+        line(im, cx, cy, lx, ly, color);
+        line(im, cx, cy, fx, fy, color);
+    }
+}
+
+/// gdImagePolygon (`close`: the closing edge, drawn first as libgd does).
+pub fn polygon(im: &mut Img, pts: &[(i32, i32)], color: i32, close: bool) {
+    let Some(&(mut lx, mut ly)) = pts.first() else { return };
+    if close {
+        let (ex, ey) = pts[pts.len() - 1];
+        line(im, lx, ly, ex, ey, color);
+    }
+    for &(x, y) in &pts[1..] {
+        line(im, lx, ly, x, y, color);
+        (lx, ly) = (x, y);
+    }
+}
+
+/// gdImageFilledPolygon: scanlines filled between the sorted edge crossings.
+pub fn filled_polygon(im: &mut Img, p: &[(i32, i32)], color: i32) {
+    let n = p.len();
+    if n == 0 {
         return;
     }
-    let (ai, bi) = (a as i32, b as i32);
-    if filled {
-        for dy in -bi..=bi {
-            let t = 1.0 - (f64::from(dy) / b).powi(2);
-            if t < 0.0 {
+    let (mut miny, mut maxy) = (p[0].1, p[0].1);
+    for &(_, y) in &p[1..] {
+        miny = miny.min(y);
+        maxy = maxy.max(y);
+    }
+    if n > 1 && miny == maxy {
+        let (mut x1, mut x2) = (p[0].0, p[0].0);
+        for &(x, _) in &p[1..] {
+            if x < x1 {
+                x1 = x;
+            } else if x > x2 {
+                x2 = x;
+            }
+        }
+        line(im, x1, miny, x2, miny, color);
+        return;
+    }
+    let pmaxy = maxy;
+    let miny = miny.max(0);
+    let maxy = maxy.min(im.h - 1);
+    for y in miny..=maxy {
+        let mut ints: Vec<i32> = Vec::new();
+        for i in 0..n {
+            let (ind1, ind2) = if i == 0 { (n - 1, 0) } else { (i - 1, i) };
+            let (mut y1, mut y2) = (p[ind1].1, p[ind2].1);
+            let (x1, x2);
+            if y1 < y2 {
+                x1 = p[ind1].0;
+                x2 = p[ind2].0;
+            } else if y1 > y2 {
+                std::mem::swap(&mut y1, &mut y2);
+                x2 = p[ind1].0;
+                x1 = p[ind2].0;
+            } else {
                 continue;
             }
-            let dx = (a * t.sqrt()).round() as i32;
-            for x in (cx - dx)..=(cx + dx) {
-                im.set_pixel(x, cy + dy, color);
+            if y >= y1 && y < y2 {
+                ints.push((f64::from((y - y1) * (x2 - x1)) / f64::from(y2 - y1) + 0.5 + f64::from(x1)) as i32);
+            } else if y == pmaxy && y == y2 {
+                ints.push(x2);
             }
         }
-        return;
-    }
-    let steps = ((a + b) * 8.0) as i32 + 8;
-    let mut prev: Option<(i32, i32)> = None;
-    for i in 0..=steps {
-        let t = f64::from(i) * std::f64::consts::TAU / f64::from(steps);
-        let p = (cx + (f64::from(ai) * t.cos()).round() as i32, cy + (f64::from(bi) * t.sin()).round() as i32);
-        if let Some(q) = prev {
-            thin_line(im, q.0, q.1, p.0, p.1, color);
-        }
-        prev = Some(p);
-    }
-}
-
-pub fn polygon(im: &mut Img, pts: &[(i32, i32)], color: i32, close: bool) {
-    for w in pts.windows(2) {
-        line(im, w[0].0, w[0].1, w[1].0, w[1].1, color);
-    }
-    if close && pts.len() > 2 {
-        let (a, b) = (pts[pts.len() - 1], pts[0]);
-        line(im, a.0, a.1, b.0, b.1, color);
-    }
-}
-
-pub fn filled_polygon(im: &mut Img, pts: &[(i32, i32)], color: i32) {
-    if pts.is_empty() {
-        return;
-    }
-    let (min_y, max_y) = pts.iter().fold((i32::MAX, i32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
-    for y in min_y.max(im.clip.1)..=max_y.min(im.clip.3) {
-        let mut xs = Vec::new();
-        for i in 0..pts.len() {
-            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
-            if (a.1 <= y && b.1 > y) || (b.1 <= y && a.1 > y) {
-                let t = f64::from(y - a.1) / f64::from(b.1 - a.1);
-                xs.push((f64::from(a.0) + t * f64::from(b.0 - a.0)).round() as i32);
-            }
-        }
-        xs.sort_unstable();
-        for pair in xs.chunks(2) {
+        ints.sort_unstable();
+        for pair in ints.chunks(2) {
             if let [l, r] = pair {
-                for x in *l..=*r {
-                    im.set_pixel(x, y, color);
-                }
+                line(im, *l, y, *r, y, color);
             }
         }
     }
@@ -445,6 +637,7 @@ pub fn filled_polygon(im: &mut Img, pts: &[(i32, i32)], color: i32) {
 // ---- copying ----
 
 /// gdImageCopy.
+#[allow(clippy::too_many_arguments)] // libgd's own signature
 pub fn copy(dst: &mut Img, src: &Img, dx: i32, dy: i32, sx: i32, sy: i32, w: i32, h: i32) {
     for y in 0..h {
         for x in 0..w {
@@ -468,6 +661,7 @@ pub fn copy(dst: &mut Img, src: &Img, dx: i32, dy: i32, sx: i32, sy: i32, w: i32
 }
 
 /// gdImageCopyMerge (`gray`: gdImageCopyMergeGray).
+#[allow(clippy::too_many_arguments)] // libgd's own signature
 pub fn copy_merge(dst: &mut Img, src: &Img, dx: i32, dy: i32, sx: i32, sy: i32, w: i32, h: i32, pct: i32, gray: bool) {
     for y in 0..h {
         for x in 0..w {
@@ -510,6 +704,7 @@ fn spans(d: i32, s: i32) -> Vec<i32> {
 
 /// gdImageCopyResized: each source pixel is repeated over the destination
 /// pixels it covers (or dropped).
+#[allow(clippy::too_many_arguments)] // libgd's own signature
 pub fn copy_resized(dst: &mut Img, src: &Img, dx: i32, dy: i32, sx: i32, sy: i32, dw: i32, dh: i32, sw: i32, sh: i32) {
     if dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 {
         return;
@@ -549,6 +744,7 @@ pub fn copy_resized(dst: &mut Img, src: &Img, dx: i32, dy: i32, sx: i32, sy: i32
 
 /// gdImageCopyResampled: the area average of the source pixels under each
 /// destination pixel, weighted by their alpha.
+#[allow(clippy::too_many_arguments)] // libgd's own signature
 pub fn copy_resampled(dst: &mut Img, src: &Img, dx: i32, dy: i32, sx: i32, sy: i32, dw: i32, dh: i32, sw: i32, sh: i32) {
     if !dst.tc {
         return copy_resized(dst, src, dx, dy, sx, sy, dw, dh, sw, sh);
@@ -629,7 +825,7 @@ pub fn copy_resampled(dst: &mut Img, src: &Img, dx: i32, dy: i32, sx: i32, sy: i
 /// A truecolor copy of `im`'s pixels (palette converted).
 pub fn truecolor_copy(im: &Img) -> Img {
     let mut t = im.clone();
-    t.to_truecolor();
+    t.make_truecolor();
     t
 }
 
@@ -705,7 +901,7 @@ pub fn rotate_quarter(im: &Img, quarters: i32) -> Img {
 /// gdImageRotateInterpolated: any angle, bilinear, on a truecolor result.
 pub fn rotate(src: &Img, degrees: f64, bg: i32) -> Img {
     let mut s = src.clone();
-    s.to_truecolor();
+    s.make_truecolor();
     let angle = degrees.rem_euclid(360.0);
     let turns = angle.round() as i32;
     if (angle - f64::from(turns)).abs() < 1e-9 && turns % 90 == 0 {
@@ -797,7 +993,7 @@ fn scale_bilinear(s: &Img, out: &mut Img) {
 /// gdImageScale: a two-pass triangle filter to a truecolor image.
 pub fn scale(src: &Img, nw: i32, nh: i32, nearest: bool, bilinear_fixed: bool) -> Img {
     let mut s = src.clone();
-    s.to_truecolor();
+    s.make_truecolor();
     let mut out = Img::new(nw, nh, true);
     out.blend = false;
     out.res = s.res;
@@ -955,4 +1151,36 @@ pub fn quantize(im: &Img, max: usize) -> (Vec<Pal>, Vec<u8>, Option<u8>) {
         }
     }
     (pal, idx, trans_index)
+}
+
+/// gdImageColorMatch: each palette colour of `im2` becomes the mean of the
+/// `im1` pixels at the positions it covers. Err: libgd's result code.
+pub fn color_match(im1: &Img, im2: &mut Img) -> Result<(), i32> {
+    if !im1.tc {
+        return Err(-1);
+    }
+    if im2.tc {
+        return Err(-2);
+    }
+    if im1.w != im2.w || im1.h != im2.h {
+        return Err(-3);
+    }
+    if im2.pal.is_empty() {
+        return Err(-4);
+    }
+    let mut buf = vec![[0u64; 5]; im2.pal.len()];
+    for (i, &c) in im1.px.iter().enumerate() {
+        let Some(slot) = buf.get_mut(im2.px[i] as usize) else { continue };
+        slot[0] += 1;
+        slot[1] += red(c) as u64;
+        slot[2] += green(c) as u64;
+        slot[3] += blue(c) as u64;
+        slot[4] += alpha(c) as u64;
+    }
+    for (p, b) in im2.pal.iter_mut().zip(&buf) {
+        if let [Some(r), Some(g), Some(bl), Some(a)] = [1, 2, 3, 4].map(|k| b[k].checked_div(b[0])) {
+            (p.r, p.g, p.b, p.a) = (r as i32, g as i32, bl as i32, a as i32);
+        }
+    }
+    Ok(())
 }

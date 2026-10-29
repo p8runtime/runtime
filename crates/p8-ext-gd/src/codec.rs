@@ -10,6 +10,7 @@ pub enum Format {
     Png,
     Webp,
     Bmp,
+    Wbmp,
 }
 
 impl Format {
@@ -20,6 +21,7 @@ impl Format {
             Format::Png => "PNG",
             Format::Webp => "WEBP",
             Format::Bmp => "BMP",
+            Format::Wbmp => "WBMP",
         }
     }
 }
@@ -67,6 +69,7 @@ pub fn decode(format: Format, data: &[u8]) -> Option<Img> {
             let d = image::load_from_memory_with_format(data, ImageFormat::WebP).ok()?;
             Some(from_rgba(d.width(), d.height(), &d.to_rgba8(), true))
         }
+        Format::Wbmp => decode_wbmp(data),
         Format::Bmp => decode_bmp_palette(data).or_else(|| {
             let d = image::load_from_memory_with_format(data, ImageFormat::Bmp).ok()?;
             Some(from_rgba(d.width(), d.height(), &d.to_rgba8(), false))
@@ -134,7 +137,7 @@ fn decode_bmp_palette(d: &[u8]) -> Option<Img> {
 
 fn from_rgba(w: u32, h: u32, rgba: &[u8], with_alpha: bool) -> Img {
     let mut im = Img::new(w as i32, h as i32, true);
-    for (i, p) in rgba.chunks_exact(4).enumerate() {
+    for (i, p) in rgba.as_chunks::<4>().0.iter().enumerate() {
         let a = if with_alpha { gd_alpha(p[3]) } else { 0 };
         im.px[i] = argb(a, i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
     }
@@ -158,7 +161,7 @@ fn decode_png(data: &[u8]) -> Option<Img> {
             im.blend = false;
             if info.color_type == png::ColorType::Indexed {
                 let plte = ri.palette.as_deref().unwrap_or(&[]);
-                for e in plte.chunks_exact(3) {
+                for e in plte.as_chunks::<3>().0 {
                     im.pal.push(Pal { r: i32::from(e[0]), g: i32::from(e[1]), b: i32::from(e[2]), a: 0, open: false });
                 }
                 if let Some(t) = ri.trns.as_deref() {
@@ -240,7 +243,7 @@ fn decode_gif(data: &[u8]) -> Option<Img> {
     let pal_bytes = frame.palette.clone().unwrap_or(global);
     let mut im = Img::new(sw, sh, false);
     im.blend = false;
-    for e in pal_bytes.chunks_exact(3) {
+    for e in pal_bytes.as_chunks::<3>().0 {
         im.pal.push(Pal { r: i32::from(e[0]), g: i32::from(e[1]), b: i32::from(e[2]), a: 0, open: false });
     }
     if im.pal.is_empty() {
@@ -249,7 +252,7 @@ fn decode_gif(data: &[u8]) -> Option<Img> {
     if let Some(t) = frame.transparent {
         im.transparent = i32::from(t);
     }
-    let used = frame.buffer.iter().copied().max().map_or(0, |m| usize::from(m) + 1).max(im.transparent as usize + 1).max(1);
+    let used = frame.buffer.iter().copied().max().map_or(0, |m| usize::from(m) + 1).max((im.transparent + 1).max(0) as usize).max(1);
     // libgd drops the palette entries past the highest index in use.
     im.pal.truncate(used.min(im.pal.len()).max(1));
     let fill = if im.transparent >= 0 { im.transparent } else { 0 };
@@ -331,24 +334,23 @@ pub fn encode_png(im: &Img, level: i32) -> Option<Vec<u8>> {
         let mut mapping: Vec<usize> = (0..n).collect();
         if remap {
             let mut next = 0;
-            for i in 0..n {
+            for (i, m) in mapping.iter_mut().enumerate() {
                 if clear(i) {
-                    mapping[i] = next;
+                    *m = next;
                     next += 1;
                 }
             }
-            for i in (0..n).rev() {
+            for (i, m) in mapping.iter_mut().enumerate().rev() {
                 if !clear(i) {
-                    mapping[i] = next;
+                    *m = next;
                     next += 1;
                 }
             }
         }
         let mut plte = vec![0u8; n * 3];
         let mut trns = vec![255u8; n];
-        for i in 0..n {
+        for (i, &at) in mapping.iter().enumerate() {
             let p = im.pal.get(i).copied().unwrap_or_default();
-            let at = mapping[i];
             plte[at * 3..at * 3 + 3].copy_from_slice(&[p.r as u8, p.g as u8, p.b as u8]);
             if im.transparent == i as i32 {
                 trns[at] = 0;
@@ -441,7 +443,8 @@ pub fn encode_bmp(im: &Img) -> Vec<u8> {
     let colors = im.pal.len().max(1);
     let pal_len = if im.tc { 0 } else { colors * 4 };
     let offset = 14 + 40 + pal_len;
-    let size = offset + row * h;
+    let unpadded = w * h * if im.tc { 3 } else { 1 };
+    let size = offset + unpadded;
     let mut out = Vec::with_capacity(size);
     out.extend_from_slice(b"BM");
     out.extend_from_slice(&(size as u32).to_le_bytes());
@@ -453,10 +456,8 @@ pub fn encode_bmp(im: &Img) -> Vec<u8> {
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&(bpp as u16).to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&((row * h) as u32).to_le_bytes());
-    let ppm = |dpi: i64| (dpi as f64 / 0.0254 + 0.5) as i32;
-    out.extend_from_slice(&ppm(im.res.0).to_le_bytes());
-    out.extend_from_slice(&ppm(im.res.1).to_le_bytes());
+    out.extend_from_slice(&(unpadded as u32).to_le_bytes());
+    out.extend_from_slice(&[0; 8]);
     out.extend_from_slice(&(if im.tc { 0u32 } else { colors as u32 }).to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
     if !im.tc {
@@ -480,4 +481,69 @@ pub fn encode_bmp(im: &Img) -> Vec<u8> {
         }
     }
     out
+}
+
+fn put_mbi(out: &mut Vec<u8>, mut v: u32) {
+    let mut parts = vec![(v & 0x7f) as u8];
+    v >>= 7;
+    while v > 0 {
+        parts.push((v & 0x7f) as u8 | 0x80);
+        v >>= 7;
+    }
+    parts.reverse();
+    out.extend_from_slice(&parts);
+}
+
+/// WBMP: a pixel equal to `fg` is black (0), any other white (1).
+pub fn encode_wbmp(im: &Img, fg: i32) -> Vec<u8> {
+    let (w, h) = (im.w as usize, im.h as usize);
+    let mut out = vec![0, 0];
+    put_mbi(&mut out, w as u32);
+    put_mbi(&mut out, h as u32);
+    let row = w.div_ceil(8);
+    let start = out.len();
+    out.resize(start + row * h, 0);
+    for y in 0..h {
+        for x in 0..w {
+            if im.px[y * w + x] != fg {
+                out[start + y * row + x / 8] |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    out
+}
+
+fn get_mbi(d: &[u8], at: &mut usize) -> Option<u32> {
+    let mut v: u32 = 0;
+    loop {
+        let b = *d.get(*at)?;
+        *at += 1;
+        v = v.checked_mul(128)?.checked_add(u32::from(b & 0x7f))?;
+        if b & 0x80 == 0 {
+            return Some(v);
+        }
+    }
+}
+
+pub fn decode_wbmp(d: &[u8]) -> Option<Img> {
+    if d.len() < 4 || d[0] != 0 || d[1] != 0 {
+        return None;
+    }
+    let mut at = 2;
+    let (w, h) = (get_mbi(d, &mut at)? as usize, get_mbi(d, &mut at)? as usize);
+    if w == 0 || h == 0 || w > 1 << 15 || h > 1 << 15 {
+        return None;
+    }
+    let row = w.div_ceil(8);
+    let data = d.get(at..at + row * h)?;
+    let mut im = Img::new(w as i32, h as i32, false);
+    im.blend = false;
+    im.pal = vec![Pal { r: 255, g: 255, b: 255, a: 0, open: false }, Pal { r: 0, g: 0, b: 0, a: 0, open: false }];
+    for y in 0..h {
+        for x in 0..w {
+            let white = data[y * row + x / 8] & (0x80 >> (x % 8)) != 0;
+            im.px[y * w + x] = i32::from(!white);
+        }
+    }
+    Some(im)
 }

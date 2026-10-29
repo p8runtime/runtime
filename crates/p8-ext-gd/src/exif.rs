@@ -156,7 +156,7 @@ impl Info {
         match format {
             F_URATIONAL | F_SRATIONAL => {
                 let (n, d) = (self.u32(v), self.u32(v.get(4..).unwrap_or(&[])));
-                if d == 0 { 0 } else { i64::from(n / d) }
+                n.checked_div(d).map_or(0, i64::from)
             }
             _ => self.num(v, format) as i64,
         }
@@ -293,11 +293,9 @@ fn process_tag(info: &mut Info, entry: &[u8], section: usize) -> bool {
                         info.thumb_filetype = if info.file_type == 7 || info.file_type == 8 { info.file_type } else { 8 };
                         info.thumb_size = info.int(&value, unsigned) as usize;
                     }
-                    0x0202 => {
-                        if info.thumb_filetype == 0 {
-                            info.thumb_filetype = 2;
-                            info.thumb_size = info.int(&value, unsigned) as usize;
-                        }
+                    0x0202 if info.thumb_filetype == 0 => {
+                        info.thumb_filetype = 2;
+                        info.thumb_size = info.int(&value, unsigned) as usize;
                     }
                     _ => {}
                 }
@@ -377,21 +375,19 @@ fn process_tag(info: &mut Info, entry: &[u8], section: usize) -> bool {
                     }
                 }
             }
-            0x8769 | 0x8825 | 0xA005 => {
-                if byte_count > 0 {
-                    let sub = match tag {
-                        0x8769 => EXIF,
-                        0x8825 => GPS_S,
-                        _ => INTEROP,
-                    };
-                    info.found |= 1 << sub;
-                    let off = info.u32(&value) as usize;
-                    if tiff.get(off..).is_none() {
-                        return false;
-                    }
-                    if !process_ifd(info, off, sub, i32::from(tag)) {
-                        return false;
-                    }
+            0x8769 | 0x8825 | 0xA005 if byte_count > 0 => {
+                let sub = match tag {
+                    0x8769 => EXIF,
+                    0x8825 => GPS_S,
+                    _ => INTEROP,
+                };
+                info.found |= 1 << sub;
+                let off = info.u32(&value) as usize;
+                if tiff.get(off..).is_none() {
+                    return false;
+                }
+                if !process_ifd(info, off, sub, i32::from(tag)) {
+                    return false;
                 }
             }
             _ => {}
@@ -422,7 +418,7 @@ fn user_comment(info: &Info, v: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
                 be = false;
                 body = &body[2..];
             }
-            let units: Vec<u16> = body.chunks_exact(2).map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) }).collect();
+            let units: Vec<u16> = body.as_chunks::<2>().0.iter().map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) }).collect();
             return (String::from_utf16_lossy(&units).into_bytes(), enc);
         } else if head == b"ASCII\0\0\0" {
             enc = Some(b"ASCII".to_vec());
@@ -820,13 +816,13 @@ fn build(r: &mut Read, sub_arrays: bool, want_thumb: bool) -> PhpArray {
             let t = t.to_vec();
             info.add(THUMBNAIL, "THUMBNAIL", Val::Bytes(t));
         }
-        if want_thumb && (info.thumb_width == 0 || info.thumb_height == 0) {
-            if let Some(t) = thumb_bytes(&r.data, info) {
-                if let Some((w, h)) = jpeg_size(t) {
-                    info.thumb_width = w;
-                    info.thumb_height = h;
-                }
-            }
+        if want_thumb
+            && (info.thumb_width == 0 || info.thumb_height == 0)
+            && let Some(t) = thumb_bytes(&r.data, info)
+            && let Some((w, h)) = jpeg_size(t)
+        {
+            info.thumb_width = w;
+            info.thumb_height = h;
         }
         info.add_int(COMPUTED, "Thumbnail.FileType", info.thumb_filetype);
         info.add_str(COMPUTED, "Thumbnail.MimeType", mime(info.thumb_filetype).as_bytes());
