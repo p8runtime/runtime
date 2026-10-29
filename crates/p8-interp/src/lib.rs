@@ -255,6 +255,27 @@ impl Frames {
 /// The globals a request starts with, in the order PHP makes them.
 const REQUEST_GLOBALS: &[&str] = &["_GET", "_POST", "_COOKIE", "_FILES", "argv", "argc", "_SERVER", "_ENV", "_REQUEST"];
 
+/// isset($s[k]) on a string (zend_isset_dim_slow): the character at an
+/// integer offset (from the end when negative), with k an int, a bool,
+/// null, a float, or a string that is wholly an integer (" 1", "01");
+/// None for anything else or an offset outside the string.
+fn isset_string_offset(s: &PhpStr, k: &Value) -> Option<Value> {
+    let i = match k {
+        Value::Int(i) => *i,
+        Value::Bool(b) => i64::from(*b),
+        Value::Null => 0,
+        Value::Float(f) => *f as i64,
+        Value::Str(t) => match p8_runtime::numeric::numeric_string(t.as_bytes())? {
+            p8_runtime::numeric::Number::Int(i) => i,
+            p8_runtime::numeric::Number::Float(_) => return None,
+        },
+        _ => return None,
+    };
+    let len = s.len() as i64;
+    let at = if i < 0 { len + i } else { i };
+    (0..len).contains(&at).then(|| Value::Str(PhpStr::from(&s.as_bytes()[at as usize..at as usize + 1])))
+}
+
 /// The builtin constants PHP marks deprecated (CONST_DEPRECATED), as one
 /// a FetchConst names (or falls back to).
 fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static str> {
@@ -2227,18 +2248,12 @@ impl Context<'_> {
                     };
                     let mut set = true;
                     for i in 0..n {
-                        let k = match Key::from_value(&reg!(keys + i as Reg)) {
-                            Ok((k, _)) => k,
-                            Err(_) => {
-                                set = false;
-                                break;
-                            }
-                        };
                         let next = match &cur {
-                            Value::Array(a) => a.get(&k).map(|v| v.deref()),
-                            Value::Str(s) => match k {
-                                Key::Int(i) if (i >= 0 && (i as usize) < s.len()) || (i < 0 && i.unsigned_abs() as usize <= s.len()) => Some(Value::Null),
-                                _ => None,
+                            // A string's offset: the character there.
+                            Value::Str(s) => isset_string_offset(s, &reg!(keys + i as Reg).deref()),
+                            Value::Array(a) => match Key::from_value(&reg!(keys + i as Reg)) {
+                                Ok((k, _)) => a.get(&k).map(|v| v.deref()),
+                                Err(_) => None,
                             },
                             _ => None,
                         };
@@ -3984,8 +3999,35 @@ impl Context<'_> {
                 }
             }
             Value::Str(s) => {
-                let k = self.operand(w, func, key);
-                let i = k.to_int();
+                // zend_fetch_string_offset: an integer, a string that starts
+                // with one (with junk after it, a warning), or a scalar cast.
+                let k = self.operand(w, func, key).deref();
+                let i = match &k {
+                    Value::Int(i) => *i,
+                    Value::Str(t) => match p8_runtime::numeric::leading_numeric(t.as_bytes()) {
+                        Some((p8_runtime::numeric::Number::Int(i), end)) => {
+                            if t.as_bytes()[end..].iter().any(|c| !b" \t\n\r\x0b\x0c".contains(c)) {
+                                self.warn(format!("Illegal string offset \"{}\"", String::from_utf8_lossy(t.as_bytes())));
+                            }
+                            i
+                        }
+                        _ if quiet => return Ok(Value::Null),
+                        _ => return Err(self.throw("TypeError", "Cannot access offset of type string on string")),
+                    },
+                    Value::Float(_) | Value::Bool(_) | Value::Null | Value::Undef => {
+                        if !quiet {
+                            self.warn("String offset cast occurred");
+                        }
+                        k.to_int()
+                    }
+                    other => {
+                        let t = match other {
+                            Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                            v => v.type_name().to_string(),
+                        };
+                        return Err(self.throw("TypeError", format!("Cannot access offset of type {t} on string")));
+                    }
+                };
                 let len = s.len() as i64;
                 let at = if i < 0 { len + i } else { i };
                 if at < 0 || at >= len {

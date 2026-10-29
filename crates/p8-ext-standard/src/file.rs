@@ -73,6 +73,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "scandir", run: scandir, by_ref: &[] },
     Builtin { name: "glob", run: glob, by_ref: &[] },
     Builtin { name: "opendir", run: opendir, by_ref: &[] },
+    Builtin { name: "stream_get_wrappers", run: stream_get_wrappers, by_ref: &[] },
     Builtin { name: "readdir", run: readdir, by_ref: &[] },
     Builtin { name: "rewinddir", run: rewinddir, by_ref: &[] },
     Builtin { name: "closedir", run: fclose, by_ref: &[] },
@@ -876,6 +877,13 @@ pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
         out.push(if flags & GLOB_MARK != 0 && dir { format!("{p}/") } else { p });
     }
     out
+}
+
+/// stream_get_wrappers: the URL schemes p8's streams open, in PHP's order
+/// (no https, ftp(s), http or phar yet).
+fn stream_get_wrappers(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let names = ["compress.zlib", "php", "file", "glob", "data"];
+    Ok(Value::Array(Rc::new(PhpArray::from_list(names.iter().map(|n| Value::str(*n)).collect()))))
 }
 
 /// opendir: a stream whose lines are the directory's entries (as readdir gives).
