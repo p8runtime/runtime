@@ -138,8 +138,9 @@ json() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 version_of() { tr -d '\r' < "$1" | sed -n 's/^[ \t*]*Version:[ \t]*\([^ \t]*\).*/\1/p' | head -1; }
 apps_out=$work/apps.jsonl
 printf '{"type":"run","p8":"%s","php":"8.4.27","wordpress":"%s"}\n' "$(git -C "$repo" rev-parse HEAD)" "$version" > "$apps_out"
+# app NAME VERSION KIND SOURCE ABOUT (what it is, in a line, for someone who has not met it)
 app() {
-    printf '{"type":"app","name":"%s","version":"%s","kind":"%s","source":"%s"}\n' "$(json "$1")" "$(json "$2")" "$3" "$(json "$4")" >> "$apps_out"
+    printf '{"type":"app","name":"%s","version":"%s","kind":"%s","about":"%s","source":"%s"}\n' "$(json "$1")" "$(json "$2")" "$3" "$(json "$5")" "$(json "$4")" >> "$apps_out"
 }
 record() {
     local names="" n first=1 IFS=,
@@ -152,17 +153,17 @@ record() {
         "$names" "$(json "$1")" "$2" "$3" "$4" "$5" >> "$apps_out"
 }
 themes=wordpress/wp-content/themes plugins=wordpress/wp-content/plugins
-app WordPress "$version" application "https://wordpress.org/wordpress-$version.tar.gz"
-app "Twenty Twenty-Five" "$(version_of $themes/twentytwentyfive/style.css)" theme https://wordpress.org/themes/twentytwentyfive/
-app "Twenty Twenty-Four" "$(version_of $themes/twentytwentyfour/style.css)" theme https://wordpress.org/themes/twentytwentyfour/
-app "Twenty Twenty-Three" "$(version_of $themes/twentytwentythree/style.css)" theme https://wordpress.org/themes/twentytwentythree/
-app "Twenty Twenty-One" "$(version_of $themes/twentytwentyone/style.css)" theme https://wordpress.org/themes/twentytwentyone/
-app Akismet "$(version_of $plugins/akismet/akismet.php)" plugin https://wordpress.org/plugins/akismet/
-app "Hello Dolly" "$(version_of $plugins/hello.php)" plugin https://wordpress.org/plugins/hello-dolly/
-app "Classic Editor" "$(version_of $plugins/classic-editor/classic-editor.php)" plugin https://wordpress.org/plugins/classic-editor/
-app "Contact Form 7" "$(version_of $plugins/contact-form-7/wp-contact-form-7.php)" plugin https://wordpress.org/plugins/contact-form-7/
-app "Yoast SEO" "$(version_of $plugins/wordpress-seo/wp-seo.php)" plugin https://wordpress.org/plugins/wordpress-seo/
-app WooCommerce "$(version_of $plugins/woocommerce/woocommerce.php)" plugin https://wordpress.org/plugins/woocommerce/
+app WordPress "$version" application "https://wordpress.org/wordpress-$version.tar.gz" "The website and blog platform"
+app "Twenty Twenty-Five" "$(version_of $themes/twentytwentyfive/style.css)" theme https://wordpress.org/themes/twentytwentyfive/ "WordPress's default theme since 2025, built from blocks"
+app "Twenty Twenty-Four" "$(version_of $themes/twentytwentyfour/style.css)" theme https://wordpress.org/themes/twentytwentyfour/ "WordPress's 2024 default theme, built from blocks"
+app "Twenty Twenty-Three" "$(version_of $themes/twentytwentythree/style.css)" theme https://wordpress.org/themes/twentytwentythree/ "WordPress's 2023 default theme, built from blocks"
+app "Twenty Twenty-One" "$(version_of $themes/twentytwentyone/style.css)" theme https://wordpress.org/themes/twentytwentyone/ "WordPress's 2021 default theme, a classic PHP template theme"
+app Akismet "$(version_of $plugins/akismet/akismet.php)" plugin https://wordpress.org/plugins/akismet/ "Filters spam out of comments"
+app "Hello Dolly" "$(version_of $plugins/hello.php)" plugin https://wordpress.org/plugins/hello-dolly/ "The sample plugin that ships with WordPress"
+app "Classic Editor" "$(version_of $plugins/classic-editor/classic-editor.php)" plugin https://wordpress.org/plugins/classic-editor/ "Brings back the post editor from before blocks"
+app "Contact Form 7" "$(version_of $plugins/contact-form-7/wp-contact-form-7.php)" plugin https://wordpress.org/plugins/contact-form-7/ "Contact forms that send mail"
+app "Yoast SEO" "$(version_of $plugins/wordpress-seo/wp-seo.php)" plugin https://wordpress.org/plugins/wordpress-seo/ "Search-engine optimisation: titles, meta tags, sitemaps, structured data"
+app WooCommerce "$(version_of $plugins/woocommerce/woocommerce.php)" plugin https://wordpress.org/plugins/woocommerce/ "An online shop: products, cart, checkout and orders"
 APPS="WordPress"
 install_status=pass
 cmp -s install.p8.out install.php.out || install_status=fail
