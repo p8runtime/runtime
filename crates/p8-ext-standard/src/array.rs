@@ -539,14 +539,14 @@ fn array_multisort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let orders: Vec<_> = arrays.iter().map(|(_, desc, flags)| (*desc, order(*flags))).collect();
     let mut rows: Vec<usize> = (0..size).collect();
     // Stable: equal rows keep their order (PHP's fallback on position).
-    rows.sort_by(|&x, &y| {
+    p8_runtime::sort::zend_sort(&mut rows, &mut |&x, &y| {
         for (c, (desc, cmp)) in orders.iter().enumerate() {
             let o = cmp(&columns[c][x].1, &columns[c][y].1);
             if o != Ordering::Equal {
                 return if *desc { o.reverse() } else { o };
             }
         }
-        Ordering::Equal
+        x.cmp(&y)
     });
     for (c, (i, _, _)) in arrays.iter().enumerate() {
         // String keys stay; integer keys are renumbered.
@@ -577,18 +577,20 @@ fn sort_with(args: &[Value], by_key: bool, reverse: bool, keep_keys: bool) -> Re
     let flags = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
     let cmp = order(flags);
     let done = with_array(args, |a| {
-        let mut entries: Vec<(Key, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
-        entries.sort_by(|x, y| {
-            let o = match (&x.0, &y.0) {
+        // (position, key, value): zend_sort, ties broken on the position.
+        let mut entries: Vec<(usize, Key, Value)> = a.iter().enumerate().map(|(i, (k, v))| (i, k, v.clone())).collect();
+        p8_runtime::sort::zend_sort(&mut entries, &mut |x, y| {
+            let o = match (&x.1, &y.1) {
                 // Two integer keys compare as integers under every flag
                 // (php_array_key_compare_*: no float, so PHP_INT_MAX - 1
                 // stays below PHP_INT_MAX).
                 (Key::Int(p), Key::Int(q)) if by_key && flags & !8 == 1 => p.cmp(q),
-                _ if by_key => cmp(&key_value(&x.0), &key_value(&y.0)),
-                _ => cmp(&x.1, &y.1),
+                _ if by_key => cmp(&key_value(&x.1), &key_value(&y.1)),
+                _ => cmp(&x.2, &y.2),
             };
-            if reverse { o.reverse() } else { o }
+            (if reverse { o.reverse() } else { o }).then(x.0.cmp(&y.0))
         });
+        let entries: Vec<(Key, Value)> = entries.into_iter().map(|(_, k, v)| (k, v)).collect();
         *a = if keep_keys {
             let mut out = PhpArray::new();
             for (k, v) in entries {

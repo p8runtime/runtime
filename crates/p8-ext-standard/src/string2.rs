@@ -1078,11 +1078,11 @@ fn nat_sort(args: &[Value], fold: bool) -> Result<Value, Throw> {
     let Some(Value::Ref(cell)) = args.first() else { return Ok(Value::Bool(true)) };
     let mut value = cell.borrow_mut();
     if let Value::Array(a) = &*value {
-        let mut entries: Vec<(Key, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
+        let mut entries: Vec<(usize, Key, Value)> = a.iter().enumerate().map(|(i, (k, v))| (i, k, v.clone())).collect();
         let text = |v: &Value| v.to_php_string().unwrap_or_else(PhpStr::empty);
-        entries.sort_by(|x, y| natural(text(&x.1).as_bytes(), text(&y.1).as_bytes(), fold));
+        p8_runtime::sort::zend_sort(&mut entries, &mut |x, y| natural(text(&x.2).as_bytes(), text(&y.2).as_bytes(), fold).then(x.0.cmp(&y.0)));
         let mut out = PhpArray::new();
-        for (k, v) in entries {
+        for (_, k, v) in entries {
             out.insert(k, v);
         }
         *value = Value::Array(Rc::new(out));

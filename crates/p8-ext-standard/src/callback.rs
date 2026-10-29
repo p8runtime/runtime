@@ -197,21 +197,24 @@ fn array_walk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn user_sort(ctx: &mut dyn Ctx, args: &[Value], by_key: bool, keep_keys: bool) -> Result<Value, Throw> {
     let Some((cell, a)) = take_array(args) else { return Ok(Value::Bool(true)) };
     let callback = arg(args, 1);
-    let mut entries: Vec<(Key, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
+    // (position, key, value): zend_sort calls the callback with PHP's
+    // pairs; ties are broken on the position.
+    let mut entries: Vec<(usize, Key, Value)> = a.iter().enumerate().map(|(i, (k, v))| (i, k, v.clone())).collect();
     let mut error = None;
-    entries.sort_by(|x, y| {
+    p8_runtime::sort::zend_sort(&mut entries, &mut |x, y| {
         if error.is_some() {
             return Ordering::Equal;
         }
-        let mut pair = if by_key { [x.0.to_value(), y.0.to_value()] } else { [x.1.deref(), y.1.deref()] };
+        let mut pair = if by_key { [x.1.to_value(), y.1.to_value()] } else { [x.2.deref(), y.2.deref()] };
         match ctx.call(&callback, &mut pair) {
-            Ok(r) => r.to_int().cmp(&0),
+            Ok(r) => r.to_int().cmp(&0).then(x.0.cmp(&y.0)),
             Err(e) => {
                 error = Some(e);
                 Ordering::Equal
             }
         }
     });
+    let entries: Vec<(Key, Value)> = entries.into_iter().map(|(_, k, v)| (k, v)).collect();
     if let Some(e) = error {
         return Err(e);
     }
