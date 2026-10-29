@@ -1084,6 +1084,7 @@ impl Isolate {
             class_defs: Vec::new(),
             declared: HashMap::new(),
             class_origins: HashMap::new(),
+            declared_order: Vec::new(),
             binding_file: None,
             loader: None,
             included: std::collections::HashSet::new(),
@@ -1125,6 +1126,7 @@ impl Isolate {
             gc_collected: 0,
             cfg: Vec::new(),
             argv: None,
+            started: std::time::Instant::now(),
         }
     }
 }
@@ -1172,6 +1174,9 @@ pub struct Context<'i> {
     /// for "previously declared in"; and the file whose classes are being
     /// bound before it runs.
     class_origins: HashMap<Vec<u8>, (Rc<str>, u32)>,
+    /// The classes the script declared, in order, each by the name it is
+    /// listed by (an alias by its lowercase name): get_declared_classes().
+    declared_order: Vec<(PhpStr, Rc<Class>)>,
     binding_file: Option<Rc<str>>,
     /// Compiles the files `include` runs (the embedder's compiler).
     loader: Option<Rc<dyn Loader>>,
@@ -1256,6 +1261,8 @@ pub struct Context<'i> {
     cfg: Vec<(Vec<u8>, String)>,
     /// The command line, when the host gives one: $argv, $argc, $_SERVER.
     argv: Option<Vec<String>>,
+    /// When the request started.
+    started: std::time::Instant,
     /// The request arrays a web host gives ([`Context::serve`]).
     request: Option<RequestGlobals>,
     /// What the main script returned (a router script's answer).
@@ -4933,11 +4940,23 @@ impl Ctx for Context<'_> {
         self.shutdown.push((callable, args));
     }
 
+    fn declared_classes(&self) -> Vec<(PhpStr, Rc<Class>)> {
+        let mut internal: Vec<(PhpStr, Rc<Class>)> = self
+            .classes
+            .iter()
+            .filter(|(k, c)| c.flags & p8_runtime::object::CLASS_INTERNAL != 0 && k.as_slice() == c.name.as_bytes().to_ascii_lowercase())
+            .map(|(_, c)| (c.name.clone(), Rc::clone(c)))
+            .collect();
+        internal.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        internal.into_iter().chain(self.declared_order.iter().cloned()).collect()
+    }
+
     fn class_alias(&mut self, class: Rc<Class>, alias: &[u8]) -> bool {
         let lower = alias.strip_prefix(b"\\").unwrap_or(alias).to_ascii_lowercase();
         if self.classes.contains_key(&lower) {
             return false;
         }
+        self.declared_order.push((PhpStr::from(lower.as_slice()), Rc::clone(&class)));
         self.classes.insert(lower, class);
         true
     }
@@ -5017,6 +5036,10 @@ impl Ctx for Context<'_> {
 
     fn gc_counts(&self) -> (i64, i64) {
         (self.gc_runs, self.gc_collected)
+    }
+
+    fn running_for(&self) -> std::time::Duration {
+        self.started.elapsed()
     }
 
     fn cfg(&self) -> Vec<(Vec<u8>, String)> {

@@ -210,6 +210,11 @@ pub trait Ctx {
     fn autoloaders(&self) -> Vec<Value>;
     /// register_shutdown_function()
     fn on_shutdown(&mut self, callable: Value, args: Vec<Value>);
+    /// Every class, interface, trait and enum, as get_declared_classes()
+    /// lists them, each with the name it is listed by: the built-in ones
+    /// (by name), then the script's in the order it declared them, an
+    /// alias (class_alias) by its lowercase name.
+    fn declared_classes(&self) -> Vec<(PhpStr, Rc<Class>)>;
     /// class_alias(): false when the alias is taken.
     fn class_alias(&mut self, class: Rc<Class>, alias: &[u8]) -> bool;
     /// Every (key, value) going through `v` gives (an array, a generator,
@@ -227,6 +232,11 @@ pub trait Ctx {
     /// gc_status()'s runs and collected.
     fn gc_counts(&self) -> (i64, i64) {
         (0, 0)
+    }
+
+    /// How long the request has been running (gc_status()'s application_time).
+    fn running_for(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
     }
 
     /// The host's configuration (`php -d`) as get_cfg_var() sees it: every

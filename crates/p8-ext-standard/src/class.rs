@@ -22,6 +22,9 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "method_exists", run: method_exists, by_ref: &[] },
     Builtin { name: "property_exists", run: property_exists, by_ref: &[] },
     Builtin { name: "class_exists", run: class_exists, by_ref: &[] },
+    Builtin { name: "get_declared_classes", run: get_declared_classes, by_ref: &[] },
+    Builtin { name: "get_declared_interfaces", run: get_declared_interfaces, by_ref: &[] },
+    Builtin { name: "get_declared_traits", run: get_declared_traits, by_ref: &[] },
     Builtin { name: "interface_exists", run: interface_exists, by_ref: &[] },
     Builtin { name: "is_a", run: is_a, by_ref: &[] },
     Builtin { name: "is_subclass_of", run: is_subclass_of, by_ref: &[] },
@@ -436,4 +439,23 @@ fn spl_object_id(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn spl_object_hash(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
     Ok(Value::Str(PhpStr::from(format!("{:016x}0000000000000000", o.id))))
+}
+
+/// The names of the declared classes whose kind `pick` accepts.
+fn declared(ctx: &mut dyn Ctx, pick: impl Fn(u32) -> bool) -> Value {
+    let names = ctx.declared_classes().into_iter().filter(|(_, c)| pick(c.flags)).map(|(name, _)| Value::Str(name)).collect();
+    Value::Array(Rc::new(PhpArray::from_list(names)))
+}
+
+/// Classes and enums: not interfaces or traits.
+fn get_declared_classes(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(declared(ctx, |f| f & (CLASS_INTERFACE | CLASS_TRAIT) == 0))
+}
+
+fn get_declared_interfaces(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(declared(ctx, |f| f & CLASS_INTERFACE != 0))
+}
+
+fn get_declared_traits(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(declared(ctx, |f| f & CLASS_TRAIT != 0))
 }
