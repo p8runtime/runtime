@@ -1,0 +1,8 @@
+array(2) {
+  [0]=>
+  string(4) "A::m"
+  [1]=>
+  string(4) "A::s"
+}
+Call to protected method A::m() from scope Other
+string(49) "Call to protected method C2::only() from scope D2"
