@@ -20,6 +20,7 @@ mod filter;
 mod hash;
 mod hash_algos;
 mod hash_tables;
+mod image;
 mod info;
 mod random;
 mod scan;
@@ -167,6 +168,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(mail::BUILTINS);
     registry.add_functions(net::BUILTINS);
     registry.add_functions(filter::BUILTINS);
+    registry.add_functions(image::BUILTINS);
     registry.mark_reenters(filter::REENTERING);
     registry.add_functions(csv::BUILTINS);
     // The binary running this script (PHP_BINARY), for tests that run PHP again.

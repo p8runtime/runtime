@@ -1,0 +1,9 @@
+Cannot use "self" in the global scope
+Cannot access "self" when no class scope is active
+Cannot access "self" when no class scope is active
+Cannot access "self" when no class scope is active
+Cannot use "static" in the global scope
+Cannot access "static" when no class scope is active
+Cannot use "parent" in the global scope
+Cannot access "parent" when no class scope is active
+Cannot access "self" when no class scope is active

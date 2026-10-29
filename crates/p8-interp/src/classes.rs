@@ -537,15 +537,18 @@ impl Context<'_> {
             },
             ClassRef::Scope => match self.scope().0 {
                 Some(c) => Ok(c),
-                None => Err(self.throw("Error", "Cannot use \"self\" when no class scope is active")),
+                None => Err(self.throw("Error", "Cannot access \"self\" when no class scope is active")),
             },
-            ClassRef::ParentScope => match self.scope().0.and_then(|c| c.parent.clone()) {
-                Some(c) => Ok(c),
-                None => Err(self.throw("Error", "Cannot use \"parent\" when current class scope has no parent")),
+            ClassRef::ParentScope => match self.scope().0 {
+                Some(scope) => match scope.parent.clone() {
+                    Some(c) => Ok(c),
+                    None => Err(self.throw("Error", "Cannot access \"parent\" when current class scope has no parent")),
+                },
+                None => Err(self.throw("Error", "Cannot access \"parent\" when no class scope is active")),
             },
             ClassRef::Static => match self.scope().1 {
                 Some(c) => Ok(c),
-                None => Err(self.throw("Error", "Cannot use \"static\" when no class scope is active")),
+                None => Err(self.throw("Error", "Cannot access \"static\" when no class scope is active")),
             },
         }
     }

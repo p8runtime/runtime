@@ -1,0 +1,4 @@
+panel L Panel base
+panel L Sub base
+panel/Sub
+Error: Cannot use "self" in the global scope

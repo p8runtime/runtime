@@ -193,6 +193,14 @@ fn class_of(ctx: &mut dyn Ctx, v: &Value) -> Option<Rc<Class>> {
     }
 }
 
+/// class_of, autoloading a class given by name (zend_lookup_class).
+fn class_loaded(ctx: &mut dyn Ctx, v: &Value) -> Result<Option<Rc<Class>>, Throw> {
+    match v {
+        Value::Str(s) => ctx.class_load(s.as_bytes()),
+        other => Ok(class_of(ctx, other)),
+    }
+}
+
 fn name(class: &Class) -> Value {
     Value::Str(class.name.clone())
 }
@@ -212,7 +220,7 @@ fn get_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// get_parent_class($object_or_class = ?): the parent's name, or false.
 fn get_parent_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = match args.first().map(Value::deref) {
-        Some(v) => class_of(ctx, &v),
+        Some(v) => class_loaded(ctx, &v)?,
         None => ctx.scope(),
     };
     Ok(class.and_then(|c| c.parent.as_deref().map(name)).unwrap_or(Value::Bool(false)))
@@ -354,7 +362,7 @@ fn method_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     if method.starts_with(b"$") {
         return Ok(Value::Bool(false));
     }
-    Ok(Value::Bool(class_of(ctx, &target).is_some_and(|c| c.method(&method).is_some())))
+    Ok(Value::Bool(class_loaded(ctx, &target)?.is_some_and(|c| c.method(&method).is_some())))
 }
 
 /// property_exists($object_or_class, $property): declared (any
@@ -362,7 +370,7 @@ fn method_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 fn property_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let target = arg(args, 0);
     let property = str_arg(args, 1);
-    let Some(class) = class_of(ctx, &target) else { return Ok(Value::Bool(false)) };
+    let Some(class) = class_loaded(ctx, &target)? else { return Ok(Value::Bool(false)) };
     if class.slots.contains_key(property.as_bytes()) || class.statics.contains_key(property.as_bytes()) {
         return Ok(Value::Bool(true));
     }
@@ -392,28 +400,31 @@ fn interface_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
 /// is_a($object_or_class, $class, $allow_string = false)
 fn is_a(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let allow_string = args.len() > 2 && arg(args, 2).to_bool();
-    Ok(Value::Bool(instance(ctx, args, allow_string, false)))
+    Ok(Value::Bool(instance(ctx, args, allow_string, false)?))
 }
 
 /// is_subclass_of($object_or_class, $class, $allow_string = true)
 fn is_subclass_of(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let allow_string = args.len() <= 2 || arg(args, 2).to_bool();
-    Ok(Value::Bool(instance(ctx, args, allow_string, true)))
+    Ok(Value::Bool(instance(ctx, args, allow_string, true)?))
 }
 
-fn instance(ctx: &mut dyn Ctx, args: &[Value], allow_string: bool, strict: bool) -> bool {
+/// A class named by a string is autoloaded (when strings are allowed).
+fn instance(ctx: &mut dyn Ctx, args: &[Value], allow_string: bool, strict: bool) -> Result<bool, Throw> {
     let target = arg(args, 0);
-    if matches!(target, Value::Str(_)) && !allow_string {
-        return false;
-    }
-    let Some(class) = class_of(ctx, &target) else { return false };
+    let class = match &target {
+        Value::Str(_) if !allow_string => return Ok(false),
+        Value::Str(s) => ctx.class_load(s.as_bytes())?,
+        other => class_of(ctx, other),
+    };
+    let Some(class) = class else { return Ok(false) };
     let wanted = str_arg(args, 1);
     let wanted = wanted.as_bytes();
     let wanted = wanted.strip_prefix(b"\\").unwrap_or(wanted).to_ascii_lowercase();
     if strict && class.lower == wanted {
-        return false;
+        return Ok(false);
     }
-    class.is_a(&wanted)
+    Ok(class.is_a(&wanted))
 }
 
 fn spl_object_id(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
