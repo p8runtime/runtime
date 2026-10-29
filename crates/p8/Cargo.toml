@@ -17,3 +17,4 @@ p8-syntax = { path = "../p8-syntax" }
 p8-ext-tokenizer = { path = "../p8-ext-tokenizer" }
 p8-ext-pcre = { path = "../p8-ext-pcre" }
 p8-ext-mysqli = { path = "../p8-ext-mysqli" }
+p8-ext-curl = { path = "../p8-ext-curl" }

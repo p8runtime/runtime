@@ -37,6 +37,7 @@ pub mod extensions {
     pub use p8_ext_tokenizer::EXTENSION as TOKENIZER;
     pub use p8_ext_pcre::EXTENSION as PCRE;
     pub use p8_ext_mysqli::EXTENSION as MYSQLI;
+    pub use p8_ext_curl::EXTENSION as CURL;
 }
 
 /// Process-wide state shared by every isolate: the registered extensions.

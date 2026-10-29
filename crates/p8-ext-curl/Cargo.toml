@@ -1,0 +1,10 @@
+[package]
+name = "p8-ext-curl"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8 curl extension over the pure-Rust rsurl"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+rsurl = { version = "=0.1.21", default-features = false, features = ["purecrypto-tls", "idn"] }
