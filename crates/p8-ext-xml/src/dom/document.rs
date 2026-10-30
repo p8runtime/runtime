@@ -76,6 +76,8 @@ fn load(ctx: &mut dyn Ctx, this: &Rc<Object>, data: Vec<u8>, filename: Option<St
     let settings = old.doc.borrow().settings.clone();
     let mut doc = Doc::new(this.class.name.as_bytes().to_vec());
     doc.settings = settings;
+    // registerNodeClass holds for the document object, whatever it loads.
+    doc.node_classes = old.doc.borrow().node_classes.clone();
     let flags = load_flags(&old.doc.borrow(), flags);
     let parser = build::parse(&mut doc, data, filename.clone(), flags);
     let where_ = filename.as_deref().unwrap_or("Entity");
@@ -130,6 +132,8 @@ fn load_html_data(ctx: &mut dyn Ctx, this: &Rc<Object>, data: Vec<u8>, filename:
     let settings = old.doc.borrow().settings.clone();
     let mut doc = Doc::new(this.class.name.as_bytes().to_vec());
     doc.settings = settings;
+    // registerNodeClass holds for the document object, whatever it loads.
+    doc.node_classes = old.doc.borrow().node_classes.clone();
     doc.settings.encoding = None;
     doc.settings.url = None;
     let errors = crate::html::parse(&mut doc, data, filename.clone(), flags);
@@ -274,6 +278,40 @@ fn save(ctx: &mut dyn Ctx, this: &Rc<Object>, node: Option<NodeRef>, options: i6
             Ok(Some(out.buf))
         }
     }
+}
+
+/// registerNodeClass(string $baseClass, ?string $extendedClass): node
+/// objects of the DOM class `baseClass` made from now on are of
+/// `extendedClass` (null: of the base class again).
+pub fn register_node_class(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+    const F: &str = "DOMDocument::registerNodeClass()";
+    let base_name = bytes(&arg(args, 0));
+    let shown = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    let base = match ctx.class(&base_name) {
+        Some(c) if c.is_a(b"domnode") => c,
+        _ => return Err(ctx.throw("TypeError", format!("{F}: Argument #1 ($baseClass) must be a class name derived from DOMNode, {} given", shown(&base_name)))),
+    };
+    let extended = match opt_bytes(&arg(args, 1)) {
+        None => None,
+        Some(name) => match ctx.class(&name) {
+            None => return Err(ctx.throw("TypeError", format!("{F}: Argument #2 ($extendedClass) must be a valid class name or null, {} given", shown(&name)))),
+            Some(c) if !c.is_a(&base.lower) => {
+                return Err(ctx.throw("Error", format!("{F}: Argument #2 ($extendedClass) must be a class name derived from {} or null, {} given", shown(base.name.as_bytes()), shown(&name))));
+            }
+            Some(c) => Some(c.name.as_bytes().to_vec()),
+        },
+    };
+    let r = this_doc(this);
+    let mut doc = r.doc.borrow_mut();
+    if base.lower.as_slice() == b"domdocument" {
+        doc.class = extended.unwrap_or_else(|| b"DOMDocument".to_vec());
+    } else {
+        doc.node_classes.retain(|(b, _)| *b != base.lower);
+        if let Some(e) = extended {
+            doc.node_classes.push((base.lower.clone(), e));
+        }
+    }
+    Ok(Value::Bool(true))
 }
 
 pub fn save_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {

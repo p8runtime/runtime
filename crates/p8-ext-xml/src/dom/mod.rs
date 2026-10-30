@@ -163,6 +163,7 @@ const DOCUMENT_METHODS: &[Meth] = concat_meths!(
         m!("schemaValidate", d::schema_validate),
         m!("schemaValidateSource", d::schema_validate_source),
         m!("saveXML", d::save_xml),
+        m!("registerNodeClass", d::register_node_class),
         m!("saveHTML", d::save_html),
         m!("saveHTMLFile", d::save_html_file),
         m!("save", d::save_file),

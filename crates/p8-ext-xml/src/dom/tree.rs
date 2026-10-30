@@ -133,11 +133,14 @@ pub struct Doc {
     pub orphan: bool,
     /// An HTML document (libxml2's XML_HTML_DOCUMENT_NODE), made by loadHTML.
     pub html: bool,
+    /// registerNodeClass: the class node objects of a base class are made
+    /// with instead (base class lowercase, extended class as named).
+    pub node_classes: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 impl Doc {
     pub fn new(class: Vec<u8>) -> Doc {
-        Doc { nodes: vec![Node::new(Kind::Document, Vec::new())], objects: Vec::new(), settings: Settings::default(), class, orphan: false, html: false }
+        Doc { nodes: vec![Node::new(Kind::Document, Vec::new())], objects: Vec::new(), settings: Settings::default(), class, orphan: false, html: false, node_classes: Vec::new() }
     }
 
     pub fn add(&mut self, node: Node) -> Id {
