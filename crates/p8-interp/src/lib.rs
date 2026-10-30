@@ -3205,6 +3205,55 @@ impl Context<'_> {
                 }
                 Instr::IterInitRef { src, iter, end } => {
                     let cell = make_ref(w, src);
+                    let object = match &*cell.borrow() {
+                        Value::Object(o) => Some(Rc::clone(o)),
+                        _ => None,
+                    };
+                    // A plain object: its properties the code can see, each
+                    // made a reference as the loop reaches it.
+                    if let Some(mut o) = object {
+                        // An IteratorAggregate: the iterator it gives (the call
+                        // back into PHP needs the registers, so they are
+                        // taken afresh after it).
+                        while o.class.is_a(b"iteratoraggregate") && !o.class.is_a(b"arrayobject") {
+                            match self.call_named(regs, &o, b"getIterator")? {
+                                Value::Object(it) if it.class.is_a(b"traversable") => o = it,
+                                _ => return Err(self.throw("Error", "An iterator cannot be used with foreach by reference")),
+                            }
+                        }
+                        let w = &mut regs[base..base + func.nregs as usize];
+                        // ArrayObject / ArrayIterator: their stored array, by reference.
+                        let storage = ["arrayiterator", "arrayobject"]
+                            .iter()
+                            .find(|c| o.class.is_a(c.as_bytes()))
+                            .and_then(|c| o.class.slot(b"storage", Some(c.as_bytes())));
+                        if let Some(i) = storage
+                            && matches!(o.slots.borrow()[i].deref(), Value::Array(_))
+                        {
+                            let cell = refs::make_ref(&mut o.slots.borrow_mut()[i]);
+                            let empty = matches!(&*cell.borrow(), Value::Array(a) if a.is_empty());
+                            if empty {
+                                pc = end as usize;
+                            } else {
+                                w[iter as usize] = Value::Int(0);
+                                w[iter as usize + 1] = Value::Ref(cell);
+                            }
+                            return Ok(Next::Go(pc));
+                        }
+                        if o.class.is_a(b"traversable") {
+                            return Err(self.throw("Error", "An iterator cannot be used with foreach by reference"));
+                        }
+                        // A plain object: its properties the code can see, each
+                        // made a reference as the loop reaches it.
+                        let names: Vec<Value> = self.visible_props(&o).iter().map(|(k, _)| k.to_value()).collect();
+                        if names.is_empty() {
+                            pc = end as usize;
+                        } else {
+                            w[iter as usize] = Value::Int(0);
+                            w[iter as usize + 1] = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::Array(Rc::new(PhpArray::from_list(names)))])));
+                        }
+                        return Ok(Next::Go(pc));
+                    }
                     let state = match &*cell.borrow() {
                         Value::Array(a) => Ok(!a.is_empty()),
                         other => Err(other.type_name()),
@@ -3228,6 +3277,7 @@ impl Context<'_> {
                     };
                     let next = match &reg!(iter + 1) {
                         Value::Ref(cell) => refs::next_ref(cell, pos),
+                        Value::Array(state) => self.next_prop_ref(state, pos),
                         _ => None,
                     };
                     match next {

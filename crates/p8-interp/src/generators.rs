@@ -522,8 +522,39 @@ impl Context<'_> {
         }
     }
 
+    /// foreach by reference over an object (`state`: the object and the names
+    /// its visible properties had at the start): the property at position
+    /// `pos` or after that still exists, made a reference.
+    pub(crate) fn next_prop_ref(&self, state: &PhpArray, pos: usize) -> Option<(usize, Key, crate::refs::Cell)> {
+        let Some(Value::Object(o)) = state.get(&Key::Int(0)) else { return None };
+        let Some(Value::Array(names)) = state.get(&Key::Int(1)) else { return None };
+        let scope = self.scope().0;
+        let names: Vec<Value> = names.values().cloned().collect();
+        for (p, name) in names.iter().enumerate().skip(pos) {
+            let key = match name {
+                Value::Int(i) => Key::Int(*i),
+                v => Key::from_string(v.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty)),
+            };
+            let declared = match &key {
+                Key::Str(n) => o.class.slot(n.as_bytes(), scope.as_ref().map(|c| c.lower.as_slice())),
+                Key::Int(_) => None,
+            };
+            if let Some(i) = declared
+                && !matches!(o.slots.borrow()[i], Value::Undef)
+            {
+                let cell = crate::refs::make_ref(&mut o.slots.borrow_mut()[i]);
+                return Some((p, key, cell));
+            }
+            if let Some(slot) = o.dynamic.borrow_mut().get_mut(&key) {
+                let cell = crate::refs::make_ref(slot);
+                return Some((p, key, cell));
+            }
+        }
+        None
+    }
+
     /// An object's properties the running code can see, by name.
-    fn visible_props(&self, o: &Object) -> PhpArray {
+    pub(crate) fn visible_props(&self, o: &Object) -> PhpArray {
         let scope = self.scope().0;
         let mut out = PhpArray::new();
         let slots = o.slots.borrow();
