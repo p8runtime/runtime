@@ -8,3 +8,7 @@ $db->exec('create view big as select id, total from p where total > 20');
 var_dump($db->query('select * from big')->fetchAll(PDO::FETCH_ASSOC));
 $db->exec('update p set qty = 10 where id = 1');
 var_dump($db->query('select total from p where id = 1')->fetchColumn());
+$db->exec("attach database ':memory:' as other");
+$db->exec('create table other.t (x integer)');
+$db->exec('insert into other.t values (7)');
+var_dump($db->query('select x from other.t')->fetchColumn());

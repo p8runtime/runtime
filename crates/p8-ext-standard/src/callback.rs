@@ -8,6 +8,7 @@
 use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -94,6 +95,19 @@ fn is_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             Value::Object(_) => ctx.is_callable(&v),
             _ => false,
         }));
+    }
+    // A class named by the callable is autoloaded first, as PHP's
+    // zend_is_callable does ([Class, 'm'], 'Class::m').
+    let class = match &v {
+        Value::Array(a) if a.len() == 2 => match a.get_int(0).map(Value::deref) {
+            Some(Value::Str(c)) => Some(c),
+            _ => None,
+        },
+        Value::Str(s) => s.as_bytes().windows(2).position(|w| w == b"::").map(|at| PhpStr::from(&s.as_bytes()[..at])),
+        _ => None,
+    };
+    if let Some(c) = class {
+        ctx.class_load_now(c.as_bytes())?;
     }
     Ok(Value::Bool(ctx.is_callable(&v)))
 }

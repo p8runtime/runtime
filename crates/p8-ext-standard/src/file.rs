@@ -678,8 +678,25 @@ fn stream_is_local(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     Ok(Value::Bool(!matches!(scheme, Some("http" | "https" | "ftp" | "ftps" | "data"))))
 }
 
+/// tmpfile(): a new file in the temporary directory, open for reading and
+/// writing, removed when it is closed (as PHP's: its path is a real file's,
+/// which stream_get_meta_data() gives).
 fn tmpfile(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(new_stream(ctx, Stream::new(Target::Memory(Vec::new()), "php://temp", "w+b")))
+    let dir = temp_dir();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    for i in 0..1000u32 {
+        let path = format!("{dir}/php{:06x}", (stamp as u32).wrapping_add(i.wrapping_mul(7919)) & 0xff_ffff);
+        if let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path) {
+            let mut s = Stream::new(Target::File(f), &path, "r+b");
+            let gone = path.clone();
+            s.on_close = Some(Box::new(move |_| {
+                let _ = std::fs::remove_file(&gone);
+            }));
+            return Ok(new_stream(ctx, s));
+        }
+    }
+    ctx.warn("tmpfile(): Unable to create temporary file, Check permissions in temporary files directory.");
+    Ok(Value::Bool(false))
 }
 
 /// The bytes of a file (or php:// stream), or None after PHP's warning.

@@ -192,6 +192,12 @@ pub trait Ctx {
     /// The class `name`, after the autoloaders had their go (an Err of
     /// Throw::Autoload asks the engine to run them and the call again).
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw>;
+    /// The class `name`, the autoloaders run right here (from a builtin
+    /// marked as reentering), so the call is not run again: for a method,
+    /// whose receiver may be a temporary the re-run would not find.
+    fn class_load_now(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
+        self.class_load(name)
+    }
     /// The value of `o`'s property at `slot` as `$o->name` reads it here:
     /// through its get hook (from a builtin marked as reentering); None
     /// when it has none (unset, or virtual without a get hook).

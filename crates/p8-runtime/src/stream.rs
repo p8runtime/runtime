@@ -173,8 +173,9 @@ pub struct Stream {
     pub eof: bool,
     /// Read ahead of what the script has taken (fgets reads past the line).
     pub buffer: Vec<u8>,
-    /// Runs with a Memory target's bytes when the stream closes (or goes
-    /// away): a gzip file compressed and written on gzclose.
+    /// Runs when the stream closes (or goes away), with a Memory target's
+    /// bytes (empty for any other): a gzip file compressed and written on
+    /// gzclose, tmpfile()'s file removed.
     pub on_close: Option<OnClose>,
     /// A zlib (gzip file) stream: one way only, no SEEK_END.
     pub zlib: bool,
@@ -223,8 +224,11 @@ impl Stream {
     pub fn close(&mut self) {
         let _ = self.flush();
         let target = std::mem::replace(&mut self.target, Target::Memory(Vec::new()));
-        if let (Some(finish), Target::Memory(data)) = (self.on_close.take(), &target) {
-            finish(data);
+        if let Some(finish) = self.on_close.take() {
+            match &target {
+                Target::Memory(data) => finish(data),
+                _ => finish(&[]),
+            }
         }
     }
 
