@@ -1,0 +1,11 @@
+int(4)
+string(1) "y"
+bool(true)
+bool(false)
+x=1,y=4,x=1,y=4,x=1,y=4,x=1
+NULL
+NULL
+bool(false)
+bool(true)
+bool(true)
+string(1) "k"

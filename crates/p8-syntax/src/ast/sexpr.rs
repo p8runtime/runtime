@@ -801,6 +801,11 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                 }
                 self.write("))");
             }
+            Expr::Throw { expr, .. } => {
+                self.write("(throw ");
+                self.visit_expr(expr);
+                self.write(")");
+            }
             Expr::Clone { expr, .. } => {
                 self.write("(clone ");
                 self.visit_expr(expr);

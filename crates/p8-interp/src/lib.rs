@@ -190,6 +190,14 @@ impl Vars {
     fn remove(&mut self, name: &[u8]) {
         self.0.retain(|(n, _)| n != name);
     }
+
+    /// The variable `name` made the reference `cell`.
+    fn bind(&mut self, name: &[u8], cell: Rc<RefCell<Value>>) {
+        match self.0.iter_mut().find(|(n, _)| n == name) {
+            Some((_, c)) => *c = cell,
+            None => self.0.push((name.to_vec(), cell)),
+        }
+    }
 }
 
 /// PHP's error levels (E_*), for error_reporting.
@@ -1189,6 +1197,7 @@ impl Isolate {
             statics: HashMap::new(),
             magic_guard: Vec::new(),
             result_reg: 0,
+            header_throw: None,
             deferred_write: None,
             fibers: Vec::new(),
             fiber_suspended: None,
@@ -1332,6 +1341,9 @@ pub struct Context<'i> {
     /// The register a running nested call's result lands in: destructors
     /// that run as its frame goes (after it returned) start above it.
     result_reg: usize,
+    /// What header_register_callback's callback threw while a builtin's
+    /// output sent the headers: the builtin's call ends with it.
+    header_throw: Option<Throw>,
     /// A write held back until the error handler has run (`$undef op= v`).
     deferred_write: Option<(usize, Value)>,
     /// The fibers running, innermost last.
@@ -1776,6 +1788,19 @@ impl Context<'_> {
         self.note_output_start();
     }
 
+    /// header_register_callback(): its callback runs once, just before the
+    /// headers go out: when output first reaches the host (not while it is
+    /// buffered), or at the end of the script (`at_end`).
+    fn run_header_callback(&mut self, regs: &mut Vec<Value>, at_end: bool) -> Result<(), Throw> {
+        if self.out.started || self.out.head_sent || (!at_end && !self.out.buffers.is_empty()) {
+            return Ok(());
+        }
+        match self.ext_state.remove("header_callback") {
+            Some(callback) if !matches!(callback, Value::Null) => self.call_with_regs(regs, &callback, &mut []).map(|_| ()),
+            _ => Ok(()),
+        }
+    }
+
     /// Write to the output (the innermost buffer, or the host).
     fn write_out(&mut self, bytes: &[u8]) {
         self.out.write(bytes);
@@ -1842,6 +1867,14 @@ impl Context<'_> {
                 let t = self.handle_uncaught(&mut regs, t);
                 status = self.report_end(Err(t));
             }
+        }
+        // The headers go out now at the latest: header_register_callback's
+        // callback runs first.
+        self.frames.floor = 0;
+        if let Err(t) = self.run_header_callback(&mut regs, true) {
+            let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
+            let t = self.handle_uncaught(&mut regs, t);
+            status = self.report_end(Err(t));
         }
         self.end_buffers(&mut regs);
         // The extensions' request-end work (a session is written here).
@@ -2811,6 +2844,9 @@ impl Context<'_> {
                     if let Some(e) = ops::object_string_error(&v) {
                         return Err(self.op_error(e));
                     }
+                    if self.ext_state.contains_key("header_callback") && !matches!(&v, Value::Str(s) if s.is_empty()) {
+                        self.run_header_callback(regs, false)?;
+                    }
                     match &v {
                         Value::Str(s) => self.write_out(s.as_bytes()),
                         other => {
@@ -3077,6 +3113,25 @@ impl Context<'_> {
                         let cell = make_ref(w, b);
                         let main: &mut [Value] = if in_main { w } else { below };
                         self.global_bind(main, &name, cell);
+                    }
+                    Rare::VarBind => {
+                        let name = self.var_name(w, func, a);
+                        let at_global = in_main || self.frames.last().is_some_and(|f| f.global);
+                        if c == 1 {
+                            // `global $$name` at global scope changes nothing.
+                            if !at_global {
+                                let cell = self.global_cell(below, &name);
+                                self.bind_local(w, &name, cell);
+                            }
+                        } else {
+                            let cell = make_ref(w, b);
+                            if at_global {
+                                let main: &mut [Value] = if in_main { w } else { below };
+                                self.global_bind(main, &name, cell);
+                            } else {
+                                self.bind_local(w, &name, cell);
+                            }
+                        }
                     }
                     Rare::Globals => {
                         let main: &[Value] = if in_main { w } else { below };
@@ -4204,7 +4259,9 @@ impl Context<'_> {
         // An object argument may need its __toString() (PHP code) to become
         // a string parameter: that takes the path that can call back.
         let objects = regs[start..start + argc as usize].iter().any(|v| matches!(v, Value::Object(_)));
-        if !self.isolate.registry.reenters(i) && !objects {
+        // Before the headers go out, output may run header_register_callback's callback.
+        let header_due = !self.out.started && self.ext_state.contains_key("header_callback");
+        if !self.isolate.registry.reenters(i) && !objects && !header_due {
             // The common case: the builtin works on the registers directly.
             let args = &mut regs[start..start + argc as usize];
             let r = self.run_builtin(i, args);
@@ -4258,8 +4315,11 @@ impl Context<'_> {
             }
         }
         let outer = self.running_builtin.replace(i);
-        let r = (self.isolate.registry.function(i).run)(self, args);
+        let mut r = (self.isolate.registry.function(i).run)(self, args);
         self.running_builtin = outer;
+        if let Some(t) = self.header_throw.take() {
+            r = Err(t);
+        }
         if let Err(Throw::Error { .. }) = r {
             self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args);
         }
@@ -4351,6 +4411,16 @@ impl Context<'_> {
             return make_ref(w, r as Reg);
         }
         frame.vars_mut().cell(name)
+    }
+
+    /// The running frame's variable `name` (a compiled one, or one only
+    /// named at run time) made the reference `cell`.
+    fn bind_local(&mut self, w: &mut [Value], name: &[u8], cell: Rc<RefCell<Value>>) {
+        let frame = self.frames.last_mut().expect("a running frame");
+        match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+            Some(r) => w[r] = Value::Ref(cell),
+            None => frame.vars_mut().bind(name, cell),
+        }
     }
 
     /// The running frame's variable `name`, if set.
@@ -4804,6 +4874,14 @@ impl Context<'_> {
 
 impl Ctx for Context<'_> {
     fn echo(&mut self, bytes: &[u8]) {
+        // Output from a builtin (var_dump, printf) sends the headers too:
+        // the callback runs first; what it throws ends the builtin's call.
+        if !bytes.is_empty() && self.ext_state.contains_key("header_callback") && !self.isolate.regs.is_empty() && self.header_throw.is_none() {
+            let mut regs = std::mem::take(&mut self.isolate.regs);
+            let r = self.run_header_callback(&mut regs, false);
+            self.isolate.regs = regs;
+            self.header_throw = r.err();
+        }
         self.write_out(bytes);
     }
 
@@ -5011,6 +5089,24 @@ impl Ctx for Context<'_> {
         }
     }
 
+    fn class_constant(&mut self, class: &Rc<Class>, name: &[u8]) -> Result<Option<Value>, Throw> {
+        let Some(c) = class.constants.get(name) else { return Ok(None) };
+        let Some(init) = c.init.clone() else { return Ok(Some(c.value.clone())) };
+        let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.to_vec());
+        if !self.const_cache.contains_key(&key) {
+            let scope = self.classes.get(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
+            let mut regs = std::mem::take(&mut self.isolate.regs);
+            if regs.is_empty() {
+                self.isolate.regs = regs;
+                return Err(Ctx::fatal(self, "a builtin that takes no callable computed a class constant".into()));
+            }
+            let r = self.eval_constant(&mut regs, &init, scope, key.clone());
+            self.isolate.regs = regs;
+            r?;
+        }
+        Ok(self.const_cache.get(&key).cloned())
+    }
+
     fn function_info(&mut self, callee: &p8_runtime::reflect::Callee) -> Option<p8_runtime::reflect::FnInfo> {
         self.info_of(callee)
     }
@@ -5063,9 +5159,20 @@ impl Ctx for Context<'_> {
         let Some(frame) = self.frames.last() else { return Vec::new() };
         let regs = &self.isolate.regs;
         let base = frame.base as usize;
-        let n = (frame.argc as usize).min(frame.func.code.params.len());
+        let params = &frame.func.code.params;
+        // A variadic parameter holds the arguments past the others: they
+        // count one by one (its named ones are not func_get_args()'s).
+        let variadic = params.last().is_some_and(|p| p.variadic);
+        let fixed = params.len() - usize::from(variadic);
+        let n = (frame.argc as usize).min(fixed);
         let mut out: Vec<Value> = (0..n).map(|i| regs.get(base + i).map(Value::deref).unwrap_or(Value::Null)).collect();
-        out.extend(frame.args().iter().map(Value::deref));
+        if variadic {
+            if let Some(Value::Array(rest)) = regs.get(base + fixed).map(Value::deref) {
+                out.extend(rest.iter().filter(|(k, _)| matches!(k, Key::Int(_))).map(|(_, v)| v.deref()));
+            }
+        } else {
+            out.extend(frame.args().iter().map(Value::deref));
+        }
         out
     }
 

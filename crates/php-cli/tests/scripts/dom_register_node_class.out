@@ -1,0 +1,19 @@
+bool(true)
+string(4) "MyEl"
+string(4) "hi r"
+string(4) "MyEl"
+string(4) "MyEl"
+bool(true)
+string(6) "MyText"
+string(6) "MyText"
+bool(true)
+string(10) "DOMElement"
+Error: DOMDocument::registerNodeClass(): Argument #2 ($extendedClass) must be a class name derived from DOMElement or null, Other given
+TypeError: DOMDocument::registerNodeClass(): Argument #1 ($baseClass) must be a class name derived from DOMNode, Other given
+TypeError: DOMDocument::registerNodeClass(): Argument #2 ($extendedClass) must be a valid class name or null, Nope given
+Error: DOMDocument::registerNodeClass(): Argument #2 ($extendedClass) must be a class name derived from DOMText or null, MyEl given
+bool(true)
+string(11) "DOMDocument"
+string(4) "MyEl"
+bool(true)
+string(6) "LazyEl"

@@ -20,6 +20,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "header_remove", run: header_remove, by_ref: &[] },
     Builtin { name: "headers_sent", run: headers_sent, by_ref: &[0, 1] },
     Builtin { name: "headers_list", run: headers_list, by_ref: &[] },
+    Builtin { name: "header_register_callback", run: header_register_callback, by_ref: &[] },
     Builtin { name: "http_response_code", run: http_response_code, by_ref: &[] },
     Builtin { name: "setcookie", run: setcookie, by_ref: &[] },
     Builtin { name: "setrawcookie", run: setrawcookie, by_ref: &[] },
@@ -199,6 +200,18 @@ fn headers_sent(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         *r.borrow_mut() = Value::Int(line as i64);
     }
     Ok(Value::Bool(started.is_some()))
+}
+
+/// header_register_callback(): the engine calls it just before the
+/// headers go out (a later registration replaces it).
+fn header_register_callback(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let callback = arg(args, 0);
+    if !ctx.is_callable(&callback) {
+        let why = p8_runtime::args::callable_error(ctx, &callback);
+        return Err(ctx.throw("TypeError", format!("header_register_callback(): Argument #1 ($callback) must be a valid callback, {why}")));
+    }
+    *ctx.state("header_callback") = callback;
+    Ok(Value::Bool(true))
 }
 
 fn headers_list(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {

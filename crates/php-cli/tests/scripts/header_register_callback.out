@@ -1,0 +1,7 @@
+[first]
+bool(true)
+bool(true)
+before echo
+buffered
+after
+header_register_callback(): Argument #1 ($callback) must be a valid callback, function "nope_not_a_fn" not found or invalid function name

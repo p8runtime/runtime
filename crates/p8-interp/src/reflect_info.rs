@@ -36,8 +36,11 @@ impl Context<'_> {
                     None => return out,
                 }
             }
-            Callee::Method(class, name) => match class.method(&name.as_bytes().to_ascii_lowercase()).map(|m| self.code_of(m)) {
-                Some(Code::User(clo)) => (clo, Vec::new()),
+            Callee::Method(class, name) => match class.method(&name.as_bytes().to_ascii_lowercase()) {
+                Some(m) if m.native.is_none() && m.func != u32::MAX => match self.code_of(m) {
+                    Code::User(clo) => (clo, Vec::new()),
+                    Code::Native(..) => return out,
+                },
                 _ => return out,
             },
             Callee::Closure(o) => match closure_data(o) {
@@ -97,6 +100,7 @@ impl Context<'_> {
                 })
                 .collect(),
             ret: code.ret_type.clone(),
+            tentative_ret: None,
             returns_ref: code.returns_ref,
             user: true,
             file: Some(PhpStr::from(&*code.file)),
@@ -132,7 +136,8 @@ impl Context<'_> {
                         .collect()
                 })
                 .unwrap_or_default(),
-            ret: sig.and_then(|s| stub_type(s.ret_mask, s.ret_classes)),
+            ret: sig.filter(|s| !s.tentative).and_then(|s| stub_type(s.ret_mask, s.ret_classes)),
+            tentative_ret: sig.filter(|s| s.tentative).and_then(|s| stub_type(s.ret_mask, s.ret_classes)),
             returns_ref: sig.is_some_and(|s| s.returns_ref),
             user: false,
             file: None,
@@ -159,9 +164,11 @@ impl Context<'_> {
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?.clone();
                 let declaring = self.classes.get(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
-                Some(match self.code_of(&m) {
-                    Code::User(clo) => self.user_info(&clo, Some(declaring)),
-                    Code::Native(..) => {
+                // A builtin interface's abstract method has no code: its stub describes it.
+                let code = if m.native.is_none() && m.func == u32::MAX { None } else { Some(self.code_of(&m)) };
+                Some(match code {
+                    Some(Code::User(clo)) => self.user_info(&clo, Some(declaring)),
+                    Some(Code::Native(..)) | None => {
                         let stub = format!("{}::{}", String::from_utf8_lossy(m.declaring_name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes()));
                         let mut info = self.stub_info(&stub, m.name.clone(), Some(declaring));
                         info.is_static = m.is_static;
@@ -222,7 +229,7 @@ impl Context<'_> {
             if self.unresolved(class) {
                 self.resolve_class(&mut regs, class)?;
             }
-            let (object, ctor) = self.instantiate(&|i| regs.get(i).cloned().unwrap_or_default(), Rc::clone(class))?;
+            let (object, ctor) = self.instantiate_as(&|i| regs.get(i).cloned().unwrap_or_default(), Rc::clone(class), construct)?;
             Ok::<_, Throw>((object, ctor.is_some()))
         })();
         self.isolate.regs = regs;

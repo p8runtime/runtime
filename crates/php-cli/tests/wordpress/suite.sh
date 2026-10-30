@@ -1,7 +1,7 @@
 #!/bin/bash
 # WordPress's own PHPUnit tests (wordpress-develop, pinned) under PHP 8.4
 # (docker, with the extensions WordPress's CI has) and under p8, on
-# MariaDB, compared test by test (suite/compare.php): how many of the tests
+# MariaDB, compared test by test (../apps/compare.php): how many of the tests
 # PHP passes p8 passes too. Writes the run as a p8-test-suite "suite" line
 # to .tmp/wordpress-suite/suite.jsonl. Exit 0 when both runs completed.
 #
@@ -87,8 +87,9 @@ tail -3 "$work/p8.txt"
 
 php_version=$(docker run --rm "$image" php -r 'echo PHP_VERSION;')
 # The comparison's summary to the terminal, its suite line to suite.jsonl.
-COPYFILE_DISABLE=1 tar --no-xattrs -cf - -C "$here/suite" compare.php -C "$work" php.xml p8.tc |
-    docker run --rm -i "$image" bash -c "mkdir /c && cd /c && tar xf - && php compare.php php.xml p8.tc suite.jsonl '$(git -C "$repo" rev-parse HEAD)' '$php_version' '$version' >&2 && cat suite.jsonl" \
+COPYFILE_DISABLE=1 tar --no-xattrs -cf - -C "$here/../apps" compare.php -C "$work" php.xml p8.tc |
+    docker run --rm -i "$image" bash -c "mkdir /c && cd /c && tar xf - && php compare.php php.xml p8.tc suite.jsonl '$(git -C "$repo" rev-parse HEAD)' '$php_version' \
+        WordPress '$version' \"WordPress's PHPUnit tests\" 'https://github.com/WordPress/wordpress-develop/tree/$version/tests/phpunit' tests/phpunit/tests/ >&2 && cat suite.jsonl" \
     > "$work/suite.jsonl"
 # PHPUnit exits 1 or 2 when tests fail, and ends with its summary; a run
 # that stopped (a crash, or PHPUnit's own error exits 2 too) has none.

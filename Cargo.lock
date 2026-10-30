@@ -3042,6 +3042,7 @@ dependencies = [
  "md-5 0.10.6",
  "md2",
  "md4",
+ "nix 0.30.1",
  "p8-runtime",
  "ripemd",
  "sha1",

@@ -192,6 +192,9 @@ pub trait Ctx {
     /// through its get hook (from a builtin marked as reentering); None
     /// when it has none (unset, or virtual without a get hook).
     fn prop_value(&mut self, o: &Rc<crate::object::Object>, slot: usize) -> Result<Option<Value>, Throw>;
+    /// A class constant's value, its code run first if it has not run yet
+    /// (as `C::NAME` does); None when the class has no such constant.
+    fn class_constant(&mut self, class: &Rc<Class>, name: &[u8]) -> Result<Option<Value>, Throw>;
     /// Reflection: a function's or method's declaration (None: none such).
     fn function_info(&mut self, callee: &crate::reflect::Callee) -> Option<crate::reflect::FnInfo>;
     /// Reflection: a function's static variables (a closure's `use` values

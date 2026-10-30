@@ -1,0 +1,41 @@
+string(5) "count"
+bool(false)
+bool(true)
+int(0)
+string(0) ""
+array(0) {
+}
+string(11) "getIterator"
+bool(false)
+bool(true)
+int(0)
+string(0) ""
+array(0) {
+}
+string(9) "offsetGet"
+bool(false)
+bool(true)
+int(1)
+string(0) ""
+array(0) {
+}
+string(13) "jsonSerialize"
+bool(false)
+bool(true)
+int(0)
+string(0) ""
+array(0) {
+}
+bool(false)
+bool(false)
+bool(true)
+string(3) "int"
+string(0) ""
+bool(false)
+bool(true)
+string(5) "mixed"
+string(0) ""
+bool(true)
+bool(false)
+string(0) ""
+string(6) "string"

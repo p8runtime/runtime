@@ -191,7 +191,7 @@ fn curl_multi_setopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
         c::CURLMOPT_PUSHFUNCTION => {
             if !ctx.is_callable(&value) {
-                let why = crate::setopt::callable_error(ctx, &value);
+                let why = p8_runtime::args::callable_error(ctx, &value);
                 return Err(ctx.throw("TypeError", format!("curl_multi_setopt(): Argument #2 ($option) must be a valid callback for option CURLMOPT_PUSHFUNCTION, {why}")));
             }
         }

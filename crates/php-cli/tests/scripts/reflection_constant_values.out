@@ -1,0 +1,35 @@
+string(1) "A"
+array(2) {
+  ["default"]=>
+  array(2) {
+    ["rss"]=>
+    string(15) "Not\Loaded\Feed"
+    ["x"]=>
+    string(7) "N\Other"
+  }
+  ["type"]=>
+  string(3) "map"
+}
+string(1) "B"
+array(1) {
+  ["default"]=>
+  int(11)
+}
+string(1) "C"
+array(2) {
+  ["default"]=>
+  array(1) {
+    [0]=>
+    string(4) "Main"
+  }
+  ["type"]=>
+  string(3) "map"
+}
+string(1) "D"
+array(2) {
+  ["default"]=>
+  bool(true)
+  ["n"]=>
+  int(30719)
+}
+bool(true)

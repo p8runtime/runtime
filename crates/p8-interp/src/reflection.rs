@@ -585,11 +585,9 @@ fn check_constructor(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<(), Throw> 
     Ok(())
 }
 
+/// A class constant's value (its code run first, if needed); null for none.
 fn class_constant(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &str) -> Result<Value, Throw> {
-    match ctx.constant(format!("{}::{}", String::from_utf8_lossy(class.name.as_bytes()), name).as_bytes()) {
-        Some(v) => Ok(v),
-        None => Ok(class.constants.get(name.as_bytes()).map_or(Value::Null, |c| c.value.clone())),
-    }
+    Ok(ctx.class_constant(class, name.as_bytes())?.unwrap_or(Value::Null))
 }
 
 fn vis_bits(v: Visibility) -> i64 {
@@ -707,6 +705,8 @@ fn_method!(fa_get_number_of_required_parameters, |ctx, info, this, args| Ok(Valu
 )));
 fn_method!(fa_get_return_type, |ctx, info, this, args| Ok(type_value(ctx, &info.ret)));
 fn_method!(fa_has_return_type, |ctx, info, this, args| Ok(Value::Bool(info.ret.is_some())));
+fn_method!(fa_get_tentative_return_type, |ctx, info, this, args| Ok(type_value(ctx, &info.tentative_ret)));
+fn_method!(fa_has_tentative_return_type, |ctx, info, this, args| Ok(Value::Bool(info.tentative_ret.is_some())));
 fn_method!(fa_is_variadic, |ctx, info, this, args| Ok(Value::Bool(info.params.last().is_some_and(|p| p.variadic))));
 fn_method!(fa_returns_reference, |ctx, info, this, args| Ok(Value::Bool(info.returns_ref)));
 fn_method!(fa_is_user_defined, |ctx, info, this, args| Ok(Value::Bool(info.user)));
@@ -1697,6 +1697,8 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("getNumberOfRequiredParameters", Some(Native::Method(fa_get_number_of_required_parameters))),
     ("getReturnType", Some(Native::Method(fa_get_return_type))),
     ("hasReturnType", Some(Native::Method(fa_has_return_type))),
+    ("getTentativeReturnType", Some(Native::Method(fa_get_tentative_return_type))),
+    ("hasTentativeReturnType", Some(Native::Method(fa_has_tentative_return_type))),
     ("isVariadic", Some(Native::Method(fa_is_variadic))),
     ("returnsReference", Some(Native::Method(fa_returns_reference))),
     ("isUserDefined", Some(Native::Method(fa_is_user_defined))),

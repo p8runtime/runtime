@@ -230,6 +230,21 @@ impl FnBuilder<'_> {
 
     /// Point each `goto` at its label: one in the same loops or outside
     /// them (never into a loop or switch).
+    /// Each kind of register is numbered in 14 bits and the frame in 16: a
+    /// function past that cannot be compiled (an error, never registers
+    /// silently shared).
+    fn check_size(&self) -> Result<()> {
+        let limit = 1usize << KIND_SHIFT;
+        let (cvs, consts, temps) = (self.cvs.len(), self.consts.len(), self.max_temps);
+        if cvs >= limit || consts >= limit || temps >= limit || cvs + consts + temps > usize::from(u16::MAX) {
+            return Err(CompileError {
+                message: format!("p8 cannot compile a function this large yet ({cvs} variables, {consts} constants, {temps} temporaries; at most {} each)", limit - 1),
+                line: self.decl_line,
+            });
+        }
+        Ok(())
+    }
+
     fn resolve_gotos(&mut self) -> Result<()> {
         for g in std::mem::take(&mut self.gotos) {
             let Some((target, loops)) = self.labels.get(&g.label) else {
@@ -521,6 +536,12 @@ fn thread_returns(code: &mut [Instr]) {
 /// `ns\\name` (just `name` in the global namespace).
 fn join(ns: &[u8], name: &[u8]) -> Vec<u8> {
     if ns.is_empty() { name.to_vec() } else { [ns, b"\\", name].concat() }
+}
+
+/// Whether a destructuring pattern takes anything by reference (`[&$a]`,
+/// `['k' => [&$b]]`).
+fn has_ref_items(items: &[p8_syntax::ast::ArrayItem]) -> bool {
+    items.iter().any(|i| i.by_ref || matches!(i.value, Expr::Array { items, .. } if has_ref_items(items)))
 }
 
 /// Whether a call's arguments are `...` (the first-class callable syntax).
@@ -1020,12 +1041,15 @@ impl<'src> Compiler<'src> {
         let mut ns: Vec<u8> = Vec::new();
         let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
             // Declared as the file loads (early binding), as PHP does it:
-            // not a class that implements interfaces or uses traits, nor an
-            // enum (it implements UnitEnum); those are declared when their
-            // statement runs.
+            // not a class that implements interfaces (a __toString makes it
+            // Stringable) or uses traits, nor an enum (it implements
+            // UnitEnum); those are declared when their statement runs.
             let uses_traits = |members: &[p8_syntax::ast::ClassMember]| members.iter().any(|m| matches!(m, p8_syntax::ast::ClassMember::TraitUse { .. }));
+            let stringable = |c: &Self, members: &[p8_syntax::ast::ClassMember]| {
+                members.iter().any(|m| matches!(m, p8_syntax::ast::ClassMember::Method { name, .. } if c.text(name.span).eq_ignore_ascii_case(b"__tostring")))
+            };
             let early = match stmt {
-                Stmt::Class { implements, members, .. } => implements.is_empty() && !uses_traits(members),
+                Stmt::Class { implements, members, .. } => implements.is_empty() && !uses_traits(members) && !stringable(c, members),
                 Stmt::Interface { extends, .. } => extends.is_empty(),
                 Stmt::Trait { members, .. } => !uses_traits(members),
                 _ => false,
@@ -1072,6 +1096,7 @@ impl<'src> Compiler<'src> {
             f.emit(Instr::Return { src: one });
         }
         f.resolve_gotos()?;
+        f.check_size()?;
         let main = Arc::new(f.finish(self.file.clone()));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
@@ -1220,9 +1245,13 @@ impl<'src> Compiler<'src> {
                 f.temps = f.floor;
                 self.close_loop(f, cont);
             }
-            Stmt::Foreach { expr, key_var, value_var: Expr::Unary { op: UnaryOp::Reference, expr: value_var, .. }, body, .. } => {
-                // By reference: the elements of the array itself, so a
-                // property's or an element's is made a reference first.
+            Stmt::Foreach { expr, key_var, value_var, body, .. }
+                if matches!(value_var, Expr::Unary { op: UnaryOp::Reference, .. }) || matches!(value_var, Expr::Array { items, .. } if has_ref_items(items)) =>
+            {
+                // By reference (`as &$v`, or `as ['k' => &$v]` taken apart
+                // from the element itself): the elements of the array
+                // itself, so a property's or an element's is made a
+                // reference first.
                 let src = match expr {
                     Expr::PropertyFetch { target, property, .. } => {
                         let r = f.temp();
@@ -1252,9 +1281,17 @@ impl<'src> Compiler<'src> {
                 let iter = f.temp();
                 let _cell = f.temp();
                 let saved = f.temps;
+                let pattern = match value_var {
+                    Expr::Array { items, .. } => Some((*items, f.temp())),
+                    _ => None,
+                };
                 let init = f.emit(Instr::IterInitRef { src, iter, end: 0 });
                 let start = f.here();
-                let val = self.var_target(f, value_var)?;
+                let val = match (pattern, value_var) {
+                    (Some((_, r)), _) => r,
+                    (None, Expr::Unary { expr: target, .. }) => self.var_target(f, target)?,
+                    (None, other) => return Err(self.unsupported(other.span(), "this foreach target")),
+                };
                 let key = match key_var {
                     Some(k) => Some(self.var_target(f, k)?),
                     None => None,
@@ -1262,12 +1299,21 @@ impl<'src> Compiler<'src> {
                 let next = f.emit(Instr::IterNextRef { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
                 f.push_loop();
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
+                if let Some((items, r)) = pattern {
+                    self.destructure(f, items, r, Some((r, &[])))?;
+                    f.temps = f.floor;
+                }
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
                 f.emit(Instr::Jump { target: start });
                 let end = f.here();
                 f.patch(init, end);
                 f.patch(next, end);
+                // The element's reference goes with the loop (as PHP frees
+                // its temporary), so the last element is a plain value again.
+                if let Some((_, r)) = pattern {
+                    f.emit(Instr::Free { reg: r });
+                }
                 self.close_loop(f, start);
                 // The loop is done with what it iterated (PHP frees it here).
                 f.emit(Instr::Free { reg: iter });
@@ -1454,6 +1500,12 @@ impl<'src> Compiler<'src> {
             Stmt::Declare { body, .. } => self.stmts(f, body)?,
             Stmt::Global { vars, .. } => {
                 for v in *vars {
+                    // `global $$name`: `$$name = &$GLOBALS[$name]`.
+                    if let Expr::IndirectVariable { name, .. } = v {
+                        let n = self.expr(f, name)?;
+                        f.emit(Instr::rare(Rare::VarBind, n, 0, 1, 0));
+                        continue;
+                    }
                     let Expr::Variable { name, .. } = v else {
                         return Err(self.unsupported(v.span(), "this global statement"));
                     };
@@ -1939,6 +1991,7 @@ impl<'src> Compiler<'src> {
             }
         }
         f.resolve_gotos()?;
+        f.check_size()?;
         Ok((f.finish(self.file.clone()), captures))
     }
 
@@ -2460,9 +2513,41 @@ impl<'src> Compiler<'src> {
         Ok((Frozen::Null, Some(Arc::new(r?.0))))
     }
 
+    /// `__DIR__`: the file's directory.
+    fn dir(&self) -> Vec<u8> {
+        match self.file.rfind('/') {
+            Some(0) => b"/".to_vec(),
+            Some(i) => self.file.as_bytes()[..i].to_vec(),
+            None => b".".to_vec(),
+        }
+    }
+
+    /// Whether `e` is known at compile time throughout: literals, the
+    /// file's magic constants, and arrays, concatenations and signs of
+    /// those (what const_value folds). An array of such is one constant
+    /// (Composer's class map: `__DIR__ . '/..' . '/x.php'`, 15,000 of them).
+    fn foldable(&self, e: &Expr) -> bool {
+        match e {
+            Expr::MagicConst { kind: MagicConstKind::File | MagicConstKind::Dir | MagicConstKind::Line | MagicConstKind::Namespace, .. } => true,
+            Expr::Binary { left, op: BinaryOp::Concat, right, .. } => self.foldable(left) && self.foldable(right),
+            Expr::Unary { op: UnaryOp::Minus | UnaryOp::Plus, expr, .. } => self.literal(expr).is_some(),
+            Expr::Array { items, .. } => items.iter().all(|i| {
+                !i.unpack && !i.by_ref && i.key.is_none_or(|k| matches!(self.literal(k), Some(v) if !matches!(v, Frozen::Float(_)))) && self.foldable(i.value)
+            }),
+            other => self.literal(other).is_some(),
+        }
+    }
+
     fn const_value(&self, e: &Expr) -> Result<Frozen> {
         if let Some(v) = self.literal(e) {
             return Ok(v);
+        }
+        match e {
+            Expr::MagicConst { kind: MagicConstKind::File, .. } => return Ok(Frozen::Str(Text::from(self.file.as_bytes()))),
+            Expr::MagicConst { kind: MagicConstKind::Dir, .. } => return Ok(Frozen::Str(Text::from(self.dir().as_slice()))),
+            Expr::MagicConst { kind: MagicConstKind::Line, span } => return Ok(Frozen::Int(i64::from(self.line(*span)))),
+            Expr::MagicConst { kind: MagicConstKind::Namespace, .. } => return Ok(Frozen::Str(Text::from(self.ns.as_slice()))),
+            _ => {}
         }
         match e {
             Expr::Unary { op: op @ (UnaryOp::Minus | UnaryOp::Plus), expr, .. } => match (op, self.const_value(expr)?) {
@@ -2741,6 +2826,12 @@ impl<'src> Compiler<'src> {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 f.emit(Instr::rare(Rare::AssignStaticRef, name, src, 0, class));
+                src
+            }
+            // `$$name = &...`: the variable named at run time.
+            Expr::IndirectVariable { name, .. } => {
+                let n = self.expr(f, name)?;
+                f.emit(Instr::rare(Rare::VarBind, n, src, 0, 0));
                 src
             }
             _ => return Err(self.unsupported(span, "this assignment by reference")),
@@ -3686,6 +3777,14 @@ impl<'src> Compiler<'src> {
                 }
                 dst
             }
+            // An array known at compile time (`['a' => 1, 'b' => [2, 3]]`,
+            // `[__DIR__ . '/x.php']`) is one constant, as PHP folds it: a
+            // large one (100,000 words, a 15,000-class map) takes a single
+            // register.
+            Expr::Array { items, .. } if !items.is_empty() && self.foldable(e) && self.const_value(e).is_ok() => {
+                let value = self.const_value(e)?;
+                f.constant(value)
+            }
             Expr::Array { items, .. } => {
                 let dst = f.temp();
                 f.emit(Instr::NewArray { dst });
@@ -3774,11 +3873,7 @@ impl<'src> Compiler<'src> {
                 let text: Vec<u8> = match kind {
                     MagicConstKind::Line => return Ok(f.constant(Frozen::Int(i64::from(self.line(*span))))),
                     MagicConstKind::File => self.file.as_bytes().to_vec(),
-                    MagicConstKind::Dir => match self.file.rfind('/') {
-                        Some(0) => b"/".to_vec(),
-                        Some(i) => self.file.as_bytes()[..i].to_vec(),
-                        None => b".".to_vec(),
-                    },
+                    MagicConstKind::Dir => self.dir(),
                     MagicConstKind::Method if f.name.as_bytes() != b"{main}" => match &f.class {
                         Some(c) => [c.as_bytes(), b"::", f.name.as_bytes()].concat(),
                         // Outside a class, __METHOD__ is the function's name.
@@ -3914,12 +4009,30 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::FromCallable { dst, src: pair });
                 dst
             }
-            Expr::StaticCall { class: Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
+            Expr::StaticCall { class: class_expr @ Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
                 if is_placeholder(args) =>
             {
-                // `C::m(...)`: a Closure of "C::m".
-                let text = [self.text(*class), b"::", self.text(*method)].concat();
-                let src = f.constant(Frozen::Str(Text::from(text.as_slice())));
+                // `C::m(...)`: a Closure of "C::m", the class name resolved
+                // as written here (self, parent and static stay keywords);
+                // `$c::m(...)`: of [$c, 'm'].
+                let written = self.text(*class);
+                let src = if written.starts_with(b"$") {
+                    let class = self.expr(f, class_expr)?;
+                    let name = f.constant(Frozen::Str(Text::from(self.text(*method))));
+                    let pair = f.temp();
+                    f.emit(Instr::NewArray { dst: pair });
+                    f.emit(Instr::ArrayPush { arr: pair, val: class });
+                    f.emit(Instr::ArrayPush { arr: pair, val: name });
+                    pair
+                } else {
+                    let class = if matches!(written.to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") {
+                        written.to_ascii_lowercase()
+                    } else {
+                        self.class_name(written)
+                    };
+                    let text = [class.as_slice(), b"::", self.text(*method)].concat();
+                    f.constant(Frozen::Str(Text::from(text.as_slice())))
+                };
                 let dst = f.temp();
                 f.emit(Instr::FromCallable { dst, src });
                 dst
@@ -4024,6 +4137,14 @@ impl<'src> Compiler<'src> {
                     let name = f.constant(Frozen::Str(Text::from(text)));
                     f.emit(Instr::ClassConst { dst, class: class_index, name });
                 }
+                dst
+            }
+            // `throw` as an expression: it never yields a value.
+            Expr::Throw { expr, .. } => {
+                let src = self.expr(f, expr)?;
+                f.emit(Instr::Throw { src });
+                let dst = out(f, hint, mark);
+                f.emit(Instr::LoadNull { dst });
                 dst
             }
             Expr::Clone { expr, .. } => {
@@ -4415,14 +4536,40 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    /// The callable name a function call by name resolves to, as a register:
+    /// `use function` and the namespace applied; in a namespace an
+    /// unqualified `f` is ns\f when that exists as the code runs, else the
+    /// global f (as any call).
+    fn function_callee(&mut self, f: &mut FnBuilder, name: Span) -> Result<Reg> {
+        let (full, fallback) = self.ns_name(self.text(name), &self.use_functions, true);
+        let full = f.constant(Frozen::Str(Text::from(full.as_slice())));
+        Ok(match fallback {
+            // `f(...$a)` in a namespace: ns\f when it exists as
+            // the call runs, else the global f (as any call).
+            Some(global) => {
+                let global = f.constant(Frozen::Str(Text::from(global.as_slice())));
+                let exists = f.constant(Frozen::Str(Text::from("function_exists")));
+                let base = f.temp();
+                f.emit(Instr::Move { dst: base, src: full });
+                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
+                let callee = f.temp();
+                let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
+                f.emit(Instr::Move { dst: callee, src: full });
+                let end = f.emit(Instr::Jump { target: 0 });
+                f.patch(other, f.here());
+                f.emit(Instr::Move { dst: callee, src: global });
+                f.patch(end, f.here());
+                callee
+            }
+            None => full,
+        })
+    }
+
     fn call(&mut self, f: &mut FnBuilder, func: &Expr, args: &[p8_syntax::ast::Arg], span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
         // `f(...)`: a Closure of the function.
         if is_placeholder(args) {
             let src = match func {
-                Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
-                    let text = self.text(*name);
-                    f.constant(Frozen::Str(Text::from(text.strip_prefix(b"\\").unwrap_or(text))))
-                }
+                Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => self.function_callee(f, *name)?,
                 other => self.expr(f, other)?,
             };
             let dst = f.temp();
@@ -4436,30 +4583,7 @@ impl<'src> Compiler<'src> {
         };
         if needs_spread(args) {
             let callee = match func {
-                Expr::Variable { name, .. } if !dynamic => {
-                    let (full, fallback) = self.ns_name(self.text(*name), &self.use_functions, true);
-                    let full = f.constant(Frozen::Str(Text::from(full.as_slice())));
-                    match fallback {
-                        // `f(...$a)` in a namespace: ns\f when it exists as
-                        // the call runs, else the global f (as any call).
-                        Some(global) => {
-                            let global = f.constant(Frozen::Str(Text::from(global.as_slice())));
-                            let exists = f.constant(Frozen::Str(Text::from("function_exists")));
-                            let base = f.temp();
-                            f.emit(Instr::Move { dst: base, src: full });
-                            f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
-                            let callee = f.temp();
-                            let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
-                            f.emit(Instr::Move { dst: callee, src: full });
-                            let end = f.emit(Instr::Jump { target: 0 });
-                            f.patch(other, f.here());
-                            f.emit(Instr::Move { dst: callee, src: global });
-                            f.patch(end, f.here());
-                            callee
-                        }
-                        None => full,
-                    }
-                }
+                Expr::Variable { name, .. } if !dynamic => self.function_callee(f, *name)?,
                 other => self.expr(f, other)?,
             };
             return self.spread_call(f, callee, args);

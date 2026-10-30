@@ -109,7 +109,12 @@ fn class_for(doc: &Doc, kind: Kind) -> Vec<u8> {
         Kind::Fragment => b"DOMDocumentFragment",
         Kind::Notation => b"DOMNotation",
     };
-    name.to_vec()
+    // A class registered for it with registerNodeClass.
+    let lower = name.to_ascii_lowercase();
+    match doc.node_classes.iter().find(|(base, _)| *base == lower) {
+        Some((_, extended)) => extended.clone(),
+        None => name.to_vec(),
+    }
 }
 
 /// The PHP object for a node: the one it has, or a new one.
@@ -865,6 +870,6 @@ getter!(next_element_sibling_get, |ctx, r| {
 impl Doc {
     /// A snapshot to copy from (a node copied within its own document).
     pub fn clone_tree(&self) -> Doc {
-        Doc { nodes: self.nodes.clone(), objects: Vec::new(), settings: self.settings.clone(), class: self.class.clone(), orphan: self.orphan, html: self.html }
+        Doc { nodes: self.nodes.clone(), objects: Vec::new(), settings: self.settings.clone(), class: self.class.clone(), orphan: self.orphan, html: self.html, node_classes: self.node_classes.clone() }
     }
 }
