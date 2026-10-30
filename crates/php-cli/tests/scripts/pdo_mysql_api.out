@@ -1,0 +1,86 @@
+bool(true)
+array(3) {
+  [0]=>
+  string(6) "sqlite"
+  [1]=>
+  string(5) "mysql"
+  [2]=>
+  string(5) "pgsql"
+}
+array(3) {
+  [0]=>
+  string(6) "sqlite"
+  [1]=>
+  string(5) "mysql"
+  [2]=>
+  string(5) "pgsql"
+}
+PDO::MYSQL_ATTR_USE_BUFFERED_QUERY = 1000
+PDO::MYSQL_ATTR_LOCAL_INFILE = 1001
+PDO::MYSQL_ATTR_INIT_COMMAND = 1002
+PDO::MYSQL_ATTR_COMPRESS = 1003
+PDO::MYSQL_ATTR_DIRECT_QUERY = 1004
+PDO::MYSQL_ATTR_FOUND_ROWS = 1005
+PDO::MYSQL_ATTR_IGNORE_SPACE = 1006
+PDO::MYSQL_ATTR_SSL_KEY = 1007
+PDO::MYSQL_ATTR_SSL_CERT = 1008
+PDO::MYSQL_ATTR_SSL_CA = 1009
+PDO::MYSQL_ATTR_SSL_CAPATH = 1010
+PDO::MYSQL_ATTR_SSL_CIPHER = 1011
+PDO::MYSQL_ATTR_SERVER_PUBLIC_KEY = 1012
+PDO::MYSQL_ATTR_MULTI_STATEMENTS = 1013
+PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT = 1014
+PDO::MYSQL_ATTR_LOCAL_INFILE_DIRECTORY = 1015
+Pdo\Mysql extends PDO
+Pdo\Mysql::ATTR_USE_BUFFERED_QUERY = 1000
+Pdo\Mysql::ATTR_LOCAL_INFILE = 1001
+Pdo\Mysql::ATTR_INIT_COMMAND = 1002
+Pdo\Mysql::ATTR_COMPRESS = 1003
+Pdo\Mysql::ATTR_DIRECT_QUERY = 1004
+Pdo\Mysql::ATTR_FOUND_ROWS = 1005
+Pdo\Mysql::ATTR_IGNORE_SPACE = 1006
+Pdo\Mysql::ATTR_SSL_KEY = 1007
+Pdo\Mysql::ATTR_SSL_CERT = 1008
+Pdo\Mysql::ATTR_SSL_CA = 1009
+Pdo\Mysql::ATTR_SSL_CAPATH = 1010
+Pdo\Mysql::ATTR_SSL_CIPHER = 1011
+Pdo\Mysql::ATTR_SERVER_PUBLIC_KEY = 1012
+Pdo\Mysql::ATTR_MULTI_STATEMENTS = 1013
+Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT = 1014
+Pdo\Mysql::ATTR_LOCAL_INFILE_DIRECTORY = 1015
+getWarningCount
+bool(true)
+PDOException: SQLSTATE[HY000] [2002] Connection refused
+int(2002)
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2002)
+  [2]=>
+  string(18) "Connection refused"
+}
+PDOException: SQLSTATE[HY000] [2002] No such file or directory
+int(2002)
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2002)
+  [2]=>
+  string(25) "No such file or directory"
+}
+PDOException: SQLSTATE[HY000] [2019] Unknown character set
+int(2019)
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2019)
+  [2]=>
+  string(21) "Unknown character set"
+}
+SQLSTATE[HY000] [2002] Connection refused
+Pdo\Mysql::connect() cannot be used for connecting to the "sqlite" driver, either call Pdo\Sqlite::connect() or PDO::connect() instead
+string(10) "Pdo\Sqlite"
+Error: Pdo\Mysql object is uninitialized

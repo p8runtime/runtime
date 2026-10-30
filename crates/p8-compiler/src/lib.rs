@@ -827,7 +827,12 @@ fn dim_root_is_static(c: &Compiler, e: &Expr) -> bool {
     while let Expr::ArrayDimFetch { array, .. } = cur {
         cur = array;
     }
-    matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if c.text(*name).starts_with(b"$"))
+    match cur {
+        Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } => c.text(*name).starts_with(b"$"),
+        // `C::${expr}`: named when it runs.
+        Expr::ClassConstFetch { constant: Expr::IndirectVariable { .. }, .. } => true,
+        _ => false,
+    }
 }
 
 /// Whether a hook's source uses its property's stored value: `$this->name`,
@@ -2854,6 +2859,13 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
                 Ok((dst, false))
             }
+            Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                let class = self.class_ref(f, class)?;
+                let name = self.expr(f, name)?;
+                let dst = f.temp();
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
+                Ok((dst, false))
+            }
             Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => {
                 let r = self.expr(f, e)?;
                 // Mark the call (the last instruction) as wanting a reference.
@@ -2993,12 +3005,10 @@ impl<'src> Compiler<'src> {
         f.emit(Instr::NewArray { dst: callee });
         f.emit(Instr::ArrayPush { arr: callee, val: a });
         f.emit(Instr::ArrayPush { arr: callee, val: b });
-        // A variable passed may be taken by reference: which parameters
-        // do is asked when the call runs.
-        if needs_spread(args) || args.iter().any(|a| self.can_ref(a.value)) {
+        if needs_spread(args) {
             return self.spread_call(f, callee, args);
         }
-        let (base, argc) = self.args_by_value(f, args)?;
+        let (base, argc) = self.value_args(f, args, callee)?;
         f.emit(Instr::CallValue { dst: base, callee, base, argc });
         Ok(base)
     }
@@ -3027,6 +3037,25 @@ impl<'src> Compiler<'src> {
                 value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref_arg(value) => {
                     let flag = f.temp();
                     f.emit(asks(flag, n as u8));
+                    self.ref_or_value_with(f, value, *r, flag)?;
+                }
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        Ok((regs[0], args.len() as u8))
+    }
+
+    /// The arguments of a call of a value (`$f(...)`, `[$o, 'm'](...)`): a
+    /// variable, element or property goes as a reference when the callable
+    /// takes that parameter by one, asked as the call runs (PHP's
+    /// SEND_VAR_EX for a function known only then).
+    fn value_args(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg], callee: Reg) -> Result<(Reg, u8)> {
+        let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
+        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+            match arg.value {
+                value if self.can_ref_arg(value) && !matches!(value, Expr::Variable { name, .. } if matches!(self.text(*name), b"$this" | b"$GLOBALS")) => {
+                    let flag = f.temp();
+                    f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16));
                     self.ref_or_value_with(f, value, *r, flag)?;
                 }
                 value => self.expr_into(f, value, *r)?,
@@ -3219,7 +3248,7 @@ impl<'src> Compiler<'src> {
         {
             cur = array;
         }
-        if matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$")) {
+        if dim_root_is_static(self, cur) {
             f.emit(Instr::Free { reg: root });
         }
     }
@@ -3427,6 +3456,14 @@ impl<'src> Compiler<'src> {
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let dst = f.temp();
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
+                Ok(dst)
+            }
+            // `C::${expr}[k] = v`: the static property named when it runs.
+            Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                let class = self.class_ref(f, class)?;
+                let name = self.expr(f, name)?;
                 let dst = f.temp();
                 f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
                 Ok(dst)
@@ -4668,15 +4705,9 @@ impl<'src> Compiler<'src> {
             };
             return self.spread_call(f, callee, args);
         }
-        if dynamic && args.iter().any(|a| self.can_ref(a.value)) {
-            // A variable passed may be taken by reference: which parameters
-            // do is asked when the call runs.
-            let callee = self.expr(f, func)?;
-            return self.spread_call(f, callee, args);
-        }
         if dynamic {
             let callee = self.expr(f, func)?;
-            let (base, argc) = self.args_by_value(f, args)?;
+            let (base, argc) = self.value_args(f, args, callee)?;
             f.emit(Instr::CallValue { dst: base, callee, base, argc });
             let _ = (span, hint, mark);
             return Ok(base);

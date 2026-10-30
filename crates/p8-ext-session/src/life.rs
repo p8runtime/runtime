@@ -339,7 +339,7 @@ fn decode_with(ctx: &mut dyn Ctx, s: &Shared, ser: Serializer, data: &[u8]) -> R
     match ser {
         Serializer::PhpSerialize => {
             let mut r = Reader::new(data);
-            let value = r.value(ctx);
+            let value = r.value(ctx)?;
             let result = value.is_ok();
             let mut value = value.unwrap_or(Value::Null);
             if result {
@@ -366,7 +366,7 @@ fn decode_with(ctx: &mut dyn Ctx, s: &Shared, ser: Serializer, data: &[u8]) -> R
                 let name = data[p + 1..p + 1 + namelen].to_vec();
                 p += namelen + 1;
                 r.seek(p);
-                match r.value(ctx) {
+                match r.value(ctx)? {
                     Ok(v) => {
                         set_var(s, name, v);
                         p = r.at();
@@ -391,7 +391,7 @@ fn decode_with(ctx: &mut dyn Ctx, s: &Shared, ser: Serializer, data: &[u8]) -> R
                 };
                 let name = data[p..q].to_vec();
                 r.seek(q + 1);
-                match r.value(ctx) {
+                match r.value(ctx)? {
                     Ok(v) => {
                         set_var(s, name, v);
                         p = r.at();

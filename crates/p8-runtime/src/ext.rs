@@ -189,15 +189,11 @@ pub trait Ctx {
     fn new_resource(&mut self, resource: crate::stream::Resource) -> Value;
     /// Write to the host directly, past output buffers (PHP's STDOUT).
     fn write_stdout(&mut self, bytes: &[u8]);
-    /// The class `name`, after the autoloaders had their go (an Err of
-    /// Throw::Autoload asks the engine to run them and the call again).
+    /// The class `name`, after the autoloaders had their go: they run
+    /// right here, as zend_lookup_class runs them, so this builtin's frame
+    /// is below theirs (from a builtin marked as reentering, or a method:
+    /// the registers are lent; anything else is an engine error).
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw>;
-    /// The class `name`, the autoloaders run right here (from a builtin
-    /// marked as reentering), so the call is not run again: for a method,
-    /// whose receiver may be a temporary the re-run would not find.
-    fn class_load_now(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
-        self.class_load(name)
-    }
     /// The value of `o`'s property at `slot` as `$o->name` reads it here:
     /// through its get hook (from a builtin marked as reentering); None
     /// when it has none (unset, or virtual without a get hook).

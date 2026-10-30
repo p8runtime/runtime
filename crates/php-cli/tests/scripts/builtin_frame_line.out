@@ -1,0 +1,7 @@
+is_callable 9
+bool(false)
+array(1) {
+  [0]=>
+  string(12) "array_map 11"
+}
+usort 18

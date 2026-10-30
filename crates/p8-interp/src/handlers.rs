@@ -3,32 +3,48 @@
 //!
 //! Each runs where the engine holds the running frames' registers: an
 //! error handler after the instruction that raised the diagnostic, an
-//! autoloader before the instruction that wanted the class runs again,
-//! shutdown functions while the main frame is still there (its globals).
+//! autoloader where a builtin looks the class up (zend_lookup_class) or
+//! before the instruction that wanted the class runs again, shutdown
+//! functions while the main frame is still there (its globals).
 //!
 //! Reference: $PHP_SRC_PATH/Zend/zend.c (zend_error_impl),
 //! $PHP_SRC_PATH/ext/spl/php_spl.c (spl_autoload_call),
 //! $PHP_SRC_PATH/main/main.c (php_call_shutdown_functions)
 
 use crate::Context;
-use p8_runtime::ext::Throw;
+use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::object::Class;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
 impl Context<'_> {
-    /// The class `name` (as written, any case): a declared one; else, if
-    /// autoloaders may declare it, Throw::Autoload (the engine runs them
-    /// and the instruction again); else "Class not found".
+    /// The class `name` (as written, any case): a declared one; else one
+    /// the autoloaders declare; else "Class not found". A builtin's lookup
+    /// (the registers lent) runs them right here, as zend_lookup_class
+    /// does, so their frames sit above the builtin's; an instruction's
+    /// gets Throw::Autoload (the engine runs them and the instruction
+    /// again: PHP shows no internal frame there either).
     pub(crate) fn find_class(&mut self, name: &[u8]) -> Result<Rc<Class>, Throw> {
+        match self.load_class(name)? {
+            Some(c) => Ok(c),
+            None => {
+                let name = name.strip_prefix(b"\\").unwrap_or(name);
+                Err(self.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name))))
+            }
+        }
+    }
+
+    /// find_class(), None where no class of that name is there after the
+    /// autoloaders ran.
+    fn load_class(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
         let lower = name.to_ascii_lowercase();
         if let Some(c) = self.classes.get(&lower) {
-            return Ok(Rc::clone(c));
+            return Ok(Some(Rc::clone(c)));
         }
         if let Some(c) = self.builtin_on_demand(&lower) {
-            return Ok(c);
+            return Ok(Some(c));
         }
         // Each lookup asks the autoloaders, as PHP's do, except while they
         // are running for this class (no recursion) and in the retry of
@@ -39,11 +55,27 @@ impl Context<'_> {
         if valid && !self.autoloaders.is_empty() {
             if self.autoload_retry.as_ref() == Some(&lower) {
                 self.autoload_retry = None;
+            } else if !self.isolate.regs.is_empty() {
+                return self.autoload_here(name, lower);
             } else if self.autoload_tried.insert(lower) {
                 return Err(Throw::Autoload(PhpStr::from(name)));
             }
         }
-        Err(self.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name))))
+        Ok(None)
+    }
+
+    /// Run the autoloaders on `name` where the lookup is, on the lent
+    /// registers: the class if one declared it.
+    fn autoload_here(&mut self, name: &[u8], lower: Vec<u8>) -> Result<Option<Rc<Class>>, Throw> {
+        if !self.autoload_tried.insert(lower.clone()) {
+            return Ok(None);
+        }
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let r = self.run_loaders(&mut regs, PhpStr::from(name), &lower);
+        self.isolate.regs = regs;
+        self.autoload_tried.remove(&lower);
+        r?;
+        Ok(self.classes.get(&lower).cloned())
     }
 
     /// A builtin class declared when first wanted (Reflection, the
@@ -81,23 +113,37 @@ impl Context<'_> {
     /// The class `name` if declared, after the autoloaders had their go
     /// (class_exists($name, true) and the like, from a builtin).
     pub(crate) fn class_if_loaded(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
-        match self.find_class(name) {
-            Ok(c) => Ok(Some(c)),
-            Err(Throw::Autoload(n)) => Err(Throw::Autoload(n)),
-            Err(_) => Ok(None),
+        match self.load_class(name) {
+            Err(Throw::Autoload(n)) => Err(self.unlent_autoload(n)),
+            r => r,
         }
     }
 
+    /// A class a builtin wanted autoloaded without the registers lent: one
+    /// not marked as reentering (Registry::mark_reenters) cannot run the
+    /// autoloaders where it is, and is not run again after them.
+    #[cold]
+    pub(crate) fn unlent_autoload(&mut self, name: PhpStr) -> Throw {
+        self.autoload_tried.remove(&name.as_bytes().to_ascii_lowercase());
+        Ctx::fatal(self, format!("a builtin not marked as reentering autoloaded \"{}\"", String::from_utf8_lossy(name.as_bytes())))
+    }
+
     /// Run the autoloaders on `name`, in order, until one declares it.
-    pub(crate) fn run_autoload(&mut self, regs: &mut Vec<Value>, name: PhpStr) -> Result<(), Throw> {
-        let lower = name.as_bytes().to_ascii_lowercase();
-        let mut result = Ok(());
+    fn run_loaders(&mut self, regs: &mut Vec<Value>, name: PhpStr, lower: &[u8]) -> Result<(), Throw> {
         for loader in self.autoloaders.clone() {
-            result = self.call_with_regs(regs, &loader, &mut [Value::Str(name.clone())]).map(|_| ());
-            if result.is_err() || self.classes.contains_key(&lower) {
+            self.call_with_regs(regs, &loader, &mut [Value::Str(name.clone())])?;
+            if self.classes.contains_key(lower) {
                 break;
             }
         }
+        Ok(())
+    }
+
+    /// Run the autoloaders on `name` for the instruction that asked (it
+    /// runs again after them).
+    pub(crate) fn run_autoload(&mut self, regs: &mut Vec<Value>, name: PhpStr) -> Result<(), Throw> {
+        let lower = name.as_bytes().to_ascii_lowercase();
+        let result = self.run_loaders(regs, name, &lower);
         self.autoload_tried.remove(&lower);
         if result.is_ok() && !self.classes.contains_key(&lower) {
             self.autoload_retry = Some(lower);

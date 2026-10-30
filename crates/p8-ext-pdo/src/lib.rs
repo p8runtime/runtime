@@ -2,11 +2,11 @@
 //! p8's pdo extension: the driver-agnostic PDO core. PDO, PDOStatement,
 //! PDOException and PDORow, the fetch modes, error modes and attributes of
 //! php-src's ext/pdo, over a [`driver::Driver`] trait that `pdo_sqlite`
-//! (p8-ext-pdo-sqlite) and `pdo_pgsql` (p8-ext-pdo-pgsql) implement and
-//! `pdo_mysql` will, on p8-mysqlnd.
+//! (p8-ext-pdo-sqlite), `pdo_pgsql` (p8-ext-pdo-pgsql) and `pdo_mysql`
+//! (p8-ext-pdo-mysql, on p8-mysqlnd) implement.
 //!
 //! Not implemented: persistent connections (the attribute is kept and
-//! ignored), scrollable cursors, multiple rowsets, PDO::FETCH_SERIALIZE's
+//! ignored), scrollable cursors, PDO::FETCH_SERIALIZE's
 //! unserialize, the `pdo.dsn.*` ini DSN aliases and the `uri:` DSN.
 //!
 //! Reference: $PHP_SRC_PATH/ext/pdo (pdo_dbh.c, pdo_stmt.c, pdo_sql_parser.re)

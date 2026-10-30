@@ -3874,6 +3874,7 @@ dependencies = [
  "p8-ext-openssl",
  "p8-ext-pcre",
  "p8-ext-pdo",
+ "p8-ext-pdo-mysql",
  "p8-ext-pdo-pgsql",
  "p8-ext-pdo-sqlite",
  "p8-ext-session",
@@ -4030,6 +4031,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "p8-ext-pdo-mysql"
+version = "0.1.0"
+dependencies = [
+ "p8-ext-pdo",
+ "p8-mysqlnd",
+ "p8-runtime",
+]
+
+[[package]]
 name = "p8-ext-pdo-pgsql"
 version = "0.1.0"
 dependencies = [
@@ -4126,6 +4136,7 @@ dependencies = [
  "p8-bytecode",
  "p8-compiler",
  "p8-runtime",
+ "p8-stubs",
  "p8-syntax",
 ]
 

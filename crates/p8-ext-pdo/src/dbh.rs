@@ -249,6 +249,9 @@ pub fn attribute_set(ctx: &mut dyn Ctx, func: &str, dbh: &Rc<Dbh>, attr: i64, va
         ATTR_STRINGIFY_FETCHES => {
             let b = bool_param(ctx, value)?;
             dbh.stringify.set(b);
+            // The driver hears of it too (pdo_mysql decodes rows by it);
+            // what it answers does not matter.
+            let _ = dbh.conn.borrow_mut().set_attribute(ctx, attr, value)?;
             return Ok(true);
         }
         ATTR_STATEMENT_CLASS => return statement_class_set(ctx, func, dbh, value),
@@ -258,6 +261,10 @@ pub fn attribute_set(ctx: &mut dyn Ctx, func: &str, dbh: &Rc<Dbh>, attr: i64, va
     let r = dbh.conn.borrow_mut().set_attribute(ctx, attr, value)?;
     if r {
         return Ok(true);
+    }
+    let refused = dbh.conn.borrow_mut().attribute_error();
+    if let Some(e) = refused {
+        record(dbh, &Where::Dbh, &e);
     }
     // The driver refused: its error state, or "driver does not support".
     // A driver that refuses with no error of its own is silent (PDO_HANDLE_DBH_ERR
@@ -329,10 +336,15 @@ pub fn m_get_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
         ATTR_STRINGIFY_FETCHES => return Ok(Value::Bool(dbh.stringify.get())),
         _ => {}
     }
-    let r = dbh.conn.borrow_mut().get_attribute(attr);
+    let r = dbh.conn.borrow_mut().get_attribute_checked(attr);
     match r {
-        Some(v) => Ok(v),
-        None => {
+        Ok(Some(v)) => Ok(v),
+        Err(e) => {
+            record(&dbh, &Where::Dbh, &e);
+            handle_error(ctx, "PDO::getAttribute", &dbh, Where::Dbh)?;
+            Ok(Value::Bool(false))
+        }
+        Ok(None) => {
             impl_error(ctx, "PDO::getAttribute", &dbh, Where::Dbh, "IM001", Some("driver does not support that attribute"))?;
             Ok(Value::Bool(false))
         }
@@ -453,7 +465,12 @@ fn prepare_failed(ctx: &mut dyn Ctx, func: &str, dbh: &Rc<Dbh>, e: stmt::Prepare
             record(dbh, &Where::Dbh, &e);
             handle_error(ctx, func, dbh, Where::Dbh)
         }
-        stmt::PrepareError::Impl(state, msg) => impl_error(ctx, func, dbh, Where::Dbh, state, Some(msg)),
+        // pdo_parse_params() raised it on the statement; the preparer then
+        // copies the SQLSTATE to the connection, which PDO reports too.
+        stmt::PrepareError::Impl(state, msg) => {
+            impl_error(ctx, func, dbh, Where::Dbh, state, Some(msg))?;
+            handle_error(ctx, func, dbh, Where::Dbh)
+        }
     }
 }
 
@@ -492,12 +509,15 @@ pub fn m_query(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         stmt::setup_fetch_mode(ctx, &obj, func, mode, 2, "fetchMode", &rest)?;
     }
     stmt::data(&obj).err.borrow_mut().clear();
-    if stmt::run(ctx, func, &obj)? {
+    let ran = stmt::run(ctx, func, &obj);
+    if let Ok(true) = ran {
         finish_stmt(ctx, &obj, &query, &class)?;
         return Ok(Value::Object(obj));
     }
-    // Something broke: the statement's error is the connection's until the next call.
+    // Something broke: the statement's error is the connection's until the
+    // next call (also when it was thrown).
     *dbh.query_error.borrow_mut() = Some(stmt::data(&obj).err.borrow().clone());
+    ran?;
     Ok(Value::Bool(false))
 }
 
@@ -635,8 +655,11 @@ pub fn m_error_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
         None => dbh.error.borrow().clone(),
     };
     let mut items = vec![Value::str(e.sqlstate.as_str())];
+    // An error PDO raised itself has no driver part: the driver adds the
+    // last one it holds (fetch_err), if it keeps one.
+    let info = if e.info.is_some() { e.info.clone() } else { dbh.conn.borrow().error_info() };
     if e.sqlstate != "00000"
-        && let Some((code, msg)) = &e.info
+        && let Some((code, msg)) = &info
     {
         items.push(Value::Int(*code));
         items.push(Value::str(msg.as_str()));

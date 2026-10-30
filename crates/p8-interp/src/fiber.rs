@@ -98,9 +98,9 @@ impl Context<'_> {
             DESTROY => "Fiber->__destruct",
             _ => "Fiber::getCurrent",
         };
-        self.natives.push(crate::NativeCall { depth: self.frames.len(), name, args: args.iter().map(Value::deref).collect(), top: true });
+        self.push_native(name, None, args, true);
         let r = self.fiber_op_inner(fiber, op, args);
-        self.natives.pop();
+        self.pop_native();
         r
     }
 
@@ -148,7 +148,11 @@ impl Context<'_> {
             return Err(self.fiber_error("Cannot start a fiber that has already been started"));
         }
         let callable = state(fiber).borrow().callable.clone();
-        let target = self.resolve_callable(&callable)?;
+        // Lent while it is resolved: a class it names is autoloaded there.
+        std::mem::swap(&mut self.isolate.regs, regs);
+        let target = self.resolve_callable(&callable);
+        std::mem::swap(&mut self.isolate.regs, regs);
+        let target = target?;
         let m = match target {
             crate::callable::Target::Frame(m @ MethodFrame { func: Code::User(_), .. }) => m,
             _ => {

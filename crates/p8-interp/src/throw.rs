@@ -85,7 +85,19 @@ impl Context<'_> {
                 let mut entry = PhpArray::new();
                 entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
                 entry.insert(key("line"), Value::Int(i64::from(line)));
-                entry.insert(key("function"), Value::str(n.name));
+                match &n.method {
+                    Some((name, class, this)) => {
+                        entry.insert(key("function"), Value::Str(name.clone()));
+                        entry.insert(key("class"), Value::Str(class.clone()));
+                        if objects && let Some(this) = this {
+                            entry.insert(key("object"), Value::Object(Rc::clone(this)));
+                        }
+                        entry.insert(key("type"), Value::str(if this.is_some() { "->" } else { "::" }));
+                    }
+                    None => {
+                        entry.insert(key("function"), Value::str(n.name));
+                    }
+                }
                 entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
                 let _ = trace.push(Value::Array(Rc::new(entry)));
             }

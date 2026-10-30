@@ -398,6 +398,9 @@ fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static 
 struct NativeCall {
     depth: usize,
     name: &'static str,
+    /// A builtin method's name, class and object (None: called
+    /// statically), shown in place of `name`.
+    method: Option<(PhpStr, PhpStr, Option<Rc<Object>>)>,
     args: Vec<Value>,
     /// Shown in a trace even when the error is raised inside it (no PHP
     /// frame above): the Fiber methods.
@@ -1196,6 +1199,7 @@ impl Isolate {
             arg_buf: Vec::new(),
             lambdas: HashMap::new(),
             natives: Vec::new(),
+            native_args: Vec::new(),
             running_builtin: None,
             statics: HashMap::new(),
             magic_guard: Vec::new(),
@@ -1339,6 +1343,9 @@ pub struct Context<'i> {
     lambdas: HashMap<usize, Rc<Closure>>,
     /// Builtins running that may call back into PHP, innermost last.
     natives: Vec<NativeCall>,
+    /// Argument lists of finished `natives`, kept for the next ones (a
+    /// call then allocates nothing).
+    native_args: Vec<Vec<Value>>,
     /// The builtin running now, innermost (its name for its messages).
     running_builtin: Option<usize>,
     /// `static` variables, by function (its code's address) and index.
@@ -2218,7 +2225,6 @@ impl Context<'_> {
                 let at = pc;
                 match self.call_builtin(regs, base, i, args, n, dst) {
                     Ok(()) => pc += 1,
-                    Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
                     Err(t) => pc = self.unwind(regs, t, pc)?,
                 }
                 if !self.pending_errors.is_empty() || self.ids.has_pending() {
@@ -2265,6 +2271,10 @@ impl Context<'_> {
     /// that wanted the class, again).
     #[cold]
     fn autoload_then(&mut self, regs: &mut Vec<Value>, name: PhpStr, at: usize) -> Result<usize, Throw> {
+        // Their frames show the line of the instruction.
+        if let Some(top) = self.frames.last_mut() {
+            top.pc = at as u32 + 1;
+        }
         match self.run_autoload(regs, name) {
             Ok(()) => Ok(at),
             Err(t) => self.unwind(regs, t, at),
@@ -4032,19 +4042,15 @@ impl Context<'_> {
             classes::Code::Native(native, name) => {
                 let mut buf: Vec<Value> = regs[args..args + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)).collect();
                 let saved = std::mem::replace(&mut self.native_class, m.called.clone());
-                // Lent, as to a builtin: Closure::call runs PHP code.
+                // Lent, as to a builtin: Closure::call runs PHP code, and
+                // a class it looks up is autoloaded with it running.
                 self.isolate.regs = std::mem::take(regs);
-                let r = self.run_native(native, m.this.as_ref(), &mut buf);
+                if let Some(top) = self.frames.last_mut() {
+                    top.pc = pc as u32;
+                }
+                let r = self.run_native_method(native, &name, m.scope.as_ref(), m.this.as_ref(), &mut buf);
                 *regs = std::mem::take(&mut self.isolate.regs);
                 self.native_class = saved;
-                if let Err(Throw::Autoload(_)) = r {
-                    // The call runs again after the autoloaders: its
-                    // arguments go back (as call_builtin's do).
-                    for (slot, v) in regs[args..args + argc as usize].iter_mut().zip(buf) {
-                        *slot = v;
-                    }
-                    return r.map(|_| Next::Go(pc));
-                }
                 // An error the method raised: the trace shows its call on
                 // top (not a hook's, `$name::get`: PHP has no frame there).
                 if let (Err(Throw::Error { .. }), Some(scope)) = (&r, &m.scope)
@@ -4294,12 +4300,46 @@ impl Context<'_> {
         self.resource_ids.take();
     }
 
+    /// A builtin starts running at the current frame count (see NativeCall).
+    pub(crate) fn push_native(&mut self, name: &'static str, method: Option<(PhpStr, PhpStr, Option<Rc<Object>>)>, args: &[Value], top: bool) {
+        let mut list = self.native_args.pop().unwrap_or_default();
+        list.extend(args.iter().map(Value::deref));
+        self.natives.push(NativeCall { depth: self.frames.len(), name, method, args: list, top });
+    }
+
+    /// The innermost builtin of `natives` is done.
+    pub(crate) fn pop_native(&mut self) {
+        if let Some(mut n) = self.natives.pop() {
+            n.args.clear();
+            self.native_args.push(n.args);
+        }
+    }
+
+    /// Run a builtin class's method `name` of class `scope` as a call: the
+    /// frames of PHP code it runs (a callback, an autoloader) show it
+    /// below them, as PHP shows an internal method's frame. A property
+    /// hook's (`$name::get`) has no frame in PHP.
+    pub(crate) fn run_native_method(&mut self, native: p8_runtime::object::Native, name: &PhpStr, scope: Option<&Rc<Class>>, this: Option<&Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
+        let Some(scope) = scope.filter(|_| name.as_bytes().first() != Some(&b'$')) else {
+            return self.run_native(native, this, args);
+        };
+        let method = Some((name.clone(), scope.name.clone(), this.cloned()));
+        self.push_native("", method, args, false);
+        let r = self.run_native(native, this, args);
+        self.pop_native();
+        r
+    }
+
     /// Run a builtin class's method.
     pub(crate) fn run_native(&mut self, native: p8_runtime::object::Native, this: Option<&Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
         let r = match (native, this) {
             (p8_runtime::object::Native::Method(f), Some(this)) => f(self, this, args),
             (p8_runtime::object::Native::Static(f), _) => f(self, args),
             (p8_runtime::object::Native::Method(_), None) => Err(self.throw("Error", "Non-static method cannot be called statically")),
+        };
+        let r = match r {
+            Err(Throw::Autoload(n)) => Err(self.unlent_autoload(n)),
+            r => r,
         };
         self.report_diags();
         r
@@ -4365,7 +4405,8 @@ impl Context<'_> {
     /// Call builtin `i` on the `argc` arguments at `args` of the frame at
     /// `base`, its result into `dst`. The arguments move into a buffer
     /// and the register file is lent to the context while the builtin
-    /// runs, so it can call back into PHP (array_map, usort).
+    /// runs, so it can call back into PHP (array_map, usort) and run the
+    /// autoloaders where it looks a class up (class_exists, is_a).
     #[inline]
     fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
@@ -4378,10 +4419,6 @@ impl Context<'_> {
             // The common case: the builtin works on the registers directly.
             let args = &mut regs[start..start + argc as usize];
             let r = self.run_builtin(i, args);
-            if let Err(Throw::Autoload(_)) = r {
-                // The call runs again after the autoloaders: its arguments stay.
-                return r.map(|_| ());
-            }
             for v in args {
                 clear(v);
             }
@@ -4392,16 +4429,15 @@ impl Context<'_> {
         buf.extend(regs[start..start + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)));
         self.isolate.regs = std::mem::take(regs);
         // Running: frames it calls show it in their traces.
-        let name = self.isolate.registry.function(i).name;
-        self.natives.push(NativeCall { depth: self.frames.len(), name, args: buf.iter().map(Value::deref).collect(), top: false });
-        let r = self.run_builtin(i, &mut buf);
-        self.natives.pop();
-        *regs = std::mem::take(&mut self.isolate.regs);
-        if let Err(Throw::Autoload(_)) = r {
-            for (slot, v) in regs[start..start + argc as usize].iter_mut().zip(buf.drain(..)) {
-                *slot = v;
-            }
+        // Its frames show this call's line.
+        if let Some(top) = self.frames.last_mut() {
+            top.pc = self.pc as u32;
         }
+        let name = self.isolate.registry.function(i).name;
+        self.push_native(name, None, &buf, false);
+        let r = self.run_builtin(i, &mut buf);
+        self.pop_native();
+        *regs = std::mem::take(&mut self.isolate.regs);
         buf.clear();
         self.arg_buf = buf;
         regs[base + dst as usize] = r?;
@@ -4433,8 +4469,10 @@ impl Context<'_> {
         if let Some(t) = self.header_throw.take() {
             r = Err(t);
         }
-        if let Err(Throw::Error { .. }) = r {
-            self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args);
+        match r {
+            Err(Throw::Error { .. }) => self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args),
+            Err(Throw::Autoload(n)) => r = Err(self.unlent_autoload(n)),
+            _ => {}
         }
         self.report_diags();
         r
@@ -5290,28 +5328,6 @@ impl Ctx for Context<'_> {
 
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
         self.class_if_loaded(name)
-    }
-
-    fn class_load_now(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
-        match self.class_if_loaded(name) {
-            // The autoloaders run here when the builtin lent its registers
-            // (it runs PHP code), so the builtin carries on. Unwinding to
-            // run them and re-running the call instead lost a temporary
-            // receiver: `$attributes[0]->newInstance()` became a call on
-            // null (#220).
-            Err(Throw::Autoload(n)) => {
-                let mut regs = std::mem::take(&mut self.isolate.regs);
-                if regs.is_empty() {
-                    self.isolate.regs = regs;
-                    return Err(Throw::Autoload(n));
-                }
-                let r = self.run_autoload(&mut regs, n);
-                self.isolate.regs = regs;
-                r?;
-                self.class_if_loaded(name)
-            }
-            other => other,
-        }
     }
 
     fn called_class(&self) -> Option<Rc<Class>> {

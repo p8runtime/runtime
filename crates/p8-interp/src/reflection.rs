@@ -74,7 +74,7 @@ fn class_arg(ctx: &mut dyn Ctx, v: &Value) -> Result<Rc<Class>, Throw> {
         Value::Object(o) => Ok(Rc::clone(&o.class)),
         other => {
             let name = text(other);
-            match ctx.class_load_now(name.as_bytes())? {
+            match ctx.class_load(name.as_bytes())? {
                 Some(c) => Ok(c),
                 None => Err(fail(ctx, format!("Class \"{name}\" does not exist"))),
             }
@@ -566,7 +566,10 @@ class_method!(rc_get_traits, |ctx, class, this, args| {
     }
     Ok(Value::Array(Rc::new(out)))
 });
-class_method!(rc_get_extension_name, |ctx, class, this, args| Ok(Value::Bool(false)));
+class_method!(rc_get_extension_name, |ctx, class, this, args| Ok(match class_extension(&class) {
+    Some(m) => s(m.as_bytes()),
+    None => Value::Bool(false),
+}));
 
 fn ro_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else {
@@ -990,7 +993,7 @@ fn default_constant_value(ctx: &mut dyn Ctx, class: Option<&Rc<Class>>, name: &[
             b"self" | b"static" => class.cloned(),
             b"parent" => class.and_then(|c| c.parent.clone()),
             // Autoloaded if need be, as evaluating the default does.
-            _ => ctx.class_load_now(owner)?,
+            _ => ctx.class_load(owner)?,
         };
         let Some(owner) = owner else {
             return Err(missing(ctx, format!("Class \"{}\" not found", String::from_utf8_lossy(&name[..at]))));
@@ -1021,7 +1024,12 @@ param_method!(rp_get_declaring_class, |ctx, p, pos, info, this| Ok(match &info.c
 }));
 // ReflectionParameter::__toString(): "Parameter #0 [ <optional> ?int $a = NULL ]"
 // (php_reflection.c _parameter_string).
-param_method!(rp_to_string, |ctx, p, pos, info, this| {
+param_method!(rp_to_string, |ctx, p, pos, info, this| Ok(s(param_text(&info, pos).as_bytes())));
+
+/// Parameter `pos` of a function as reflection prints it (php_reflection.c
+/// _parameter_string).
+fn param_text(info: &FnInfo, pos: usize) -> String {
+    let p = &info.params[pos];
     let required = !(p.optional && info.params[pos..].iter().all(|q| q.optional));
     let mut out = format!("Parameter #{pos} [ {} ", if required { "<required>" } else { "<optional>" });
     if let Some(t) = &p.ty {
@@ -1052,8 +1060,129 @@ param_method!(rp_to_string, |ctx, p, pos, info, this| {
         }
     }
     out.push_str(" ]");
+    out
+}
+
+/// The extension a builtin class is PHP's (None for a user class).
+fn class_extension(class: &Class) -> Option<&'static str> {
+    if class.flags & CLASS_INTERNAL == 0 {
+        return None;
+    }
+    p8_stubs::class_module(class.name.as_bytes())
+}
+
+/// The extension a builtin function or method is in (a method: its class's).
+fn function_extension(info: &FnInfo) -> Option<&'static str> {
+    if info.user {
+        return None;
+    }
+    match &info.class {
+        Some(c) => class_extension(c),
+        None => p8_stubs::function_module(info.name.as_bytes()),
+    }
+}
+
+fn_method!(fa_get_extension_name, |ctx, info, this, args| Ok(match function_extension(&info) {
+    Some(m) => s(m.as_bytes()),
+    None => Value::Bool(false),
+}));
+
+/// ReflectionFunction / ReflectionMethod::__toString() (php_reflection.c
+/// _function_string).
+fn fa_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let info = info_of(ctx, this)?;
+    let callee = callee_of(ctx, this)?;
+    let meta = ctx.reflect_meta(&Subject::Function(callee.clone()));
+    let mut out = String::new();
+    if info.user
+        && let Some(doc) = &meta.doc
+    {
+        out.push_str(&String::from_utf8_lossy(doc.as_bytes()));
+        out.push('\n');
+    }
+    let method = match &callee {
+        Callee::Method(class, name) => class.method(&name.as_bytes().to_ascii_lowercase()).cloned().map(|m| (Rc::clone(class), m)),
+        _ => None,
+    };
+    out.push_str(if info.is_closure { "Closure [ " } else if method.is_some() { "Method [ " } else { "Function [ " });
+    out.push_str(if info.user { "<user" } else { "<internal" });
+    if let Some(m) = function_extension(&info) {
+        out.push(':');
+        out.push_str(m);
+    }
+    if let Some((class, m)) = &method {
+        let lower = m.name.as_bytes().to_ascii_lowercase();
+        let declaring = ctx.class(&m.declaring).unwrap_or_else(|| Rc::clone(class));
+        if !m.declaring.eq_ignore_ascii_case(class.name.as_bytes()) {
+            out.push_str(&format!(", inherits {}", text(&Value::Str(m.declaring_name.clone()))));
+        } else if let Some(parent) = &declaring.parent
+            && let Some(over) = parent.method(&lower).filter(|o| o.visibility != Visibility::Private)
+        {
+            out.push_str(&format!(", overwrites {}", text(&Value::Str(over.declaring_name.clone()))));
+        }
+        if let Some((owner, _)) = prototype_of(ctx, &declaring, &lower) {
+            out.push_str(&format!(", prototype {}", text(&Value::Str(owner.name.clone()))));
+        }
+        if lower == b"__construct" {
+            out.push_str(", ctor");
+        }
+    }
+    out.push_str("> ");
+    if let Some((_, m)) = &method {
+        for (on, word) in [(m.is_abstract, "abstract "), (m.is_final, "final "), (m.is_static, "static ")] {
+            if on {
+                out.push_str(word);
+            }
+        }
+        out.push_str(match m.visibility {
+            Visibility::Public => "public ",
+            Visibility::Protected => "protected ",
+            Visibility::Private => "private ",
+        });
+        out.push_str("method ");
+    } else {
+        if info.is_static && info.is_closure {
+            out.push_str("static ");
+        }
+        out.push_str("function ");
+    }
+    if info.returns_ref {
+        out.push('&');
+    }
+    out.push_str(&String::from_utf8_lossy(info.name.as_bytes()));
+    out.push_str(" ] {\n");
+    if info.user {
+        let file = info.file.as_ref().map(|f| String::from_utf8_lossy(f.as_bytes()).into_owned()).unwrap_or_default();
+        out.push_str(&format!("  @@ {file} {} - {}\n", info.line, meta.end_line));
+    }
+    if info.is_closure {
+        let bound = ctx.static_variables(&callee);
+        if !bound.is_empty() {
+            out.push_str(&format!("\n  - Bound Variables [{}] {{\n", bound.len()));
+            for (i, (k, _)) in bound.iter().enumerate() {
+                if let Key::Str(name) = k {
+                    out.push_str(&format!("      Variable #{i} [ ${} ]\n", String::from_utf8_lossy(name.as_bytes())));
+                }
+            }
+            out.push_str("  }\n");
+        }
+    }
+    // A user function with neither parameters nor a return type has no
+    // argument info, so no list.
+    let ret = info.ret.as_ref().map(|t| (t, "Return")).or(info.tentative_ret.as_ref().map(|t| (t, "Tentative return")));
+    if !info.user || !info.params.is_empty() || ret.is_some() {
+        out.push_str(&format!("\n  - Parameters [{}] {{\n", info.params.len()));
+        for pos in 0..info.params.len() {
+            out.push_str(&format!("    {}\n", param_text(&info, pos)));
+        }
+        out.push_str("  }\n");
+    }
+    if let Some((t, word)) = ret {
+        out.push_str(&format!("  - {word} [ {} ]\n", t.shown()));
+    }
+    out.push_str("}\n");
     Ok(s(out.as_bytes()))
-});
+}
 
 /// A default value as reflection prints it (format_default_value).
 fn default_text(out: &mut String, v: &Value) {
@@ -1631,7 +1760,7 @@ fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &s
     let mut base = None;
     let mut name = name;
     if let Some(n) = name.take_if(|_| flags & 2 != 0) {
-        match ctx.class_load_now(n.as_bytes())? {
+        match ctx.class_load(n.as_bytes())? {
             Some(c) => base = Some(c),
             None => return Err(ctx.throw("Error", format!("Class \"{n}\" not found"))),
         }
@@ -1648,7 +1777,7 @@ fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &s
             continue;
         }
         if let Some(base) = &base {
-            match ctx.class_load_now(attr.as_bytes())? {
+            match ctx.class_load(attr.as_bytes())? {
                 Some(c) if c.is_a(&base.lower) => {}
                 _ => continue,
             }
@@ -1787,7 +1916,7 @@ fn attribute_flags(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<Result<Option
 
 fn ra_new_instance(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let name = text(&get(this, "name"));
-    let Some(class) = ctx.class_load_now(name.as_bytes())? else {
+    let Some(class) = ctx.class_load(name.as_bytes())? else {
         return Err(ctx.throw("Error", format!("Attribute class \"{name}\" not found")));
     };
     let flags = match attribute_flags(ctx, &class)? {
@@ -2042,6 +2171,8 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("getAttributes", Some(Native::Method(fa_get_attributes))),
     ("getStaticVariables", Some(Native::Method(fa_get_static_variables))),
     ("getClosureThis", Some(Native::Method(fa_get_closure_this))),
+    ("getExtensionName", Some(Native::Method(fa_get_extension_name))),
+    ("__toString", Some(Native::Method(fa_to_string))),
     ("getClosureUsedVariables", Some(Native::Method(fa_get_closure_used_variables))),
     ("getClosureScopeClass", Some(Native::Method(fa_get_closure_scope_class))),
     ("getClosureCalledClass", Some(Native::Method(fa_get_closure_called_class))),

@@ -9,6 +9,7 @@ description = "p8's interpreter: runs register bytecode"
 indexmap = "2.0"
 p8-bytecode = { path = "../p8-bytecode" }
 p8-runtime = { path = "../p8-runtime" }
+p8-stubs = { path = "../p8-stubs" }
 
 [dev-dependencies]
 bumpalo = { version = "3.12", features = ["collections"] }

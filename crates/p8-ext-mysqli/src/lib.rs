@@ -26,7 +26,7 @@ pub const EXTENSION: Extension = Extension { name: "mysqli", register };
 
 type R = Result<Value, Throw>;
 
-const CLIENT_INFO: &str = "mysqlnd 8.4.27";
+const CLIENT_INFO: &str = p8_mysqlnd::CLIENT_INFO;
 const CLIENT_VERSION: i64 = 80427;
 
 const REPORT_ERROR: i64 = 1;
@@ -321,6 +321,7 @@ fn real_connect(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], func: &str
         database: database.as_ref().map(|d| d.as_bytes()),
         flags: flags as u32,
         timeout: None,
+        charset: p8_mysqlnd::DEFAULT_CHARSET,
     };
     match Connection::connect(&options) {
         Ok(conn) => {
