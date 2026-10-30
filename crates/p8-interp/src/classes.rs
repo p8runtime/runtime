@@ -1473,7 +1473,7 @@ impl Context<'_> {
 
     /// Coercive typing's last resort: an object with __toString() for a
     /// type that takes a string, as the string (None: not so).
-    fn stringable(&mut self, regs: &mut Vec<Value>, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, Throw> {
+    pub(crate) fn stringable(&mut self, regs: &mut Vec<Value>, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, Throw> {
         let Value::Object(o) = v else { return Ok(None) };
         if strict || ty.mask & p8_runtime::types::T_STRING == 0 || o.class.method(b"__tostring").is_none() {
             return Ok(None);

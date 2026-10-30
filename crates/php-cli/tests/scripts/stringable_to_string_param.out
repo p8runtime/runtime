@@ -12,3 +12,6 @@ array(2) {
 }
 f(): Argument #1 ($s) must be of type string, B given
 h(): Argument #1 ($i) must be of type int, A given
+string(2) "a!"
+string(2) "a!"
+bad(): Return value must be of type int, A returned

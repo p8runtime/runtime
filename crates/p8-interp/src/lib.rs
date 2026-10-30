@@ -3063,6 +3063,10 @@ impl Context<'_> {
                                 Ok(Some(converted)) => reg!(a) = converted,
                                 Ok(None) => {}
                                 Err(()) => {
+                                    if let Some(s) = self.stringable(regs, ty, &v, func.strict)? {
+                                        regs[base + a as usize] = s;
+                                        return Ok(Next::Go(pc));
+                                    }
                                     // b: 0 a value returned, else none (`return;`, the end).
                                     let given = if b != 0 { "none".into() } else { p8_runtime::args::value_name(&v) };
                                     let name = self.function_display();
