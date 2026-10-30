@@ -1,0 +1,96 @@
+bool(true)
+bool(true)
+bool(true)
+array(1) {
+  [0]=>
+  string(6) "sqlite"
+}
+string(3) "PDO"
+string(6) "sqlite"
+bool(true)
+string(5) "00000"
+int(0)
+int(3)
+string(1) "3"
+string(5) "00000"
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+bool(true)
+string(42) "SELECT * FROM t WHERE id > ? AND name <> ?"
+bool(true)
+int(4)
+int(0)
+array(2) {
+  [0]=>
+  array(4) {
+    ["id"]=>
+    int(2)
+    ["name"]=>
+    string(1) "b"
+    ["score"]=>
+    float(2.5)
+    ["data"]=>
+    NULL
+  }
+  [1]=>
+  array(4) {
+    ["id"]=>
+    int(3)
+    ["name"]=>
+    string(1) "c"
+    ["score"]=>
+    NULL
+    ["data"]=>
+    NULL
+  }
+}
+string(1) "b"
+string(1) "c"
+array(3) {
+  ["q"]=>
+  string(1) "?"
+  ["n"]=>
+  string(2) ":x"
+  ["p"]=>
+  string(1) "v"
+}
+bool(true)
+int(1)
+string(1) "4"
+0: 1,a
+1: 2,b
+2: 3,c
+3: 4,d
+int(4)
+string(7) "'it''s'"
+string(7) "'plain'"
+array(8) {
+  ["native_type"]=>
+  string(7) "integer"
+  ["pdo_type"]=>
+  int(1)
+  ["sqlite:decl_type"]=>
+  string(7) "INTEGER"
+  ["table"]=>
+  string(1) "t"
+  ["flags"]=>
+  array(0) {
+  }
+  ["name"]=>
+  string(2) "id"
+  ["len"]=>
+  int(-1)
+  ["precision"]=>
+  int(0)
+}
+string(6) "double"
+string(4) "TEXT"
+bool(true)
+string(10) "Pdo\Sqlite"
+bool(true)

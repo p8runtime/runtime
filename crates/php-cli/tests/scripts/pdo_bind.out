@@ -1,0 +1,59 @@
+bool(true)
+int(42)
+float(1.5)
+string(4) "text"
+string(4) "text"
+string(14) "62696e00617279"
+string(4) "blob"
+NULL
+string(4) "null"
+int(1)
+NULL
+string(1) "7"
+string(4) "text"
+string(10) "706c61696e"
+string(4) "text"
+string(4) "3.25"
+string(4) "text"
+string(16) "1one,2two,3three"
+array(2) {
+  [0]=>
+  string(3) "one"
+  [1]=>
+  string(5) "three"
+}
+array(2) {
+  [0]=>
+  string(3) "two"
+  [1]=>
+  string(5) "three"
+}
+array(2) {
+  [0]=>
+  string(3) "one"
+  [1]=>
+  string(3) "two"
+}
+string(1) "5"
+1=one
+2=two
+3=three
+string(3) "one"
+SQL: [39] SELECT * FROM b WHERE n = :n AND s = ?1
+Params:  1
+Key: Name: [2] :n
+paramno=-1
+name=[2] ":n"
+is_param=1
+param_type=1
+SQL: [27] SELECT * FROM b WHERE n = ?
+Params:  1
+Key: Position #0:
+paramno=0
+name=[0] ""
+is_param=1
+param_type=2
+bool(true)
+int(7)
+bool(true)
+bool(true)
