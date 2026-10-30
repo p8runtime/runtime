@@ -191,20 +191,48 @@ fn array_flip(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// array_unique($array, $flags = SORT_STRING): the first of each group of
 /// equal values (compared as strings by default) keeps its key.
+/// array_unique($array, $flags = SORT_STRING), as php_array.c does it:
+/// for SORT_STRING one pass with a set of the values' strings; for the
+/// other flags the entries sorted (ties by position), each run of equal
+/// ones kept as its first. The first of equal entries stays, keys kept.
 fn array_unique(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let flags = if args.len() > 1 { arg(args, 1).to_int() } else { 2 };
+    let input = arr(args, 0);
     let mut out = PhpArray::new();
-    let mut seen: Vec<Value> = Vec::new();
-    for (k, v) in arr(args, 0).iter() {
-        let v = v.deref();
-        let dup = seen.iter().any(|s| match flags {
-            2 | 5 => s.to_php_string().map(|x| x.as_bytes().to_vec()) == v.to_php_string().map(|x| x.as_bytes().to_vec()),
-            1 => s.to_float() == v.to_float(),
-            _ => s.loose_eq(&v),
-        });
-        if !dup {
-            seen.push(v.clone());
-            out.insert(k, v);
+    if flags == 2 {
+        let mut seen: std::collections::HashSet<Option<Vec<u8>>> = std::collections::HashSet::with_capacity(input.len());
+        for (k, v) in input.iter() {
+            let v = v.deref();
+            if seen.insert(v.to_php_string().map(|x| x.as_bytes().to_vec())) {
+                out.insert(k, v);
+            }
+        }
+        return array(out);
+    }
+    let cmp = order(flags);
+    let mut entries: Vec<(usize, Value)> = input.iter().enumerate().map(|(i, (_, v))| (i, v.deref())).collect();
+    p8_runtime::sort::zend_sort(&mut entries, &mut |x, y| cmp(&x.1, &y.1).then(x.0.cmp(&y.0)));
+    let mut keep = vec![false; entries.len()];
+    let mut last: Option<&(usize, Value)> = None;
+    for e in &entries {
+        match last {
+            Some(l) if cmp(&l.1, &e.1) == Ordering::Equal => {
+                // A duplicate: the earlier of the two stays.
+                if l.0 > e.0 {
+                    keep[l.0] = false;
+                    keep[e.0] = true;
+                    last = Some(e);
+                }
+            }
+            _ => {
+                keep[e.0] = true;
+                last = Some(e);
+            }
+        }
+    }
+    for (i, (k, v)) in input.iter().enumerate() {
+        if keep[i] {
+            out.insert(k, v.deref());
         }
     }
     array(out)
