@@ -85,6 +85,23 @@ pub static PDO_CONSTANTS: &[(&str, Constant)] = &[
     ("SQLITE_OPEN_CREATE", Constant::Int(4)),
     ("SQLITE_ATTR_READONLY_STATEMENT", Constant::Int(1001)),
     ("SQLITE_ATTR_EXTENDED_RESULT_CODES", Constant::Int(1002)),
+    // pdo_mysql adds these to PDO itself (mysqlnd's set).
+    ("MYSQL_ATTR_USE_BUFFERED_QUERY", Constant::Int(1000)),
+    ("MYSQL_ATTR_LOCAL_INFILE", Constant::Int(1001)),
+    ("MYSQL_ATTR_INIT_COMMAND", Constant::Int(1002)),
+    ("MYSQL_ATTR_COMPRESS", Constant::Int(1003)),
+    ("MYSQL_ATTR_DIRECT_QUERY", Constant::Int(1004)),
+    ("MYSQL_ATTR_FOUND_ROWS", Constant::Int(1005)),
+    ("MYSQL_ATTR_IGNORE_SPACE", Constant::Int(1006)),
+    ("MYSQL_ATTR_SSL_KEY", Constant::Int(1007)),
+    ("MYSQL_ATTR_SSL_CERT", Constant::Int(1008)),
+    ("MYSQL_ATTR_SSL_CA", Constant::Int(1009)),
+    ("MYSQL_ATTR_SSL_CAPATH", Constant::Int(1010)),
+    ("MYSQL_ATTR_SSL_CIPHER", Constant::Int(1011)),
+    ("MYSQL_ATTR_SERVER_PUBLIC_KEY", Constant::Int(1012)),
+    ("MYSQL_ATTR_MULTI_STATEMENTS", Constant::Int(1013)),
+    ("MYSQL_ATTR_SSL_VERIFY_SERVER_CERT", Constant::Int(1014)),
+    ("MYSQL_ATTR_LOCAL_INFILE_DIRECTORY", Constant::Int(1015)),
     // pdo_pgsql adds these to PDO itself.
     ("PGSQL_ATTR_DISABLE_PREPARES", Constant::Int(1000)),
     ("PGSQL_TRANSACTION_IDLE", Constant::Int(0)),
@@ -103,6 +120,26 @@ pub static SQLITE_CONSTANTS: &[(&str, Constant)] = &[
     ("ATTR_OPEN_FLAGS", Constant::Int(1000)),
     ("ATTR_READONLY_STATEMENT", Constant::Int(1001)),
     ("ATTR_EXTENDED_RESULT_CODES", Constant::Int(1002)),
+];
+
+/// What `Pdo\Mysql` adds.
+pub static MYSQL_CONSTANTS: &[(&str, Constant)] = &[
+    ("ATTR_USE_BUFFERED_QUERY", Constant::Int(1000)),
+    ("ATTR_LOCAL_INFILE", Constant::Int(1001)),
+    ("ATTR_INIT_COMMAND", Constant::Int(1002)),
+    ("ATTR_COMPRESS", Constant::Int(1003)),
+    ("ATTR_DIRECT_QUERY", Constant::Int(1004)),
+    ("ATTR_FOUND_ROWS", Constant::Int(1005)),
+    ("ATTR_IGNORE_SPACE", Constant::Int(1006)),
+    ("ATTR_SSL_KEY", Constant::Int(1007)),
+    ("ATTR_SSL_CERT", Constant::Int(1008)),
+    ("ATTR_SSL_CA", Constant::Int(1009)),
+    ("ATTR_SSL_CAPATH", Constant::Int(1010)),
+    ("ATTR_SSL_CIPHER", Constant::Int(1011)),
+    ("ATTR_SERVER_PUBLIC_KEY", Constant::Int(1012)),
+    ("ATTR_MULTI_STATEMENTS", Constant::Int(1013)),
+    ("ATTR_SSL_VERIFY_SERVER_CERT", Constant::Int(1014)),
+    ("ATTR_LOCAL_INFILE_DIRECTORY", Constant::Int(1015)),
 ];
 
 /// What `Pdo\Pgsql` adds.

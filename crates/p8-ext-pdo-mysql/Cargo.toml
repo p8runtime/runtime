@@ -1,0 +1,11 @@
+[package]
+name = "p8-ext-pdo-mysql"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's pdo_mysql driver: PDO over p8-mysqlnd, the MySQL protocol spoken in Rust (text and binary), no libmysqlclient"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+p8-ext-pdo = { path = "../p8-ext-pdo" }
+p8-mysqlnd = { path = "../p8-mysqlnd" }

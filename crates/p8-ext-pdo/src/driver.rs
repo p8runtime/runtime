@@ -1,5 +1,5 @@
-//! What a PDO driver is: the traits `pdo_sqlite` implements and a later
-//! `pdo_mysql` (over p8-mysqlnd) will. The core owns everything PHP-visible
+//! What a PDO driver is: the traits `pdo_sqlite`, `pdo_pgsql` and
+//! `pdo_mysql` (over p8-mysqlnd) implement. The core owns everything PHP-visible
 //! (objects, error modes, fetch modes, bound variables); a driver owns the
 //! connection and speaks in plain Rust values.
 //!
@@ -65,6 +65,9 @@ pub enum Placeholders {
     /// `$1`, `$2`: the core rewrites `?` and `:name` into them
     /// (`named_rewrite_template = "$%d"`, pdo_pgsql) and binds by position.
     Dollar,
+    /// `?` only (PDO_PLACEHOLDER_POSITIONAL, pdo_mysql): the core rewrites
+    /// `:name` into `?` and binds by position, each value as its PHP type.
+    Positional,
 }
 
 /// Which lexer finds placeholders: the default one, or SQLite's (which also
@@ -75,6 +78,9 @@ pub enum Scanner {
     Sqlite,
     /// pgsql_sql_parser.re: E'' strings, dollar quoting, `??` for `?`.
     Pgsql,
+    /// mysql_sql_parser.re: backslash escapes in strings, `` quoting,
+    /// `#` and `-- ` comments.
+    Mysql,
 }
 
 /// A column as `getColumnMeta()` describes it (the driver's part).
@@ -154,6 +160,13 @@ pub trait Connection: Any {
         self.prepare(&String::from_utf8_lossy(sql))
     }
 
+    /// Prepare `sql` for Placeholders::Positional (`:name` already
+    /// rewritten to `?`). Ok(None): the server cannot prepare it, and the
+    /// statement is emulated instead (pdo_mysql's fallback on error 1295).
+    fn prepare_native(&mut self, sql: &[u8], options: &Options) -> Result<Option<Box<dyn Statement>>, DriverError> {
+        self.prepare_with(sql, options).map(Some)
+    }
+
     /// A statement for an emulated prepare: `sql` has the values in it.
     fn prepare_emulated(&mut self, sql: &[u8]) -> Result<Box<dyn Statement>, DriverError> {
         self.prepare(&String::from_utf8_lossy(sql))
@@ -221,11 +234,23 @@ pub trait Connection: Any {
         Ok(false)
     }
 
+    /// Why the last [`Connection::set_attribute`] that returned `Ok(false)`
+    /// failed, when the server refused it (pdo_mysql's autocommit).
+    fn attribute_error(&mut self) -> Option<DriverError> {
+        None
+    }
+
     /// `PDO::getAttribute()` for an attribute the core does not handle:
     /// None: not supported.
     fn get_attribute(&mut self, attr: i64) -> Option<Value> {
         let _ = attr;
         None
+    }
+
+    /// `PDO::getAttribute()` for an attribute that asks the server, which
+    /// can fail (the driver's -1: PDO reports the connection's error).
+    fn get_attribute_checked(&mut self, attr: i64) -> Result<Option<Value>, DriverError> {
+        Ok(self.get_attribute(attr))
     }
 
     /// The driver-specific methods (`sqliteCreateFunction`): `name` in the
@@ -282,8 +307,33 @@ pub trait Statement: Any {
         None
     }
 
+    /// Whether `getColumnMeta()` of a column past the last is SQLSTATE
+    /// 07009 (pdo_sqlite, pdo_pgsql); false: a quiet `false` (pdo_mysql).
+    fn meta_index_error(&self) -> bool {
+        true
+    }
+
     /// Stop reading the result so the statement can run again.
     fn close_cursor(&mut self) {}
+
+    /// `PDOStatement::closeCursor()`: [`Statement::close_cursor`], with the
+    /// error reading what was left gave (pdo_mysql's later result sets).
+    fn close_cursor_checked(&mut self) -> Result<(), DriverError> {
+        self.close_cursor();
+        Ok(())
+    }
+
+    /// How many parameters a Placeholders::Positional statement takes
+    /// (binding past them is HY093); None when the driver does not say.
+    fn param_count(&self) -> Option<usize> {
+        None
+    }
+
+    /// Move to the next result set (`PDOStatement::nextRowset()`): Ok(None)
+    /// when there is none. None: the driver has no multiple rowsets.
+    fn next_rowset(&mut self) -> Option<Result<Option<ExecInfo>, DriverError>> {
+        None
+    }
 
     /// The bytes a column of the current row stands for when it is fetched
     /// as PDO::PARAM_LOB (pdo_pgsql: the large object an oid names).

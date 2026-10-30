@@ -1,0 +1,309 @@
+string(1) "2"
+emulate=true stringify=false
+int(2)
+int(39)
+id=1 ti=-5 uti=255 si=65535 mi=-8388608 i=2147483647 ui=4294967295 bi=-9223372036854775807-1 ubi=string:3138343436373434303733373039353531363135 f=1.1 f2=123.4567 d=2.5 d2=2.5E-5 dec1=string:332e313432 dec0=string:3132333435363738393031323334353637383930 s=string:68c3a96c6c6f c=string:6162 tx=string:74657874 mt=string:6d656469756d b=string:00ff61 lb=string:0102 bn=string:61620000 vb=string:7662 dt=string:323032342d30312d30322030333a30343a3035 dt3=string:323032342d30312d30322030333a30343a30352e363738 dt6=string:323032342d30312d30322030333a30343a30352e313233343536 da=string:323032342d30312d3032 tm=string:2d3833383a35393a3539 tm2=string:31323a33343a35362e3738 ts=NULL y=string:32303234 bt=682 bt64=string:3138343436373434303733373039353531363135 e=string:62 st=string:782c79 j=string:7b2261223a20317d z=string:3030303432 n=NULL bo=1 
+id=2 ti=NULL uti=NULL si=NULL mi=NULL i=-1 ui=NULL bi=NULL ubi=NULL f=-0.5 f2=NULL d=1.0E+300 d2=NULL dec1=NULL dec0=NULL s=string:74776f c=NULL tx=NULL mt=NULL b=NULL lb=NULL bn=NULL vb=NULL dt=string:303030302d30302d30302030303a30303a3030 dt3=NULL dt6=NULL da=string:303030302d30302d3030 tm=string:30303a30303a3030 tm2=NULL ts=string:323030302d30312d30312030303a30303a3030 y=NULL bt=NULL bt64=NULL e=NULL st=NULL j=NULL z=NULL n=NULL bo=NULL 
+emulate=true stringify=true
+int(2)
+int(39)
+id=string:31 ti=string:2d35 uti=string:323535 si=string:3635353335 mi=string:2d38333838363038 i=string:32313437343833363437 ui=string:34323934393637323935 bi=string:2d39323233333732303336383534373735383038 ubi=string:3138343436373434303733373039353531363135 f=string:312e31 f2=string:3132332e34353637 d=string:322e35 d2=string:302e303030303235 dec1=string:332e313432 dec0=string:3132333435363738393031323334353637383930 s=string:68c3a96c6c6f c=string:6162 tx=string:74657874 mt=string:6d656469756d b=string:00ff61 lb=string:0102 bn=string:61620000 vb=string:7662 dt=string:323032342d30312d30322030333a30343a3035 dt3=string:323032342d30312d30322030333a30343a30352e363738 dt6=string:323032342d30312d30322030333a30343a30352e313233343536 da=string:323032342d30312d3032 tm=string:2d3833383a35393a3539 tm2=string:31323a33343a35362e3738 ts=NULL y=string:32303234 bt=string:363832 bt64=string:3138343436373434303733373039353531363135 e=string:62 st=string:782c79 j=string:7b2261223a20317d z=string:3030303432 n=NULL bo=string:31 
+id=string:32 ti=NULL uti=NULL si=NULL mi=NULL i=string:2d31 ui=NULL bi=NULL ubi=NULL f=string:2d302e35 f2=NULL d=string:3165333030 d2=NULL dec1=NULL dec0=NULL s=string:74776f c=NULL tx=NULL mt=NULL b=NULL lb=NULL bn=NULL vb=NULL dt=string:303030302d30302d30302030303a30303a3030 dt3=NULL dt6=NULL da=string:303030302d30302d3030 tm=string:30303a30303a3030 tm2=NULL ts=string:323030302d30312d30312030303a30303a3030 y=NULL bt=NULL bt64=NULL e=NULL st=NULL j=NULL z=NULL n=NULL bo=NULL 
+emulate=false stringify=false
+int(2)
+int(39)
+id=1 ti=-5 uti=255 si=65535 mi=-8388608 i=2147483647 ui=4294967295 bi=-9223372036854775807-1 ubi=string:3138343436373434303733373039353531363135 f=1.1 f2=123.4567 d=2.5 d2=2.5E-5 dec1=string:332e313432 dec0=string:3132333435363738393031323334353637383930 s=string:68c3a96c6c6f c=string:6162 tx=string:74657874 mt=string:6d656469756d b=string:00ff61 lb=string:0102 bn=string:61620000 vb=string:7662 dt=string:323032342d30312d30322030333a30343a3035 dt3=string:323032342d30312d30322030333a30343a30352e363738 dt6=string:323032342d30312d30322030333a30343a30352e313233343536 da=string:323032342d30312d3032 tm=string:2d3833383a35393a3539 tm2=string:31323a33343a35362e3738 ts=NULL y=string:32303234 bt=682 bt64=string:3138343436373434303733373039353531363135 e=string:62 st=string:782c79 j=string:7b2261223a20317d z=string:3030303432 n=NULL bo=1 
+id=2 ti=NULL uti=NULL si=NULL mi=NULL i=-1 ui=NULL bi=NULL ubi=NULL f=-0.5 f2=NULL d=1.0E+300 d2=NULL dec1=NULL dec0=NULL s=string:74776f c=NULL tx=NULL mt=NULL b=NULL lb=NULL bn=NULL vb=NULL dt=string:303030302d30302d30302030303a30303a3030 dt3=NULL dt6=NULL da=string:303030302d30302d3030 tm=string:30303a30303a3030 tm2=NULL ts=string:323030302d30312d30312030303a30303a3030 y=NULL bt=NULL bt64=NULL e=NULL st=NULL j=NULL z=NULL n=NULL bo=NULL 
+emulate=false stringify=true
+int(2)
+int(39)
+id=string:31 ti=string:2d35 uti=string:323535 si=string:3635353335 mi=string:2d38333838363038 i=string:32313437343833363437 ui=string:34323934393637323935 bi=string:2d39323233333732303336383534373735383038 ubi=string:3138343436373434303733373039353531363135 f=string:312e31 f2=string:3132332e34353637 d=string:322e35 d2=string:322e35452d35 dec1=string:332e313432 dec0=string:3132333435363738393031323334353637383930 s=string:68c3a96c6c6f c=string:6162 tx=string:74657874 mt=string:6d656469756d b=string:00ff61 lb=string:0102 bn=string:61620000 vb=string:7662 dt=string:323032342d30312d30322030333a30343a3035 dt3=string:323032342d30312d30322030333a30343a30352e363738 dt6=string:323032342d30312d30322030333a30343a30352e313233343536 da=string:323032342d30312d3032 tm=string:2d3833383a35393a3539 tm2=string:31323a33343a35362e3738 ts=NULL y=string:32303234 bt=string:363832 bt64=string:3138343436373434303733373039353531363135 e=string:62 st=string:782c79 j=string:7b2261223a20317d z=string:3030303432 n=NULL bo=string:31 
+id=string:32 ti=NULL uti=NULL si=NULL mi=NULL i=string:2d31 ui=NULL bi=NULL ubi=NULL f=string:2d302e35 f2=NULL d=string:312e30452b333030 d2=NULL dec1=NULL dec0=NULL s=string:74776f c=NULL tx=NULL mt=NULL b=NULL lb=NULL bn=NULL vb=NULL dt=string:303030302d30302d30302030303a30303a3030 dt3=NULL dt6=NULL da=string:303030302d30302d3030 tm=string:30303a30303a3030 tm2=NULL ts=string:323030302d30312d30312030303a30303a3030 y=NULL bt=NULL bt64=NULL e=NULL st=NULL j=NULL z=NULL n=NULL bo=NULL 
+{"native_type":"LONG","pdo_type":1,"flags":["not_null","primary_key"],"table":"types_t","name":"id","len":11,"precision":0}
+{"native_type":"TINY","pdo_type":1,"flags":[],"table":"types_t","name":"ti","len":4,"precision":0}
+{"native_type":"TINY","pdo_type":1,"flags":[],"table":"types_t","name":"uti","len":3,"precision":0}
+{"native_type":"SHORT","pdo_type":1,"flags":[],"table":"types_t","name":"si","len":5,"precision":0}
+{"native_type":"INT24","pdo_type":1,"flags":["multiple_key"],"table":"types_t","name":"mi","len":9,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"types_t","name":"i","len":11,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":[],"table":"types_t","name":"ui","len":10,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":[],"table":"types_t","name":"bi","len":20,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":[],"table":"types_t","name":"ubi","len":20,"precision":0}
+{"native_type":"FLOAT","pdo_type":2,"flags":[],"table":"types_t","name":"f","len":12,"precision":31}
+{"native_type":"FLOAT","pdo_type":2,"flags":[],"table":"types_t","name":"f2","len":7,"precision":4}
+{"native_type":"DOUBLE","pdo_type":2,"flags":[],"table":"types_t","name":"d","len":22,"precision":31}
+{"native_type":"DOUBLE","pdo_type":2,"flags":[],"table":"types_t","name":"d2","len":22,"precision":31}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":[],"table":"types_t","name":"dec1","len":12,"precision":3}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":[],"table":"types_t","name":"dec0","len":21,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":["unique_key"],"table":"types_t","name":"s","len":80,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"c","len":12,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"tx","len":262140,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"mt","len":67108860,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"b","len":65535,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"lb","len":4294967295,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"bn","len":4,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":[],"table":"types_t","name":"vb","len":10,"precision":0}
+{"native_type":"DATETIME","pdo_type":2,"flags":[],"table":"types_t","name":"dt","len":19,"precision":0}
+{"native_type":"DATETIME","pdo_type":2,"flags":[],"table":"types_t","name":"dt3","len":23,"precision":3}
+{"native_type":"DATETIME","pdo_type":2,"flags":[],"table":"types_t","name":"dt6","len":26,"precision":6}
+{"native_type":"DATE","pdo_type":2,"flags":[],"table":"types_t","name":"da","len":10,"precision":0}
+{"native_type":"TIME","pdo_type":2,"flags":[],"table":"types_t","name":"tm","len":10,"precision":0}
+{"native_type":"TIME","pdo_type":2,"flags":[],"table":"types_t","name":"tm2","len":13,"precision":2}
+{"native_type":"TIMESTAMP","pdo_type":2,"flags":[],"table":"types_t","name":"ts","len":19,"precision":0}
+{"native_type":"YEAR","pdo_type":1,"flags":[],"table":"types_t","name":"y","len":4,"precision":0}
+{"native_type":"BIT","pdo_type":1,"flags":[],"table":"types_t","name":"bt","len":10,"precision":0}
+{"native_type":"BIT","pdo_type":1,"flags":[],"table":"types_t","name":"bt64","len":64,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"e","len":4,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"st","len":12,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"j","len":4294967295,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":[],"table":"types_t","name":"z","len":5,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":[],"table":"types_t","name":"n","len":11,"precision":0}
+{"native_type":"TINY","pdo_type":1,"flags":[],"table":"types_t","name":"bo","len":1,"precision":0}
+bool(false)
+array(20) {
+  [0]=>
+  int(1)
+  [1]=>
+  string(3) "1.5"
+  [2]=>
+  float(1)
+  [3]=>
+  NULL
+  [4]=>
+  string(1) "x"
+  [5]=>
+  int(1)
+  [6]=>
+  int(2)
+  [7]=>
+  int(1)
+  [8]=>
+  int(-1)
+  [9]=>
+  int(9223372036854775807)
+  [10]=>
+  string(20) "18446744073709551615"
+  [11]=>
+  string(3) "0.3"
+  [12]=>
+  float(3.141593)
+  [13]=>
+  float(1.5)
+  [14]=>
+  float(1.5)
+  [15]=>
+  int(1)
+  [16]=>
+  string(1) "A"
+  [17]=>
+  string(10) "2020-01-01"
+  [18]=>
+  string(8) "12:00:00"
+  [19]=>
+  string(1) "1"
+}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"1","len":1,"precision":0}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":["not_null"],"table":"","name":"1.5","len":4,"precision":1}
+{"native_type":"DOUBLE","pdo_type":2,"flags":["not_null"],"table":"","name":"1e0","len":3,"precision":31}
+{"native_type":"NULL","pdo_type":2,"flags":[],"table":"","name":"NULL","len":0,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":["not_null"],"table":"","name":"x","len":4,"precision":39}
+{"native_type":"LONGLONG","pdo_type":1,"flags":["not_null"],"table":"","name":"COUNT(*)","len":21,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"sum","len":3,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"CAST(1 AS UNSIGNED)","len":1,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"-1","len":2,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":["not_null"],"table":"","name":"9223372036854775807","len":19,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":["not_null"],"table":"","name":"18446744073709551615","len":20,"precision":0}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":["not_null"],"table":"","name":"0.1 + 0.2","len":5,"precision":1}
+{"native_type":"DOUBLE","pdo_type":2,"flags":["not_null"],"table":"","name":"PI()","len":8,"precision":6}
+{"native_type":"FLOAT","pdo_type":2,"flags":[],"table":"","name":"CAST(1.5 AS FLOAT)","len":12,"precision":31}
+{"native_type":"DOUBLE","pdo_type":2,"flags":[],"table":"","name":"CAST(1.5 AS DOUBLE)","len":22,"precision":31}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"NOW() > 0","len":1,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":["not_null"],"table":"","name":"X'41'","len":1,"precision":0}
+{"native_type":"DATE","pdo_type":2,"flags":[],"table":"","name":"DATE(\"2020-01-01\")","len":10,"precision":0}
+{"native_type":"TIME","pdo_type":2,"flags":[],"table":"","name":"CAST(\"12:00:00\" AS TIME)","len":10,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":[],"table":"","name":"CONCAT(1)","len":4,"precision":39}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null","primary_key"],"table":"types_t","name":"id","len":11,"precision":0}
+{"native_type":"TINY","pdo_type":1,"flags":[],"table":"types_t","name":"ti","len":4,"precision":0}
+{"native_type":"TINY","pdo_type":1,"flags":[],"table":"types_t","name":"uti","len":3,"precision":0}
+{"native_type":"SHORT","pdo_type":1,"flags":[],"table":"types_t","name":"si","len":5,"precision":0}
+{"native_type":"INT24","pdo_type":1,"flags":["multiple_key"],"table":"types_t","name":"mi","len":9,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"types_t","name":"i","len":11,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":[],"table":"types_t","name":"ui","len":10,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":[],"table":"types_t","name":"bi","len":20,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":[],"table":"types_t","name":"ubi","len":20,"precision":0}
+{"native_type":"FLOAT","pdo_type":2,"flags":[],"table":"types_t","name":"f","len":12,"precision":31}
+{"native_type":"FLOAT","pdo_type":2,"flags":[],"table":"types_t","name":"f2","len":7,"precision":4}
+{"native_type":"DOUBLE","pdo_type":2,"flags":[],"table":"types_t","name":"d","len":22,"precision":31}
+{"native_type":"DOUBLE","pdo_type":2,"flags":[],"table":"types_t","name":"d2","len":22,"precision":31}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":[],"table":"types_t","name":"dec1","len":12,"precision":3}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":[],"table":"types_t","name":"dec0","len":21,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":["unique_key"],"table":"types_t","name":"s","len":80,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"c","len":12,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"tx","len":262140,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"mt","len":67108860,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"b","len":65535,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"lb","len":4294967295,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"bn","len":4,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":[],"table":"types_t","name":"vb","len":10,"precision":0}
+{"native_type":"DATETIME","pdo_type":2,"flags":[],"table":"types_t","name":"dt","len":19,"precision":0}
+{"native_type":"DATETIME","pdo_type":2,"flags":[],"table":"types_t","name":"dt3","len":23,"precision":3}
+{"native_type":"DATETIME","pdo_type":2,"flags":[],"table":"types_t","name":"dt6","len":26,"precision":6}
+{"native_type":"DATE","pdo_type":2,"flags":[],"table":"types_t","name":"da","len":10,"precision":0}
+{"native_type":"TIME","pdo_type":2,"flags":[],"table":"types_t","name":"tm","len":10,"precision":0}
+{"native_type":"TIME","pdo_type":2,"flags":[],"table":"types_t","name":"tm2","len":13,"precision":2}
+{"native_type":"TIMESTAMP","pdo_type":2,"flags":[],"table":"types_t","name":"ts","len":19,"precision":0}
+{"native_type":"YEAR","pdo_type":1,"flags":[],"table":"types_t","name":"y","len":4,"precision":0}
+{"native_type":"BIT","pdo_type":1,"flags":[],"table":"types_t","name":"bt","len":10,"precision":0}
+{"native_type":"BIT","pdo_type":1,"flags":[],"table":"types_t","name":"bt64","len":64,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"e","len":4,"precision":0}
+{"native_type":"STRING","pdo_type":2,"flags":[],"table":"types_t","name":"st","len":12,"precision":0}
+{"native_type":"BLOB","pdo_type":2,"flags":["blob"],"table":"types_t","name":"j","len":4294967295,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":[],"table":"types_t","name":"z","len":5,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":[],"table":"types_t","name":"n","len":11,"precision":0}
+{"native_type":"TINY","pdo_type":1,"flags":[],"table":"types_t","name":"bo","len":1,"precision":0}
+bool(false)
+array(20) {
+  [0]=>
+  int(1)
+  [1]=>
+  string(3) "1.5"
+  [2]=>
+  float(1)
+  [3]=>
+  NULL
+  [4]=>
+  string(1) "x"
+  [5]=>
+  int(1)
+  [6]=>
+  int(2)
+  [7]=>
+  int(1)
+  [8]=>
+  int(-1)
+  [9]=>
+  int(9223372036854775807)
+  [10]=>
+  string(20) "18446744073709551615"
+  [11]=>
+  string(3) "0.3"
+  [12]=>
+  float(3.141592653589793)
+  [13]=>
+  float(1.5)
+  [14]=>
+  float(1.5)
+  [15]=>
+  int(1)
+  [16]=>
+  string(1) "A"
+  [17]=>
+  string(10) "2020-01-01"
+  [18]=>
+  string(8) "12:00:00"
+  [19]=>
+  string(1) "1"
+}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"1","len":1,"precision":0}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":["not_null"],"table":"","name":"1.5","len":4,"precision":1}
+{"native_type":"DOUBLE","pdo_type":2,"flags":["not_null"],"table":"","name":"1e0","len":3,"precision":31}
+{"native_type":"NULL","pdo_type":2,"flags":[],"table":"","name":"NULL","len":0,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":["not_null"],"table":"","name":"x","len":4,"precision":39}
+{"native_type":"LONGLONG","pdo_type":1,"flags":["not_null"],"table":"","name":"COUNT(*)","len":21,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"sum","len":3,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"CAST(1 AS UNSIGNED)","len":1,"precision":0}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"-1","len":2,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":["not_null"],"table":"","name":"9223372036854775807","len":19,"precision":0}
+{"native_type":"LONGLONG","pdo_type":1,"flags":["not_null"],"table":"","name":"18446744073709551615","len":20,"precision":0}
+{"native_type":"NEWDECIMAL","pdo_type":2,"flags":["not_null"],"table":"","name":"0.1 + 0.2","len":5,"precision":1}
+{"native_type":"DOUBLE","pdo_type":2,"flags":["not_null"],"table":"","name":"PI()","len":8,"precision":6}
+{"native_type":"FLOAT","pdo_type":2,"flags":[],"table":"","name":"CAST(1.5 AS FLOAT)","len":12,"precision":31}
+{"native_type":"DOUBLE","pdo_type":2,"flags":[],"table":"","name":"CAST(1.5 AS DOUBLE)","len":22,"precision":31}
+{"native_type":"LONG","pdo_type":1,"flags":["not_null"],"table":"","name":"NOW() > 0","len":1,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":["not_null"],"table":"","name":"X'41'","len":1,"precision":0}
+{"native_type":"DATE","pdo_type":2,"flags":[],"table":"","name":"DATE(\"2020-01-01\")","len":10,"precision":0}
+{"native_type":"TIME","pdo_type":2,"flags":[],"table":"","name":"CAST(\"12:00:00\" AS TIME)","len":10,"precision":0}
+{"native_type":"VAR_STRING","pdo_type":2,"flags":[],"table":"","name":"CONCAT(1)","len":4,"precision":39}
+array(10) {
+  [0]=>
+  int(42)
+  [1]=>
+  int(42)
+  [2]=>
+  string(3) "1.5"
+  [3]=>
+  int(1)
+  [4]=>
+  int(0)
+  [5]=>
+  NULL
+  [6]=>
+  string(7) "a'b\c d"
+  [7]=>
+  NULL
+  [8]=>
+  int(-9223372036854775808)
+  [9]=>
+  string(1) "7"
+}
+array(4) {
+  [0]=>
+  float(1.25)
+  [1]=>
+  float(3)
+  [2]=>
+  string(1) "5"
+  [3]=>
+  string(2) "é"
+}
+array(10) {
+  [0]=>
+  int(42)
+  [1]=>
+  string(2) "42"
+  [2]=>
+  string(3) "1.5"
+  [3]=>
+  int(1)
+  [4]=>
+  int(0)
+  [5]=>
+  NULL
+  [6]=>
+  string(7) "a'b\c d"
+  [7]=>
+  NULL
+  [8]=>
+  int(-9223372036854775808)
+  [9]=>
+  string(1) "7"
+}
+array(4) {
+  [0]=>
+  float(1.25)
+  [1]=>
+  float(3)
+  [2]=>
+  string(1) "5"
+  [3]=>
+  string(2) "é"
+}
+int(1)
+string(20) "00626c6f62ff64617461"
+NULL
+string(24) "5f62696e617279275c30ff27"
+int(0)
+string(20) "00626c6f62ff64617461"
+NULL
+string(24) "5f62696e617279275c30ff27"
+array(2) {
+  ["types_t.id"]=>
+  int(1)
+  [".one"]=>
+  int(1)
+}
+array(2) {
+  ["ID"]=>
+  int(1)
+  ["S"]=>
+  string(6) "héllo"
+}

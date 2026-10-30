@@ -1,0 +1,402 @@
+--- emulate=true
+bool(true)
+int(1)
+string(1) "1"
+bool(true)
+int(1)
+string(1) "2"
+bool(true)
+int(1)
+string(1) "3"
+bool(true)
+string(1) "6"
+array(6) {
+  [0]=>
+  array(4) {
+    [0]=>
+    int(1)
+    [1]=>
+    string(1) "a"
+    [2]=>
+    int(1)
+    [3]=>
+    float(1.5)
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    int(2)
+    [1]=>
+    string(1) "b"
+    [2]=>
+    int(2)
+    [3]=>
+    float(-2.25)
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    int(3)
+    [1]=>
+    string(3) "o'k"
+    [2]=>
+    NULL
+    [3]=>
+    float(0)
+  }
+  [3]=>
+  array(4) {
+    [0]=>
+    int(4)
+    [1]=>
+    string(3) "ref"
+    [2]=>
+    int(10)
+    [3]=>
+    NULL
+  }
+  [4]=>
+  array(4) {
+    [0]=>
+    int(5)
+    [1]=>
+    string(4) "ref2"
+    [2]=>
+    int(11)
+    [3]=>
+    NULL
+  }
+  [5]=>
+  array(4) {
+    [0]=>
+    int(6)
+    [1]=>
+    string(3) "arr"
+    [2]=>
+    int(12)
+    [3]=>
+    NULL
+  }
+}
+array(2) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  string(3) "ref"
+}
+PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near ''1'' at line 1
+string(5) "42000"
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(151) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near ''1'' at line 1"
+}
+bool(true)
+array(2) {
+  ["a"]=>
+  string(1) "x"
+  ["b"]=>
+  string(1) "x"
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number: number of bound variables does not match number of tokens
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number: number of bound variables does not match number of tokens
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number: parameter was not defined
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+object(PDOStatement)#6 (1) {
+  ["queryString"]=>
+  string(12) "SELECT ?, :a"
+}
+bool(true)
+bool(true)
+bool(true)
+PDOException: SQLSTATE[HY093]: Invalid parameter number: parameter was not defined
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near '?' at line 1
+string(5) "42000"
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(149) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near '?' at line 1"
+}
+array(5) {
+  [0]=>
+  string(1) "?"
+  [1]=>
+  string(1) "?"
+  [2]=>
+  int(1)
+  [3]=>
+  string(1) "1"
+  [4]=>
+  string(1) "2"
+}
+array(2) {
+  [0]=>
+  string(6) "it's ?"
+  [1]=>
+  string(2) "ok"
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number: number of bound variables does not match number of tokens
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+bool(true)
+array(1) {
+  [0]=>
+  array(1) {
+    ["r"]=>
+    int(6)
+  }
+}
+int(1)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(21) "'a\'b\"c\\d\0e\n\r\Z'"
+string(3) "'x'"
+string(4) "N'x'"
+string(3) "nat"
+SQL: [8] SELECT ?
+Sent SQL: [13] SELECT N'nat'
+Params:  1
+Key: Position #0:
+paramno=0
+name=[0] ""
+is_param=1
+param_type=1073741826
+--- emulate=false
+bool(true)
+int(1)
+string(1) "1"
+bool(true)
+int(1)
+string(1) "2"
+bool(true)
+int(1)
+string(1) "3"
+bool(true)
+string(1) "6"
+array(6) {
+  [0]=>
+  array(4) {
+    [0]=>
+    int(1)
+    [1]=>
+    string(1) "a"
+    [2]=>
+    int(1)
+    [3]=>
+    float(1.5)
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    int(2)
+    [1]=>
+    string(1) "b"
+    [2]=>
+    int(2)
+    [3]=>
+    float(-2.25)
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    int(3)
+    [1]=>
+    string(3) "o'k"
+    [2]=>
+    NULL
+    [3]=>
+    float(0)
+  }
+  [3]=>
+  array(4) {
+    [0]=>
+    int(4)
+    [1]=>
+    string(3) "ref"
+    [2]=>
+    int(10)
+    [3]=>
+    NULL
+  }
+  [4]=>
+  array(4) {
+    [0]=>
+    int(5)
+    [1]=>
+    string(4) "ref2"
+    [2]=>
+    int(11)
+    [3]=>
+    NULL
+  }
+  [5]=>
+  array(4) {
+    [0]=>
+    int(6)
+    [1]=>
+    string(3) "arr"
+    [2]=>
+    int(12)
+    [3]=>
+    NULL
+  }
+}
+array(2) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  string(3) "ref"
+}
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number
+string(5) "HY093"
+array(1) {
+  [0]=>
+  string(5) "HY093"
+}
+bool(false)
+PDOException: SQLSTATE[HY093]: Invalid parameter number
+string(5) "HY093"
+array(1) {
+  [0]=>
+  string(5) "HY093"
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number
+string(5) "HY093"
+array(1) {
+  [0]=>
+  string(5) "HY093"
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number: parameter was not defined
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number: mixed named and positional parameters
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number
+string(5) "HY093"
+array(1) {
+  [0]=>
+  string(5) "HY093"
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number: parameter was not defined
+string(5) "HY093"
+array(2) {
+  [0]=>
+  string(5) "HY093"
+  [1]=>
+  int(0)
+}
+bool(true)
+string(9) "by number"
+PDOException: SQLSTATE[HY093]: Invalid parameter number
+string(5) "HY093"
+array(1) {
+  [0]=>
+  string(5) "HY093"
+}
+array(5) {
+  [0]=>
+  string(1) "?"
+  [1]=>
+  string(1) "?"
+  [2]=>
+  int(1)
+  [3]=>
+  string(1) "1"
+  [4]=>
+  string(1) "2"
+}
+array(2) {
+  [0]=>
+  string(6) "it's ?"
+  [1]=>
+  string(2) "ok"
+}
+PDOException: SQLSTATE[HY093]: Invalid parameter number
+string(5) "HY093"
+array(1) {
+  [0]=>
+  string(5) "HY093"
+}
+bool(true)
+array(1) {
+  [0]=>
+  array(1) {
+    ["r"]=>
+    int(6)
+  }
+}
+int(1)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(21) "'a\'b\"c\\d\0e\n\r\Z'"
+string(3) "'x'"
+string(4) "N'x'"
+string(3) "nat"
+SQL: [8] SELECT ?
+Params:  1
+Key: Position #0:
+paramno=0
+name=[0] ""
+is_param=1
+param_type=1073741826

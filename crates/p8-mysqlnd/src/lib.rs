@@ -1,11 +1,14 @@
 //! A MySQL client: the wire protocol as PHP's mysqlnd speaks it, over std's
 //! sockets. It connects (TCP or a Unix socket), authenticates with
 //! mysql_native_password or caching_sha2_password, runs text-protocol
-//! queries and reads their results, buffered, one result set at a time.
+//! queries and server-side prepared statements (the binary protocol), and
+//! reads their results one result set at a time: whole (buffered) or row by
+//! row as the caller asks for them (unbuffered). Rows are decoded into PHP
+//! values the way mysqlnd does it ([`text_values`], [`binary_values`]).
 //!
 //! Reference: $PHP_SRC_PATH/ext/mysqlnd (mysqlnd_wireprotocol.c,
-//! mysqlnd_auth.c, mysqlnd_connection.c, mysqlnd_charset.c) and the MySQL
-//! client/server protocol documentation.
+//! mysqlnd_ps.c, mysqlnd_ps_codec.c, mysqlnd_auth.c, mysqlnd_connection.c,
+//! mysqlnd_charset.c) and the MySQL client/server protocol documentation.
 
 #![forbid(unsafe_code)]
 
@@ -18,8 +21,15 @@ use std::time::Duration;
 
 // Capability flags (CLIENT_*).
 const LONG_PASSWORD: u32 = 1;
+/// UPDATE counts the rows it matched, not the ones it changed.
+pub const FOUND_ROWS: u32 = 2;
 const LONG_FLAG: u32 = 4;
 const CONNECT_WITH_DB: u32 = 8;
+/// The server may ask for a client file (LOAD DATA LOCAL INFILE, which
+/// the client then refuses).
+const LOCAL_FILES: u32 = 0x80;
+/// Function names may be followed by spaces.
+pub const IGNORE_SPACE: u32 = 0x100;
 const PROTOCOL_41: u32 = 0x200;
 const TRANSACTIONS: u32 = 0x2000;
 const SECURE_CONNECTION: u32 = 0x8000;
@@ -30,21 +40,37 @@ const PLUGIN_AUTH: u32 = 0x8_0000;
 const PLUGIN_AUTH_LENENC_CLIENT_DATA: u32 = 0x20_0000;
 
 /// The flags a connection asks for whatever the caller passes (mysqlnd's
-/// CLIENT_* defaults).
-const BASE_FLAGS: u32 =
-    LONG_PASSWORD | LONG_FLAG | PROTOCOL_41 | TRANSACTIONS | SECURE_CONNECTION | MULTI_RESULTS | PS_MULTI_RESULTS | PLUGIN_AUTH | PLUGIN_AUTH_LENENC_CLIENT_DATA;
+/// CLIENT_* defaults, MYSQLND_CAPABILITIES).
+const BASE_FLAGS: u32 = LONG_PASSWORD
+    | LONG_FLAG
+    | LOCAL_FILES
+    | PROTOCOL_41
+    | TRANSACTIONS
+    | SECURE_CONNECTION
+    | MULTI_RESULTS
+    | PS_MULTI_RESULTS
+    | PLUGIN_AUTH
+    | PLUGIN_AUTH_LENENC_CLIENT_DATA;
 
+/// SERVER_STATUS_IN_TRANS: a transaction is open.
+pub const STATUS_IN_TRANS: u16 = 0x01;
 /// SERVER_MORE_RESULTS_EXISTS: another result follows this one.
 const MORE_RESULTS: u16 = 0x08;
+/// SERVER_STATUS_NO_BACKSLASH_ESCAPES: the NO_BACKSLASH_ESCAPES SQL mode.
+pub const STATUS_NO_BACKSLASH_ESCAPES: u16 = 0x200;
+
+/// What mysqlnd calls itself (mysqlnd_get_client_info()).
+pub const CLIENT_INFO: &str = "mysqlnd 8.4.27";
 
 /// utf8mb4_general_ci, the collation mysqlnd connects with (utf8mb4).
 pub const DEFAULT_CHARSET: u16 = 45;
 
 // Client error codes (CR_*), with the messages mysqlnd gives them.
 pub const CR_CONNECTION_ERROR: u16 = 2002;
-pub const CR_CONN_HOST_ERROR: u16 = 2003;
 pub const CR_SERVER_GONE_ERROR: u16 = 2006;
 pub const CR_COMMANDS_OUT_OF_SYNC: u16 = 2014;
+pub const CR_CANT_READ_CHARSET: u16 = 2019;
+pub const CR_LOAD_DATA_LOCAL_INFILE_REJECTED: u16 = 2068;
 pub const CR_AUTH_PLUGIN_CANNOT_LOAD: u16 = 2059;
 pub const CR_MALFORMED_PACKET: u16 = 2027;
 
@@ -86,6 +112,9 @@ pub struct ConnectOptions<'a> {
     /// CLIENT_* flags to add (mysqli_real_connect's $flags).
     pub flags: u32,
     pub timeout: Option<Duration>,
+    /// The collation the handshake asks for (the connection's character
+    /// set): [`DEFAULT_CHARSET`] unless the caller names another.
+    pub charset: u16,
 }
 
 enum Stream {
@@ -151,6 +180,89 @@ pub enum Outcome {
     Done,
 }
 
+/// The start of a result: what the statement changed (an OK packet), or
+/// the columns of a result set whose rows are still to be read with
+/// [`Connection::read_row`].
+pub enum Header {
+    Done,
+    Columns(Vec<Column>),
+}
+
+/// A statement prepared on the server (COM_STMT_PREPARE).
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    pub id: u32,
+    /// How many `?` it has.
+    pub params: usize,
+    /// The columns of its result, as far as the server knows them before
+    /// it runs (SHOW and CALL only know after).
+    pub columns: Vec<Column>,
+}
+
+/// A value bound to a `?` of a prepared statement, by the type mysqlnd
+/// sends it as (mysqlnd_stmt_execute_store_types()).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Param<'a> {
+    Null,
+    /// MYSQL_TYPE_LONGLONG.
+    Int(i64),
+    /// MYSQL_TYPE_DOUBLE.
+    Double(f64),
+    /// MYSQL_TYPE_TINY (a PHP bool).
+    Tiny(i8),
+    /// MYSQL_TYPE_VAR_STRING.
+    Bytes(&'a [u8]),
+}
+
+/// A column of a row as PHP gets it from mysqlnd.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldValue {
+    Null,
+    Int(i64),
+    Double(f64),
+    Bytes(Vec<u8>),
+}
+
+// Field types (MYSQL_TYPE_*).
+pub const TYPE_DECIMAL: u8 = 0;
+pub const TYPE_TINY: u8 = 1;
+pub const TYPE_SHORT: u8 = 2;
+pub const TYPE_LONG: u8 = 3;
+pub const TYPE_FLOAT: u8 = 4;
+pub const TYPE_DOUBLE: u8 = 5;
+pub const TYPE_NULL: u8 = 6;
+pub const TYPE_TIMESTAMP: u8 = 7;
+pub const TYPE_LONGLONG: u8 = 8;
+pub const TYPE_INT24: u8 = 9;
+pub const TYPE_DATE: u8 = 10;
+pub const TYPE_TIME: u8 = 11;
+pub const TYPE_DATETIME: u8 = 12;
+pub const TYPE_YEAR: u8 = 13;
+pub const TYPE_NEWDATE: u8 = 14;
+pub const TYPE_VARCHAR: u8 = 15;
+pub const TYPE_BIT: u8 = 16;
+pub const TYPE_VECTOR: u8 = 242;
+pub const TYPE_JSON: u8 = 245;
+pub const TYPE_NEWDECIMAL: u8 = 246;
+pub const TYPE_ENUM: u8 = 247;
+pub const TYPE_SET: u8 = 248;
+pub const TYPE_TINY_BLOB: u8 = 249;
+pub const TYPE_MEDIUM_BLOB: u8 = 250;
+pub const TYPE_LONG_BLOB: u8 = 251;
+pub const TYPE_BLOB: u8 = 252;
+pub const TYPE_VAR_STRING: u8 = 253;
+pub const TYPE_STRING: u8 = 254;
+pub const TYPE_GEOMETRY: u8 = 255;
+
+// Column flags.
+pub const NOT_NULL_FLAG: u16 = 1;
+pub const PRI_KEY_FLAG: u16 = 2;
+pub const UNIQUE_KEY_FLAG: u16 = 4;
+pub const MULTIPLE_KEY_FLAG: u16 = 8;
+pub const BLOB_FLAG: u16 = 16;
+pub const UNSIGNED_FLAG: u16 = 32;
+pub const ZEROFILL_FLAG: u16 = 64;
+
 /// An open connection, and what the server last reported.
 pub struct Connection {
     stream: Stream,
@@ -167,6 +279,11 @@ pub struct Connection {
     pub info: Vec<u8>,
     /// Another result of the last statement is waiting to be read.
     pending: bool,
+    /// The rows of the current result are still to be read: Some(true)
+    /// when they are binary-protocol rows (of a prepared statement).
+    reading: Option<bool>,
+    /// The results of the last command come in the binary protocol.
+    binary: bool,
 }
 
 /// Reads a packet's fields in order.
@@ -338,13 +455,15 @@ impl Connection {
             server_version: String::new(),
             thread_id: 0,
             host_info,
-            charset: DEFAULT_CHARSET,
+            charset: options.charset,
             status: 0,
             affected_rows: 0,
             insert_id: 0,
             warnings: 0,
             info: Vec::new(),
             pending: false,
+            reading: None,
+            binary: false,
         };
         // A failed connect reports SQLSTATE HY000, whatever the server said.
         conn.handshake(options).map_err(|e| Error { sqlstate: "HY000".into(), ..e })?;
@@ -353,7 +472,7 @@ impl Connection {
 
     fn tcp(host: &str, port: u16, timeout: Option<Duration>) -> Result<TcpStream> {
         use std::net::ToSocketAddrs;
-        let addrs = (host, port).to_socket_addrs().map_err(|_| Error::client(CR_CONN_HOST_ERROR, format!("php_network_getaddresses: getaddrinfo for {host} failed: Name or service not known")))?;
+        let addrs = (host, port).to_socket_addrs().map_err(|_| Error::client(CR_CONNECTION_ERROR, format!("php_network_getaddresses: getaddrinfo for {host} failed: Name or service not known")))?;
         let mut last = None;
         for addr in addrs {
             let r = match timeout {
@@ -525,7 +644,7 @@ impl Connection {
     }
 
     fn command(&mut self, command: u8, arg: &[u8]) -> Result<()> {
-        if self.pending {
+        if self.pending || self.reading.is_some() {
             return Err(Error::client(CR_COMMANDS_OUT_OF_SYNC, "Commands out of sync; you can't run this command now"));
         }
         self.seq = 0;
@@ -537,8 +656,31 @@ impl Connection {
 
     /// COM_QUERY: run `sql` and read its first result.
     pub fn query(&mut self, sql: &[u8]) -> Result<Outcome> {
+        let header = self.query_start(sql)?;
+        self.store(header)
+    }
+
+    /// COM_QUERY: run `sql` and read the start of its first result; the
+    /// rows of a result set are left for [`Connection::read_row`].
+    pub fn query_start(&mut self, sql: &[u8]) -> Result<Header> {
         self.command(0x03, sql)?;
-        self.read_result()
+        self.binary = false;
+        self.read_header()
+    }
+
+    /// A result whose header was read, with its rows.
+    fn store(&mut self, header: Header) -> Result<Outcome> {
+        match header {
+            Header::Done => Ok(Outcome::Done),
+            Header::Columns(columns) => {
+                let mut rows = Vec::new();
+                while let Some(packet) = self.read_row()? {
+                    rows.push(text_row(&packet, columns.len())?);
+                }
+                self.affected_rows = rows.len() as u64;
+                Ok(Outcome::Rows(ResultSet { columns, rows }))
+            }
+        }
     }
 
     /// Another result of the last statement waits (more_results()).
@@ -546,62 +688,199 @@ impl Connection {
         self.pending
     }
 
+    /// The rows of the current result are still being read (an unbuffered
+    /// result): nothing else can run until they are.
+    pub fn reading_rows(&self) -> bool {
+        self.reading.is_some()
+    }
+
     /// The next result of the last statement, if there is one.
     pub fn next_result(&mut self) -> Option<Result<Outcome>> {
-        if !self.pending {
+        let header = self.next_header()?;
+        Some(header.and_then(|h| self.store(h)))
+    }
+
+    /// The start of the next result of the last statement, if there is one.
+    pub fn next_header(&mut self) -> Option<Result<Header>> {
+        if !self.pending || self.reading.is_some() {
             return None;
         }
         self.pending = false;
-        Some(self.read_result())
+        Some(self.read_header())
     }
 
-    fn read_result(&mut self) -> Result<Outcome> {
+    fn read_header(&mut self) -> Result<Header> {
         let packet = self.read_packet()?;
         match packet.first() {
             Some(0x00) => {
                 self.read_ok(&packet)?;
-                Ok(Outcome::Done)
+                Ok(Header::Done)
             }
             Some(0xFF) => {
                 self.pending = false;
                 Err(server_error(&packet))
             }
-            Some(0xFB) => Err(Error::client(2068, "LOAD DATA LOCAL INFILE is forbidden, check related settings like mysqli.allow_local_infile|mysqli.local_infile_directory or PDO::MYSQL_ATTR_LOCAL_INFILE|PDO::MYSQL_ATTR_LOCAL_INFILE_DIRECTORY")),
-            _ => {
-                let count = Cursor::new(&packet).lenenc_int()? as usize;
-                let mut columns = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let packet = self.read_packet()?;
-                    columns.push(Self::column(&packet)?);
+            Some(0xFB) => {
+                // LOAD DATA LOCAL INFILE: the server asks for a file. None
+                // is sent (an empty packet), and the server's answer to
+                // that is read so the connection stays in step.
+                self.write_packet(&[])?;
+                let answer = self.read_packet()?;
+                if answer.first() == Some(&0x00) {
+                    self.read_ok(&answer)?;
                 }
-                let eof = self.read_packet()?;
-                self.read_eof(&eof);
-                let mut rows = Vec::new();
-                loop {
-                    let packet = self.read_packet()?;
-                    match packet.first() {
-                        Some(0xFE) if packet.len() < 9 => {
-                            self.read_eof(&packet);
-                            break;
-                        }
-                        Some(0xFF) => {
-                            self.pending = false;
-                            return Err(server_error(&packet));
-                        }
-                        _ => {
-                            let mut c = Cursor::new(&packet);
-                            let mut row = Vec::with_capacity(count);
-                            for _ in 0..count {
-                                row.push(c.lenenc_bytes()?.map(<[u8]>::to_vec));
-                            }
-                            rows.push(row);
-                        }
+                self.pending = false;
+                Err(Error::client(
+                    CR_LOAD_DATA_LOCAL_INFILE_REJECTED,
+                    "LOAD DATA LOCAL INFILE is forbidden, check related settings like mysqli.allow_local_infile|mysqli.local_infile_directory or PDO::MYSQL_ATTR_LOCAL_INFILE|PDO::MYSQL_ATTR_LOCAL_INFILE_DIRECTORY",
+                ))
+            }
+            _ => {
+                // A result set: what the last statement changed is reset
+                // (UPSERT_STATUS_RESET), its affected rows unknown (-1).
+                self.affected_rows = u64::MAX;
+                self.insert_id = 0;
+                self.warnings = 0;
+                self.info.clear();
+                let count = Cursor::new(&packet).lenenc_int()? as usize;
+                let columns = self.columns(count)?;
+                self.reading = Some(self.binary);
+                Ok(Header::Columns(columns))
+            }
+        }
+    }
+
+    /// `count` column definitions and the EOF packet after them.
+    fn columns(&mut self, count: usize) -> Result<Vec<Column>> {
+        let mut columns = Vec::with_capacity(count);
+        for _ in 0..count {
+            let packet = self.read_packet()?;
+            columns.push(Self::column(&packet)?);
+        }
+        let eof = self.read_packet()?;
+        self.read_eof(&eof);
+        Ok(columns)
+    }
+
+    /// The next row of the current result, as the server sent it (decode
+    /// it with [`text_row`], [`text_values`] or [`binary_values`]); None at
+    /// its end.
+    pub fn read_row(&mut self) -> Result<Option<Vec<u8>>> {
+        if self.reading.is_none() {
+            return Ok(None);
+        }
+        let packet = match self.read_packet() {
+            Ok(p) => p,
+            Err(e) => {
+                self.reading = None;
+                return Err(e);
+            }
+        };
+        match packet.first() {
+            Some(0xFE) if packet.len() < 9 => {
+                self.read_eof(&packet);
+                self.reading = None;
+                self.pending = self.status & MORE_RESULTS != 0;
+                Ok(None)
+            }
+            Some(0xFF) => {
+                self.reading = None;
+                self.pending = false;
+                Err(server_error(&packet))
+            }
+            _ => Ok(Some(packet)),
+        }
+    }
+
+    /// Read and drop the rest of the current result's rows.
+    pub fn skip_rows(&mut self) -> Result<()> {
+        while self.read_row()?.is_some() {}
+        Ok(())
+    }
+
+    /// COM_STMT_PREPARE: prepare `sql` on the server.
+    pub fn prepare(&mut self, sql: &[u8]) -> Result<Prepared> {
+        self.command(0x16, sql)?;
+        let packet = self.read_packet()?;
+        match packet.first() {
+            Some(0x00) => {}
+            Some(0xFF) => return Err(server_error(&packet)),
+            _ => return Err(Error::malformed()),
+        }
+        let mut c = Cursor::new(&packet[1..]);
+        let id = c.u32()?;
+        let ncolumns = c.u16()? as usize;
+        let params = c.u16()? as usize;
+        if c.rest().len() >= 3 {
+            c.u8()?;
+            self.warnings = c.u16()?;
+        }
+        if params > 0 {
+            self.columns(params)?;
+        }
+        let columns = if ncolumns > 0 { self.columns(ncolumns)? } else { Vec::new() };
+        Ok(Prepared { id, params, columns })
+    }
+
+    /// COM_STMT_EXECUTE: run prepared statement `id` with `params` and read
+    /// the start of its first result (its rows are binary-protocol rows).
+    pub fn execute(&mut self, id: u32, params: &[Param]) -> Result<Header> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&id.to_le_bytes());
+        // No cursor; one iteration.
+        out.push(0);
+        out.extend_from_slice(&1u32.to_le_bytes());
+        if !params.is_empty() {
+            let mut nulls = vec![0u8; params.len().div_ceil(8)];
+            for (i, p) in params.iter().enumerate() {
+                if *p == Param::Null {
+                    nulls[i / 8] |= 1 << (i % 8);
+                }
+            }
+            out.extend_from_slice(&nulls);
+            // The types follow.
+            out.push(1);
+            for p in params {
+                let kind = match p {
+                    Param::Null => TYPE_NULL,
+                    Param::Int(_) => TYPE_LONGLONG,
+                    Param::Double(_) => TYPE_DOUBLE,
+                    Param::Tiny(_) => TYPE_TINY,
+                    Param::Bytes(_) => TYPE_VAR_STRING,
+                };
+                out.extend_from_slice(&[kind, 0]);
+            }
+            for p in params {
+                match p {
+                    Param::Null => {}
+                    Param::Int(i) => out.extend_from_slice(&i.to_le_bytes()),
+                    Param::Double(d) => out.extend_from_slice(&d.to_le_bytes()),
+                    Param::Tiny(t) => out.extend_from_slice(&t.to_le_bytes()),
+                    Param::Bytes(b) => {
+                        put_lenenc(&mut out, b.len() as u64);
+                        out.extend_from_slice(b);
                     }
                 }
-                self.affected_rows = rows.len() as u64;
-                self.pending = self.status & MORE_RESULTS != 0;
-                Ok(Outcome::Rows(ResultSet { columns, rows }))
             }
+        }
+        self.command(0x17, &out)?;
+        self.binary = true;
+        self.read_header()
+    }
+
+    /// COM_STMT_CLOSE: the server forgets statement `id` (no answer comes).
+    /// Nothing is sent while another result is being read.
+    pub fn close_statement(&mut self, id: u32) {
+        let _ = self.command(0x19, &id.to_le_bytes());
+    }
+
+    /// COM_STATISTICS: the server's status line (mysqlnd_stat()).
+    pub fn stat(&mut self) -> Result<Vec<u8>> {
+        self.command(0x09, b"")?;
+        let packet = self.read_packet()?;
+        match packet.first() {
+            Some(0xFF) => Err(server_error(&packet)),
+            _ => Ok(packet),
         }
     }
 
@@ -663,6 +942,192 @@ impl Connection {
         self.charset = cs.nr;
         Ok(())
     }
+}
+
+/// A text-protocol row: each of its `n` values as the server sent it, or
+/// None for NULL.
+pub fn text_row(packet: &[u8], n: usize) -> Result<Row> {
+    let mut c = Cursor::new(packet);
+    let mut row = Vec::with_capacity(n);
+    for _ in 0..n {
+        row.push(c.lenenc_bytes()?.map(<[u8]>::to_vec));
+    }
+    Ok(row)
+}
+
+/// atoll()/strtoull(): the leading integer of `s`, wrapping as C does.
+fn c_integer(s: &[u8]) -> u64 {
+    let s = s.trim_ascii_start();
+    let (neg, digits) = match s.first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let n = digits.iter().take_while(|c| c.is_ascii_digit()).fold(0u64, |n, &c| n.wrapping_mul(10).wrapping_add(u64::from(c - b'0')));
+    if neg { n.wrapping_neg() } else { n }
+}
+
+/// The integer types mysqlnd reads into a PHP int (php_type IS_LONG), with
+/// how many bytes the binary protocol gives them.
+fn int_bytes(kind: u8) -> Option<usize> {
+    match kind {
+        TYPE_TINY => Some(1),
+        TYPE_SHORT | TYPE_YEAR => Some(2),
+        TYPE_INT24 | TYPE_LONG => Some(4),
+        TYPE_LONGLONG => Some(8),
+        _ => None,
+    }
+}
+
+/// ps_fetch_from_1_to_8_bytes(): an integer of `bytes` (little-endian; a
+/// BIT is big-endian), signed or not, zero-filled to the column's width.
+fn fixed_int(column: &Column, bytes: &[u8]) -> FieldValue {
+    if column.flags & UNSIGNED_FLAG != 0 {
+        let u = if column.kind == TYPE_BIT {
+            bytes.iter().fold(0u64, |n, &b| (n << 8) | u64::from(b))
+        } else {
+            bytes.iter().rev().fold(0u64, |n, &b| (n << 8) | u64::from(b))
+        };
+        if column.flags & ZEROFILL_FLAG != 0 {
+            return FieldValue::Bytes(format!("{u:0width$}", width = column.length as usize).into_bytes());
+        }
+        return match i64::try_from(u) {
+            Ok(i) => FieldValue::Int(i),
+            Err(_) => FieldValue::Bytes(u.to_string().into_bytes()),
+        };
+    }
+    // Signed: 1 to 4 bytes or 8, sign-extended from the top one.
+    let n = bytes.len();
+    if !matches!(n, 1..=4 | 8) {
+        return FieldValue::Int(0);
+    }
+    let mut b = if bytes[n - 1] & 0x80 != 0 { [0xFF; 8] } else { [0; 8] };
+    b[..n].copy_from_slice(bytes);
+    FieldValue::Int(i64::from_le_bytes(b))
+}
+
+/// A text-protocol row decoded as mysqlnd does it
+/// (php_mysqlnd_rowp_read_text_protocol()): with `native` (the
+/// MYSQLND_OPT_INT_AND_FLOAT_NATIVE option), integer columns are ints
+/// (unless zero-filled, or unsigned and past PHP_INT_MAX) and FLOAT and
+/// DOUBLE floats; a BIT is an int with `native`, its decimal digits without.
+pub fn text_values(packet: &[u8], columns: &[Column], native: bool) -> Result<Vec<FieldValue>> {
+    let row = text_row(packet, columns.len())?;
+    Ok(row
+        .into_iter()
+        .zip(columns)
+        .map(|(v, col)| {
+            let Some(v) = v else { return FieldValue::Null };
+            if col.kind == TYPE_BIT {
+                if v.is_empty() || v.len() > 8 {
+                    return FieldValue::Bytes(v);
+                }
+                return match fixed_int(col, &v) {
+                    FieldValue::Int(i) if !native => FieldValue::Bytes((i as u64).to_string().into_bytes()),
+                    other => other,
+                };
+            }
+            if native && col.flags & ZEROFILL_FLAG == 0 {
+                if let Some(n) = int_bytes(col.kind) {
+                    let u = c_integer(&v);
+                    if n < 8 || col.flags & UNSIGNED_FLAG == 0 || i64::try_from(u).is_ok() {
+                        return FieldValue::Int(u as i64);
+                    }
+                    return FieldValue::Bytes(v);
+                }
+                if col.kind == TYPE_FLOAT || col.kind == TYPE_DOUBLE {
+                    // zend_strtod() of the server's text.
+                    return FieldValue::Double(String::from_utf8_lossy(&v).trim().parse().unwrap_or(0.0));
+                }
+            }
+            FieldValue::Bytes(v)
+        })
+        .collect())
+}
+
+/// mysql_float_to_double(): a FLOAT as the double PHP shows, through its
+/// decimal text: `decimals` digits after the point, or six significant
+/// digits when the column has no fixed decimals (31 and up).
+fn float_to_double(f: f32, decimals: u8) -> f64 {
+    let text = if decimals >= 31 { format!("{:.5e}", f64::from(f)) } else { format!("{:.*}", usize::from(decimals), f64::from(f)) };
+    text.parse().unwrap_or(0.0)
+}
+
+/// A binary-protocol date, time or datetime (ps_fetch_date(),
+/// ps_fetch_time(), ps_fetch_datetime()): `to` is what follows its length.
+fn temporal(column: &Column, to: &[u8]) -> Result<Vec<u8>> {
+    let min = if column.kind == TYPE_TIME { 8 } else { 4 };
+    if !to.is_empty() && to.len() < min {
+        return Err(Error::malformed());
+    }
+    let at = |i: usize| u32::from(to.get(i).copied().unwrap_or(0));
+    let u32_at = |i: usize| to.get(i..i + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    // Fractional seconds to the column's decimals.
+    let fraction = |micros: u32| match u32::from(column.decimals) {
+        d @ 1..=6 => format!(".{:0w$}", micros / 10u32.pow(6 - d), w = d as usize),
+        _ => String::new(),
+    };
+    let date = || if to.is_empty() { (0, 0, 0) } else { (at(0) | at(1) << 8, at(2), at(3)) };
+    Ok(match column.kind {
+        TYPE_DATE => {
+            let (y, m, d) = date();
+            format!("{y:04}-{m:02}-{d:02}")
+        }
+        TYPE_TIME => {
+            let neg = to.first().is_some_and(|&b| b != 0);
+            // Days count as hours.
+            let h = at(5) + u32_at(1) * 24;
+            let micros = if to.len() >= 12 { u32_at(8) } else { 0 };
+            format!("{}{h:02}:{:02}:{:02}{}", if neg { "-" } else { "" }, at(6), at(7), fraction(micros))
+        }
+        _ => {
+            let (y, m, d) = date();
+            let micros = if to.len() >= 11 { u32_at(7) } else { 0 };
+            format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}{}", at(4), at(5), at(6), fraction(micros))
+        }
+    }
+    .into_bytes())
+}
+
+/// A binary-protocol row decoded as mysqlnd does it
+/// (php_mysqlnd_rowp_read_binary_protocol() and the ps_fetch_* functions):
+/// integers are ints (unsigned past PHP_INT_MAX and zero-filled ones are
+/// strings), FLOAT and DOUBLE floats, dates and times their text.
+pub fn binary_values(packet: &[u8], columns: &[Column]) -> Result<Vec<FieldValue>> {
+    let mut c = Cursor::new(packet);
+    c.u8()?;
+    let nulls = c.bytes((columns.len() + 9) / 8)?;
+    let mut out = Vec::with_capacity(columns.len());
+    for (i, col) in columns.iter().enumerate() {
+        // The first two bits of the NULL bitmap are reserved.
+        let bit = i + 2;
+        if nulls[bit / 8] & (1 << (bit % 8)) != 0 {
+            out.push(FieldValue::Null);
+            continue;
+        }
+        let v = match col.kind {
+            TYPE_NULL => FieldValue::Null,
+            TYPE_FLOAT => {
+                let b = c.bytes(4)?;
+                FieldValue::Double(float_to_double(f32::from_le_bytes([b[0], b[1], b[2], b[3]]), col.decimals))
+            }
+            TYPE_DOUBLE => FieldValue::Double(f64::from_le_bytes(c.bytes(8)?.try_into().expect("8 bytes"))),
+            TYPE_DATE | TYPE_TIME | TYPE_DATETIME | TYPE_TIMESTAMP => {
+                let n = usize::try_from(c.lenenc_int()?).map_err(|_| Error::malformed())?;
+                FieldValue::Bytes(temporal(col, c.bytes(n)?)?)
+            }
+            TYPE_BIT => {
+                let b = c.lenenc_bytes()?.unwrap_or_default();
+                if b.is_empty() || b.len() > 8 { FieldValue::Bytes(b.to_vec()) } else { fixed_int(col, b) }
+            }
+            kind => match int_bytes(kind) {
+                Some(n) => fixed_int(col, c.bytes(n)?),
+                None => FieldValue::Bytes(c.lenenc_bytes()?.unwrap_or_default().to_vec()),
+            },
+        };
+        out.push(v);
+    }
+    Ok(out)
 }
 
 /// The OS error text mysqlnd shows (without Rust's " (os error N)").
@@ -867,6 +1332,28 @@ pub fn escape(cs: &Charset, s: &[u8]) -> Vec<u8> {
     out
 }
 
+/// mysql_real_escape_string() for a connection in NO_BACKSLASH_ESCAPES
+/// mode (mysqlnd_cset_escape_quotes): a ' is doubled, nothing else changes
+/// (a valid multi-byte character is copied whole).
+pub fn escape_quotes(cs: &Charset, s: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() + s.len() / 8);
+    let mut i = 0;
+    while i < s.len() {
+        let len = if cs.max_len > 1 { cs.mb.valid(&s[i..]) } else { 0 };
+        if len > 0 {
+            out.extend_from_slice(&s[i..i + len]);
+            i += len;
+            continue;
+        }
+        if s[i] == b'\'' {
+            out.push(b'\'');
+        }
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -989,6 +1476,7 @@ mod tests {
             database: Some(b"db"),
             flags: 0,
             timeout: None,
+            charset: DEFAULT_CHARSET,
         })
     }
 
@@ -1018,6 +1506,63 @@ mod tests {
         assert_eq!((e.code, e.sqlstate.as_str(), e.message.as_str()), (1045, "HY000", "Access denied"));
     }
 
+    fn col(kind: u8, flags: u16, length: u32, decimals: u8) -> Column {
+        Column { kind, flags, length, decimals, ..Column::default() }
+    }
+
+    #[test]
+    fn binary_rows_as_php_values() {
+        let cols = [
+            col(TYPE_LONGLONG, UNSIGNED_FLAG, 20, 0),
+            col(TYPE_TINY, 0, 4, 0),
+            col(TYPE_FLOAT, 0, 12, 31),
+            col(TYPE_DATETIME, 0, 23, 3),
+            col(TYPE_TIME, 0, 10, 0),
+            col(TYPE_VAR_STRING, 0, 10, 0),
+            col(TYPE_LONG, ZEROFILL_FLAG | UNSIGNED_FLAG, 5, 0),
+        ];
+        // The sixth column is NULL: bit 5 + 2 of the bitmap.
+        let mut p = vec![0, 0b1000_0000, 0];
+        p.extend_from_slice(&u64::MAX.to_le_bytes());
+        p.push(0xFB);
+        p.extend_from_slice(&1.1f32.to_le_bytes());
+        // 2024-01-02 03:04:05.678000
+        p.extend_from_slice(&[11, 0xE8, 0x07, 1, 2, 3, 4, 5, 0x70, 0x58, 0x0A, 0]);
+        // -34 days 22:59:59
+        p.extend_from_slice(&[8, 1, 34, 0, 0, 0, 22, 59, 59]);
+        p.extend_from_slice(&42u32.to_le_bytes());
+        let b = |s: &str| FieldValue::Bytes(s.as_bytes().to_vec());
+        assert_eq!(
+            binary_values(&p, &cols).unwrap(),
+            vec![b("18446744073709551615"), FieldValue::Int(-5), FieldValue::Double(1.1), b("2024-01-02 03:04:05.678"), b("-838:59:59"), FieldValue::Null, b("00042")]
+        );
+        // A FLOAT with fixed decimals rounds to them.
+        assert_eq!(float_to_double(123.4567, 4), 123.4567);
+    }
+
+    #[test]
+    fn text_rows_as_php_values() {
+        let cols = [
+            col(TYPE_LONG, 0, 11, 0),
+            col(TYPE_LONGLONG, UNSIGNED_FLAG, 20, 0),
+            col(TYPE_DOUBLE, 0, 22, 31),
+            col(TYPE_BIT, UNSIGNED_FLAG, 10, 0),
+            col(TYPE_YEAR, UNSIGNED_FLAG | ZEROFILL_FLAG, 4, 0),
+            col(TYPE_NEWDECIMAL, 0, 12, 3),
+        ];
+        let mut p = Vec::new();
+        for v in [&b"-7"[..], b"18446744073709551615", b"2.5e-5", &[0x02, 0xAA], b"2024", b"3.142"] {
+            put_lenenc(&mut p, v.len() as u64);
+            p.extend_from_slice(v);
+        }
+        let b = |s: &str| FieldValue::Bytes(s.as_bytes().to_vec());
+        assert_eq!(
+            text_values(&p, &cols, true).unwrap(),
+            vec![FieldValue::Int(-7), b("18446744073709551615"), FieldValue::Double(2.5e-5), FieldValue::Int(682), b("2024"), b("3.142")]
+        );
+        assert_eq!(text_values(&p, &cols, false).unwrap(), vec![b("-7"), b("18446744073709551615"), b("2.5e-5"), b("682"), b("2024"), b("3.142")]);
+    }
+
     #[test]
     fn escapes() {
         let utf8 = charset("utf8mb4").expect("utf8mb4");
@@ -1026,5 +1571,7 @@ mod tests {
         let big5 = charset("big5").expect("big5");
         assert_eq!(escape(&big5, b"\xa5\x5c'"), b"\xa5\x5c\\'".to_vec());
         assert_eq!(escape(&utf8, b"\xa5\x5c'"), b"\xa5\\\\\\'".to_vec());
+        // NO_BACKSLASH_ESCAPES: only the quote is doubled.
+        assert_eq!(escape_quotes(&utf8, b"a'b\\c\n"), b"a''b\\c\n".to_vec());
     }
 }

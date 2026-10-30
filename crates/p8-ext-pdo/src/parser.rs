@@ -1,5 +1,5 @@
 //! Finding the placeholders of a query: `pdo_sql_parser.re`,
-//! `sqlite_sql_parser.re` and `pgsql_sql_parser.re`. String literals and
+//! `sqlite_sql_parser.re`, `pgsql_sql_parser.re` and `mysql_sql_parser.re`. String literals and
 //! comments are skipped; `:name` and `?` are placeholders (`::` and `??` are
 //! text, except that pgsql's `??` is an escaped `?`).
 
@@ -131,9 +131,46 @@ fn pgsql_next(sql: &[u8], i: usize) -> (Tok, usize) {
     }
 }
 
+/// mysql_sql_parser.re: a backslash escapes in '' and "" strings, ``
+/// quotes identifiers, `#` and `-- ` (a dash pair and a space) start
+/// comments.
+fn mysql_next(sql: &[u8], i: usize) -> (Tok, usize) {
+    let s = &sql[i..];
+    let c = s[0];
+    match c {
+        b'"' | b'\'' => {
+            let mut j = 1;
+            while j < s.len() {
+                match s[j] {
+                    b'\\' if j + 1 < s.len() => j += 2,
+                    q if q == c && s.get(j + 1) == Some(&c) => j += 2,
+                    q if q == c => return (Tok::Text, j + 1),
+                    _ => j += 1,
+                }
+            }
+            (Tok::Text, 1)
+        }
+        b'`' => match quoted(s, b'`') {
+            Some(n) => (Tok::Text, n),
+            None => (Tok::Text, 1),
+        },
+        b'#' => (Tok::Text, s.iter().position(|&b| b == b'\n').unwrap_or(s.len())),
+        b'-' if s.get(1) == Some(&b'-') && s.get(2).is_some_and(|b| b" \t\x0b\x0c\r".contains(b)) => (Tok::Text, s.iter().position(|&b| b == b'\n').unwrap_or(s.len())),
+        b'-' => (Tok::Text, 1),
+        b':' | b'?' | b'/' => next(sql, i, Scanner::Default),
+        _ => {
+            let n = s.iter().take_while(|b| !b":?\"'`/#-".contains(b)).count();
+            (Tok::Text, n.max(1))
+        }
+    }
+}
+
 fn next(sql: &[u8], i: usize, scanner: Scanner) -> (Tok, usize) {
     if scanner == Scanner::Pgsql {
         return pgsql_next(sql, i);
+    }
+    if scanner == Scanner::Mysql {
+        return mysql_next(sql, i);
     }
     let s = &sql[i..];
     let c = s[0];
@@ -287,9 +324,31 @@ pub fn dollar_rewrite(sql: &[u8], scan: &Scan) -> (Vec<u8>, Option<DollarMap>) {
     (out, Some(map))
 }
 
+/// Rewrite the `:name` placeholders of a scan into `?` (pdo_parse_params()
+/// for PDO_PLACEHOLDER_POSITIONAL): the names, by position, when there
+/// were any (the bound_param_map); a query of `?` is left as it is.
+pub fn qmark_rewrite(sql: &[u8], scan: &Scan) -> (Vec<u8>, Option<Vec<String>>) {
+    if !scan.named {
+        return (sql.to_vec(), None);
+    }
+    let names = scan.binds().map(|p| String::from_utf8_lossy(&sql[p.pos..p.pos + p.len]).into_owned()).collect();
+    (rewrite(sql, &scan.placeholders, |_| b"?".to_vec()), Some(names))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mysql_strings_comments_and_names() {
+        let sql = b"SELECT 'it\\'s ?', \"\\\"?\", `?x`, ? # :a\n, :b -- ?\n, 1--:c";
+        let s = scan(sql, Scanner::Mysql);
+        let found: Vec<_> = s.placeholders.iter().map(|p| &sql[p.pos..p.pos + p.len]).collect();
+        assert_eq!(found, vec![&b"?"[..], b":b", b":c"]);
+        let (out, names) = qmark_rewrite(b"SELECT :a, ':b', :a", &scan(b"SELECT :a, ':b', :a", Scanner::Mysql));
+        assert_eq!(out, b"SELECT ?, ':b', ?".to_vec());
+        assert_eq!(names, Some(vec![":a".to_string(), ":a".to_string()]));
+    }
 
     #[test]
     fn skips_strings_and_comments() {

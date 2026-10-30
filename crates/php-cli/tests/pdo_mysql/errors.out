@@ -1,0 +1,438 @@
+string(5) "00000"
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+--- emulate=true
+PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'pdo_p8.no_such_table' doesn't exist
+string(5) "42S02"
+array(3) {
+  [0]=>
+  string(5) "42S02"
+  [1]=>
+  int(1146)
+  [2]=>
+  string(42) "Table 'pdo_p8.no_such_table' doesn't exist"
+}
+PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1
+string(5) "42000"
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(155) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1"
+}
+PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY'
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1062)
+  [2]=>
+  string(37) "Duplicate entry '1' for key 'PRIMARY'"
+}
+PDOException: SQLSTATE[HY000]: General error: 1364 Field 'v' doesn't have a default value
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(1364)
+  [2]=>
+  string(38) "Field 'v' doesn't have a default value"
+}
+object(PDOStatement)
+PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY'
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1062)
+  [2]=>
+  string(37) "Duplicate entry '1' for key 'PRIMARY'"
+}
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1062)
+  [2]=>
+  string(37) "Duplicate entry '1' for key 'PRIMARY'"
+}
+PDOException: SQLSTATE[23000]: Integrity constraint violation: 1048 Column 'v' cannot be null
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1048)
+  [2]=>
+  string(25) "Column 'v' cannot be null"
+}
+PDOException: SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'v' at row 1
+string(5) "22001"
+array(3) {
+  [0]=>
+  string(5) "22001"
+  [1]=>
+  int(1406)
+  [2]=>
+  string(37) "Data too long for column 'v' at row 1"
+}
+string(5) "00000"
+bool(false)
+string(5) "42S02"
+array(3) {
+  [0]=>
+  string(5) "42S02"
+  [1]=>
+  int(1146)
+  [2]=>
+  string(42) "Table 'pdo_p8.no_such_table' doesn't exist"
+}
+bool(false)
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(155) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1"
+}
+bool(true)
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+object(PDOStatement)
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+
+Warning: PDO::exec(): SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY' in %s on line 53
+bool(false)
+
+Warning: PDOStatement::execute(): SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY' in %s on line 55
+bool(false)
+--- emulate=false
+PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'pdo_p8.no_such_table' doesn't exist
+string(5) "42S02"
+array(3) {
+  [0]=>
+  string(5) "42S02"
+  [1]=>
+  int(1146)
+  [2]=>
+  string(42) "Table 'pdo_p8.no_such_table' doesn't exist"
+}
+PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1
+string(5) "42000"
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(155) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1"
+}
+PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY'
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1062)
+  [2]=>
+  string(37) "Duplicate entry '1' for key 'PRIMARY'"
+}
+PDOException: SQLSTATE[HY000]: General error: 1364 Field 'v' doesn't have a default value
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(1364)
+  [2]=>
+  string(38) "Field 'v' doesn't have a default value"
+}
+PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'nope' in 'SELECT'
+string(5) "42S22"
+array(3) {
+  [0]=>
+  string(5) "42S22"
+  [1]=>
+  int(1054)
+  [2]=>
+  string(33) "Unknown column 'nope' in 'SELECT'"
+}
+PDOException: SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY'
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1062)
+  [2]=>
+  string(37) "Duplicate entry '1' for key 'PRIMARY'"
+}
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1062)
+  [2]=>
+  string(37) "Duplicate entry '1' for key 'PRIMARY'"
+}
+PDOException: SQLSTATE[23000]: Integrity constraint violation: 1048 Column 'v' cannot be null
+string(5) "23000"
+array(3) {
+  [0]=>
+  string(5) "23000"
+  [1]=>
+  int(1048)
+  [2]=>
+  string(25) "Column 'v' cannot be null"
+}
+PDOException: SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'v' at row 1
+string(5) "22001"
+array(3) {
+  [0]=>
+  string(5) "22001"
+  [1]=>
+  int(1406)
+  [2]=>
+  string(37) "Data too long for column 'v' at row 1"
+}
+string(5) "00000"
+bool(false)
+string(5) "42S02"
+array(3) {
+  [0]=>
+  string(5) "42S02"
+  [1]=>
+  int(1146)
+  [2]=>
+  string(42) "Table 'pdo_p8.no_such_table' doesn't exist"
+}
+bool(false)
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(155) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1"
+}
+bool(true)
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+bool(false)
+array(3) {
+  [0]=>
+  string(5) "42S22"
+  [1]=>
+  int(1054)
+  [2]=>
+  string(33) "Unknown column 'nope' in 'SELECT'"
+}
+
+Warning: PDO::exec(): SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY' in %s on line 53
+bool(false)
+
+Warning: PDOStatement::execute(): SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 'PRIMARY' in %s on line 55
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+int(0)
+bool(true)
+int(1)
+PDOException: There is no active transaction
+int(0)
+NULL
+PDOException: There is no active transaction
+int(0)
+NULL
+PDOException: There is already an active transaction
+int(0)
+NULL
+bool(false)
+PDOException: There is no active transaction
+int(0)
+NULL
+bool(true)
+bool(false)
+bool(true)
+int(0)
+PDOException: There is already an active transaction
+int(0)
+NULL
+int(0)
+PDOException: SQLSTATE[HY000]: General error: 2006 MySQL server has gone away
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2006)
+  [2]=>
+  string(26) "MySQL server has gone away"
+}
+PDOException: SQLSTATE[HY000]: General error: 2006 MySQL server has gone away
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2006)
+  [2]=>
+  string(26) "MySQL server has gone away"
+}
+int(0)
+array(3) {
+  [0]=>
+  string(5) "00000"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+PDOException: SQLSTATE[HY000]: General error: 2014 Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute.
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2014)
+  [2]=>
+  string(269) "Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute."
+}
+object(PDOStatement)
+PDOException: SQLSTATE[HY000]: General error: 2014 Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute.
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2014)
+  [2]=>
+  string(269) "Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute."
+}
+PDOException: SQLSTATE[HY000]: General error: 2014 Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute.
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2014)
+  [2]=>
+  string(269) "Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute."
+}
+PDOException: SQLSTATE[HY000]: General error: 2014 Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute.
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2014)
+  [2]=>
+  string(269) "Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute."
+}
+PDOException: SQLSTATE[HY000]: General error: 2014 Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute.
+string(5) "HY000"
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2014)
+  [2]=>
+  string(269) "Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute."
+}
+array(3) {
+  [0]=>
+  string(5) "HY000"
+  [1]=>
+  int(2014)
+  [2]=>
+  string(269) "Cannot execute queries while other unbuffered queries are active.  Consider using PDOStatement::fetchAll().  Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute."
+}
+PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1
+string(5) "42000"
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(155) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1"
+}
+string(5) "42000"
+array(3) {
+  [0]=>
+  string(5) "42000"
+  [1]=>
+  int(1064)
+  [2]=>
+  string(155) "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1"
+}
+
+Warning: PDO::getAttribute(): SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute in %s on line 119
+bool(false)
+array(3) {
+  [0]=>
+  string(5) "IM001"
+  [1]=>
+  NULL
+  [2]=>
+  NULL
+}
+
+Warning: PDO::prepare(): SQLSTATE[HY093]: Invalid parameter number: mixed named and positional parameters in %s on line 121
+
+Warning: PDO::prepare(): SQLSTATE[HY093]: Invalid parameter number in %s on line 121
+bool(false)
+int(3)
+NULL
