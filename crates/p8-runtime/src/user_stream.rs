@@ -1053,6 +1053,17 @@ pub fn cast(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, this: &Rc<Object>) ->
                 ctx.warn(&format!("{func}(): {}::stream_cast must not return itself", class_name(&o)));
                 return Ok(None);
             }
+            // Another user-space stream is cast in turn.
+            let inner = crate::stream::resource(&r).expect("a stream resource");
+            if let Ok(mut s) = inner.stream.try_borrow_mut()
+                && s.user().is_some()
+            {
+                let cast = cast(ctx, func, &mut s, &r)?;
+                if cast.is_none() {
+                    ctx.warn(&format!("{func}(): Cannot represent a stream of type user-space as a select()able descriptor"));
+                }
+                return Ok(cast);
+            }
             Ok(Some(v.deref()))
         }
         _ => {
