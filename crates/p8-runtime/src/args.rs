@@ -20,6 +20,36 @@ use p8_stubs::{
 /// An error a builtin call raises before it runs: the class and message.
 pub type Refused = (&'static str, String);
 
+/// zend_is_callable_ex()'s error for a value that is not callable.
+pub fn callable_error(ctx: &mut dyn crate::ext::Ctx, v: &Value) -> String {
+    match v {
+        Value::Str(s) => {
+            let name = String::from_utf8_lossy(s.as_bytes()).into_owned();
+            match name.split_once("::") {
+                Some((class, _)) if ctx.class(class.as_bytes()).is_none() => format!("class \"{class}\" not found"),
+                Some((class, method)) => format!("class {class} does not have a method \"{method}\""),
+                None => format!("function \"{name}\" not found or invalid function name"),
+            }
+        }
+        Value::Array(a) if a.len() == 2 => match (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) {
+            (Some(Value::Str(class)), Some(Value::Str(method))) => {
+                let class = String::from_utf8_lossy(class.as_bytes()).into_owned();
+                if ctx.class(class.as_bytes()).is_none() {
+                    format!("class \"{class}\" not found")
+                } else {
+                    format!("class {class} does not have a method \"{}\"", String::from_utf8_lossy(method.as_bytes()))
+                }
+            }
+            (Some(Value::Object(o)), Some(Value::Str(method))) => {
+                format!("class {} does not have a method \"{}\"", String::from_utf8_lossy(o.class.shown()), String::from_utf8_lossy(method.as_bytes()))
+            }
+            _ => "array callback must have exactly two members".into(),
+        },
+        Value::Array(_) => "array callback must have exactly two members".into(),
+        _ => "no array or string given".into(),
+    }
+}
+
 /// Check `args` (as passed) against `sig`, converting each accepted
 /// scalar argument to its parameter's type in place, as PHP does in
 /// non-strict mode. Deprecations go to `diags`.

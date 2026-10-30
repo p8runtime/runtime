@@ -459,6 +459,11 @@ pub enum Expr<'ast> {
         expr: ExprId<'ast>,
         span: Span,
     },
+    /// `throw $e` as an expression (PHP 8): `$x ?? throw ...`, a match arm.
+    Throw {
+        expr: ExprId<'ast>,
+        span: Span,
+    },
     NullsafePropertyFetch {
         target: ExprId<'ast>,
         property: ExprId<'ast>,
@@ -566,6 +571,7 @@ impl<'ast> Expr<'ast> {
             Expr::Closure { span, .. } => *span,
             Expr::ArrowFunction { span, .. } => *span,
             Expr::Clone { span, .. } => *span,
+            Expr::Throw { span, .. } => *span,
             Expr::Print { span, .. } => *span,
             Expr::NullsafePropertyFetch { span, .. } => *span,
             Expr::NullsafeMethodCall { span, .. } => *span,

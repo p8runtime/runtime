@@ -1454,6 +1454,12 @@ impl<'src> Compiler<'src> {
             Stmt::Declare { body, .. } => self.stmts(f, body)?,
             Stmt::Global { vars, .. } => {
                 for v in *vars {
+                    // `global $$name`: `$$name = &$GLOBALS[$name]`.
+                    if let Expr::IndirectVariable { name, .. } = v {
+                        let n = self.expr(f, name)?;
+                        f.emit(Instr::rare(Rare::VarBind, n, 0, 1, 0));
+                        continue;
+                    }
                     let Expr::Variable { name, .. } = v else {
                         return Err(self.unsupported(v.span(), "this global statement"));
                     };
@@ -2743,6 +2749,12 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::rare(Rare::AssignStaticRef, name, src, 0, class));
                 src
             }
+            // `$$name = &...`: the variable named at run time.
+            Expr::IndirectVariable { name, .. } => {
+                let n = self.expr(f, name)?;
+                f.emit(Instr::rare(Rare::VarBind, n, src, 0, 0));
+                src
+            }
             _ => return Err(self.unsupported(span, "this assignment by reference")),
         })
     }
@@ -3914,12 +3926,30 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::FromCallable { dst, src: pair });
                 dst
             }
-            Expr::StaticCall { class: Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
+            Expr::StaticCall { class: class_expr @ Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
                 if is_placeholder(args) =>
             {
-                // `C::m(...)`: a Closure of "C::m".
-                let text = [self.text(*class), b"::", self.text(*method)].concat();
-                let src = f.constant(Frozen::Str(Text::from(text.as_slice())));
+                // `C::m(...)`: a Closure of "C::m", the class name resolved
+                // as written here (self, parent and static stay keywords);
+                // `$c::m(...)`: of [$c, 'm'].
+                let written = self.text(*class);
+                let src = if written.starts_with(b"$") {
+                    let class = self.expr(f, class_expr)?;
+                    let name = f.constant(Frozen::Str(Text::from(self.text(*method))));
+                    let pair = f.temp();
+                    f.emit(Instr::NewArray { dst: pair });
+                    f.emit(Instr::ArrayPush { arr: pair, val: class });
+                    f.emit(Instr::ArrayPush { arr: pair, val: name });
+                    pair
+                } else {
+                    let class = if matches!(written.to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") {
+                        written.to_ascii_lowercase()
+                    } else {
+                        self.class_name(written)
+                    };
+                    let text = [class.as_slice(), b"::", self.text(*method)].concat();
+                    f.constant(Frozen::Str(Text::from(text.as_slice())))
+                };
                 let dst = f.temp();
                 f.emit(Instr::FromCallable { dst, src });
                 dst
@@ -4024,6 +4054,14 @@ impl<'src> Compiler<'src> {
                     let name = f.constant(Frozen::Str(Text::from(text)));
                     f.emit(Instr::ClassConst { dst, class: class_index, name });
                 }
+                dst
+            }
+            // `throw` as an expression: it never yields a value.
+            Expr::Throw { expr, .. } => {
+                let src = self.expr(f, expr)?;
+                f.emit(Instr::Throw { src });
+                let dst = out(f, hint, mark);
+                f.emit(Instr::LoadNull { dst });
                 dst
             }
             Expr::Clone { expr, .. } => {
@@ -4415,14 +4453,40 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    /// The callable name a function call by name resolves to, as a register:
+    /// `use function` and the namespace applied; in a namespace an
+    /// unqualified `f` is ns\f when that exists as the code runs, else the
+    /// global f (as any call).
+    fn function_callee(&mut self, f: &mut FnBuilder, name: Span) -> Result<Reg> {
+        let (full, fallback) = self.ns_name(self.text(name), &self.use_functions, true);
+        let full = f.constant(Frozen::Str(Text::from(full.as_slice())));
+        Ok(match fallback {
+            // `f(...$a)` in a namespace: ns\f when it exists as
+            // the call runs, else the global f (as any call).
+            Some(global) => {
+                let global = f.constant(Frozen::Str(Text::from(global.as_slice())));
+                let exists = f.constant(Frozen::Str(Text::from("function_exists")));
+                let base = f.temp();
+                f.emit(Instr::Move { dst: base, src: full });
+                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
+                let callee = f.temp();
+                let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
+                f.emit(Instr::Move { dst: callee, src: full });
+                let end = f.emit(Instr::Jump { target: 0 });
+                f.patch(other, f.here());
+                f.emit(Instr::Move { dst: callee, src: global });
+                f.patch(end, f.here());
+                callee
+            }
+            None => full,
+        })
+    }
+
     fn call(&mut self, f: &mut FnBuilder, func: &Expr, args: &[p8_syntax::ast::Arg], span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
         // `f(...)`: a Closure of the function.
         if is_placeholder(args) {
             let src = match func {
-                Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
-                    let text = self.text(*name);
-                    f.constant(Frozen::Str(Text::from(text.strip_prefix(b"\\").unwrap_or(text))))
-                }
+                Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => self.function_callee(f, *name)?,
                 other => self.expr(f, other)?,
             };
             let dst = f.temp();
@@ -4436,30 +4500,7 @@ impl<'src> Compiler<'src> {
         };
         if needs_spread(args) {
             let callee = match func {
-                Expr::Variable { name, .. } if !dynamic => {
-                    let (full, fallback) = self.ns_name(self.text(*name), &self.use_functions, true);
-                    let full = f.constant(Frozen::Str(Text::from(full.as_slice())));
-                    match fallback {
-                        // `f(...$a)` in a namespace: ns\f when it exists as
-                        // the call runs, else the global f (as any call).
-                        Some(global) => {
-                            let global = f.constant(Frozen::Str(Text::from(global.as_slice())));
-                            let exists = f.constant(Frozen::Str(Text::from("function_exists")));
-                            let base = f.temp();
-                            f.emit(Instr::Move { dst: base, src: full });
-                            f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
-                            let callee = f.temp();
-                            let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
-                            f.emit(Instr::Move { dst: callee, src: full });
-                            let end = f.emit(Instr::Jump { target: 0 });
-                            f.patch(other, f.here());
-                            f.emit(Instr::Move { dst: callee, src: global });
-                            f.patch(end, f.here());
-                            callee
-                        }
-                        None => full,
-                    }
-                }
+                Expr::Variable { name, .. } if !dynamic => self.function_callee(f, *name)?,
                 other => self.expr(f, other)?,
             };
             return self.spread_call(f, callee, args);

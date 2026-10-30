@@ -1176,12 +1176,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
 
             TokenKind::Throw => {
-                // Throw expression (PHP 8+): reuse error node to avoid a new variant
+                // Throw expression (PHP 8+).
                 let start = token.span.start;
                 self.bump();
                 let expr = self.parse_expr(0);
                 let span = Span::new(start, expr.span().end);
-                self.arena.alloc(Expr::Error { span })
+                self.arena.alloc(Expr::Throw { expr, span })
             }
 
             TokenKind::Function => {

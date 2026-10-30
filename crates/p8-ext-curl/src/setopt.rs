@@ -19,36 +19,6 @@ fn name_of(option: i64) -> &'static str {
     NAMES.binary_search_by_key(&option, |(n, _)| *n).map_or("?", |i| NAMES[i].1)
 }
 
-/// zend_is_callable_ex()'s error for a value that is not callable.
-pub(crate) fn callable_error(ctx: &mut dyn Ctx, v: &Value) -> String {
-    match v {
-        Value::Str(s) => {
-            let name = String::from_utf8_lossy(s.as_bytes()).into_owned();
-            match name.split_once("::") {
-                Some((class, _)) if ctx.class(class.as_bytes()).is_none() => format!("class \"{class}\" not found"),
-                Some((class, method)) => format!("class {class} does not have a method \"{method}\""),
-                None => format!("function \"{name}\" not found or invalid function name"),
-            }
-        }
-        Value::Array(a) if a.len() == 2 => match (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) {
-            (Some(Value::Str(class)), Some(Value::Str(method))) => {
-                let class = String::from_utf8_lossy(class.as_bytes()).into_owned();
-                if ctx.class(class.as_bytes()).is_none() {
-                    format!("class \"{class}\" not found")
-                } else {
-                    format!("class {class} does not have a method \"{}\"", String::from_utf8_lossy(method.as_bytes()))
-                }
-            }
-            (Some(Value::Object(o)), Some(Value::Str(method))) => {
-                format!("class {} does not have a method \"{}\"", String::from_utf8_lossy(o.class.shown()), String::from_utf8_lossy(method.as_bytes()))
-            }
-            _ => "array callback must have exactly two members".into(),
-        },
-        Value::Array(_) => "array callback must have exactly two members".into(),
-        _ => "no array or string given".into(),
-    }
-}
-
 /// The file-handle options' stream: Err for what PHP's
 /// zend_fetch_resource2_ex() rejects, Ok(None) for null.
 fn file_handle(ctx: &mut dyn Ctx, v: &Value) -> Result<Option<Rc<Object>>, Throw> {
@@ -250,7 +220,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
             }
             if !ctx.is_callable(value) {
                 default(h);
-                let why = callable_error(ctx, value);
+                let why = p8_runtime::args::callable_error(ctx, value);
                 let name = name_of(option);
                 return Err(ctx.throw("TypeError", format!("{func}(): Argument #{argn} (${argname}) must be a valid callback for option {name}, {why}")));
             }

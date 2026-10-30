@@ -324,6 +324,7 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
         | Expr::PostDec { var: expr, .. }
         | Expr::Print { expr, .. }
         | Expr::Clone { expr, .. }
+        | Expr::Throw { expr, .. }
         | Expr::Cast { expr, .. }
         | Expr::Empty { expr, .. }
         | Expr::Eval { expr, .. }

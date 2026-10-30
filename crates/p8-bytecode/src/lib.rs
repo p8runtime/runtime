@@ -336,6 +336,9 @@ pub enum Rare {
     /// `$GLOBALS[name] = &$v`: the global variable named by a becomes the
     /// reference in b.
     GlobalBind,
+    /// `$$name = &$v` (c 0): the variable named by a becomes the reference
+    /// in b; `global $$name` (c 1): it becomes the global of that name.
+    VarBind,
     /// A call with `...` in it: a = whether the callable in b takes its
     /// argument number `class` by reference (false when it is not callable;
     /// the call reports that).
