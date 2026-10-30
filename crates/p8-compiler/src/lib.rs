@@ -1941,6 +1941,7 @@ impl<'src> Compiler<'src> {
                 visibility,
                 is_static: false,
                 readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
+                is_final: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")),
                 ty: p.ty.map(|t| Text::from(type_text(self, t).as_slice())),
                 ty_decl: p.ty.map(|t| self.type_decl(t)),
                 meta: Meta { attrs: f.params[i].attrs.clone(), ..Meta::default() },
@@ -2288,6 +2289,7 @@ impl<'src> Compiler<'src> {
                             visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
                             is_static: has(b"static"),
                             readonly: has(b"readonly") || flags & CLASS_READONLY != 0,
+                            is_final: has(b"final"),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
                             ty_decl: ty.map(|t| self.type_decl(t)),
                         });
@@ -2433,6 +2435,7 @@ impl<'src> Compiler<'src> {
                             visibility,
                             is_static: false,
                             readonly: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
+                            is_final: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
                             ty_decl: ty.map(|t| self.type_decl(t)),
                         });

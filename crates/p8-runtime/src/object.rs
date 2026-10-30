@@ -97,6 +97,7 @@ pub struct Property {
     /// As declared, for messages and var_dump.
     pub declaring_name: PhpStr,
     pub readonly: bool,
+    pub is_final: bool,
     /// The declared type as written (`int`, `?Foo`), if typed.
     pub ty: Option<PhpStr>,
     /// The declared type, checked when a value is stored.

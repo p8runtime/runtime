@@ -1,0 +1,8 @@
+f: mods=33 final=true abstract=false virtual=false hooks=false []
+plain: mods=1 final=false abstract=false virtual=false hooks=false []
+ro: mods=2177 final=false abstract=false virtual=false hooks=false []
+st: mods=17 final=false abstract=false virtual=false hooks=false []
+abs: mods=577 final=false abstract=true virtual=true hooks=true [get]
+virt: mods=513 final=false abstract=false virtual=true hooks=true [get]
+backed: mods=1 final=false abstract=false virtual=false hooks=true [set]
+ReflectionMethod $virt::get

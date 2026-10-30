@@ -1459,7 +1459,73 @@ fn rpr_get_type(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
     Ok(type_value(ctx, &ty))
 }
 prop_flag!(rpr_has_type, |v, st, ro, def, ty, declared| Ok(Value::Bool(ty.is_some())));
-prop_flag!(rpr_get_modifiers, |v, st, ro, def, ty, declared| Ok(Value::Int(vis_bits(v) | if st { 16 } else { 0 } | if ro { 128 } else { 0 })));
+fn rpr_get_modifiers(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (v, st, ro, _, _, _) = prop_facts(ctx, this)?;
+    let h = prop_hooks(ctx, this)?;
+    let mut bits = vis_bits(v) | if st { 16 } else { 0 } | if ro { 128 } else { 0 };
+    // A public readonly property is implicitly protected(set).
+    if ro && v == Visibility::Public {
+        bits |= 2048;
+    }
+    bits |= if h.is_final { 32 } else { 0 } | if h.is_abstract { 64 } else { 0 } | if h.virtual_ { 512 } else { 0 };
+    Ok(Value::Int(bits))
+}
+
+/// What a property declares beyond its visibility: final, its hooks.
+struct PropHooks {
+    is_final: bool,
+    is_abstract: bool,
+    virtual_: bool,
+    /// The hook methods it has ("get", "set"), with their method names.
+    hooks: Vec<(&'static str, Vec<u8>)>,
+    class: Rc<Class>,
+}
+
+fn prop_hooks(ctx: &mut dyn Ctx, this: &Object) -> Result<PropHooks, Throw> {
+    let (class, name, slot) = held_property(ctx, this)?;
+    let (is_final, bits) = match slot.filter(|_| class.statics.get(name.as_bytes()).is_none()) {
+        Some(i) => (class.properties[i].is_final, class.properties[i].hooks),
+        None => (false, 0),
+    };
+    let mut hooks = Vec::new();
+    let mut is_abstract = false;
+    for kind in ["get", "set"] {
+        let method = format!("${name}::{kind}").into_bytes();
+        if let Some(m) = class.method(&method.to_ascii_lowercase()) {
+            is_abstract |= m.is_abstract;
+            hooks.push((kind, method));
+        }
+    }
+    let virtual_ = bits & p8_runtime::object::HOOK_VIRTUAL != 0 || is_abstract;
+    Ok(PropHooks { is_final, is_abstract, virtual_, hooks, class })
+}
+
+fn rpr_is_final(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(prop_hooks(ctx, this)?.is_final))
+}
+
+fn rpr_is_abstract(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(prop_hooks(ctx, this)?.is_abstract))
+}
+
+fn rpr_is_virtual(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(prop_hooks(ctx, this)?.virtual_))
+}
+
+fn rpr_has_hooks(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(!prop_hooks(ctx, this)?.hooks.is_empty()))
+}
+
+/// getHooks(): ["get" => ReflectionMethod, "set" => ...].
+fn rpr_get_hooks(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let h = prop_hooks(ctx, this)?;
+    let mut out = PhpArray::new();
+    for (kind, method) in &h.hooks {
+        let m = new_method(ctx, &h.class, method);
+        out.insert(Key::Str(PhpStr::from(*kind)), m);
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
 
 fn rpr_get_declaring_class(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let name = get(this, "class");
@@ -2209,6 +2275,11 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getType", Some(Native::Method(rpr_get_type))),
             ("hasType", Some(Native::Method(rpr_has_type))),
             ("getModifiers", Some(Native::Method(rpr_get_modifiers))),
+            ("isFinal", Some(Native::Method(rpr_is_final))),
+            ("isAbstract", Some(Native::Method(rpr_is_abstract))),
+            ("isVirtual", Some(Native::Method(rpr_is_virtual))),
+            ("hasHooks", Some(Native::Method(rpr_has_hooks))),
+            ("getHooks", Some(Native::Method(rpr_get_hooks))),
             ("getDeclaringClass", Some(Native::Method(rpr_get_declaring_class))),
             ("setAccessible", Some(Native::Method(no_op))),
             ("getDocComment", Some(Native::Method(rpr_get_doc_comment))),

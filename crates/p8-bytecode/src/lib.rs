@@ -600,6 +600,7 @@ pub struct PropDef {
     pub visibility: Visibility,
     pub is_static: bool,
     pub readonly: bool,
+    pub is_final: bool,
     /// The declared type as written.
     pub ty: Option<Text>,
     /// The declared type, checked when a value is stored.
