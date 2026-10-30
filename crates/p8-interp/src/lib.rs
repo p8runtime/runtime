@@ -3662,10 +3662,9 @@ impl Context<'_> {
                         let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
                         return Err(self.throw("Error", format!("Indirect modification of {class}::${} is not allowed", String::from_utf8_lossy(pn.as_bytes()))));
                     }
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, at + 2 + i as Reg)?);
-                    }
+                    // The keys as written: an ArrayAccess object takes any
+                    // (SplObjectStorage's are objects); an array's are converted.
+                    let keys: Vec<Value> = (0..n).map(|i| self.operand(w, func, at + 2 + i as Reg)).collect();
                     let v = self.operand(w, func, val);
                     // An overloaded property: __get's value is written into
                     // only when it is an object; otherwise nothing changes.
@@ -3674,10 +3673,6 @@ impl Context<'_> {
                         let got = self.run_magic(regs, found, &mut [Value::Str(pname.clone())])?;
                         if matches!(got, Value::Object(_)) {
                             // Into the object as `$obj[k]... = v` writes (ArrayAccess, SimpleXML).
-                            let keys: Vec<Value> = path.iter().map(|k| match k {
-                                Key::Int(i) => Value::Int(*i),
-                                Key::Str(s) => Value::Str(s.clone()),
-                            }).collect();
                             let dim_op = match op {
                                 Some(op) => arrayaccess::DimOp::Op(op, v),
                                 None => arrayaccess::DimOp::Set(v),
@@ -3699,7 +3694,6 @@ impl Context<'_> {
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     // A path into an object (ArrayAccess): `$obj->p[k] = v` is its offsetSet.
-                    let keys: Vec<Value> = path.iter().map(Key::to_value).collect();
                     if let Some(root) = self.peek_prop(&target, &name)
                         && arrayaccess::path_has_object(&root, &keys, append)
                     {
@@ -3709,6 +3703,10 @@ impl Context<'_> {
                         };
                         regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
                         return Ok(Next::Go(pc));
+                    }
+                    let mut path = Vec::with_capacity(n as usize);
+                    for i in 0..n {
+                        path.push(self.key(w, func, at + 2 + i as Reg)?);
                     }
                     reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
                 }
@@ -4634,7 +4632,14 @@ impl Context<'_> {
             }
             // from_value reports illegal keys as errors only
             Ok((k, Some(KeyIssue::Illegal(_)))) => Ok(k),
-            Err(KeyIssue::Illegal(t)) => Err(self.throw("TypeError", format!("Cannot access offset of type {t} on array"))),
+            Err(KeyIssue::Illegal(t)) => {
+                // An object is named by its class (zend_illegal_container_offset).
+                let t = match &v {
+                    Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    _ => t.to_string(),
+                };
+                Err(self.throw("TypeError", format!("Cannot access offset of type {t} on array")))
+            }
             Err(KeyIssue::LosesPrecision(f)) => Ok(Key::Int(f as i64)),
         }
     }
