@@ -17,6 +17,7 @@ pub mod reflect;
 /// The builtins' declared signatures (for reflection).
 pub use p8_stubs as stubs;
 pub mod stream;
+pub mod user_stream;
 pub mod trace;
 pub mod types;
 pub mod string;

@@ -142,7 +142,11 @@ fn register(registry: &mut Registry) {
         registry.add_module(module);
     }
     registry.add_functions(file::BUILTINS);
+    // The streams a user-space wrapper opened that are still open close
+    // when the request ends (stream_close), as PHP frees its resources.
+    registry.add_request_end(p8_runtime::user_stream::close_open);
     registry.add_functions(proc::BUILTINS);
+    registry.mark_reenters(file::REENTER);
     registry.add_functions(json::BUILTINS);
     registry.add_functions(hash::BUILTINS);
     registry.add_classes(hash::CLASSES);

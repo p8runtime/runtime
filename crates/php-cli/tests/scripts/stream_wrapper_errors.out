@@ -1,0 +1,216 @@
+bool(true)
+
+Warning: stream_wrapper_register(): Protocol mem:// is already defined. in %s on line 13
+bool(false)
+
+Warning: stream_wrapper_register(): Invalid protocol scheme specified. Unable to register wrapper class W to a b:// in %s on line 14
+bool(false)
+
+Warning: stream_wrapper_register(): Protocol php:// is already defined. in %s on line 15
+bool(false)
+bool(true)
+TypeError: stream_wrapper_register(): Argument #2 ($class) must be a valid class name, NoSuchClass given
+bool(true)
+bool(true)
+-- unregistered
+bool(true)
+
+Warning: stream_wrapper_unregister(): Unable to unregister protocol mem:// in %s on line 26
+bool(false)
+bool(false)
+
+Warning: file_get_contents(): Unable to find the wrapper "mem" - did you forget to enable it when you configured PHP? in %s on line 28
+
+Warning: file_get_contents(mem://x): Failed to open stream: No such file or directory in %s on line 28
+bool(false)
+
+Warning: file_exists(): Unable to find the wrapper "mem" - did you forget to enable it when you configured PHP? in %s on line 29
+bool(false)
+
+Warning: file_get_contents(): Unable to find the wrapper "nope" - did you forget to enable it when you configured PHP? in %s on line 30
+
+Warning: file_get_contents(nope://x): Failed to open stream: No such file or directory in %s on line 30
+bool(false)
+
+Warning: stream_wrapper_restore(): mem:// never existed, nothing to restore in %s on line 31
+bool(false)
+
+Notice: stream_wrapper_restore(): php:// was never changed, nothing to restore in %s on line 32
+bool(true)
+-- case
+bool(true)
+
+Warning: fopen(): Unable to find the wrapper "abc" - did you forget to enable it when you configured PHP? in %s on line 36
+
+Warning: fopen(abc://q): Failed to open stream: No such file or directory in %s on line 36
+bool(false)
+open Abc://q r 0
+bool(true)
+bool(true)
+open DEF://q r 0
+bool(true)
+-- file:// unregistered
+bool(true)
+bool(false)
+
+Warning: file_get_contents(): file:// wrapper is disabled in the server configuration in %s on line 44
+
+Warning: file_get_contents(/nonexistent/p8-wrapper.txt): Failed to open stream: no suitable wrapper could be found in %s on line 44
+bool(false)
+
+Warning: fopen(): file:// wrapper is disabled in the server configuration in %s on line 45
+
+Warning: fopen(/nonexistent/p8-wrapper.txt): Failed to open stream: no suitable wrapper could be found in %s on line 45
+bool(false)
+bool(false)
+bool(true)
+open rel/name.txt rb 0
+string(0) ""
+url_stat /some/where 6
+bool(true)
+bool(true)
+int(3)
+url_stat /some/where 4
+int(3)
+bool(true)
+
+Notice: stream_wrapper_restore(): file:// was never changed, nothing to restore in %s on line 55
+bool(true)
+
+Warning: file_get_contents(/nonexistent/p8-wrapper.txt): Failed to open stream: No such file or directory in %s on line 56
+bool(false)
+-- a class that cannot serve
+bool(true)
+
+Warning: fopen(abs://q): Failed to open stream: operation failed in %s on line 61
+bool(false)
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 65
+
+Warning: fopen(bare://q): Failed to open stream: "Bare::stream_open" call failed in %s on line 65
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 66
+
+Warning: file_exists(): Bare::url_stat is not implemented! in %s on line 66
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 67
+
+Warning: stat(): Bare::url_stat is not implemented! in %s on line 67
+
+Warning: stat(): stat failed for bare://q in %s on line 67
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 68
+
+Warning: unlink(): Bare::unlink is not implemented! in %s on line 68
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 69
+
+Warning: rename(): Bare::rename is not implemented! in %s on line 69
+bool(false)
+
+Warning: rename(): Unable to find the wrapper "abc" - did you forget to enable it when you configured PHP? in %s on line 70
+
+Warning: rename(): Cannot rename a file across wrapper types in %s on line 70
+bool(false)
+
+Warning: rename(): Cannot rename a file across wrapper types in %s on line 71
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 72
+
+Warning: mkdir(): Bare::mkdir is not implemented! in %s on line 72
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 73
+
+Warning: rmdir(): Bare::rmdir is not implemented! in %s on line 73
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 74
+
+Warning: touch(): Bare::stream_metadata is not implemented! in %s on line 74
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 75
+
+Warning: chmod(): Bare::stream_metadata is not implemented! in %s on line 75
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 76
+
+Warning: opendir(bare://q): Failed to open directory: "Bare::dir_opendir" call failed in %s on line 76
+bool(false)
+
+Deprecated: Creation of dynamic property Bare::$context is deprecated in %s on line 77
+
+Warning: scandir(bare://q): Failed to open directory: "Bare::dir_opendir" call failed in %s on line 77
+
+Warning: scandir(): (errno 2): No such file or directory in %s on line 77
+bool(false)
+-- a stream with few methods
+
+Warning: fread(): Few::stream_read is not implemented! in %s on line 86
+bool(false)
+
+Warning: fwrite(): Few::stream_write is not implemented! in %s on line 87
+bool(false)
+
+Warning: feof(): Few::stream_eof is not implemented! Assuming EOF in %s on line 88
+bool(true)
+
+Warning: fstat(): Few::stream_stat is not implemented! in %s on line 89
+bool(false)
+
+Warning: ftruncate(): Can't truncate this stream! in %s on line 90
+bool(false)
+
+Warning: flock(): Few::stream_lock is not implemented! in %s on line 91
+bool(false)
+bool(false)
+
+Warning: fseek(): Stream does not support seeking in %s on line 93
+int(-1)
+
+Warning: fseek(): Stream does not support seeking in %s on line 94
+int(-1)
+bool(false)
+bool(true)
+
+Warning: stream_set_blocking(): Few::stream_set_option is not implemented! in %s on line 97
+bool(false)
+-- a stream that answers too much
+
+Warning: fread(): Greedy::stream_read - read 5 bytes more data than requested (8197 read, 8192 max) - excess data will be lost in %s on line 111
+int(3)
+
+Warning: fwrite(): Greedy::stream_write wrote 2 bytes more data than requested (6 written, 4 max) in %s on line 112
+int(4)
+
+Warning: ftruncate(): Greedy::stream_truncate did not return a boolean! in %s on line 113
+bool(false)
+bool(false)
+flock(): Argument #2 ($operation) must be one of LOCK_SH, LOCK_EX, or LOCK_UN
+-- url wrappers and include
+bool(true)
+bool(false)
+bool(true)
+
+Warning: include(): remote:// wrapper is disabled in the server configuration by allow_url_include=0 in %s on line 124
+
+Warning: include(remote://inc.php): Failed to open stream: no suitable wrapper could be found in %s on line 124
+
+Warning: include(): Failed opening 'remote://inc.php' for inclusion (include_path='.:/usr/local/lib/php') in %s on line 124
+bool(false)
+
+Warning: require(): remote:// wrapper is disabled in the server configuration by allow_url_include=0 in %s on line 126
+
+Warning: require(remote://req.php): Failed to open stream: no suitable wrapper could be found in %s on line 126
+Error: Failed opening required 'remote://req.php' (include_path='.:/usr/local/lib/php')
+
+Warning: file_put_contents(): Exclusive locks may only be set for regular files in %s on line 130
+bool(false)

@@ -1,0 +1,217 @@
+bool(true)
+-- put
+__construct
+stream_open(mem://a, wb, 0) ctx=resource (stream-context)
+stream_write(12)
+stream_flush
+stream_close
+int(12)
+-- get
+__construct
+stream_open(mem://a, rb, 0) ctx=resource (stream-context)
+stream_stat
+stream_read(8192)
+stream_eof
+stream_read(8192)
+stream_eof
+stream_close
+string(12) "hello
+world
+"
+-- file
+__construct
+stream_open(mem://a, rb, 0) ctx=resource (stream-context)
+stream_stat
+stream_read(8192)
+stream_eof
+stream_read(8192)
+stream_eof
+stream_close
+array(2) {
+  [0]=>
+  string(5) "hello"
+  [1]=>
+  string(5) "world"
+}
+-- fopen r
+__construct
+stream_open(mem://a, r, 0) ctx=resource (stream-context)
+stream_read(8192)
+stream_eof
+string(6) "hello
+"
+int(6)
+bool(false)
+string(3) "wor"
+stream_seek(1, 0)
+stream_tell
+int(0)
+stream_read(8192)
+stream_eof
+string(4) "ello"
+stream_stat
+int(12)
+stream_lock(2)
+bool(true)
+stream_close
+bool(true)
+-- fopen r+
+__construct
+stream_open(mem://a, r+, 0) ctx=resource (stream-context)
+stream_write(2)
+int(2)
+stream_flush
+bool(true)
+stream_truncate(4)
+bool(true)
+stream_seek(0, 0)
+stream_tell
+bool(true)
+stream_stat
+stream_read(8192)
+stream_eof
+stream_read(8192)
+stream_eof
+string(4) "HEll"
+stream_close
+bool(true)
+-- missing
+__construct
+stream_open(mem://nope, r, 0) ctx=resource (stream-context)
+
+Warning: fopen(mem://nope): Failed to open stream: "Mem::stream_open" call failed in %s on line 75
+bool(false)
+__construct
+stream_open(mem://nope, rb, 0) ctx=resource (stream-context)
+
+Warning: file_get_contents(mem://nope): Failed to open stream: "Mem::stream_open" call failed in %s on line 76
+bool(false)
+-- stat
+__construct
+url_stat(mem://a, 6) ctx=null
+__construct
+url_stat(mem://d, 6) ctx=null
+__construct
+url_stat(mem://a, 4) ctx=null
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+int(4)
+int(1234567890)
+__construct
+url_stat(mem://nope, 6) ctx=null
+bool(false)
+__construct
+url_stat(mem://nope, 4) ctx=null
+
+Warning: filesize(): stat failed for mem://nope in %s on line 80
+bool(false)
+int(4)
+__construct
+stream_open(mem://b, w, 0) ctx=resource (stream-context)
+stream_eof
+stream_close
+string(10) "user-space"
+-- ops
+__construct
+rename(mem://a, mem://b)
+bool(true)
+__construct
+unlink(mem://b) ctx=resource (stream-context)
+bool(true)
+__construct
+unlink(mem://b) ctx=resource (stream-context)
+bool(false)
+__construct
+mkdir(mem://e, 700, 9)
+bool(true)
+__construct
+rmdir(mem://e, 8)
+bool(true)
+__construct
+stream_metadata(mem://t, 1, [5,6])
+bool(true)
+__construct
+stream_metadata(mem://t, 1, [])
+bool(true)
+__construct
+stream_metadata(mem://t, 6, 384)
+bool(true)
+-- dir
+__construct
+dir_opendir(mem://d, 0)
+dir_readdir
+dir_readdir
+string(1) "a"
+string(1) "b"
+dir_rewinddir
+dir_readdir
+string(1) "a"
+dir_closedir
+__construct
+dir_opendir(mem://d, 0)
+dir_readdir
+dir_readdir
+dir_readdir
+dir_readdir
+dir_closedir
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+__construct
+dir_opendir(mem://zz, 0)
+
+Warning: opendir(mem://zz): Failed to open directory: "Mem::dir_opendir" call failed in %s on line 99
+bool(false)
+-- include
+__construct
+stream_open(mem://code.php, rb, 65665) ctx=null
+stream_set_option(2, 0, 8192)
+stream_stat
+stream_read(8192)
+stream_eof
+stream_close
+included!
+int(42)
+-- copy
+__construct
+url_stat(mem://code.php, 0) ctx=resource (stream-context)
+__construct
+url_stat(mem://copy, 2) ctx=resource (stream-context)
+__construct
+stream_open(mem://code.php, rb, 0) ctx=resource (stream-context)
+__construct
+stream_open(mem://copy, wb, 0) ctx=resource (stream-context)
+stream_read(8192)
+stream_eof
+stream_write(36)
+stream_read(8192)
+stream_eof
+stream_close
+stream_flush
+stream_close
+bool(true)
+string(36) "<?php echo "included!\n"; return 42;"
+-- unregister
+bool(true)
+bool(false)
+bool(false)
+
+Warning: stream_wrapper_unregister(): Unable to unregister protocol mem:// in %s on line 110
+bool(false)
+
+Warning: stream_wrapper_restore(): mem:// never existed, nothing to restore in %s on line 111
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+
+Notice: stream_wrapper_restore(): file:// was never changed, nothing to restore in %s on line 115
+bool(true)
+int(0)

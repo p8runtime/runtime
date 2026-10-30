@@ -1339,7 +1339,7 @@ fn send(ctx: &mut dyn Ctx, func: &str, to: &Value, bytes: &[u8]) -> R {
                 return Err(ctx.throw("TypeError", format!("{func}(): supplied resource is not a valid stream resource")));
             }
             let mut stream = res.stream.borrow_mut();
-            Ok(Value::Bool(stream.write(ctx, bytes).is_some()))
+            Ok(Value::Bool(stream.write(ctx, bytes)?.is_some()))
         }
         other => {
             let path = other.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty);
