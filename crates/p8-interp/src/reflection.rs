@@ -1483,7 +1483,7 @@ struct PropHooks {
 
 fn prop_hooks(ctx: &mut dyn Ctx, this: &Object) -> Result<PropHooks, Throw> {
     let (class, name, slot) = held_property(ctx, this)?;
-    let (is_final, bits) = match slot.filter(|_| class.statics.get(name.as_bytes()).is_none()) {
+    let (is_final, bits) = match slot.filter(|_| !class.statics.contains_key(name.as_bytes())) {
         Some(i) => (class.properties[i].is_final, class.properties[i].hooks),
         None => (false, 0),
     };
