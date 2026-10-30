@@ -39,6 +39,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "fprintf", run: fprintf, by_ref: &[] },
     Builtin { name: "fpassthru", run: fpassthru, by_ref: &[] },
     Builtin { name: "stream_get_contents", run: stream_get_contents, by_ref: &[] },
+    Builtin { name: "stream_copy_to_stream", run: stream_copy_to_stream, by_ref: &[] },
     Builtin { name: "tmpfile", run: tmpfile, by_ref: &[] },
     Builtin { name: "file_get_contents", run: file_get_contents, by_ref: &[] },
     Builtin { name: "file_put_contents", run: file_put_contents, by_ref: &[] },
@@ -380,6 +381,37 @@ fn stream_get_contents(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
             _ => s.read_all(),
         }
     }))))
+}
+
+/// stream_copy_to_stream(resource $from, resource $to, ?int $length =
+/// null, int $offset = 0): int|false, the bytes copied.
+fn stream_copy_to_stream(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let from = stream_arg(ctx, "stream_copy_to_stream", args, 0)?;
+    let to = stream_arg(ctx, "stream_copy_to_stream", args, 1)?;
+    let length = match args.get(2).map(Value::deref) {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.to_int()),
+    };
+    let offset = if args.len() > 3 { arg(args, 3).to_int() } else { 0 };
+    let bytes = with_stream(&from, |s| {
+        if offset > 0 && !s.seek(offset, 0) {
+            return None;
+        }
+        Some(match length {
+            Some(n) if n >= 0 => s.read(n as usize),
+            _ => s.read_all(),
+        })
+    });
+    let Some(bytes) = bytes else {
+        ctx.warn(&format!("stream_copy_to_stream(): Failed to seek to position {offset} in the stream"));
+        return Ok(Value::Bool(false));
+    };
+    if bytes.is_empty() {
+        return Ok(Value::Int(0));
+    }
+    let r = resource(&to).expect("a stream resource");
+    let written = r.stream.borrow_mut().write(ctx, &bytes);
+    Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
 }
 
 fn tmpfile(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {

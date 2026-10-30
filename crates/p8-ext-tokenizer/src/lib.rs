@@ -33,6 +33,8 @@ fn register(registry: &mut Registry) {
 static BUILTINS: &[Builtin] = &[
     Builtin { name: "token_get_all", run: token_get_all, by_ref: &[] },
     Builtin { name: "token_name", run: token_name, by_ref: &[] },
+    // (ext/standard's in PHP; it is the lexer's work.)
+    Builtin { name: "php_strip_whitespace", run: php_strip_whitespace, by_ref: &[] },
 ];
 
 static CLASSES: &[ClassSpec] = &[ClassSpec {
@@ -420,6 +422,55 @@ fn token_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         let _ = out.push(v);
     }
     Ok(Value::Array(Rc::new(out)))
+}
+
+/// php_strip_whitespace(string $filename): the file's code without its
+/// comments, each run of whitespace one space (zend_strip).
+fn php_strip_whitespace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let path = code_arg(args);
+    let src = match std::fs::read(String::from_utf8_lossy(path.as_bytes()).as_ref()) {
+        Ok(src) => src,
+        Err(e) => {
+            let reason = if e.kind() == std::io::ErrorKind::NotFound { "No such file or directory".to_string() } else { e.to_string() };
+            ctx.warn(&format!("php_strip_whitespace({}): Failed to open stream: {reason}", String::from_utf8_lossy(path.as_bytes())));
+            return Ok(Value::Str(PhpStr::empty()));
+        }
+    };
+    let (whitespace, comment, doc_comment, end_heredoc) = (id("T_WHITESPACE"), id("T_COMMENT"), id("T_DOC_COMMENT"), id("T_END_HEREDOC"));
+    let toks = tokens(&src, false);
+    let mut out = Vec::with_capacity(src.len());
+    let mut prev_space = false;
+    let mut i = 0;
+    while i < toks.len() {
+        let t = &toks[i];
+        i += 1;
+        match t.tok {
+            Tok::Id(w) if w == whitespace => {
+                if !prev_space {
+                    out.push(b' ');
+                    prev_space = true;
+                }
+                continue;
+            }
+            Tok::Id(c) if c == comment || c == doc_comment => continue,
+            Tok::Id(h) if h == end_heredoc => {
+                out.extend_from_slice(&src[t.start..t.end]);
+                // The character after it (`;` or a newline) is kept, then a newline.
+                if let Some(next) = toks.get(i) {
+                    i += 1;
+                    if next.tok != Tok::Id(whitespace) {
+                        out.extend_from_slice(&src[next.start..next.end]);
+                    }
+                }
+                out.push(b'\n');
+                prev_space = true;
+                continue;
+            }
+            _ => out.extend_from_slice(&src[t.start..t.end]),
+        }
+        prev_space = false;
+    }
+    Ok(Value::Str(PhpStr::new(out)))
 }
 
 /// TOKEN_PARSE: the code must parse (a ParseError if not); whether it is set.

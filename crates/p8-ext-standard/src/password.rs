@@ -23,6 +23,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "password_needs_rehash", run: password_needs_rehash, by_ref: &[] },
     Builtin { name: "password_get_info", run: password_get_info, by_ref: &[] },
     Builtin { name: "password_algos", run: password_algos, by_ref: &[] },
+    Builtin { name: "crypt", run: crypt_fn, by_ref: &[] },
 ];
 
 const BCRYPT_COST: i64 = 12;
@@ -260,16 +261,162 @@ fn bcrypt(key: &[u8], setting: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// php_crypt() as password_verify() falls back on it: bcrypt settings only
-/// (p8's crypt() is not there yet); "*0" ("*1" after "*0") on failure.
+/// php_crypt(): bcrypt ($2y$ and kin), SHA-512 ($6$), SHA-256 ($5$) and
+/// MD5 ($1$) settings; "*0" ("*1" after "*0") on failure. The traditional
+/// and extended DES settings are not implemented (they fail).
 fn crypt(key: &[u8], salt: &[u8]) -> Vec<u8> {
     let key = &key[..key.iter().position(|&c| c == 0).unwrap_or(key.len())];
-    if salt.starts_with(b"$2")
-        && let Some(h) = bcrypt(key, salt)
-    {
-        return h;
+    let made = if salt.starts_with(b"$2") {
+        bcrypt(key, salt)
+    } else if let Some(rest) = salt.strip_prefix(b"$6$") {
+        sha_crypt::<sha2::Sha512>(key, rest, b"$6$", &SHA512_ORDER)
+    } else if let Some(rest) = salt.strip_prefix(b"$5$") {
+        sha_crypt::<sha2::Sha256>(key, rest, b"$5$", &SHA256_ORDER)
+    } else if let Some(rest) = salt.strip_prefix(b"$1$") {
+        Some(md5_crypt(key, rest))
+    } else {
+        None
+    };
+    match made {
+        Some(h) => h,
+        None if salt.starts_with(b"*0") => b"*1".to_vec(),
+        None => b"*0".to_vec(),
     }
-    if salt.starts_with(b"*0") { b"*1".to_vec() } else { b"*0".to_vec() }
+}
+
+/// crypt(string $string, string $salt): string
+fn crypt_fn(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let (key, salt) = (str_arg(args, 0), str_arg(args, 1));
+    Ok(Value::Str(PhpStr::new(crypt(key.as_bytes(), salt.as_bytes()))))
+}
+
+const ITOA64: &[u8; 64] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// crypt's base64: `n` characters of the 24 bits b2 b1 b0, low bits first.
+fn b64_from_24bit(out: &mut Vec<u8>, b2: u8, b1: u8, b0: u8, n: usize) {
+    let mut w = (u32::from(b2) << 16) | (u32::from(b1) << 8) | u32::from(b0);
+    for _ in 0..n {
+        out.push(ITOA64[(w & 0x3f) as usize]);
+        w >>= 6;
+    }
+}
+
+/// The byte triples the SHA-crypt output encodes, in order; the last is
+/// written with fewer characters.
+static SHA256_ORDER: [(usize, usize, usize); 11] =
+    [(0, 10, 20), (21, 1, 11), (12, 22, 2), (3, 13, 23), (24, 4, 14), (15, 25, 5), (6, 16, 26), (27, 7, 17), (18, 28, 8), (9, 19, 29), (99, 31, 30)];
+static SHA512_ORDER: [(usize, usize, usize); 22] = [
+    (0, 21, 42), (22, 43, 1), (44, 2, 23), (3, 24, 45), (25, 46, 4), (47, 5, 26), (6, 27, 48), (28, 49, 7), (50, 8, 29), (9, 30, 51), (31, 52, 10),
+    (53, 11, 32), (12, 33, 54), (34, 55, 13), (56, 14, 35), (15, 36, 57), (37, 58, 16), (59, 17, 38), (18, 39, 60), (40, 61, 19), (62, 20, 41), (99, 99, 63),
+];
+
+/// Bytes of `block` repeated to `len` bytes.
+fn repeated(block: &[u8], len: usize) -> Vec<u8> {
+    block.iter().copied().cycle().take(len).collect()
+}
+
+/// Ulrich Drepper's SHA-crypt ($5$ / $6$): `setting` is what follows the
+/// prefix (`rounds=N$` then up to 16 salt bytes). PHP refuses rounds
+/// outside 1000..=999999999.
+fn sha_crypt<D: sha2::Digest>(key: &[u8], setting: &[u8], prefix: &[u8], order: &[(usize, usize, usize)]) -> Option<Vec<u8>> {
+    let digest = |parts: &[&[u8]]| -> Vec<u8> {
+        let mut d = D::new();
+        for p in parts {
+            d.update(p);
+        }
+        d.finalize().to_vec()
+    };
+    let (rounds, custom, rest) = match setting.strip_prefix(b"rounds=") {
+        Some(r) => {
+            let end = r.iter().position(|&c| c == b'$')?;
+            let n: u64 = std::str::from_utf8(&r[..end]).ok()?.parse().ok()?;
+            if !(1000..=999_999_999).contains(&n) {
+                return None;
+            }
+            (n, true, &r[end + 1..])
+        }
+        None => (5000, false, setting),
+    };
+    let salt_end = rest.iter().position(|&c| c == b'$').unwrap_or(rest.len()).min(16);
+    let salt = &rest[..salt_end];
+    let b = digest(&[key, salt, key]);
+    let size = b.len();
+    let mut a = D::new();
+    a.update(key);
+    a.update(salt);
+    a.update(repeated(&b, key.len()));
+    let mut n = key.len();
+    while n > 0 {
+        a.update(if n & 1 != 0 { &b[..] } else { key });
+        n >>= 1;
+    }
+    let a = a.finalize().to_vec();
+    let p = repeated(&digest(&[&repeated(key, key.len() * key.len())]), key.len());
+    let s = repeated(&digest(&[&repeated(salt, salt.len() * (16 + usize::from(a[0])))]), salt.len());
+    let mut c = a;
+    for i in 0..rounds {
+        let mut d = D::new();
+        d.update(if i & 1 != 0 { &p[..] } else { &c[..] });
+        if i % 3 != 0 {
+            d.update(&s);
+        }
+        if i % 7 != 0 {
+            d.update(&p);
+        }
+        d.update(if i & 1 != 0 { &c[..] } else { &p[..] });
+        c = d.finalize().to_vec();
+    }
+    let mut out = prefix.to_vec();
+    if custom {
+        out.extend_from_slice(format!("rounds={rounds}$").as_bytes());
+    }
+    out.extend_from_slice(salt);
+    out.push(b'$');
+    let byte = |i: usize| if i < size { c[i] } else { 0 };
+    for (k, &(x, y, z)) in order.iter().enumerate() {
+        let n = if k + 1 < order.len() { 4 } else if size == 64 { 2 } else { 3 };
+        b64_from_24bit(&mut out, byte(x), byte(y), byte(z), n);
+    }
+    Some(out)
+}
+
+/// Poul-Henning Kamp's MD5-crypt ($1$): up to 8 salt bytes.
+fn md5_crypt(key: &[u8], setting: &[u8]) -> Vec<u8> {
+    use sha2::Digest;
+    let salt_end = setting.iter().position(|&c| c == b'$').unwrap_or(setting.len()).min(8);
+    let salt = &setting[..salt_end];
+    let alt = md5::Md5::new().chain_update(key).chain_update(salt).chain_update(key).finalize();
+    let mut ctx = md5::Md5::new();
+    ctx.update(key);
+    ctx.update(b"$1$");
+    ctx.update(salt);
+    ctx.update(repeated(&alt, key.len()));
+    let mut n = key.len();
+    while n > 0 {
+        ctx.update(if n & 1 != 0 { &[0u8][..] } else { &key[..1] });
+        n >>= 1;
+    }
+    let mut fin = ctx.finalize().to_vec();
+    for i in 0..1000 {
+        let mut d = md5::Md5::new();
+        d.update(if i & 1 != 0 { key } else { &fin[..] });
+        if i % 3 != 0 {
+            d.update(salt);
+        }
+        if i % 7 != 0 {
+            d.update(key);
+        }
+        d.update(if i & 1 != 0 { &fin[..] } else { key });
+        fin = d.finalize().to_vec();
+    }
+    let mut out = b"$1$".to_vec();
+    out.extend_from_slice(salt);
+    out.push(b'$');
+    for (x, y, z) in [(0, 6, 12), (1, 7, 13), (2, 8, 14), (3, 9, 15), (4, 10, 5)] {
+        b64_from_24bit(&mut out, fin[x], fin[y], fin[z], 4);
+    }
+    b64_from_24bit(&mut out, 0, 0, fin[11], 2);
+    out
 }
 
 fn argon2_params(hash: &[u8]) -> Option<(i64, i64, i64, i64)> {

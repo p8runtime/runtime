@@ -1,0 +1,17 @@
+int(4)
+int(4)
+int(0)
+string(8) "23456789"
+int(3232235777)
+int(4294967295)
+bool(false)
+bool(false)
+bool(false)
+string(11) "192.168.1.1"
+string(15) "255.255.255.255"
+string(7) "0.0.0.0"
+string(87) "<?php
+ function f( $x ) { return $x + 1; } $s = <<<EOT
+  keep   this
+  EOT;
+echo f(1); "

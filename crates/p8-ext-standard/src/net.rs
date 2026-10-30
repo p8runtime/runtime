@@ -14,6 +14,8 @@ use std::rc::Rc;
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "gethostname", run: gethostname, by_ref: &[] },
     Builtin { name: "inet_pton", run: inet_pton, by_ref: &[] },
+    Builtin { name: "ip2long", run: ip2long, by_ref: &[] },
+    Builtin { name: "long2ip", run: long2ip, by_ref: &[] },
     Builtin { name: "inet_ntop", run: inet_ntop, by_ref: &[] },
     Builtin { name: "gethostbyname", run: gethostbyname, by_ref: &[] },
     Builtin { name: "gethostbynamel", run: gethostbynamel, by_ref: &[] },
@@ -154,4 +156,19 @@ fn ipv6_text(b: &[u8]) -> String {
         i += 1;
     }
     out
+}
+
+/// ip2long(string $ip): int|false: a dotted IPv4 address as a number.
+fn ip2long(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let ip = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    Ok(match std::str::from_utf8(ip.as_bytes()).ok().and_then(|s| s.parse::<std::net::Ipv4Addr>().ok()) {
+        Some(a) => Value::Int(i64::from(u32::from(a))),
+        None => Value::Bool(false),
+    })
+}
+
+/// long2ip(int $ip): string: the low 32 bits as a dotted IPv4 address.
+fn long2ip(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let n = arg(args, 0).to_int() as u32;
+    Ok(Value::Str(PhpStr::from(std::net::Ipv4Addr::from(n).to_string().as_str())))
 }
