@@ -1,0 +1,48 @@
+== exception mode (default)
+PDOException | SQLSTATE[HY000]: General error: 1 no such table: nope | 'HY000' | ["HY000",1,"no such table: nope"]
+PDOException | SQLSTATE[HY000]: General error: 1 no such table: nope | 'HY000' | ["HY000",1,"no such table: nope"]
+PDOException | SQLSTATE[HY000]: General error: 1 no such table: nope | 'HY000' | ["HY000",1,"no such table: nope"]
+PDOException | SQLSTATE[23000]: Integrity constraint violation: 19 UNIQUE constraint failed: u.email | '23000' | ["23000",19,"UNIQUE constraint failed: u.email"]
+PDOException | SQLSTATE[23000]: Integrity constraint violation: 19 NOT NULL constraint failed: u.email | '23000' | ["23000",19,"NOT NULL constraint failed: u.email"]
+PDOException | SQLSTATE[23000]: Integrity constraint violation: 19 UNIQUE constraint failed: u.email | '23000' | ["23000",19,"UNIQUE constraint failed: u.email"]
+string(5) "23000"
+string(5) "23000"
+int(19)
+== bad parameter number
+PDOException | SQLSTATE[HY000]: General error: 25 column index out of range | 'HY000' | ["HY000",25,"column index out of range"]
+ValueError: PDOStatement::bindValue(): Argument #1 ($param) must be greater than or equal to 1
+PDOException | SQLSTATE[HY000]: General error: 25 column index out of range | 'HY000' | ["HY000",25,"column index out of range"]
+== warning mode
+
+Warning: PDO::exec(): SQLSTATE[HY000]: General error: 1 no such table: nope in %s on line 29
+bool(false)
+string(5) "HY000"
+
+Warning: PDO::query(): SQLSTATE[HY000]: General error: 1 no such table: nope in %s on line 31
+bool(false)
+
+Warning: PDOStatement::execute(): SQLSTATE[23000]: Integrity constraint violation: 19 UNIQUE constraint failed: u.email in %s on line 33
+bool(false)
+string(5) "23000"
+== silent mode
+bool(false)
+string(5) "HY000"
+string(5) "HY000"
+int(1)
+bool(false)
+string(5) "HY000"
+== setAttribute checks
+Error mode must be one of the PDO::ERRMODE_* constants
+Case folding mode must be one of the PDO::CASE_* constants
+Attribute value must be of type int for selected attribute, string given
+== connection errors
+PDOException | could not find driver | 0 | null
+PDOException | PDO::__construct(): Argument #1 ($dsn) must be a valid data source name | 0 | null
+PDOException | SQLSTATE[HY000] [14] unable to open database file | 14 | ["HY000",14,"unable to open database file"]
+== misc
+PDOException | There is no active transaction | 0 | null
+PDOException | There is no active transaction | 0 | null
+PDOException | There is already an active transaction | 0 | null
+PDO::prepare(): Argument #1 ($query) must not be empty
+PDO::exec(): Argument #1 ($statement) must not be empty
+PDOException | SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute | 'IM001' | ["IM001",0]

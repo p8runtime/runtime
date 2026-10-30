@@ -53,6 +53,9 @@ pub mod extensions {
     pub use p8_ext_zip::EXTENSION as ZIP;
     pub use p8_ext_fileinfo::EXTENSION as FILEINFO;
     pub use p8_ext_session::EXTENSION as SESSION;
+    /// PDO's core; register it before the drivers.
+    pub use p8_ext_pdo::EXTENSION as PDO;
+    pub use p8_ext_pdo_sqlite::EXTENSION as PDO_SQLITE;
     /// What the built-in web server adds (register it after STANDARD).
     pub use p8_ext_standard::server::EXTENSION as SERVER;
 }
