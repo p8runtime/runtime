@@ -1146,6 +1146,25 @@ fn rpr_set_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     Ok(Value::Null)
 }
 
+/// ReflectionProperty::getRawValue / setRawValue: the stored value,
+/// bypassing hooks (as getValue / setValue already read and write slots);
+/// not for static properties.
+fn rpr_get_raw_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let (class, name, _) = held_property(ctx, this)?;
+    if class.statics.contains_key(name.as_bytes()) {
+        return Err(fail(ctx, "May not use getRawValue on static properties".into()));
+    }
+    rpr_get_value(ctx, this, args)
+}
+
+fn rpr_set_raw_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let (class, name, _) = held_property(ctx, this)?;
+    if class.statics.contains_key(name.as_bytes()) {
+        return Err(fail(ctx, "May not use setRawValue on static properties".into()));
+    }
+    rpr_set_value(ctx, this, args)
+}
+
 // ---- Lazy objects (PHP 8.4) ----
 
 /// `$object` argument `i` of a lazy-object method: an instance of the class.
@@ -2083,6 +2102,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getName", Some(Native::Method(rpr_get_name))),
             ("getValue", Some(Native::Method(rpr_get_value))),
             ("setValue", Some(Native::Method(rpr_set_value))),
+            ("getRawValue", Some(Native::Method(rpr_get_raw_value))),
+            ("setRawValue", Some(Native::Method(rpr_set_raw_value))),
             ("isInitialized", Some(Native::Method(rpr_is_initialized))),
             ("skipLazyInitialization", Some(Native::Method(rpr_skip_lazy_initialization))),
             ("setRawValueWithoutLazyInitialization", Some(Native::Method(rpr_set_raw_value_without_lazy_initialization))),
