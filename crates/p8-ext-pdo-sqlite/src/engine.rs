@@ -62,9 +62,10 @@ impl Engine {
         if readonly {
             flags |= OpenFlags::ReadOnly;
         }
-        // SQLite has generated columns and views; Turso keeps them behind
-        // options (an error otherwise: "Generated columns require ...").
-        let features = DatabaseOpts::default().with_generated_columns(true).with_views(true);
+        // SQLite has generated columns, views and ATTACH; Turso keeps them
+        // behind options (an error otherwise: "Generated columns require
+        // ...", "ATTACH is an experimental feature").
+        let features = DatabaseOpts::default().with_generated_columns(true).with_views(true).with_attach(true);
         let db = Database::open(io, path, OpenOptions::new(Arc::new(SqliteDialect)).flags(flags).db_opts(features)).map_err(|e| map_error(&e))?;
         let conn = db.connect().map_err(|e| map_error(&e))?;
         Ok(Engine { _db: db, conn })
@@ -72,7 +73,7 @@ impl Engine {
 
     /// Run SQL that returns no rows (one or more statements); the rows changed.
     pub fn exec(&self, sql: &str) -> Result<i64, EngineError> {
-        self.conn.prepare_execute_batch(&main_schema_dropped(sql)).map_err(|e| map_error(&e))?;
+        self.conn.prepare_execute_batch(main_schema_dropped(sql)).map_err(|e| map_error(&e))?;
         Ok(self.conn.changes())
     }
 
@@ -175,20 +176,6 @@ fn main_schema_dropped(sql: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::main_schema_dropped;
-
-    #[test]
-    fn drops_only_a_trailing_main_literal() {
-        assert_eq!(main_schema_dropped("select * from pragma_table_xinfo('t', 'main') order by cid"), "select * from pragma_table_xinfo('t') order by cid");
-        assert_eq!(main_schema_dropped("select * from PRAGMA_index_list( 'a''b' ,  'MAIN' )"), "select * from PRAGMA_index_list( 'a''b' )");
-        assert_eq!(main_schema_dropped("select * from pragma_table_info('t', 'other')"), "select * from pragma_table_info('t', 'other')");
-        assert_eq!(main_schema_dropped("select 'pragma_x(1, ''main'')'"), "select 'pragma_x(1, ''main'')'");
-        assert_eq!(main_schema_dropped("select * from pragma_table_info('t')"), "select * from pragma_table_info('t')");
-        assert_eq!(main_schema_dropped("select my_pragma_x('a', 'main')"), "select my_pragma_x('a', 'main')");
-    }
-}
 
 pub struct Prepared {
     stmt: turso_core::Statement,
@@ -288,5 +275,20 @@ impl Prepared {
     /// Whether the statement leaves the database alone.
     pub fn readonly(&self) -> bool {
         self.stmt.get_program().sql.trim_start().get(..6).is_some_and(|s| s.eq_ignore_ascii_case("select"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::main_schema_dropped;
+
+    #[test]
+    fn drops_only_a_trailing_main_literal() {
+        assert_eq!(main_schema_dropped("select * from pragma_table_xinfo('t', 'main') order by cid"), "select * from pragma_table_xinfo('t') order by cid");
+        assert_eq!(main_schema_dropped("select * from PRAGMA_index_list( 'a''b' ,  'MAIN' )"), "select * from PRAGMA_index_list( 'a''b' )");
+        assert_eq!(main_schema_dropped("select * from pragma_table_info('t', 'other')"), "select * from pragma_table_info('t', 'other')");
+        assert_eq!(main_schema_dropped("select 'pragma_x(1, ''main'')'"), "select 'pragma_x(1, ''main'')'");
+        assert_eq!(main_schema_dropped("select * from pragma_table_info('t')"), "select * from pragma_table_info('t')");
+        assert_eq!(main_schema_dropped("select my_pragma_x('a', 'main')"), "select my_pragma_x('a', 'main')");
     }
 }
