@@ -989,7 +989,8 @@ fn default_constant_value(ctx: &mut dyn Ctx, class: Option<&Rc<Class>>, name: &[
         let owner = match owner.to_ascii_lowercase().as_slice() {
             b"self" | b"static" => class.cloned(),
             b"parent" => class.and_then(|c| c.parent.clone()),
-            _ => ctx.class(owner),
+            // Autoloaded if need be, as evaluating the default does.
+            _ => ctx.class_load(owner)?,
         };
         let Some(owner) = owner else {
             return Err(missing(ctx, format!("Class \"{}\" not found", String::from_utf8_lossy(&name[..at]))));
