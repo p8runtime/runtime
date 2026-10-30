@@ -230,6 +230,21 @@ impl FnBuilder<'_> {
 
     /// Point each `goto` at its label: one in the same loops or outside
     /// them (never into a loop or switch).
+    /// Each kind of register is numbered in 14 bits and the frame in 16: a
+    /// function past that cannot be compiled (an error, never registers
+    /// silently shared).
+    fn check_size(&self) -> Result<()> {
+        let limit = 1usize << KIND_SHIFT;
+        let (cvs, consts, temps) = (self.cvs.len(), self.consts.len(), self.max_temps);
+        if cvs >= limit || consts >= limit || temps >= limit || cvs + consts + temps > usize::from(u16::MAX) {
+            return Err(CompileError {
+                message: format!("p8 cannot compile a function this large yet ({cvs} variables, {consts} constants, {temps} temporaries; at most {} each)", limit - 1),
+                line: self.decl_line,
+            });
+        }
+        Ok(())
+    }
+
     fn resolve_gotos(&mut self) -> Result<()> {
         for g in std::mem::take(&mut self.gotos) {
             let Some((target, loops)) = self.labels.get(&g.label) else {
@@ -1081,6 +1096,7 @@ impl<'src> Compiler<'src> {
             f.emit(Instr::Return { src: one });
         }
         f.resolve_gotos()?;
+        f.check_size()?;
         let main = Arc::new(f.finish(self.file.clone()));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
@@ -1975,6 +1991,7 @@ impl<'src> Compiler<'src> {
             }
         }
         f.resolve_gotos()?;
+        f.check_size()?;
         Ok((f.finish(self.file.clone()), captures))
     }
 
@@ -2496,21 +2513,41 @@ impl<'src> Compiler<'src> {
         Ok((Frozen::Null, Some(Arc::new(r?.0))))
     }
 
-    /// Whether an array literal's keys and values are all literals (or such
-    /// arrays), with no spread or reference. A float key is left out: its
-    /// conversion to an int warns each time the array is made.
-    fn literal_array(&self, items: &[p8_syntax::ast::ArrayItem]) -> bool {
-        let literal = |c: &Self, e: &Expr| match e {
-            Expr::Array { items, .. } => c.literal_array(items),
-            other => c.literal(other).is_some(),
-        };
-        let key = |c: &Self, k: &Expr| matches!(c.literal(k), Some(v) if !matches!(v, Frozen::Float(_)));
-        items.iter().all(|i| !i.unpack && !i.by_ref && i.key.is_none_or(|k| key(self, k)) && literal(self, i.value))
+    /// `__DIR__`: the file's directory.
+    fn dir(&self) -> Vec<u8> {
+        match self.file.rfind('/') {
+            Some(0) => b"/".to_vec(),
+            Some(i) => self.file.as_bytes()[..i].to_vec(),
+            None => b".".to_vec(),
+        }
+    }
+
+    /// Whether `e` is known at compile time throughout: literals, the
+    /// file's magic constants, and arrays, concatenations and signs of
+    /// those (what const_value folds). An array of such is one constant
+    /// (Composer's class map: `__DIR__ . '/..' . '/x.php'`, 15,000 of them).
+    fn foldable(&self, e: &Expr) -> bool {
+        match e {
+            Expr::MagicConst { kind: MagicConstKind::File | MagicConstKind::Dir | MagicConstKind::Line | MagicConstKind::Namespace, .. } => true,
+            Expr::Binary { left, op: BinaryOp::Concat, right, .. } => self.foldable(left) && self.foldable(right),
+            Expr::Unary { op: UnaryOp::Minus | UnaryOp::Plus, expr, .. } => self.literal(expr).is_some(),
+            Expr::Array { items, .. } => items.iter().all(|i| {
+                !i.unpack && !i.by_ref && i.key.is_none_or(|k| matches!(self.literal(k), Some(v) if !matches!(v, Frozen::Float(_)))) && self.foldable(i.value)
+            }),
+            other => self.literal(other).is_some(),
+        }
     }
 
     fn const_value(&self, e: &Expr) -> Result<Frozen> {
         if let Some(v) = self.literal(e) {
             return Ok(v);
+        }
+        match e {
+            Expr::MagicConst { kind: MagicConstKind::File, .. } => return Ok(Frozen::Str(Text::from(self.file.as_bytes()))),
+            Expr::MagicConst { kind: MagicConstKind::Dir, .. } => return Ok(Frozen::Str(Text::from(self.dir().as_slice()))),
+            Expr::MagicConst { kind: MagicConstKind::Line, span } => return Ok(Frozen::Int(i64::from(self.line(*span)))),
+            Expr::MagicConst { kind: MagicConstKind::Namespace, .. } => return Ok(Frozen::Str(Text::from(self.ns.as_slice()))),
+            _ => {}
         }
         match e {
             Expr::Unary { op: op @ (UnaryOp::Minus | UnaryOp::Plus), expr, .. } => match (op, self.const_value(expr)?) {
@@ -3740,10 +3777,11 @@ impl<'src> Compiler<'src> {
                 }
                 dst
             }
-            // An array of literals only (`['a' => 1, 'b' => [2, 3]]`) is one
-            // constant, as PHP folds it: a large one (a list of 100,000
-            // words) takes a single register.
-            Expr::Array { items, .. } if !items.is_empty() && self.literal_array(items) => {
+            // An array known at compile time (`['a' => 1, 'b' => [2, 3]]`,
+            // `[__DIR__ . '/x.php']`) is one constant, as PHP folds it: a
+            // large one (100,000 words, a 15,000-class map) takes a single
+            // register.
+            Expr::Array { items, .. } if !items.is_empty() && self.foldable(e) && self.const_value(e).is_ok() => {
                 let value = self.const_value(e)?;
                 f.constant(value)
             }
@@ -3835,11 +3873,7 @@ impl<'src> Compiler<'src> {
                 let text: Vec<u8> = match kind {
                     MagicConstKind::Line => return Ok(f.constant(Frozen::Int(i64::from(self.line(*span))))),
                     MagicConstKind::File => self.file.as_bytes().to_vec(),
-                    MagicConstKind::Dir => match self.file.rfind('/') {
-                        Some(0) => b"/".to_vec(),
-                        Some(i) => self.file.as_bytes()[..i].to_vec(),
-                        None => b".".to_vec(),
-                    },
+                    MagicConstKind::Dir => self.dir(),
                     MagicConstKind::Method if f.name.as_bytes() != b"{main}" => match &f.class {
                         Some(c) => [c.as_bytes(), b"::", f.name.as_bytes()].concat(),
                         // Outside a class, __METHOD__ is the function's name.

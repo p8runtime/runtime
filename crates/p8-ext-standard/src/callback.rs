@@ -20,6 +20,10 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_map", run: array_map, by_ref: &[] },
     Builtin { name: "array_filter", run: array_filter, by_ref: &[] },
     Builtin { name: "array_reduce", run: array_reduce, by_ref: &[] },
+    Builtin { name: "array_find", run: array_find, by_ref: &[] },
+    Builtin { name: "array_find_key", run: array_find_key, by_ref: &[] },
+    Builtin { name: "array_any", run: array_any, by_ref: &[] },
+    Builtin { name: "array_all", run: array_all, by_ref: &[] },
     Builtin { name: "array_walk", run: array_walk, by_ref: &[0] },
     Builtin { name: "usort", run: usort, by_ref: &[0] },
     Builtin { name: "array_udiff", run: array_udiff, by_ref: &[] },
@@ -146,6 +150,47 @@ fn array_filter(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
     }
     Ok(Value::Array(Rc::new(out)))
+}
+
+/// The first entry for which `callback($value, $key)` is true (PHP 8.4's
+/// array_find family; ext/standard/array.c php_array_find).
+fn find_entry(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Option<(Value, Value)>, Throw> {
+    let a = array(args, 0);
+    let callback = arg(args, 1);
+    for (k, v) in a.iter() {
+        let (key, value) = (k.to_value(), v.deref());
+        if ctx.call(&callback, &mut [value.clone(), key.clone()])?.to_bool() {
+            return Ok(Some((key, value)));
+        }
+    }
+    Ok(None)
+}
+
+/// array_find(array $array, callable $callback): the first value the callback accepts, or null.
+fn array_find(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(find_entry(ctx, args)?.map_or(Value::Null, |(_, v)| v))
+}
+
+/// array_find_key(array $array, callable $callback): its key, or null.
+fn array_find_key(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(find_entry(ctx, args)?.map_or(Value::Null, |(k, _)| k))
+}
+
+/// array_any(array $array, callable $callback): whether the callback accepts any entry.
+fn array_any(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(find_entry(ctx, args)?.is_some()))
+}
+
+/// array_all(array $array, callable $callback): whether it accepts every entry (true for none).
+fn array_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let a = array(args, 0);
+    let callback = arg(args, 1);
+    for (k, v) in a.iter() {
+        if !ctx.call(&callback, &mut [v.deref(), k.to_value()])?.to_bool() {
+            return Ok(Value::Bool(false));
+        }
+    }
+    Ok(Value::Bool(true))
 }
 
 /// array_reduce(array $array, callable $callback, mixed $initial = null)

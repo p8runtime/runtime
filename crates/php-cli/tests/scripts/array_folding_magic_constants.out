@@ -1,0 +1,16 @@
+array(3) {
+  [0]=>
+  int(15000)
+  [1]=>
+  bool(true)
+  [2]=>
+  string(5) "7.php"
+}
+array(3) {
+  [0]=>
+  int(11)
+  [1]=>
+  int(-1)
+  [2]=>
+  string(3) "ab3"
+}

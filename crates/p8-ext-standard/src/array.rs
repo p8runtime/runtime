@@ -516,7 +516,25 @@ fn order(flags: i64) -> impl Fn(&Value, &Value) -> Ordering {
             if flags & 8 != 0 { x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()) } else { x.cmp(&y) }
         }
         6 => crate::string2::natural(&text(a), &text(b), flags & 8 != 0),
-        _ => a.deref().compare(&b.deref()).unwrap_or(Ordering::Equal),
+        _ => regular(&a.deref(), &b.deref()),
+    }
+}
+
+/// SORT_REGULAR's order (php_array_data_compare_unstable_i): zend_compare,
+/// where values that do not compare are 1 (ZEND_UNCOMPARABLE), except
+/// that enum cases group by identity and go after other values, so that
+/// array_unique finds equal cases next to each other (GH-9775).
+fn regular(a: &Value, b: &Value) -> Ordering {
+    use p8_runtime::object::CLASS_ENUM;
+    match a.compare(b) {
+        Some(o) => o,
+        None => match (a, b) {
+            (Value::Object(x), Value::Object(y)) if y.class.flags & CLASS_ENUM != 0 && x.class.flags & CLASS_ENUM != 0 => {
+                (Rc::as_ptr(x) as usize).cmp(&(Rc::as_ptr(y) as usize))
+            }
+            (_, Value::Object(y)) if y.class.flags & CLASS_ENUM != 0 => Ordering::Less,
+            _ => Ordering::Greater,
+        },
     }
 }
 
