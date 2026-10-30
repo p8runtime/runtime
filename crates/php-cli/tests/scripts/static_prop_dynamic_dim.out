@@ -1,0 +1,23 @@
+array(2) {
+  [0]=>
+  array(5) {
+    ["x"]=>
+    string(5) "final"
+    [0]=>
+    int(1)
+    ["y"]=>
+    int(2)
+    ["z"]=>
+    int(3)
+    ["w"]=>
+    int(4)
+  }
+  [1]=>
+  array(2) {
+    ["x"]=>
+    string(10) "deprecated"
+    [0]=>
+    int(1)
+  }
+}
+int(5)

@@ -827,7 +827,12 @@ fn dim_root_is_static(c: &Compiler, e: &Expr) -> bool {
     while let Expr::ArrayDimFetch { array, .. } = cur {
         cur = array;
     }
-    matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if c.text(*name).starts_with(b"$"))
+    match cur {
+        Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } => c.text(*name).starts_with(b"$"),
+        // `C::${expr}`: named when it runs.
+        Expr::ClassConstFetch { constant: Expr::IndirectVariable { .. }, .. } => true,
+        _ => false,
+    }
 }
 
 /// Whether a hook's source uses its property's stored value: `$this->name`,
@@ -2854,6 +2859,13 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
                 Ok((dst, false))
             }
+            Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                let class = self.class_ref(f, class)?;
+                let name = self.expr(f, name)?;
+                let dst = f.temp();
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
+                Ok((dst, false))
+            }
             Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => {
                 let r = self.expr(f, e)?;
                 // Mark the call (the last instruction) as wanting a reference.
@@ -3219,7 +3231,7 @@ impl<'src> Compiler<'src> {
         {
             cur = array;
         }
-        if matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$")) {
+        if dim_root_is_static(self, cur) {
             f.emit(Instr::Free { reg: root });
         }
     }
@@ -3427,6 +3439,14 @@ impl<'src> Compiler<'src> {
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let dst = f.temp();
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
+                Ok(dst)
+            }
+            // `C::${expr}[k] = v`: the static property named when it runs.
+            Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                let class = self.class_ref(f, class)?;
+                let name = self.expr(f, name)?;
                 let dst = f.temp();
                 f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
                 Ok(dst)
