@@ -1,0 +1,31 @@
+zip            Zip archive data, at least v2.0 to extract, compression method=store | application/zip | application/zip; charset=binary | binary | ???
+zip empty      Zip archive data (empty) | application/zip | application/zip; charset=binary | binary | zip/cbz
+zip comment    Zip archive data, at least v2.0 to extract, compression method=store | application/zip | application/zip; charset=binary | binary | ???
+docx           Microsoft Word 2007+ | application/vnd.openxmlformats-officedocument.wordprocessingml.document | application/vnd.openxmlformats-officedocument.wordprocessingml.document; charset=binary | binary | docx
+xlsx           Microsoft Excel 2007+ | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; charset=binary | binary | xlsx
+pptx           Microsoft PowerPoint 2007+ | application/vnd.openxmlformats-officedocument.presentationml.presentation | application/vnd.openxmlformats-officedocument.presentationml.presentation; charset=binary | binary | pptx
+odt            OpenDocument Text | application/vnd.oasis.opendocument.text | application/vnd.oasis.opendocument.text; charset=binary | binary | odt
+ods            OpenDocument Spreadsheet | application/vnd.oasis.opendocument.spreadsheet | application/vnd.oasis.opendocument.spreadsheet; charset=binary | binary | ods
+epub           EPUB document | application/epub+zip | application/epub+zip; charset=binary | binary | ???
+jar            Zip archive data, at least v2.0 to extract, compression method=store | application/zip | application/zip; charset=binary | binary | ???
+apk            Android package (APK), with AndroidManifest.xml Zip archive data, at least v2.0 to extract, compression method=store | application/vnd.android.package-archive | application/vnd.android.package-archive; charset=binary | binary | apk
+zip head       data | application/octet-stream | application/octet-stream; charset=binary | binary | ???
+gzip           gzip compressed data, from Unix | application/gzip | application/gzip; charset=binary | binary | ???
+gzip named     gzip compressed data, was "file.txt", from Unix | application/gzip | application/gzip; charset=binary | binary | gz/tgz/tpz/zabw/svgz/adz/kmy/xcfgz
+bzip2          bzip2 compressed data, block size = 900k | application/x-bzip2 | application/x-bzip2; charset=binary | binary | bz2
+xz             XZ compressed data, checksum CRC64 | application/x-xz | application/x-xz; charset=binary | binary | xz
+zstd           Zstandard compressed data (v0.8+), Dictionary ID: None | application/zstd | application/zstd; charset=binary | binary | zst
+lz4            LZ4 compressed data (v1.4+) | application/x-lz4 | application/x-lz4; charset=binary | binary | lz4
+7z             7-zip archive data, version 0.4 | application/x-7z-compressed | application/x-7z-compressed; charset=binary | binary | 7z/cb7
+rar4           RAR archive data | application/x-rar | application/x-rar; charset=binary | binary | rar/cbr
+rar5           RAR archive data, v5 | application/x-rar | application/x-rar; charset=binary | binary | rar
+tar            POSIX tar archive | application/x-tar | application/x-tar; charset=binary | binary | tar/ustar
+tar v7         tar archive | application/x-tar | application/x-tar; charset=binary | binary | tar
+tar gnu        POSIX tar archive (GNU) | application/x-tar | application/x-tar; charset=binary | binary | tar/gtar
+cpio           ASCII cpio archive (SVR4 with no CRC) | application/x-cpio | application/x-cpio; charset=binary | binary | cpio
+ar             current ar archive | application/x-archive | application/x-archive; charset=us-ascii | us-ascii | a/lib/ar
+deb            Debian binary package | application/vnd.debian.binary-package | application/vnd.debian.binary-package; charset=us-ascii | us-ascii | deb/udeb/ipk
+rpm            RPM v3.0 bin | application/x-rpm | application/x-rpm; charset=binary | binary | ???
+dmg koly       data | application/octet-stream | application/octet-stream; charset=binary | binary | ???
+iso            ISO 9660 CD-ROM filesystem data | application/x-iso9660-image | application/x-iso9660-image; charset=binary | binary | iso/iso9660
+ole2           OLE 2 Compound Document | application/octet-stream | application/octet-stream; charset=binary | binary | ???

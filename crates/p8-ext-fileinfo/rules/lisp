@@ -1,0 +1,34 @@
+0	search/4096	(setq\ 			Lisp/Scheme program text
+!:mime	text/x-lisp
+0	search/4096	(defvar\ 		Lisp/Scheme program text
+!:mime	text/x-lisp
+0	search/4096	(defparam\ 		Lisp/Scheme program text
+!:mime	text/x-lisp
+0	search/4096	(defun\  		Lisp/Scheme program text
+!:mime	text/x-lisp
+0	search/4096	(autoload\ 		Lisp/Scheme program text
+!:mime	text/x-lisp
+0	search/4096	(custom-set-variables\ 	Lisp/Scheme program text
+!:mime	text/x-lisp
+0	string	\012(
+>&0	regex	\^(defun|defvar|defconst|defmacro|setq|fset)	Emacs v18 byte-compiled Lisp data
+!:mime	application/x-elc
+!:apple	EMAxTEXT
+!:ext elc
+>&0	regex	\^(put|provide|require|random)	Emacs v18 byte-compiled Lisp data
+!:mime	application/x-elc
+!:apple	EMAxTEXT
+!:ext elc
+0	string	;ELC
+>4	byte	>18			Emacs/XEmacs v%d byte-compiled Lisp data
+!:mime	application/x-elc
+!:apple	EMAxTEXT
+!:ext elc
+0	string	DUMPEDGNUEMACS	GNU/Emacs pdumper image
+0	string	(SYSTEM::VERSION\040'	CLISP byte-compiled Lisp program (pre 2004-03-27)
+0	string	(|SYSTEM|::|VERSION|\040'	CLISP byte-compiled Lisp program text
+0	long	0x70768BD2		CLISP memory image data
+0	long	0xD28B7670		CLISP memory image data, other endian
+0	string	\372\372\372\372	MIT scheme (library?)
+0	search/1	\<TeXmacs|	TeXmacs document text
+!:mime	text/texmacs

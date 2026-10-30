@@ -1,0 +1,1114 @@
+0	string/t	@
+>1	string/cW	\ echo\ off	DOS batch file text
+!:mime	text/x-msdos-batch
+!:ext	bat
+>1	string/cW	echo\ off	DOS batch file text
+!:mime	text/x-msdos-batch
+!:ext	bat
+>1	string/cW	rem		DOS batch file text
+!:mime	text/x-msdos-batch
+!:ext	bat
+>1	string/cW	set\ 		DOS batch file text
+!:mime	text/x-msdos-batch
+!:ext	bat
+100	search/0xffff   rxfuncadd
+>100	regex/c =^[\ \t]{0,10}call[\ \t]{1,10}rxfunc	OS/2 REXX batch file text
+100	search/0xffff   say
+>100	regex/c =^[\ \t]{0,10}say\ ['"]			OS/2 REXX batch file text
+0	leshort		0x166	MS Windows COFF MIPS R4000 object file
+0	leshort		0x184	MS Windows COFF Alpha object file
+0	leshort		0x268	MS Windows COFF Motorola 68000 object file
+0	leshort		0x1f0	MS Windows COFF PowerPC object file
+0	leshort		0x290	MS Windows COFF PA-RISC object file
+0	string/b	MZ
+>0x18	uleshort <0x40
+>>(0x3c.l)	string	NE	Windows Icons Library 16-bit
+!:mime		image/x-ms-icl
+!:ext		icl
+>>(0x3c.l)	string	LX
+>>>(0x3c.l)	use		lx-executable
+>>(0x3c.l)	string	PE
+>>(0x3c.l)	default	x	MS-DOS executable, MZ for MS-DOS
+!:mime	application/x-dosexec
+!:ext	exe/com/vlm/drv
+>(0x3c.l)	string		PE\0\0	PE
+!:mime	application/vnd.microsoft.portable-executable
+>>(0x3c.l+24)	leshort		0x010b	\b32 executable
+>>(0x3c.l+24)	leshort		0x020b	\b32+ executable
+>>(0x3c.l+24)	leshort		0x0107	ROM image
+>>(0x3c.l+24)	default		x	Unknown PE signature
+>>>&0 		leshort		x	%#x
+>>(0x3c.l+22)	leshort&0x2000	>0	(DLL)
+>>(0x3c.l+92)	leshort		0	(
+>>>(0x3c.l+6)	uleshort	=2	\bMicrosoft compiled help format 2.0)
+!:ext	hxs
+>>>(0x3c.l+6)	uleshort	!2	\bControl Panel Item)
+!:ext	cpl
+>>(0x3c.l+92)	leshort		1
+>>>(0x3c.l+22)	leshort&0x2000	>0	(native)
+!:ext	dll/sys
+>>>(0x3c.l+22)	leshort&0x2000	0	(native)
+!:ext	exe/sys
+>>(0x3c.l+92)	leshort		2
+>>>(0x3c.l+22)	leshort&0x2000	>0	(GUI)
+!:ext	dll/cpl/tlb/ocx/acm/ax/ime
+>>>(0x3c.l+22)	leshort&0x2000	0	(GUI)
+!:ext	exe/scr
+>>(0x3c.l+92)	leshort		3
+>>>(0x3c.l+22)	leshort&0x2000	>0	(console)
+!:ext	dll/cpl/tlb/ocx/acm/ax/ime
+>>>(0x3c.l+22)	leshort&0x2000	0	(console)
+!:ext	exe/com
+>>(0x3c.l+92)	leshort		4	(Unknown subsystem 4)
+>>(0x3c.l+92)	leshort		5	(OS/2)
+>>(0x3c.l+92)	leshort		6	(Unknown subsystem 6)
+>>(0x3c.l+92)	leshort		7	(POSIX
+>>>(0x3c.l+22)	leshort&0x2000	>0	\b)
+!:ext	dll
+>>>(0x3c.l+22)	leshort&0x2000	0	\b)
+!:ext	exe
+>>(0x3c.l+92)	leshort		8	(Win9x)
+>>(0x3c.l+92)	leshort		9	(Windows CE
+>>>(0x3c.l+22)	leshort&0x2000	>0	\b)
+!:ext	dll
+>>>(0x3c.l+22)	leshort&0x2000	0	\b)
+!:ext	exe
+>>(0x3c.l+92)	leshort		10	(EFI application)
+!:ext	efi
+>>(0x3c.l+92)	leshort		11	(EFI boot service driver)
+!:ext	efi
+>>(0x3c.l+92)	leshort		12	(EFI runtime driver)
+!:ext	efi
+>>(0x3c.l+92)	leshort		13	(EFI ROM)
+!:ext	efi
+>>(0x3c.l+92)	leshort		14	(XBOX)
+>>(0x3c.l+92)	leshort		15	(Unknown subsystem 15)
+>>(0x3c.l+92)	leshort		16	(Windows boot application
+>>>(0x3c.l+22)	leshort&0x2000	>0	\b)
+!:ext	dll
+>>>(0x3c.l+22)	leshort&0x2000	0	\b)
+!:ext	efi/exe
+>>(0x3c.l+92)	leshort		>16	(Unknown subsystem
+>>>&0		leshort		x	%#x)
+>>(0x3c.l+4)	leshort		0x14c	Intel 80386
+>>(0x3c.l+4)	leshort		0x166	MIPS R4000
+>>(0x3c.l+4)	leshort		0x168	MIPS R10000
+>>(0x3c.l+4)	leshort		0x184	Alpha
+>>(0x3c.l+4)	leshort		0x1a2	Hitachi SH3
+>>(0x3c.l+4)	leshort		0x1a3	Hitachi SH3 DSP
+>>(0x3c.l+4)	leshort		0x1a8	Hitachi SH5
+>>(0x3c.l+4)	leshort		0x169	MIPS WCE v2
+>>(0x3c.l+4)	leshort		0x1a6	Hitachi SH4
+>>(0x3c.l+4)	leshort		0x1c0	ARM
+>>(0x3c.l+4)	leshort		0x1c2	ARM Thumb
+>>(0x3c.l+4)	leshort		0x1c4	ARMv7 Thumb
+>>(0x3c.l+4)	leshort		0x1d3	Matsushita AM33
+>>(0x3c.l+4)	leshort		0x1f0	PowerPC
+>>(0x3c.l+4)	leshort		0x1f1	PowerPC with FPU
+>>(0x3c.l+4)	leshort		0x1f2	PowerPC (big-endian)
+>>(0x3c.l+4)	leshort		0x200	Intel Itanium
+>>(0x3c.l+4)	leshort		0x266	MIPS16
+>>(0x3c.l+4)	leshort		0x268	Motorola 68000
+>>(0x3c.l+4)	leshort		0x290	PA-RISC
+>>(0x3c.l+4)	leshort		0x366	MIPSIV
+>>(0x3c.l+4)	leshort		0x466	MIPS16 with FPU
+>>(0x3c.l+4)	leshort		0xebc	EFI byte code
+>>(0x3c.l+4)	leshort		0x5032	RISC-V 32-bit
+>>(0x3c.l+4)	leshort		0x5064	RISC-V 64-bit
+>>(0x3c.l+4)	leshort		0x5128	RISC-V 128-bit
+>>(0x3c.l+4)	leshort		0x6232	LoongArch 32-bit
+>>(0x3c.l+4)	leshort		0x6264	LoongArch 64-bit
+>>(0x3c.l+4)	leshort		0x9041	Mitsubishi M32R
+>>(0x3c.l+4)	leshort		0x8664	x86-64
+>>(0x3c.l+4)	leshort		0xaa64	Aarch64
+>>(0x3c.l+4)	leshort		0xc0ee	MSIL
+>>(0x3c.l+4)	default		x	Unknown processor type
+>>>&0		leshort		x	%#x
+>>(0x3c.l+22)	leshort&0x0200	>0	(stripped to external PDB)
+>>(0x3c.l+22)	leshort&0x1000	>0	system file
+>>(0x3c.l+24)	leshort		0x010b
+>>>(0x3c.l+232) lelong	>0	Mono/.Net assembly
+>>(0x3c.l+24)	leshort		0x020b
+>>>(0x3c.l+248) lelong	>0	Mono/.Net assembly
+>>(8.s*16)		string		32STUB	\b, 32rtm DOS extender
+>>(8.s*16)		string		!32STUB	\b, for MS Windows
+>>(0x3c.l+0xf8)		string		UPX0 \b, UPX compressed
+>>(0x3c.l+0xf8)		search/0x140	PEC2 \b, PECompact2 compressed
+>>(0x3c.l+0xf8)		search/0x140	UPX2
+>>>(&0x10.l+(-4))	string		PK\3\4 \b, ZIP self-extracting archive (Info-Zip)
+>>(0x3c.l+0xf8)		search/0x140	.idata
+>>>(&0xe.l+(-4))	string		PK\3\4 \b, ZIP self-extracting archive (Info-Zip)
+>>>(&0xe.l+(-4))	string		ZZ0 \b, ZZip self-extracting archive
+>>>(&0xe.l+(-4))	string		ZZ1 \b, ZZip self-extracting archive
+>>(0x3c.l+0xf8)		search/0x140	.rsrc
+>>>(&0x0f.l+(-4))	string		a\\\4\5 \b, WinHKI self-extracting archive
+>>>(&0x0f.l+(-4))	string		Rar! \b, RAR self-extracting archive
+>>>(&0x0f.l+(-4))	search/0x3000	MSCF \b, InstallShield self-extracting archive
+>>>(&0x0f.l+(-4))	search/32	Nullsoft \b, Nullsoft Installer self-extracting archive
+>>(0x3c.l+0xf8)		search/0x140	.data
+>>>(&0x0f.l)		string		WEXTRACT \b, MS CAB-Installer self-extracting archive
+>>(0x3c.l+0xf8)		search/0x140	.petite\0 \b, Petite compressed
+>>>(0x3c.l+0xf7)	byte		x
+>>>>(&0x104.l+(-4))	string		=!sfx! \b, ACE self-extracting archive
+>>(0x3c.l+0xf8)		search/0x140	.WISE \b, WISE installer self-extracting archive
+>>(0x3c.l+0xf8)		search/0x140	.dz\0\0\0 \b, Dzip self-extracting archive
+>>&(0x3c.l+0xf8)	search/0x100	_winzip_ \b, ZIP self-extracting archive (WinZip)
+>>&(0x3c.l+0xf8)	search/0x100	SharedD \b, Microsoft Installer self-extracting archive
+>>0x30			string		Inno \b, InnoSetup self-extracting archive
+>>(0x3c.l+6)	leshort			>1	\b, %u sections
+>0x18	uleshort	>0x3f
+>>(0x3c.l) string !PE\0\0 MS-DOS executable
+>>(0x3c.l)		string		NE \b, NE
+!:mime	application/x-ms-ne-executable
+>>>(0x3c.l+0x36)	byte		0 for OS/2 1.0 or MS Windows 1-2
+>>>(0x3c.l+0x36)	byte		1 for OS/2 1.x
+>>>(0x3c.l+0x36)	byte		2 for MS Windows 3.x
+>>>(0x3c.l+0x36)	byte		3 for MS-DOS
+>>>(0x3c.l+0x36)	byte		4 for Windows 386
+>>>(0x3c.l+0x36)	byte		5 for Borland Operating System Services
+>>>(0x3c.l+0x36)	byte		0x81 for MS-DOS, Phar Lap DOS extender, OS/2
+>>>(0x3c.l+0x36)	byte		0x82 for MS-DOS, Phar Lap DOS extender, Windows
+>>>(0x3c.l+0x36)	default		x
+>>>>(0x3c.l+0x36)	ubyte		x (unknown OS %#x)
+>>>(0x3c.l+0x3F)	ubyte		x	(%u
+>>>(0x3c.l+0x3E)	ubyte		x	\b.%u)
+>>>(0x3c.l+0x0c)	leshort&0x8000	0x8000 (DLL or font)
+!:ext	dll/drv/3gr/cpl/vbx/fon/fot
+>>>(0x3c.l+0x0c)	leshort&0x8000	0 (EXE)
+!:ext	exe/scr
+>>>&(&0x24.s-1)		string		ARJSFX \b, ARJ self-extracting archive
+>>>(0x3c.l+0x70)	search/0x80	WinZip(R)\ Self-Extractor \b, ZIP self-extracting archive (WinZip)
+>>(0x3c.l)		string		LX\0\0 \b, LX
+!:mime	application/x-dosexec
+>>>(0x3c.l+0x0a)	leshort		<1 (unknown OS)
+>>>(0x3c.l+0x0a)	leshort		1 for OS/2
+>>>(0x3c.l+0x0a)	leshort		2 for MS Windows
+>>>(0x3c.l+0x0a)	leshort		3 for DOS
+>>>(0x3c.l+0x0a)	leshort		>3 (unknown OS)
+>>>(0x3c.l+0x10)	lelong&0x28000	=0x8000 (DLL)
+>>>(0x3c.l+0x10)	lelong&0x20000	>0 (device driver)
+>>>(0x3c.l+0x10)	lelong&0x300	0x300 (GUI)
+>>>(0x3c.l+0x10)	lelong&0x28300	<0x300 (console)
+>>>(0x3c.l+0x08)	leshort		1 i80286
+>>>(0x3c.l+0x08)	leshort		2 i80386
+>>>(0x3c.l+0x08)	leshort		3 i80486
+>>>(8.s*16)		string		emx \b, emx
+>>>>&1			string		x %s
+>>>&(&0x54.l-3)		string		arjsfx \b, ARJ self-extracting archive
+>>(0x3c.l)		string		W3 \b, W3 for MS Windows
+!:mime	application/x-ms-w3-executable
+!:ext	vxd/exe
+>>(0x3c.l)		string		W4 \b, W4 for MS Windows
+!:mime	application/x-ms-w4-executable
+!:ext	vxd
+>>(0x3c.l)		string		LE\0\0 \b, LE executable
+!:mime	application/x-dosexec
+>>>(0x3c.l+0x0a)	leshort		1
+>>>>0x240		search/0x100	DOS/4G for MS-DOS, DOS4GW DOS extender
+>>>>0x240		search/0x200	WATCOM\ C/C++ for MS-DOS, DOS4GW DOS extender
+>>>>0x440		search/0x100	CauseWay\ DOS\ Extender for MS-DOS, CauseWay DOS extender
+>>>>0x40		search/0x40	PMODE/W for MS-DOS, PMODE/W DOS extender
+>>>>0x40		search/0x40	STUB/32A for MS-DOS, DOS/32A DOS extender (stub)
+>>>>0x40		search/0x80	STUB/32C for MS-DOS, DOS/32A DOS extender (configurable stub)
+>>>>0x40		search/0x80	DOS/32A for MS-DOS, DOS/32A DOS extender (embedded)
+>>>>&0x24		lelong		<0x50
+>>>>>(&0x4c.l)		string		\xfc\xb8WATCOM
+>>>>>>&0		search/8	3\xdbf\xb9 \b, 32Lite compressed
+>>>(0x3c.l+0x0a)	leshort		2 for MS Windows
+>>>(0x3c.l+0x0a)	leshort		3 for DOS
+>>>(0x3c.l+0x0a)	leshort		4 for MS Windows (VxD)
+!:ext	vxd/386/pdr/mpd
+>>>(&0x7c.l+0x26)	string		UPX \b, UPX compressed
+>>>&(&0x54.l-3)		string		UNACE \b, ACE self-extracting archive
+>>0x3c		lelong	>0x20000000
+>>>(4.s*512)	leshort !0x014c \b, MZ for MS-DOS
+!:mime	application/x-dosexec
+!:ext	exe/com
+>2		long	!0
+>>0x18		uleshort <0x40
+>>>(4.s*512)	leshort !0x014c
+>>>>&(2.s-514)	string	!LE
+>>>>>&-2	string	!BW
+>>>>>>(0x3c.l)	string	!LX
+>>>>>>>(0x3c.l)	string	!PE	\b, MZ for MS-DOS
+!:mime	application/x-dosexec
+>>>>&(2.s-514)	string	LE \b, LE
+>>>>>0x240	search/0x100	DOS/4G for MS-DOS, DOS4GW DOS extender
+>>>>&(2.s-514)	string	BW
+>>>>>0x240	search/0x100	DOS/4G	\b, LE for MS-DOS, DOS4GW DOS extender (embedded)
+>>>>>0x240	search/0x100	!DOS/4G	\b, BW collection for MS-DOS
+>(4.s*512)	leshort		0x014c \b, COFF
+!:mime	application/x-dosexec
+>>(8.s*16)	string		go32stub for MS-DOS, DJGPP go32 DOS extender
+>>(8.s*16)	string		emx
+>>>&1		string		x for DOS, Win or OS/2, emx %s
+>>&(&0x42.l-3)	byte		x
+>>>&0x26	string		UPX \b, UPX compressed
+>>&0x2c		search/0xa0	.text
+>>>&0x0b	lelong		<0x2000
+>>>>&0		lelong		>0x6000 \b, 32lite compressed
+>(8.s*16) string $WdX \b, WDos/X DOS extender
+>0x35	string	\x8e\xc0\xb9\x08\x00\xf3\xa5\x4a\x75\xeb\x8e\xc3\x8e\xd8\x33\xff\xbe\x30\x00\x05 \b, aPack compressed
+>0xe7	string	LH/2\ 	Self-Extract \b, %s
+>0x1c	string	UC2X	\b, UCEXE compressed
+>0x1c	string	WWP\ 	\b, WWPACK compressed
+>0x1c	string	RJSX 	\b, ARJ self-extracting archive
+>0x1c	string	diet 	\b, diet compressed
+>0x1c	string	LZ09 	\b, LZEXE v0.90 compressed
+>0x1c	string	LZ91 	\b, LZEXE v0.91 compressed
+>0x1c	string	tz 	\b, TinyProg compressed
+>0x1e	string	Copyright\ 1989-1990\ PKWARE\ Inc.	Self-extracting PKZIP archive
+!:mime	application/zip
+>0x1e	string	PKLITE\ Copr.	Self-extracting PKZIP archive
+!:mime	application/zip
+>0x20	search/0xe0	aRJsfX \b, ARJ self-extracting archive
+>0x20	string AIN
+>>0x23	string 2	\b, AIN 2.x compressed
+>>0x23	string <2	\b, AIN 1.x compressed
+>>0x23	string >2	\b, AIN 1.x compressed
+>0x24	string	LHa's\ SFX \b, LHa self-extracting archive
+!:mime	application/x-lha
+>0x24	string	LHA's\ SFX \b, LHa self-extracting archive
+!:mime	application/x-lha
+>0x24	string	\ $ARX \b, ARX self-extracting archive
+>0x24	string	\ $LHarc \b, LHarc self-extracting archive
+>0x20	string	SFX\ by\ LARC \b, LARC self-extracting archive
+>0x40	string aPKG \b, aPackage self-extracting archive
+>0x64	string	W\ Collis\0\0 \b, Compack compressed
+>0x7a	string		Windows\ self-extracting\ ZIP	\b, ZIP self-extracting archive
+>>&0xf4 search/0x140 \x0\x40\x1\x0
+>>>(&0.l+(4)) string MSCF \b, WinHKI CAB self-extracting archive
+>1638	string	-lh5- \b, LHa self-extracting archive v2.13S
+>0x17888 string Rar! \b, RAR self-extracting archive
+>(4.s*512)	long	x
+>>&(2.s-517)	byte	x
+>>>&0	string		PK\3\4 \b, ZIP self-extracting archive
+>>>&0	string		Rar! \b, RAR self-extracting archive
+>>>&0	string		=!\x11 \b, AIN 2.x self-extracting archive
+>>>&0	string		=!\x12 \b, AIN 2.x self-extracting archive
+>>>&0	string		=!\x17 \b, AIN 1.x self-extracting archive
+>>>&0	string		=!\x18 \b, AIN 1.x self-extracting archive
+>>>&7	search/400	**ACE** \b, ACE self-extracting archive
+>>>&0	search/0x480	UC2SFX\ Header \b, UC2 self-extracting archive
+>(8.s*16)	search/0x20	PKSFX \b, ZIP self-extracting archive (PKZIP)
+>49801	string	\x79\xff\x80\xff\x76\xff	\b, CODEC archive v3.21
+>>49824 leshort		=1			\b, 1 file
+>>49824 leshort		>1			\b, %u files
+0	string/b	LX
+>2	ushort		=0
+>>0	use			lx-executable
+>2	ushort		=0x0101
+>>0	use			\^lx-executable
+0       name    	lx-executable
+>0x00	uleshort		=0x584c	LX
+>0x00	uleshort		=0x454C	LE
+>0x00	uleshort		x	executable
+!:mime	application/x-lx-executable
+!:ext	exe
+>0x02	ubyte			!0		(big-endian)
+>0x0a	leshort			1		for OS/2
+>0x0a	leshort			3		for DOS
+>0x10	ulelong&0x00038000	=0x00000000	(program)
+>0x10	ulelong&0x00038000	>0x00000000
+>>0x10	ulelong&0x00020000	>0		(device driver)
+!:ext	sys
+>>0x10	ulelong&0x00020000	=0		(library)
+!:ext	dll
+>0x10  	ulelong&0x00000300	=0x00000300	(GUI)
+>0x10	ulelong&0x00000300	!0x00000300	(console)
+>0x08	uleshort		1		i80286
+>0x08	uleshort		2		i80386
+>0x08	uleshort		3		i80486
+>0x08	uleshort		4		i80586
+0	string/b	KCF		FreeDOS KEYBoard Layout collection
+>3	uleshort	x		\b, version %#x
+>6	ubyte		>0
+>>7	string		>\0		\b, author=%-.14s
+>>7	search/254	\xff		\b, info=
+>>>&0	string		x		\b%-.15s
+0	string/b	KLF		FreeDOS KEYBoard Layout file
+>3	uleshort	x		\b, version %#x
+>5	ubyte		>0
+>>8	string		x		\b, name=%-.2s
+0	string	\xffKEYB\ \ \ \0\0\0\0
+>12	string	\0\0\0\0`\004\360	MS-DOS KEYBoard Layout file
+0	ulequad&0x07a0ffffffff		0xffffffff
+>4  ubelong   !0x14000000
+>>10  ubequad   !0
+>>>0	use				msdos-driver
+0       name    			msdos-driver		DOS executable (
+!:mime	application/x-dosdriver
+!:ext	sys/dev/bin/dos
+>40	search/7			UPX!			\bUPX compressed 
+>4	uleshort&0x8000			0x0000			\bblock device driver
+>4	uleshort&0x8000			0x8000			\b
+>>4	uleshort&0x0008			0x0008			\bclock 
+>>4	uleshort&0x0010			0x0010			\bfast 
+>>4	uleshort&0x0003			>0			\bstandard 
+>>>4	uleshort&0x0001			0x0001			\binput
+>>>4	uleshort&0x0003			0x0003			\b/
+>>>4	uleshort&0x0002			0x0002			\boutput 
+>>4	uleshort&0x8000			0x8000			\bcharacter device driver
+>0	ubyte				x
+>>40	search/7			UPX!
+>>40	default				x
+>>>12		ubyte			>0x23			\b 
+>>>>10		ubyte			>0x20
+>>>>>10		ubyte			!0x2E
+>>>>>>10	ubyte			!0x2A			\b%c
+>>>>11		ubyte			>0x20
+>>>>>11		ubyte			!0x2E			\b%c
+>>>>12		ubyte			>0x20
+>>>>>12		ubyte			!0x39
+>>>>>>12	ubyte			!0x2E			\b%c
+>>>13		ubyte			>0x20
+>>>>13		ubyte			!0x2E			\b%c
+>>>>14		ubyte			>0x20
+>>>>>14		ubyte			!0x2E			\b%c
+>>>>15		ubyte			>0x20
+>>>>>15		ubyte			!0x2E			\b%c
+>>>>16		ubyte			>0x20
+>>>>>16		ubyte			!0x2E
+>>>>>>16	ubyte			<0xCB			\b%c
+>>>>17		ubyte			>0x20
+>>>>>17		ubyte			!0x2E
+>>>>>>17	ubyte			<0x90			\b%c
+>>>12		ubyte			<0x2F
+>>>>22		string			>\056			%-.6s
+>4	uleshort&0x8000			0x0000
+>>4	uleshort&0x0002			0x0002			\b,32-bit sector-
+>4	uleshort&0x0040			0x0040			\b,IOCTL-
+>4	uleshort&0x0800			0x0800			\b,close media-
+>4	uleshort&0x8000			0x8000
+>>4	uleshort&0x2000			0x2000			\b,until busy-
+>4	uleshort&0x4000			0x4000			\b,control strings-
+>4	uleshort&0x8000			0x8000
+>>4	uleshort&0x6840			>0			\bsupport
+>4	uleshort&0x8000			0x0000
+>>4	uleshort&0x4842			>0			\bsupport
+>0	ubyte				x			\b)
+>0	ulelong				!0xffffffff		with pointer %#x
+0	ulequad				0x0513c00000000012
+>0	use				msdos-driver
+0	ulequad				0x32f28000ffff0016
+>0	use				msdos-driver
+0	ulequad				0x007f00000000ffff
+>0	use				msdos-driver
+0	ulequad				0x001600000000ffff
+>0	use				msdos-driver
+0	ulequad				0x0bf708c2ffffffff
+>0	use				msdos-driver
+0	ulequad				0x07bd08c2ffffffff
+>0	use				msdos-driver
+0	ulequad				0x027ac0c0ffffffff
+>0	use				msdos-driver
+0	ulequad				0x00228880ffffffff
+>0	use				msdos-driver
+0	ubyte		0x8c
+>4	string			!O====
+>>5	string			!MAIN
+>>>4	ubyte			>13
+>>>>0		use	msdos-com
+0       name    msdos-com
+>0  byte        x               DOS executable (
+>0	byte			=0xE9
+>>56		quad		=0
+>>>24			regex	=^[A-Z][A-Za-z\040]{5,21}	\bLotus driver) %s
+!:mime				application/x-dosexec
+!:ext				drv
+>>>24			default	x				\bCOM)
+!:mime				application/x-dosexec
+!:ext				com
+>>56		quad		!0
+>>>1			search/0xc088	\xcd\x22		\bCOM or COMBOOT 16-bit)
+!:mime				application/x-dosexec
+!:ext				com/cbt
+>>>1			default		x			\bCOM)
+!:mime				application/x-dosexec
+!:ext				com
+>0	byte			!0xE9
+>>10		string		=?STACVOL			\bSCREATE.SYS)
+!:mime			application/x-dosexec
+!:ext			sys
+>>10		string		!?STACVOL			\bCOM)
+!:mime			application/x-dosexec
+!:ext			com
+>6	string		SFX\ of\ LHarc	\b, %s
+>0x1FE leshort	0xAA55		    \b, boot code
+>85	string		UPX		        \b, UPX compressed
+>4	string		\ $ARX		    \b, ARX self-extracting archive
+>4	string		\ $LHarc	    \b, LHarc self-extracting archive
+>0x20e string	SFX\ by\ LARC	\b, LARC self-extracting archive
+>1	search/0xc088	\xcd\x22	\b, maybe with interrupt 22h
+>0	ubelong		x		\b, start instruction %#8.8x
+>4	ubelong		x		%8.8x
+0	        byte	0xeb
+>1          byte    >-1
+>>(1.b+2)   byte    x
+>>>16		ubyte		>3
+>>>>2		string		!DriveDroid
+>>>>>15		string		!Non\040System\040disk
+>>>>>>6		string		!read\040error\015
+>>>>>>>24	string		!\220\220\353I$\022\017
+>>>>>>>>9	string		!7-May-81
+>>>>>>>>>3	string		!\370sdfS\270
+>>>>>>>>>>0		use		msdos-com
+>>>16		ubyte		=0
+>>>>0x1FE	leshort		=0xAA55
+>>>>0x1FE	default		x
+>>>>>395	string		!ibmbio\040\040com
+>>>>>>0			use		msdos-com
+>>>16		default		x
+>>>>(11.s-2)	uleshort	!0xAA55
+>>>>>54		string		!FAT
+>>>>>>3		string		!COMPAQ\040\040
+>>>>>>>0		use		msdos-com
+0           byte    0xe9
+>1		leshort	>-1
+>>(1.s+3)   byte    x
+>>>16		ubyte		>3
+>>>>0			use		msdos-com
+>>>16		ubyte		=0
+>>>>0			use		msdos-com
+>>>16		default	x
+>>>>21		ubyte		<0xE5
+>>>>>0			use		msdos-com
+>>>>21		ubyte		>0xE4
+>>>>>11		uleshort&0x001f	!0
+>>>>>>0			use		msdos-com
+>1		leshort	<-259
+>>(1,s+65539)   byte    x
+>>>0        use msdos-com
+0	ubyte		0xb8
+>0	string		!\xb8\xc0\x07\x8e
+>>1	lelong&0xFFFFFFFe 0x21CD4CFe	COM executable (32-bit COMBOOT
+!:mime	application/x-c32-comboot-syslinux-exec
+!:ext c32
+>>>1	lelong		0x21CD4CFf	\b)
+>>>1	lelong		0x21CD4CFe	\b, relocatable)
+>>1	default	x
+>>>3	search/118	\xCD
+>>>>&0	ubyte	=0x13
+>>>>>3	ubequad	!0x8ec0b8c0078ed88d
+>>>>>>0		use		msdos-com
+>>>>&0	ubyte	=0x16
+>>>>>8	ubelong	!0x3DE4E475
+>>>>>>0		use		msdos-com
+>>>>&0	default	x
+>>>>>0		use		msdos-com
+>>>3	default	x
+>>>>3	ubyte	!0x0
+>>>>>3	ubyte	!0xb1
+>>>>>>0	use		msdos-com
+0	string/b	\x81\xfc
+>4	string	\x77\x02\xcd\x20\xb9
+>0x1e	search/3	\x57\xe9
+>>&2	string		UPX!		FREE-DOS executable (COM), UPX
+!:mime	application/x-dosexec
+>>>&21	string		=FONT		compressed DOS code page font
+!:ext	cpx
+>>>&21	string		!FONT		compressed
+!:ext	com
+>>>&12	uleshort	x		\b, uncompressed %u bytes
+252	string Must\ have\ DOS\ version DR-DOS executable (COM)
+!:mime	application/x-dosexec
+!:ext	com
+2	string	\xcd\x21		COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+4	string	\xcd\x21		COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+5	string	\xcd\x21		COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+7	string	\xcd\x21
+>0	byte	!0xb8			COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+10	string	\xcd\x21
+>5	string	!\xcd\x21		COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+13	string	\xcd\x21		COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+18	string	\xcd\x21	
+>17	byte	>32
+>>17	byte	<126		
+>>17	default	x			COM executable for MS-DOS	
+!:mime	application/x-dosexec
+!:ext	com
+23	string	\xcd\x21		COM executable for MS-DOS
+!:mime	application/x-dosexec
+!:ext	com
+30	string	\xcd\x21		COM executable for MS-DOS
+!:mime	application/x-dosexec
+!:ext	com
+70	string	\xcd\x21		COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+0x6	search/0xa	\xfc\x57\xf3\xa5\xc3	COM executable for MS-DOS
+!:mime	application/x-dosexec
+!:ext	com
+0x6	search/0xa	\xfc\x57\xf3\xa4\xc3	COM executable for DOS
+!:mime	application/x-dosexec
+!:ext	com
+>0x18	search/0x10	\x50\xa4\xff\xd5\x73	\b, aPack compressed
+0x3c	string		W\ Collis\0\0		COM executable for MS-DOS, Compack compressed
+!:mime	application/x-dosexec
+!:ext	com
+0	string/b	LZ		MS-DOS executable (built-in)
+0	string/b	\320\317\021\340\241\261\032\341AAFB\015\000OM\006\016\053\064\001\001\001\377			AAF legacy file using MS Structured Storage
+>30	byte	9		(512B sectors)
+>30	byte	12		(4kB sectors)
+0	string/b	\320\317\021\340\241\261\032\341\001\002\001\015\000\002\000\000\006\016\053\064\003\002\001\001			AAF file using MS Structured Storage
+>30	byte	9		(512B sectors)
+>30	byte	12		(4kB sectors)
+0	belong	0x31be0000
+>128	ubyte		>0  			Microsoft
+>>96	uleshort	=0			Word
+!:mime	application/msword
+!:apple	MSWDWDBN
+!:ext	doc/dcx
+>>>0x6E	ulequad		=0			1.0-4.0
+>>>0x6E	ulequad		!0			5.0-6.0
+>>>0x6E	ulequad		x			(DOS) Document
+>>96	uleshort	!0			Write 3.0 (Windows) Document
+!:mime	application/x-mswrite
+!:apple	MSWDWDBN
+!:ext	wri/doc
+>>(0x1C.s*128)	uleshort x
+>>>&-2		uleshort	=0x0014
+>>>>&0x12	string		x		%s
+>>>>>&1		string		x		\b, author %s
+>>>>>>&1	string		x		\b, reviser %s
+>>>>>>>&1	string		x		\b, keywords %s
+>>>>>>>>&1	string		x		\b, comment %s
+>>>>>>>>>&1	string		x		\b, version %s
+>>>>>>>>>>&1	string		x		\b, %-.8s
+>>>>>>>>>>&9	string		x		created %-.8s
+>>0x1E	string		>0			\b, formatted by %-.66s
+>>96	uleshort	>0			\b, %u pages
+>>0x62	string		>0			\b, %-.8s printer
+>>0x6A	uleshort	>0			\b, %u blocks
+>>128	ubyte		x			\b,
+>>>128		ubyte	>0x1F
+>>>>128		string	x			%s
+>>>128		ubyte	<0x20
+>>>>129		ubyte	>0x1F
+>>>>>129	string	x			%s
+>>>>129		ubyte	<0x20
+>>>>>130	ubyte	>0x1F
+>>>>>>130	string	x			%s
+>>>>>130	ubyte	<0x20
+>>>>>>131	ubyte	>0x1F
+>>>>>>>131	string	x			%s
+>>>>>>131	ubyte	<0x20
+>>>>>>>132	ubyte	>0x1F
+>>>>>>>>132	string	x			%s
+>>>>>>>132	ubyte	<0x20
+>>>>>>>>133	ubyte	>0x1F
+>>>>>>>>>133	string	x			%s
+0	string/b	PO^Q`				Microsoft Word 6.0 Document
+!:mime	application/msword
+4   long        0
+>0  belong      0xfe320000      Microsoft Word for Macintosh 1.0
+!:mime	application/msword
+!:ext   mcw
+>0  belong      0xfe340000      Microsoft Word for Macintosh 3.0
+!:mime	application/msword
+!:ext   mcw
+>0  belong      0xfe37001c      Microsoft Word for Macintosh 4.0
+!:mime	application/msword
+!:ext   mcw
+>0  belong      0xfe370023      Microsoft Word for Macintosh 5.0
+!:mime	application/msword
+!:ext   mcw
+0	string/b	\333\245-\0\0\0			Microsoft Word 2.0 Document
+!:mime	application/msword
+!:ext   doc
+0	string/b	\xDB\xA5\x2D\x00		Microsoft WinWord 2.0 Document
+!:mime application/msword
+0	string/b	\xDB\xA5\x2D\x00		Microsoft WinWord 2.0 Document
+!:mime application/msword
+0	string/b	\x09\x04\x06\x00\x00\x00\x10\x00	Microsoft Excel Worksheet
+!:mime	application/vnd.ms-excel
+!:apple	XCELXLS4
+!:ext	xls
+0	belong	0x00001a00
+>20	ubyte		>0
+>>20	ubyte		<32	Lotus 1-2-3
+!:mime	application/vnd.lotus-1-2-3
+!:apple	????L123
+>>>4	uleshort	0x1000	WorKsheet, version 3
+!:ext	wk3
+>>>4	uleshort	0x1002	WorKsheet, version 4
+!:ext	wk4/wt4
+>>>4	uleshort	0x1003	WorKsheet, version 97
+!:ext	123
+>>>4	uleshort	0x1005	WorKsheet, version 9.8 Millennium
+!:ext	123
+>>>4	uleshort	0x8001	FoRMatting data
+!:ext	frm
+>>>4	uleshort	0x8007	ForMatting data, version 3
+!:ext	fm3
+>>>4	default		x	unknown
+>>>>6	uleshort	=0x0004	worksheet
+!:ext	wXX
+>>>>6	uleshort	!0x0004	formatting data
+!:ext	fXX
+>>>>4	uleshort	x	\b, revision %#x
+>>>6	uleshort	=0x0004	\b, cell range
+>>>>8	ulelong		!0
+>>>>>10	ubyte		>0	\b%d*
+>>>>>8	uleshort	x	\b%d,
+>>>>>11	ubyte		x	\b%d-
+>>>>14	ubyte		>0	\b%d*
+>>>>12	uleshort	x	\b%d,
+>>>>15	ubyte		x	\b%d
+>>>>20	ubyte		>1	\b, character set %#x
+>>>>21	ubyte		x	\b, flags %#x
+>>>6	uleshort	!0x0004
+>>>>30	search/29	\0\xAE
+>>>>>&4	string		>\0	\b, 1st font "%s"
+0	belong	0x00000200
+!:strength -1
+>7	ubyte		0
+>>6	ubyte		>0	Lotus
+!:mime	application/vnd.lotus-1-2-3
+!:apple	????L123
+>>>4	uleshort	0x0007	1-2-3 CoNFiguration, version 2.x (PGRAPH.CNF)
+!:ext	cnf
+>>>4	uleshort	0x0C05	1-2-3 CoNFiguration, version 2.4J
+!:ext	cnf
+>>>4	uleshort	0x0801	1-2-3 CoNFiguration, version 1-2.1
+!:ext	cnf
+>>>4	uleshort	0x0802	Symphony CoNFiguration
+!:ext	cnf
+>>>4	uleshort	0x0804	1-2-3 CoNFiguration, version 2.2
+!:ext	cnf
+>>>4	uleshort	0x080A	1-2-3 CoNFiguration, version 2.3-2.4
+!:ext	cnf
+>>>4	uleshort	0x1402	1-2-3 CoNFiguration, version 3.x
+!:ext	cnf
+>>>4	uleshort	0x1450	1-2-3 CoNFiguration, version 4.x
+!:ext	cnf
+>>>4	uleshort	0x0404	1-2-3 WorKSheet, version 1
+!:ext	wks
+>>>4	uleshort	0x0405	Symphony WoRksheet, version 1.0
+!:ext	wrk/wr1
+>>>4	uleshort	0x0406	1-2-3/Symphony worksheet, version 2
+!:ext	wk1/wr1
+>>>4	uleshort	0x0600	1-2-3 WorKsheet, version 1.xJ
+!:ext	wj1
+>>>4	uleshort	0x0602	1-2-3 worksheet, version 2.4J
+!:ext	wj3
+>>>4	uleshort	0x8006	1-2-3 ForMaTting data, version 2.x
+!:ext	fmt/fj3
+>>>4	uleshort	0x8007	1-2-3 FoRMatting data, version 2.0
+!:ext	frm
+>>>4	default		x	unknown worksheet or configuration
+!:ext	cnf
+>>>>4	uleshort	x	\b, revision %#x
+>>>6		use	lotus-cells
+>>>(8.s+10)	use	lotus-cells
+0	name		lotus-cells
+>0	ubelong	0x06000800	\b, cell range
+>>4	ulong		!0
+>>>4	uleshort	x	\b%d,
+>>>6	uleshort	x	\b%d-
+>>8	uleshort	x	\b%d,
+>>10	uleshort	x	\b%d
+0	string/b		WordPro\0	Lotus WordPro
+!:mime	application/vnd.lotus-wordpro
+0	string/b		WordPro\r\373	Lotus WordPro
+!:mime	application/vnd.lotus-wordpro
+0		string		\x71\xa8\x00\x00\x01\x02
+>12		string		Stirling\ Technologies,		InstallShield Uninstall Script
+0	string/b	Nullsoft\ AVS\ Preset\ 	Winamp plug in
+0	string/b	\327\315\306\232
+>26	uleshort&0xFDff	=0x0100			Windows metafile
+>>4	uleshort	!0			\b, resource handle %#x
+>>6	leshort		x			\b, bounding box (%d
+>>8	leshort		x			\b,%d
+>>10	leshort		x			/ %d
+>>12	leshort		x			\b,%d)
+>>14	uleshort	x			\b, dpi %u
+>>16	ulelong		!0			\b, reserved %#x
+>>20	uleshort	x			\b, checksum %#x
+>>22	use		wmf-head
+0	string/b	\002\000\011\000	Windows metafile
+>0	use		wmf-head
+0	string/b	\001\000\011\000
+>18	ulelong		>0			Windows metafile
+>>0	use		wmf-head
+0	name		wmf-head
+>0	uleshort	!0x0001			\b, type %#x
+>2	uleshort*2	!18			\b, header size %u
+>4	uleshort	=0x0100			\b, DIBs not supported 
+>4	uleshort	=0x0300
+>4	default		x			\b, version
+>>4	uleshort	x			%#x
+>6	ulelong	x				\b, size %u words
+!:mime	image/wmf
+!:ext	wmf
+>10	uleshort	x			\b, %u objects
+>12	ulelong		x			\b, largest record size %#x
+>16	uleshort	!0			\b, %u members
+0	string/b	\003\001\001\004\070\001\000\000	tz3 ms-works file
+0	string/b	\003\002\001\004\070\001\000\000	tz3 ms-works file
+0	string/b	\003\003\001\004\070\001\000\000	tz3 ms-works file
+0 string \211\000\077\003\005\000\063\237\127\065\027\266\151\064\005\045\101\233\021\002 PGP sig
+0 string \211\000\077\003\005\000\063\237\127\066\027\266\151\064\005\045\101\233\021\002 PGP sig
+0 string \211\000\077\003\005\000\063\237\127\067\027\266\151\064\005\045\101\233\021\002 PGP sig
+0 string \211\000\077\003\005\000\063\237\127\070\027\266\151\064\005\045\101\233\021\002 PGP sig
+0 string \211\000\077\003\005\000\063\237\127\071\027\266\151\064\005\045\101\233\021\002 PGP sig
+0 string \211\000\225\003\005\000\062\122\207\304\100\345\042 PGP sig
+0	string/b	MDIF\032\000\010\000\000\000\372\046\100\175\001\000\001\036\001\000 MS Windows special zipped file
+0   belong  0x00000100
+>9  byte    0
+>>0 byte    x
+>>0 use     cur-ico-dir
+>9  ubyte   0xff
+>>0 byte    x
+>>0 use     cur-ico-dir
+0	name		cur-ico-dir
+>18		ulelong		&0x00000006
+>>(18.l)	ulelong		x		MS Windows
+>>>0		ubelong		0x00000100	icon resource
+!:mime		image/vnd.microsoft.icon
+!:ext		ico
+>>>>4 		uleshort	x		- %d icon
+>>>>4 		uleshort	>1		\bs
+>>>>0x06	use		ico-entry
+>>>>4 		uleshort	>1
+>>>>>0x16	use		ico-entry
+>>>0		ubelong		0x00000200	cursor resource
+!:mime		image/x-win-bitmap
+!:ext		cur
+>>>>4 		uleshort	x		- %d icon
+>>>>4 		uleshort	>1		\bs
+>>>>0x06	use		cur-entry
+0	name		cur-entry
+>0	use		cur-ico-entry
+>4	uleshort	x	\b, hotspot @%dx
+>6	uleshort	x	\b%d
+0	name		ico-entry
+>0			use	cur-ico-entry
+>4	uleshort	>1	\b, %d planes
+>6	uleshort	>1	\b, %d bits/pixel
+0		name		cur-ico-entry
+>0		byte		=0		\b, 256x
+>0		byte		!0		\b, %dx
+>1		byte        	=0		\b256
+>1		byte        	!0		\b%d
+>2		ubyte		!0		\b, %d colors
+>(12.l)		ubelong		=0x89504e47
+>>&-4		indirect	x	\b with 
+>(12.l)		ubelong		!0x89504e47
+0   belong  0x00000200
+>9  byte    0
+>>0 use     cur-ico-dir
+>9  ubyte   0xff
+>>0 use     cur-ico-dir
+0	string/b	PK\010\010BGI	Borland font
+>4	string	>\0	%s
+0	string/b	pk\010\010BGI	Borland device
+>4	string	>\0	%s
+0	lelong		0x00000004
+>12	lelong		0x00000118	Windows Recycle Bin INFO2 file (Win98 or below)
+0	lelong		0x00000005
+>12	lelong		0x00000320	Windows Recycle Bin INFO2 file (Win2k - WinXP)
+9	string		GERBILDOC	First Choice document
+9	string		GERBILDB	First Choice database
+9	string		GERBILCLIP	First Choice database
+0	string		GERBIL		First Choice device file
+9	string		RABBITGRAPH	RabbitGraph file
+0	string		DCU1		Borland Delphi .DCU file
+0	string		=!<spell>	MKS Spell hash list (old format)
+0	string		=!<spell2>	MKS Spell hash list
+0	lelong		0x08086b70	TurboC BGI file
+0	lelong		0x08084b50	TurboC Font file
+0	string		TPF0
+>4	pstring		>\0		Delphi compiled form '%s'
+0	string		PMCC		Windows 3.x .GRP file
+1	string		RDC-meg		MegaDots
+>8	byte		>0x2F		version %c
+>9	byte		>0x2F		\b.%c file
+0x171	string	MICROSOFT\ PIFEX\0	Windows Program Information File
+!:mime	application/x-dosexec
+!:ext	pif
+>0x24	string		>\0		\b for %.63s
+>0x65	string		>\0		\b, directory=%.64s
+>0xA5	string		>\0		\b, parameters=%.64s
+>0x187	search/0xB55	WINDOWS\ VMM\ 4.0\0
+>>&0x5e		ubyte	>0
+>>>&-1		string	<PIFMGR.DLL		\b, icon=%s
+>>>&-1		string	>PIFMGR.DLL		\b, icon=%s
+>>&0xF0		ubyte	>0
+>>>&-1		string	<Terminal		\b, font=%.32s
+>>>&-1		string	>Terminal		\b, font=%.32s
+>>&0x110	ubyte	>0
+>>>&-1		string	<Lucida\ Console	\b, TrueTypeFont=%.32s
+>>>&-1		string	>Lucida\ Console	\b, TrueTypeFont=%.32s
+>0x187	search/0xB55	WINDOWS\ NT\ \ 3.1\0	\b, Windows NT-style
+>0x187	search/0xB55	CONFIG\ \ SYS\ 4.0\0	\b +CONFIG.SYS
+>0x187	search/0xB55	AUTOEXECBAT\ 4.0\0	\b +AUTOEXEC.BAT
+0	string		NG\0\001
+>2	ulelong		0x00000100	Norton Guide
+!:mime	application/x-norton-guide
+!:ext	ng/hlp
+>>8	string		>\0		"%-.40s"
+>>48	string		>\0		\b, %-.66s
+>>114	string		>\0		%-.66s
+0	string		Abort
+>6	search/7089	Non-DOS\ disk	Norton Commander module message
+!:mime	application/x-norton-msg
+!:ext	msg
+0	string	DOS\ Client\ Message\ File:	Novell DOS client message
+!:ext	msg
+>26	ubyte		>0x20
+>>25		ubyte	!0x20			%c
+>>>26		ubyte	!0x20			\b%c
+>>>>27		ubyte	!0x20			\b%c
+>>>>>28		ubyte	!0x20			\b%c
+>>>>>>29	ubyte	!0x20			\b%c
+>>>>>>>30	ubyte	!0x20			\b%c
+>>>>>>>>31	ubyte	!0x20			\b%c
+>>>>>>>>>32	ubyte	!0x20			\b%c
+>>>>>>>>>>33	ubyte	!0x20			\b%c
+>>>>>>>>>>>34	ubyte	!0x20			\b%c
+>>>>>>>>>>>>35	ubyte	!0x20			\b%c
+>>>>>>>>>>>>>36	ubyte	!0x20			\b%c
+>28	search/14	,\040Tran 
+>>&0	string	x				\b, tran version %s
+>>>&0	ubyte		!0xa			\b, terminated by %#2.2x
+>>>>&0	ubyte		x			\b%2.2x
+>0x65	ubyte		!0x1A			\b, at 0x65 %#x
+>0x66	ubyte		!0x01			\b, at 0x66 %#x
+0	string	Novell\ Message\ Librarian\ Data\ File	Novell message librarian data
+!:ext	msg
+0	ulelong	0x48443408		4DOS help file
+>4	string	x			\b, version %-4.4s
+0	ulequad	0x3a000000024e4c	MS Advisor help file
+0	string/b	ITSF\003\000\000\000\x60\000\000\000	MS Windows HtmlHelp Data
+!:mime	application/vnd.ms-htmlhelp
+!:ext	chm
+2	string/b	GFA-BASIC3	GFA-BASIC 3 data
+0	string/b	MSCF\0\0\0\0	Microsoft Cabinet archive data
+>0x2c	search/980/c	.diag		\b, Diagnostic
+!:mime	application/vnd.ms-cab-compressed
+!:ext	diagcab
+>0x2c	search/300/c	png.pub\0		\b, Publisher Packed and Go
+!:mime	application/vnd.ms-cab-compressed
+!:ext	puz
+>0x2c	search/17/c	ppview32.exe\0		\b, PowerPoint Viewer Packed and Go
+!:mime	application/vnd.ms-powerpoint
+!:ext	ppz
+>0x2c	search/968/c	gadget.xml		\b, Windows Desktop Gadget
+!:mime	application/x-windows-gadget
+!:ext	gadget
+>0x2c	search/3369/c	content.ini\0	\b, IncrediMail
+!:mime	application/x-incredimail
+>>0x2c	search/83/c	Flavor.htm\0	ecard
+!:ext	imf
+>>0x2c	search/211/c	.swf\0		skin
+!:ext	ims
+>>0x2c	search/92/c	anim.im3\0	animation
+!:ext	ima
+>>0x2c	default		x
+>>>0x2c	search/116/c	thumb		ecard, image, notifier or skin
+!:ext	imf/imi/imn/ims
+>>>0x2c	default		x		emoticons or sound
+!:ext	ime/imw
+>0x2c	default		x
+>>(16.l+16)	ubyte	x
+>>>&-1	string 		PackageInfo.xml	\b, Device Metadata Package
+!:mime	application/vnd.ms-cab-compressed
+!:ext	devicemetadata-ms
+>>>&-1	string/c 	_accrpt_.snp	\b, Access report snapshot
+!:mime	application/msaccess
+!:ext	snp
+>>>&-1	string 		manifest.xsf	\b, InfoPath Form Template
+!:mime	application/vnd.ms-cab-compressed
+!:ext	xsn
+>>>&7	string 		=.000		\b, WinCE install
+!:mime	application/vnd.ms-cab-compressed
+!:ext	cab
+>>>&-1	string/c 	wsusscan.cab	\b, Microsoft Standalone Update
+!:mime	application/vnd.ms-cab-compressed
+!:ext	msu
+>>>&-1	default		x
+>>>>&-1	search/255 	.
+>>>>>&0	string/c	ppt\0
+>>>>>>28 uleshort	>1		\b, PowerPoint Packed and Go
+!:mime	application/vnd.ms-powerpoint
+!:ext	ppz
+>>>>>>28 uleshort	=1		\b, one packed PowerPoint
+!:mime	application/vnd.ms-cab-compressed
+!:ext	pp_
+>>>>>&0	string/c	theme		\b, Windows
+!:mime	application/x-windows-themepack
+>>>>>>(16.l+16)	string	=Panoram	8
+!:ext	deskthemepack
+>>>>>>(16.l+16)	string	!Panoram	7 or 8
+!:ext	themepack/deskthemepack
+>>>>>>(16.l+16)	ubyte	x		Theme Pack
+>>>>>&0	string/c	one		\b, OneNote Package
+!:mime	application/msonenote
+!:ext	onepkg
+>>>>>&0	default		x
+>>>>>>&0	search/255 	\0
+>>>>>>>&16	string/c 	wsusscan.cab	\b, Microsoft Standalone Update
+!:mime	application/vnd.ms-cab-compressed
+!:ext	msu
+>>>>>>>&16	default	x
+>>>>>>>>28	uleshort	>1	\b, many
+!:mime	application/vnd.ms-cab-compressed
+!:ext	cab
+>>>>>>>>28	uleshort	=1
+>>>>>>>>>30	uleshort	=0x0000	\b, Windows 2000/XP setup
+!:mime	application/vnd.ms-cab-compressed
+!:ext	_/?_/??_
+>>>>>>>>>30	uleshort	!0x0000	\b, single
+!:mime	application/vnd.ms-cab-compressed
+!:ext	cab
+>>>>&-1	default		x
+>>>>>28	uleshort	=1	\b, single
+!:mime	application/vnd.ms-cab-compressed
+!:ext	_
+>>>>>28	uleshort	>1	\b, many
+!:mime	application/vnd.ms-cab-compressed
+!:ext	cab
+>8	ulelong		x		\b, %u bytes
+>28	uleshort		1		\b, 1 file
+>28	uleshort		>1		\b, %u files
+>16	ulelong		x		\b, at %#x
+>(16.l)	use		cab-file
+>28	uleshort		>1
+>>(16.l+16)	ubyte	x
+>>>&0	search/255 	\0
+>>>>&0	use		cab-file
+>24	ubeshort	!0x0301		\b version %#x
+>26	uleshort	>1		\b, %u cffolders
+>30	uleshort	>0		\b, flags %#x
+>32	uleshort	>0		\b, ID %u
+>34	uleshort+1	x		\b, number %u
+>30	uleshort	&0x0004		\b, extra bytes
+>>36	uleshort	>0		%u in head
+>>38	ubyte		>0		%u in folder
+>>39	ubyte		>0		%u in data block
+>>36	uleshort	>0
+>>>(36.s+40)	use			cab-folder
+>30	uleshort	^0x0004
+>>30	uleshort		=0x0000
+>>>36	use				cab-folder
+>>30	uleshort		=0x0001	\b, previous
+>>>36	use				cab-anchor
+>>30	uleshort		=0x0002	\b, next
+>>>36	use				cab-anchor
+>>30	uleshort		=0x0003	\b, previous
+>>>36	string		x		%s
+>>>>&1	string		x		disk %s
+>>>>>&1	string		x		\b, next %s
+>>>>>>&1	string		x	disk %s
+>>>>>>>&1	use			cab-folder
+0       name    			cab-anchor
+>&0	string		x		%s
+>>&1	string		x		disk %s
+0       name    			cab-folder
+>4	uleshort	x		\b, %u datablock
+>4	uleshort	>1		\bs
+>6	uleshort	x		\b, %#x compression
+0       name    			cab-file
+>8	uleshort	>0		\b, iFolder %#x
+>10	lemsdosdate	x		last modified %s
+>12	lemsdostime	x		%s
+>14	uleshort	>0		+
+>>14	uleshort	&0x0001		\bR
+>>14	uleshort	&0x0002		\bH
+>>14	uleshort	&0x0004		\bS
+>>14	uleshort	&0x0020		\bA
+>>14	uleshort	&0x0040		\bX
+>>14	uleshort	&0x0080		\bUtf
+>>14	uleshort	&0x0100		\b?
+>16	string		x		"%s"
+0	string/b	ISc(		InstallShield Cabinet archive data
+>5	byte&0xf0	=0x60		version 6,
+>5	byte&0xf0	!0x60		version 4/5,
+>(12.l+40)	lelong	x		%u files
+0	string/b	MSCE\0\0\0\0	Microsoft WinCE install header
+>20	lelong		0		\b, architecture-independent
+>20	lelong		103		\b, Hitachi SH3
+>20	lelong		104		\b, Hitachi SH4
+>20	lelong		0xA11		\b, StrongARM
+>20	lelong		4000		\b, MIPS R4000
+>20	lelong		10003		\b, Hitachi SH3
+>20	lelong		10004		\b, Hitachi SH3E
+>20	lelong		10005		\b, Hitachi SH4
+>20	lelong		70001		\b, ARM 7TDMI
+>52	leshort		1		\b, 1 file
+>52	leshort		>1		\b, %u files
+>56	leshort		1		\b, 1 registry entry
+>56	leshort		>1		\b, %u registry entries
+0	ulelong 1
+>40	string	\ EMF		Windows Enhanced Metafile (EMF) image data
+>>44	ulelong x		version %#x
+0	string/b	\224\246\056		Microsoft Word Document
+!:mime	application/msword
+0	string/b $RBU
+>23	string Dell			%s system BIOS
+>5	byte   2
+>>48	byte   x			version %d.
+>>49	byte   x			\b%d.
+>>50	byte   x			\b%d
+>5	byte   <2
+>>48	string x			version %.3s
+0	string/b	ITOLITLS		Microsoft Reader eBook Data
+>8	lelong	x			\b, version %u
+!:mime					application/x-ms-reader
+0	string/b	B000FF\n	Windows Embedded CE binary image
+0	string	\xfc\x03\x00	Mallard BASIC program data (v1.11)
+0	string	\xfc\x04\x00	Mallard BASIC program data (v1.29+)
+0	string	\xfc\x03\x01	Mallard BASIC protected program data (v1.11)
+0	string	\xfc\x04\x01	Mallard BASIC protected program data (v1.29+)
+0	string	MIOPEN		Mallard BASIC Jetsam data
+0	string	Jetsam0		Mallard BASIC Jetsam index data
+0x3	ushort	>1979
+>0x5	ubyte-1 <31
+>>0x6	ubyte-1 <12
+>>>0x7	string	\0\0\0\0\0\0\0\0
+>>>>0x1 ubyte	x	DOS 2.0 backup id file, sequence %d
+!:ext @@@
+>>>>0x0 ubyte	0xff	\b, last disk
+0x52	ubyte	0	
+>0	byte-127	<-126
+>>0x53	ubyte-1	<78	
+>>>(0x53.b+4)	ubyte	0	
+>>>>(0x53.b+3)	ubyte	>0x1F	
+>>>>>5	ubyte&0x8C	0x0C	
+>>>>>>0	ubyte	x	DOS 2.0-3.2 backed up
+>>>>>>0	ubyte	0
+>>>>>>>1 uleshort	x	sequence %d of
+>>>>>>0x5	string	x	file %s
+>>>>>>128	indirect x	\b; 
+0	string	\x8bBACKUP\x20
+>0xa	string	\0\0\0\0\0\0\0\0
+>>0x9	ubyte	x	DOS 3.3 backup control file, sequence %d
+>>0x8a	ubyte	0xff	\b, last disk
+0	name		dos-date
+>2	uleshort&0x001F	x	%u
+>2	uleshort&0x01E0	=0x0020	jan
+>2	uleshort&0x01E0	=0x0040	feb
+>2	uleshort&0x01E0	=0x0060	mar
+>2	uleshort&0x01E0	=0x0080	apr
+>2	uleshort&0x01E0	=0x00A0	may
+>2	uleshort&0x01E0	=0x00C0	jun
+>2	uleshort&0x01E0	=0x00E0	jul
+>2	uleshort&0x01E0	=0x0100	aug
+>2	uleshort&0x01E0	=0x0120	sep
+>2	uleshort&0x01E0	=0x0140	oct
+>2	uleshort&0x01E0	=0x0160	nov
+>2	uleshort&0x01E0	=0x0180	dec
+>2	uleshort/512	x	1980+%u

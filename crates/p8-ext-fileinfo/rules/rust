@@ -1,0 +1,8 @@
+0	string		rust\x00\x00\x00
+>12	string		\014rustc\x20		Rust compiler metadata
+!:ext	rmeta
+>>7	byte		x			\b, version %d
+0	string		RSIC
+>4	uleshort	=0			Rust incremental compilation metadata
+!:ext	bin
+>>6	pstring		x			\b, rustc %s

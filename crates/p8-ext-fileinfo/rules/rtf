@@ -1,0 +1,40 @@
+0	string		{\\rtf
+>5	ubyte		!0xAB
+>>5	ubyte		!0x5C		Rich Text Format data
+!:mime	text/rtf
+!:apple	????RTF
+!:ext	rtf
+>>>0	use		rtf-info
+0	name		rtf-info
+>5	ubyte		!0x7b		\b, version %c
+>6	string		\\mac		\b, Apple Macintosh
+>6	string		\\pc
+>>9	ubyte		=0x61		\b, IBM PS/2, code page 850
+>>9	ubyte		!0x61		\b, IBM PC, code page 437
+>6	search/502	\\ansi		\b, ANSI
+>6	default		x		\b, unknown character set
+>5	search/500	\\ansicpg
+>>&0	ubyte		!0x30		\b, code page
+>>>&-1		string	x		%-.3s
+>>>&2		ubyte	>0x2F
+>>>>&-1		ubyte	<0x3A		\b%c
+>>>>>&0		ubyte	>0x2F
+>>>>>>&-1	ubyte	<0x3A		\b%c
+>5	ubyte		x
+>>6	search/497	\\adeflang	\b, default middle east language ID
+>>>&0	string		x		%.4s
+>>>&4	ubyte		>0x2F
+>>>>&-1	ubyte		<0x3A		\b%c
+>>6	default		x
+>>>6	search/505	\\deflang
+>>>>&0	string		>0		\b, default language ID %-.4s
+>>>>&4		ubyte	>0x2F
+>>>>>&-1	ubyte	<0x3A		\b%c
+0	string		{\\urtf		Rich Text Format unicoded data
+!:mime	text/rtf
+!:ext	rtf
+>1	use		rtf-info
+0	string		{\\pwd		Pocket Word document or template
+!:mime	application/x-pocket-word
+!:ext	pwd/psw/pwt
+>0	use		rtf-info

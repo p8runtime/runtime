@@ -1,0 +1,89 @@
+0	name	wolfram
+>0	string	x	Mathematica notebook version 2.x
+!:ext mb
+!:mime application/vnd.wolfram.mathematica
+0	string	\064\024\012\000\035\000\000\000
+>0	use	wolfram
+0	string	\064\024\011\000\035\000\000\000
+>0	use	wolfram
+0	search/1000	Content-type:\040application/mathematica	Mathematica notebook version 2.x
+!:ext nb
+!:mime application/mathematica
+0	string	(*^\n\n::[\011frontEndVersion\ =
+>0	use	wolfram
+0	string	(*^\r\r::[\011
+>0	use	wolfram
+0	string	(*^\r\n\r\n::[\011
+>0	use	wolfram
+0	string	(*^\015
+>0	use	wolfram
+0	string	(*^\n\r\n\r::[\011
+>0	use	wolfram
+0	string	(*^\r::[\011
+>0	use	wolfram
+0	string	(*^\r\n::[\011
+>0	use	wolfram
+0	string	(*^\n\n::[\011
+>0	use	wolfram
+0	string	(*^\n::[\011
+>0	use	wolfram
+0	string	(*This\ is\ a\ Mathematica\ binary\ 	Mathematica binary file
+>88	string	>\0	from %s
+0	string	MMAPBF\000\001\000\000\000\203\000\001\000	Mathematica PBF (fonts I think)
+4	string	\ A~	MAthematica .ml file
+0	string	(***********************	Mathematica 3.0 notebook
+0       string  MATLAB  Matlab v
+!:mime	application/x-matlab-data
+!:ext	mat
+>7	ubyte	=0x35	\b5 mat-file
+>7	ubyte	!0x35
+>>7	string	x	\b%.3s mat-file
+>126    short   0x494d  (big endian)
+>>124   beshort x       version %#04x
+>126    short   0x4d49  (little endian)
+>>124   leshort x       version %#04x
+>126	short	x
+>>20	search/2	Platform:\040	\b, platform
+>>>&0	string		x		%-0.2s
+>>>&2		ubyte	!0x2C		\b%c
+>>>>&0		ubyte	!0x2C		\b%c
+>>>>>&0		ubyte	!0x2C		\b%c
+>>>>>>&0	ubyte	!0x2C		\b%c
+>>>>>>>&0	ubyte	!0x2C		\b%c
+>>>>>>>>&0	ubyte	!0x2C		\b%c
+>>>>>>>>>&0	ubyte	!0x2C		\b%c
+>>20	default		x
+>>>11	string		x	"%s"
+>34	search/9/c	created\040on:\040	\b, created
+>>&0	string	x		%-.24s
+13	ushort	0
+>20	ubyte	>0x1F
+>>20	ubyte	<0304
+>>>4	ulong		!0
+>>>>0	ubelong&0xFFffFF00	0x00000300
+>>>>>0	use	matlab4
+>>>>0	ubelong&0xFFffFF00	0x00000400
+>>>>>0	use	matlab4
+>>>>0	ulelong		<53
+>>>>>12	ulelong		<2
+>>>>>>16	ulelong		<3
+>>>>>>>16	ubelong		>0
+>>>>>>>>0	use	\^matlab4
+>>>>>>16	ulelong		>2
+>>>>>>>21 ubyte	>0x1F
+>>>>>>>>0 use	\^matlab4
+0	name	matlab4		Matlab v4 mat-file
+!:mime	application/x-matlab-data
+!:ext	mat
+>0	ubelong/1000	0	(little endian)
+>0	ubelong/1000	1	(big endian)
+>0	ubelong/1000	2	(VAX D-float)
+>0	ubelong/1000	3	(VAX G-float)
+>0	ubelong/1000	4	(Cray)
+>16	pstring/L	x	%s
+>0	ubelong%10	0	\b, numeric
+>0	ubelong%10	1	\b, text
+>0	ubelong%10	2	\b, sparse
+>4	ubelong		x	\b, rows %u
+>8	ubelong		x	\b, columns %u
+>12	ubelong		!0	\b, imaginary (%u)

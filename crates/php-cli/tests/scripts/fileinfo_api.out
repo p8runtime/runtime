@@ -1,0 +1,88 @@
+== loaded: true
+== constants: array (
+  0 => 0,
+  1 => 2,
+  2 => 1040,
+  3 => 16,
+  4 => 1024,
+  5 => 8,
+  6 => 32,
+  7 => 128,
+  8 => 256,
+  9 => 2048,
+  10 => 16777216,
+)
+== methods: array (
+  0 => '__construct',
+  1 => 'file',
+  2 => 'buffer',
+  3 => 'set_flags',
+)
+== functions: array (
+  0 => true,
+  1 => true,
+  2 => true,
+  3 => true,
+  4 => true,
+  5 => true,
+)
+== file png: 'image/png'
+== file txt: 'text/plain'
+== file php: 'text/x-php'
+== file empty: 'application/x-empty'
+== file one: 'application/octet-stream'
+== file big: 'image/x-tga'
+== file dir: 'directory'
+== file flags: 'image/png'
+== file mime: 'image/png; charset=binary'
+== file again: 'image/png'
+[W: finfo::file(DIR/missing): Failed to open stream: No such file or directory] == file missing: false
+== file empty name: ValueError: finfo::file(): Argument #2 ($flags) must not be empty
+== file nul: TypeError: finfo::file(): Argument #2 ($flags) must not contain any null bytes
+== file type: TypeError: finfo::file(): Argument #1 ($filename) must be of type string, array given
+== buffer: 'image/png'
+== buffer flags: 'binary'
+== set_flags: true
+== after set_flags: 'PNG image data, 16 x 16, 8-bit/color RGBA, non-interlaced'
+== set_flags enc: true
+== after enc: 'us-ascii'
+== set_flags type: TypeError: finfo::set_flags(): Argument #1 ($flags) must be of type int, string given
+== construct type: TypeError: finfo::__construct(): Argument #1 ($flags) must be of type int, string given
+== construct many: ArgumentCountError: finfo::__construct() expects at most 2 arguments, 3 given
+== buffer none: ArgumentCountError: finfo::buffer() expects at least 1 argument, 0 given
+== is object: true
+== finfo_file: 'text/x-php; charset=us-ascii'
+== finfo_file flags: 'text/x-php'
+== finfo_buffer: 'image/gif; charset=binary'
+== finfo_buffer flags: 'image/gif; charset=binary'
+== finfo_set_flags: true
+== finfo_buffer after: 'image/gif'
+[W: finfo_file(DIR/missing): Failed to open stream: No such file or directory] == finfo_file missing: false
+== finfo_file empty: ValueError: finfo_file(): Argument #2 ($filename) must not be empty
+== finfo_file nul: TypeError: finfo_file(): Argument #2 ($filename) must not contain any null bytes
+== finfo_file notobj: TypeError: finfo_file(): Argument #1 ($finfo) must be of type finfo, string given
+== finfo_close: true
+== default open: 'finfo'
+== default flags: 'ASCII text, with no line terminators'
+== open any flags: 'finfo'
+== mct png: 'image/png'
+== mct txt: 'text/plain'
+== mct empty: 'application/x-empty'
+== mct dir: 'directory'
+[W: mime_content_type(DIR/missing): Failed to open stream: No such file or directory] == mct missing: false
+== mct empty name: ValueError: mime_content_type(): Argument #1 ($filename) must not be empty
+== mct nul: TypeError: mime_content_type(): Argument #1 ($filename) must not contain any null bytes
+== mct int: TypeError: mime_content_type(): Argument #1 ($filename) must be of type resource|string, int given
+== mct null: TypeError: mime_content_type(): Argument #1 ($filename) must be of type resource|string, null given
+== mct array: TypeError: mime_content_type(): Argument #1 ($filename) must be of type resource|string, array given
+== mct stream: 'image/png'
+== stream pos kept: 5
+== custom: 'the foo format, byte 7'
+== custom mime: 'application/x-foo; charset=us-ascii'
+== custom other: 'text/plain; charset=us-ascii'
+== magic missing: Exception: finfo::__construct(DIR/nomagic): Failed to open stream: No such file or directory
+[W: finfo_open(DIR/nomagic): Failed to open stream: No such file or directory] [W: finfo_open(DIR/nomagic): Failed to open stream: No such file or directory] [W: finfo_open(): Failed to load magic database at "DIR/nomagic"] == open magic missing: false
+== ext png: 'png'
+== ext text: '???'
+== ext unknown: '???'
+== apple unknown: 'UNKNUNKN'

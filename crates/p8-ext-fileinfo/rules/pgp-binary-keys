@@ -1,0 +1,147 @@
+0	ubyte			=0xC6	OpenPGP Public Key
+>&0	use			primary_key_length_new
+0	ubyte			=0xC5	OpenPGP Secret Key
+>&0	use			primary_key_length_new
+0	ubyte&0xFC		=0x98	OpenPGP Public Key
+>&-1	use			primary_key_length_old
+0	ubyte&0xFC		=0x94	OpenPGP Secret Key
+>&-1	use			primary_key_length_old
+0		name		primary_key_length_new
+>&0		ubyte		<192
+>>&0		use		pgp_binary_key_pk_check
+>>>&(&-1.B)	use		sig_or_component_1
+>&0		ubyte		>191
+>>&-1		ubyte		<225
+>>>&1		use		pgp_binary_key_pk_check
+>>>>&(&-2.S-48960)	use	sig_or_component_1
+>&0		ubyte		=255
+>>&4		use		pgp_binary_key_pk_check
+>>>&(&-4.L)	use		sig_or_component_1
+0		name		primary_key_length_old
+>&0		ubyte&0x3	=0
+>>&1		use		pgp_binary_key_pk_check
+>>>&(&-1.B)	use		sig_or_component_1
+>&0		ubyte&0x3	=1
+>>&2		use		pgp_binary_key_pk_check
+>>>&(&-2.S)	use		sig_or_component_1
+>&0		ubyte&0x3	=2
+>>&4		use		pgp_binary_key_pk_check
+>>>&(&-4.L)	use		sig_or_component_1
+0		name		pgp_binary_key_pk_check
+>&0		ubyte		>1
+>>&-1		ubyte		<8
+>>>&-1		byte		x		Version %d
+>>>&0		bedate		>631156147      \b, Created %s
+>>>>&-5		ubyte		>3
+>>>>>&4		use		pgp_binary_key_algo
+>>>>&-5		ubyte		<4
+>>>>>&6		use		pgp_binary_key_algo
+0		name		pgp_binary_key_algo
+>0		clear		x
+>&0		ubyte		=1	\b, RSA (Encrypt or Sign,
+>>&0		ubeshort	x	\b %d bits)
+>&0		ubyte		=2	\b, RSA (Encrypt,
+>>&0		ubeshort	x	\b %d bits)
+>&0		ubyte		=3	\b, RSA (Sign,
+>>&0		ubeshort	x	\b %d bits)
+>&0		ubyte		=16	\b, El Gamal (Encrypt,
+>>&0		ubeshort	x	\b %d bits)
+>&0		ubyte		=17	\b, DSA
+>>&0		ubeshort	x	\b (%d bits)
+>&0		ubyte		=18	\b, ECDH
+>&0		ubyte		=19	\b, ECDSA
+>&0		ubyte		=20	\b, El Gamal (Encrypt or Sign,
+>>&0		ubeshort	x	\b %d bits)
+>&0		ubyte		=22	\b, EdDSA
+>&0		default         x
+>>&0		ubyte		x	\b, Unknown Algorithm (%#x)
+0	name		sig_or_component_1
+>&0	ubyte		=0xC2
+>>0	ubyte		x	\b; Signature
+>>&0	use		sig_or_component_1_length_new
+>&0	ubyte		=0xCD
+>>0	ubyte		x	\b; User ID
+>>&0	use		sig_or_component_1_length_new
+>&0	ubyte		=0xCE
+>>0	ubyte		x	\b; Public Subkey
+>>&0	use		sig_or_component_1_length_new
+>&0	ubyte		=0xC7
+>>0	ubyte		x	\b; Secret Subkey
+>>&0	use		sig_or_component_1_length_new
+>&0	ubyte		=0xD1
+>>0	ubyte		x	\b; User Attribute
+>>&0	use		sig_or_component_1_length_new
+>&0	ubyte&0xFC	=0x88
+>>0	ubyte		x	\b; Signature
+>>&-1	use		sig_or_component_1_length_old
+>&0	ubyte&0xFC	=0xB4
+>>0	ubyte		x	\b; User ID
+>>&-1	use		sig_or_component_1_length_old
+>&0	ubyte&0xFC	=0xB8
+>>0	ubyte		x	\b; Public Subkey
+>>&-1	use		sig_or_component_1_length_old
+>&0	ubyte&0xFC	=0x9C
+>>0	ubyte		x	\b; Secret Subkey
+>>&-1	use		sig_or_component_1_length_old
+0		name		sig_or_component_1_length_new
+>&0		ubyte		<192
+>>&(&-1.B)	use		cert_packet_3
+>&0		ubyte		>191
+>>&-1		ubyte		<225
+>>>&(&-1.S-48959)	use	cert_packet_3
+>&0		ubyte		=255
+>>&(&-4.L)	use		cert_packet_3
+0		name		sig_or_component_1_length_old
+>&0		ubyte&0x3	=0
+>>&(&0.B+1)	use		cert_packet_3
+>&0		ubyte&0x3	=1
+>>&(&0.S+2)	use		cert_packet_3
+>&0		ubyte&0x3	=2
+>>&(&0.L+4)	use		cert_packet_3
+0	name		cert_packet_3
+>&0	ubyte		=0xC2
+>>0	ubyte		x	\b; Signature
+>>&0	use		cert_packet_3_length_new
+>&0	ubyte		=0xCD
+>>0	ubyte		x	\b; User ID
+>>&0	use		cert_packet_3_length_new
+>&0	ubyte		=0xCE
+>>0	ubyte		x	\b; Public Subkey
+>>&0	use		cert_packet_3_length_new
+>&0	ubyte		=0xC7
+>>0	ubyte		x	\b; Secret Subkey
+>>&0	use		cert_packet_3_length_new
+>&0	ubyte		=0xD1
+>>0	ubyte		x	\b; User Attribute
+>>&0	use		cert_packet_3_length_new
+>&0	ubyte&0xFC	=0x88
+>>0	ubyte		x	\b; Signature
+>>&-1	use		cert_packet_3_length_old
+>&0	ubyte&0xFC	=0xB4
+>>0	ubyte		x	\b; User ID
+>>&-1	use		cert_packet_3_length_old
+>&0	ubyte&0xFC	=0xB8
+>>0	ubyte		x	\b; Public Subkey
+>>&-1	use		cert_packet_3_length_old
+>&0	ubyte&0xFC	=0x9C
+>>0	ubyte		x	\b; Secret Subkey
+>>&-1	use		cert_packet_3_length_old
+0		name		cert_packet_3_length_new
+>&0		ubyte		<192
+>>&(&-1.B)	use		pgp_binary_keys_end
+>&0		ubyte		>191
+>>&-1		ubyte		<225
+>>>&(&-1.S-48959)	use	pgp_binary_keys_end
+>&0		ubyte		=255
+>>&(&-4.L)	use		pgp_binary_keys_end
+0		name		cert_packet_3_length_old
+>&0		ubyte&0x3	=0
+>>&(&0.B+1)	use		pgp_binary_keys_end
+>&0		ubyte&0x3	=1
+>>&(&0.S+2)	use		pgp_binary_keys_end
+>&0		ubyte&0x3	=2
+>>&(&0.L+4)	use		pgp_binary_keys_end
+0		name		pgp_binary_keys_end
+>0		byte		x		\b; OpenPGP Certificate
+!:mime		application/pgp-keys
+!:ext		pgp/gpg/pkr/asd

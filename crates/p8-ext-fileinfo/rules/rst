@@ -1,0 +1,9 @@
+0	search/256	\=\=
+!:strength + 30
+>&0	regex/256	\^[\=]+$
+>>&0	search/512	:Author:		ReStructuredText file
+>>&0	search/512	\012Authors:		ReStructuredText file
+>>&0	search/512	\012Author:		ReStructuredText file
+>>&0	default		x
+>>>&0	regex/512	\^\\.\\.[A-Za-z]	ReStructuredText file
+!:ext	rst

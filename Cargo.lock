@@ -2930,6 +2930,7 @@ dependencies = [
  "p8-bytecode",
  "p8-compiler",
  "p8-ext-curl",
+ "p8-ext-fileinfo",
  "p8-ext-gd",
  "p8-ext-mbstring",
  "p8-ext-mysqli",
@@ -2966,6 +2967,14 @@ version = "0.1.0"
 dependencies = [
  "p8-runtime",
  "rsurl",
+]
+
+[[package]]
+name = "p8-ext-fileinfo"
+version = "0.1.0"
+dependencies = [
+ "p8-pcre",
+ "p8-runtime",
 ]
 
 [[package]]

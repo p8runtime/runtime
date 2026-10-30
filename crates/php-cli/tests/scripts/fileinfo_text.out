@@ -1,0 +1,72 @@
+plain          ASCII text | text/plain | text/plain; charset=us-ascii | us-ascii
+no newline     ASCII text, with no line terminators | text/plain | text/plain; charset=us-ascii | us-ascii
+crlf           ASCII text, with CRLF line terminators | text/plain | text/plain; charset=us-ascii | us-ascii
+cr             ASCII text, with CR line terminators | text/plain | text/plain; charset=us-ascii | us-ascii
+mixed          ASCII text, with CRLF, LF line terminators | text/plain | text/plain; charset=us-ascii | us-ascii
+long line      ASCII text, with very long lines (400) | text/plain | text/plain; charset=us-ascii | us-ascii
+utf8           Unicode text, UTF-8 text | text/plain | text/plain; charset=utf-8 | utf-8
+utf8 bom       Unicode text, UTF-8 (with BOM) text | text/plain | text/plain; charset=utf-8 | utf-8
+latin1         ISO-8859 text | text/plain | text/plain; charset=iso-8859-1 | iso-8859-1
+cp1252         Non-ISO extended-ASCII text | text/plain | text/plain; charset=unknown-8bit | unknown-8bit
+utf16le        Unicode text, UTF-16, little-endian text | text/plain | text/plain; charset=utf-16le | utf-16le
+utf16be        Unicode text, UTF-16, big-endian text | text/plain | text/plain; charset=utf-16be | utf-16be
+escape         ASCII text, with escape sequences | text/plain | text/plain; charset=us-ascii | us-ascii
+overstrike     ASCII text, with overstriking | text/plain | text/plain; charset=us-ascii | us-ascii
+binary nul     data | application/octet-stream | application/octet-stream; charset=binary | binary
+html           HTML document, ASCII text | text/html | text/html; charset=us-ascii | us-ascii
+doctype        HTML document, ASCII text | text/html | text/html; charset=us-ascii | us-ascii
+html upper     HTML document, ASCII text, with no line terminators | text/html | text/html; charset=us-ascii | us-ascii
+html frag      HTML document, ASCII text | text/html | text/html; charset=us-ascii | us-ascii
+html comment   HTML document, ASCII text | text/html | text/html; charset=us-ascii | us-ascii
+sgml export    exported SGML document, ASCII text | text/plain | text/plain; charset=us-ascii | us-ascii
+xml            XML 1.0 document, ASCII text | text/xml | text/xml; charset=us-ascii | us-ascii
+xml single     XML document, ASCII text, with no line terminators | text/xml | text/xml; charset=us-ascii | us-ascii
+xml no ver     XML document, ASCII text, with no line terminators | text/xml | text/xml; charset=us-ascii | us-ascii
+xhtml          XML 1.0 document, ASCII text | text/xml | text/xml; charset=us-ascii | us-ascii
+rss            XML 1.0 document, ASCII text | text/xml | text/xml; charset=us-ascii | us-ascii
+sitemap        XML 1.0 document, ASCII text | text/xml | text/xml; charset=us-ascii | us-ascii
+svg bare       SVG Scalable Vector Graphics image, ASCII text, with no line terminators | image/svg+xml | image/svg+xml; charset=us-ascii | us-ascii
+svg xml        SVG Scalable Vector Graphics image, ASCII text | image/svg+xml | image/svg+xml; charset=us-ascii | us-ascii
+svg doctype    SVG XML document | image/svg+xml | image/svg+xml; charset=us-ascii | us-ascii
+svg comment    exported SGML document, ASCII text | text/plain | text/plain; charset=us-ascii | us-ascii
+php            PHP script, ASCII text | text/x-php | text/x-php; charset=us-ascii | us-ascii
+php short      PHP script, ASCII text | text/x-php | text/x-php; charset=us-ascii | us-ascii
+php html       PHP script, ASCII text | text/x-php | text/x-php; charset=us-ascii | us-ascii
+html php       HTML document, ASCII text | text/html | text/html; charset=us-ascii | us-ascii
+json obj       JSON text data | application/json | application/json; charset=us-ascii | us-ascii
+json arr       JSON text data | application/json | application/json; charset=us-ascii | us-ascii
+json utf8      JSON text data | application/json | application/json; charset=utf-8 | utf-8
+json scalar    ASCII text, with no line terminators | text/plain | text/plain; charset=us-ascii | us-ascii
+json bad       ASCII text, with no line terminators | text/plain | text/plain; charset=us-ascii | us-ascii
+ndjson         New Line Delimited JSON text data | application/x-ndjson | application/x-ndjson; charset=us-ascii | us-ascii
+csv            CSV ASCII text | text/csv | text/csv; charset=us-ascii | us-ascii
+csv quoted     CSV ASCII text | text/csv | text/csv; charset=us-ascii | us-ascii
+csv utf8       CSV Unicode text, UTF-8 text | text/csv | text/csv; charset=utf-8 | utf-8
+sh             POSIX shell script, ASCII text executable | text/x-shellscript | text/x-shellscript; charset=us-ascii | us-ascii
+bash           Bourne-Again shell script, ASCII text executable | text/x-shellscript | text/x-shellscript; charset=us-ascii | us-ascii
+env bash       Bourne-Again shell script, ASCII text executable | text/x-shellscript | text/x-shellscript; charset=us-ascii | us-ascii
+python env     Python script, ASCII text executable | text/x-script.python | text/x-script.python; charset=us-ascii | us-ascii
+perl           Perl script text executable | text/x-perl | text/x-perl; charset=us-ascii | us-ascii
+node           Node.js script executable, ASCII text | application/javascript | application/javascript; charset=us-ascii | us-ascii
+js strict      JavaScript source, ASCII text | application/javascript | application/javascript; charset=us-ascii | us-ascii
+js func        ASCII text | text/plain | text/plain; charset=us-ascii | us-ascii
+js module      JavaScript source, ASCII text | application/javascript | application/javascript; charset=us-ascii | us-ascii
+css            ASCII text | text/plain | text/plain; charset=us-ascii | us-ascii
+c              C source, ASCII text | text/x-c | text/x-c; charset=us-ascii | us-ascii
+rtf            Rich Text Format data, version 1, ANSI, code page 1252 | text/rtf | text/rtf; charset=us-ascii | us-ascii
+webvtt         WebVTT subtitles, ASCII text | text/vtt | text/vtt; charset=us-ascii | us-ascii
+po             GNU gettext message catalogue, ASCII text | text/x-po | text/x-po; charset=us-ascii | us-ascii
+po lead nl     GNU gettext message catalogue, ASCII text | text/x-po | text/x-po; charset=us-ascii | us-ascii
+email          news or mail, ASCII text | message/rfc822 | message/rfc822; charset=us-ascii | us-ascii
+diff           unified diff output, ASCII text | text/x-diff | text/x-diff; charset=us-ascii | us-ascii
+ini            ASCII text | text/plain | text/plain; charset=us-ascii | us-ascii
+markdown       ASCII text | text/plain | text/plain; charset=us-ascii | us-ascii
+x              very short file (no magic) | application/octet-stream | application/octet-stream; charset=binary | binary
+empty          empty | application/x-empty | application/x-empty; charset=binary | binary
+two bytes      ASCII text, with no line terminators | text/plain | text/plain; charset=us-ascii | us-ascii
+
+continue:
+php html       "PHP script, \\012- HTML document, ASCII text" | "text\/x-php\\012- text\/plain"
+html php       "HTML document, \\012- HTML document, ASCII text" | "text\/html\\012- text\/plain"
+csv            "CSV ASCII, \\012- ASCII text" | "text\/csv\\012- text\/plain"
+sh             "POSIX shell script, \\012- a \/bin\/sh script, ASCII text executable" | "text\/x-shellscript\\012- text\/plain"

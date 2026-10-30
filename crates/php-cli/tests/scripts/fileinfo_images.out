@@ -1,0 +1,32 @@
+png rgba       PNG image data, 16 x 16, 8-bit/color RGBA, non-interlaced | image/png | image/png; charset=binary | binary | png
+png rgb        PNG image data, 100 x 50, 8-bit/color RGB, non-interlaced | image/png | image/png; charset=binary | binary | png
+png gray       PNG image data, 3 x 3, 8-bit grayscale, non-interlaced | image/png | image/png; charset=binary | binary | png
+png palette    PNG image data, 640 x 480, 8-bit colormap, non-interlaced | image/png | image/png; charset=binary | binary | png
+png ga         PNG image data, 5 x 6, 16-bit gray+alpha, non-interlaced | image/png | image/png; charset=binary | binary | png
+png adam7      PNG image data, 7 x 7, 8-bit/color RGBA, interlaced | image/png | image/png; charset=binary | binary | png
+png short      data | application/octet-stream | application/octet-stream; charset=binary | binary | ???
+gif89a         GIF image data, version 89a, 50 x 40 | image/gif | image/gif; charset=binary | binary | gif
+gif87a         GIF image data, version 87a, 320 x 200 | image/gif | image/gif; charset=binary | binary | gif
+jpeg jfif      JPEG image data, JFIF standard 1.01, resolution (DPI), density 72x72, segment length 16, baseline, precision 8, 80x60, components 3 | image/jpeg | image/jpeg; charset=binary | binary | jpeg/jpg/jpe/jfif
+jpeg prog      JPEG image data, JFIF standard 1.01, resolution (DPI), density 72x72, segment length 16, progressive, precision 8, 80x60, components 3 | image/jpeg | image/jpeg; charset=binary | binary | jpeg/jpg/jpe/jfif
+jpeg comment   JPEG image data, JFIF standard 1.01, resolution (DPI), density 72x72, segment length 16, comment: "made by test", baseline, precision 8, 80x60, components 3 | image/jpeg | image/jpeg; charset=binary | binary | jpeg/jpg/jpe/jfif
+jpeg exif      JPEG image data, Exif standard: [TIFF image data, little-endian, direntries=3, height=20, orientation=upper-left, width=30], baseline, precision 8, 80x60, components 3 | image/jpeg | image/jpeg; charset=binary | binary | jpeg/jpg/jpe/jfif
+jpeg exif be   JPEG image data, JFIF standard 1.01, resolution (DPI), density 72x72, segment length 16, Exif Standard: [TIFF image data, big-endian, direntries=3, height=20, orientation=upper-right, width=30], baseline, precision 8, 80x60, components 3 | image/jpeg | image/jpeg; charset=binary | binary | jpeg/jpg/jpe/jfif
+jpeg bare      JPEG image data | image/jpeg | image/jpeg; charset=binary | binary | jpeg/jpg/jpe/jfif
+tiff le        TIFF image data, little-endian, direntries=3, height=20, orientation=upper-left, width=30 | image/tiff | image/tiff; charset=binary | binary | tif/tiff
+tiff be        TIFF image data, big-endian, direntries=3, height=20, orientation=upper-right, width=30 | image/tiff | image/tiff; charset=binary | binary | tif/tiff
+bmp            PC bitmap, Windows 3.x format, 4 x 4 x 24, image size 16, resolution 2835 x 2835 px/m, cbSize 70, bits offset 54 | image/bmp | image/bmp; charset=binary | binary | bmp/ico
+ico            MS Windows icon resource - 1 icon, 16x16, 32 bits/pixel | image/vnd.microsoft.icon | image/vnd.microsoft.icon; charset=binary | binary | ico
+cur            MS Windows cursor resource - 1 icon, 16x16, hotspot @1x1 | image/x-win-bitmap | image/x-win-bitmap; charset=binary | binary | cur
+webp vp8       RIFF (little-endian) data, Web/P image, VP8 encoding, 50x40, Scaling: [none]x[none], YUV color, decoders should clamp | image/webp | image/webp; charset=binary | binary | webp
+webp vp8l      RIFF (little-endian) data, Web/P image | image/webp | image/webp; charset=binary | binary | webp
+webp vp8x      RIFF (little-endian) data, Web/P image | image/webp | image/webp; charset=binary | binary | webp
+avif           ISO Media, AVIF Image | image/avif | image/avif; charset=binary | binary | ???
+avif seq       ISO Media, AVIF Image Sequence | image/avif | image/avif; charset=binary | binary | ???
+heic           ISO Media, HEIF Image HEVC Main or Main Still Picture Profile | image/heic | image/heic; charset=binary | binary | ???
+heif           ISO Media, HEIF Image | image/heif | image/heif; charset=binary | binary | ???
+psd            Adobe Photoshop Image, 30 x 40, RGB, 3x 8-bit channels | image/vnd.adobe.photoshop | image/vnd.adobe.photoshop; charset=binary | binary | psd
+svg            SVG Scalable Vector Graphics image, ASCII text, with no line terminators | image/svg+xml | image/svg+xml; charset=us-ascii | us-ascii | svg
+xpm            X pixmap image text, 1 x 1 x 1, 1 chars/pixel | image/x-xpixmap | image/x-xpixmap; charset=us-ascii | us-ascii | xpm
+pbm            Netpbm image data, size = 2 x 2, bitmap, ASCII text | image/x-portable-bitmap | image/x-portable-bitmap; charset=us-ascii | us-ascii | pbm
+ppm            Netpbm image data, size = 2 x 2, rawbits, pixmap | image/x-portable-pixmap | image/x-portable-pixmap; charset=binary | binary | ppm/pnm

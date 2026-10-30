@@ -1,0 +1,2492 @@
+0	ubequad&0x00FeC400000000C0	0
+!:strength -40
+>17	ubyte&0xC0		!0xC0
+>>2	ubyte			>0
+>>>2	ubyte			<34
+>>>>17	ubyte&0x0F		!11
+>>>>>16	ubyte			1
+>>>>>>0		use		tga-image
+>>>>>16	ubyte			8
+>>>>>>0		use		tga-image
+>>>>>16	ubyte			15
+>>>>>>0		use		tga-image
+>>>>>16	ubyte			16
+>>>>>>0		use		tga-image
+>>>>>16	ubyte			24
+>>>>>>0		use		tga-image
+>>>>>16	ubyte			32
+>>>>>>0		use		tga-image
+0	name				tga-image
+>2	ubyte		<34		Targa image data
+!:mime	image/x-tga
+!:apple	????TPIC
+!:ext	tga/tpic/icb/vda/vst
+>2	ubyte&0xF7	1		- Map
+>2	ubyte&0xF7	2		- RGB
+>>17	ubyte&0x0F	>0		\bA
+>2	ubyte&0xF7	3		- Mono
+>2	ubyte		32		- Color
+>2	ubyte		33		- Color
+>1	ubyte		1		(
+>>3	uleshort	>0		\b%d-
+>>5	uleshort	x		\b%d)
+>2	ubyte&0x08	8		- RLE
+>12	uleshort	>0		%d x
+>12	uleshort	=0		65536 x
+>14	uleshort	>0		%d
+>14	uleshort	=0		65536
+>16	ubyte		x		x %d
+>8	uleshort	>0		+%d
+>10	uleshort	>0		+%d
+>17	ubyte&0x0F	>0		- %d-bit alpha
+>17	ubyte		&0x20		- top
+>17	ubyte		&0x10		- right
+>17	ubyte&0xC0	0x40		- interleave
+>17	ubyte&0xC0	0x80		- four way interleave
+>17	ubyte&0xC0	0xC0		- reserved
+>0	ubyte		>0
+>>18	string		x		"%s"
+>18	search/4261301/s	TRUEVISION-XFILE.\0
+>>&-8		ulelong			>0
+>>>(&-4.l)	uleshort		0x01EF
+>>>>&0		string			>\0		- author "%-.40s"
+>>>>&41		string			>\0		- comment "%-.80s"
+>>>>&365	ubequad&0xffffFFFFffff0000	!0
+>>>>>&-6	uleshort		x		%d
+>>>>>&-8	uleshort		x		\b-%d
+>>>>>&-4	uleshort		x		\b-%d
+>>>>&371	ubequad&0xffffFFFFffff0000	!0
+>>>>>&-8	uleshort		x		%d
+>>>>>&-6	uleshort		x		\b:%.2d
+>>>>>&-4	uleshort		x		\b:%.2d
+>>>>&377	string			>\0		- job "%-.40s"
+>>>>&418	ubequad&0xffffFFFFffff0000	!0
+>>>>>&-8	uleshort		x		%d
+>>>>>&-6	uleshort		x		\b:%.2d
+>>>>>&-4	uleshort		x		\b:%.2d
+>>>>&424	string			>\0		- %-.40s
+>>>>&424	ubyte			>0
+>>>>>&40	uleshort/100		x		%d
+>>>>>&40	uleshort%100		x		\b.%d
+>>>>>&42	ubyte			>0x20		\b%c
+>>>>&468	ulelong			>0		- keycolor %#8.8x
+>>>>&474	uleshort		>0
+>>>>>&-4	uleshort		>0		- aspect %d
+>>>>>&-2	uleshort		x		\b/%d
+>>>>&478	uleshort		>0
+>>>>>&-4	uleshort		>0		- gamma %d
+>>>>>&-2	uleshort		x		\b/%d
+0	name		netpbm
+>3	regex/s		=\^[0-9]{1,50}[\040\t\f\r\n]+[0-9]{1,50}	Netpbm image data
+>>&0	regex		=[0-9]{1,50} 			\b, size = %s x
+>>>&0	regex		=[0-9]{1,50}			\b %s
+0	search/1	P1
+>2	regex/2		[\040\t\f\r\n]
+>>3	string		!000000000
+>>>0	use		netpbm
+>>>0	string		x	\b, bitmap
+!:strength + 65
+!:mime	image/x-portable-bitmap
+!:ext	pbm
+>>>3	ubyte		=0x23
+>>>>4	string		x	%s
+0	search/1	P2
+>0	regex/4		P2[\040\t\f\r\n]
+>>0	use		netpbm
+>>0	string		x	\b, greymap
+!:strength + 65
+!:mime	image/x-portable-graymap
+!:ext	pgm
+0	search/1	P3
+>0	regex/4		P3[\040\t\f\r\n]
+>>0	use		netpbm
+>>0	string		x	\b, pixmap
+!:strength + 65
+!:mime	image/x-portable-pixmap
+!:ext	ppm
+0	string		P4
+>0	regex/4		P4[\040\t\f\r\n]
+>>0	use		netpbm
+>>0	string		x	\b, rawbits, bitmap
+!:strength + 65
+!:mime	image/x-portable-bitmap
+!:ext	pbm
+0	string		P5
+>0	regex/4		P5[\040\t\f\r\n]
+>>0	use		netpbm
+>>0	string		x	\b, rawbits, greymap
+!:strength + 65
+!:mime	image/x-portable-greymap
+!:ext	pgm
+0	string		P6
+>0	regex/4		P6[\040\t\f\r\n]
+>>0	use		netpbm
+>>0	string		x	\b, rawbits, pixmap
+!:strength + 65
+!:mime	image/x-portable-pixmap
+!:ext	ppm/pnm
+0	string		P7
+>2	ubyte		!0xAB
+>>3	search/256/b	WIDTH		Netpbm PAM image file, size =
+!:mime	image/x-portable-arbitrarymap
+!:ext	pam
+!:strength + 65
+>>>&1	string		x		%s
+>>>3	search/256/b	HEIGHT		x
+>>>>&1	string		x		%s
+>>>2	ubyte		!0x0A		\b, %#x at offset 2 instead new line
+0	string		\117\072	Solitaire Image Recorder format
+>4	string		\013		MGI Type 11
+>4	string		\021		MGI Type 17
+0	string		.MDA		MicroDesign data
+>21	ubyte		48		version 2
+>21	ubyte		51		version 3
+0	string		.MDP		MicroDesign page data
+>21	ubyte		48		version 2
+>21	ubyte		51		version 3
+0	string		IIN1		NIFF image data
+!:mime	image/x-niff
+0	string		II\x1a\0\0\0HEAPCCDR	Canon CIFF raw image data
+!:mime	image/x-canon-crw
+>16	uleshort	x	\b, version %d.
+>14	uleshort	x	\b%d
+0	string		II\x2a\0\x10\0\0\0CR	Canon CR2 raw image data
+!:mime	image/x-canon-cr2
+!:strength +80
+>10	ubyte		x	\b, version %d.
+>11	ubyte		x	\b%d
+0	string		FUJIFILMCCD-RAW		Fujifilm RAF raw image data
+!:mime  image/x-fuji-raf
+!:ext	raf
+>0x10	string		x			\b, format version %4.4s
+>0x1C	string		x			\b, camera %s
+0	string		MM\x00\x2a	TIFF image data, big-endian
+!:strength +70
+!:mime	image/tiff
+!:ext	tif/tiff
+>(4.L)	use		\^tiff_ifd
+0	string		II\x2a\x00	TIFF image data, little-endian
+!:mime	image/tiff
+!:strength +70
+!:ext	tif/tiff
+>(4.l)	use		tiff_ifd
+0	name		tiff_ifd
+>0	uleshort	x		\b, direntries=%d
+>2	use		tiff_entry
+0	name		tiff_entry
+>0	uleshort	0xfe
+>>12	use		tiff_entry
+>0	uleshort	0x100
+>>4	ulelong		1
+>>>12	use		tiff_entry
+>>>8	uleshort	x		\b, width=%d
+>0	uleshort	0x101
+>>4	ulelong		1
+>>>8	uleshort	x		\b, height=%d
+>>>12	use		tiff_entry
+>0	uleshort	0x102
+>>8	uleshort	x		\b, bps=%d
+>>12	use		tiff_entry
+>0	uleshort	0x103
+>>4	ulelong		1		\b, compression=
+>>>8	uleshort	1		\bnone
+>>>8	uleshort	2		\bhuffman
+>>>8	uleshort	3		\bbi-level group 3
+>>>8	uleshort	4		\bbi-level group 4
+>>>8	uleshort	5		\bLZW
+>>>8	uleshort	6		\bJPEG (old)
+>>>8	uleshort	7		\bJPEG
+>>>8	uleshort	8		\bdeflate
+>>>8	uleshort	9		\bJBIG, ITU-T T.85
+>>>8	uleshort	0xa		\bJBIG, ITU-T T.43
+>>>8	uleshort	0x7ffe		\bNeXT RLE 2-bit
+>>>8	uleshort	0x8005		\bPackBits (Macintosh RLE)
+>>>8	uleshort	0x8029		\bThunderscan RLE
+>>>8	uleshort	0x807f		\bRasterPadding (CT or MP)
+>>>8	uleshort	0x8080		\bRLE (Line Work)
+>>>8	uleshort	0x8081		\bRLE (High-Res Cont-Tone)
+>>>8	uleshort	0x8082		\bRLE (Binary Line Work)
+>>>8	uleshort	0x80b2		\bDeflate (PKZIP)
+>>>8	uleshort	0x80b3		\bKodak DCS
+>>>8	uleshort	0x8765		\bJBIG
+>>>8	uleshort	0x8798		\bJPEG2000
+>>>8	uleshort	0x8799		\bNikon NEF Compressed
+>>>8	default		x
+>>>>8	uleshort	x		\b(unknown %#x)
+>>>12	use		tiff_entry
+>0	uleshort	0x106		\b, PhotometricInterpretation=
+>>8	clear		x
+>>8	uleshort	0		\bWhiteIsZero
+>>8	uleshort	1		\bBlackIsZero
+>>8	uleshort	2		\bRGB
+>>8	uleshort	3		\bRGB Palette
+>>8	uleshort	4		\bTransparency Mask
+>>8	uleshort	5		\bCMYK
+>>8	uleshort	6		\bYCbCr
+>>8	uleshort	8		\bCIELab
+>>8	default		x
+>>>8	uleshort	x		\b(unknown=%#x)
+>>12	use		tiff_entry
+>0	uleshort	0x10a
+>>4	ulelong		1
+>>>12	use		tiff_entry
+>0	uleshort	0x10d
+>>(8.l)	string		x		\b, name=%s
+>>>12	use		tiff_entry
+>0	uleshort	0x10e
+>>(8.l)	string		x		\b, description=%s
+>>>12	use		tiff_entry
+>0	uleshort	0x10f
+>>(8.l)	string		x		\b, manufacturer=%s
+>>>12	use		tiff_entry
+>0	uleshort	0x110
+>>(8.l)	string		x		\b, model=%s
+>>>12	use		tiff_entry
+>0	uleshort	0x111
+>>12	use		tiff_entry
+>0	uleshort	0x112		\b, orientation=
+>>8	uleshort	1		\bupper-left
+>>8	uleshort	3		\blower-right
+>>8	uleshort	6		\bupper-right
+>>8	uleshort	8		\blower-left
+>>8	uleshort	9		\bundefined
+>>8	default		x
+>>>8	uleshort	x		\b[*%d*]
+>>12	use		tiff_entry
+>0	uleshort	0x11a
+>>8	ulelong		x		\b, xresolution=%d
+>>12	use		tiff_entry
+>0	uleshort	0x11b
+>>8	ulelong		x		\b, yresolution=%d
+>>12	use		tiff_entry
+>0	uleshort	0x128
+>>8	uleshort	x		\b, resolutionunit=%d
+>>12	use		tiff_entry
+>0	uleshort	0x131
+>>(8.l)	string		x		\b, software=%s
+>>12	use		tiff_entry
+>0	uleshort	0x132
+>>(8.l)	string		x		\b, datetime=%s
+>>12	use		tiff_entry
+>0	uleshort	0x13c
+>>(8.l)	string		x		\b, hostcomputer=%s
+>>12	use		tiff_entry
+>0	uleshort	0x13e
+>>12	use		tiff_entry
+>0	uleshort	0x13f
+>>12	use		tiff_entry
+>0	uleshort	0x211
+>>12	use		tiff_entry
+>0	uleshort	0x213
+>>12	use		tiff_entry
+>0	uleshort	0x214
+>>12	use		tiff_entry
+>0	uleshort	0x8298
+>>(8.l)	string		x		\b, copyright=%s
+>>12	use		tiff_entry
+>0	uleshort	0x8769
+>>12	use		tiff_entry
+>0	uleshort	0x8825		\b, GPS-Data
+>>12	use		tiff_entry
+0	string		MM\x00\x2b	Big TIFF image data, big-endian
+!:mime	image/tiff
+0	string		II\x2b\x00	Big TIFF image data, little-endian
+!:mime	image/tiff
+0	name		png-ihdr
+>0	ubelong		x		\b, %d x
+>4	ubelong		x		%d,
+>8	ubyte		x		%d-bit
+>9	ubyte		0		grayscale,
+>9	ubyte		2		\b/color RGB,
+>9	ubyte		3		colormap,
+>9	ubyte		4		gray+alpha,
+>9	ubyte		6		\b/color RGBA,
+>12	ubyte		0		non-interlaced
+>12	ubyte		1		interlaced
+0	string		\x89PNG\x0d\x0a\x1a\x0a\x00\x00\x00\x0DIHDR	PNG image data
+!:mime	image/png
+!:ext   png
+!:strength +10
+>16	use		png-ihdr
+0	string		\x89PNG\x0d\x0a\x1a\x0a\x00\x00\x00\x04CgBI
+>24	string  	\x00\x00\x00\x0DIHDR	PNG image data (CgBI)
+!:mime	image/png
+!:ext   png
+!:strength +10
+>>32	use		png-ihdr
+0	string		GIF94z		ZIF image (GIF+deflate alpha)
+!:mime	image/x-unknown
+0	string		FGF95a		FGF image (GIF+deflate beta)
+!:mime	image/x-unknown
+0	string		PBF		PBF image (deflate compression)
+!:mime	image/x-unknown
+0	string		GIF8		GIF image data
+!:strength +80
+!:mime	image/gif
+!:apple	8BIMGIFf
+!:ext	gif
+>4	string		7a		\b, version 8%s,
+>4	string		9a		\b, version 8%s,
+>6	uleshort	>0		%d x
+>8	uleshort	>0		%d
+0	string		\361\0\100\273	CMU window manager raster image data
+>4	ulelong		>0		%d x
+>8	ulelong		>0		%d,
+>12	ulelong		>0		%d-bit
+0	search/256/bc	id=imagemagick
+>&0	ubyte&0xD5	0		MIFF image data
+!:mime	image/x-miff
+!:ext	miff/mif
+>>0	string		!id=ImageMagick	starting with
+>>>0	ubyte		=0x7b		comment
+>>>>2	string		x		"%s"
+>>>0	ubyte		!0x7b
+>>>>0	string		>\0		'%-.14s'
+0	string		push
+>5	search/3	graphic-context	ImageMagick Vector Graphic
+!:mime	image/x-mvg
+!:ext	mvg
+0	long		1123028772	Artisan image data
+>4	long		1		\b, rectangular 24-bit
+>4	long		2		\b, rectangular 8-bit with colormap
+>4	long		3		\b, rectangular 32-bit (24-bit with matte)
+0	search/1/ts	#FIG
+>&0	use		image-xfig
+0	search/1/bs	#FIG
+>&0	use		image-xfig
+0	name		image-xfig
+>8	ubyte		x		FIG image text
+!:mime	image/x-xfig
+!:ext	fig
+>5	string		x		\b, version %.3s
+>8	ubyte		>0x0D
+>>8	string		x		"%s"
+0	string		\x14FIG		DeskMate Drawing
+!:mime	image/x-deskmate-fig
+!:ext	fig
+0	string		ARF_BEGARF		PHIGS clear text archive
+0	string		@(#)SunPHIGS		SunPHIGS
+>40	string		SunBin			binary
+>32	string		archive			archive
+0	string		GKSM		GKS Metafile
+>24	string		SunGKS		\b, SunGKS
+0	string/c	begmf
+>5	short		!0
+>>5	short		!0xABab		clear text Computer Graphics Metafile
+!:mime	image/cgm
+!:ext	cgm
+>>>5	string		x		%s
+>>>2	search/128/c	mfversion
+>>>>&1	ubyte		>0x31		\b, version %c
+0	ubeshort&0xFFe0		0x0020
+>28	ubyte			x
+>>2	search/128/b		\x10\x22\0	binary Computer Graphics Metafile
+!:mime	image/cgm
+!:ext	cgm
+>>>&-1	ubeshort		>1		\b, version %u
+>>>0	ubeshort&0x001F		<31		\b, parameter length %u
+>>>>2		pstring		>\0		'%s'
+>>>>0  		ubeshort&0x0001	=0
+>>>>>(2.b+3)	ubeshort	!0x1022		\b, 2nd command %#4.4x (short even)
+>>>>0  		ubeshort&0x0001	=1
+>>>>>(2.b+4)	ubeshort	!0x1022		\b, 2nd command %#4.4x (short odd)
+>>>0	ubeshort&0x001F		=0x1F
+>>>>2  		ubeshort&0x8000	!0		\b, partition flag %#4.4x
+>>>>2  		ubeshort&0x7Fff	x		\b, parameter length %u (long)
+>>>>4		pstring/B	x		'%s'
+>>>>2  		ubeshort&0x0001	=1
+>>>>>(4.b+6)		ubeshort !0x1022	\b, 2nd command %#4.4x (long odd)
+>>>>2  		ubeshort&0x0001	=0
+>>>>>(4.b+5)	ubeshort	!0x1022		\b, 2nd command %#4.4x (long even)
+>>>-2	ubeshort		!0x0040		\b, NOT_FOUND_END_METAFILE
+0	string	yz	MGR bitmap, modern format, 8-bit aligned
+0	string	zz	MGR bitmap, old format, 1-bit deep, 16-bit aligned
+0	string	xz	MGR bitmap, old format, 1-bit deep, 32-bit aligned
+0	string	yx	MGR bitmap, modern format, squeezed
+0	string		%bitmap\0	FBM image data
+>30	long		0x31		\b, mono
+>30	long		0x33		\b, color
+1	string		PC\ Research,\ Inc	group 3 fax data
+>29	ubyte		0		\b, normal resolution (204x98 DPI)
+>29	ubyte		1		\b, fine resolution (204x196 DPI)
+0	string		Sfff		structured fax file
+0	string		\x11\x06	Award BIOS Logo, 136 x 84
+!:mime	image/x-award-bioslogo
+!:ext	epa
+0	string		\x11\x09	Award BIOS Logo, 136 x 126
+!:mime	image/x-award-bioslogo
+!:ext	epa
+0	string		\x10\x09	Award BIOS Logo, 128 x 126
+!:mime	image/x-award-bioslogo
+!:ext	epa
+0	string		AWBM
+>4	uleshort	<1981		Award BIOS Logo, version 2
+!:mime	image/x-award-bioslogo2
+!:ext	epa/bmp
+>>4	uleshort&0x0003	0
+>>>4	uleshort	x		\b, %d
+>>>6	uleshort	x		x %d
+>>4	uleshort&0x0003	>0		\b,
+>>>4	uleshort&0x0003	=1
+>>>>4	uleshort	x		%d+3
+>>>4	uleshort&0x0003	=2
+>>>>4	uleshort	x		%d+2
+>>>4	uleshort&0x0003	=3
+>>>>4	uleshort	x		%d+1
+>>>6	uleshort	x		x %d
+0	uleshort		40
+>12	uleshort	1		Device independent bitmap graphic
+!:mime	image/x-ms-bmp
+!:apple	????BMPp
+!:ext	dib
+>>4	ulelong		x		\b, %d x
+>>8	ulelong		x		%d x
+>>14	uleshort	x		%d
+>>16	ulelong		>0		\b, %u compression
+>>20	ulelong		x		\b, image size %u
+>>24	ulelong		>0		\b, resolution %d x
+>>>28	ulelong		x		%d px/m
+>>36	ulelong		>0		\b, %u important colors
+0	name		bitmap-vbm
+>2	ubyte		0xCB		VDC bitmap
+!:mime	image/x-commodore-vbm
+!:ext	bm/vbm
+>>3	ubyte		x		\b, version %u
+>>4	ubeshort	x		\b, %u
+>>6	ubeshort	x		x %u
+>>3	ubyte		=3
+>>>8	ubyte		0		\b, uncompressed
+>>>8	ubyte		1		\b, RLE-compressed
+>>>16	pstring/H	>0		\b, comment "%s"
+0	string		BM
+>2	ubeshort		0xCB02
+>>6	short		=0
+>>>0	use     	bitmap-bmp
+>>6	short		!0
+>>>0	use     	bitmap-vbm
+>2	ubeshort		0xCB03
+>>14	short		=0
+>>>0	use     	bitmap-vbm
+>>14	short		!0
+>>>0	use     	bitmap-bmp
+>2	default		x
+>>0	use     	bitmap-bmp
+0	name		bitmap-bmp
+>14	ulelong		12		PC bitmap, OS/2 1.x format
+!:mime	image/bmp
+!:ext	bmp
+>>18	uleshort	x		\b, %d x
+>>20	uleshort	x		%d
+>>24	uleshort	x		x %d
+>>6	uleshort	>0		\b, hotspot %ux
+>>>8	uleshort	x		\b%u
+>>2	ulelong		x		\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+>14	ulelong		48		PC bitmap, OS/2 2.x format (DIB header size=48)
+>14	ulelong		24		PC bitmap, OS/2 2.x format (DIB header size=24)
+>14	ulelong		16		PC bitmap, OS/2 2.x format (DIB header size=16)
+!:mime	image/bmp
+!:apple	????BMPp
+!:ext	bmp
+>>18	ulelong		x		\b, %u x
+>>22	ulelong		x		%u
+>>28	uleshort	>1		x %u
+>>6	uleshort	>0		\b, hotspot %ux
+>>>8	uleshort	x		\b%u
+>>2	ulelong		x		\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+>14	ulelong		64		PC bitmap, OS/2 2.x format
+!:mime	image/bmp
+!:apple	????BMPp
+!:ext	bmp
+>>18	ulelong		x		\b, %u x
+>>22	ulelong		x		%u
+>>28	uleshort	>1		x %u
+>>6	uleshort	>0		\b, hotspot %ux
+>>>8	uleshort	x		\b%u
+>>26	uleshort	>1		\b, %u color planes
+>>2	ulelong		x		\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+>14	ulelong		52		PC bitmap, Adobe Photoshop
+!:mime	image/bmp
+!:apple	????BMPp
+!:ext	bmp
+>>18	ulelong		x		\b, %d x
+>>22	ulelong		x		%d x
+>>28	uleshort	x		%d
+>>6	uleshort	>0		\b, hotspot %ux
+>>>8	uleshort	x		\b%u
+>>2	ulelong		x		\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+>14	ulelong		56		PC bitmap, Adobe Photoshop with alpha channel mask
+!:mime	image/bmp
+!:apple	????BMPp
+!:ext	bmp
+>>18	ulelong		x		\b, %d x
+>>22	ulelong		x		%d x
+>>28	uleshort		x		%d
+>>6	uleshort	>0		\b, hotspot %ux
+>>>8	uleshort	x		\b%u
+>>2	ulelong		x		\b, cbSize %u
+>>10	ulelong			x	\b, bits offset %u
+>14	ulelong		40
+>>14	ulelong		40		PC bitmap, Windows 3.x format
+!:mime	image/bmp
+!:apple	????BMPp
+>>>18	ulelong		x		\b, %d x
+>>>22	ulelong		x		%d
+>>>18	ulequad		=0x0000019000000140	x
+!:ext	bmp/sys
+>>>18	ulequad		!0x0000019000000140
+>>>>30	ulelong		2		x
+!:ext	bmp/rle
+>>>>30	default		x
+>>>>>18	ulequad&0xffFFffC0ffFFffC0 =0	x
+!:ext	bmp/ico
+>>>>>18	default		x		x
+!:ext	bmp
+>>>28	uleshort	x		%d
+>>>30	ulelong		>0		\b, %u compression
+>>>34	ulelong		>0		\b, image size %u
+>>>38	ulelong		>0		\b, resolution %d x
+>>>>42	ulelong		x		%d px/m
+>>>50	ulelong		>0		\b, %u important colors
+>>>2	ulelong		x		\b, cbSize %u
+>>>10	ulelong		x	\b, bits offset %u
+>14	ulelong		124		PC bitmap, Windows 98/2000 and newer format
+!:mime	image/bmp
+!:ext	bmp
+>>18	ulelong		x		\b, %d x
+>>22	ulelong		x		%d x
+>>28	uleshort	x		%d
+>>6	uleshort	>0		\b, hotspot %ux
+>>>8	uleshort	x		\b%u
+>>2	ulelong		x		\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+>14	ulelong		108		PC bitmap, Windows 95/NT4 and newer format
+!:mime	image/bmp
+!:ext	bmp
+>>18	ulelong		x		\b, %d x
+>>22	ulelong		x		%d x
+>>28	uleshort	x		%d
+>>6	uleshort	>0		\b, hotspot %ux
+>>>8	uleshort	x		\b%u
+>>2	ulelong		x		\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+0	string		IC
+>6	ulelong&0xFF00FF00	=0	OS/2 icon
+!:mime	image/x-os2-ico
+!:ext	ico
+>>2	ulelong		x	\b, cbSize %u
+>>6	uleshort	x	\b, hotspot %ux
+>>8	uleshort	x	\b%u
+>>10	ulelong		x	\b, bits offset %u
+0	string		CI
+>14	ulelong		<65		OS/2
+!:mime	image/x-os2-ico
+!:ext	ico
+>>14	ulelong		12		1.x color icon
+>>>18	uleshort	x		%u x
+>>>20	uleshort/2	x		%u
+>>>24	uleshort	>1		x %u
+>>14	ulelong		64		2.x color icon
+>>>18	ulelong		x		%u x
+>>>22	ulelong/2	x		%u
+>>>28	uleshort	>1		x %u
+>>>30	ulelong		3		\b, Huffman 1D compression
+>>6	uleshort	x	\b, hotspot %ux
+>>8	uleshort	x	\b%u
+>>2	ulelong		x	\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+0	string		CP
+>10	ulelong		>0
+>>14	ulelong		=12
+>>>0		use		os2-ptr
+>>14	ulelong		=64
+>>>0		use		os2-ptr
+0	name		os2-ptr
+>14	ulelong		x		OS/2
+!:mime	image/x-ibm-pointer
+!:ext	ptr
+>>14	ulelong		12		1.x color pointer
+>>>18	uleshort	x		%u x
+>>>20	uleshort/2	x		%u
+>>>24	uleshort	>1		x %u
+>>14	ulelong		64		2.x color pointer
+>>>18	ulelong		x		%u x
+>>>22	ulelong/2	x		%u
+>>>28	uleshort	>1		x %u
+>>>30	ulelong		3		\b, Huffman 1D compression
+>>6	uleshort	x	\b, hotspot %ux
+>>8	uleshort	x	\b%u
+>>2	ulelong		x	\b, cbSize %u
+>>10	ulelong		x	\b, bits offset %u
+0	string		BA
+>2	ulelong		<0x004c5942	OS/2 graphic array
+!:mime	image/x-os2-graphics
+>>2	ulelong		x	\b, cbSize %u
+>>6	ulelong		>0	\b, data offset %u
+>>10	uleshort	>0		\b, display %u
+>>>12	uleshort	>0		x %u
+>>14	string		BM	\b; 1st 
+!:ext	bmp/bga
+>>14	string		CI	\b; 1st 
+!:ext	ico
+>>14	string		CP	\b; 1st 
+!:ext	ico
+>>14	string		IC	\b; 1st 
+!:ext	ico
+>>14	indirect	x	
+0	string			/*\040
+>0	search/0xCE		/*\ XPM\ */
+>>&0		search/1249	[]
+>>>0		use		xpm-image
+>0	default			x
+>>0		search/0x52	static\040char\040
+>>>&0		search/64	[]
+>>>>0		use		xpm-image
+0	name			xpm-image
+>0	string		x	X pixmap image text
+!:mime	image/x-xpixmap
+!:ext	xpm
+>0	search/0x406	\n"
+>>&0	regex/8		[0-9]{1,5}	\b, %s
+>>>&0	regex/8		[0-9]{1,5}	x %s
+>>>>&0	regex/12	[0-9]{1,9}	x %s
+>>>>>&0	regex/14	[0-9]{1,2}	\b, %s chars/pixel
+>0	string		!/*\ XPM\ */
+>>0	string		x	\b, 1st line "%s"
+0	uleshort	0xcc52		RLE image data,
+>6	uleshort	x		%d x
+>8	uleshort	x		%d
+>2	uleshort	>0		\b, lower left corner: %d
+>4	uleshort	>0		\b, lower right corner: %d
+>10	ubyte&0x1	=0x1		\b, clear first
+>10	ubyte&0x2	=0x2		\b, no background
+>10	ubyte&0x4	=0x4		\b, alpha channel
+>10	ubyte&0x8	=0x8		\b, comment
+>11	ubyte		>0		\b, %d color channels
+>12	ubyte		>0		\b, %d bits per pixel
+>13	ubyte		>0		\b, %d color map channels
+0	string		Imagefile\ version-	iff image data
+>10	string		>\0		%s
+0	ubelong		0x59a66a95	Sun raster image data
+>4	ubelong		>0		\b, %d x
+>8	ubelong		>0		%d,
+>12	ubelong		>0		%d-bit,
+>20	ubelong		0		old format,
+>20	ubelong		2		compressed,
+>20	ubelong		3		RGB,
+>20	ubelong		4		TIFF,
+>20	ubelong		5		IFF,
+>20	ubelong		0xffff		reserved for testing,
+>24	ubelong		0		no colormap
+>24	ubelong		1		RGB colormap
+>24	ubelong		2		raw colormap
+0	ubeshort		474		SGI image data
+>2	ubyte		1		\b, RLE
+>3	ubyte		2		\b, high precision
+>4	ubeshort	x		\b, %d-D
+>6	ubeshort	x		\b, %d x
+>8	ubeshort	x		%d
+>10	ubeshort	x		\b, %d channel
+>10	ubeshort	!1		\bs
+>80	string		>0		\b, "%s"
+0	string		IT01		FIT image data
+>4	ubelong		x		\b, %d x
+>8	ubelong		x		%d x
+>12	ubelong		x		%d
+0	string		IT02		FIT image data
+>4	ubelong		x		\b, %d x
+>8	ubelong		x		%d x
+>12	ubelong		x		%d
+2048	string		PCD_IPI		Kodak Photo CD image pack file
+>0xe02	ubyte&0x03	0x00		, landscape mode
+>0xe02	ubyte&0x03	0x01		, portrait mode
+>0xe02	ubyte&0x03	0x02		, landscape mode
+>0xe02	ubyte&0x03	0x03		, portrait mode
+0	string		PCD_OPA		Kodak Photo CD overview pack file
+0	string	SIMPLE\ \ =	FITS image data
+!:mime	image/fits
+!:ext	fits/fts
+>109	string	8		\b, 8-bit, character or unsigned binary integer
+>108	string	16		\b, 16-bit, two's complement binary integer
+>107	string	\ 32		\b, 32-bit, two's complement binary integer
+>107	string	-32		\b, 32-bit, floating point, single precision
+>107	string	-64		\b, 64-bit, floating point, double precision
+0	string	This\ is\ a\ BitMap\ file	Lisp Machine bit-array-file
+0	ubeshort		0x1010		PEX Binary Archive
+128	string	DICM			DICOM medical imaging data
+!:mime	application/dicom
+!:ext dcm/dicom/dic
+0	ubelong	>99
+>8	ubelong	<3
+>>12	ubelong	<33
+>>>4	ubelong	7
+>>>>96	ubelong	x			X-Window screen dump image data, version X11
+!:mime	image/x-xwindowdump
+!:ext	xwd/dmp
+>>>>>0	ubelong	>100
+>>>>>>100 string	>\0			\b, "%s"
+>>>>>16	ubelong	x			\b, %dx
+>>>>>20	ubelong	x			\b%dx
+>>>>>12	ubelong	x			\b%d
+>>>>>28	ubelong	>0			\b, order %u
+>>>>>72	ubelong	x			\b, %u colors
+>>>>>76	ubelong	x			%u entries
+>>>>>88	ubelong	!0			\b, x=%d
+>>>>>92	ubelong	!0			\b, y=%d
+>>>>>96	ubelong	>0			\b, %u border
+0	ubelong		=0x000000028
+>4	ubelong		=6
+>>36	ubeshort	x		X-Window screen dump image data, version X10
+!:mime	image/x-xwindowdump
+!:ext	xwd
+>>>20	ubelong		x		\b, %d
+>>>24	ubelong		x		\bx%d
+>>>12	ubelong		x		\bx%u
+>>>32	ubeshort		!0	\b, x=%d
+>>>34	ubeshort		!0	\b, y=%d
+>>>36	ubeshort	!0		\b, %u border
+0	string	NJPL1I00		PDS (JPL) image data
+2	string	NJPL1I			PDS (JPL) image data
+0	string	CCSD3ZF			PDS (CCSD) image data
+2	string	CCSD3Z			PDS (CCSD) image data
+0	string	PDS_			PDS image data
+0	string	LBLSIZE=		PDS (VICAR) image data
+0	string	pM85		Atari ST STAD bitmap image data (hor)
+>5	ubyte	0x00		(white background)
+>5	ubyte	0xFF		(black background)
+0	string	pM86		Atari ST STAD bitmap image data (vert)
+>5	ubyte	0x00		(white background)
+>5	ubyte	0xFF		(black background)
+0	uleshort	0x0296		Atari ATR image
+0		beshort		0x0000
+>2		quad		!0
+>>4		ubeshort&0xF000	0
+>>>-0		offset	=32034
+>>>>0		use		degas-bitmap
+>>>-0		offset	=32066
+>>>>0		use		degas-bitmap
+>>>-0		offset	=32128
+>>>>0		use		degas-bitmap
+>>>-0		offset	=44834
+>>>>0		use		degas-bitmap
+0		beshort		0x0001
+>2		quad		!0
+>>-0		offset	=32034
+>>>0		use		degas-bitmap
+>>-0		offset	=32066
+>>>0		use		degas-bitmap
+0	beshort		0x0002
+>2		ubeshort&0xF000	0
+>>19		ubyte			=0
+>>>0		use		degas-bitmap
+>>19		ubyte			!0
+>>>(19.b*2)	ubequad			x
+>>>>&8		ubelong&0xff00ffFF	!0
+>>>>>6		ubeshort&0xF000	0
+>>>>>>8		ubeshort&0xF000	0
+>>>>>>>0	use		degas-bitmap
+>>>>&8		ubelong&0xff00ffFF	=0
+>>>>>&-4	ubelong&0x00FF0000	<0x00200000
+>>>>>>0		use		degas-bitmap
+0		beshort			0x8000
+>2		ubeshort&0xF000		0
+>>10		ubeshort&0xF000		0
+>>>2		quad			!0
+>>>>0		use		degas-bitmap
+0		beshort			0x8001
+>2		ubeshort&0xF000		0
+>>6		ubeshort&0xF000		0
+>>>0		use		degas-bitmap
+0		beshort			0x8002
+>2		ubeshort&0xF000		0
+>>0		use		degas-bitmap
+0	name		degas-bitmap
+>0	ubyte		x		Atari DEGAS
+!:mime	image/x-atari-degas
+>0	ubyte		=0x80		Elite compressed
+>0	ubyte		=0x00
+>>32042	ubequad		x		Elite
+>0	beshort		0x0000		bitmap
+!:ext	pi1
+>0	beshort		0x0001		bitmap
+!:ext	pi2
+>0	beshort		0x0002		bitmap
+!:ext	pi3
+>0	beshort		0x8000		bitmap
+!:ext	pc1
+>0	beshort		0x8001		bitmap
+!:ext	pc2
+>0	beshort		0x8002		bitmap
+!:ext	pc3
+>1	ubyte		=0		320 x 200 x 16
+>1	ubyte		=1		640 x 200 x 4
+>1	ubyte		=2		640 x 400 x 2
+>2	ubeshort	x		\b, color palette %4.4x
+>4	ubeshort	x		%4.4x
+>6	ubeshort	x		%4.4x
+>8	ubeshort	x		%4.4x
+>10	ubeshort	x		%4.4x
+>2	ubeshort	x		...
+0	string		\xFF\xFF0SO\x7F		Atari GED bitmap, 160x200
+!:mime	image/x-atari-ged
+!:ext	ged
+0	string		B&W256	ImageLab bitmap
+!:mime	image/x-ilab
+!:ext	b_w/b&w
+>6	ubeshort	x	\b, %u
+>8	ubeshort	x	x %u
+0	ubelong&0xffF8fe00	0x0a000000
+>3	ubyte		>0
+>>1	ubyte		<6
+>>>1	ubyte		!1	PCX
+!:mime	image/x-pcx
+>>>>1	ubyte		0	ver. 2.5 image data
+>>>>1	ubyte		2	ver. 2.8 image data, with palette
+>>>>1	ubyte		3	ver. 2.8 image data, without palette
+>>>>1	ubyte		4	for Windows image data
+>>>>1	ubyte		5	ver. 3.0 image data
+>>>>4	uleshort	x	bounding box [%d,
+>>>>6	uleshort	x	%d] -
+>>>>8	uleshort	x	[%d,
+>>>>10	uleshort	x	%d],
+>>>>65	ubyte		>1	%d planes each of
+>>>>3	ubyte		x	%d-bit
+>>>>68	ubyte		1	colour,
+>>>>68	ubyte		2	grayscale,
+>>>>68	default		x	image,
+>>>>12	uleshort	>0	%d x
+>>>>>14	uleshort	x	%d dpi,
+>>>>2	ubyte		0	uncompressed
+>>>>2	ubyte		1	RLE compressed
+0	string		8BPS
+>18	ubelong		>0	Adobe Photoshop
+!:mime	image/vnd.adobe.photoshop
+!:apple	????8BPS
+>>4   beshort 1
+>>>34	search/0xC0d7	PHUT	Image (PhotoDeluxe)
+!:ext	pdd
+>>>34	default		x	Image
+!:ext	psd
+>>4   beshort 2 Image (PSB)
+!:ext	psb
+>>18  belong  x \b, %d x
+>>14  belong  x %d,
+>>24  beshort 0 bitmap
+>>24  beshort 1 grayscale
+>>>12 beshort 2 with alpha
+>>24  beshort 2 indexed
+>>24  beshort 3 RGB
+>>>12 beshort 4 \bA
+>>24  beshort 4 CMYK
+>>>12 beshort 5 \bA
+>>24  beshort 7 multichannel
+>>24  beshort 8 duotone
+>>24  beshort 9 lab
+>>12  beshort > 1
+>>>12 beshort x \b, %dx
+>>12  beshort 1 \b,
+>>22  beshort x %d-bit channel
+>>12  beshort > 1 \bs
+>>6   bequad&0xFFffFFffFFff0000 !0 \b, at offset 6
+>>>6  belong  x	 0x%8.8x
+>>>6  beshort x   \b%4.4x
+0		ubeshort				<3
+>2		ubeshort				>0
+>>4		ubeshort				<16
+>>>(2.S*10)	ubelong					x
+>>>>4		ubeshort				=0
+>>>>>12			ubeshort			=0
+>>>>>>0				ubeshort		<2
+>>>>>>>0				use		adobe-aco
+>>>>>>0				ubeshort		=2
+>>>>>>>16				ubeshort	>0
+>>>>>>>>0					use	adobe-aco
+>>>>4		ubeshort				!0
+>>>>>0			ubeshort			<2
+>>>>>>14			ubeshort		<16
+>>>>>>>0				use		adobe-aco
+>>>>>0			ubeshort			=2
+>>>>>>14			ubeshort		=0
+>>>>>>>0				use		adobe-aco
+0	name		adobe-aco
+>0		ubeshort				x		Adobe Photoshop Color swatch, version %u
+!:mime		application/x-adobe-aco
+!:apple		????8BCO
+!:ext		aco
+>0		ubeshort				<2
+>>(2.S*10)	ubelong					x
+>>>&0		ubeshort				2		and 2
+>2		ubeshort				x		\b, %u colors
+>0		ubeshort				<2		\b; 1st
+>>4			use				aco-color
+>>>2				ubeshort		>1		\b; 2nd
+>>>>14					use		aco-color
+>0		ubeshort				=2		\b; 1st
+>>4			use				aco-color-v2
+>>>2				ubeshort		>1		\b; 2nd
+>>>>(16.S*2)				ubequad		x
+>>>>>&10					use	aco-color-v2
+0	name		aco-color
+>0		ubeshort				0		RGB
+>0		ubeshort				1		HSB
+>0		ubeshort				2		CMYK
+>0		ubeshort				3		Pantone
+>0		ubeshort				4		Focoltone
+>0		ubeshort				5		Trumatch
+>0		ubeshort				6		Toyo
+>0		ubeshort				7		Lab
+>0		ubeshort				8		Grayscale
+>0		ubeshort				9		wide CMYK
+>0		ubeshort				10		HKS
+>0		ubeshort				x		space (%u)
+>2		ubeshort				x		\b, w %#x
+>4		ubeshort				x		\b, x %#x
+>6		ubeshort				x		\b, y %#x
+>8		ubeshort				x		\b, z %#x
+0	name		aco-color-v2
+>0		use					aco-color
+>>12		ubeshort-1				x		\b, %u chars
+>>14		bestring16				x		"%s"
+0	string		P7\ 332		XV thumbnail image data
+!:mime	image/x-xv-thumbnail
+!:ext	p7/gif/tif/xpm/jpg
+0	string	NITF	National Imagery Transmission Format
+>25	string	>\0	dated %.14s
+0       beshort     0x0001
+>2      beshort     0x0008
+>>0     use gem_info
+>2      beshort     0x0009
+>>0     use gem_info
+>2      beshort     24
+>>0     use gem_info
+>2      beshort     25
+>>0     use gem_info
+16      string      XIMG\0
+>0      use gem_info
+16      string      STTT\0\x10
+>0      use gem_info
+16      string      TIMG\0
+>0      use gem_info
+0   name        gem_info
+>0	ubeshort		<0x0003		GEM
+!:mime	image/x-gem
+>>2	ubeshort	>9
+>>>16	string		STTT\0\x10	STTT
+>>>16	string		TIMG\0		TIMG
+>>>16	string		\0\x80
+>>>>2	ubeshort	=24		NOSIG
+>>>>2	ubeshort	!24		HYPERPAINT
+>>>16	default		x
+>>>>16	string		!XIMG\0		NOSIG
+>>16	string		=XIMG\0		XIMG Image data
+!:ext	img/ximg
+>>16	string		!XIMG\0		Image data
+!:ext	img
+>>2	ubeshort	9		(Ventura)
+>>12	ubeshort	x		%d x
+>>14	ubeshort	x		%d,
+>>4	ubeshort	x		%d planes,
+>>8	ubeshort	x		%d x
+>>10	ubeshort	x		%d pixelsize
+>>6	ubeshort	!2		\b, pattern size %d
+0	ulelong		0x0018FFFF	GEM Metafile data
+>4	uleshort	x		version %d
+0	string	\0\nSMJPEG	SMJPEG
+>8	ubelong	x		%d.x data
+>16	string		_SND		\b,
+>>24	ubeshort	>0		%d Hz
+>>26	ubyte		8		8-bit
+>>26	ubyte		16		16-bit
+>>28	string		NONE		uncompressed
+>>27	ubyte		1		mono
+>>28	ubyte		2		stereo
+>>32	string		_VID		\b,
+>>>40	ubelong		>0		%d frames
+>>>44	ubeshort	>0		(%d x
+>>>46	ubeshort	>0		%d)
+>16	string		_VID		\b,
+>>24	ubelong		>0		%d frames
+>>28	ubeshort	>0		(%d x
+>>30	ubeshort	>0		%d)
+0	string	Paint\ Shop\ Pro\ Image\ File	Paint Shop Pro Image File
+0	string		KiSS		KISS/GS
+>4	ubyte		16		color
+>>5	ubyte		x		%d bit
+>>8	uleshort	x		%d colors
+>>10	uleshort	x		%d groups
+>4	ubyte		32		cell
+>>5	ubyte		x		%d bit
+>>8	uleshort	x		%d x
+>>10	uleshort	x		%d
+>>12	uleshort	x		+%d
+>>14	uleshort	x		+%d
+0       string          C\253\221g\230\0\0\0 Webshots Desktop .wbz file
+0       string  CKD_P370        Hercules CKD DASD image file
+>8      lelong  x               \b, %d heads per cylinder
+>12     lelong  x               \b, track size %d bytes
+>16     byte    x               \b, device type 33%2.2X
+0       string  CKD_C370        Hercules compressed CKD DASD image file
+>8      lelong  x               \b, %d heads per cylinder
+>12     lelong  x               \b, track size %d bytes
+>16     byte    x               \b, device type 33%2.2X
+>552    lelong  x               \b, %d total cylinders
+>>557   byte    0               \b, no compression
+>>557   byte    1               \b, ZLIB compression
+>>557   byte    2               \b, BZ2 compression
+0       string  CKD_S370        Hercules CKD DASD shadow file
+>8      lelong  x               \b, %d heads per cylinder
+>12     lelong  x               \b, track size %d bytes
+>16     byte    x               \b, device type 33%2.2X
+0       string  CKD_P064        Hercules CKD64 DASD image file
+>8      lelong  x               \b, %d heads per cylinder
+>12     lelong  x               \b, track size %d bytes
+>16     byte    x               \b, device type 33%2.2X
+0       string  CKD_C064        Hercules compressed CKD64 DASD image file
+>8      lelong  x               \b, %d heads per cylinder
+>12     lelong  x               \b, track size %d bytes
+>16     byte    x               \b, device type 33%2.2X
+>524    lelong  x               \b, %d total cylinders
+>>585   byte    0               \b, no compression
+>>585   byte    1               \b, ZLIB compression
+>>585   byte    2               \b, BZ2 compression
+0       string  CKD_S064        Hercules CKD64 DASD shadow file
+>8      lelong  x               \b, %d heads per cylinder
+>12     lelong  x               \b, track size %d bytes
+>16     byte    x               \b, device type 33%2.2X
+0	string		\146\031\0\0	Squeak image data
+0	search/1	'From\040Squeak	Squeak program text
+0		string	PaRtImAgE-VoLuMe	PartImage
+>0x0020		string	0.6.1		file version %s
+>>0x0060	ulelong	>-1		volume %d
+>>0x0200	string	>\0		type %s
+>>0x1400	string	>\0		device %s,
+>>0x1600	string	>\0		original filename %s,
+>>0x2744	ulelong	0		not compressed
+>>0x2744	ulelong	1		gzip compressed
+>>0x2744	ulelong	2		bzip2 compressed
+>>0x2744	ulelong	>2		compressed with unknown algorithm
+>0x0020		string	>0.6.1		file version %s
+>0x0020		string	<0.6.1		file version %s
+0	ulelong	987654321	DCX multi-page
+!:mime	image/x-dcx
+!:ext	dcx
+>4	ulelong	x		\b, at %#x 
+>(4.l)	indirect		x
+0	ulelong  0xd75f2a80	Cineon image data
+>200	ubelong  >0		\b, %d x
+>204	ubelong  >0		%d
+14	uleshort	<2
+>62	uleshort	<2
+>>54	uleshort	12345		Bio-Rad .PIC Image File
+>>>0	uleshort	>0		%d x
+>>>2	uleshort	>0		%d,
+>>>4	uleshort	=1		1 image in file
+>>>4	uleshort	>1		%d images in file
+0	string	\000MRM			Minolta Dimage camera raw image data
+0	string	AT&TFORM
+>12	string	DJVM		DjVu multiple page document
+!:mime	image/vnd.djvu
+>12	string	DJVU		DjVu image or single page document
+!:mime	image/vnd.djvu
+>12	string	DJVI		DjVu shared document
+!:mime	image/vnd.djvu
+>12	string	THUM		DjVu page thumbnails
+!:mime	image/vnd.djvu
+0	ulelong		20000630	OpenEXR image data,
+!:mime image/x-exr
+>4	ulelong&0x000000ff x		version %d,
+>4	ulelong		^0x00000200	storage: scanline
+>4	ulelong		&0x00000200	storage: tiled
+>8	search/0x1000	compression\0	\b, compression:
+>>&16	ubyte		0		none
+>>&16	ubyte		1		rle
+>>&16	ubyte		2		zips
+>>&16	ubyte		3		zip
+>>&16	ubyte		4		piz
+>>&16	ubyte		5		pxr24
+>>&16	ubyte		6		b44
+>>&16	ubyte		7		b44a
+>>&16	ubyte		8		dwaa
+>>&16	ubyte		9		dwab
+>>&16	ubyte		>9		unknown
+>8	 search/0x1000	dataWindow\0	\b, dataWindow:
+>>&10	ulelong		x		(%d
+>>&14	ulelong		x		%d)-
+>>&18	ulelong		x		\b(%d
+>>&22	ulelong		x		%d)
+>8	search/0x1000	displayWindow\0	\b, displayWindow:
+>>&10	ulelong		x		(%d
+>>&14	ulelong		x		%d)-
+>>&18	ulelong		x		\b(%d
+>>&22	ulelong		x		%d)
+>8	search/0x1000	lineOrder\0	 \b, lineOrder:
+>>&14	ubyte		0		increasing y
+>>&14	ubyte		1		decreasing y
+>>&14	ubyte		2		random y
+>>&14	ubyte		>2		unknown
+0	string		SDPX	DPX image data, big-endian,
+!:mime image/x-dpx
+>0	use		dpx_info
+0	string		XPDS	DPX image data, little-endian,
+!:mime image/x-dpx
+>0	use		\^dpx_info
+0	name		dpx_info
+>768	ubeshort	<4
+>>772	ubelong		x	%dx
+>>776	ubelong		x	\b%d,
+>768	ubeshort	>3
+>>776	ubelong		x	%dx
+>>772	ubelong		x	\b%d,
+>768	ubeshort	0	left to right/top to bottom
+>768	ubeshort	1	right to left/top to bottom
+>768	ubeshort	2	left to right/bottom to top
+>768	ubeshort	3	right to left/bottom to top
+>768	ubeshort	4	top to bottom/left to right
+>768	ubeshort	5	top to bottom/right to left
+>768	ubeshort	6	bottom to top/left to right
+>768	ubeshort	7	bottom to top/right to left
+0	string	CDF\001
+>3	uleshort	>0		NetCDF Data Format data
+!:mime	application/x-netcdf
+!:ext	nc
+0	string	CDF\002
+>3	uleshort	>0		NetCDF Data Format data (64-bit offset)
+!:mime	application/x-netcdf
+!:ext	nc
+0	ubelong	0xCDF30001	Common Data Format (Version 3 or later) data
+!:mime  application/x-cdf
+0	ubelong	0xCDF26002	Common Data Format (Version 2.6 or 2.7) data
+!:mime  application/x-cdf
+0	ubelong	0x0000FFFF	Common Data Format (Version 2.5 or earlier) data
+!:mime  application/x-cdf
+0	ubelong	0x0e031301	Hierarchical Data Format (version 4) data
+!:mime	application/x-hdf
+!:ext	hdf/hdf4/h4
+0	string	\211HDF\r\n\032\n	Hierarchical Data Format (version 5) data
+!:mime	application/x-hdf5
+!:ext	h5/hdf5/hdf/he5
+512	string	\211HDF\r\n\032\n
+>0	string	!MATLAB			Hierarchical Data Format (version 5) with 512 bytes user block
+!:mime	application/x-hdf5
+!:ext	h5/hdf5/hdf/he5
+1024	string	\211HDF\r\n\032\n	Hierarchical Data Format (version 5) with 1k user block
+!:mime	application/x-hdf5
+!:ext	h5/hdf5/hdf/he5
+2048	string	\211HDF\r\n\032\n	Hierarchical Data Format (version 5) with 2k user block
+!:mime	application/x-hdf5
+!:ext	h5/hdf5/hdf/he5
+4096	string	\211HDF\r\n\032\n	Hierarchical Data Format (version 5) with 4k user block
+!:mime	application/x-hdf5
+!:ext	h5/hdf5/hdf/he5
+0	string	XARA\243\243	Xara graphics file
+0	string	@CorelBMF\n\rCorel\040Corporation 	Corel GALLERY Clipart
+!:mime	image/x-corel-bmf
+!:ext	bmf
+0	string	CPC\262		Cartesian Perceptual Compression image
+!:mime	image/x-cpi
+!:ext	cpi/cpc
+0       string		C565     OLPC firmware icon image data
+>4      uleshort	x       %u x
+>6      uleshort	x       %u
+0	string	\xce\xda\xde\xfa	Cytovision Metaphases file
+0	string	\xed\xad\xef\xac	Cytovision Karyotype file
+0	string	\x0b\x00\x03\x00	Cytovision FISH Probe file
+0	string	\xed\xfe\xda\xbe	Cytovision FLEX file
+0	string	\xed\xab\xed\xfe	Cytovision FLEX file
+0	string	\xad\xfd\xea\xad	Cytovision RATS file
+0	string	\xff\xa0\xff\xa8\x00	Wavelet Scalar Quantization image data
+0	string/b	PCO-	PCO B16 image data
+>12	ulelong		x	\b, %dx
+>16	ulelong		x	\b%d
+>20	ulelong		0	\b, short header
+>20	ulelong		-1	\b, extended header
+>>24	ulelong		0	\b, grayscale
+>>>36	ulelong		0	linear LUT
+>>>36	ulelong		1	logarithmic LUT
+>>>28	ulelong		x	[%d
+>>>32	ulelong		x	\b,%d]
+>>24	ulelong		1	\b, color
+>>>64	ulelong		0	linear LUT
+>>>64	ulelong		1	logarithmic LUT
+>>>40	ulelong		x	r[%d
+>>>44	ulelong		x	\b,%d]
+>>>48	ulelong		x	g[%d
+>>>52	ulelong		x	\b,%d]
+>>>56	ulelong		x	b[%d
+>>>60	ulelong		x	\b,%d]
+0	string/t	[BitmapInfo2]	Polar Monitor Bitmap text
+!:mime	image/x-polar-monitor-bitmap
+0	string	GARMIN\ BITMAP\ 01	Garmin Bitmap file
+!:ext srf
+>0x2f	string		>0		\b, version %4.4s
+>0x55	uleshort	>0		\b, %dx
+>>0x53	uleshort	x		\b%d
+0	string	IIO1$			Ulead Photo Explorer 3
+!:mime	image/x-ulead-pe3
+!:ext	pe3
+>5	search/192/s	:\\
+>>&-1	string	x			"%s"
+>5	default		x
+>>5	search/192/s	\x5c\x5c
+>>>&0	string	x			"%s"
+0	string	IIO2H			Ulead Photo Explorer 4 or 5
+!:mime	image/x-ulead-pe4
+!:ext	pe4/pe5
+>0x4c2	search/0xE02/s	JFIF		with JPEG image data
+>>&-6	use			jpeg
+11	string	\001\0\0\0\0
+>19	string	\0\001\0\003\0
+>>0	use	ulead-imaginfo
+11	string	\001\0\0\0\0
+>19	string	\0\0\0\004\0
+>>0	use	ulead-imaginfo
+0	name	ulead-imaginfo
+>22	ubyte	x			Ulead Imaginfo thumbnail
+!:mime	image/x-ulead-imaginfo
+>22	ubyte	=3			\b, version 3
+!:ext	pe3
+>22	ubyte	=4			\b, version 4
+!:ext	pe4
+>22	ubyte	x
+>>4	search/192/s	:\x5c
+>>>&-1	ubyte	>0x40
+>>>>&-5	pstring/l	>0		\b, "%s"
+>>>&-1	default		x
+>>>>4	search/192/s	\x5c\x5c
+>>>>>&-4 pstring/l	>0		\b, "%s"
+>>4	default		x
+>>>4	search/192/s	\x5c\x5c
+>>>>&-4 pstring/l	>0		\b, "%s"
+>56	search/38/s	.
+>>&1	string	x			with %-.3s images
+0	ubelong		0xFFFF0100
+>8	search/21	PresetInfo	Ulead pattern image
+!:mime	image/x-ulead-pst
+!:ext	pst
+>>4	pstring/h	x		"%s"
+0	string	Xcur			X11 cursor
+0	string		MMOR		Olympus ORF raw image data, big-endian
+!:mime	image/x-olympus-orf
+0	string		IIRO		Olympus ORF raw image data, little-endian
+!:mime	image/x-olympus-orf
+0	string		IIRS		Olympus ORF raw image data, little-endian
+!:mime	image/x-olympus-orf
+0	string	HDMV0100	AVCHD Clip Information
+0	string	#?RADIANCE\n	Radiance HDR image data
+!:mime	image/vnd.radiance
+0	string	PFS1\x0a	PFS HDR image data
+>1	regex	[0-9]*\ 	\b, %s
+>>1	regex	\ [0-9]{4}	\bx%s
+0	string	FOVb	Foveon X3F raw image data
+!:mime	image/x-x3f
+>6	uleshort	x	\b, version %d.
+>4	uleshort	x	\b%d
+>28	ulelong		x	\b, %dx
+>32	ulelong		x	\b%d
+0	string	PDN3	Paint.NET image data
+!:mime	image/x-paintnet
+0	string	\x46\x4d\x52\x00	ISO/IEC 19794-2 Format Minutiae Record (FMR)
+90	ubequad		0x574D50484F544F00	JPEG-XR Image
+>98	ubyte&0x08	=0x08			\b, hard tiling
+>99	ubyte&0x80	=0x80			\b, tiling present
+>99	ubyte&0x40	=0x40			\b, codestream present
+>99	ubyte&0x38	x			\b, spatial xform=
+>99	ubyte&0x38	0x00			\bTL
+>99	ubyte&0x38	0x08			\bBL
+>99	ubyte&0x38	0x10			\bTR
+>99	ubyte&0x38	0x18			\bBR
+>99	ubyte&0x38	0x20			\bBT
+>99	ubyte&0x38	0x28			\bRB
+>99	ubyte&0x38	0x30			\bLT
+>99	ubyte&0x38	0x38			\bLB
+>100	ubyte&0x80	=0x80			\b, short header
+>>102	ubeshort+1	x			\b, %d
+>>104	ubeshort+1	x			\bx%d
+>100	ubyte&0x80	=0x00			\b, long header
+>>102	ubelong+1	x			\b, %x
+>>106	ubelong+1	x			\bx%x
+>101	ubeshort&0xf	x			\b, bitdepth=
+>>101	ubeshort&0xf	0x0			\b1-WHITE=1
+>>101	ubeshort&0xf	0x1			\b8
+>>101	ubeshort&0xf	0x2			\b16
+>>101	ubeshort&0xf	0x3			\b16-SIGNED
+>>101	ubeshort&0xf	0x4			\b16-FLOAT
+>>101	ubeshort&0xf	0x5			\b(reserved 5)
+>>101	ubeshort&0xf	0x6			\b32-SIGNED
+>>101	ubeshort&0xf	0x7			\b32-FLOAT
+>>101	ubeshort&0xf	0x8			\b5
+>>101	ubeshort&0xf	0x9			\b10
+>>101	ubeshort&0xf	0xa			\b5-6-5
+>>101	ubeshort&0xf	0xb			\b(reserved %d)
+>>101	ubeshort&0xf	0xc			\b(reserved %d)
+>>101	ubeshort&0xf	0xd			\b(reserved %d)
+>>101	ubeshort&0xf	0xe			\b(reserved %d)
+>>101	ubeshort&0xf	0xf			\b1-BLACK=1
+>101	ubeshort&0xf0	x			\b, colorfmt=
+>>101	ubeshort&0xf0	0x00			\bYONLY
+>>101	ubeshort&0xf0	0x10			\bYUV240
+>>101	ubeshort&0xf0	0x20			\bYWV422
+>>101	ubeshort&0xf0	0x30			\bYWV444
+>>101	ubeshort&0xf0	0x40			\bCMYK
+>>101	ubeshort&0xf0	0x50			\bCMYKDIRECT
+>>101	ubeshort&0xf0	0x60			\bNCOMPONENT
+>>101	ubeshort&0xf0	0x70			\bRGB
+>>101	ubeshort&0xf0	0x80			\bRGBE
+>>101	ubeshort&0xf0	>0x80			\b(reserved %#x)
+0	string	\x42\x50\x47\xFB	BPG (Better Portable Graphics)
+!:mime  image/bpg
+0	string		icns		Mac OS X icon
+!:mime	image/x-icns
+!:apple	????icns
+!:ext icns
+>4	ubelong		>0
+>>4	ubelong		x		\b, %d bytes
+>>8	string		x		\b, "%4.4s" type
+0		ulelong		0x00000010
+>4		ulelong&0xffFFffF0	=0	Sony PlayStation PSX image,
+!:mime	image/x-sony-tim
+!:ext	tim
+>>4		ulelong&0x07	0x0		4-Bit,
+>>4		ulelong&0x07	0x1		8-Bit,
+>>4		ulelong  	0x2		15-Bit,
+>>4		ulelong  	0x3		24-Bit,
+>>4		ulelong&0x07  	0x4		Mixed-Bit,
+>>4		ulelong 	&8
+>>>(8.l+12)	uleshort	x		Pixel at (%d,
+>>>(8.l+14)	uleshort	x		\b%d) Size=
+>>>>4		ulelong  	0x8
+>>>>>(8.l+16)	uleshort*4	x		\b%d
+>>>>4		ulelong  	0x9
+>>>>>(8.l+16)	uleshort*2	x		\b%d
+>>>(8.l+18)	uleshort	x		\bx%d,
+>>>4		ulelong 	0x8		16 CLUT Entries at
+>>>4		ulelong 	0x9		256 CLUT Entries at
+>>>12		uleshort	x		(%d,
+>>>14		uleshort	x		\b%d)
+>>4		ulelong		^8
+>>>12		uleshort	x		Pixel at (%d,
+>>>14		uleshort	x		\b%d) Size=
+>>>>4		ulelong  	0x0
+>>>>>16		uleshort*4	x		\b%d
+>>>>4		ulelong  	0x1
+>>>>>16		uleshort*2	x		\b%d
+>>>>4		ulelong  	0x2
+>>>>>16		uleshort		x		\b%d
+>>>>4		ulelong  	0x3
+>>>>>16		uleshort		x		\b2/3*%d
+>>>>4		ulelong  	0x4
+>>>>>16		uleshort		x		\b%d
+>>>18		uleshort		x		\bx%d
+0		ulelong		0x80010160	MDEC video stream,
+>16		uleshort	x		%dx
+>18		uleshort	x		\b%d
+2		uleshort	0x3800		BS image,
+>6		uleshort	x		Version %d,
+>4		uleshort	x		Quantization %d,
+>0		uleshort	x		(Decompresses to %d words)
+0		string		farbfeld	farbfeld image data,
+>8		ubelong		x		%dx
+>12		ubelong		x		\b%d
+0	name	ms-directdraw-dx10
+>0	ulelong	x	\b, DXGI format:
+>0	ulelong	1	R32G32B32A32_TYPELESS
+>0	ulelong	2	R32G32B32A32_FLOAT
+>0	ulelong	3	R32G32B32A32_UINT
+>0	ulelong	4	R32G32B32A32_SINT
+>0	ulelong	5	R32G32B32_TYPELESS
+>0	ulelong	6	R32G32B32_FLOAT
+>0	ulelong	7	R32G32B32_UINT
+>0	ulelong	8	R32G32B32_SINT
+>0	ulelong	9	R16G16B16A16_TYPELESS
+>0	ulelong	10	R16G16B16A16_FLOAT
+>0	ulelong	11	R16G16B16A16_UNORM
+>0	ulelong	12	R16G16B16A16_UINT
+>0	ulelong	13	R16G16B16A16_SNORM
+>0	ulelong	14	R16G16B16A16_SINT
+>0	ulelong	15	R32G32_TYPELESS
+>0	ulelong	16	R32G32_FLOAT
+>0	ulelong	17	R32G32_UINT
+>0	ulelong	18	R32G32_SINT
+>0	ulelong	19	R32G8X24_TYPELESS
+>0	ulelong	20	D32_FLOAT_S8X24_UINT
+>0	ulelong	21	R32_FLOAT_X8X24_TYPELESS
+>0	ulelong	22	X32_TYPELESS_G8X24_UINT
+>0	ulelong	23	R10G10B10A2_TYPELESS
+>0	ulelong	24	R10G10B10A2_UNORM
+>0	ulelong	25	R10G10B10A2_UINT
+>0	ulelong	26	R11G11B10_FLOAT
+>0	ulelong	27	R8G8B8A8_TYPELESS
+>0	ulelong	28	R8G8B8A8_UNORM
+>0	ulelong	29	R8G8B8A8_UNORM_SRGB
+>0	ulelong	30	R8G8B8A8_UINT
+>0	ulelong	31	R8G8B8A8_SNORM
+>0	ulelong	32	R8G8B8A8_SINT
+>0	ulelong	33	R16G16_TYPELESS
+>0	ulelong	34	R16G16_FLOAT
+>0	ulelong	35	R16G16_UNORM
+>0	ulelong	36	R16G16_UINT
+>0	ulelong	37	R16G16_SNORM
+>0	ulelong	38	R16G16_SINT
+>0	ulelong	39	R32_TYPELESS
+>0	ulelong	40	D32_FLOAT
+>0	ulelong	41	R32_FLOAT
+>0	ulelong	42	R32_UINT
+>0	ulelong	43	R32_SINT
+>0	ulelong	44	R24G8_TYPELESS
+>0	ulelong	45	D24_UNORM_S8_UINT
+>0	ulelong	46	R24_UNORM_X8_TYPELESS
+>0	ulelong	47	X24_TYPELESS_G8_UINT
+>0	ulelong	48	R8G8_TYPELESS
+>0	ulelong	49	R8G8_UNORM
+>0	ulelong	50	R8G8_UINT
+>0	ulelong	51	R8G8_SNORM
+>0	ulelong	52	R8G8_SINT
+>0	ulelong	53	R16_TYPELESS
+>0	ulelong	54	R16_FLOAT
+>0	ulelong	55	D16_UNORM
+>0	ulelong	56	R16_UNORM
+>0	ulelong	57	R16_UINT
+>0	ulelong	58	R16_SNORM
+>0	ulelong	59	R16_SINT
+>0	ulelong	60	R8_TYPELESS
+>0	ulelong	61	R8_UNORM
+>0	ulelong	62	R8_UINT
+>0	ulelong	63	R8_SNORM
+>0	ulelong	64	R8_SINT
+>0	ulelong	65	A8_UNORM
+>0	ulelong	66	R1_UNORM
+>0	ulelong	67	R9G9B9E5_SHAREDEXP
+>0	ulelong	68	R8G8_B8G8_UNORM
+>0	ulelong	69	G8R8_G8B8_UNORM
+>0	ulelong	70	BC1_TYPELESS
+>0	ulelong	71	BC1_UNORM
+>0	ulelong	72	BC1_UNORM_SRGB
+>0	ulelong	73	BC2_TYPELESS
+>0	ulelong	74	BC2_UNORM
+>0	ulelong	75	BC2_UNORM_SRGB
+>0	ulelong	76	BC3_TYPELESS
+>0	ulelong	77	BC3_UNORM
+>0	ulelong	78	BC3_UNORM_SRGB
+>0	ulelong	79	BC4_TYPELESS
+>0	ulelong	80	BC4_UNORM
+>0	ulelong	81	BC4_SNORM
+>0	ulelong	82	BC5_TYPELESS
+>0	ulelong	83	BC5_UNORM
+>0	ulelong	84	BC5_SNORM
+>0	ulelong	85	B5G6R5_UNORM
+>0	ulelong	86	B5G5R5A1_UNORM
+>0	ulelong	87	B8G8R8A8_UNORM
+>0	ulelong	88	B8G8R8X8_UNORM
+>0	ulelong	89	R10G10B10_XR_BIAS_A2_UNORM
+>0	ulelong	90	B8G8R8A8_TYPELESS
+>0	ulelong	91	B8G8R8A8_UNORM_SRGB
+>0	ulelong	92	B8G8R8X8_TYPELESS
+>0	ulelong	93	B8G8R8X8_UNORM_SRGB
+>0	ulelong	94	BC6H_TYPELESS
+>0	ulelong	95	BC6H_UF16
+>0	ulelong	96	BC6H_SF16
+>0	ulelong	97	BC7_TYPELESS
+>0	ulelong	98	BC7_UNORM
+>0	ulelong	99	BC7_UNORM_SRGB
+>0	ulelong	100	AYUV
+>0	ulelong	101	Y410
+>0	ulelong	102	Y416
+>0	ulelong	103	NV12
+>0	ulelong	104	P010
+>0	ulelong	105	P016
+>0	ulelong	106	420_OPAQUE
+>0	ulelong	107	YUY2
+>0	ulelong	108	Y210
+>0	ulelong	109	Y216
+>0	ulelong	110	NV11
+>0	ulelong	111	AI44
+>0	ulelong	112	IA44
+>0	ulelong	113	P8
+>0	ulelong	114	A8P8
+>0	ulelong	115	B4G4R4A4_UNORM
+>0	ulelong	116	XBOX_R10G10B10_7E3_A2_FLOAT
+>0	ulelong	117	XBOX_R10G10B10_6E4_A2_FLOAT
+>0	ulelong	118	XBOX_D16_UNORM_S8_UINT
+>0	ulelong	119	XBOX_R16_UNORM_X8_TYPELESS
+>0	ulelong	120	XBOX_X16_TYPELESS_G8_UINT
+>0	ulelong	130	DXGI_FORMAT_P208
+>0	ulelong	131	DXGI_FORMAT_V208
+>0	ulelong	132	DXGI_FORMAT_V408
+>0	ulelong	133	ASTC_4X4_TYPELESS
+>0	ulelong	134	ASTC_4X4_UNORM
+>0	ulelong	135	ASTC_4X4_UNORM_SRGB
+>0	ulelong	137	ASTC_5X4_TYPELESS
+>0	ulelong	138	ASTC_5X4_UNORM
+>0	ulelong	139	ASTC_5X4_UNORM_SRGB
+>0	ulelong	141	ASTC_5X5_TYPELESS
+>0	ulelong	142	ASTC_5X5_UNORM
+>0	ulelong	143	ASTC_5X5_UNORM_SRGB
+>0	ulelong	145	ASTC_6X5_TYPELESS
+>0	ulelong	146	ASTC_6X5_UNORM
+>0	ulelong	147	ASTC_6X5_UNORM_SRGB
+>0	ulelong	149	ASTC_6X6_TYPELESS
+>0	ulelong	150	ASTC_6X6_UNORM
+>0	ulelong	151	ASTC_6X6_UNORM_SRGB
+>0	ulelong	153	ASTC_8X5_TYPELESS
+>0	ulelong	154	ASTC_8X5_UNORM
+>0	ulelong	155	ASTC_8X5_UNORM_SRGB
+>0	ulelong	157	ASTC_8X6_TYPELESS
+>0	ulelong	158	ASTC_8X6_UNORM
+>0	ulelong	159	ASTC_8X6_UNORM_SRGB
+>0	ulelong	161	ASTC_8X8_TYPELESS
+>0	ulelong	162	ASTC_8X8_UNORM
+>0	ulelong	163	ASTC_8X8_UNORM_SRGB
+>0	ulelong	165	ASTC_10X5_TYPELESS
+>0	ulelong	166	ASTC_10X5_UNORM
+>0	ulelong	167	ASTC_10X5_UNORM_SRGB
+>0	ulelong	169	ASTC_10X6_TYPELESS
+>0	ulelong	170	ASTC_10X6_UNORM
+>0	ulelong	171	ASTC_10X6_UNORM_SRGB
+>0	ulelong	173	ASTC_10X8_TYPELESS
+>0	ulelong	174	ASTC_10X8_UNORM
+>0	ulelong	175	ASTC_10X8_UNORM_SRGB
+>0	ulelong	177	ASTC_10X10_TYPELESS
+>0	ulelong	178	ASTC_10X10_UNORM
+>0	ulelong	179	ASTC_10X10_UNORM_SRGB
+>0	ulelong	181	ASTC_12X10_TYPELESS
+>0	ulelong	182	ASTC_12X10_UNORM
+>0	ulelong	183	ASTC_12X10_UNORM_SRGB
+>0	ulelong	185	ASTC_12X12_TYPELESS
+>0	ulelong	186	ASTC_12X12_UNORM
+>0	ulelong	187	ASTC_12X12_UNORM_SRGB
+>0	ulelong	190	XBOX_R10G10B10_SNORM_A2_UNORM
+>0	ulelong	189	XBOX_R4G4_UNORM
+>0	ulelong	0xFFFFFFFF	DXGI_FORMAT_FORCE_UINT
+0	name	ms-directdraw-surface
+>0x10	ulelong	x			%u x
+>0x0C	ulelong	x			%u
+>0x58	ulelong	>0			\b, %u-bit color
+>0x50	ulelong&0x4	4
+>>0x54	string	DX10
+>>>0x80	use	ms-directdraw-dx10
+>>0x54	string	!DX10			\b, compressed using %.4s
+>0x50	ulelong&0x2	0x2		\b, alpha only
+>0x50	ulelong&0x200	0x200		\b, YUV
+>0x50	ulelong&0x20000	0x20000		\b, luminance
+>0x50	ulelong&0x40	0x40
+>>0x58		ulelong	16
+>>>0x5C		ulequad	0x000003E000007C00
+>>>>0x64	ulequad 0x000000000000001F	\b, RGB555
+>>>0x5C		ulequad	0x000003E000001F00
+>>>>0x64	ulequad 0x000000000000007C	\b, BGR555
+>>>0x5C		ulequad	0x000007E00000F800
+>>>>0x64	ulequad 0x000000000000001F	\b, RGB565
+>>>0x5C		ulequad	0x000007E000001F00
+>>>>0x64	ulequad 0x00000000000000F8	\b, BGR565
+>>>0x5C		ulequad	0x000000F000000F00
+>>>>0x64	ulequad 0x0000F0000000000F	\b, ARGB4444
+>>>0x5C		ulequad	0x000000F00000000F
+>>>>0x64	ulequad 0x0000F00000000F00	\b, ABGR4444
+>>>0x5C		ulequad	0x00000F000000F000
+>>>>0x64	ulequad 0x0000000F000000F0	\b, RGBA4444
+>>>0x5C		ulequad	0x00000F00000000F0
+>>>>0x64	ulequad 0x0000000F0000F000	\b, BGRA4444
+>>>0x5C		ulequad	0x000000F000000F00
+>>>>0x64	ulequad 0x000000000000000F	\b, xRGB4444
+>>>0x5C		ulequad	0x000000F00000000F
+>>>>0x64	ulequad 0x0000000000000F00	\b, xBGR4444
+>>>0x5C		ulequad	0x00000F000000F000
+>>>>0x64	ulequad 0x00000000000000F0	\b, RGBx4444
+>>>0x5C		ulequad	0x00000F00000000F0
+>>>>0x64	ulequad 0x000000000000F000	\b, BGRx4444
+>>>0x5C		ulequad	0x000003E000007C00
+>>>>0x64	ulequad 0x000080000000001F	\b, ARGB1555
+>>>0x5C		ulequad	0x000003E000001F00
+>>>>0x64	ulequad 0x000080000000007C	\b, ABGR1555
+>>>0x5C		ulequad	0x000007C00000F800
+>>>>0x64	ulequad 0x000000010000003E	\b, RGBA5551
+>>>0x5C		ulequad	0x000007C00000003E
+>>>>0x64	ulequad 0x000000010000F800	\b, BGRA5551
+>>88		ulelong 24
+>>>0x5C		ulequad	0x0000FF0000FF0000
+>>>>0x64	ulequad 0x00000000000000FF	\b, RGB888
+>>>0x5C		ulequad	0x0000FF00000000FF
+>>>>0x64	ulequad 0x0000000000FF0000	\b, BGR888
+>>88		ulelong 32
+>>>0x5C		ulequad	0x0000FF0000FF0000
+>>>>0x64	ulequad 0xFF000000000000FF	\b, ARGB8888
+>>>0x5C		ulequad	0x0000FF00000000FF
+>>>>0x64	ulequad 0xFF00000000FF0000	\b, ABGR8888
+>>>0x5C		ulequad	0x00FF0000FF000000
+>>>>0x64	ulequad 0x000000FF0000FF00	\b, RGBA8888
+>>>0x5C		ulequad	0x00FF00000000FF00
+>>>>0x64	ulequad 0x000000FFFF000000	\b, BGBA8888
+>>>0x5C		ulequad	0x0000FF0000FF0000
+>>>>0x64	ulequad 0x00000000000000FF	\b, xRGB8888
+>>>0x5C		ulequad	0x0000FF00000000FF
+>>>>0x64	ulequad 0x0000000000FF0000	\b, xBGR8888
+>>>0x5C		ulequad	0x00FF0000FF000000
+>>>>0x64	ulequad 0x000000000000FF00	\b, RGBx8888
+>>>0x5C		ulequad	0x00FF00000000FF00
+>>>>0x64	ulequad 0x00000000FF000000	\b, BGBx8888
+>>>0x5C		ulequad	0xFFFF00000000FFFF
+>>>>0x64	ulequad 0x0000000000000000	\b, G16R16
+>>>0x5C		ulequad	0x0000FFFFFFFF0000
+>>>>0x64	ulequad 0x0000000000000000	\b, R16G16
+>>>0x5C		ulequad	0x000FFC003FF00000
+>>>>0x64	ulequad 0xC0000000000003FF	\b, A2R10G10B10
+>>>0x5C		ulequad	0x000FFC00000003FF
+>>>>0x64	ulequad 0xC00000003FF00000	\b, A2B10G10R10
+0	string/b	DDS\040\174\000\000\000 Microsoft DirectDraw Surface (DDS):
+>0	use	ms-directdraw-surface
+0	name	sega-pvr-image-header
+>0x0C	uleshort	x	%u x
+>0x0E	uleshort	x	%u
+>0x08	ubyte	0	\b, ARGB1555
+>0x08	ubyte	1	\b, RGB565
+>0x08	ubyte	2	\b, ARGB4444
+>0x08	ubyte	3	\b, YUV442
+>0x08	ubyte	4	\b, Bump
+>0x08	ubyte	5	\b, 4bpp
+>0x08	ubyte	6	\b, 8bpp
+>0x09	ubyte	0x01	\b, square twiddled
+>0x09	ubyte	0x02	\b, square twiddled & mipmap
+>0x09	ubyte	0x03	\b, VQ
+>0x09	ubyte	0x04	\b, VQ & mipmap
+>0x09	ubyte	0x05	\b, 8-bit CLUT twiddled
+>0x09	ubyte	0x06	\b, 4-bit CLUT twiddled
+>0x09	ubyte	0x07	\b, 8-bit direct twiddled
+>0x09	ubyte	0x08	\b, 4-bit direct twiddled
+>0x09	ubyte	0x09	\b, rectangle
+>0x09	ubyte	0x0B	\b, rectangular stride
+>0x09	ubyte	0x0D	\b, rectangular twiddled
+>0x09	ubyte	0x10	\b, small VQ
+>0x09	ubyte	0x11	\b, small VQ & mipmap
+>0x09	ubyte	0x12	\b, square twiddled & mipmap
+0	string	PVRT
+>0x10	string	DDS\040\174\000\000\000 Sega PVR (Xbox) image:
+>>0x20	use	ms-directdraw-surface
+>0x10	ubelong	!0x44445320		Sega PVR image:
+>>0	use	sega-pvr-image-header
+0	string	GBIX
+>0x10	string	PVRT
+>>0x10	string	DDS\040\174\000\000\000 Sega PVR (Xbox) image:
+>>>0x20	use	ms-directdraw-surface
+>>0x10	ubelong	!0x44445320		Sega PVR image:
+>>>0x10	use	sega-pvr-image-header
+>>0x08	ulelong	x	\b, global index = %u
+0	name	sega-gvr-image-header
+>0x0C	ubeshort	x	%u x
+>0x0E	ubeshort	x	%u
+>0x0B	ubyte	0	\b, I4
+>0x0B	ubyte	1	\b, I8
+>0x0B	ubyte	2	\b, IA4
+>0x0B	ubyte	3	\b, IA8
+>0x0B	ubyte	4	\b, RGB565
+>0x0B	ubyte	5	\b, RGB5A3
+>0x0B	ubyte	6	\b, ARGB8888
+>0x0B	ubyte	8	\b, CI4
+>0x0B	ubyte	9	\b, CI8
+>0x0B	ubyte	14	\b, DXT1
+0	string	GVRT	Sega GVR image:
+>0x10	use	sega-gvr-image-header
+0	string	GBIX
+>0x10	string	GVRT	Sega GVR image:
+>>0x10	use	sega-gvr-image-header
+>>0x08	ubelong	x	\b, global index = %u
+0	string	GCIX
+>0x10	string	GVRT	Sega GVR image:
+>>0x10	use	sega-gvr-image-header
+>>0x08	ubelong	x	\b, global index = %u
+0	ubelong	0x894C4650
+>4	ubelong	0x0D0A1A0A
+>12	ubelong	0x00000000	Lytro Light Field Picture
+>8	ubelong	x		\b, version %d
+0	string	CI
+>2	uleshort 44		Vision Research CINE Video,
+>>4	uleshort	0		Grayscale,
+>>4	uleshort 1		JPEG Compressed,
+>>4	uleshort 2		RAW,
+>>6	uleshort x		version %d,
+>>20	ulelong	x		%d frames,
+>>48	ulelong	x		%dx
+>>52	ulelong	x		\b%d
+0	string ARRI		ARRI ARI image data,
+>4	ulelong 0x78563412	little-endian,
+>4 	ulelong 0x12345678	big-endian,
+>12	ulelong x		version %d,
+>20	ulelong x 		%dx
+>24	ulelong x		\b%d
+0	name	khronos-ktx-glEnum
+>0	ulelong	0x1907	\b, RGB
+>0	ulelong	0x1908	\b, RGBA
+>0	ulelong	0x1909	\b, LUMINANCE
+>0	ulelong	0x190A	\b, LUMINANCE_ALPHA
+>0	ulelong	0x80E1	\b, BGR
+>0	ulelong	0x80E2	\b, BGRA
+>0	ulelong	0x83A0	\b, RGB_S3TC
+>0	ulelong	0x83A1	\b, RGB4_S3TC
+>0	ulelong	0x83A2	\b, RGBA_S3TC
+>0	ulelong	0x83A3	\b, RGBA4_S3TC
+>0	ulelong	0x83A4	\b, RGBA_DXT5_S3TC
+>0	ulelong	0x83A5	\b, RGBA4_DXT5_S3TC
+>0	ulelong	0x83F0	\b, COMPRESSED_RGB_S3TC_DXT1_EXT
+>0	ulelong	0x83F1	\b, COMPRESSED_RGBA_S3TC_DXT1_EXT
+>0	ulelong	0x83F2	\b, COMPRESSED_RGBA_S3TC_DXT3_EXT
+>0	ulelong	0x83F3	\b, COMPRESSED_RGBA_S3TC_DXT5_EXT
+>0	ulelong	0x8D64	\b, ETC1_RGB8_OES
+>0	ulelong	0x9270	\b, COMPRESSED_R11_EAC
+>0	ulelong	0x9271	\b, COMPRESSED_SIGNED_R11_EAC
+>0	ulelong	0x9272	\b, COMPRESSED_RG11_EAC
+>0	ulelong	0x9273	\b, COMPRESSED_SIGNED_RG11_EAC
+>0	ulelong	0x9274	\b, COMPRESSED_RGB8_ETC2
+>0	ulelong	0x9275	\b, COMPRESSED_SRGB8_ETC2
+>0	ulelong	0x9276	\b, COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2
+>0	ulelong	0x9277	\b, COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2
+>0	ulelong	0x9278	\b, COMPRESSED_RGBA2_ETC2_EAC
+>0	ulelong	0x9279	\b, COMPRESSED_SRGB8_ALPHA8_ETC2_EAC
+>0	ulelong	0x93B0	\b, COMPRESSED_RGBA_ASTC_4x4_KHR
+>0	ulelong	0x93B1	\b, COMPRESSED_RGBA_ASTC_5x4_KHR
+>0	ulelong	0x93B2	\b, COMPRESSED_RGBA_ASTC_5x5_KHR
+>0	ulelong	0x93B3	\b, COMPRESSED_RGBA_ASTC_6x5_KHR
+>0	ulelong	0x93B4	\b, COMPRESSED_RGBA_ASTC_6x6_KHR
+>0	ulelong	0x93B5	\b, COMPRESSED_RGBA_ASTC_8x5_KHR
+>0	ulelong	0x93B6	\b, COMPRESSED_RGBA_ASTC_8x6_KHR
+>0	ulelong	0x93B7	\b, COMPRESSED_RGBA_ASTC_8x8_KHR
+>0	ulelong	0x93B8	\b, COMPRESSED_RGBA_ASTC_10x5_KHR
+>0	ulelong	0x93B9	\b, COMPRESSED_RGBA_ASTC_10x6_KHR
+>0	ulelong	0x93BA	\b, COMPRESSED_RGBA_ASTC_10x8_KHR
+>0	ulelong	0x93BB	\b, COMPRESSED_RGBA_ASTC_10x10_KHR
+>0	ulelong	0x93BC	\b, COMPRESSED_RGBA_ASTC_12x10_KHR
+>0	ulelong	0x93BD	\b, COMPRESSED_RGBA_ASTC_12x12_KHR
+>0	ulelong	0x93D0	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR
+>0	ulelong	0x93D1	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR
+>0	ulelong	0x93D2	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR
+>0	ulelong	0x93D3	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR
+>0	ulelong	0x93D4	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR
+>0	ulelong	0x93D5	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR
+>0	ulelong	0x93D6	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR
+>0	ulelong	0x93D7	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR
+>0	ulelong	0x93D8	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_10x5_KHR
+>0	ulelong	0x93D9	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_10x6_KHR
+>0	ulelong	0x93DA	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR
+>0	ulelong	0x93DB	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR
+>0	ulelong	0x93DC	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR
+>0	ulelong	0x93DD	\b, COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR
+0	name	khronos-ktx-endian-header
+>20	ulelong	x	\b, %u
+>24	ulelong	>1	x %u
+>28	ulelong	>1	x %u
+>8	ulelong	>0
+>>8	use	khronos-ktx-glEnum
+>8	ulelong	0
+>>12	use	khronos-ktx-glEnum
+0	string	\xABKTX\ 11\xBB\r\n\x1A\n	Khronos KTX texture
+>12	ulelong	0x04030201			(little-endian)
+>>16	use	khronos-ktx-endian-header
+>12	ubelong	0x04030201			(big-endian)
+>>16	use	\^khronos-ktx-endian-header
+0	name	khronos-ktx2-supercompression
+>0	ulelong	1	BasisLZ
+>0	ulelong	2	Zstandard
+>0	ulelong	3	ZLIB
+0	name	khronos-ktx2-vkFormat
+>0	ulelong	0	UNDEFINED
+>0	ulelong	1	R4G4_UNORM_PACK8
+>0	ulelong	2	R4G4B4A4_UNORM_PACK16
+>0	ulelong	3	B4G4R4A4_UNORM_PACK16
+>0	ulelong	4	R5G6B5_UNORM_PACK16
+>0	ulelong	5	B5G6R5_UNORM_PACK16
+>0	ulelong	6	R5G5B5A1_UNORM_PACK16
+>0	ulelong	7	B5G5R5A1_UNORM_PACK16
+>0	ulelong	8	A1R5G5B5_UNORM_PACK16
+>0	ulelong	9	R8_UNORM
+>0	ulelong	10	R8_SNORM
+>0	ulelong	13	R8_UINT
+>0	ulelong	14	R8_SINT
+>0	ulelong	15	R8_SRGB
+>0	ulelong	16	R8G8_UNORM
+>0	ulelong	17	R8G8_SNORM
+>0	ulelong	20	R8G8_UINT
+>0	ulelong	21	R8G8_SINT
+>0	ulelong	22	R8G8_SRGB
+>0	ulelong	23	R8G8B8_UNORM
+>0	ulelong	24	R8G8B8_SNORM
+>0	ulelong	27	R8G8B8_UINT
+>0	ulelong	28	R8G8B8_SINT
+>0	ulelong	29	R8G8B8_SRGB
+>0	ulelong	30	B8G8R8_UNORM
+>0	ulelong	31	B8G8R8_SNORM
+>0	ulelong	34	B8G8R8_UINT
+>0	ulelong	35	B8G8R8_SINT
+>0	ulelong	36	B8G8R8_SRGB
+>0	ulelong	37	R8G8B8A8_UNORM
+>0	ulelong	38	R8G8B8A8_SNORM
+>0	ulelong	41	R8G8B8A8_UINT
+>0	ulelong	42	R8G8B8A8_SINT
+>0	ulelong	43	R8G8B8A8_SRGB
+>0	ulelong	44	B8G8R8A8_UNORM
+>0	ulelong	45	B8G8R8A8_SNORM
+>0	ulelong	48	B8G8R8A8_UINT
+>0	ulelong	49	B8G8R8A8_SINT
+>0	ulelong	50	B8G8R8A8_SRGB
+>0	ulelong	58	A2R10G10B10_UNORM_PACK32
+>0	ulelong	59	A2R10G10B10_SNORM_PACK32
+>0	ulelong	62	A2R10G10B10_UINT_PACK32
+>0	ulelong	63	A2R10G10B10_SINT_PACK32
+>0	ulelong	64	A2B10G10R10_UNORM_PACK32
+>0	ulelong	65	A2B10G10R10_SNORM_PACK32
+>0	ulelong	68	A2B10G10R10_UINT_PACK32
+>0	ulelong	69	A2B10G10R10_SINT_PACK32
+>0	ulelong	70	R16_UNORM
+>0	ulelong	71	R16_SNORM
+>0	ulelong	74	R16_UINT
+>0	ulelong	75	R16_SINT
+>0	ulelong	76	R16_SFLOAT
+>0	ulelong	77	R16G16_UNORM
+>0	ulelong	78	R16G16_SNORM
+>0	ulelong	81	R16G16_UINT
+>0	ulelong	82	R16G16_SINT
+>0	ulelong	83	R16G16_SFLOAT
+>0	ulelong	84	R16G16B16_UNORM
+>0	ulelong	85	R16G16B16_SNORM
+>0	ulelong	88	R16G16B16_UINT
+>0	ulelong	89	R16G16B16_SINT
+>0	ulelong	90	R16G16B16_SFLOAT
+>0	ulelong	91	R16G16B16A16_UNORM
+>0	ulelong	92	R16G16B16A16_SNORM
+>0	ulelong	95	R16G16B16A16_UINT
+>0	ulelong	96	R16G16B16A16_SINT
+>0	ulelong	97	R16G16B16A16_SFLOAT
+>0	ulelong	98	R32_UINT
+>0	ulelong	99	R32_SINT
+>0	ulelong	100	R32_SFLOAT
+>0	ulelong	101	R32G32_UINT
+>0	ulelong	102	R32G32_SINT
+>0	ulelong	103	R32G32_SFLOAT
+>0	ulelong	104	R32G32B32_UINT
+>0	ulelong	105	R32G32B32_SINT
+>0	ulelong	106	R32G32B32_SFLOAT
+>0	ulelong	107	R32G32B32A32_UINT
+>0	ulelong	108	R32G32B32A32_SINT
+>0	ulelong	109	R32G32B32A32_SFLOAT
+>0	ulelong	110	R64_UINT
+>0	ulelong	111	R64_SINT
+>0	ulelong	112	R64_SFLOAT
+>0	ulelong	113	R64G64_UINT
+>0	ulelong	114	R64G64_SINT
+>0	ulelong	115	R64G64_SFLOAT
+>0	ulelong	116	R64G64B64_UINT
+>0	ulelong	117	R64G64B64_SINT
+>0	ulelong	118	R64G64B64_SFLOAT
+>0	ulelong	119	R64G64B64A64_UINT
+>0	ulelong	120	R64G64B64A64_SINT
+>0	ulelong	121	R64G64B64A64_SFLOAT
+>0	ulelong	122	B10G11R11_UFLOAT_PACK32
+>0	ulelong	123	E5B9G9R9_UFLOAT_PACK32
+>0	ulelong	124	D16_UNORM
+>0	ulelong	125	X8_D24_UNORM_PACK32
+>0	ulelong	126	D32_SFLOAT
+>0	ulelong	127	S8_UINT
+>0	ulelong	128	D16_UNORM_S8_UINT
+>0	ulelong	129	D24_UNORM_S8_UINT
+>0	ulelong	130	D32_SFLOAT_S8_UINT
+>0	ulelong	131	BC1_RGB_UNORM_BLOCK
+>0	ulelong	132	BC1_RGB_SRGB_BLOCK
+>0	ulelong	133	BC1_RGBA_UNORM_BLOCK
+>0	ulelong	134	BC1_RGBA_SRGB_BLOCK
+>0	ulelong	135	BC2_UNORM_BLOCK
+>0	ulelong	136	BC2_SRGB_BLOCK
+>0	ulelong	137	BC3_UNORM_BLOCK
+>0	ulelong	138	BC3_SRGB_BLOCK
+>0	ulelong	139	BC4_UNORM_BLOCK
+>0	ulelong	140	BC4_SNORM_BLOCK
+>0	ulelong	141	BC5_UNORM_BLOCK
+>0	ulelong	142	BC5_SNORM_BLOCK
+>0	ulelong	143	BC6H_UFLOAT_BLOCK
+>0	ulelong	144	BC6H_SFLOAT_BLOCK
+>0	ulelong	145	BC7_UNORM_BLOCK
+>0	ulelong	146	BC7_SRGB_BLOCK
+>0	ulelong	147	ETC2_R8G8B8_UNORM_BLOCK
+>0	ulelong	148	ETC2_R8G8B8_SRGB_BLOCK
+>0	ulelong	149	ETC2_R8G8B8A1_UNORM_BLOCK
+>0	ulelong	150	ETC2_R8G8B8A1_SRGB_BLOCK
+>0	ulelong	151	ETC2_R8G8B8A8_UNORM_BLOCK
+>0	ulelong	152	ETC2_R8G8B8A8_SRGB_BLOCK
+>0	ulelong	153	EAC_R11_UNORM_BLOCK
+>0	ulelong	154	EAC_R11_SNORM_BLOCK
+>0	ulelong	155	EAC_R11G11_UNORM_BLOCK
+>0	ulelong	156	EAC_R11G11_SNORM_BLOCK
+>0	ulelong	157	ASTC_4x4_UNORM_BLOCK
+>0	ulelong	158	ASTC_4x4_SRGB_BLOCK
+>0	ulelong	159	ASTC_5x4_UNORM_BLOCK
+>0	ulelong	160	ASTC_5x4_SRGB_BLOCK
+>0	ulelong	161	ASTC_5x5_UNORM_BLOCK
+>0	ulelong	162	ASTC_5x5_SRGB_BLOCK
+>0	ulelong	163	ASTC_6x5_UNORM_BLOCK
+>0	ulelong	164	ASTC_6x5_SRGB_BLOCK
+>0	ulelong	165	ASTC_6x6_UNORM_BLOCK
+>0	ulelong	166	ASTC_6x6_SRGB_BLOCK
+>0	ulelong	167	ASTC_8x5_UNORM_BLOCK
+>0	ulelong	168	ASTC_8x5_SRGB_BLOCK
+>0	ulelong	169	ASTC_8x6_UNORM_BLOCK
+>0	ulelong	170	ASTC_8x6_SRGB_BLOCK
+>0	ulelong	171	ASTC_8x8_UNORM_BLOCK
+>0	ulelong	172	ASTC_8x8_SRGB_BLOCK
+>0	ulelong	173	ASTC_10x5_UNORM_BLOCK
+>0	ulelong	174	ASTC_10x5_SRGB_BLOCK
+>0	ulelong	175	ASTC_10x6_UNORM_BLOCK
+>0	ulelong	176	ASTC_10x6_SRGB_BLOCK
+>0	ulelong	177	ASTC_10x8_UNORM_BLOCK
+>0	ulelong	178	ASTC_10x8_SRGB_BLOCK
+>0	ulelong	179	ASTC_10x10_UNORM_BLOCK
+>0	ulelong	180	ASTC_10x10_SRGB_BLOCK
+>0	ulelong	181	ASTC_12x10_UNORM_BLOCK
+>0	ulelong	182	ASTC_12x10_SRGB_BLOCK
+>0	ulelong	183	ASTC_12x12_UNORM_BLOCK
+>0	ulelong	184	ASTC_12x12_SRGB_BLOCK
+>0	ulelong	1000156000	G8B8G8R8_422_UNORM
+>0	ulelong	1000156001	B8G8R8G8_422_UNORM
+>0	ulelong	1000156002	G8_B8_R8_3PLANE_420_UNORM
+>0	ulelong	1000156003	G8_B8R8_2PLANE_420_UNORM
+>0	ulelong	1000156004	G8_B8_R8_3PLANE_422_UNORM
+>0	ulelong	1000156005	G8_B8R8_2PLANE_422_UNORM
+>0	ulelong	1000156006	G8_B8_R8_3PLANE_444_UNORM
+>0	ulelong	1000156007	R10X6_UNORM_PACK16
+>0	ulelong	1000156008	R10X6G10X6_UNORM_2PACK16
+>0	ulelong	1000156009	R10X6G10X6B10X6A10X6_UNORM_4PACK16
+>0	ulelong	1000156010	G10X6B10X6G10X6R10X6_422_UNORM_4PACK16
+>0	ulelong	1000156011	B10X6G10X6R10X6G10X6_422_UNORM_4PACK16
+>0	ulelong	1000156012	G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16
+>0	ulelong	1000156013	G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+>0	ulelong	1000156014	G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16
+>0	ulelong	1000156015	G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16
+>0	ulelong	1000156016	G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16
+>0	ulelong	1000156017	R12X4_UNORM_PACK16
+>0	ulelong	1000156018	R12X4G12X4_UNORM_2PACK16
+>0	ulelong	1000156019	R12X4G12X4B12X4A12X4_UNORM_4PACK16
+>0	ulelong	1000156020	G12X4B12X4G12X4R12X4_422_UNORM_4PACK16
+>0	ulelong	1000156021	B12X4G12X4R12X4G12X4_422_UNORM_4PACK16
+>0	ulelong	1000156022	G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16
+>0	ulelong	1000156023	G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16
+>0	ulelong	1000156024	G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16
+>0	ulelong	1000156025	G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16
+>0	ulelong	1000156026	G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16
+>0	ulelong	1000156027	G16B16G16R16_422_UNORM
+>0	ulelong	1000156028	B16G16R16G16_422_UNORM
+>0	ulelong	1000156029	G16_B16_R16_3PLANE_420_UNORM
+>0	ulelong	1000156030	G16_B16R16_2PLANE_420_UNORM
+>0	ulelong	1000156031	G16_B16_R16_3PLANE_422_UNORM
+>0	ulelong	1000156032	G16_B16R16_2PLANE_422_UNORM
+>0	ulelong	1000156033	G16_B16_R16_3PLANE_444_UNORM
+>0	ulelong	1000054000	PVRTC1_2BPP_UNORM_BLOCK_IMG
+>0	ulelong	1000054001	PVRTC1_4BPP_UNORM_BLOCK_IMG
+>0	ulelong	1000054002	PVRTC2_2BPP_UNORM_BLOCK_IMG
+>0	ulelong	1000054003	PVRTC2_4BPP_UNORM_BLOCK_IMG
+>0	ulelong	1000054004	PVRTC1_2BPP_SRGB_BLOCK_IMG
+>0	ulelong	1000054005	PVRTC1_4BPP_SRGB_BLOCK_IMG
+>0	ulelong	1000054006	PVRTC2_2BPP_SRGB_BLOCK_IMG
+>0	ulelong	1000054007	PVRTC2_4BPP_SRGB_BLOCK_IMG
+>0	ulelong	1000066000	ASTC_4x4_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066001	ASTC_5x4_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066002	ASTC_5x5_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066003	ASTC_6x5_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066004	ASTC_6x6_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066005	ASTC_8x5_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066006	ASTC_8x6_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066007	ASTC_8x8_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066008	ASTC_10x5_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066009	ASTC_10x6_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066010	ASTC_10x8_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066011	ASTC_10x10_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066012	ASTC_12x10_SFLOAT_BLOCK_EXT
+>0	ulelong	1000066013	ASTC_12x12_SFLOAT_BLOCK_EXT
+0	string	\xABKTX\ 20\xBB\r\n\x1A\n	Khronos KTX2 texture
+>20	ulelong	x	\b, %u
+>24	ulelong	>1	x %u
+>28	ulelong	>1	x %u
+>32	ulelong	>1	\b, %u layers
+>36	ulelong	>1	\b, %u faces
+>40	ulelong	>1	\b, %u mipmaps
+>44	ulelong	>0	\b,
+>>44	use	khronos-ktx2-supercompression
+>12	ulelong	>0	\b,
+>>12	use	khronos-ktx2-vkFormat
+0	name	vtf-image-format
+>0	ulelong	0	RGBA8888
+>0	ulelong	1	ABGR8888
+>0	ulelong	2	RGB888
+>0	ulelong	3	BGR888
+>0	ulelong	4	RGB565
+>0	ulelong	5	I8
+>0	ulelong	6	IA88
+>0	ulelong	7	P8
+>0	ulelong	8	A8
+>0	ulelong	9	RGB888 (bluescreen)
+>0	ulelong	10	BGR888 (bluescreen)
+>0	ulelong	11	ARGB8888
+>0	ulelong	12	BGRA8888
+>0	ulelong	13	DXT1
+>0	ulelong	14	DXT3
+>0	ulelong	15	DXT5
+>0	ulelong	16	BGRx8888
+>0	ulelong	17	BGR565
+>0	ulelong	18	BGRx5551
+>0	ulelong	19	BGRA4444
+>0	ulelong	20	DXT1+A1
+>0	ulelong	21	BGRA5551
+>0	ulelong	22	UV88
+>0	ulelong	23	UVWQ8888
+>0	ulelong	24	RGBA16161616F
+>0	ulelong	25	RGBA16161616
+>0	ulelong	26	UVLX8888
+0	string	VTF\0				Valve Texture Format
+>4	ulelong	x				v%u
+>8	ulelong	x				\b.%u
+>0x10	uleshort	x				\b, %u
+>0x12	uleshort	>1				x %u
+>4	lequad	0x0000000700000002
+>>0x3F	uleshort	>1				x %u
+>0x18	uleshort	>1				\b, %u frames
+>0x38	ubyte	x				\b, mipmaps: %u
+>0x34	ulelong	>-1				\b,
+>>0x34	use	vtf-image-format
+0	string		VTF3	Valve Texture Format (PS3)
+>0x14	ubeshort		x	\b, %u
+>0x16	ubeshort		x	\b x %u
+>0x10	ubelong&0x2000	0	\b, DXT1
+>0x10	ubelong&0x2000	0x2000	\b, DXT5
+0	ulelong	0x5ca1ab13			ASTC
+>4	ubyte	x				%u
+>5	ubyte	x				\bx%u
+>6	ubyte	>1				\bx%u
+>7	ulelong&0x00FFFFFF	x		texture, %u
+>10	ulelong&0x00FFFFFF	x		x %u
+>13	ulelong&0x00FFFFFF	>1		x %u
+0	ubeshort	0x9a02	Zebra Metafile graphic
+>2	uleshort 1	(version 1.x)
+>2	uleshort	2	(version 1.1x or 1.2x)
+>2	uleshort	3	(version 1.49)
+>2	uleshort	4	(version 1.50)
+>4	string	x	(comment = %s)
+0	string	DanM 	icrosoft Paint image data (version 1.x)
+>4	uleshort	x	(%d
+>>6	uleshort	x	x %d)
+0	string	LinS 	Microsoft Paint image data (version 2.0)
+>4	uleshort	x	(%d
+>>6	uleshort	x	x %d)
+0		string	reMarkable
+>11		string	lines
+>>17		string	with
+>>>22		string	selections
+>>>>33		string	and
+>>>>>37		string	layers
+>>>>>>43	ulelong	x	reMarkable tablet notebook lines, 1404 x 1872, %x page(s)
+0		string	reMarkable
+>11		string	.lines
+>>18		string	file,
+>>>24		string	version=
+>>>>32		ubyte	x	reMarkable tablet page (v%c), 1404 x 1872,
+>>>>>43		ulelong	x	%d layer(s)
+0	name		pvr3-pixel-format
+>0	ulelong	0	PVRTC 2bpp RGB
+>0	ulelong	1	PVRTC 2bpp RGBA
+>0	ulelong	2	PVRTC 4bpp RGB
+>0	ulelong	3	PVRTC 4bpp RGBA
+>0	ulelong	4	PVRTC-II 2bpp
+>0	ulelong	5	PVRTC-II 4bpp
+>0	ulelong	6	ETC1
+>0	ulelong	7	DXT1
+>0	ulelong	8	DXT2
+>0	ulelong	9	DXT3
+>0	ulelong	10	DXT4
+>0	ulelong	11	DXT5
+>0	ulelong	12	BC4
+>0	ulelong	13	BC5
+>0	ulelong	14	BC6
+>0	ulelong	15	BC7
+>0	ulelong	16	UYVY
+>0	ulelong	17	YUY2
+>0	ulelong	18	BW1bpp
+>0	ulelong	19	R9G9B9E5 Shared Exponent
+>0	ulelong	20	RGBG8888
+>0	ulelong	21	GRGB8888
+>0	ulelong	22	ETC2 RGB
+>0	ulelong	23	ETC2 RGBA
+>0	ulelong	24	ETC2 RGB A1
+>0	ulelong	25	EAC R11
+>0	ulelong	26	EAC RG11
+>0	ulelong	27	ASTC_4x4
+>0	ulelong	28	ASTC_5x4
+>0	ulelong	29	ASTC_5x5
+>0	ulelong	30	ASTC_6x5
+>0	ulelong	31	ASTC_6x6
+>0	ulelong	32	ASTC_8x5
+>0	ulelong	33	ASTC_8x6
+>0	ulelong	34	ASTC_8x8
+>0	ulelong	35	ASTC_10x5
+>0	ulelong	36	ASTC_10x6
+>0	ulelong	37	ASTC_10x8
+>0	ulelong	38	ASTC_10x10
+>0	ulelong	39	ASTC_12x10
+>0	ulelong	40	ASTC_12x12
+>0	ulelong	41	ASTC_3x3x3
+>0	ulelong	42	ASTC_4x3x3
+>0	ulelong	43	ASTC_4x4x3
+>0	ulelong	44	ASTC_4x4x4
+>0	ulelong	45	ASTC_5x4x4
+>0	ulelong	46	ASTC_5x5x4
+>0	ulelong	47	ASTC_5x5x5
+>0	ulelong	48	ASTC_6x5x5
+>0	ulelong	49	ASTC_6x6x5
+>0	ulelong	50	ASTC_6x6x6
+0	string		PVR\x03			PowerVR 3.0 texture:
+>0x18	ulelong		x	%u x
+>0x1C	ulelong		x	%u
+>0x20	ulelong		>1	x %u
+>0x08	ubyte		x	\b,
+>0x0C	ulelong		0
+>>0x08	use	pvr3-pixel-format
+>0x0C	ulelong		!0
+>>0x08	ubyte	!0	%c
+>>>0x0C	ubyte	!0	\b%u
+>>0x09	ubyte	!0	\b%c
+>>>0x0D	ubyte	!0	\b%u
+>>0x0A	ubyte	!0	\b%c
+>>>0x0E	ubyte	!0	\b%u
+>>0x0B	ubyte	!0	\b%c
+>>>0x0F	ubyte	!0	\b%u
+>0x10	ulelong		1	\b, sRGB
+>0x04	ulelong&0x02	0x02	\b, premultiplied alpha
+0	string		\x03RVP			PowerVR 3.0 texture: BE,
+>0x18	ubelong		x	%u x
+>0x1C	ubelong		x	%u
+>0x20	ubelong		>1	x %u
+>0x08	ubyte		x	\b,
+>0x0C	ubelong		0
+>>0x08	use	pvr3-pixel-format
+>0x0C	ubelong		!0
+>>0x0B	ubyte	!0	%c
+>>>0x0F	ubyte	!0	\b%u
+>>0x0A	ubyte	!0	\b%c
+>>>0x0E	ubyte	!0	\b%u
+>>0x09	ubyte	!0	\b%c
+>>>0x0D	ubyte	!0	\b%u
+>>0x08	ubyte	!0	\b%c
+>>>0x0C	ubyte	!0	\b%u
+>0x10	ubelong		1	\b, sRGB
+>0x04	ubelong&0x02	0x02	\b, premultiplied alpha
+0	name	xbox-xpr-pixel-format
+>0	ubyte	0x00	L8
+>0	ubyte	0x01	AL8
+>0	ubyte	0x02	ARGB1555
+>0	ubyte	0x03	RGB555
+>0	ubyte	0x04	ARGB4444
+>0	ubyte	0x05	RGB565
+>0	ubyte	0x06	ARGB8888
+>0	ubyte	0x07	xRGB8888
+>0	ubyte	0x0B	P8
+>0	ubyte	0x0C	DXT1
+>0	ubyte	0x0E	DXT2
+>0	ubyte	0x0F	DXT4
+>0	ubyte	0x10	Linear ARGB1555
+>0	ubyte	0x11	Linear RGB565
+>0	ubyte	0x12	Linear ARGB8888
+>0	ubyte	0x13	Linear L8
+>0	ubyte	0x16	Linear R8B8
+>0	ubyte	0x17	Linear G8B8
+>0	ubyte	0x19	A8
+>0	ubyte	0x1A	A8L8
+>0	ubyte	0x1B	Linear AL8
+>0	ubyte	0x1C	Linear RGB555
+>0	ubyte	0x1D	Linear ARGB4444
+>0	ubyte	0x1E	Linear xRGB8888
+>0	ubyte	0x1F	Linear A8
+>0	ubyte	0x20	Linear A8L8
+>0	ubyte	0x24	YUY2
+>0	ubyte	0x25	UYVY
+>0	ubyte	0x27	L6V5U5
+>0	ubyte	0x28	V8U8
+>0	ubyte	0x29	R8B8
+>0	ubyte	0x2A	D24S8
+>0	ubyte	0x2B	F24S8
+>0	ubyte	0x2C	D16
+>0	ubyte	0x2D	F16
+>0	ubyte	0x2E	Linear D24S8
+>0	ubyte	0x2F	Linear F24S8
+>0	ubyte	0x30	Linear D16
+>0	ubyte	0x31	Linear F16
+>0	ubyte	0x32	L16
+>0	ubyte	0x33	V16U16
+>0	ubyte	0x35	Linear L16
+>0	ubyte	0x36	Linear V16U16
+>0	ubyte	0x37	Linear L6V5U5
+>0	ubyte	0x38	RGBA5551
+>0	ubyte	0x39	RGBA4444
+>0	ubyte	0x3A	QWVU8888
+>0	ubyte	0x3B	BGRA8888
+>0	ubyte	0x3C	RGBA8888
+>0	ubyte	0x3D	Linear RGBA5551
+>0	ubyte	0x3E	Linear RGBA4444
+>0	ubyte	0x3F	Linear ABGR8888
+>0	ubyte	0x40	Linear BGRA8888
+>0	ubyte	0x41	Linear RGBA8888
+>0	ubyte	0x64	Vertex Data
+0	string		XPR0	Microsoft Xbox XPR0 texture
+>0x19	ubyte	x	\b, format:
+>>0x19	use	xbox-xpr-pixel-format
+0	string		ILDA	ILDA Image Data Transfer Format
+>7	ubyte		0x00	3D Coordinates with Indexed Color
+>7	ubyte		0x01	2D Coordinates with Indexed Color
+>7	ubyte		0x02	Color Palette
+>7	ubyte		0x04	3D Coordinates with True Color
+>7	ubyte		0x05	2D Coordinates with True Color
+>8	string		>0	\b, palette %s
+>16	string		>0	\b, company %s
+>24	ubeshort	>0	\b, number of records %d
+>>26	ubeshort	x	\b, palette number %d
+>>28	ubeshort	>0	\b, number of frames %d
+>>30	ubyte		>0	\b, projector number %d
+0	ubelong&0xfffff0ff	0xcf84005a	Lepton image file
+>2	ubyte			x		(version %d)
+0	name quicktake
+>4	ubelong		8
+>>544	ubeshort	x	\b, %dx
+>>546	ubeshort	x	\b%d
+>4	ubelong		4
+>>546	ubeshort	x	\b, %dx
+>>544	ubeshort	x	\b%d
+0	string	qktk	Apple QuickTake 100 Raw Image
+>0	use quicktake
+0	string	qktn
+>4	ubyte	0	Apple QuickTake 150 Raw Image
+>4	ubyte	>0	Apple QuickTake 200 Raw Image
+>0	use quicktake
+0	string	CPT
+>4	string	FILE		Corel Photo-Paint image, version
+>>3	ubyte	x		%c,
+!:mime	image/x-corel-cpt
+!:ext	cpt
+>>0x34	ulelong		>0
+>>>(0x28.l*8)	ubyte	x
+>>>>&(0x34.l-1) ulelong x	%u
+>>>>>&0		ulelong	x	x %u
+>>0x34	ulelong		=0
+>>>(0x28.l*8)	ubyte	x
+>>>>&0x13B	ulelong x	%u
+>>>>>&0	ulelong		x	x %u
+>>0x8	ulelong	x
+>>>0x8	ulelong	0x1		RGB 24 bits
+>>>0x8	ulelong	0x3		CMYK 24 bits
+>>>0x8	ulelong	0x5		greyscale 8 bits
+>>>0x8	ulelong	0x6		black and white 1 bit
+>>>0x8	ulelong	0xA		RGB 8 bits
+>>>>0xC	ulelong/3	<256	\b, %u colors
+>>>0x8	ulelong	0xB		LAB
+>>>0x8	ulelong	0xC		RGB 48 bits
+>>>0x8	ulelong	0xE		greyscale 16 bits
+>>>0x8	default	x		color model
+>>>>0x8	ulelong	x		%#x
+>>0x31	ubyte		&0x02
+>>>0x100	search/0xc9d	\4\2\0\0
+>>>>&0		lestring16	x	"%s"
+>>0x31	ubyte&0x02	=0
+>>>0x3C string		>\0	"%-.112s"
+>>0x18	ulelong	x		\b, %u micro dots/mm
+>>0x28	ulelong		x	\b, %u block
+>>0x28	ulelong		!1	\bs
+>>0x31	ubyte&0xFC	>0
+>>>0x30	uleshort	x	\b, flags %#4.4x
+>>0x34	ulelong	x		\b, array offset %#x
+>>0x38	ulelong		>0	\b, reserved5 %#x
+>>0x31	ubyte		&0x01	\b, with ICC profile
+0	ubelong&0xFFffF7ff	0x574C6500	Corel Draw Picture
+!:mime						application/vnd.corel-draw
+!:ext						cdr
+>2	ubyte			0x65		\b, version 1.0
+>2	ubyte			0x6D		\b, version 2.0
+0	ubelong		0x4878004A	Crunch compressed texture:
+>0x0C	ubeshort	x	%u x
+>0x0E	ubeshort	x	%u
+>0x12	ubyte		0	\b, DXT1
+>0x12	ubyte		1	\b, DXT3
+>0x12	ubyte		2	\b, DXT5
+>0x12	ubyte		3	\b, DXT5 CCxY
+>0x12	ubyte		4	\b, DXT5 xGxR
+>0x12	ubyte		5	\b, DXT5 xGBR
+>0x12	ubyte		6	\b, DXT5 AGBR
+>0x12	ubyte		7	\b, DXn XY
+>0x12	ubyte		8	\b, DXn YX
+>0x12	ubyte		9	\b, DXT5 Alpha
+>0x12	ubyte		10	\b, ETC1
+>0x10	ubyte		>1	\b, %u images
+>0x11	ubyte		>1	\b, %u faces
+0	uleshort		0x4273
+>0x04	uleshort		0x4D	BasisLZ
+>>0x02	uleshort		x	v%x compressed texture:
+>>0x14	ubyte			0	ETC1S
+>>0x14	ubyte			1	UASTC 4x4
+>>0x0E	ulelong&0xFFFFFF	>1	\b, %u slices
+>>0x11	ulelong&0xFFFFFF	>1	\b, %u images
+>>0x15	uleshort&0x02		2	\b, Y-flipped
+0	string		ASTM-E57	ASTM E57 three-dimensional model
+!:mime model/e57
+!:ext e57
+0	string		qoif	QOI image data
+!:ext qoi
+!:mime image/x-qoi
+>4      ubelong		x       %ux
+>8      ubelong		x       \b%u,
+>>13	ubyte		0	s
+>>>12	ubyte		3	\bRGB
+>>>12	ubyte		4	\bRGBA
+>>>12	default		x
+>>>>12	ubyte		x	\b*bad channels %u*
+>>>13	ubyte		0	(linear alpha)
+>>13	ubyte		1
+>>>12	ubyte		3	RGB
+>>>12	ubyte		4	RGBA
+>>>13	ubyte		1	(all channels linear)
+>>13	default		x
+>>>13	ubyte		x	*bad colorspace %u*
+0	name	godot-pixel-format
+>0	ulelong&0xFFFFF	0	L8
+>0	ulelong&0xFFFFF	1	LA8
+>0	ulelong&0xFFFFF	2	R8
+>0	ulelong&0xFFFFF	3	RG8
+>0	ulelong&0xFFFFF	4	RGB8
+>0	ulelong&0xFFFFF	5	RGBA8
+>0	ulelong&0xFFFFF	6	RGBA4444
+>0	ulelong&0xFFFFF	7	RGB565
+>0	ulelong&0xFFFFF	8	RF
+>0	ulelong&0xFFFFF	9	RGF
+>0	ulelong&0xFFFFF	10	RGBF
+>0	ulelong&0xFFFFF	11	RGBAF
+>0	ulelong&0xFFFFF	12	RH
+>0	ulelong&0xFFFFF	13	RGH
+>0	ulelong&0xFFFFF	14	RGBH
+>0	ulelong&0xFFFFF	15	RGBAH
+>0	ulelong&0xFFFFF	16	RGBE9995
+>0	ulelong&0xFFFFF	17	DXT1
+>0	ulelong&0xFFFFF	18	DXT3
+>0	ulelong&0xFFFFF	19	DXT5
+>0	ulelong&0xFFFFF	20	RGTC_R
+>0	ulelong&0xFFFFF	21	RGTC_RG
+>0	ulelong&0xFFFFF	22	BPTC_RGBA
+>0	ulelong&0xFFFFF	23	BPTC_RGBF
+>0	ulelong&0xFFFFF	24	BPTC_RGBFU
+>0	ulelong&0xFFFFF	25	PVRTC1_2
+>0	ulelong&0xFFFFF	26	PVRTC1_2A
+>0	ulelong&0xFFFFF	27	PVRTC1_4
+>0	ulelong&0xFFFFF	28	PVRTC1_4A
+>0	ulelong&0xFFFFF	29	ETC
+>0	ulelong&0xFFFFF	30	ETC2_R11
+>0	ulelong&0xFFFFF	31	ETC2_R11S
+>0	ulelong&0xFFFFF	32	ETC2_RG11
+>0	ulelong&0xFFFFF	33	ETC2_RG11S
+>0	ulelong&0xFFFFF	34	ETC2_RGB8
+>0	ulelong&0xFFFFF	35	ETC2_RGBA8
+>0	ulelong&0xFFFFF	36	ETC2_RGB8A1
+>0	ulelong&0xFFFFF	37	ASTC_8x8
+0	name	godot-rescale-display-w
+>0	uleshort	0
+>0	uleshort	1
+>0	uleshort	2
+>0	uleshort	4
+>0	uleshort	8
+>0	uleshort	16
+>0	uleshort	32
+>0	uleshort	64
+>0	uleshort	128
+>0	uleshort	256
+>0	uleshort	512
+>0	uleshort	1024
+>0	uleshort	2048
+>0	uleshort	4096
+>0	uleshort	8192
+>0	uleshort	16384
+>0	uleshort	32768
+>0	default		x
+>>0	uleshort	x	(rescale to %u x
+0	name	godot-rescale-display-h
+>0	clear	x
+>0	uleshort	0
+>0	uleshort	1
+>0	uleshort	2
+>0	uleshort	4
+>0	uleshort	8
+>0	uleshort	16
+>0	uleshort	32
+>0	uleshort	64
+>0	uleshort	128
+>0	uleshort	256
+>0	uleshort	512
+>0	uleshort	1024
+>0	uleshort	2048
+>0	uleshort	4096
+>0	uleshort	8192
+>0	uleshort	16384
+>0	uleshort	32768
+>0	default		x
+>>0	uleshort	x	%u)
+0	string	GDST	Godot 3 texture:
+!:ext	stex
+!:mime	image/x-godot-stex
+>4	uleshort	x	%u x
+>8	uleshort	x	%u
+>6	uleshort	0	\b,
+>6	uleshort	!0
+>>6	use	godot-rescale-display-w
+>>10	use	godot-rescale-display-h
+>>10	uleshort	x	\b,
+>16	ulelong&0x800000	!0		has mipmaps,
+>16	ulelong&0x100000	0x100000	lossless encoding
+>16	ulelong&0x200000	0x200000	lossy encoding
+>16	ulelong&0x300000	0
+>>16	use	godot-pixel-format
+0	string	GST2	Godot 4 texture
+!:ext	stex
+!:mime	image/x-godot-stex
+>4	ulelong		x	v%u:
+>0x28	uleshort	x	%u x
+>0x2A	uleshort	x	%u
+>8	use	godot-rescale-display-w
+>12	use	godot-rescale-display-h
+>12	uleshort	x	\b,
+>0x2C	ulelong		>1	%u mipmaps,
+>0x30	use	godot-pixel-format
+>0x24	ulelong		1	\b, embedded PNG image
+>0x24	ulelong		2	\b, embedded WebP image
+>0x24	ulelong		3	\b, Basis Universal
+0	string		\0041.4\0\0\0\0O\0	iCEDraw graphic
+!:mime	image/x-idf
+!:ext	idf
+0	name		rix-header
+>0	uleshort	x	\b, %u x
+>2	uleshort	x	%u
+>4	ubyte&128	0
+>>4 ubyte&127		x	\b %u bpp (direct color)
+>4	ubyte&128	128
+>>4	ubyte&7		0	\b x 2
+>>4	ubyte&7		1	\b x 4
+>>4	ubyte&7		2	\b x 8
+>>4	ubyte&7		3	\b x 16
+>>4	ubyte&7		4	\b x 32
+>>4	ubyte&7		5	\b x 64
+>>4	ubyte&7		6	\b x 128
+>>4	ubyte&7		7	\b x 256
+>5	ubyte&15	1	\b, Planar (0213)
+>5	ubyte&15	2	\b, Planar
+>5	ubyte&15	3	\b, Text
+>5	ubyte&15	4	\b, Planar lines
+>5	ubyte&128	128	\b (compressed)
+>5	ubyte&64	64	\b (extension)
+>5	ubyte&32	32	\b (encrypted)
+0	string	RIX3	ColoRIX Image
+>4	use		rix-header
+0	string	RIX7	ColoRIX Slideshow
+0	string 	ViG	Visioneer PaperPort
+>3	string	Ae	2
+>3	string	Be	2
+>3	string	Cj	3-4
+>3	string	Em	5-7
+>3	string	Fk	8-12
+>3	default	x	MAX

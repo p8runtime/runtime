@@ -1,0 +1,8 @@
+0		regex/1024	\^begin\040[0-7]{3}\040
+>&0		regex/256	[\012\015]+M[\040-\140]{60}[\012\015]+				uuencoded text
+>&0		regex/256	[\012\015]+h[0-9A-Za-z\053\055]{60}[\012\015]+		xxencoded text
+>&0		default		x													uuencoded or xxencoded text
+>&0		string		>\0													\b, file name "%s"
+0	search/1	xbtoa\ Begin	btoa'd text
+0	search/1	$\012ship	ship'd binary text
+0	search/1	Decode\ the\ following\ with\ bdeco	bencoded News text
