@@ -1941,6 +1941,15 @@ impl Context<'_> {
                 self.last_error = Some((4, message, file.to_string(), line));
                 255
             }
+            // An uncaught ParseError is reported as the parse error it is
+            // (zend_exception_error), not as "Uncaught".
+            Err(Throw::Object(e)) if e.class.name.as_bytes().eq_ignore_ascii_case(b"ParseError") => {
+                let message = e.class.read(&e, b"message", b"error").to_php_string().unwrap_or_else(PhpStr::empty);
+                let file = e.class.read(&e, b"file", b"error").to_php_string().unwrap_or_else(PhpStr::empty);
+                let line = e.class.read(&e, b"line", b"error").to_int() as u32;
+                self.report_end(Err(Throw::Parse { message: String::from_utf8_lossy(message.as_bytes()).into_owned(), file: Rc::from(&*String::from_utf8_lossy(file.as_bytes())), line }))
+            }
+            Err(Throw::Error { class: "ParseError", message, file, line, .. }) => self.report_end(Err(Throw::Parse { message, file, line })),
             Err(Throw::Object(e)) => {
                 let shown = builtin_classes::describe(&e);
                 let root: &[u8] = if e.class.is_a(b"exception") { b"exception" } else { b"error" };

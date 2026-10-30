@@ -74,7 +74,8 @@ impl Context<'_> {
         };
         let program = match loader.load(&source, &file) {
             Ok(p) => p,
-            Err(e) if e.parse => return Err(Throw::Parse { message: e.message, file: Rc::from(file.as_str()), line: e.line }),
+            // A ParseError the includer can catch (PHP 7+).
+            Err(e) if e.parse => return Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(file.as_str()), line: e.line, props: Vec::new() }),
             Err(e) => return Err(Throw::Fatal { message: e.message, file: Rc::from(file.as_str()), line: e.line }),
         };
         for f in &program.functions {
