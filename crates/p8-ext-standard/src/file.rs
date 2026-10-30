@@ -94,11 +94,11 @@ pub static BUILTINS: &[Builtin] = &[
 
 /// The functions that take a path a user-space wrapper may serve: they
 /// run its methods (PHP code). Those that take a stream resource already
-/// may (an object argument).
+/// may (an object argument). stream_wrapper_register autoloads its class.
 pub(crate) const REENTER: &[&str] = &[
     "fopen", "file_get_contents", "file_put_contents", "file", "readfile", "unlink", "mkdir", "rmdir", "rename", "copy", "touch", "chmod", "is_file", "is_dir",
     "is_link", "file_exists", "is_readable", "is_writable", "is_writeable", "is_executable", "filesize", "filemtime", "fileatime", "filectime", "fileperms",
-    "scandir", "opendir", "dir", "stream_is_local", "stream_select",
+    "scandir", "opendir", "dir", "stream_is_local", "stream_select", "stream_wrapper_register", "stream_register_wrapper",
 ];
 
 fn text(s: &PhpStr) -> String {

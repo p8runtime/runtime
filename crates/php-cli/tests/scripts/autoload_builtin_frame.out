@@ -1,0 +1,56 @@
+autoload Missing1
+  show @12
+  {closure:%s:10} [internal]
+  is_a @15
+bool(false)
+autoload Have1
+  show @12
+  {closure:%s:10} [internal]
+  class_exists @16
+bool(true)
+autoload Missing2
+  show @12
+  {closure:%s:10} [internal]
+  is_subclass_of @17
+bool(false)
+autoload Missing3
+  show @12
+  {closure:%s:10} [internal]
+  method_exists @18
+bool(false)
+autoload Nope
+  show @12
+  {closure:%s:10} [internal]
+  is_callable @19
+bool(false)
+autoload Have2
+  show @12
+  {closure:%s:10} [internal]
+  unserialize @20
+string(5) "Have2"
+autoload Missing4
+  show @12
+  {closure:%s:10} [internal]
+  __construct @22 ReflectionClass
+Class "Missing4" does not exist
+autoload Have3
+  show @12
+  {closure:%s:10} @23
+autoload Have4
+  show @12
+  {closure:%s:10} @24
+bool(false)
+autoload Have6
+  show @12
+  {closure:%s:10} [internal]
+  __construct @26 ReflectionClass
+  make @27
+string(5) "Have6"
+autoload Have5
+  show @12
+  {closure:%s:10} [internal]
+  newInstance @29 ReflectionAttribute
+string(5) "Have5"
+  show @30
+  {closure:%s:30} [internal]
+  array_map @30

@@ -375,7 +375,12 @@ impl Context<'_> {
     /// Call `callable` on `args` above the running frames, whose
     /// registers `regs` is.
     pub(crate) fn call_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
-        let target = self.resolve_callable(callable)?;
+        // Lent while the callable is resolved: a class it names is
+        // autoloaded there (zend_is_callable_ex), not by running it again.
+        std::mem::swap(&mut self.isolate.regs, regs);
+        let target = self.resolve_callable(callable);
+        std::mem::swap(&mut self.isolate.regs, regs);
+        let target = target?;
         let m = match target {
             Target::Builtin(i) => {
                 // A builtin that calls back finds the registers lent; it is
@@ -387,16 +392,19 @@ impl Context<'_> {
                 }
                 std::mem::swap(&mut self.isolate.regs, regs);
                 let name = self.isolate.registry.function(i).name;
-                self.natives.push(crate::NativeCall { depth: self.frames.len(), name, args: args.iter().map(Value::deref).collect(), top: false });
+                self.push_native(name, None, args, false);
                 let r = self.run_builtin(i, args);
-                self.natives.pop();
+                self.pop_native();
                 std::mem::swap(&mut self.isolate.regs, regs);
                 return r;
             }
-            Target::Frame(MethodFrame { func: Code::Native(native, _), this, called, .. }) => {
+            Target::Frame(MethodFrame { func: Code::Native(native, name), this, scope, called, .. }) => {
                 let mut passed: Vec<Value> = args.iter().map(Value::deref).collect();
                 let saved = std::mem::replace(&mut self.native_class, called);
-                let r = self.run_native(native, this.as_ref(), &mut passed);
+                // Lent and running, as a method the code calls is.
+                std::mem::swap(&mut self.isolate.regs, regs);
+                let r = self.run_native_method(native, &name, scope.as_ref(), this.as_ref(), &mut passed);
+                std::mem::swap(&mut self.isolate.regs, regs);
                 self.native_class = saved;
                 return r;
             }
@@ -624,12 +632,18 @@ impl Context<'_> {
         })
     }
 
-    /// Whether a value is callable (is_callable, no autoloading).
+    /// Whether a value is callable (is_callable): a class it names is
+    /// autoloaded where the registers are lent.
     pub(crate) fn callable(&mut self, v: &Value) -> bool {
         let saved = std::mem::take(&mut self.failed_call);
-        let ok = self.resolve_callable(v).is_ok();
+        let r = self.resolve_callable(v);
         self.failed_call = saved;
-        ok
+        // Not lent: the class stays unloaded, and a later lookup asks the
+        // autoloaders again.
+        if let Err(Throw::Autoload(name)) = &r {
+            self.autoload_tried.remove(&name.as_bytes().to_ascii_lowercase());
+        }
+        r.is_ok()
     }
 }
 

@@ -397,7 +397,7 @@ fn deflate_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !matches!(encoding, RAW | GZIP | DEFLATE) {
         return Err(ctx.throw("ValueError", "deflate_init(): Argument #1 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE".into()));
     }
-    let class = ctx.class_load(b"DeflateContext")?.expect("DeflateContext is declared");
+    let class = ctx.class(b"DeflateContext").expect("DeflateContext is declared");
     let o = ctx.new_object(&class);
     let state = o.native::<DeflateState>().expect("a DeflateContext");
     *state.0.borrow_mut() = Some(Deflater { c: Compress::new(compression(level), false), encoding, level, started: false, crc: flate2::Crc::new(), adler: 1 });
@@ -491,7 +491,7 @@ fn inflate_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !matches!(encoding, RAW | GZIP | DEFLATE) {
         return Err(ctx.throw("ValueError", "Encoding mode must be ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP or ZLIB_ENCODING_DEFLATE".into()));
     }
-    let class = ctx.class_load(b"InflateContext")?.expect("InflateContext is declared");
+    let class = ctx.class(b"InflateContext").expect("InflateContext is declared");
     let o = ctx.new_object(&class);
     let state = o.native::<InflateState>().expect("an InflateContext");
     *state.0.borrow_mut() = Some(Inflater {

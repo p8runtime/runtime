@@ -276,15 +276,15 @@ fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         Err(ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len())))
     };
     let Some(rest) = bytes.strip_prefix(b"x:") else { return bad(ctx, 0) };
-    let Some((Value::Int(flags), n)) = crate::serial::read_value(ctx, rest) else { return bad(ctx, 2) };
+    let Some((Value::Int(flags), n)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, 2) };
     let at = 2 + n;
-    let Some((storage, n)) = crate::serial::read_value(ctx, &bytes[at..]) else { return bad(ctx, at) };
+    let Some((storage, n)) = crate::serial::read_value(ctx, &bytes[at..])? else { return bad(ctx, at) };
     let mut at = at + n;
     if bytes.get(at) == Some(&b';') {
         at += 1;
     }
     let Some(rest) = bytes[at..].strip_prefix(b"m:") else { return bad(ctx, at) };
-    let Some((Value::Array(m), _)) = crate::serial::read_value(ctx, rest) else { return bad(ctx, at + 2) };
+    let Some((Value::Array(m), _)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, at + 2) };
     set(this, "\0flags", Value::Int(flags));
     set(this, "storage", storage);
     for (k, v) in m.iter() {
@@ -644,17 +644,17 @@ fn os_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     }
     let mut u = crate::serial::Unserializer::new(bytes);
     u.seek(2);
-    let count = match u.value(ctx) {
+    let count = match u.value(ctx)? {
         Ok(Value::Int(n)) if n >= 0 => n,
         _ => return Err(bad(ctx, u.at())),
     };
     for _ in 0..count {
-        let Ok(Value::Object(o)) = u.value(ctx) else { return Err(bad(ctx, u.at())) };
+        let Ok(Value::Object(o)) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
         if bytes.get(u.at()) != Some(&b',') {
             return Err(bad(ctx, u.at()));
         }
         u.seek(u.at() + 1);
-        let Ok(inf) = u.value(ctx) else { return Err(bad(ctx, u.at())) };
+        let Ok(inf) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
         if bytes.get(u.at()) != Some(&b';') {
             return Err(bad(ctx, u.at()));
         }
@@ -665,7 +665,7 @@ fn os_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         return Err(bad(ctx, u.at()));
     }
     u.seek(u.at() + 2);
-    let Ok(Value::Array(members)) = u.value(ctx) else { return Err(bad(ctx, u.at())) };
+    let Ok(Value::Array(members)) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
     u.finish(ctx)?;
     spl_restore_members(ctx, this, b"splobjectstorage", &members);
     Ok(Value::Null)
@@ -964,7 +964,7 @@ fn dll_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
     }
     let bad = |ctx: &mut dyn Ctx, at: usize| ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len()));
     let mut u = crate::serial::Unserializer::new(bytes);
-    let flags = match u.value(ctx) {
+    let flags = match u.value(ctx)? {
         Ok(Value::Int(f)) => f,
         Ok(_) | Err(_) => return Err(bad(ctx, 0)),
     };
@@ -974,7 +974,7 @@ fn dll_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
             return Err(bad(ctx, u.at()));
         }
         u.seek(u.at() + 1);
-        match u.value(ctx) {
+        match u.value(ctx)? {
             Ok(v) => list.push(v),
             Err(at) => return Err(bad(ctx, at)),
         }
