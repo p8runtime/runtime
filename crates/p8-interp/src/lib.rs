@@ -5194,6 +5194,10 @@ impl Ctx for Context<'_> {
 
     fn class_constant(&mut self, class: &Rc<Class>, name: &[u8]) -> Result<Option<Value>, Throw> {
         let Some(c) = class.constants.get(name) else { return Ok(None) };
+        // An enum case is its object (constant(), reflection), not its value.
+        if c.is_case {
+            return Ok(Some(Value::Object(self.enum_case(class, name))));
+        }
         let Some(init) = c.init.clone() else { return Ok(Some(c.value.clone())) };
         let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.to_vec());
         if !self.const_cache.contains_key(&key) {

@@ -41,6 +41,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "getenv", run: getenv, by_ref: &[] },
     Builtin { name: "time", run: time, by_ref: &[] },
     Builtin { name: "gc_collect_cycles", run: gc_collect_cycles, by_ref: &[] },
+    Builtin { name: "gc_mem_caches", run: gc_mem_caches, by_ref: &[] },
     Builtin { name: "gc_status", run: gc_status, by_ref: &[] },
     Builtin { name: "gc_enable", run: gc_switch, by_ref: &[] },
     Builtin { name: "gc_disable", run: gc_switch, by_ref: &[] },
@@ -412,6 +413,12 @@ fn time(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 /// (their destructors run first); how many values they held.
 fn gc_collect_cycles(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(ctx.gc_collect()?))
+}
+
+/// gc_mem_caches(): bytes handed back from the memory manager's caches;
+/// p8 keeps no such caches (Rust's allocator owns memory), so none.
+fn gc_mem_caches(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Int(0))
 }
 
 /// gc_status(): the collector's counters, as PHP 8.4 reports them.

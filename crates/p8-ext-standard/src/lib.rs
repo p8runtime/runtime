@@ -197,6 +197,7 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(&["ob_end_clean", "ob_end_flush", "ob_clean", "ob_flush", "ob_get_clean", "ob_get_flush"]);
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
+    registry.mark_reenters(class::REENTER);
     registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
     for (module, name, value, _) in defaults::CONSTANTS {
         let value = match value {

@@ -46,6 +46,10 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "register_shutdown_function", run: register_shutdown_function, by_ref: &[] },
 ];
 
+/// Builtins that run PHP code: constant() computes a class constant
+/// written as an expression.
+pub const REENTER: &[&str] = &["constant"];
+
 /// get_class_methods(object|string $object_or_class): the methods the
 /// calling code can see, as declared.
 fn get_class_methods(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -117,7 +121,8 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                         format!("Cannot access {} constant {}::{}", c.visibility.word(), class.name.to_lossy(), String::from_utf8_lossy(name)),
                     ));
                 }
-                Ok(c.value.clone())
+                // An enum case's object; a constant computed from an expression.
+                Ok(ctx.class_constant(&class, name)?.unwrap_or(Value::Null))
             }
             None => Err(ctx.throw("Error", format!("Undefined constant {}::{}", class.name.to_lossy(), String::from_utf8_lossy(name)))),
         };
