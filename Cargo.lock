@@ -4136,6 +4136,7 @@ dependencies = [
  "p8-bytecode",
  "p8-compiler",
  "p8-runtime",
+ "p8-stubs",
  "p8-syntax",
 ]
 

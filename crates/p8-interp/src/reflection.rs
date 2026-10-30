@@ -566,7 +566,10 @@ class_method!(rc_get_traits, |ctx, class, this, args| {
     }
     Ok(Value::Array(Rc::new(out)))
 });
-class_method!(rc_get_extension_name, |ctx, class, this, args| Ok(Value::Bool(false)));
+class_method!(rc_get_extension_name, |ctx, class, this, args| Ok(match class_extension(&class) {
+    Some(m) => s(m.as_bytes()),
+    None => Value::Bool(false),
+}));
 
 fn ro_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else {
@@ -1060,9 +1063,32 @@ fn param_text(info: &FnInfo, pos: usize) -> String {
     out
 }
 
+/// The extension a builtin class is PHP's (None for a user class).
+fn class_extension(class: &Class) -> Option<&'static str> {
+    if class.flags & CLASS_INTERNAL == 0 {
+        return None;
+    }
+    p8_stubs::class_module(class.name.as_bytes())
+}
+
+/// The extension a builtin function or method is in (a method: its class's).
+fn function_extension(info: &FnInfo) -> Option<&'static str> {
+    if info.user {
+        return None;
+    }
+    match &info.class {
+        Some(c) => class_extension(c),
+        None => p8_stubs::function_module(info.name.as_bytes()),
+    }
+}
+
+fn_method!(fa_get_extension_name, |ctx, info, this, args| Ok(match function_extension(&info) {
+    Some(m) => s(m.as_bytes()),
+    None => Value::Bool(false),
+}));
+
 /// ReflectionFunction / ReflectionMethod::__toString() (php_reflection.c
-/// _function_string). A builtin's extension is not known here, so it is
-/// "<internal>" where PHP names one ("<internal:Core>").
+/// _function_string).
 fn fa_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let info = info_of(ctx, this)?;
     let callee = callee_of(ctx, this)?;
@@ -1080,6 +1106,10 @@ fn fa_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
     };
     out.push_str(if info.is_closure { "Closure [ " } else if method.is_some() { "Method [ " } else { "Function [ " });
     out.push_str(if info.user { "<user" } else { "<internal" });
+    if let Some(m) = function_extension(&info) {
+        out.push(':');
+        out.push_str(m);
+    }
     if let Some((class, m)) = &method {
         let lower = m.name.as_bytes().to_ascii_lowercase();
         let declaring = ctx.class(&m.declaring).unwrap_or_else(|| Rc::clone(class));
@@ -2141,6 +2171,7 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("getAttributes", Some(Native::Method(fa_get_attributes))),
     ("getStaticVariables", Some(Native::Method(fa_get_static_variables))),
     ("getClosureThis", Some(Native::Method(fa_get_closure_this))),
+    ("getExtensionName", Some(Native::Method(fa_get_extension_name))),
     ("__toString", Some(Native::Method(fa_to_string))),
     ("getClosureUsedVariables", Some(Native::Method(fa_get_closure_used_variables))),
     ("getClosureScopeClass", Some(Native::Method(fa_get_closure_scope_class))),

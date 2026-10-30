@@ -6,6 +6,7 @@
 //!
 //! Reference: $PHP_SRC_PATH/Zend/zend_compile.c - zend_type_to_string
 
+mod modules;
 mod table;
 
 pub const T_MIXED: u32 = 1 << 0;
@@ -67,6 +68,22 @@ impl Param {
 
 /// The signature of the PHP function `name`, or of `Class::method` (any
 /// case), if PHP has one.
+/// The extension PHP puts builtin function `name` in ("Core", "standard",
+/// "SPL"...), as reflection reports it.
+pub fn function_module(name: &[u8]) -> Option<&'static str> {
+    module_in(modules::FUNCTION_MODULES, name)
+}
+
+/// The extension PHP puts builtin class (or interface, trait) `name` in.
+pub fn class_module(name: &[u8]) -> Option<&'static str> {
+    module_in(modules::CLASS_MODULES, name)
+}
+
+fn module_in(table: &'static [(&'static str, &'static str)], name: &[u8]) -> Option<&'static str> {
+    let lower = String::from_utf8_lossy(name.strip_prefix(b"\\").unwrap_or(name)).to_ascii_lowercase();
+    table.binary_search_by(|(n, _)| (*n).cmp(lower.as_str())).ok().map(|i| table[i].1)
+}
+
 pub fn lookup(name: &[u8]) -> Option<&'static Sig> {
     let name = std::str::from_utf8(name).ok()?;
     let name = name.strip_prefix('\\').unwrap_or(name);

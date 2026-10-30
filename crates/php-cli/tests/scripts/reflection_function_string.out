@@ -86,3 +86,26 @@ Method [ <user, overwrites N\B, prototype N\B> protected method ab ] {
 Method [ <user> public method &r ] {
   @@ %s 19 - 19
 }
+Function [ <internal:Core> function strlen ] {
+
+  - Parameters [1] {
+    Parameter #0 [ <required> string $string ]
+  }
+  - Return [ int ]
+}
+---
+Method [ <internal:SPL, prototype Countable> public method count ] {
+
+  - Parameters [0] {
+  }
+  - Tentative return [ int ]
+}
+---
+string(4) "Core"
+string(8) "standard"
+bool(false)
+string(3) "SPL"
+string(4) "Core"
+string(4) "date"
+bool(false)
+string(3) "PDO"
