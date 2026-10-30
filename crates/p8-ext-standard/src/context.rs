@@ -9,7 +9,8 @@ use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::object::Object;
-use p8_runtime::stream::{Resource, Stream, Target, resource, resource_of};
+use p8_runtime::stream::{resource, resource_of};
+use p8_runtime::user_stream::{default_context, new_context};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -64,13 +65,6 @@ fn merge(ctx: &mut dyn Ctx, o: &Object, given: &PhpArray) -> Result<(), Throw> {
     Ok(())
 }
 
-fn new_context(ctx: &mut dyn Ctx) -> Value {
-    ctx.new_resource(Resource {
-        kind: "stream-context",
-        closed: std::cell::Cell::new(false),
-        stream: std::cell::RefCell::new(Stream::new(Target::Memory(Vec::new()), "", "r")),
-    })
-}
 
 /// The context argument `n`: a stream-context resource (or a stream, for
 /// the functions that take either).
@@ -163,15 +157,6 @@ fn set_params(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         set_params_on(ctx, &o, &params)?;
     }
     Ok(Value::Bool(true))
-}
-
-fn default_context(ctx: &mut dyn Ctx) -> Value {
-    if let v @ Value::Object(_) = ctx.state("stream_context_default").clone() {
-        return v;
-    }
-    let v = new_context(ctx);
-    *ctx.state("stream_context_default") = v.clone();
-    v
 }
 
 /// stream_context_get_default(?array $options = null)

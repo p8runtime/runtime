@@ -6,12 +6,13 @@
 //! Reference: $PHP_SRC_PATH/ext/standard/proc_open.c,
 //! $PHP_SRC_PATH/ext/standard/fsock.c
 
-use crate::file::{new_stream, stream_arg};
+use crate::file::{is_user, new_stream, stream_arg, with_user};
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::stream::{PipeOut, Resource, Stream, Target, resource, resource_of};
 use p8_runtime::string::PhpStr;
+use p8_runtime::user_stream;
 use p8_runtime::value::Value;
 use std::cell::{Cell, RefCell};
 use std::os::unix::ffi::OsStrExt;
@@ -30,6 +31,10 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "stream_set_chunk_size", run: stream_set_chunk_size, by_ref: &[] },
     Builtin { name: "stream_select", run: stream_select, by_ref: &[0, 1, 2] },
     Builtin { name: "stream_set_timeout", run: stream_set_timeout, by_ref: &[] },
+    Builtin { name: "stream_set_write_buffer", run: stream_set_write_buffer, by_ref: &[] },
+    Builtin { name: "set_file_buffer", run: stream_set_write_buffer, by_ref: &[] },
+    Builtin { name: "stream_set_read_buffer", run: stream_set_read_buffer, by_ref: &[] },
+    Builtin { name: "stream_supports_lock", run: stream_supports_lock, by_ref: &[] },
 ];
 
 fn text(v: &Value) -> String {
@@ -277,6 +282,10 @@ fn fsockopen(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn stream_set_blocking(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "stream_set_blocking", args, 0)?;
     let enable = arg(args, 1).to_bool();
+    if is_user(&o) {
+        let mode = Value::Int(i64::from(enable));
+        return Ok(Value::Bool(with_user(ctx, &o, false, |ctx, s| user_stream::set_option(ctx, "", s, user_stream::OPTION_BLOCKING, mode, None))?));
+    }
     let r = resource(&o).expect("a stream");
     r.stream.borrow_mut().nonblocking = !enable;
     Ok(Value::Bool(true))
@@ -308,6 +317,37 @@ fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     if read.is_none() && write.is_none() && except.is_none() {
         return Err(ctx.throw("ValueError", "No stream arrays were passed".into()));
     }
+    // A user-space stream is waited on through the stream its stream_cast
+    // gives (asked for each place it is listed, as PHP builds its fd sets);
+    // one that gives none is left out, as PHP cannot select on it.
+    let mut stand_ins: Vec<(Rc<p8_runtime::object::Object>, Option<Value>)> = Vec::new();
+    let mut usable = 0;
+    for v in [&read, &write, &except].into_iter().flatten().flat_map(|a| a.values()) {
+        let Some(o) = resource_of(v) else { continue };
+        if !is_user(&o) {
+            usable += 1;
+            continue;
+        }
+        let cast = with_user(ctx, &o, None, |ctx, s| user_stream::cast(ctx, "stream_select", s, &o))?;
+        if cast.is_none() {
+            ctx.warn("stream_select(): Cannot represent a stream of type user-space as a select()able descriptor");
+        } else {
+            usable += 1;
+        }
+        stand_ins.retain(|(s, _)| !Rc::ptr_eq(s, &o));
+        stand_ins.push((o, cast));
+    }
+    if usable == 0 && !stand_ins.is_empty() {
+        return Err(ctx.throw("ValueError", "No stream arrays were passed".into()));
+    }
+    // What a value in the arrays is waited on as (None: left out).
+    let waited = |v: &Value| -> Option<Value> {
+        let o = resource_of(v)?;
+        match stand_ins.iter().find(|(s, _)| Rc::ptr_eq(s, &o)) {
+            Some((_, cast)) => cast.clone(),
+            None => Some(v.clone()),
+        }
+    };
     let timeout = match args.get(3).map(Value::deref) {
         None | Some(Value::Null) => None,
         Some(v) => {
@@ -323,13 +363,19 @@ fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         }
     };
     let deadline = timeout.map(|t| std::time::Instant::now() + t);
-    let writable = write.as_ref().map_or(0, |w| w.len());
+    let mut writes = PhpArray::new();
+    for (k, v) in write.iter().flat_map(|a| a.iter()).filter(|(_, v)| waited(v).is_some()) {
+        writes.insert(k.clone(), v.clone());
+    }
+    let writable = writes.len();
     let ready_reads = loop {
         let mut ready = PhpArray::new();
         for (k, v) in read.iter().flat_map(|a| a.iter()) {
-            let Some(o) = resource_of(v) else { continue };
+            let Some(o) = waited(v).as_ref().and_then(resource_of) else { continue };
             let Some(r) = resource(&o) else { continue };
-            if !r.closed.get() && r.stream.borrow_mut().read_ready() {
+            // A user-space stream with bytes read ahead stands in for itself.
+            let ahead = r.stream.try_borrow().is_ok_and(|s| s.user().is_some() && !s.buffer.is_empty());
+            if !r.closed.get() && (ahead || r.stream.try_borrow_mut().is_ok_and(|mut s| s.read_ready())) {
                 ready.insert(k.clone(), v.clone());
             }
         }
@@ -339,9 +385,19 @@ fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         let pause = Duration::from_millis(1);
         std::thread::sleep(deadline.map_or(pause, |d| pause.min(d.saturating_duration_since(std::time::Instant::now()))));
     };
+    // PHP asks each user-space stream it waited on again, finding its
+    // descriptor among the ready ones.
+    for v in [&read, &write, &except].into_iter().flatten().flat_map(|a| a.values()) {
+        if let Some(o) = resource_of(v).filter(|o| is_user(o) && stand_ins.iter().any(|(s, c)| Rc::ptr_eq(s, o) && c.is_some())) {
+            with_user(ctx, &o, None, |ctx, s| user_stream::cast(ctx, "stream_select", s, &o))?;
+        }
+    }
     let count = ready_reads.len() + writable;
     if let (Some(Value::Ref(cell)), Some(_)) = (args.first(), &read) {
         *cell.borrow_mut() = Value::Array(Rc::new(ready_reads));
+    }
+    if let (Some(Value::Ref(cell)), Some(_)) = (args.get(1), &write) {
+        *cell.borrow_mut() = Value::Array(Rc::new(writes));
     }
     if let (Some(Value::Ref(cell)), Some(_)) = (args.get(2), &except) {
         *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
@@ -352,6 +408,13 @@ fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 /// stream_set_timeout(resource $stream, int $seconds, int $microseconds = 0)
 fn stream_set_timeout(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "stream_set_timeout", args, 0)?;
+    if is_user(&o) {
+        // The wrapper is told the seconds and microseconds as given.
+        let seconds = arg(args, 1).to_int();
+        let micros = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+        let set = with_user(ctx, &o, false, |ctx, s| user_stream::set_option(ctx, "", s, user_stream::OPTION_READ_TIMEOUT, Value::Int(seconds), Some(micros)))?;
+        return Ok(Value::Bool(set));
+    }
     let seconds = arg(args, 1).to_int().max(0) as u64;
     let micros = if args.len() > 2 { arg(args, 2).to_int().max(0) as u64 } else { 0 };
     let r = resource(&o).expect("a stream");
@@ -363,4 +426,50 @@ fn stream_set_timeout(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
     }
     let _ = str_arg(args, 0);
     Ok(Value::Bool(false))
+}
+
+/// stream_set_write_buffer / stream_set_read_buffer for a user-space
+/// stream: stream_set_option (PHP_STREAM_BUFFER_NONE 0 for size 0, else
+/// PHP_STREAM_BUFFER_FULL 2 and the size); 0 when it agrees, else EOF (-1).
+fn user_buffer(ctx: &mut dyn Ctx, o: &p8_runtime::object::Object, option: i64, size: i64) -> Result<Value, Throw> {
+    let (mode, size) = if size == 0 { (0, None) } else { (2, Some(size)) };
+    let set = with_user(ctx, o, false, |ctx, s| user_stream::set_option(ctx, "", s, option, Value::Int(mode), size))?;
+    Ok(Value::Int(if set { 0 } else { -1 }))
+}
+
+/// stream_set_write_buffer(resource $stream, int $size) (and set_file_buffer):
+/// 0 when the buffering was set. p8 writes through: a file opened by
+/// descriptor refuses (EOF, -1), as PHP's does; the standard streams take it.
+fn stream_set_write_buffer(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let o = stream_arg(ctx, "stream_set_write_buffer", args, 0)?;
+    let size = arg(args, 1).to_int();
+    if is_user(&o) {
+        return user_buffer(ctx, &o, user_stream::OPTION_WRITE_BUFFER, size);
+    }
+    let r = resource(&o).expect("a stream");
+    let standard = matches!(r.stream.borrow().target, Target::Stdin | Target::Stdout | Target::Stderr);
+    Ok(Value::Int(if standard { 0 } else { -1 }))
+}
+
+/// stream_set_read_buffer(resource $stream, int $size): 0 (p8's streams
+/// read what is asked for; a user-space wrapper is asked).
+fn stream_set_read_buffer(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let o = stream_arg(ctx, "stream_set_read_buffer", args, 0)?;
+    let size = arg(args, 1).to_int();
+    if is_user(&o) {
+        return user_buffer(ctx, &o, user_stream::OPTION_READ_BUFFER, size);
+    }
+    Ok(Value::Int(0))
+}
+
+/// stream_supports_lock(resource $stream): files and the standard streams
+/// do, memory does not; a user-space wrapper is asked (stream_lock(0)).
+fn stream_supports_lock(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let o = stream_arg(ctx, "stream_supports_lock", args, 0)?;
+    if is_user(&o) {
+        return Ok(Value::Bool(with_user(ctx, &o, false, |ctx, s| user_stream::lock(ctx, s, 0))?));
+    }
+    let r = resource(&o).expect("a stream");
+    let lockable = matches!(r.stream.borrow().target, Target::File(_) | Target::Stdin | Target::Stdout | Target::Stderr);
+    Ok(Value::Bool(lockable))
 }

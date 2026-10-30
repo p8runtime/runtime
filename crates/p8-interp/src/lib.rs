@@ -1135,6 +1135,8 @@ impl Isolate {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
         let stop = Arc::clone(&self.interrupt);
         let classes = self.builtin_classes.clone();
+        let ids = Rc::new(Ids::default());
+        let resource_ids = Rc::new(Ids::monotonic_beside(&ids));
         Context {
             stop,
             isolate: self,
@@ -1164,11 +1166,12 @@ impl Isolate {
             loader: None,
             included: std::collections::HashSet::new(),
             included_order: Vec::new(),
-            ids: Rc::new(Ids::default()),
+            ids,
             native_class: None,
             ext_state: HashMap::new(),
+            ended_globals: Vec::new(),
             resource_classes: HashMap::new(),
-            resource_ids: Rc::new(Ids::monotonic()),
+            resource_ids,
             enum_objects: HashMap::new(),
             resolved: std::collections::HashSet::new(),
             stack_base: 0,
@@ -1274,8 +1277,12 @@ pub struct Context<'i> {
     arg_buf: Vec<Value>,
     /// Extensions' per-request state (Ctx::state).
     ext_state: HashMap<&'static str, Value>,
-    /// The class of each kind of resource, and their numbers.
-    resource_classes: HashMap<&'static str, Rc<Class>>,
+    /// The main frame's globals as the script left them, kept until the
+    /// request's end hooks have run.
+    ended_globals: Vec<Value>,
+    /// The class of each kind of resource (and whether it is a user-space
+    /// wrapper's stream, which has a destructor), and their numbers.
+    resource_classes: HashMap<(&'static str, bool), Rc<Class>>,
     resource_ids: Rc<Ids>,
     /// The class a static builtin method runs for (an enum's cases()).
     native_class: Option<Rc<Class>>,
@@ -1888,6 +1895,7 @@ impl Context<'_> {
             self.end_buffers(&mut regs);
         }
         // The request's variables go now (the isolate keeps the capacity).
+        self.ended_globals.clear();
         regs.clear();
         self.frames.clear();
         self.isolate.regs = regs;
@@ -3391,14 +3399,19 @@ impl Context<'_> {
                 }
                 Instr::Include { dst, src, kind } => {
                     let v = self.operand(w, func, src);
-                    let Some(program) = self.load_include(&v, kind, &func.file)? else {
-                        reg!(dst) = Value::Bool(kind.once());
+                    // The registers are lent: a user-space wrapper's methods
+                    // may serve the file.
+                    self.isolate.regs = std::mem::take(regs);
+                    let loaded = self.load_include(&v, kind, &func.file);
+                    *regs = std::mem::take(&mut self.isolate.regs);
+                    let Some(program) = loaded? else {
+                        regs[base + dst as usize] = Value::Bool(kind.once());
                         return Ok(Next::Go(pc));
                     };
                     let program = match program {
                         Ok(p) => p,
                         Err(()) => {
-                            reg!(dst) = Value::Bool(false);
+                            regs[base + dst as usize] = Value::Bool(false);
                             return Ok(Next::Go(pc));
                         }
                     };
@@ -4226,14 +4239,18 @@ impl Context<'_> {
 
     /// A resource object (numbered by the resources' own counter).
     fn make_resource(&mut self, resource: p8_runtime::stream::Resource) -> Rc<Object> {
+        // A user-space wrapper's stream is closed (its stream_close run)
+        // when the resource goes: its class has that as a destructor.
+        let user = resource.stream.borrow().user().is_some();
+        let dtor: Option<p8_runtime::object::NativeMethod> = if user { Some(p8_runtime::user_stream::free) } else { None };
         let class = self
             .resource_classes
-            .entry(resource.kind)
+            .entry((resource.kind, user))
             .or_insert_with(|| {
                 Rc::new(Class {
                     name: PhpStr::from(resource.kind),
                     lower: resource.kind.as_bytes().to_vec(),
-                    flags: p8_runtime::object::CLASS_RESOURCE | p8_runtime::object::CLASS_FINAL,
+                    flags: p8_runtime::object::CLASS_RESOURCE | p8_runtime::object::CLASS_FINAL | if user { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 },
                     parent: None,
                     interfaces: Vec::new(),
                     properties: Vec::new(),
@@ -4248,7 +4265,7 @@ impl Context<'_> {
                     clone_data: None,
                     forward_calls: None,
                     make_data: None,
-                    native_dtor: None,
+                    native_dtor: dtor,
                     enum_cases: Vec::new(),
                     enum_backing: None,
                     static_inits: Vec::new(),

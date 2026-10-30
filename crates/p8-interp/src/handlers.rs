@@ -182,8 +182,11 @@ impl Context<'_> {
         loop {
             let mut freed = false;
             for r in (0..ncv).rev() {
+                // (Resources stay: PHP frees them after the output buffers,
+                // a user-space stream's stream_close then.)
                 if let Value::Object(o) = &regs[r]
                     && Rc::strong_count(o) == 1
+                    && o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0
                 {
                     regs[r] = Value::Undef;
                     freed = true;
@@ -194,6 +197,11 @@ impl Context<'_> {
                 break;
             }
         }
+        // What the globals still hold lives on past the output buffers, as
+        // PHP's symbol table does (a resource is freed then: a user-space
+        // stream's stream_close runs after the buffers are flushed).
+        let kept = regs[..ncv.min(regs.len())].iter().filter(|v| !matches!(v, Value::Undef)).cloned();
+        self.ended_globals.extend(kept);
         self.destruct_remaining(regs)
     }
 

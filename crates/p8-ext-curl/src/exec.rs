@@ -119,7 +119,15 @@ impl Run<'_> {
         let Some(r) = resource_of(stream) else { return false };
         let Some(res) = resource(&r) else { return false };
         let mut cx = self.cx.borrow_mut();
-        res.stream.borrow_mut().write(&mut **cx, data) == Some(data.len())
+        let written = res.stream.borrow_mut().write(&mut **cx, data);
+        match written {
+            Ok(n) => n == Some(data.len()),
+            // A user-space wrapper's stream_write threw.
+            Err(t) => {
+                self.status.borrow_mut().thrown = Some(t);
+                false
+            }
+        }
     }
 
     /// The body (or, with CURLOPT_HEADER, header) bytes to the write sink.

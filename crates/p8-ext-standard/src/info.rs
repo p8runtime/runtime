@@ -6,7 +6,9 @@
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
+use crate::file::user_field;
 use p8_runtime::stream::{Target, resource, resource_of};
+use p8_runtime::user_stream::{self, Located, Stat};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::os::unix::fs::MetadataExt;
@@ -34,8 +36,11 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "vfprintf", run: vfprintf, by_ref: &[] },
 ];
 
-/// These need the running frames' registers (backtrace arguments).
-pub const REENTER: &[&str] = &["debug_backtrace", "debug_print_backtrace"];
+/// These need the running frames' registers (backtrace arguments), or
+/// take a path a user-space wrapper may serve (its methods are PHP code).
+pub const REENTER: &[&str] = &[
+    "debug_backtrace", "debug_print_backtrace", "stat", "lstat", "fileinode", "fileowner", "filegroup", "filetype", "chown", "chgrp", "lchown", "lchgrp",
+];
 
 fn path(args: &[Value]) -> String {
     String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned()
@@ -43,29 +48,22 @@ fn path(args: &[Value]) -> String {
 
 /// stat's array: the 13 values by number, then by name.
 fn stat_array(m: &std::fs::Metadata) -> Value {
-    let values = [
-        ("dev", m.dev() as i64),
-        ("ino", m.ino() as i64),
-        ("mode", i64::from(m.mode())),
-        ("nlink", m.nlink() as i64),
-        ("uid", i64::from(m.uid())),
-        ("gid", i64::from(m.gid())),
-        ("rdev", m.rdev() as i64),
-        ("size", m.size() as i64),
-        ("atime", m.atime()),
-        ("mtime", m.mtime()),
-        ("ctime", m.ctime()),
-        ("blksize", m.blksize() as i64),
-        ("blocks", m.blocks() as i64),
-    ];
-    let mut out = PhpArray::new();
-    for (i, (_, v)) in values.iter().enumerate() {
-        out.insert(Key::Int(i as i64), Value::Int(*v));
-    }
-    for (k, v) in values {
-        out.insert(Key::from_string(PhpStr::from(k)), Value::Int(v));
-    }
-    Value::Array(Rc::new(out))
+    let st = Stat {
+        dev: m.dev() as i64,
+        ino: m.ino() as i64,
+        mode: i64::from(m.mode()),
+        nlink: m.nlink() as i64,
+        uid: i64::from(m.uid()),
+        gid: i64::from(m.gid()),
+        rdev: m.rdev() as i64,
+        size: m.size() as i64,
+        atime: m.atime(),
+        mtime: m.mtime(),
+        ctime: m.ctime(),
+        blksize: m.blksize() as i64,
+        blocks: m.blocks() as i64,
+    };
+    Value::Array(Rc::new(st.to_array()))
 }
 
 fn stat_of(ctx: &mut dyn Ctx, func: &str, p: &str, follow: bool) -> Option<std::fs::Metadata> {
@@ -82,11 +80,17 @@ fn stat_of(ctx: &mut dyn Ctx, func: &str, p: &str, follow: bool) -> Option<std::
 
 fn stat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
+    if let Some(v) = user_field(ctx, "stat", &p, false, |st| Value::Array(Rc::new(st.to_array())))? {
+        return Ok(v);
+    }
     Ok(stat_of(ctx, "stat", &p, true).map_or(Value::Bool(false), |m| stat_array(&m)))
 }
 
 fn lstat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
+    if let Some(v) = user_field(ctx, "lstat", &p, true, |st| Value::Array(Rc::new(st.to_array())))? {
+        return Ok(v);
+    }
     Ok(stat_of(ctx, "lstat", &p, false).map_or(Value::Bool(false), |m| stat_array(&m)))
 }
 
@@ -95,6 +99,11 @@ fn fstat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Some(o) = resource_of(&v) else {
         return Err(ctx.throw("TypeError", format!("fstat(): Argument #1 ($stream) must be of type resource, {} given", v.type_name())));
     };
+    if crate::file::is_user(&o) {
+        // The wrapper's stream_stat.
+        let st = crate::file::with_user(ctx, &o, None, |ctx, s| user_stream::stat(ctx, "fstat", s))?;
+        return Ok(st.map_or(Value::Bool(false), |st| Value::Array(Rc::new(st.to_array()))));
+    }
     let Some(r) = resource(&o) else { return Ok(Value::Bool(false)) };
     let s = r.stream.borrow();
     match &s.target {
@@ -165,25 +174,50 @@ fn readlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
 }
 
-fn stat_field(ctx: &mut dyn Ctx, func: &str, args: &[Value], f: impl Fn(&std::fs::Metadata) -> i64) -> Value {
+/// A stat field: from a user-space wrapper's url_stat (`user`), else the
+/// file's metadata (`f`).
+fn stat_field(ctx: &mut dyn Ctx, func: &str, args: &[Value], user: impl FnOnce(&Stat) -> i64, f: impl Fn(&std::fs::Metadata) -> i64) -> Result<Value, Throw> {
     let p = path(args);
-    stat_of(ctx, func, &p, true).map_or(Value::Bool(false), |m| Value::Int(f(&m)))
+    if let Some(v) = user_field(ctx, func, &p, false, |st| Value::Int(user(st)))? {
+        return Ok(v);
+    }
+    Ok(stat_of(ctx, func, &p, true).map_or(Value::Bool(false), |m| Value::Int(f(&m))))
 }
 
 fn fileinode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(stat_field(ctx, "fileinode", args, |m| m.ino() as i64))
+    stat_field(ctx, "fileinode", args, |st| st.ino, |m| m.ino() as i64)
 }
 
 fn fileowner(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(stat_field(ctx, "fileowner", args, |m| i64::from(m.uid())))
+    stat_field(ctx, "fileowner", args, |st| st.uid, |m| i64::from(m.uid()))
 }
 
 fn filegroup(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(stat_field(ctx, "filegroup", args, |m| i64::from(m.gid())))
+    stat_field(ctx, "filegroup", args, |st| st.gid, |m| i64::from(m.gid()))
+}
+
+/// What a stat's mode says the file is (filetype()).
+fn type_of_mode(ctx: &mut dyn Ctx, mode: i64) -> &'static str {
+    match mode & user_stream::S_IFMT {
+        0o120000 => "link",
+        0o010000 => "fifo",
+        0o020000 => "char",
+        0o040000 => "dir",
+        0o060000 => "block",
+        0o100000 => "file",
+        0o140000 => "socket",
+        other => {
+            ctx.notice(&format!("filetype(): Unknown file type ({other})"));
+            "unknown"
+        }
+    }
 }
 
 fn filetype(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
+    if let Some(st) = crate::file::user_stat(ctx, "filetype", &p, true, false)? {
+        return Ok(st.map_or(Value::Bool(false), |st| Value::str(type_of_mode(ctx, st.mode))));
+    }
     let Some(m) = stat_of(ctx, "filetype", &p, false) else { return Ok(Value::Bool(false)) };
     let t = m.file_type();
     Ok(Value::str(if t.is_symlink() {
@@ -246,8 +280,8 @@ fn vfprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let values = crate::printf::array_values(&arg(args, 2));
     let fmt = arg(args, 1).to_php_string().unwrap_or_else(PhpStr::empty);
     let bytes = crate::printf::formatted(ctx, "vfprintf", fmt.as_bytes(), &values, crate::printf::Missing::Array)?;
-    if let Some(r) = resource(&o) {
-        r.stream.borrow_mut().write(ctx, &bytes);
+    if resource(&o).is_some() {
+        crate::file::with_user(ctx, &o, None, |ctx, s| s.write(ctx, &bytes))?;
     }
     Ok(Value::Int(bytes.len() as i64))
 }
@@ -277,6 +311,20 @@ fn id_of(ctx: &mut dyn Ctx, func: &str, v: &Value, table: &str, what: &str) -> O
 /// the system's reason) when it can't be.
 fn change_owner(ctx: &mut dyn Ctx, args: &mut [Value], func: &str, group: bool, link: bool) -> Result<Value, Throw> {
     let path = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
+    if let Located::User(w, _) = user_stream::locate(ctx, func, &path) {
+        // stream_metadata with the name or the number.
+        let who = arg(args, 1);
+        let option = match (group, matches!(who, Value::Int(_))) {
+            (false, false) => user_stream::META_OWNER_NAME,
+            (false, true) => user_stream::META_OWNER,
+            (true, false) => user_stream::META_GROUP_NAME,
+            (true, true) => user_stream::META_GROUP,
+        };
+        let value = if matches!(who, Value::Int(_)) { who } else { Value::Str(who.to_php_string().unwrap_or_else(PhpStr::empty)) };
+        let mut call = [Value::str(path.as_str()), Value::Int(option), value];
+        return Ok(Value::Bool(user_stream::url_op(ctx, func, &w, "stream_metadata", &mut call, Value::Null)?));
+    }
+    user_stream::clear_stat_cache(ctx);
     let id = if group { id_of(ctx, func, &arg(args, 1), "/etc/group", "gid") } else { id_of(ctx, func, &arg(args, 1), "/etc/passwd", "uid") };
     let Some(id) = id else { return Ok(Value::Bool(false)) };
     let (uid, gid) = if group { (None, Some(id)) } else { (Some(id), None) };

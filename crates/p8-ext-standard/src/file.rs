@@ -13,6 +13,7 @@ use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
 use p8_runtime::object::{Native, Object, Visibility};
 use p8_runtime::stream::{Resource, Stream, Target, resource, resource_of};
 use p8_runtime::string::PhpStr;
+use p8_runtime::user_stream::{self, Located, Stat};
 use p8_runtime::value::Value;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -85,6 +86,19 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "rewinddir", run: rewinddir, by_ref: &[] },
     Builtin { name: "dir", run: dir, by_ref: &[] },
     Builtin { name: "closedir", run: fclose, by_ref: &[] },
+    Builtin { name: "stream_wrapper_register", run: stream_wrapper_register, by_ref: &[] },
+    Builtin { name: "stream_register_wrapper", run: stream_wrapper_register, by_ref: &[] },
+    Builtin { name: "stream_wrapper_unregister", run: stream_wrapper_unregister, by_ref: &[] },
+    Builtin { name: "stream_wrapper_restore", run: stream_wrapper_restore, by_ref: &[] },
+];
+
+/// The functions that take a path a user-space wrapper may serve: they
+/// run its methods (PHP code). Those that take a stream resource already
+/// may (an object argument).
+pub(crate) const REENTER: &[&str] = &[
+    "fopen", "file_get_contents", "file_put_contents", "file", "readfile", "unlink", "mkdir", "rmdir", "rename", "copy", "touch", "chmod", "is_file", "is_dir",
+    "is_link", "file_exists", "is_readable", "is_writable", "is_writeable", "is_executable", "filesize", "filemtime", "fileatime", "filectime", "fileperms",
+    "scandir", "opendir", "dir", "stream_is_local", "stream_select",
 ];
 
 fn text(s: &PhpStr) -> String {
@@ -120,8 +134,143 @@ fn with_stream<R>(o: &Object, f: impl FnOnce(&mut Stream) -> R) -> R {
     f(&mut r.stream.borrow_mut())
 }
 
+/// Whether the stream is a user-space wrapper's (its operations run PHP
+/// code, so they go through the `_in` methods with the context).
+pub(crate) fn is_user(o: &Object) -> bool {
+    resource(o).is_some_and(|r| r.stream.try_borrow().is_ok_and(|s| s.user().is_some()))
+}
+
+/// An operation on a stream that may run PHP code (a user-space
+/// wrapper's), the stream borrowed meanwhile: the wrapper's own code
+/// reaching for it again finds it busy (`busy` is the answer) rather than
+/// the borrow panicking.
+pub(crate) fn with_user<R>(ctx: &mut dyn Ctx, o: &Object, busy: R, f: impl FnOnce(&mut dyn Ctx, &mut Stream) -> Result<R, Throw>) -> Result<R, Throw> {
+    let r = resource(o).expect("a stream resource");
+    match r.stream.try_borrow_mut() {
+        Ok(mut s) => f(ctx, &mut s),
+        Err(_) => Ok(busy),
+    }
+}
+
 pub(crate) fn new_stream(ctx: &mut dyn Ctx, stream: Stream) -> Value {
-    ctx.new_resource(Resource { kind: "stream", closed: Cell::new(false), stream: RefCell::new(stream) })
+    let user = stream.user().is_some();
+    let v = ctx.new_resource(Resource { kind: "stream", closed: Cell::new(false), stream: RefCell::new(stream) });
+    if user {
+        user_stream::adopt(ctx, &v);
+    }
+    v
+}
+
+/// The stream context argument `i`, if one was given (null is none).
+fn context_arg(args: &[Value], i: usize) -> Option<Value> {
+    args.get(i).map(Value::deref).filter(|v| resource_of(v).is_some())
+}
+
+/// A user-space wrapper's context: the one given, else the request's default.
+fn context_or_default(ctx: &mut dyn Ctx, context: Option<Value>) -> Value {
+    context.unwrap_or_else(|| user_stream::default_context(ctx))
+}
+
+/// "Failed to open stream" for a path no wrapper serves (file://
+/// unregistered).
+fn disabled(ctx: &mut dyn Ctx, func: &str, shown: &str) {
+    user_stream::warn_disabled(ctx, func);
+    ctx.warn(&format!("{func}({shown}): Failed to open stream: no suitable wrapper could be found"));
+}
+
+/// `path` opened by the user-space wrapper serving it (stream_open given
+/// `options` and the context; PHP's warning when it fails), or refused
+/// when file:// is unregistered: None when p8's own streams serve it.
+fn open_user(ctx: &mut dyn Ctx, func: &str, path: &str, mode: &str, options: i64, context: Option<Value>) -> Result<Option<Option<Stream>>, Throw> {
+    match user_stream::locate(ctx, func, path) {
+        Located::User(w, local) => {
+            let context = context_or_default(ctx, context);
+            Ok(Some(match user_stream::open(ctx, &w, &local, mode, options, context, false)? {
+                Ok((s, _)) => Some(s),
+                Err(reason) => {
+                    ctx.warn(&format!("{func}({path}): Failed to open stream: {reason}"));
+                    None
+                }
+            }))
+        }
+        Located::Disabled => {
+            disabled(ctx, func, path);
+            Ok(Some(None))
+        }
+        Located::Builtin => Ok(None),
+    }
+}
+
+/// php_stat for a path a user-space wrapper serves (its url_stat, through
+/// PHP's stat cache): None when p8 serves the path itself. A failed stat
+/// is warned of unless `quiet` (the is_* and file_exists checks).
+pub(crate) fn user_stat(ctx: &mut dyn Ctx, func: &str, path: &str, link: bool, quiet: bool) -> Result<Option<Option<Stat>>, Throw> {
+    let stat = match user_stream::locate(ctx, func, path) {
+        Located::User(w, local) => {
+            let flags = user_stream::STAT_IGNORE_OPEN_BASEDIR | if link { user_stream::STAT_LINK } else { 0 } | if quiet { user_stream::STAT_QUIET } else { 0 };
+            user_stream::url_stat(ctx, func, &w, &local, flags, Value::Null)?
+        }
+        Located::Disabled => None,
+        Located::Builtin => return Ok(None),
+    };
+    if stat.is_none() && !quiet {
+        ctx.warn(&format!("{func}(): {}stat failed for {path}", if link { "L" } else { "" }));
+    }
+    Ok(Some(stat))
+}
+
+/// The uid this process runs as, which php_stat compares a file's owner
+/// with (getuid()): a new file's owner, learnt once.
+fn process_uid() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    static UID: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *UID.get_or_init(|| {
+        let probe = std::env::temp_dir().join(format!("p8-uid-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).ok()?;
+        let uid = file.metadata().ok().map(|m| m.uid());
+        let _ = std::fs::remove_file(&probe);
+        uid
+    })
+}
+
+/// is_readable/is_writable/is_executable for a user-space wrapper's stat:
+/// the owner's bits when the process owns it, else the others' (`mask`:
+/// the owner's bit).
+fn user_access(st: &Stat, mask: i64) -> bool {
+    let owner = process_uid().is_some_and(|uid| i64::from(uid) == st.uid);
+    st.mode & if owner { mask } else { mask >> 6 } != 0
+}
+
+/// A user-space wrapper's stat, or None when p8 serves the path: the
+/// answer of an is_* check.
+fn user_check(ctx: &mut dyn Ctx, func: &str, path: &str, link: bool, check: impl FnOnce(&Stat) -> bool) -> Result<Option<Value>, Throw> {
+    Ok(user_stat(ctx, func, path, link, true)?.map(|st| Value::Bool(st.as_ref().is_some_and(check))))
+}
+
+/// A user-space wrapper's stat value for a function that warns when there
+/// is none (filesize, filemtime, ...); None when p8 serves the path.
+pub(crate) fn user_field(ctx: &mut dyn Ctx, func: &str, path: &str, link: bool, field: impl FnOnce(&Stat) -> Value) -> Result<Option<Value>, Throw> {
+    Ok(user_stat(ctx, func, path, link, false)?.map(|st| st.as_ref().map_or(Value::Bool(false), field)))
+}
+
+/// A user-space wrapper's url operation (unlink, rename, mkdir, rmdir,
+/// stream_metadata) for `path`: None when p8 serves the path.
+fn user_op(ctx: &mut dyn Ctx, func: &str, path: &str, method: &str, args: &mut [Value], context: Option<Value>) -> Result<Option<Value>, Throw> {
+    match user_stream::locate(ctx, func, path) {
+        Located::User(w, _) => {
+            let context = match method {
+                // touch, chmod and chown pass no context.
+                "stream_metadata" => Value::Null,
+                _ => context_or_default(ctx, context),
+            };
+            Ok(Some(Value::Bool(user_stream::url_op(ctx, func, &w, method, args, context)?)))
+        }
+        Located::Disabled => {
+            ctx.warn(&format!("{func}(): Unable to locate stream wrapper"));
+            Ok(Some(Value::Bool(false)))
+        }
+        Located::Builtin => Ok(None),
+    }
 }
 
 /// The OS error PHP shows ("No such file or directory").
@@ -145,7 +294,23 @@ pub(crate) fn os_error(e: &std::io::Error) -> String {
 
 /// Open `path` with an fopen mode (php:// names included).
 fn open(ctx: &mut dyn Ctx, func: &str, path: &PhpStr, mode: &str) -> Result<Option<Stream>, Throw> {
+    open_with(ctx, func, path, mode, 0, None)
+}
+
+/// Open `path` with an fopen mode: a user-space wrapper's URL is opened by
+/// its class (stream_open given `options` and the context), anything else
+/// as [`open`] does.
+fn open_with(ctx: &mut dyn Ctx, func: &str, path: &PhpStr, mode: &str, options: i64, context: Option<Value>) -> Result<Option<Stream>, Throw> {
     let p = text(path);
+    if let Some(opened) = open_user(ctx, func, &p, mode, options, context)? {
+        return Ok(opened);
+    }
+    open_builtin(ctx, func, p, mode)
+}
+
+/// `p` opened by p8's own streams (php://, compress.zlib://, http://, an
+/// extension's scheme, a file).
+fn open_builtin(ctx: &mut dyn Ctx, func: &str, p: String, mode: &str) -> Result<Option<Stream>, Throw> {
     if let Some(gz) = p.strip_prefix("compress.zlib://") {
         return Ok(crate::zlib::open_gz(ctx, func, gz, mode));
     }
@@ -223,7 +388,8 @@ fn fopen(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Err(ctx.throw("ValueError", "Path cannot be empty".into()));
     }
     let mode = text(&str_arg(args, 1));
-    match open(ctx, "fopen", &path, &mode)? {
+    let options = if args.len() > 2 && arg(args, 2).to_bool() { user_stream::USE_PATH } else { 0 };
+    match open_with(ctx, "fopen", &path, &mode, options, context_arg(args, 3))? {
         Some(s) => Ok(new_stream(ctx, s)),
         None => Ok(Value::Bool(false)),
     }
@@ -234,7 +400,7 @@ pub(crate) fn fclose(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
     let r = resource(&o).expect("a stream resource");
     r.closed.set(true);
     // The file itself closes now (the resource value lives on, closed).
-    r.stream.borrow_mut().close();
+    with_user(ctx, &o, (), |ctx, s| s.close_in(ctx))?;
     Ok(Value::Bool(true))
 }
 
@@ -252,12 +418,12 @@ pub(crate) fn fwrite(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
         // A gzip file being read takes nothing.
         return Ok(Value::Int(0));
     }
-    if !writable {
+    // A user-space wrapper decides for itself what its mode allows.
+    if !writable && !is_user(&o) {
         ctx.report(8, &format!("fwrite(): Write of {} bytes failed with errno=9 Bad file descriptor", bytes.len()));
         return Ok(Value::Bool(false));
     }
-    let r = resource(&o).expect("a stream resource");
-    let written = r.stream.borrow_mut().write(ctx, bytes);
+    let written = with_user(ctx, &o, None, |ctx, s| s.write(ctx, bytes))?;
     Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
 }
 
@@ -270,7 +436,8 @@ pub(crate) fn fread(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
     if with_stream(&o, |s| s.zlib && !s.readable()) {
         return Ok(Value::Bool(false));
     }
-    Ok(Value::Str(PhpStr::new(with_stream(&o, |s| s.read(n as usize)))))
+    let read = with_user(ctx, &o, None, |ctx, s| s.read_in(ctx, n as usize))?;
+    Ok(read.map_or(Value::Bool(false), |b| Value::Str(PhpStr::new(b))))
 }
 
 pub(crate) fn fgets(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -285,23 +452,24 @@ pub(crate) fn fgets(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
             Some(n as usize)
         }
     };
-    Ok(with_stream(&o, |s| s.gets(limit)).map_or(Value::Bool(false), |b| Value::Str(PhpStr::new(b))))
+    let line = with_user(ctx, &o, None, |ctx, s| s.gets_in(ctx, limit))?;
+    Ok(line.map_or(Value::Bool(false), |b| Value::Str(PhpStr::new(b))))
 }
 
 pub(crate) fn fgetc(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fgetc", args, 0)?;
-    let b = with_stream(&o, |s| s.read(1));
+    let b = with_user(ctx, &o, None, |ctx, s| s.read_in(ctx, 1))?.unwrap_or_default();
     Ok(if b.is_empty() { Value::Bool(false) } else { Value::Str(PhpStr::new(b)) })
 }
 
 pub(crate) fn feof(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "feof", args, 0)?;
-    Ok(Value::Bool(with_stream(&o, |s| s.at_end())))
+    Ok(Value::Bool(with_user(ctx, &o, true, |ctx, s| s.at_end_in(ctx))?))
 }
 
 fn fflush(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fflush", args, 0)?;
-    Ok(Value::Bool(with_stream(&o, |s| s.flush())))
+    Ok(Value::Bool(with_user(ctx, &o, false, |ctx, s| s.flush_in(ctx))?))
 }
 
 pub(crate) fn ftell(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -325,7 +493,7 @@ pub(crate) fn fseek(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
             return Ok(Value::Int(-1));
         }
     }
-    Ok(Value::Int(if with_stream(&o, |s| s.seek(offset, whence)) { 0 } else { -1 }))
+    Ok(Value::Int(if with_user(ctx, &o, false, |ctx, s| s.seek_in(ctx, offset, whence))? { 0 } else { -1 }))
 }
 
 pub(crate) fn rewind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -333,7 +501,7 @@ pub(crate) fn rewind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
     if with_stream(&o, |s| s.zlib && s.writable()) {
         return Ok(Value::Bool(false));
     }
-    Ok(Value::Bool(with_stream(&o, |s| s.seek(0, 0))))
+    Ok(Value::Bool(with_user(ctx, &o, false, |ctx, s| s.seek_in(ctx, 0, 0))?))
 }
 
 fn ftruncate(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -342,11 +510,31 @@ fn ftruncate(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if size < 0 {
         return Err(ctx.throw("ValueError", "ftruncate(): Argument #2 ($size) must be greater than or equal to 0".into()));
     }
+    if is_user(&o) {
+        // stream_truncate, if the wrapper has one.
+        return match with_user(ctx, &o, Some(false), |ctx, s| user_stream::truncate(ctx, s, size))? {
+            Some(done) => Ok(Value::Bool(done)),
+            None => {
+                ctx.warn("ftruncate(): Can't truncate this stream!");
+                Ok(Value::Bool(false))
+            }
+        };
+    }
     Ok(Value::Bool(with_stream(&o, |s| s.truncate(size as usize))))
 }
 
+/// flock(resource $stream, int $operation, int &$would_block = null): a
+/// user-space wrapper's stream_lock decides; p8 holds no other locks.
 fn flock(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    stream_arg(ctx, "flock", args, 0)?;
+    const LOCK_UN: i64 = 3;
+    let o = stream_arg(ctx, "flock", args, 0)?;
+    let operation = arg(args, 1).to_int();
+    if !(1..=3).contains(&(operation & LOCK_UN)) {
+        return Err(ctx.throw("ValueError", "flock(): Argument #2 ($operation) must be one of LOCK_SH, LOCK_EX, or LOCK_UN".into()));
+    }
+    if is_user(&o) {
+        return Ok(Value::Bool(with_user(ctx, &o, false, |ctx, s| user_stream::lock(ctx, s, operation))?));
+    }
     Ok(Value::Bool(true))
 }
 
@@ -354,16 +542,47 @@ fn flock(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn fprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fprintf", args, 0)?;
     let bytes = crate::printf::formatted(ctx, "fprintf", crate::str_arg(args, 1).as_bytes(), &args[2..], crate::printf::Missing::Count(2))?;
-    let r = resource(&o).expect("a stream resource");
-    r.stream.borrow_mut().write(ctx, &bytes);
+    with_user(ctx, &o, None, |ctx, s| s.write(ctx, &bytes))?;
     Ok(Value::Int(bytes.len() as i64))
 }
 
 pub(crate) fn fpassthru(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "fpassthru", args, 0)?;
+    if is_user(&o) {
+        return Ok(Value::Int(with_user(ctx, &o, 0, passthru)? as i64));
+    }
     let rest = with_stream(&o, |s| s.read_all());
     ctx.echo(&rest);
     Ok(Value::Int(rest.len() as i64))
+}
+
+/// _php_stream_passthru: what is left, echoed a read (8 KiB) at a time;
+/// how much.
+fn passthru(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<usize, Throw> {
+    let mut n = 0;
+    while let Some(b) = s.read_in(ctx, 8192)?.filter(|b| !b.is_empty()) {
+        ctx.echo(&b);
+        n += b.len();
+    }
+    Ok(n)
+}
+
+/// _php_stream_copy_to_stream_ex: up to `max` bytes (all: None) read 8 KiB
+/// at a time and written on; how many, None when a write failed.
+fn copy_streams(ctx: &mut dyn Ctx, from: &mut Stream, to: &mut Stream, max: Option<usize>) -> Result<Option<usize>, Throw> {
+    let mut n = 0;
+    loop {
+        let chunk = max.map_or(8192, |m| (m - n).min(8192));
+        if chunk == 0 {
+            break;
+        }
+        let Some(bytes) = from.read_in(ctx, chunk)?.filter(|b| !b.is_empty()) else { break };
+        n += bytes.len();
+        if to.write(ctx, &bytes)?.is_none_or(|w| w == 0) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(n))
 }
 
 /// stream_get_contents(resource $stream, ?int $length = null, int $offset = -1)
@@ -374,6 +593,20 @@ fn stream_get_contents(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
         None | Some(Value::Null) => None,
         Some(v) => Some(v.to_int()),
     };
+    if is_user(&o) {
+        let read = with_user(ctx, &o, None, |ctx, s| {
+            let here = s.tell();
+            if offset >= 0 && offset != here {
+                let moved = if offset > here { s.seek_in(ctx, offset - here, 1)? } else { s.seek_in(ctx, offset, 0)? };
+                if !moved {
+                    ctx.warn(&format!("stream_get_contents(): Failed to seek to position {offset} in the stream"));
+                    return Ok(None);
+                }
+            }
+            s.read_all_in(ctx, length.filter(|&n| n >= 0).map(|n| n as usize)).map(Some)
+        })?;
+        return Ok(read.map_or(Value::Bool(false), |b| Value::Str(PhpStr::new(b))));
+    }
     Ok(Value::Str(PhpStr::new(with_stream(&o, |s| {
         if offset >= 0 {
             s.seek(offset, 0);
@@ -395,6 +628,16 @@ fn stream_copy_to_stream(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
         Some(v) => Some(v.to_int()),
     };
     let offset = if args.len() > 3 { arg(args, 3).to_int() } else { 0 };
+    if is_user(&from) || is_user(&to) {
+        let (Some(rf), Some(rt)) = (resource(&from), resource(&to)) else { return Ok(Value::Bool(false)) };
+        let (Ok(mut src), Ok(mut dst)) = (rf.stream.try_borrow_mut(), rt.stream.try_borrow_mut()) else { return Ok(Value::Bool(false)) };
+        if offset > 0 && !src.seek_in(ctx, offset, 0)? {
+            ctx.warn(&format!("stream_copy_to_stream(): Failed to seek to position {offset} in the stream"));
+            return Ok(Value::Bool(false));
+        }
+        let max = length.filter(|&n| n >= 0).map(|n| n as usize);
+        return Ok(copy_streams(ctx, &mut src, &mut dst, max)?.map_or(Value::Bool(false), |n| Value::Int(n as i64)));
+    }
     let bytes = with_stream(&from, |s| {
         if offset > 0 && !s.seek(offset, 0) {
             return None;
@@ -412,15 +655,23 @@ fn stream_copy_to_stream(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
         return Ok(Value::Int(0));
     }
     let r = resource(&to).expect("a stream resource");
-    let written = r.stream.borrow_mut().write(ctx, &bytes);
+    let written = r.stream.borrow_mut().write(ctx, &bytes)?;
     Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
 }
 
 /// stream_is_local(resource|string $stream): whether it is not over a
-/// network (a URL wrapper: http, https, ftp, data; a socket).
-fn stream_is_local(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+/// network (a URL wrapper: http, https, ftp, data; a socket; a user-space
+/// wrapper registered with STREAM_IS_URL).
+fn stream_is_local(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(o) = resource_of(&arg(args, 0)) {
+        if is_user(&o) {
+            let url = with_stream(&o, |s| s.path.clone());
+            return Ok(Value::Bool(!matches!(user_stream::locate(ctx, "stream_is_local", &url), Located::User(w, _) if w.is_url)));
+        }
         return Ok(Value::Bool(resource(&o).is_some_and(|r| !matches!(r.stream.borrow().target, Target::Tcp(_)))));
+    }
+    if let Located::User(w, _) = user_stream::locate(ctx, "stream_is_local", &text(&str_arg(args, 0))) {
+        return Ok(Value::Bool(!w.is_url));
     }
     let url = text(&str_arg(args, 0)).to_ascii_lowercase();
     let scheme = url.split_once("://").map(|(s, _)| s).or_else(|| url.starts_with("data:").then_some("data"));
@@ -432,13 +683,25 @@ fn tmpfile(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// The bytes of a file (or php:// stream), or None after PHP's warning.
-fn read_path(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Result<Option<Vec<u8>>, Throw> {
+fn read_path(ctx: &mut dyn Ctx, func: &str, path: &PhpStr, options: i64, context: Option<Value>) -> Result<Option<Vec<u8>>, Throw> {
     if path.is_empty() {
         return Err(ctx.throw("ValueError", "Path cannot be empty".into()));
     }
     let p = text(path);
+    if let Some(opened) = open_user(ctx, func, &p, "rb", options, context)? {
+        let Some(mut s) = opened else { return Ok(None) };
+        let bytes = s.read_all_in(ctx, None)?;
+        s.close_in(ctx)?;
+        return Ok(Some(bytes));
+    }
+    read_builtin(ctx, func, p)
+}
+
+/// The bytes p8's own streams have for `p` (no user-space wrapper serves
+/// it), or None after PHP's warning.
+fn read_builtin(ctx: &mut dyn Ctx, func: &str, p: String) -> Result<Option<Vec<u8>>, Throw> {
     if p.starts_with("php://") {
-        return Ok(open(ctx, func, path, "r")?.map(|mut s| s.read_all()));
+        return Ok(open_builtin(ctx, func, p, "r")?.map(|mut s| s.read_all()));
     }
     if let Some(gz) = p.strip_prefix("compress.zlib://") {
         return Ok(crate::zlib::open_gz(ctx, func, gz, "r").map(|mut s| s.read_all()));
@@ -468,17 +731,36 @@ fn read_path(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Result<Option<Vec<
 /// file_get_contents(string $filename, bool $use_include_path = false, $context = null,
 /// int $offset = 0, ?int $length = null)
 fn file_get_contents(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(mut bytes) = read_path(ctx, "file_get_contents", &str_arg(args, 0))? else { return Ok(Value::Bool(false)) };
+    let path = str_arg(args, 0);
+    let options = if args.len() > 1 && arg(args, 1).to_bool() { user_stream::USE_PATH } else { 0 };
     let offset = if args.len() > 3 { arg(args, 3).to_int() } else { 0 };
+    let length = args.get(4).map(Value::deref).filter(|v| !matches!(v, Value::Null)).map(|v| v.to_int());
+    if length.is_some_and(|n| n < 0) {
+        return Err(ctx.throw("ValueError", "file_get_contents(): Argument #5 ($length) must be greater than or equal to 0".into()));
+    }
+    if !path.is_empty()
+        && let Some(opened) = open_user(ctx, "file_get_contents", &text(&path), "rb", options, context_arg(args, 2))?
+    {
+        // Through the wrapper: seek to the offset, read up to the length.
+        let Some(mut s) = opened else { return Ok(Value::Bool(false)) };
+        if offset != 0 && !s.seek_in(ctx, offset, if offset > 0 { 0 } else { 2 })? {
+            ctx.warn(&format!("file_get_contents(): Failed to seek to position {offset} in the stream"));
+            s.close_in(ctx)?;
+            return Ok(Value::Bool(false));
+        }
+        let bytes = s.read_all_in(ctx, length.map(|n| n as usize))?;
+        s.close_in(ctx)?;
+        return Ok(Value::Str(PhpStr::new(bytes)));
+    }
+    if path.is_empty() {
+        return Err(ctx.throw("ValueError", "Path cannot be empty".into()));
+    }
+    let Some(mut bytes) = read_builtin(ctx, "file_get_contents", text(&path))? else { return Ok(Value::Bool(false)) };
     if offset != 0 {
         let at = if offset < 0 { (bytes.len() as i64 + offset).max(0) as usize } else { (offset as usize).min(bytes.len()) };
         bytes.drain(..at);
     }
-    if let Some(n) = args.get(4).map(Value::deref).filter(|v| !matches!(v, Value::Null)) {
-        let n = n.to_int();
-        if n < 0 {
-            return Err(ctx.throw("ValueError", "file_get_contents(): Argument #5 ($length) must be greater than or equal to 0".into()));
-        }
+    if let Some(n) = length {
         bytes.truncate(n as usize);
     }
     Ok(Value::Str(PhpStr::new(bytes)))
@@ -491,18 +773,75 @@ const FILE_APPEND: i64 = 8;
 
 /// file_put_contents(string $filename, mixed $data, int $flags = 0, $context = null)
 fn file_put_contents(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    const LOCK_EX: i64 = 2;
     let path = str_arg(args, 0);
+    let p = text(&path);
     let flags = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
-    let data: Vec<u8> = match arg(args, 1) {
-        Value::Array(a) => a.values().flat_map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec()).collect(),
+    if flags & LOCK_EX != 0 && p.contains("://") && !p.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("file://")) {
+        ctx.warn("file_put_contents(): Exclusive locks may only be set for regular files");
+        return Ok(Value::Bool(false));
+    }
+    let options = if flags & FILE_USE_INCLUDE_PATH != 0 { user_stream::USE_PATH } else { 0 };
+    let mode = if flags & FILE_APPEND != 0 { "ab" } else if flags & LOCK_EX != 0 { "cb" } else { "wb" };
+    let user = match open_user(ctx, "file_put_contents", &p, mode, options, context_arg(args, 3))? {
+        Some(None) => return Ok(Value::Bool(false)),
+        Some(Some(s)) => Some(s),
+        None => None,
+    };
+    let Some(mut stream) = user.map_or_else(|| open_builtin(ctx, "file_put_contents", p.clone(), if flags & FILE_APPEND != 0 { "a" } else { "w" }), |s| Ok(Some(s)))? else {
+        return Ok(Value::Bool(false));
+    };
+    if stream.user().is_some() && flags & LOCK_EX != 0 {
+        // A file:// wrapper's file: locked (if it can be), then emptied.
+        if !(user_stream::lock(ctx, &mut stream, 0)? && user_stream::lock(ctx, &mut stream, LOCK_EX)?) {
+            stream.close_in(ctx)?;
+            ctx.warn("file_put_contents(): Exclusive locks are not supported for this stream");
+            return Ok(Value::Bool(false));
+        }
+        user_stream::truncate(ctx, &mut stream, 0)?;
+    }
+    let written = match arg(args, 1) {
+        Value::Array(a) => {
+            // Each element written as it is.
+            let mut n = 0;
+            for v in a.values() {
+                let piece = v.to_php_string().unwrap_or_else(PhpStr::empty);
+                if piece.is_empty() {
+                    continue;
+                }
+                if stream.write(ctx, piece.as_bytes())? != Some(piece.len()) {
+                    ctx.warn(&format!("file_put_contents(): Failed to write {} bytes to {p}", piece.len()));
+                    stream.close_in(ctx)?;
+                    return Ok(Value::Bool(false));
+                }
+                n += piece.len();
+            }
+            Some(n)
+        }
         v => match resource_of(&v) {
-            Some(o) => with_stream(&o, |s| s.read_all()),
-            None => v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec(),
+            Some(o) if is_user(&o) || stream.user().is_some() => {
+                let r = resource(&o).expect("a stream resource");
+                let Ok(mut from) = r.stream.try_borrow_mut() else { return Ok(Value::Bool(false)) };
+                copy_streams(ctx, &mut from, &mut stream, None)?
+            }
+            Some(o) => {
+                let data = with_stream(&o, |s| s.read_all());
+                stream.write(ctx, &data)?
+            }
+            None => {
+                let data = v.to_php_string().unwrap_or_else(PhpStr::empty);
+                let n = if data.is_empty() { Some(0) } else { stream.write(ctx, data.as_bytes())? };
+                if let Some(n) = n.filter(|&n| n != data.len()) {
+                    ctx.warn(&format!("file_put_contents(): Only {n} of {} bytes written, possibly out of free disk space", data.len()));
+                    stream.close_in(ctx)?;
+                    return Ok(Value::Bool(false));
+                }
+                n
+            }
         },
     };
-    let mode = if flags & FILE_APPEND != 0 { "a" } else { "w" };
-    let Some(mut stream) = open(ctx, "file_put_contents", &path, mode)? else { return Ok(Value::Bool(false)) };
-    Ok(stream.write(ctx, &data).map_or(Value::Bool(false), |n| Value::Int(n as i64)))
+    stream.close_in(ctx)?;
+    Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
 }
 
 /// file(string $filename, int $flags = 0, $context = null): the lines.
@@ -511,7 +850,8 @@ fn file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if flags & !(FILE_USE_INCLUDE_PATH | FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) != 0 {
         return Err(ctx.throw("ValueError", "file(): Argument #2 ($flags) must be a valid flag value".into()));
     }
-    let Some(bytes) = read_path(ctx, "file", &str_arg(args, 0))? else { return Ok(Value::Bool(false)) };
+    let options = if flags & FILE_USE_INCLUDE_PATH != 0 { user_stream::USE_PATH } else { 0 };
+    let Some(bytes) = read_path(ctx, "file", &str_arg(args, 0), options, context_arg(args, 2))? else { return Ok(Value::Bool(false)) };
     let mut lines = Vec::new();
     let mut start = 0;
     let mut push = |line: &[u8]| {
@@ -538,7 +878,20 @@ fn file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn readfile(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(bytes) = read_path(ctx, "readfile", &str_arg(args, 0))? else { return Ok(Value::Bool(false)) };
+    let path = str_arg(args, 0);
+    let options = if args.len() > 1 && arg(args, 1).to_bool() { user_stream::USE_PATH } else { 0 };
+    if !path.is_empty()
+        && let Some(opened) = open_user(ctx, "readfile", &text(&path), "rb", options, context_arg(args, 2))?
+    {
+        let Some(mut s) = opened else { return Ok(Value::Bool(false)) };
+        let n = passthru(ctx, &mut s)?;
+        s.close_in(ctx)?;
+        return Ok(Value::Int(n as i64));
+    }
+    if path.is_empty() {
+        return Err(ctx.throw("ValueError", "Path cannot be empty".into()));
+    }
+    let Some(bytes) = read_builtin(ctx, "readfile", text(&path))? else { return Ok(Value::Bool(false)) };
     ctx.echo(&bytes);
     Ok(Value::Int(bytes.len() as i64))
 }
@@ -556,6 +909,10 @@ fn done(ctx: &mut dyn Ctx, func: &str, shown: &str, r: std::io::Result<()>) -> V
 
 fn unlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = text(&str_arg(args, 0));
+    if let Some(done) = user_op(ctx, "unlink", &p, "unlink", &mut [Value::str(p.as_str())], context_arg(args, 1))? {
+        return Ok(done);
+    }
+    user_stream::clear_stat_cache(ctx);
     // A symlink to a directory is unlinked (the link, not what it names).
     if std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
         ctx.warn(&format!("unlink({p}): Is a directory"));
@@ -569,6 +926,12 @@ fn unlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn mkdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = text(&str_arg(args, 0));
     let recursive = args.len() > 2 && arg(args, 2).to_bool();
+    let mode = if args.len() > 1 { arg(args, 1).to_int() } else { 0o777 };
+    let mut call = [Value::str(p.as_str()), Value::Int(mode), Value::Int(user_stream::dir_options(recursive))];
+    if let Some(done) = user_op(ctx, "mkdir", &p, "mkdir", &mut call, context_arg(args, 3))? {
+        return Ok(done);
+    }
+    user_stream::clear_stat_cache(ctx);
     let r = if recursive {
         if Path::new(&p).exists() {
             Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
@@ -590,12 +953,35 @@ fn mkdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn rmdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = text(&str_arg(args, 0));
+    let mut call = [Value::str(p.as_str()), Value::Int(user_stream::dir_options(false))];
+    if let Some(done) = user_op(ctx, "rmdir", &p, "rmdir", &mut call, context_arg(args, 1))? {
+        return Ok(done);
+    }
+    user_stream::clear_stat_cache(ctx);
     let r = std::fs::remove_dir(&p);
     Ok(done(ctx, "rmdir", &p, r))
 }
 
 fn rename(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (from, to) = (text(&str_arg(args, 0)), text(&str_arg(args, 1)));
+    let (source, dest) = (user_stream::locate(ctx, "rename", &from), user_stream::locate(ctx, "rename", &to));
+    match (source, dest) {
+        (Located::User(a, _), Located::User(b, _)) if Rc::ptr_eq(&a, &b) => {
+            let context = context_or_default(ctx, context_arg(args, 2));
+            let mut call = [Value::str(from.as_str()), Value::str(to.as_str())];
+            return Ok(Value::Bool(user_stream::url_op(ctx, "rename", &a, "rename", &mut call, context)?));
+        }
+        (Located::Disabled, _) => {
+            ctx.warn("rename(): Unable to locate stream wrapper");
+            return Ok(Value::Bool(false));
+        }
+        (Located::User(..), _) | (_, Located::User(..)) => {
+            ctx.warn("rename(): Cannot rename a file across wrapper types");
+            return Ok(Value::Bool(false));
+        }
+        _ => {}
+    }
+    user_stream::clear_stat_cache(ctx);
     let r = std::fs::rename(&from, &to);
     Ok(done(ctx, "rename", &format!("{from},{to}"), r))
 }
@@ -637,11 +1023,16 @@ fn move_uploaded_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
 
 fn copy(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (from, to) = (text(&str_arg(args, 0)), text(&str_arg(args, 1)));
+    let context = context_arg(args, 2);
+    let (source, dest) = (user_stream::peek(ctx, &from), user_stream::peek(ctx, &to));
+    if matches!(source, Located::User(..)) || matches!(dest, Located::User(..)) {
+        return copy_through(ctx, (&from, source), (&to, dest), context);
+    }
     if from.contains("://") || to.contains("://") {
         // Through the streams: a wrapper (compress.zlib://, php://) at either end.
-        let Some(bytes) = read_path(ctx, "copy", &str_arg(args, 0))? else { return Ok(Value::Bool(false)) };
+        let Some(bytes) = read_path(ctx, "copy", &str_arg(args, 0), 0, None)? else { return Ok(Value::Bool(false)) };
         let Some(mut out) = open(ctx, "copy", &str_arg(args, 1), "wb")? else { return Ok(Value::Bool(false)) };
-        let ok = out.write(ctx, &bytes).is_some();
+        let ok = out.write(ctx, &bytes)?.is_some();
         out.close();
         return Ok(Value::Bool(ok));
     }
@@ -654,9 +1045,63 @@ fn copy(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
 }
 
+/// php_copy_file_ctx with a user-space wrapper at either end: neither may
+/// be a directory, nor both the same file (their stats say); then the
+/// bytes go across, a read at a time.
+fn copy_through(ctx: &mut dyn Ctx, (from, source): (&str, Located), (to, dest): (&str, Located), context: Option<Value>) -> Result<Value, Throw> {
+    let ctx_value = context_or_default(ctx, context.clone());
+    let src = match &source {
+        Located::User(w, local) => user_stream::url_stat(ctx, "copy", w, local, 0, ctx_value.clone())?,
+        _ => None,
+    };
+    if src.is_some_and(|s| s.is_dir()) {
+        ctx.warn("copy(): The first argument to copy() function cannot be a directory");
+        return Ok(Value::Bool(false));
+    }
+    let dst = match &dest {
+        Located::User(w, local) => user_stream::url_stat(ctx, "copy", w, local, user_stream::STAT_QUIET, ctx_value)?,
+        _ => None,
+    };
+    if dst.is_some_and(|s| s.is_dir()) {
+        ctx.warn("copy(): The second argument to copy() function cannot be a directory");
+        return Ok(Value::Bool(false));
+    }
+    if let (Some(a), Some(b)) = (src, dst)
+        && a.ino != 0
+        && a.ino == b.ino
+        && a.dev == b.dev
+    {
+        return Ok(Value::Bool(false));
+    }
+    let Some(mut input) = open_with(ctx, "copy", &PhpStr::from(from), "rb", 0, context.clone())? else { return Ok(Value::Bool(false)) };
+    let Some(mut output) = open_with(ctx, "copy", &PhpStr::from(to), "wb", 0, context)? else {
+        input.close_in(ctx)?;
+        return Ok(Value::Bool(false));
+    };
+    let copied = copy_streams(ctx, &mut input, &mut output, None)?;
+    input.close_in(ctx)?;
+    output.close_in(ctx)?;
+    Ok(Value::Bool(copied.is_some()))
+}
+
 /// touch(string $filename, ?int $mtime = null, ?int $atime = null)
 fn touch(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = text(&str_arg(args, 0));
+    let int_or_null = |i: usize| match args.get(i).map(Value::deref) {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.to_int()),
+    };
+    let (mtime, atime) = (int_or_null(1), int_or_null(2));
+    if mtime.is_none() && atime.is_some() {
+        return Err(ctx.throw("ValueError", "touch(): Argument #2 ($mtime) cannot be null when argument #3 ($atime) is an integer".into()));
+    }
+    // stream_metadata's value: [mtime, atime], or [] for now.
+    let times: Vec<Value> = mtime.map(|m| vec![Value::Int(m), Value::Int(atime.unwrap_or(m))]).unwrap_or_default();
+    let mut call = [Value::str(p.as_str()), Value::Int(user_stream::META_TOUCH), Value::Array(Rc::new(PhpArray::from_list(times)))];
+    if let Some(done) = user_op(ctx, "touch", &p, "stream_metadata", &mut call, None)? {
+        return Ok(done);
+    }
+    user_stream::clear_stat_cache(ctx);
     let file = match std::fs::OpenOptions::new().create(true).append(true).open(&p) {
         Ok(f) => f,
         Err(e) => {
@@ -676,21 +1121,39 @@ fn path_arg(args: &[Value]) -> String {
     text(&str_arg(args, 0))
 }
 
-fn is_file(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(Path::new(&path_arg(args)).is_file()))
-}
-
-fn is_dir(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(Path::new(&path_arg(args)).is_dir()))
-}
-
-fn is_link(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(std::fs::symlink_metadata(path_arg(args)).is_ok_and(|m| m.file_type().is_symlink())))
-}
-
-fn file_exists(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn is_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
-    Ok(Value::Bool(!p.is_empty() && Path::new(&p).exists()))
+    if let Some(v) = user_check(ctx, "is_file", &p, false, Stat::is_file)? {
+        return Ok(v);
+    }
+    Ok(Value::Bool(Path::new(&p).is_file()))
+}
+
+fn is_dir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let p = path_arg(args);
+    if let Some(v) = user_check(ctx, "is_dir", &p, false, Stat::is_dir)? {
+        return Ok(v);
+    }
+    Ok(Value::Bool(Path::new(&p).is_dir()))
+}
+
+fn is_link(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let p = path_arg(args);
+    if let Some(v) = user_check(ctx, "is_link", &p, true, Stat::is_link)? {
+        return Ok(v);
+    }
+    Ok(Value::Bool(std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())))
+}
+
+fn file_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let p = path_arg(args);
+    if p.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    if let Some(v) = user_check(ctx, "file_exists", &p, false, |_| true)? {
+        return Ok(v);
+    }
+    Ok(Value::Bool(Path::new(&p).exists()))
 }
 
 pub(crate) fn mode_bits(p: &str) -> Option<u32> {
@@ -698,16 +1161,28 @@ pub(crate) fn mode_bits(p: &str) -> Option<u32> {
     std::fs::metadata(p).ok().map(|m| m.permissions().mode())
 }
 
-fn is_readable(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(mode_bits(&path_arg(args)).is_some_and(|m| m & 0o444 != 0)))
-}
-
-fn is_writable(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(mode_bits(&path_arg(args)).is_some_and(|m| m & 0o222 != 0)))
-}
-
-fn is_executable(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn is_readable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
+    if let Some(v) = user_check(ctx, "is_readable", &p, false, |st| user_access(st, 0o400))? {
+        return Ok(v);
+    }
+    Ok(Value::Bool(mode_bits(&p).is_some_and(|m| m & 0o444 != 0)))
+}
+
+fn is_writable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let p = path_arg(args);
+    let func = called(ctx, "is_writable");
+    if let Some(v) = user_check(ctx, func, &p, false, |st| user_access(st, 0o200))? {
+        return Ok(v);
+    }
+    Ok(Value::Bool(mode_bits(&p).is_some_and(|m| m & 0o222 != 0)))
+}
+
+fn is_executable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let p = path_arg(args);
+    if let Some(v) = user_check(ctx, "is_executable", &p, false, |st| user_access(st, 0o100))? {
+        return Ok(v);
+    }
     Ok(Value::Bool(Path::new(&p).is_file() && mode_bits(&p).is_some_and(|m| m & 0o111 != 0)))
 }
 
@@ -724,11 +1199,26 @@ fn stat(ctx: &mut dyn Ctx, func: &str, p: &str) -> Option<std::fs::Metadata> {
 
 fn filesize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
+    if let Some(v) = user_field(ctx, "filesize", &p, false, |st| Value::Int(st.size))? {
+        return Ok(v);
+    }
     Ok(stat(ctx, "filesize", &p).map_or(Value::Bool(false), |m| Value::Int(m.len() as i64)))
 }
 
+/// filemtime, fileatime and filectime (a user-space wrapper's stat gives
+/// each its own; p8's files answer the modification time for all three).
 fn filemtime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
+    let func = called(ctx, "filemtime");
+    if let Some(v) = user_field(ctx, func, &p, false, |st| {
+        Value::Int(match func {
+            "fileatime" => st.atime,
+            "filectime" => st.ctime,
+            _ => st.mtime,
+        })
+    })? {
+        return Ok(v);
+    }
     Ok(stat(ctx, "filemtime", &p).map_or(Value::Bool(false), |m| {
         let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
         Value::Int(t as i64)
@@ -737,12 +1227,20 @@ fn filemtime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn fileperms(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
+    if let Some(v) = user_field(ctx, "fileperms", &p, false, |st| Value::Int(st.mode))? {
+        return Ok(v);
+    }
     Ok(stat(ctx, "fileperms", &p).map_or(Value::Bool(false), |_| Value::Int(i64::from(mode_bits(&p).unwrap_or(0)))))
 }
 
 fn chmod(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     use std::os::unix::fs::PermissionsExt;
     let p = path_arg(args);
+    let mut call = [Value::str(p.as_str()), Value::Int(user_stream::META_ACCESS), Value::Int(arg(args, 1).to_int())];
+    if let Some(done) = user_op(ctx, "chmod", &p, "stream_metadata", &mut call, None)? {
+        return Ok(done);
+    }
+    user_stream::clear_stat_cache(ctx);
     let mode = arg(args, 1).to_int() as u32;
     let r = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode));
     Ok(match r {
@@ -760,7 +1258,8 @@ fn umask(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(0o022))
 }
 
-fn clearstatcache(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+fn clearstatcache(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    user_stream::clear_stat_cache(ctx);
     Ok(Value::Null)
 }
 
@@ -882,7 +1381,25 @@ fn scandir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if p.is_empty() {
         return Err(ctx.throw("ValueError", "scandir(): Argument #1 ($directory) cannot be empty".into()));
     }
-    match entries(&p) {
+    let listed = match user_stream::locate(ctx, "scandir", &p) {
+        Located::User(w, local) => {
+            let context = context_or_default(ctx, context_arg(args, 2));
+            match user_stream::open(ctx, &w, &local, "r", 0, context, true)? {
+                Ok((mut dir, _)) => {
+                    let mut names = Vec::new();
+                    while let Some(name) = user_stream::readdir(ctx, &mut dir)? {
+                        names.push(name);
+                    }
+                    dir.close_in(ctx)?;
+                    Ok(names)
+                }
+                Err(reason) => Err(reason),
+            }
+        }
+        Located::Disabled => Err("no suitable wrapper could be found".to_string()),
+        Located::Builtin => entries(&p).map_err(|e| os_error(&e)),
+    };
+    match listed {
         Ok(mut names) => {
             // SCANDIR_SORT_ASCENDING (0), _DESCENDING (1), _NONE (2).
             match if args.len() > 1 { arg(args, 1).to_int() } else { 0 } {
@@ -892,8 +1409,8 @@ fn scandir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             }
             Ok(Value::Array(Rc::new(PhpArray::from_list(names.into_iter().map(|n| Value::Str(PhpStr::new(n))).collect()))))
         }
-        Err(e) => {
-            ctx.warn(&format!("scandir({p}): Failed to open directory: {}", os_error(&e)));
+        Err(reason) => {
+            ctx.warn(&format!("scandir({p}): Failed to open directory: {reason}"));
             ctx.warn("scandir(): (errno 2): No such file or directory");
             Ok(Value::Bool(false))
         }
@@ -1101,14 +1618,60 @@ pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
 
 /// stream_get_wrappers: the URL schemes p8's streams open, in PHP's order
 /// (no https, ftp(s) or phar yet), then those extensions registered (zip).
-fn stream_get_wrappers(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let names = ["compress.zlib", "php", "file", "glob", "data", "http"].into_iter().chain(p8_runtime::stream::wrapper_schemes());
-    Ok(Value::Array(Rc::new(PhpArray::from_list(names.map(Value::str).collect()))))
+/// The user-space wrappers registered come last; a scheme
+/// stream_wrapper_unregister() took away is left out.
+fn stream_get_wrappers(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let names = user_stream::schemes(ctx);
+    Ok(Value::Array(Rc::new(PhpArray::from_list(names.into_iter().map(|n| Value::Str(PhpStr::new(n))).collect()))))
 }
 
-/// opendir: a stream whose lines are the directory's entries (as readdir gives).
+/// stream_wrapper_register(string $protocol, string $class, int $flags = 0)
+fn stream_wrapper_register(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let func = called(ctx, "stream_wrapper_register");
+    let (protocol, name) = (str_arg(args, 0), str_arg(args, 1));
+    let Some(class) = ctx.class_load(name.as_bytes())? else {
+        return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($class) must be a valid class name, {} given", text(&name))));
+    };
+    // PHP keeps a registration as a resource ("stream factory"), failed
+    // or not: it takes a number.
+    ctx.new_resource(Resource { kind: "stream factory", closed: Cell::new(true), stream: RefCell::new(Stream::new(Target::Memory(Vec::new()), "", "r")) });
+    let flags = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+    Ok(Value::Bool(user_stream::register(ctx, func, protocol.as_bytes(), class, flags)))
+}
+
+/// stream_wrapper_unregister(string $protocol)
+fn stream_wrapper_unregister(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(user_stream::unregister(ctx, str_arg(args, 0).as_bytes())))
+}
+
+/// stream_wrapper_restore(string $protocol)
+fn stream_wrapper_restore(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(user_stream::restore(ctx, str_arg(args, 0).as_bytes())))
+}
+
+/// opendir: a stream whose lines are the directory's entries (as readdir
+/// gives); a user-space wrapper's dir_opendir.
 fn opendir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
+    let func = called(ctx, "opendir");
+    match user_stream::locate(ctx, func, &p) {
+        Located::User(w, local) => {
+            let context = context_or_default(ctx, context_arg(args, 1));
+            return Ok(match user_stream::open(ctx, &w, &local, "r", 0, context, true)? {
+                Ok((dir, _)) => new_stream(ctx, dir),
+                Err(reason) => {
+                    ctx.warn(&format!("{func}({p}): Failed to open directory: {reason}"));
+                    Value::Bool(false)
+                }
+            });
+        }
+        Located::Disabled => {
+            user_stream::warn_disabled(ctx, func);
+            ctx.warn(&format!("{func}({p}): Failed to open directory: no suitable wrapper could be found"));
+            return Ok(Value::Bool(false));
+        }
+        Located::Builtin => {}
+    }
     match entries(&p) {
         Ok(names) => {
             let mut data = Vec::new();
@@ -1127,6 +1690,10 @@ fn opendir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn readdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "readdir", args, 0)?;
+    if is_user(&o) {
+        let name = with_user(ctx, &o, None, |ctx, s| if s.user().is_some_and(|u| u.dir) { user_stream::readdir(ctx, s) } else { Ok(None) })?;
+        return Ok(name.map_or(Value::Bool(false), |n| Value::Str(PhpStr::new(n))));
+    }
     let mut name = Vec::new();
     loop {
         let b = with_stream(&o, |s| s.read(1));
@@ -1141,7 +1708,7 @@ fn readdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn rewinddir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "rewinddir", args, 0)?;
-    with_stream(&o, |s| s.seek(0, 0));
+    with_user(ctx, &o, false, |ctx, s| s.seek_in(ctx, 0, 0))?;
     Ok(Value::Null)
 }
 
@@ -1226,8 +1793,13 @@ fn stream_isatty(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 /// mode) and where it is (eof, bytes read ahead).
 fn stream_get_meta_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "stream_get_meta_data", args, 0)?;
+    // php_stream_eof: a user-space stream is asked (stream_eof).
+    if is_user(&o) {
+        with_user(ctx, &o, true, |ctx, s| s.at_end_in(ctx))?;
+    }
     let entries = with_stream(&o, |s| {
         let (wrapper, kind, seekable) = match &s.target {
+            Target::User(u) => ("user-space", if u.dir { "user-space-dir" } else { "user-space" }, u.seekable()),
             Target::File(_) => ("plainfile", "STDIO", true),
             Target::Memory(_) if s.path.starts_with("php://temp") => ("PHP", "TEMP", true),
             Target::Memory(_) if s.path.starts_with("php://memory") => ("PHP", "MEMORY", true),
@@ -1238,11 +1810,17 @@ fn stream_get_meta_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
             Target::PipeOut(_) | Target::PipeIn(_) | Target::Process(_) => ("", "STDIO", false),
         };
         let text = |t: &str| Value::Str(PhpStr::from(t));
-        vec![
+        let mut entries = vec![
             ("timed_out", Value::Bool(false)),
             ("blocked", Value::Bool(true)),
             // At the end for the script: nothing read ahead is left.
             ("eof", Value::Bool(s.eof && s.buffer.is_empty())),
+        ];
+        // A user-space stream's wrapper instance.
+        if let Some(u) = s.user() {
+            entries.push(("wrapper_data", Value::Object(Rc::clone(&u.object))));
+        }
+        entries.extend([
             ("wrapper_type", text(wrapper)),
             ("stream_type", text(kind)),
             // Memory and temp streams are always read-write.
@@ -1250,7 +1828,8 @@ fn stream_get_meta_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
             ("unread_bytes", Value::Int(s.buffer.len() as i64)),
             ("seekable", Value::Bool(seekable)),
             ("uri", text(&s.path)),
-        ]
+        ]);
+        entries
     });
     let mut out = PhpArray::new();
     for (k, v) in entries {
