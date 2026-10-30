@@ -567,6 +567,13 @@ impl Context<'_> {
 
     /// `new C(args)`: the object, and its constructor's frame (if any).
     pub(crate) fn instantiate(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
+        self.instantiate_as(regs, class, true)
+    }
+
+    /// `instantiate`, with `construct` false for an object made without
+    /// its constructor (newInstanceWithoutConstructor): then the
+    /// constructor's visibility does not matter.
+    pub(crate) fn instantiate_as(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>, construct: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
         if class.flags & CLASS_INTERFACE != 0 {
             return Err(self.throw("Error", format!("Cannot instantiate interface {}", text(&class.name))));
         }
@@ -598,6 +605,9 @@ impl Context<'_> {
             class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
         }
         let Some(ctor) = class.method(b"__construct").cloned() else { return Ok((object, None)) };
+        if !construct {
+            return Ok((object, None));
+        }
         let declaring = self.declaring(&class, &ctor.declaring);
         if !visible(ctor.visibility, &declaring, self.scope().0.as_deref()) {
             let t = self.throw("Error", format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()));

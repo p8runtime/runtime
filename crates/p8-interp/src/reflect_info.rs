@@ -229,7 +229,7 @@ impl Context<'_> {
             if self.unresolved(class) {
                 self.resolve_class(&mut regs, class)?;
             }
-            let (object, ctor) = self.instantiate(&|i| regs.get(i).cloned().unwrap_or_default(), Rc::clone(class))?;
+            let (object, ctor) = self.instantiate_as(&|i| regs.get(i).cloned().unwrap_or_default(), Rc::clone(class), construct)?;
             Ok::<_, Throw>((object, ctor.is_some()))
         })();
         self.isolate.regs = regs;

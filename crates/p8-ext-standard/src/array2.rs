@@ -399,7 +399,7 @@ fn func_get_arg(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     match all.get(n as usize) {
         Some(v) => Ok(v.clone()),
         None => Err(ctx.throw(
-            "Error",
+            "ValueError",
             "func_get_arg(): Argument #1 ($position) must be less than the number of the arguments passed to the currently executed function".into(),
         )),
     }

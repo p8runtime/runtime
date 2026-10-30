@@ -585,11 +585,9 @@ fn check_constructor(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<(), Throw> 
     Ok(())
 }
 
+/// A class constant's value (its code run first, if needed); null for none.
 fn class_constant(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &str) -> Result<Value, Throw> {
-    match ctx.constant(format!("{}::{}", String::from_utf8_lossy(class.name.as_bytes()), name).as_bytes()) {
-        Some(v) => Ok(v),
-        None => Ok(class.constants.get(name.as_bytes()).map_or(Value::Null, |c| c.value.clone())),
-    }
+    Ok(ctx.class_constant(class, name.as_bytes())?.unwrap_or(Value::Null))
 }
 
 fn vis_bits(v: Visibility) -> i64 {

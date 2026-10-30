@@ -4977,6 +4977,24 @@ impl Ctx for Context<'_> {
         }
     }
 
+    fn class_constant(&mut self, class: &Rc<Class>, name: &[u8]) -> Result<Option<Value>, Throw> {
+        let Some(c) = class.constants.get(name) else { return Ok(None) };
+        let Some(init) = c.init.clone() else { return Ok(Some(c.value.clone())) };
+        let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.to_vec());
+        if !self.const_cache.contains_key(&key) {
+            let scope = self.classes.get(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
+            let mut regs = std::mem::take(&mut self.isolate.regs);
+            if regs.is_empty() {
+                self.isolate.regs = regs;
+                return Err(Ctx::fatal(self, "a builtin that takes no callable computed a class constant".into()));
+            }
+            let r = self.eval_constant(&mut regs, &init, scope, key.clone());
+            self.isolate.regs = regs;
+            r?;
+        }
+        Ok(self.const_cache.get(&key).cloned())
+    }
+
     fn function_info(&mut self, callee: &p8_runtime::reflect::Callee) -> Option<p8_runtime::reflect::FnInfo> {
         self.info_of(callee)
     }
@@ -5029,9 +5047,20 @@ impl Ctx for Context<'_> {
         let Some(frame) = self.frames.last() else { return Vec::new() };
         let regs = &self.isolate.regs;
         let base = frame.base as usize;
-        let n = (frame.argc as usize).min(frame.func.code.params.len());
+        let params = &frame.func.code.params;
+        // A variadic parameter holds the arguments past the others: they
+        // count one by one (its named ones are not func_get_args()'s).
+        let variadic = params.last().is_some_and(|p| p.variadic);
+        let fixed = params.len() - usize::from(variadic);
+        let n = (frame.argc as usize).min(fixed);
         let mut out: Vec<Value> = (0..n).map(|i| regs.get(base + i).map(Value::deref).unwrap_or(Value::Null)).collect();
-        out.extend(frame.args().iter().map(Value::deref));
+        if variadic {
+            if let Some(Value::Array(rest)) = regs.get(base + fixed).map(Value::deref) {
+                out.extend(rest.iter().filter(|(k, _)| matches!(k, Key::Int(_))).map(|(_, v)| v.deref()));
+            }
+        } else {
+            out.extend(frame.args().iter().map(Value::deref));
+        }
         out
     }
 
