@@ -20,6 +20,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "error_reporting", run: error_reporting, by_ref: &[] },
     Builtin { name: "ini_get", run: ini_get, by_ref: &[] },
     Builtin { name: "ini_get_all", run: ini_get_all, by_ref: &[] },
+    Builtin { name: "php_ini_loaded_file", run: no_ini_file, by_ref: &[] },
+    Builtin { name: "php_ini_scanned_files", run: no_ini_file, by_ref: &[] },
     Builtin { name: "ini_set", run: ini_set, by_ref: &[] },
     Builtin { name: "ini_alter", run: ini_set, by_ref: &[] },
     Builtin { name: "trigger_error", run: trigger_error, by_ref: &[] },
@@ -61,6 +63,11 @@ fn ini_get(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Some(v) => v,
         None => Value::Bool(false),
     })
+}
+
+/// php_ini_loaded_file() / php_ini_scanned_files(): p8 reads no php.ini.
+fn no_ini_file(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(false))
 }
 
 /// ini_get_all(?string $extension = null, bool $details = true): every

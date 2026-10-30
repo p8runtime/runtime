@@ -1012,6 +1012,92 @@ param_method!(rp_get_declaring_class, |ctx, p, pos, info, this| Ok(match &info.c
     Some(c) => new_class_reflection(ctx, c),
     None => Value::Null,
 }));
+// ReflectionParameter::__toString(): "Parameter #0 [ <optional> ?int $a = NULL ]"
+// (php_reflection.c _parameter_string).
+param_method!(rp_to_string, |ctx, p, pos, info, this| {
+    let required = !(p.optional && info.params[pos..].iter().all(|q| q.optional));
+    let mut out = format!("Parameter #{pos} [ {} ", if required { "<required>" } else { "<optional>" });
+    if let Some(t) = &p.ty {
+        out.push_str(&t.shown());
+        out.push(' ');
+    }
+    if p.by_ref {
+        out.push('&');
+    }
+    if p.variadic {
+        out.push_str("...");
+    }
+    out.push('$');
+    out.push_str(&String::from_utf8_lossy(p.name.as_bytes()));
+    if !required && !p.variadic {
+        if !info.user {
+            out.push_str(" = ");
+            out.push_str(p.default_text.unwrap_or("<default>"));
+        } else if let Some(name) = &p.default_const {
+            // A class constant's resolved class is shown fully qualified.
+            let name = String::from_utf8_lossy(name.as_bytes());
+            let relative = ["self::", "static::", "parent::"].iter().any(|k| name.len() >= k.len() && name[..k.len()].eq_ignore_ascii_case(k));
+            out.push_str(if name.contains("::") && !relative { " = \\" } else { " = " });
+            out.push_str(&name);
+        } else if let Some(v) = &p.default {
+            out.push_str(" = ");
+            default_text(&mut out, v);
+        }
+    }
+    out.push_str(" ]");
+    Ok(s(out.as_bytes()))
+});
+
+/// A default value as reflection prints it (format_default_value).
+fn default_text(out: &mut String, v: &Value) {
+    match v {
+        Value::Null => out.push_str("NULL"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Str(t) => {
+            out.push('\'');
+            for &c in t.as_bytes() {
+                match c {
+                    b'\\' => out.push_str("\\\\"),
+                    b'\n' => out.push_str("\\n"),
+                    b'\r' => out.push_str("\\r"),
+                    b'\t' => out.push_str("\\t"),
+                    0x0b => out.push_str("\\v"),
+                    0x0c => out.push_str("\\f"),
+                    0x1b => out.push_str("\\e"),
+                    c if !(0x20..0x7f).contains(&c) => out.push_str(&format!("\\x{c:02X}")),
+                    c => out.push(c as char),
+                }
+            }
+            out.push('\'');
+        }
+        Value::Array(a) => {
+            let is_list = a.iter().enumerate().all(|(i, (k, _))| matches!(k, Key::Int(n) if n == i as i64));
+            out.push('[');
+            for (i, (k, v)) in a.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                if !is_list {
+                    match k {
+                        Key::Int(n) => out.push_str(&n.to_string()),
+                        Key::Str(t) => {
+                            out.push('\'');
+                            out.push_str(&String::from_utf8_lossy(t.as_bytes()));
+                            out.push('\'');
+                        }
+                    }
+                    out.push_str(" => ");
+                }
+                default_text(out, v);
+            }
+            out.push(']');
+        }
+        Value::Object(o) => out.push_str(&format!("object({})", String::from_utf8_lossy(o.class.name.as_bytes()))),
+        Value::Ref(r) => default_text(out, &r.borrow()),
+        v => out.push_str(&String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes())),
+    }
+}
+
 fn rp_get_attributes(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let subject = Subject::Param(callee_of(ctx, this)?, get(this, "\0pos").to_int() as usize);
     attributes_of(ctx, subject, args, "ReflectionParameter")
@@ -2087,6 +2173,7 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getDeclaringClass", Some(Native::Method(rp_get_declaring_class))),
             ("getDeclaringFunction", Some(Native::Method(rp_get_declaring_function))),
             ("getAttributes", Some(Native::Method(rp_get_attributes))),
+            ("__toString", Some(Native::Method(rp_to_string))),
         ],
         constants: &[],
         debug_info: Some(info_name),
