@@ -732,9 +732,7 @@ fn utf8_len(s: &[u8], max: usize) -> usize {
         0x80..=0xC1 => 0,
         0xC2..=0xDF => if tail(1) { 2 } else { 0 },
         0xE0..=0xEF => if tail(1) && tail(2) && (c >= 0xE1 || s[1] >= 0xA0) { 3 } else { 0 },
-        0xF0..=0xF4 if max == 4 => {
-            if tail(1) && tail(2) && tail(3) && (c >= 0xF1 || s[1] >= 0x90) && (c <= 0xF3 || s[1] <= 0x8F) { 4 } else { 0 }
-        }
+        0xF0..=0xF4 if max == 4 && tail(1) && tail(2) && tail(3) && (c >= 0xF1 || s[1] >= 0x90) && (c <= 0xF3 || s[1] <= 0x8F) => 4,
         _ => 0,
     }
 }
@@ -1022,6 +1020,11 @@ mod tests {
 
     #[test]
     fn escapes() {
-        assert_eq!(escape(b"a'b\"c\\d\0e\nf\rg\x1ah"), b"a\\'b\\\"c\\\\d\\0e\\nf\\rg\\Zh".to_vec());
+        let utf8 = charset("utf8mb4").expect("utf8mb4");
+        assert_eq!(escape(&utf8, b"a'b\"c\\d\0e\nf\rg\x1ah"), b"a\\'b\\\"c\\\\d\\0e\\nf\\rg\\Zh".to_vec());
+        // A BIG-5 character whose second byte is a backslash is copied whole.
+        let big5 = charset("big5").expect("big5");
+        assert_eq!(escape(&big5, b"\xa5\x5c'"), b"\xa5\x5c\\'".to_vec());
+        assert_eq!(escape(&utf8, b"\xa5\x5c'"), b"\xa5\\\\\\'".to_vec());
     }
 }

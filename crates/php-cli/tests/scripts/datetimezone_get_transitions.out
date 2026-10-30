@@ -1,0 +1,47 @@
+array(1) {
+  [0]=>
+  array(5) {
+    ["ts"]=>
+    int(1767225600)
+    ["time"]=>
+    string(25) "2026-01-01T00:00:00+00:00"
+    ["offset"]=>
+    int(-12600)
+    ["isdst"]=>
+    bool(false)
+    ["abbr"]=>
+    string(3) "NST"
+  }
+}
+Array
+(
+    [0] => Array
+        (
+            [ts] => 1704067200
+            [time] => 2024-01-01T00:00:00+00:00
+            [offset] => 0
+            [isdst] => 
+            [abbr] => GMT
+        )
+
+    [1] => Array
+        (
+            [ts] => 1711846800
+            [time] => 2024-03-31T01:00:00+00:00
+            [offset] => 3600
+            [isdst] => 1
+            [abbr] => BST
+        )
+
+    [2] => Array
+        (
+            [ts] => 1729990800
+            [time] => 2024-10-27T01:00:00+00:00
+            [offset] => 0
+            [isdst] => 
+            [abbr] => GMT
+        )
+
+)
+bool(false)
+int(1)

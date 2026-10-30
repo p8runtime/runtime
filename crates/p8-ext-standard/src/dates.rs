@@ -822,6 +822,24 @@ fn parse(text: &str) -> Option<Parsed> {
             Some(at) => (&t[..at], Some(&t[at + 1..])),
             None => (t.as_str(), None),
         };
+        // Compact ISO 8601: 20080701, 20080701T22:38:07, 20080701T223807 (timelib's
+        // datenocolon and xmlrpc forms).
+        let compact = date_part.len() == 8 && date_part.bytes().all(|c| c.is_ascii_digit());
+        let spread;
+        let date_part = if compact {
+            spread = format!("{}-{}-{}", &date_part[..4], &date_part[4..6], &date_part[6..]);
+            spread.as_str()
+        } else {
+            date_part
+        };
+        let clock_spread;
+        let time_part = match time_part {
+            Some(tp) if compact && tp.len() >= 6 && tp.as_bytes()[..6].iter().all(u8::is_ascii_digit) => {
+                clock_spread = format!("{}:{}:{}{}", &tp[..2], &tp[2..4], &tp[4..6], &tp[6..]);
+                Some(clock_spread.as_str())
+            }
+            other => other,
+        };
         let nums: Vec<&str> = date_part.trim_start_matches('+').split(['-', '/', '.']).collect();
         if nums.len() == 3 && nums.iter().all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit())) {
             let v: Vec<i64> = nums.iter().filter_map(|x| x.parse().ok()).collect();
