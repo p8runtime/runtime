@@ -1,0 +1,34 @@
+string(35) "i:0;:i:1;:s:3:"two";:a:1:{i:0;i:3;}"
+array(3) {
+  [0]=>
+  int(0)
+  [1]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    string(3) "two"
+    [2]=>
+    array(1) {
+      [0]=>
+      int(3)
+    }
+  }
+  [2]=>
+  array(0) {
+  }
+}
+string(99) "O:19:"SplDoublyLinkedList":3:{i:0;i:0;i:1;a:3:{i:0;i:1;i:1;s:3:"two";i:2;a:1:{i:0;i:3;}}i:2;a:0:{}}"
+int(3)
+string(3) "two"
+int(0)
+string(74) "O:5:"Chain":3:{i:0;i:2;i:1;a:1:{i:0;d:4.5;}i:2;a:1:{s:5:"extra";s:1:"x";}}"
+string(5) "Chain"
+string(1) "x"
+float(4.5)
+int(2)
+string(59) "O:8:"SplStack":3:{i:0;i:6;i:1;a:1:{i:0;s:1:"a";}i:2;a:0:{}}"
+int(2)
+int(7)
+string(13) "i:4;:s:1:"z";"
+Incomplete or ill-typed serialization data

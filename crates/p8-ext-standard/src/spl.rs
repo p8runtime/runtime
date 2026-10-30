@@ -801,6 +801,82 @@ fn put_dll(o: &Object, list: Vec<Value>) {
     set(o, "dllist", Value::Array(Rc::new(PhpArray::from_list(list))));
 }
 
+/// The list's properties besides its own state, as __serialize() gives them.
+fn dll_members(o: &Object) -> PhpArray {
+    let mut out = members(o);
+    for internal in ["\0SplDoublyLinkedList\0flags", "\0SplDoublyLinkedList\0dllist"] {
+        out.remove(&Key::from_string(PhpStr::from(internal)));
+    }
+    out
+}
+
+/// Serializable::serialize(): `i:FLAGS;` then `:VALUE` per element (spl_dllist.c).
+fn dll_serialize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let mut out = format!("i:{};", dll_flags(this)).into_bytes();
+    for v in dll(this) {
+        out.push(b':');
+        out.extend(crate::serial::serialized(ctx, &v)?);
+    }
+    Ok(Value::Str(PhpStr::new(out)))
+}
+
+/// Serializable::unserialize(): what dll_serialize wrote, back.
+fn dll_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let data = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    let bytes = data.as_bytes();
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    let bad = |ctx: &mut dyn Ctx, at: usize| Err(ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len())));
+    let Some((Value::Int(flags), mut at)) = crate::serial::read_value(ctx, bytes) else { return bad(ctx, 0) };
+    let mut list = dll(this);
+    while at < bytes.len() {
+        if bytes[at] != b':' {
+            return bad(ctx, at);
+        }
+        at += 1;
+        let Some((v, n)) = crate::serial::read_value(ctx, &bytes[at..]) else { return bad(ctx, at) };
+        list.push(v);
+        at += n;
+    }
+    set(this, "flags", Value::Int(flags));
+    put_dll(this, list);
+    Ok(Value::Null)
+}
+
+/// __serialize(): [flags, elements, other properties].
+fn dll_magic_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let list = Value::Array(Rc::new(PhpArray::from_list(dll(this))));
+    let parts = vec![Value::Int(dll_flags(this)), list, Value::Array(Rc::new(dll_members(this)))];
+    Ok(Value::Array(Rc::new(PhpArray::from_list(parts))))
+}
+
+/// __unserialize(): what __serialize gave, back.
+fn dll_magic_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let data = array_of(arg(args, 0));
+    let (Some(Value::Int(flags)), Some(Value::Array(list)), Some(Value::Array(members))) =
+        (data.get_int(0).map(Value::deref), data.get_int(1).map(Value::deref), data.get_int(2).map(Value::deref))
+    else {
+        return Err(ctx.throw("UnexpectedValueException", "Incomplete or ill-typed serialization data".into()));
+    };
+    set(this, "flags", Value::Int(flags));
+    put_dll(this, list.values().map(Value::deref).collect());
+    for (k, v) in members.iter() {
+        let key = match &k {
+            Key::Int(i) => i.to_string().into_bytes(),
+            Key::Str(s) => s.as_bytes().to_vec(),
+        };
+        // A mangled name ("\0Class\0p", "\0*\0p") is a declared property's.
+        let name = key.iter().rposition(|&c| c == 0).map_or(key.as_slice(), |i| &key[i + 1..]);
+        if this.class.slots.contains_key(name) {
+            this.class.write(this, name, this.class.name.as_bytes(), v.clone());
+        } else {
+            this.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), v.clone());
+        }
+    }
+    Ok(Value::Null)
+}
+
 fn dll_push(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut l = dll(this);
     l.push(arg(args, 0));
@@ -1282,6 +1358,10 @@ const DLL_METHODS: &[(&str, Option<Native>)] = &[
     ("key", Some(Native::Method(dll_key))),
     ("next", Some(Native::Method(dll_next))),
     ("prev", Some(Native::Method(dll_prev))),
+    ("serialize", Some(Native::Method(dll_serialize))),
+    ("unserialize", Some(Native::Method(dll_unserialize))),
+    ("__serialize", Some(Native::Method(dll_magic_serialize))),
+    ("__unserialize", Some(Native::Method(dll_magic_unserialize))),
 ];
 
 const HEAP_METHODS: &[(&str, Option<Native>)] = &[
