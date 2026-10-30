@@ -5289,6 +5289,10 @@ impl Ctx for Context<'_> {
     }
 
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
+        self.class_if_loaded(name)
+    }
+
+    fn class_load_now(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
         match self.class_if_loaded(name) {
             // The autoloaders run here when the builtin lent its registers
             // (it runs PHP code), so the builtin carries on. Unwinding to

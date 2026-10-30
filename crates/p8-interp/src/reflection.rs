@@ -74,7 +74,7 @@ fn class_arg(ctx: &mut dyn Ctx, v: &Value) -> Result<Rc<Class>, Throw> {
         Value::Object(o) => Ok(Rc::clone(&o.class)),
         other => {
             let name = text(other);
-            match ctx.class_load(name.as_bytes())? {
+            match ctx.class_load_now(name.as_bytes())? {
                 Some(c) => Ok(c),
                 None => Err(fail(ctx, format!("Class \"{name}\" does not exist"))),
             }
@@ -990,7 +990,7 @@ fn default_constant_value(ctx: &mut dyn Ctx, class: Option<&Rc<Class>>, name: &[
             b"self" | b"static" => class.cloned(),
             b"parent" => class.and_then(|c| c.parent.clone()),
             // Autoloaded if need be, as evaluating the default does.
-            _ => ctx.class_load(owner)?,
+            _ => ctx.class_load_now(owner)?,
         };
         let Some(owner) = owner else {
             return Err(missing(ctx, format!("Class \"{}\" not found", String::from_utf8_lossy(&name[..at]))));
@@ -1631,7 +1631,7 @@ fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &s
     let mut base = None;
     let mut name = name;
     if let Some(n) = name.take_if(|_| flags & 2 != 0) {
-        match ctx.class_load(n.as_bytes())? {
+        match ctx.class_load_now(n.as_bytes())? {
             Some(c) => base = Some(c),
             None => return Err(ctx.throw("Error", format!("Class \"{n}\" not found"))),
         }
@@ -1648,7 +1648,7 @@ fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &s
             continue;
         }
         if let Some(base) = &base {
-            match ctx.class_load(attr.as_bytes())? {
+            match ctx.class_load_now(attr.as_bytes())? {
                 Some(c) if c.is_a(&base.lower) => {}
                 _ => continue,
             }
@@ -1735,7 +1735,7 @@ fn ra_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
     let subject = decode_subject(ctx, &get(this, "\0subject"))?;
     let args = ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?;
     let mut out = format!("Attribute [ {} ]", text(&get(this, "name")));
-    if args.len() > 0 {
+    if !args.is_empty() {
         out.push_str(&format!(" {{\n  - Arguments [{}] {{\n", args.len()));
         for (i, (k, v)) in args.iter().enumerate() {
             out.push_str(&format!("    Argument #{i} [ "));
@@ -1787,7 +1787,7 @@ fn attribute_flags(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<Result<Option
 
 fn ra_new_instance(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let name = text(&get(this, "name"));
-    let Some(class) = ctx.class_load(name.as_bytes())? else {
+    let Some(class) = ctx.class_load_now(name.as_bytes())? else {
         return Err(ctx.throw("Error", format!("Attribute class \"{name}\" not found")));
     };
     let flags = match attribute_flags(ctx, &class)? {
