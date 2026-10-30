@@ -8,8 +8,10 @@
 
 use p8_runtime::ext::Ctx;
 use p8_runtime::ext::Throw;
+use p8_runtime::object::Object;
 use p8_runtime::value::Value;
 use std::any::Any;
+use std::rc::Rc;
 
 /// A value in a row, or bound to a parameter, as the database holds it.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +21,10 @@ pub enum DbValue {
     Float(f64),
     Text(Vec<u8>),
     Blob(Vec<u8>),
+    /// A boolean (pdo_pgsql's `bool` columns; bound for PDO::PARAM_BOOL).
+    Bool(bool),
+    /// A large object the script gets as a stream (pdo_pgsql's `bytea`).
+    Lob(Vec<u8>),
 }
 
 /// An error the driver reports: PDO's errorInfo is `[sqlstate, code, message]`.
@@ -56,6 +62,9 @@ pub enum Placeholders {
     /// `?` and `:name` both: the driver binds them itself, by position or
     /// by name (pdo_sqlite).
     Native,
+    /// `$1`, `$2`: the core rewrites `?` and `:name` into them
+    /// (`named_rewrite_template = "$%d"`, pdo_pgsql) and binds by position.
+    Dollar,
 }
 
 /// Which lexer finds placeholders: the default one, or SQLite's (which also
@@ -64,6 +73,8 @@ pub enum Placeholders {
 pub enum Scanner {
     Default,
     Sqlite,
+    /// pgsql_sql_parser.re: E'' strings, dollar quoting, `??` for `?`.
+    Pgsql,
 }
 
 /// A column as `getColumnMeta()` describes it (the driver's part).
@@ -74,7 +85,16 @@ pub struct ColumnMeta {
     pub flags: Vec<String>,
     /// Further entries, in order (`sqlite:decl_type`, `table`).
     pub extra: Vec<(String, String)>,
+    /// The whole driver part, in the driver's order (replaces the fields
+    /// above; no `flags` is added).
+    pub ordered: Option<Vec<(String, Value)>>,
+    /// `len` and `precision` (-1 and 0 when None).
+    pub len: Option<i64>,
+    pub precision: Option<i64>,
 }
+
+/// A driver method reached through PDO itself (`PDO::pgsqlGetPid()`).
+pub type DriverMethod = fn(&mut dyn Ctx, &Rc<Object>, &mut [Value]) -> Result<Value, Throw>;
 
 /// One driver (the `sqlite` of `sqlite:...`).
 pub trait Driver: Send + Sync {
@@ -87,6 +107,11 @@ pub trait Driver: Send + Sync {
     /// Open a connection. `dsn` is what follows the first colon, `options`
     /// the constructor's driver options by their integer key.
     fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options) -> Result<Box<dyn Connection>, ConnectError>;
+    /// A driver method PHP lists on PDO (`pgsqlGetPid`), by name.
+    fn pdo_method(&self, name: &str) -> Option<DriverMethod> {
+        let _ = name;
+        None
+    }
 }
 
 /// The constructor's options array, by integer key.
@@ -113,8 +138,62 @@ pub trait Connection: Any {
         Scanner::Default
     }
 
+    /// The placeholders one statement takes, given `PDO::prepare()`'s
+    /// options (pdo_pgsql emulates per statement).
+    fn placeholders_for(&mut self, options: &Options) -> Placeholders {
+        let _ = options;
+        self.placeholders()
+    }
+
     /// Prepare `sql` (placeholders already rewritten for `placeholders()`).
     fn prepare(&mut self, sql: &str) -> Result<Box<dyn Statement>, DriverError>;
+
+    /// Prepare `sql` with `PDO::prepare()`'s options.
+    fn prepare_with(&mut self, sql: &[u8], options: &Options) -> Result<Box<dyn Statement>, DriverError> {
+        let _ = options;
+        self.prepare(&String::from_utf8_lossy(sql))
+    }
+
+    /// A statement for an emulated prepare: `sql` has the values in it.
+    fn prepare_emulated(&mut self, sql: &[u8]) -> Result<Box<dyn Statement>, DriverError> {
+        self.prepare(&String::from_utf8_lossy(sql))
+    }
+
+    /// Whether PDO::ATTR_CURSOR => PDO::CURSOR_SCROLL is supported.
+    fn scrollable(&self) -> bool {
+        false
+    }
+
+    /// For an emulated prepare: a statement made at PDO::prepare() time,
+    /// kept across executes and given each one's query with
+    /// [`Statement::set_query`] (pdo_pgsql's scroll cursors). None: a new
+    /// statement per execute.
+    fn emulated_shell(&mut self, options: &Options) -> Option<Box<dyn Statement>> {
+        let _ = options;
+        None
+    }
+
+    /// The string a PDO::PARAM_BOOL parameter of an emulated prepare
+    /// becomes when it is bound (as PDO::PARAM_STR), when the driver words
+    /// booleans itself (pdo_pgsql's EVT_NORMALIZE: `t`, `f`).
+    fn emulated_bool(&mut self, b: bool) -> Option<Vec<u8>> {
+        let _ = b;
+        None
+    }
+
+    /// What a stream bound as PDO::PARAM_LOB is sent as, when it is one of
+    /// the driver's own (pdo_pgsql's large objects go as their oid); `path`
+    /// is the stream's.
+    fn lob_param(&mut self, path: &str) -> Option<DbValue> {
+        let _ = path;
+        None
+    }
+
+    /// Messages the server sent that a script callback should see, and the
+    /// callback (pdo_pgsql's notices).
+    fn take_notices(&mut self) -> Option<(Value, Vec<Vec<u8>>)> {
+        None
+    }
 
     /// Run statements that return no rows; the rows affected.
     fn exec(&mut self, sql: &[u8]) -> Result<i64, DriverError>;
@@ -170,8 +249,28 @@ pub trait Statement: Any {
     /// Run it with the bound values.
     fn execute(&mut self, binds: &[(BindKey, DbValue)]) -> Result<ExecInfo, DriverError>;
 
+    /// Run a Placeholders::Dollar statement; `mapped` is false when the
+    /// query had no `?`/`:name` to rewrite (pdo_pgsql then sends as many
+    /// untyped NULLs as values were bound, as PHP does).
+    fn execute_dollar(&mut self, binds: &[(BindKey, DbValue)], mapped: bool) -> Result<ExecInfo, DriverError> {
+        let _ = mapped;
+        self.execute(binds)
+    }
+
     /// The next row, None at the end.
     fn fetch(&mut self) -> Result<Option<Vec<DbValue>>, DriverError>;
+
+    /// The row PDO::FETCH_ORI_* `ori` (with `offset`) points to; drivers
+    /// without scrollable cursors read the next one.
+    fn fetch_scroll(&mut self, ori: i64, offset: i64) -> Result<Option<Vec<DbValue>>, DriverError> {
+        let _ = (ori, offset);
+        self.fetch()
+    }
+
+    /// Take the query of the next execute (see [`Connection::emulated_shell`]).
+    fn set_query(&mut self, sql: &[u8]) {
+        let _ = sql;
+    }
 
     fn column_count(&self) -> usize;
 
@@ -185,6 +284,13 @@ pub trait Statement: Any {
 
     /// Stop reading the result so the statement can run again.
     fn close_cursor(&mut self) {}
+
+    /// The bytes a column of the current row stands for when it is fetched
+    /// as PDO::PARAM_LOB (pdo_pgsql: the large object an oid names).
+    fn lob_column(&self, col: usize) -> Option<Vec<u8>> {
+        let _ = col;
+        None
+    }
 
     fn get_attribute(&mut self, attr: i64) -> Option<Value> {
         let _ = attr;

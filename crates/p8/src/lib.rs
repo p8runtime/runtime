@@ -59,6 +59,7 @@ pub mod extensions {
     pub use p8_ext_sockets::EXTENSION as SOCKETS;
     pub use p8_ext_openssl::EXTENSION as OPENSSL;
     pub use p8_ext_intl::EXTENSION as INTL;
+    pub use p8_ext_pdo_pgsql::EXTENSION as PDO_PGSQL;
     /// What the built-in web server adds (register it after STANDARD).
     pub use p8_ext_standard::server::EXTENSION as SERVER;
 }

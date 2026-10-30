@@ -289,7 +289,8 @@ fn to_val(v: &DbValue) -> Val {
         DbValue::Int(i) => Val::Int(*i),
         DbValue::Float(f) => Val::Float(*f),
         DbValue::Text(t) => Val::Text(t.clone()),
-        DbValue::Blob(b) => Val::Blob(b.clone()),
+        DbValue::Blob(b) | DbValue::Lob(b) => Val::Blob(b.clone()),
+        DbValue::Bool(b) => Val::Int(i64::from(*b)),
     }
 }
 

@@ -28,3 +28,4 @@ p8-ext-pdo-sqlite = { path = "../p8-ext-pdo-sqlite" }
 p8-ext-sockets = { path = "../p8-ext-sockets" }
 p8-ext-openssl = { path = "../p8-ext-openssl" }
 p8-ext-intl = { path = "../p8-ext-intl" }
+p8-ext-pdo-pgsql = { path = "../p8-ext-pdo-pgsql" }

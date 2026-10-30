@@ -2,7 +2,8 @@
 //! p8's pdo extension: the driver-agnostic PDO core. PDO, PDOStatement,
 //! PDOException and PDORow, the fetch modes, error modes and attributes of
 //! php-src's ext/pdo, over a [`driver::Driver`] trait that `pdo_sqlite`
-//! (p8-ext-pdo-sqlite) implements and `pdo_mysql` will, on p8-mysqlnd.
+//! (p8-ext-pdo-sqlite) and `pdo_pgsql` (p8-ext-pdo-pgsql) implement and
+//! `pdo_mysql` will, on p8-mysqlnd.
 //!
 //! Not implemented: persistent connections (the attribute is kept and
 //! ignored), scrollable cursors, multiple rowsets, PDO::FETCH_SERIALIZE's
@@ -24,7 +25,7 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 pub use dbh::{call_driver_method, register_driver};
-pub use state::{Dbh, dbh_of};
+pub use state::{Dbh, dbh_of, dispatch_notices};
 
 pub const EXTENSION: Extension = Extension { name: "pdo", register };
 
@@ -87,6 +88,15 @@ static CLASSES: &[ClassSpec] = &[
             m!("sqliteCreateFunction", dbh::m_sqlite_create_function),
             m!("sqliteCreateAggregate", dbh::m_sqlite_create_aggregate),
             m!("sqliteCreateCollation", dbh::m_sqlite_create_collation),
+            m!("pgsqlCopyFromArray", dbh::m_pgsql_copy_from_array),
+            m!("pgsqlCopyFromFile", dbh::m_pgsql_copy_from_file),
+            m!("pgsqlCopyToArray", dbh::m_pgsql_copy_to_array),
+            m!("pgsqlCopyToFile", dbh::m_pgsql_copy_to_file),
+            m!("pgsqlLOBCreate", dbh::m_pgsql_lob_create),
+            m!("pgsqlLOBOpen", dbh::m_pgsql_lob_open),
+            m!("pgsqlLOBUnlink", dbh::m_pgsql_lob_unlink),
+            m!("pgsqlGetNotify", dbh::m_pgsql_get_notify),
+            m!("pgsqlGetPid", dbh::m_pgsql_get_pid),
         ],
         constants: consts::PDO_CONSTANTS,
         debug_info: None,
