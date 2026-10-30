@@ -1331,20 +1331,38 @@ impl<'src> Compiler<'src> {
                     Expr::Array { items, .. } => Some((*items, f.temp())),
                     _ => None,
                 };
+                // `as $this->p`, `as $a[k]`, `as C::$s` (`=> $o->k` too): the
+                // element lands in a temporary, then is assigned, value first
+                // (as zend_compile_foreach does).
+                let plain = |c: &Self, e: &Expr| matches!(e, Expr::Variable { name, .. } if c.text(*name).starts_with(b"$") && c.text(*name) != b"$this");
+                let value_place = (pattern.is_none() && !plain(self, value_var)).then(|| f.temp());
+                // (When the value goes through a temporary the key does too: the
+                // value is assigned before it, and may read the old key.)
+                let key_place = key_var.filter(|k| value_place.is_some() || !plain(self, k)).map(|_| f.temp());
                 let saved = f.temps;
                 let init = f.emit(Instr::IterInit { src, iter, end: 0 });
                 let start = f.here();
-                let val = match pattern {
-                    Some((_, r)) => r,
-                    None => self.var_target(f, value_var)?,
+                let val = match (pattern, value_place) {
+                    (Some((_, r)), _) => r,
+                    (None, Some(t)) => t,
+                    (None, None) => self.var_target(f, value_var)?,
                 };
-                let key = match key_var {
-                    Some(k) => Some(self.var_target(f, k)?),
-                    None => None,
+                let key = match (key_var, key_place) {
+                    (Some(_), Some(t)) => Some(t),
+                    (Some(k), None) => Some(self.var_target(f, k)?),
+                    (None, _) => None,
                 };
                 let next = f.emit(Instr::IterNext { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
                 f.push_loop();
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
+                if let Some(t) = value_place {
+                    self.assign_from(f, value_var, t)?;
+                    f.temps = f.floor;
+                }
+                if let (Some(k), Some(t)) = (key_var, key_place) {
+                    self.assign_from(f, k, t)?;
+                    f.temps = f.floor;
+                }
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, None)?;
                     f.temps = f.floor;

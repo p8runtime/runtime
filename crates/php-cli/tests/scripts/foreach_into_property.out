@@ -1,0 +1,34 @@
+array(4) {
+  [0]=>
+  int(2)
+  [1]=>
+  string(1) "b"
+  [2]=>
+  array(2) {
+    [0]=>
+    string(3) "a=1"
+    [1]=>
+    string(3) "b=2"
+  }
+  [3]=>
+  int(2)
+}
+array(2) {
+  ["vpre"]=>
+  int(10)
+  ["v0"]=>
+  int(20)
+}
+object(stdClass)#1 (2) {
+  ["v"]=>
+  string(1) "y"
+  ["k"]=>
+  string(1) "x"
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    int(6)
+  }
+}
