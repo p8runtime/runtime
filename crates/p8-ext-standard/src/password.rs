@@ -272,10 +272,8 @@ fn crypt(key: &[u8], salt: &[u8]) -> Vec<u8> {
         sha_crypt::<sha2::Sha512>(key, rest, b"$6$", &SHA512_ORDER)
     } else if let Some(rest) = salt.strip_prefix(b"$5$") {
         sha_crypt::<sha2::Sha256>(key, rest, b"$5$", &SHA256_ORDER)
-    } else if let Some(rest) = salt.strip_prefix(b"$1$") {
-        Some(md5_crypt(key, rest))
     } else {
-        None
+        salt.strip_prefix(b"$1$").map(|rest| md5_crypt(key, rest))
     };
     match made {
         Some(h) => h,

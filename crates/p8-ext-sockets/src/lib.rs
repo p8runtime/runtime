@@ -484,10 +484,11 @@ fn socket_set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = sock_arg(ctx, "socket_set_option", args, 0)?;
     let s = sock(&o);
     let (level, name) = (arg(args, 1).to_int(), arg(args, 2).to_int());
-    if name == 1 && level == 6 {
-        if let State::Tcp(t) = &*s.state.borrow() {
-            let _ = t.set_nodelay(arg(args, 3).to_bool());
-        }
+    if name == 1
+        && level == 6
+        && let State::Tcp(t) = &*s.state.borrow()
+    {
+        let _ = t.set_nodelay(arg(args, 3).to_bool());
     }
     s.options.borrow_mut().insert((level, name), arg(args, 3));
     Ok(Value::Bool(true))
