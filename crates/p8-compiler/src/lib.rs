@@ -2496,6 +2496,18 @@ impl<'src> Compiler<'src> {
         Ok((Frozen::Null, Some(Arc::new(r?.0))))
     }
 
+    /// Whether an array literal's keys and values are all literals (or such
+    /// arrays), with no spread or reference. A float key is left out: its
+    /// conversion to an int warns each time the array is made.
+    fn literal_array(&self, items: &[p8_syntax::ast::ArrayItem]) -> bool {
+        let literal = |c: &Self, e: &Expr| match e {
+            Expr::Array { items, .. } => c.literal_array(items),
+            other => c.literal(other).is_some(),
+        };
+        let key = |c: &Self, k: &Expr| matches!(c.literal(k), Some(v) if !matches!(v, Frozen::Float(_)));
+        items.iter().all(|i| !i.unpack && !i.by_ref && i.key.is_none_or(|k| key(self, k)) && literal(self, i.value))
+    }
+
     fn const_value(&self, e: &Expr) -> Result<Frozen> {
         if let Some(v) = self.literal(e) {
             return Ok(v);
@@ -3727,6 +3739,13 @@ impl<'src> Compiler<'src> {
                     }
                 }
                 dst
+            }
+            // An array of literals only (`['a' => 1, 'b' => [2, 3]]`) is one
+            // constant, as PHP folds it: a large one (a list of 100,000
+            // words) takes a single register.
+            Expr::Array { items, .. } if !items.is_empty() && self.literal_array(items) => {
+                let value = self.const_value(e)?;
+                f.constant(value)
             }
             Expr::Array { items, .. } => {
                 let dst = f.temp();
