@@ -523,6 +523,12 @@ fn join(ns: &[u8], name: &[u8]) -> Vec<u8> {
     if ns.is_empty() { name.to_vec() } else { [ns, b"\\", name].concat() }
 }
 
+/// Whether a destructuring pattern takes anything by reference (`[&$a]`,
+/// `['k' => [&$b]]`).
+fn has_ref_items(items: &[p8_syntax::ast::ArrayItem]) -> bool {
+    items.iter().any(|i| i.by_ref || matches!(i.value, Expr::Array { items, .. } if has_ref_items(items)))
+}
+
 /// Whether a call's arguments are `...` (the first-class callable syntax).
 fn is_placeholder(args: &[p8_syntax::ast::Arg]) -> bool {
     matches!(args, [arg] if matches!(arg.value, Expr::VariadicPlaceholder { .. }))
@@ -1020,12 +1026,15 @@ impl<'src> Compiler<'src> {
         let mut ns: Vec<u8> = Vec::new();
         let scan = |c: &mut Self, ns: &[u8], stmt: &Stmt| {
             // Declared as the file loads (early binding), as PHP does it:
-            // not a class that implements interfaces or uses traits, nor an
-            // enum (it implements UnitEnum); those are declared when their
-            // statement runs.
+            // not a class that implements interfaces (a __toString makes it
+            // Stringable) or uses traits, nor an enum (it implements
+            // UnitEnum); those are declared when their statement runs.
             let uses_traits = |members: &[p8_syntax::ast::ClassMember]| members.iter().any(|m| matches!(m, p8_syntax::ast::ClassMember::TraitUse { .. }));
+            let stringable = |c: &Self, members: &[p8_syntax::ast::ClassMember]| {
+                members.iter().any(|m| matches!(m, p8_syntax::ast::ClassMember::Method { name, .. } if c.text(name.span).eq_ignore_ascii_case(b"__tostring")))
+            };
             let early = match stmt {
-                Stmt::Class { implements, members, .. } => implements.is_empty() && !uses_traits(members),
+                Stmt::Class { implements, members, .. } => implements.is_empty() && !uses_traits(members) && !stringable(c, members),
                 Stmt::Interface { extends, .. } => extends.is_empty(),
                 Stmt::Trait { members, .. } => !uses_traits(members),
                 _ => false,
@@ -1220,9 +1229,13 @@ impl<'src> Compiler<'src> {
                 f.temps = f.floor;
                 self.close_loop(f, cont);
             }
-            Stmt::Foreach { expr, key_var, value_var: Expr::Unary { op: UnaryOp::Reference, expr: value_var, .. }, body, .. } => {
-                // By reference: the elements of the array itself, so a
-                // property's or an element's is made a reference first.
+            Stmt::Foreach { expr, key_var, value_var, body, .. }
+                if matches!(value_var, Expr::Unary { op: UnaryOp::Reference, .. }) || matches!(value_var, Expr::Array { items, .. } if has_ref_items(items)) =>
+            {
+                // By reference (`as &$v`, or `as ['k' => &$v]` taken apart
+                // from the element itself): the elements of the array
+                // itself, so a property's or an element's is made a
+                // reference first.
                 let src = match expr {
                     Expr::PropertyFetch { target, property, .. } => {
                         let r = f.temp();
@@ -1252,9 +1265,17 @@ impl<'src> Compiler<'src> {
                 let iter = f.temp();
                 let _cell = f.temp();
                 let saved = f.temps;
+                let pattern = match value_var {
+                    Expr::Array { items, .. } => Some((*items, f.temp())),
+                    _ => None,
+                };
                 let init = f.emit(Instr::IterInitRef { src, iter, end: 0 });
                 let start = f.here();
-                let val = self.var_target(f, value_var)?;
+                let val = match (pattern, value_var) {
+                    (Some((_, r)), _) => r,
+                    (None, Expr::Unary { expr: target, .. }) => self.var_target(f, target)?,
+                    (None, other) => return Err(self.unsupported(other.span(), "this foreach target")),
+                };
                 let key = match key_var {
                     Some(k) => Some(self.var_target(f, k)?),
                     None => None,
@@ -1262,12 +1283,21 @@ impl<'src> Compiler<'src> {
                 let next = f.emit(Instr::IterNextRef { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
                 f.push_loop();
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
+                if let Some((items, r)) = pattern {
+                    self.destructure(f, items, r, Some((r, &[])))?;
+                    f.temps = f.floor;
+                }
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
                 f.emit(Instr::Jump { target: start });
                 let end = f.here();
                 f.patch(init, end);
                 f.patch(next, end);
+                // The element's reference goes with the loop (as PHP frees
+                // its temporary), so the last element is a plain value again.
+                if let Some((_, r)) = pattern {
+                    f.emit(Instr::Free { reg: r });
+                }
                 self.close_loop(f, start);
                 // The loop is done with what it iterated (PHP frees it here).
                 f.emit(Instr::Free { reg: iter });

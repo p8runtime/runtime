@@ -42,6 +42,9 @@ pub struct FnInfo {
     pub class: Option<Rc<Class>>,
     pub params: Vec<ParamInfo>,
     pub ret: Option<TypeDecl>,
+    /// A builtin method's tentative return type (getTentativeReturnType):
+    /// stated, but not yet enforced on overrides, so getReturnType() is null.
+    pub tentative_ret: Option<TypeDecl>,
     pub returns_ref: bool,
     /// Written in PHP (else a builtin).
     pub user: bool,

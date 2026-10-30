@@ -1,0 +1,66 @@
+array(2) {
+  [0]=>
+  array(2) {
+    ["type"]=>
+    string(7) "ERROR:a"
+    ["message"]=>
+    string(1) "a"
+  }
+  [1]=>
+  array(2) {
+    ["type"]=>
+    string(9) "WARNING:b"
+    ["message"]=>
+    string(1) "b"
+  }
+}
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(10)
+    [1]=>
+    array(2) {
+      [0]=>
+      int(2)
+      [1]=>
+      string(2) "c0"
+    }
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    int(40)
+    [1]=>
+    array(2) {
+      [0]=>
+      int(5)
+      [1]=>
+      string(2) "c1"
+    }
+  }
+}
+array(2) {
+  [0]=>
+  array(1) {
+    ["x"]=>
+    int(2)
+  }
+  [1]=>
+  array(1) {
+    ["x"]=>
+    int(3)
+  }
+}
+array(2) {
+  [0]=>
+  array(1) {
+    ["k"]=>
+    string(3) "new"
+  }
+  [1]=>
+  array(1) {
+    ["k"]=>
+    int(5)
+  }
+}

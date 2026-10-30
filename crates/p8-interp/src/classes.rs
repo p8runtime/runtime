@@ -70,7 +70,8 @@ impl Context<'_> {
     /// method, when its stub signature says so).
     pub(crate) fn method_takes_ref(&self, class: &Class, lower: &[u8], n: usize) -> bool {
         match class.method(lower) {
-            Some(m) if m.native.is_none() => self.closures[m.func as usize].code.param_by_ref(n),
+            Some(m) if m.native.is_none() && m.func != u32::MAX => self.closures[m.func as usize].code.param_by_ref(n),
+            // A builtin's method, or a builtin interface's abstract one (no code).
             Some(m) => {
                 let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
                 p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
@@ -278,6 +279,11 @@ impl Context<'_> {
                     return Ok(());
                 }
                 if let Some(other) = from_trait.get(&key) {
+                    // The same trait method reached twice (a trait used
+                    // directly and through another trait): no collision.
+                    if methods.get(&key).is_some_and(|x| x.native.is_none() && m.native.is_none() && x.func == m.func) {
+                        return Ok(());
+                    }
                     return Err(c.fatal_at(
                         format!(
                             "Trait method {}::{} has not been applied as {name}::{}, because of collision with {}::{}",
