@@ -3005,12 +3005,10 @@ impl<'src> Compiler<'src> {
         f.emit(Instr::NewArray { dst: callee });
         f.emit(Instr::ArrayPush { arr: callee, val: a });
         f.emit(Instr::ArrayPush { arr: callee, val: b });
-        // A variable passed may be taken by reference: which parameters
-        // do is asked when the call runs.
-        if needs_spread(args) || args.iter().any(|a| self.can_ref(a.value)) {
+        if needs_spread(args) {
             return self.spread_call(f, callee, args);
         }
-        let (base, argc) = self.args_by_value(f, args)?;
+        let (base, argc) = self.value_args(f, args, callee)?;
         f.emit(Instr::CallValue { dst: base, callee, base, argc });
         Ok(base)
     }
@@ -3039,6 +3037,25 @@ impl<'src> Compiler<'src> {
                 value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref_arg(value) => {
                     let flag = f.temp();
                     f.emit(asks(flag, n as u8));
+                    self.ref_or_value_with(f, value, *r, flag)?;
+                }
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        Ok((regs[0], args.len() as u8))
+    }
+
+    /// The arguments of a call of a value (`$f(...)`, `[$o, 'm'](...)`): a
+    /// variable, element or property goes as a reference when the callable
+    /// takes that parameter by one, asked as the call runs (PHP's
+    /// SEND_VAR_EX for a function known only then).
+    fn value_args(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg], callee: Reg) -> Result<(Reg, u8)> {
+        let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
+        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+            match arg.value {
+                value if self.can_ref_arg(value) && !matches!(value, Expr::Variable { name, .. } if matches!(self.text(*name), b"$this" | b"$GLOBALS")) => {
+                    let flag = f.temp();
+                    f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16));
                     self.ref_or_value_with(f, value, *r, flag)?;
                 }
                 value => self.expr_into(f, value, *r)?,
@@ -4688,15 +4705,9 @@ impl<'src> Compiler<'src> {
             };
             return self.spread_call(f, callee, args);
         }
-        if dynamic && args.iter().any(|a| self.can_ref(a.value)) {
-            // A variable passed may be taken by reference: which parameters
-            // do is asked when the call runs.
-            let callee = self.expr(f, func)?;
-            return self.spread_call(f, callee, args);
-        }
         if dynamic {
             let callee = self.expr(f, func)?;
-            let (base, argc) = self.args_by_value(f, args)?;
+            let (base, argc) = self.value_args(f, args, callee)?;
             f.emit(Instr::CallValue { dst: base, callee, base, argc });
             let _ = (span, hint, mark);
             return Ok(base);
