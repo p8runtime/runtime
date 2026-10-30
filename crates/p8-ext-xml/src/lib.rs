@@ -11,6 +11,7 @@ mod html;
 mod html_tables;
 mod parser;
 mod simplexml;
+mod uri;
 mod writer;
 mod xsd;
 mod xml;

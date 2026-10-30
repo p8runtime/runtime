@@ -1,0 +1,4 @@
+bool(true)
+bool(true)
+bool(false)
+Element '{urn:t}note', attribute '{http://www.w3.org/XML/1998/namespace}lang': 'not a language!' is not a valid value of the atomic type 'xs:language'.
