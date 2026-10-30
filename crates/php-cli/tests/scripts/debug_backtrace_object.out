@@ -1,0 +1,6 @@
+Finder::find no-object
+W::get W
+TC::test TC
+TC::run TC
+Finder::find no-object
+E::get E

@@ -178,8 +178,9 @@ pub trait Ctx {
     fn set_local(&mut self, name: &[u8], value: Value) -> bool;
     /// The calling code's set variables, in order (get_defined_vars).
     fn locals(&self) -> Vec<(PhpStr, Value)>;
-    /// The calls that led here, as debug_backtrace() gives them.
-    fn backtrace(&self) -> crate::array::PhpArray;
+    /// The calls that led here, as debug_backtrace() gives them (with each
+    /// method call's `object` when `objects`).
+    fn backtrace(&self, objects: bool) -> crate::array::PhpArray;
     /// get_included_files(): every file run, in order.
     fn included_files(&self) -> Vec<String>;
     /// Per-request state an extension keeps (json_last_error, ...).

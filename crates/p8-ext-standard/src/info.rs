@@ -203,7 +203,8 @@ const DEBUG_BACKTRACE_IGNORE_ARGS: i64 = 2;
 fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let options = if args.is_empty() { 1 } else { arg(args, 0).to_int() };
     let limit = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
-    let trace = ctx.backtrace();
+    const DEBUG_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
+    let trace = ctx.backtrace(options & DEBUG_BACKTRACE_PROVIDE_OBJECT != 0);
     let mut out = PhpArray::new();
     for (i, (_, frame)) in trace.iter().enumerate() {
         if limit > 0 && i as i64 >= limit {
@@ -223,7 +224,7 @@ fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
 
 /// debug_print_backtrace: the trace as getTraceAsString shows it, no {main}.
 fn debug_print_backtrace(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let trace = Value::Array(Rc::new(ctx.backtrace()));
+    let trace = Value::Array(Rc::new(ctx.backtrace(false)));
     let shown = p8_runtime::trace::trace_string(&trace);
     // Everything up to the "#N {main}" line.
     let cut = shown.rfind('#').unwrap_or(0);
