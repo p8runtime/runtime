@@ -1,0 +1,238 @@
+object(OpenSSLAsymmetricKey)#1 (0) {
+}
+Array
+(
+    [bits] => 1024
+    [key] => -----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDLXp6PkCtbpV+P1gwFQWH6Ez0U
+83uEmS8IGnpeI8Fk8rY/vHOZzZZaxRCw+loyc342qCDIQheMOCNm5Fkevz06q757
+/oooiLR3yryYGKiKG1IZIiplmtsC95oKrzUSKk60wuI1mbgpMUP5LKi/Tvxes5Pm
+kUtXfimz2qgkeUcPpQIDAQAB
+-----END PUBLIC KEY-----
+
+    [rsa] => Array
+        (
+            [n] => cb5e9e8f902b5ba55f8fd60c054161fa133d14f37b84992f081a7a5e23c164f2b63fbc7399cd965ac510b0fa5a32737e36a820c842178c382366e4591ebf3d3aabbe7bfe8a2888b477cabc9818a88a1b5219222a659adb02f79a0aaf35122a4eb4c2e23599b8293143f92ca8bf4efc5eb393e6914b577e29b3daa82479470fa5
+            [e] => 010001
+            [d] => c70ffdda7e7ec23d1456016950b79804a55233b0c4a59d1f792a19bf0df69e2e291028116b69de134933b657c773fcb27d2382bb225e54451af9fae7f4fdb21a7c863f827492a0da3282b3b4b9f2feb44cb7d2bce412218b30f509bd06cc7884a7f3f9de76a6db8945bbfcb43c6c60fdc3fca8d07e95f53b2b223ff5817de83d
+            [p] => f80193d20a2a8d638c62016d646ade7c87a0177d5748241368b22697aff627017ea012a32544056abd91c27eaa530aec1ad48f30cd08cfcaf2f6ebd46ecf0f3f
+            [q] => d1ecb93556ccb7fc4c934673ec48961bf3285905d272485b1e28ce194c34340c305ff71514a8cef1c88149e91bd5706b61ad8d30e70fc8c7b734dab806668c1b
+            [dmp1] => 2183550e55015b09d0b68daad29efe61a592249a7368f4370b36c7b047bee396781df966c26a66b0fddcec836150c771104f18ea674a8189d33b3ab3022648d1
+            [dmq1] => 7487d01807e3048f0d8303acfe111d22cecc2afecc5f9c42d86f16597cafcde4a645df46d87d0cc3b2e5f23d70b1ff01dceb16617b228bf631812998d614bed9
+            [iqmp] => 77d6d27b64558f714b6fd54ece7b179b5491f346da11bbe2924ceaf49f4cd5a747fa08e66dac0ed45643cf0b09824c12621984dd3462ce31392a13b3e4946a46
+        )
+
+    [type] => 0
+)
+bool(true)
+string(916) "-----BEGIN PRIVATE KEY-----
+MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAMteno+QK1ulX4/W
+DAVBYfoTPRTze4SZLwgael4jwWTytj+8c5nNllrFELD6WjJzfjaoIMhCF4w4I2bk
+WR6/PTqrvnv+iiiItHfKvJgYqIobUhkiKmWa2wL3mgqvNRIqTrTC4jWZuCkxQ/ks
+qL9O/F6zk+aRS1d+KbPaqCR5Rw+lAgMBAAECgYEAxw/92n5+wj0UVgFpULeYBKVS
+M7DEpZ0feSoZvw32ni4pECgRa2neE0kztlfHc/yyfSOCuyJeVEUa+frn9P2yGnyG
+P4J0kqDaMoKztLny/rRMt9K85BIhizD1Cb0GzHiEp/P53nam24lFu/y0PGxg/cP8
+qNB+lfU7KyI/9YF96D0CQQD4AZPSCiqNY4xiAW1kat58h6AXfVdIJBNosiaXr/Yn
+AX6gEqMlRAVqvZHCfqpTCuwa1I8wzQjPyvL269Ruzw8/AkEA0ey5NVbMt/xMk0Zz
+7EiWG/MoWQXSckhbHijOGUw0NAwwX/cVFKjO8ciBSekb1XBrYa2NMOcPyMe3NNq4
+BmaMGwJAIYNVDlUBWwnQto2q0p7+YaWSJJpzaPQ3CzbHsEe+45Z4HflmwmpmsP3c
+7INhUMdxEE8Y6mdKgYnTOzqzAiZI0QJAdIfQGAfjBI8NgwOs/hEdIs7MKv7MX5xC
+2G8WWXyvzeSmRd9G2H0Mw7Ll8j1wsf8B3OsWYXsii/YxgSmY1hS+2QJAd9bSe2RV
+j3FLb9VOznsXm1SR80baEbvikkzq9J9M1adH+gjmbawO1FZDzwsJgkwSYhmE3TRi
+zjE5KhOz5JRqRg==
+-----END PRIVATE KEY-----
+"
+Array
+(
+    [bits] => 1024
+    [key] => -----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDLXp6PkCtbpV+P1gwFQWH6Ez0U
+83uEmS8IGnpeI8Fk8rY/vHOZzZZaxRCw+loyc342qCDIQheMOCNm5Fkevz06q757
+/oooiLR3yryYGKiKG1IZIiplmtsC95oKrzUSKk60wuI1mbgpMUP5LKi/Tvxes5Pm
+kUtXfimz2qgkeUcPpQIDAQAB
+-----END PUBLIC KEY-----
+
+    [rsa] => Array
+        (
+            [n] => cb5e9e8f902b5ba55f8fd60c054161fa133d14f37b84992f081a7a5e23c164f2b63fbc7399cd965ac510b0fa5a32737e36a820c842178c382366e4591ebf3d3aabbe7bfe8a2888b477cabc9818a88a1b5219222a659adb02f79a0aaf35122a4eb4c2e23599b8293143f92ca8bf4efc5eb393e6914b577e29b3daa82479470fa5
+            [e] => 010001
+        )
+
+    [type] => 0
+)
+Array
+(
+    [bits] => 256
+    [key] => -----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPq4hbIWHvB51rdWr8ejrjWo4qVNW
+VugYFtPg/xLQw0mHkIPZ4DvKsqOTOnMoezkbSmVVMuwz9flvnqHGmQvmug==
+-----END PUBLIC KEY-----
+
+    [ec] => Array
+        (
+            [curve_name] => prime256v1
+            [curve_oid] => 1.2.840.10045.3.1.7
+            [x] => 3eae216c8587bc1e75add5abf1e8eb8d6a38a9535656e81816d3e0ff12d0c349
+            [y] => 879083d9e03bcab2a3933a73287b391b4a655532ec33f5f96f9ea1c6990be6ba
+            [d] => b3e4aa87b233b5e0c1892e4a3df4efb96bb2b7d624ae4ba8ca25bfe9b6a0e8d9
+        )
+
+    [type] => 3
+)
+Array
+(
+    [bits] => 256
+    [key] => -----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPq4hbIWHvB51rdWr8ejrjWo4qVNW
+VugYFtPg/xLQw0mHkIPZ4DvKsqOTOnMoezkbSmVVMuwz9flvnqHGmQvmug==
+-----END PUBLIC KEY-----
+
+    [ec] => Array
+        (
+            [curve_name] => prime256v1
+            [curve_oid] => 1.2.840.10045.3.1.7
+            [x] => 3eae216c8587bc1e75add5abf1e8eb8d6a38a9535656e81816d3e0ff12d0c349
+            [y] => 879083d9e03bcab2a3933a73287b391b4a655532ec33f5f96f9ea1c6990be6ba
+        )
+
+    [type] => 3
+)
+bool(true)
+string(241) "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgs+Sqh7IzteDBiS5K
+PfTvuWuyt9YkrkuoyiW/6bag6NmhRANCAAQ+riFshYe8HnWt1avx6OuNajipU1ZW
+6BgW0+D/EtDDSYeQg9ngO8qyo5M6cyh7ORtKZVUy7DP1+W+eocaZC+a6
+-----END PRIVATE KEY-----
+"
+Array
+(
+    [bits] => 1024
+    [key] => -----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDLXp6PkCtbpV+P1gwFQWH6Ez0U
+83uEmS8IGnpeI8Fk8rY/vHOZzZZaxRCw+loyc342qCDIQheMOCNm5Fkevz06q757
+/oooiLR3yryYGKiKG1IZIiplmtsC95oKrzUSKk60wuI1mbgpMUP5LKi/Tvxes5Pm
+kUtXfimz2qgkeUcPpQIDAQAB
+-----END PUBLIC KEY-----
+
+    [rsa] => Array
+        (
+            [n] => cb5e9e8f902b5ba55f8fd60c054161fa133d14f37b84992f081a7a5e23c164f2b63fbc7399cd965ac510b0fa5a32737e36a820c842178c382366e4591ebf3d3aabbe7bfe8a2888b477cabc9818a88a1b5219222a659adb02f79a0aaf35122a4eb4c2e23599b8293143f92ca8bf4efc5eb393e6914b577e29b3daa82479470fa5
+            [e] => 010001
+        )
+
+    [type] => 0
+)
+int(1024)
+bool(false)
+bool(false)
+int(2048)
+bool(true)
+string(37) "-----BEGIN ENCRYPTED PRIVATE KEY-----"
+bool(false)
+bool(true)
+int(1024)
+bool(false)
+string(44) "error:1E08010C:DECODER routines::unsupported"
+bool(false)
+bool(true)
+string(44) "error:1E08010C:DECODER routines::unsupported"
+Key array must be of the form array(0 => key, 1 => phrase)
+bool(true)
+RGdl55kB8iUyhahNgThinX+kDQaYlGcg8touX17ogbXwZGnMCS3/6FHjpiudYtjYVvTM1Wgxpj9osRgrcX2kQy4Vv78CtvlmDzgtEyKJ2Lk8miA/NvThJz7UBlurNHkTPSLFNeJt1MeWMyJ0kTIMIWIJy4K27iTJ1PZl+oSwpgM=
+int(1)
+int(0)
+bool(true)
+Xv8DPZIgj8v1Ltycv2ydS9fAa3taaiLH1kHRSUoJ1rCJjTIcCo/bVcELm/JcK7d3wrRmD4ZwAfeYedCJ3nMhoo318DfMAraMR9HrKNmKkZmHaWGtsCUkpImHKhL9NnXbapV9Yj/wS59xW1ZfUWgGzqJHJkyCp1aYcdvQuGz+Rok=
+int(1)
+int(0)
+bool(true)
+T/+otntUawG98hXSNsrl7L0lh5Dh1cTGhmHbF1NXWGeddLVhHFomSUBXozYcnRSYUoVDiLf8fsKpFvOjUVmMKdfUwQPQYWSMGYdm8BuD+IsFt8fTm/33i/dCG4zRKnGqioaMaaguKQfH2E7Sq112JOkgnMQJ+ZNnnkEtNPYh5CQ=
+int(1)
+int(0)
+bool(true)
+ft36H2H79Pv3Nugq9WIMOrjGhX8MLC2biTKN/amCtWAz91Lam/EXbzbnyAptkGE7LoQTAXPilemZi4tpdu9ev4B1r4UBEG0vL3vqZ9gImY7DHi2tINx+cVvLjK5nTX0nT2M90oHR/bNv0e5heqg0A6TkYr1yYr6oKC1OC7hkTak=
+int(1)
+int(0)
+bool(true)
+Fe5zFRwZPCRTL3g3pBYM7EGapZhZdVAINIiavnOj2YilQlAZgR7TYO9aIA11j0w4c0XpmiseooeqXj7XRf7AxbJyaUICdvFVLPsNuzB9kgGo1Ptk3bJzKznJrTfDgPxuLKBA8VSsywbnSGkd5OSLc5qEjYmr0gFDXvd7pLgkRUE=
+int(1)
+int(0)
+bool(true)
+KU8pQUoUlEKpTrJATtztD8GJKZShOe3+WGVpjrwn9iEatNgFzyjCG+MUV3G8yY6noYdFlwlRw+icnsYiEIyG90NV+HRvckkZR7zJqhbEynRNmMXrebRMc/V2a/kERYoqmm35tmbITEMaYVbTd6xccnEFxyDItL4DaFgU5ts9k7k=
+int(1)
+int(0)
+bool(true)
+int(1)
+int(1)
+
+Warning: openssl_verify(): Don't know how to get public key from this private key in %s on line 145
+
+Warning: openssl_verify(): Supplied key param cannot be coerced into a public key in %s on line 145
+bool(false)
+
+Warning: openssl_sign(): Supplied key param cannot be coerced into a private key in %s on line 146
+bool(false)
+
+Warning: openssl_sign(): Unknown digest algorithm in %s on line 147
+bool(false)
+int(0)
+bool(true)
+int(1)
+int(0)
+bool(true)
+int(1)
+bool(true)
+int(128)
+bool(true)
+string(14) "secret message"
+bool(true)
+int(128)
+bool(true)
+string(14) "secret message"
+bool(true)
+AIJrR4j36JFKbN+kfqfAwqsWApqxJ75r6iyLI5R/w0CzjKtloiWV+pxBKcR86FMH6iwsFviky5+jXsf8hsnNPME8jWY5O1luo8tU+5ZMdLwO4zURnddI/bLXuxHrRADsishxqvFnGgYxxFQMR1DaFgXNEroHzoM85uXxvmS5HdU=
+bool(true)
+string(6) "signed"
+bool(false)
+string(44) "error:1E08010C:DECODER routines::unsupported"
+
+Warning: openssl_public_encrypt(): key parameter is not a valid public key in %s on line 161
+bool(false)
+
+Warning: openssl_private_decrypt(): key parameter is not a valid private key in %s on line 162
+bool(false)
+int(16)
+int(16)
+int(2)
+int(16)
+bool(true)
+string(11) "sealed data"
+int(1024)
+int(0)
+string(6) "010001"
+int(384)
+int(3)
+string(9) "secp384r1"
+string(12) "1.3.132.0.34"
+bool(true)
+
+Warning: openssl_pkey_new(): Missing configuration value: "curve_name" not set in %s on line 174
+bool(false)
+
+Warning: openssl_pkey_new(): Private key length must be at least 384 bits, configured to 128 in %s on line 175
+bool(false)
+bool(true)
+int(32)
+int(256)
+int(5)
+int(32)
+bool(true)
+int(64)
+int(1)
+bool(true)
+string(128) "fe700dffb59e8d759e8ce85fc01ed2f9d46a1612ee41950675337c9cac90d435d7c1121d12fb967713433f1d8ac6f3d9184909eebd60d4906095861199114c09"
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=
+-----END PUBLIC KEY-----
+Cannot directly construct OpenSSLAsymmetricKey, use openssl_pkey_new() instead
+Trying to clone an uncloneable object of class OpenSSLAsymmetricKey
