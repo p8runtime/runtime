@@ -237,7 +237,7 @@ fn replace(ctx: &mut dyn Ctx, pattern: &[u8], with: With, s: &[u8], bits: i64) -
         match &with {
             With::Text(r) => substitute(&re, s, &caps, r, &mut out),
             With::Callback(f) => {
-                let arr = groups(&re, s, &caps, |e| bytes(e));
+                let arr = groups(&re, s, &caps, bytes);
                 let v = ctx.call(f, &mut [Value::Array(Rc::new(arr))])?;
                 out.extend_from_slice(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes());
             }

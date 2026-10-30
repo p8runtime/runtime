@@ -242,9 +242,7 @@ fn decode_table(table: &'static encoding_rs::Encoding, s: &[u8]) -> Vec<u32> {
             encoding_rs::DecoderResult::InputEmpty => return out,
             encoding_rs::DecoderResult::OutputFull => buf.reserve(rest.len() * 3 + 16),
             encoding_rs::DecoderResult::Malformed(bad, _) => {
-                for _ in 0..bad {
-                    out.push(BAD);
-                }
+                out.extend(std::iter::repeat_n(BAD, usize::from(bad)));
             }
         }
     }
