@@ -1,0 +1,22 @@
+[Attribute [ A ]
+]
+[Attribute [ A ] {
+  - Arguments [7] {
+    Argument #0 [ 1 ]
+    Argument #1 [ 'x' ]
+    Argument #2 [ name = [1, 2] ]
+    Argument #3 [ o = 9223372036854775807 ]
+    Argument #4 [ e = NULL ]
+    Argument #5 [ f = 1.5 ]
+    Argument #6 [ b = true ]
+  }
+}
+]
+[Attribute [ A ]
+]
+[Attribute [ Undefined ] {
+  - Arguments [1] {
+    Argument #0 [ 'q' ]
+  }
+}
+]

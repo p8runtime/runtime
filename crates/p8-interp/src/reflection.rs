@@ -1729,6 +1729,29 @@ fn ra_get_arguments(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
     Ok(Value::Array(Rc::new(ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?)))
 }
 
+/// ReflectionAttribute::__toString(): "Attribute [ Name ]" and its
+/// arguments, each as a default value prints (php_reflection.c).
+fn ra_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let subject = decode_subject(ctx, &get(this, "\0subject"))?;
+    let args = ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?;
+    let mut out = format!("Attribute [ {} ]", text(&get(this, "name")));
+    if args.len() > 0 {
+        out.push_str(&format!(" {{\n  - Arguments [{}] {{\n", args.len()));
+        for (i, (k, v)) in args.iter().enumerate() {
+            out.push_str(&format!("    Argument #{i} [ "));
+            if let Key::Str(name) = k {
+                out.push_str(&String::from_utf8_lossy(name.as_bytes()));
+                out.push_str(" = ");
+            }
+            default_text(&mut out, v);
+            out.push_str(" ]\n");
+        }
+        out.push_str("  }\n}");
+    }
+    out.push('\n');
+    Ok(s(out.as_bytes()))
+}
+
 /// The attribute names of the builtin attribute classes (they take any target).
 const BUILTIN_ATTRIBUTES: [&[u8]; 6] = [b"attribute", b"returntypewillchange", b"allowdynamicproperties", b"sensitiveparameter", b"override", b"deprecated"];
 
@@ -2355,6 +2378,7 @@ pub static CLASSES: &[ClassSpec] = &[
             ("isRepeated", Some(Native::Method(ra_is_repeated))),
             ("getArguments", Some(Native::Method(ra_get_arguments))),
             ("newInstance", Some(Native::Method(ra_new_instance))),
+            ("__toString", Some(Native::Method(ra_to_string))),
         ],
         constants: &[("IS_INSTANCEOF", Constant::Int(2))],
         debug_info: Some(info_name),
