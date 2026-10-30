@@ -2750,14 +2750,18 @@ impl<'src> Compiler<'src> {
                 let message = if arg.unpack { "Cannot use argument unpacking after named arguments" } else { "Cannot use positional argument after named argument" };
                 return Err(CompileError { message: message.into(), line });
             }
-            // Positional arguments come before any `...`: n is the parameter.
+            // Positional arguments come before any `...`: n is the parameter;
+            // a named one is asked about by its name.
             if let Some(callee) = callee
-                && arg.name.is_none()
                 && !arg.unpack
                 && self.can_ref(arg.value)
             {
                 let flag = f.temp();
-                f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16));
+                let key = arg.name.map(|name| f.constant(Frozen::Str(Text::from(self.text(name.span)))));
+                match key {
+                    Some(key) => f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, key, u16::MAX)),
+                    None => f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16)),
+                };
                 let (by_ref, by_value) = match arg.value {
                     Expr::Variable { name, .. } => (f.cv(&self.text(*name)[1..]), None),
                     value => {
@@ -2768,14 +2772,23 @@ impl<'src> Compiler<'src> {
                     }
                 };
                 let value_at = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
-                f.emit(Instr::rare(Rare::ArrayPushRef, list, by_ref, 0, 0));
+                match key {
+                    Some(key) => f.emit(Instr::rare(Rare::ArraySetRef, list, key, by_ref, 0)),
+                    None => f.emit(Instr::rare(Rare::ArrayPushRef, list, by_ref, 0, 0)),
+                };
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(value_at, f.here());
                 let v = match by_value {
                     Some(r) => r,
                     None => self.expr(f, arg.value)?,
                 };
-                f.emit(Instr::ArrayPush { arr: list, val: v });
+                match key {
+                    Some(key) => {
+                        named = true;
+                        f.emit(Instr::ArraySet { arr: list, key, val: v })
+                    }
+                    None => f.emit(Instr::ArrayPush { arr: list, val: v }),
+                };
                 f.patch(end, f.here());
                 continue;
             }

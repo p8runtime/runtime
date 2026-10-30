@@ -341,7 +341,8 @@ pub enum Rare {
     VarBind,
     /// A call with `...` in it: a = whether the callable in b takes its
     /// argument number `class` by reference (false when it is not callable;
-    /// the call reports that).
+    /// the call reports that). With `class` u16::MAX, the parameter is the
+    /// one named by the string in c (a named argument).
     CallableArgByRef,
     /// Throw an Error whose message is the string in a (what PHP finds
     /// wrong only as the code runs: `f($a[])` when f takes a value).

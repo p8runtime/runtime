@@ -233,6 +233,21 @@ impl Context<'_> {
         }
     }
 
+    /// An argument as parameter `n` gets it: a reference (an argument
+    /// compiled as one) only where the parameter takes one.
+    fn arg_or_ref(&self, target: &Target, n: usize, v: &Value) -> Value {
+        if matches!(v, Value::Ref(_)) && self.takes_ref(target, n) { v.clone() } else { v.deref() }
+    }
+
+    /// Whether the parameter of `target` named `name` takes a reference.
+    /// An unknown name answers yes, so the variable is not read (and
+    /// warned about) before the call reports the name, as in PHP.
+    pub(crate) fn named_takes_ref(&self, target: &Target, name: &[u8]) -> bool {
+        let (_, params) = self.named_params(target);
+        let name = String::from_utf8_lossy(name);
+        params.iter().position(|p| p.name == name && !p.variadic).is_none_or(|i| self.takes_ref(target, i))
+    }
+
     /// What `callable` calls, with PHP's error when it is not callable.
     pub(crate) fn resolve_callable(&mut self, callable: &Value) -> Result<Target, Throw> {
         match callable.deref() {
@@ -485,7 +500,7 @@ impl Context<'_> {
         for (k, v) in list.iter() {
             match k {
                 Key::Int(_) => {
-                    out.push(v.deref());
+                    out.push(self.arg_or_ref(target, out.len(), v));
                     set.push(true);
                 }
                 Key::Str(key) => {
@@ -505,7 +520,7 @@ impl Context<'_> {
                         out.resize(i + 1, Value::Undef);
                         set.resize(i + 1, false);
                     }
-                    out[i] = v.deref();
+                    out[i] = self.arg_or_ref(target, i, v);
                     set[i] = true;
                 }
             }

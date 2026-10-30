@@ -3154,6 +3154,10 @@ impl Context<'_> {
                         let callee = reg!(b).clone();
                         let retry = self.autoload_retry.clone();
                         let by_ref = match self.resolve_callable(&callee) {
+                            Ok(t) if class == u16::MAX => {
+                                let name = reg!(c).to_php_string().unwrap_or_else(PhpStr::empty);
+                                self.named_takes_ref(&t, name.as_bytes())
+                            }
                             Ok(t) => self.takes_ref(&t, class as usize),
                             // A class not loaded yet: the autoloaders run and the
                             // question is asked again (not answered "no", which
