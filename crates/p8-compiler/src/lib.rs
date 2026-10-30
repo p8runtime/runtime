@@ -2993,7 +2993,9 @@ impl<'src> Compiler<'src> {
         f.emit(Instr::NewArray { dst: callee });
         f.emit(Instr::ArrayPush { arr: callee, val: a });
         f.emit(Instr::ArrayPush { arr: callee, val: b });
-        if needs_spread(args) {
+        // A variable passed may be taken by reference: which parameters
+        // do is asked when the call runs.
+        if needs_spread(args) || args.iter().any(|a| self.can_ref(a.value)) {
             return self.spread_call(f, callee, args);
         }
         let (base, argc) = self.args_by_value(f, args)?;
@@ -4664,6 +4666,12 @@ impl<'src> Compiler<'src> {
                 Expr::Variable { name, .. } if !dynamic => self.function_callee(f, *name)?,
                 other => self.expr(f, other)?,
             };
+            return self.spread_call(f, callee, args);
+        }
+        if dynamic && args.iter().any(|a| self.can_ref(a.value)) {
+            // A variable passed may be taken by reference: which parameters
+            // do is asked when the call runs.
+            let callee = self.expr(f, func)?;
             return self.spread_call(f, callee, args);
         }
         if dynamic {
