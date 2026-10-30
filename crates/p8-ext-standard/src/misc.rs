@@ -19,6 +19,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "assert_options", run: assert_options, by_ref: &[] },
     Builtin { name: "error_reporting", run: error_reporting, by_ref: &[] },
     Builtin { name: "ini_get", run: ini_get, by_ref: &[] },
+    Builtin { name: "ini_get_all", run: ini_get_all, by_ref: &[] },
     Builtin { name: "ini_set", run: ini_set, by_ref: &[] },
     Builtin { name: "ini_alter", run: ini_set, by_ref: &[] },
     Builtin { name: "trigger_error", run: trigger_error, by_ref: &[] },
@@ -60,6 +61,46 @@ fn ini_get(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Some(v) => v,
         None => Value::Bool(false),
     })
+}
+
+/// ini_get_all(?string $extension = null, bool $details = true): every
+/// directive (or one extension's), sorted by name; with details, each as
+/// [global_value, local_value, access].
+fn ini_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let ext = match arg(args, 0) {
+        Value::Null => None,
+        _ => Some(String::from_utf8_lossy(str_arg(args, 0).as_bytes()).to_ascii_lowercase()),
+    };
+    let details = args.len() < 2 || arg(args, 1).to_bool();
+    let mut rows: Vec<_> = crate::defaults::INI_DEFAULTS.iter().filter(|(e, _, _)| ext.as_deref().is_none_or(|x| x == *e)).collect();
+    if let Some(x) = &ext
+        && !ctx.modules().iter().any(|m| m.eq_ignore_ascii_case(x))
+    {
+        ctx.warn(&format!("ini_get_all(): Extension \"{x}\" cannot be found"));
+        return Ok(Value::Bool(false));
+    }
+    // zend_ini_sort_entries: names compared ignoring case.
+    rows.sort_by_key(|(_, name, _)| name.to_ascii_lowercase());
+    let text = |v: Option<Value>| match v {
+        None | Some(Value::Null) => Value::Null,
+        Some(v) => v,
+    };
+    let mut out = PhpArray::new();
+    for (_, name, default) in rows {
+        let local = text(ctx.ini_get(name.as_bytes()));
+        let v = if details {
+            let access = crate::defaults::INI_ACCESS.iter().find(|(n, _)| n == name).map_or(7, |(_, a)| i64::from(*a));
+            let mut d = PhpArray::new();
+            d.insert(Key::Str(PhpStr::from("global_value")), default.map_or(Value::Null, |b| Value::Str(PhpStr::from(b))));
+            d.insert(Key::Str(PhpStr::from("local_value")), local);
+            d.insert(Key::Str(PhpStr::from("access")), Value::Int(access));
+            Value::Array(Rc::new(d))
+        } else {
+            local
+        };
+        out.insert(Key::Str(PhpStr::from(*name)), v);
+    }
+    Ok(Value::Array(Rc::new(out)))
 }
 
 fn ini_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

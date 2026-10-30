@@ -80,6 +80,19 @@ foreach ($all_ini as $name => $value) {
 }
 echo "];\n";
 
+// ini_get_all() reports who may change each directive (PHP_INI_USER 1,
+// PHP_INI_PERDIR 2, PHP_INI_SYSTEM 4, PHP_INI_ALL 7).
+echo "\n/// Each directive's access level, as ini_get_all() reports it.\n";
+echo "pub static INI_ACCESS: &[(&str, u8)] = &[\n";
+foreach (ini_get_all(null, true) as $name => $info) {
+    $ext = $owner[$name];
+    if ($ext !== 'core' && !in_array($ext, array_map('strtolower', EXTENSIONS), true)) {
+        continue;
+    }
+    printf("    (\"%s\", %d),\n", $name, $info['access']);
+}
+echo "];\n";
+
 // opcache_get_configuration() reports each directive with a type.
 echo "\n/// The type opcache_get_configuration() gives each directive: b(ool), i(nt), f(loat), s(tring).\n";
 echo "pub static OPCACHE_DIRECTIVE_TYPES: &[(&str, char)] = &[\n";
