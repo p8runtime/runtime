@@ -56,6 +56,7 @@ pub mod extensions {
     /// PDO's core; register it before the drivers.
     pub use p8_ext_pdo::EXTENSION as PDO;
     pub use p8_ext_pdo_sqlite::EXTENSION as PDO_SQLITE;
+    pub use p8_ext_pdo_pgsql::EXTENSION as PDO_PGSQL;
     /// What the built-in web server adds (register it after STANDARD).
     pub use p8_ext_standard::server::EXTENSION as SERVER;
 }

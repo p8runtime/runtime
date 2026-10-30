@@ -1,9 +1,11 @@
 bool(true)
 bool(true)
 bool(true)
-array(1) {
+array(2) {
   [0]=>
   string(6) "sqlite"
+  [1]=>
+  string(5) "pgsql"
 }
 string(3) "PDO"
 string(6) "sqlite"

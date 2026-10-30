@@ -85,6 +85,13 @@ pub static PDO_CONSTANTS: &[(&str, Constant)] = &[
     ("SQLITE_OPEN_CREATE", Constant::Int(4)),
     ("SQLITE_ATTR_READONLY_STATEMENT", Constant::Int(1001)),
     ("SQLITE_ATTR_EXTENDED_RESULT_CODES", Constant::Int(1002)),
+    // pdo_pgsql adds these to PDO itself.
+    ("PGSQL_ATTR_DISABLE_PREPARES", Constant::Int(1000)),
+    ("PGSQL_TRANSACTION_IDLE", Constant::Int(0)),
+    ("PGSQL_TRANSACTION_ACTIVE", Constant::Int(1)),
+    ("PGSQL_TRANSACTION_INTRANS", Constant::Int(2)),
+    ("PGSQL_TRANSACTION_INERROR", Constant::Int(3)),
+    ("PGSQL_TRANSACTION_UNKNOWN", Constant::Int(4)),
 ];
 
 /// What `Pdo\Sqlite` adds (its own names for the same values).
@@ -96,4 +103,15 @@ pub static SQLITE_CONSTANTS: &[(&str, Constant)] = &[
     ("ATTR_OPEN_FLAGS", Constant::Int(1000)),
     ("ATTR_READONLY_STATEMENT", Constant::Int(1001)),
     ("ATTR_EXTENDED_RESULT_CODES", Constant::Int(1002)),
+];
+
+/// What `Pdo\Pgsql` adds.
+pub static PGSQL_CONSTANTS: &[(&str, Constant)] = &[
+    ("ATTR_DISABLE_PREPARES", Constant::Int(1000)),
+    ("ATTR_RESULT_MEMORY_SIZE", Constant::Int(1001)),
+    ("TRANSACTION_IDLE", Constant::Int(0)),
+    ("TRANSACTION_ACTIVE", Constant::Int(1)),
+    ("TRANSACTION_INTRANS", Constant::Int(2)),
+    ("TRANSACTION_INERROR", Constant::Int(3)),
+    ("TRANSACTION_UNKNOWN", Constant::Int(4)),
 ];

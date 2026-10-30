@@ -25,3 +25,4 @@ p8-ext-fileinfo = { path = "../p8-ext-fileinfo" }
 p8-ext-session = { path = "../p8-ext-session" }
 p8-ext-pdo = { path = "../p8-ext-pdo" }
 p8-ext-pdo-sqlite = { path = "../p8-ext-pdo-sqlite" }
+p8-ext-pdo-pgsql = { path = "../p8-ext-pdo-pgsql" }
