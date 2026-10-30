@@ -128,6 +128,11 @@ pub fn register_wrapper(scheme: &'static str, open: WrapperOpen) {
     }
 }
 
+/// The schemes extensions registered, in the order they did.
+pub fn wrapper_schemes() -> Vec<&'static str> {
+    WRAPPERS.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(s, _)| *s).collect()
+}
+
 /// The opener for `scheme` (lowercase), if an extension registered one.
 pub fn wrapper(scheme: &str) -> Option<WrapperOpen> {
     WRAPPERS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(s, _)| *s == scheme).map(|(_, open)| *open)

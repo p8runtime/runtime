@@ -974,10 +974,10 @@ pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
 }
 
 /// stream_get_wrappers: the URL schemes p8's streams open, in PHP's order
-/// (no https, ftp(s) or phar yet).
+/// (no https, ftp(s) or phar yet), then those extensions registered (zip).
 fn stream_get_wrappers(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let names = ["compress.zlib", "php", "file", "glob", "data", "http"];
-    Ok(Value::Array(Rc::new(PhpArray::from_list(names.iter().map(|n| Value::str(*n)).collect()))))
+    let names = ["compress.zlib", "php", "file", "glob", "data", "http"].into_iter().chain(p8_runtime::stream::wrapper_schemes());
+    Ok(Value::Array(Rc::new(PhpArray::from_list(names.map(Value::str).collect()))))
 }
 
 /// opendir: a stream whose lines are the directory's entries (as readdir gives).
