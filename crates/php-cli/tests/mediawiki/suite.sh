@@ -54,9 +54,12 @@ in_php() {
         docker run --rm -i --user "$(id -u):$(id -g)" --tmpfs "${top}:uid=$(id -u),gid=$(id -g),exec,size=4g" "$image" \
             bash -c "mkdir -p '$PWD' '$work/db' && cd '$PWD' && tar xf - 2>/dev/null && $1"
 }
-# The wiki's settings, once.
+# The wiki's settings, once (an earlier one in the checkout stops the installer).
 if [ ! -f "$work/LocalSettings.php" ]; then
-    in_php "php maintenance/run.php install --dbtype sqlite --dbpath '$work/db' --server http://localhost --scriptpath '' --pass p8p8p8p8p8p8 p8wiki Admin >&2 && cat LocalSettings.php" > "$work/LocalSettings.php"
+    [ -f LocalSettings.php ] && find LocalSettings.php -delete
+    in_php "php maintenance/run.php install --dbtype sqlite --dbpath '$work/db' --server http://localhost --scriptpath '' --pass p8p8p8p8p8p8 p8wiki Admin >&2 && cat LocalSettings.php" > "$work/LocalSettings.php.new"
+    # (in place only once the install succeeded)
+    mv "$work/LocalSettings.php.new" "$work/LocalSettings.php"
 fi
 cp "$work/LocalSettings.php" LocalSettings.php
 # The PHPUnit configuration MediaWiki generates (composer phpunit:config).

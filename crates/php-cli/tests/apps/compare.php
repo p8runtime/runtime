@@ -14,13 +14,29 @@
 // tried in order).
 [, $php_log, $p8_log, $out, $commit, $php_version, $app, $app_version, $suite_name, $source, $tests_root] = $argv;
 
+// Pest names a test by its description in its JUnit log ("it does x",
+// with the file as "path::description") but by the method it generates in
+// PHPUnit's TeamCity log (Pest\Support\Str::evaluable: "__pest_evaluable_it_does_x",
+// in a class under the P\ namespace): PHP's names are mapped to the latter.
+function pest_evaluable(string $description): string
+{
+    $at = strpos($description, ' with data set ');
+    [$head, $tail] = $at === false ? [$description, ''] : [substr($description, 0, $at), substr($description, $at)];
+    $code = '__pest_evaluable_' . str_replace(' ', '_', str_replace('_', '__', $head));
+    return preg_replace('/[^a-zA-Z0-9_\x80-\xff]/', '_', $code) . $tail;
+}
+
 // PHP's outcomes, and each test's group: its directory (or file) under
 // TESTS_ROOT.
 $php = [];
 $group = [];
 $xml = simplexml_load_file($php_log) or exit("$php_log: not a JUnit log\n");
 foreach ($xml->xpath('//testcase') as $case) {
-    $key = $case['class'] . '::' . $case['name'];
+    $name = (string) $case['name'];
+    if (str_contains((string) $case['file'], '::')) {
+        $name = pest_evaluable($name);
+    }
+    $key = $case['class'] . '::' . $name;
     $kids = array_map(fn ($c) => $c->getName(), iterator_to_array($case->children(), false));
     $php[$key] = match (true) {
         in_array('error', $kids, true) => 'error',
@@ -56,6 +72,9 @@ foreach (file($p8_log) as $line) {
     if ($m[1] === 'testStarted') {
         $hint = $attrs['locationHint'] ?? '';
         $class = ltrim(explode('::', $hint)[1] ?? '', '\\');
+        if (str_starts_with($class, 'P\\') && str_starts_with($attrs['name'], '__pest_evaluable_')) {
+            $class = substr($class, 2);
+        }
         $current = "$class::{$attrs['name']}";
         $p8[$current] = 'pass';
     } elseif ($m[1] === 'testFailed' && $current !== null) {
