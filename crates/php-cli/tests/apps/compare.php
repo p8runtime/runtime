@@ -45,7 +45,8 @@ foreach ($xml->xpath('//testcase') as $case) {
         in_array('warning', $kids, true) => 'warning',
         default => 'pass',
     };
-    $file = (string) $case['file'];
+    // (Pest's file is "path::description": its group is the path's.)
+    $file = explode('::', (string) $case['file'])[0];
     $rel = basename($file);
     foreach (explode(',', $tests_root) as $root) {
         if (($at = strpos($file, $root)) !== false) {
