@@ -1,0 +1,59 @@
+0	string/t		Relay-Version: 	old news text
+!:mime	message/rfc822
+0	string/t		#!\ rnews	batched news text
+!:mime	message/rfc822
+0	string/t		N#!\ rnews	mailed, batched news text
+!:mime	message/rfc822
+0	string/t		Forward\ to 	mail forwarding text
+!:mime	message/rfc822
+0	string/t		Pipe\ to 	mail piping text
+!:mime	message/rfc822
+0	string/tc		delivered-to:	SMTP mail text
+!:mime	message/rfc822
+0	string/tc		return-path:	SMTP mail text
+!:mime	message/rfc822
+0	string/t		Path:		news text
+!:mime	message/news
+0	string/t		Xref:		news text
+!:mime	message/news
+0	string/t		From:		news or mail text
+!:mime	message/rfc822
+0	string/t		Date:		news or mail text
+!:mime	message/rfc822
+0	string/t		Article 	saved news text
+!:mime	message/news
+0	string/b		BABYL\ OPTIONS:	Emacs RMAIL
+!:mime	message/x-gnu-rmail
+!:ext	/
+0	string/t		Received:	RFC 822 mail text
+!:mime	message/rfc822
+0	string/t		MIME-Version:	MIME entity text
+0	lelong		0x223E9F78	Transport Neutral Encapsulation Format (TNEF)
+!:mime	application/vnd.ms-tnef
+!:ext	tnef/dat
+>6	ubyte		!1		\b, 1st level %#2.2x
+>7	ubelong		!0x06900800	\b, 1st id %#8.8x
+>7	ubelong		=0x06900800
+>>11	ulelong		!4		\b, TnefVersion length %x
+>>15	ulelong		!0x00010000h	\b, version %#8.8x
+>>19	uleshort	!1		\b, checksum %#4.4x
+>>21	ubyte		!1		\b, level %#2.2x
+>>22	ubelong		=0x07900600	\b, OEM codepage
+>>>26	ulelong		=8		
+>>>>30	ulelong		x		%u
+>>>>34	ulelong		!0		and %u
+>>>>38	uleshort	x		(checksum %#x)
+>>40	ubyte		!1		\b, level %u
+>>41	ubelong		=0x08800700	\b, MessageAttribute
+>>>45	pstring/l	x		"%s"
+0	string		*mbx*		MBX mail folder
+0	string		\241\002\213\015skiplist\ file\0\0\0	Cyrus skiplist DB
+0	string		\241\002\213\015twoskip\ file\0\0\0\0	Cyrus twoskip DB
+0	string	JAM\0			JAM message area header file
+>12	leshort >0			(%d messages)
+0       string CyrSBytecode     Cyrus sieve bytecode data,
+>12     belong =1       version 1, big-endian
+>12     lelong =1       version 1, little-endian
+>12     belong x        version %d, network-endian
+0	string	CRYPTED\003\007		Dovecot encrypted message
+>9	byte	x			\b, dcrypt version %d

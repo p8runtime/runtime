@@ -1,0 +1,9 @@
+0	string	GSTIm\0\0	GNU SmallTalk
+>7	byte&1	=0		LE image version
+>>10	byte	x		%d.
+>>9	byte	x		\b%d.
+>>8	byte	x		\b%d
+>7	byte&1	=1		BE image version
+>>8	byte	x		%d.
+>>9	byte	x		\b%d.
+>>10	byte	x		\b%d

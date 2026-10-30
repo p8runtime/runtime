@@ -1,0 +1,12 @@
+0	search/8192	(input,		Pascal source text
+!:mime	text/x-pascal
+0	string	PPU	Pascal unit
+>3	string	x	\b, version %s
+0	string/b	Type
+>4	string		D2		Dan Bricklin's Demo 2 demo
+!:ext	dbd
+>4	string		T2		Turbo Pascal TOUR data
+!:mime	application/x-borland-cbt
+!:ext	cbt
+>4	default		x		Dan Bricklin's Demo demo (generic)
+!:ext	dbd

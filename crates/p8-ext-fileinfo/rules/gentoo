@@ -1,0 +1,52 @@
+0	string	AUX
+>0	use	gentoo-manifest
+0	string	DATA
+>0	use	gentoo-manifest
+0	string	DIST
+>0	use	gentoo-manifest
+0	string	EBUILD
+>0	use	gentoo-manifest
+0	string	MANIFEST
+>0	use	gentoo-manifest
+0	string	-----BEGIN\040PGP\040SIGNED\040MESSAGE-----
+>34	search/32	\n\n
+>>&0	string	AUX
+>>>&0	use	gentoo-manifest
+>>&0	string	DATA
+>>>&0	use	gentoo-manifest
+>>&0	string	DIST
+>>>&0	use	gentoo-manifest
+>>&0	string	EBUILD
+>>>&0	use	gentoo-manifest
+>>&0	string	MANIFEST
+>>>&0	use	gentoo-manifest
+0	name	gentoo-manifest
+>&0	regex	[[:space:]]+[[:print:]]+[[:space:]]+[[:digit:]]+[[:space:]]+[[:alnum:]]+[[:space:]]+[[:xdigit:]]{32}	Gentoo Manifest (GLEP 74)
+!:mime	application/vnd.gentoo.manifest
+0	search/512	EAPI=
+>0	regex		.*\n[\040\t]*EAPI=["']?	Gentoo ebuild
+>>&0	regex		[[:alnum:]+_.-]+	\b, EAPI %s
+!:mime	application/vnd.gentoo.ebuild
+0	search/512	@ECLASS:\040		Gentoo eclass
+>&0	string		x			%s
+!:mime	application/vnd.gentoo.eclass
+0	string		\<?xml
+>0	search/512	\<catmetadata		Gentoo category metadata file
+!:mime	application/vnd.gentoo.catmetadata+xml
+>0	search/512	\<pkgmetadata		Gentoo package metadata file
+!:mime	application/vnd.gentoo.pkgmetadata+xml
+257	string		ustar
+>0	search/100	/gpkg-1\0
+>>0	regex		[^/]+		Gentoo GLEP 78 (GPKG) binary package for "%s"
+!:mime	application/vnd.gentoo.gpkg
+!:ext	tar
+>>>124	string	00000000000\0
+>>>>512	search/100	.tar.
+>>>>>&0	string		gz\0		using gzip compression
+>>>>>&0	string		bz2\0		using bzip2 compression
+>>>>>&0	string		lz\0		using lzip compression
+>>>>>&0	string		lz4\0		using lz4 compression
+>>>>>&0	string		lzo\0		using lzo compression
+>>>>>&0	string		xz\0		using xz compression
+>>>>>&0	string		zst\0		using zstd compression
+>>>>(636.o+1024)	search/611	.sig\0	\b, signed

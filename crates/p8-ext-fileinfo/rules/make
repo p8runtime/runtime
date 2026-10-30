@@ -1,0 +1,10 @@
+0	regex/100l	\^(CFLAGS|VPATH|LDFLAGS|all:|\\.PRECIOUS)	makefile script text
+!:mime	text/x-makefile
+!:strength -15
+0	regex/100l	\^\\.(BEGIN|endif|include)	BSD makefile script text
+!:mime	text/x-makefile
+!:ext	/mk
+!:strength -10
+0	regex/100l	\^SUBDIRS[[:space:]]+=	automake makefile script text
+!:mime	text/x-makefile
+!:strength -15

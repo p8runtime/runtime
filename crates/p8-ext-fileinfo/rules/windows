@@ -1,0 +1,736 @@
+0	string	\xCF\xAD\x12\xFE
+>0x7C	ulelong	>0			MS Outlook Express DBX file
+!:mime		application/x-ms-dbx
+!:ext	dbx
+>>4	byte	=0xC5			\b, message database
+>>4	byte	=0xC6			\b, folder database
+>>4	byte	=0xC7			\b, account information
+>>4	byte	=0x30			\b, offline database
+>>20	ulequad	!0x0000000500000005	\b, version
+>>>24	ulelong	x			%u
+>>>20	ulelong	x			\b.%u
+>>0x7C	ulelong	x			\b, ~ %u bytes
+>>0x5c	ulelong	x			\b, highest ID %#x
+>>0xC4	ulelong	x			\b, %u item
+>>0xC4	ulelong	!1			\bs
+>>0xE4	ulelong	>0			\b, index pointer %#x
+0	ubelong		0x0DF0ADBA	MS Outlook Nickfile
+!:mime		application/x-ms-nickfile
+!:ext	nk2/dat/bak
+>4	ulelong		x		\b, probably version %u
+>8	ulelong		x		\b.%u
+>12	ulelong		x		\b, %u items
+>16	ulelong		x		\b, %u entries
+>20	uleshort	x		\b, value type %#4.4x
+>22	uleshort	x		\b, entry type %#4.4x
+>20	uleshort	=0x001F
+>>36	ulelong		x		\b, %u bytes
+>>40	lestring16	x		"%s"
+0	string		PAGE
+>4	string		DUMP		MS Windows 32bit crash dump
+!:mime	application/x-ms-dmp
+!:ext	dmp
+>>8	ulelong		x		\b, version %u
+>>12	ulelong		x		\b.%u
+>>32	ulelong		!0x14c		\b, MachineImageType %#x
+>>36	ulelong		x		\b, %u processors
+>>0x05c	byte            0		\b, no PAE
+>>0x05c	byte            1		\b, PAE
+>>0xf88	lelong		1		\b, full dump
+>>0xf88	lelong		2		\b, kernel dump
+>>0xf88	lelong		3		\b, small dump
+>>0xf88	lelong		>3		\b, dump type (%#x)
+>>0x068	lelong		x		\b, %d pages
+>4	string		DU64		MS Windows 64bit crash dump
+!:mime	application/x-ms-dmp
+!:ext	dmp
+>>8	ulelong		x		\b, version %u
+>>12	ulelong		x		\b.%u
+>>48	ulelong		!0x8664		\b, MachineImageType %#x
+>>52	ulelong		x		\b, %u processors
+>>0xf98 ulelong	x		\b,
+>>>0xf98	lelong		5		full dump
+>>>0xf98	lelong		6		kernel dump
+>>>0xf98	lelong		4		small dump
+>>>0xf98	default		x		DumpType
+>>>>0xf98 	ulelong		x		(%#x)
+>>0x090	lequad		x		\b, %lld pages
+0	string		ElfFile\0	MS Windows
+!:mime		application/x-ms-evtx
+!:ext		evtx
+>0x24	ulelong		=0x00030001	Vista-8.1 Event Log
+>0x24	ulelong		!0x00030001	10-11 Event Log, version 
+>>0x26	uleshort	x		%u
+>>0x24	uleshort	x		\b.%u
+>0x2a	leshort		x		\b, %d chunks
+>>0x10	lelong		x		\b (no. %d in use)
+>0x18	lelong		>1		\b, next record no. %d
+>0x18	lelong		=1		\b, empty
+>0x78	lelong		&1		\b, DIRTY
+>0x78	lelong		&2		\b, FULL
+0	ubyte			0
+>0	search/0x699087/b	.\0e\0t\0l\0\0\0
+>>0	use			trace-etl
+0	name		trace-etl
+>0	ubyte			x		Windows Event Trace Log
+!:mime		application/etl
+!:ext		etl
+>0	search/0x2b4/sb	:\0\x5c\0	
+>>&-2	lestring16		x		"%s"
+0	string			$SDI
+>4	string			0001		System Deployment Image
+!:mime	application/x-ms-sdi
+!:ext	sdi
+>>8	ulequad			!0		\b, MDBtype %#llx
+>>16	ulequad			!0		\b, BootCodeOffset %#llx
+>>24	ulequad			!0		\b, BootCodeSize %#llx
+>>32	ulequad			!0		\b, VendorID %#llx
+>>40	ulequad			!0		\b, DeviceID %#llx
+>>48	ulequad			!0		\b, DeviceModel %#llx
+>>>56	ulequad			!0		\b%llx
+>>64	ulequad			!0		\b, DeviceRole %#llx
+>>80	ulequad			!0		\b, RuntimeGUID %#llx
+>>>88	ulequad			!0		\b%llx
+>>96	ulequad			!0		\b, RuntimeOEMrev %#llx
+>>112	ulequad			!0		\b, PageAlignment %llu
+>>0x1f8	ulequad			x		\b, checksum %#llx
+>>0x400	string			>\0		\b, type %-3.8s
+>>>0x420	ulequad		!0		(%#llx)
+>>>0x408	ulequad		!0		%#llx attributes
+>>>0x410	ulequad		x		at %#llx
+>>>0x418	ulequad		>0		%llu bytes 
+>>>>(0x410.l)	indirect	x
+>>0x440		string		>\0		\b, type %-3.8s
+>>>0x428	ulequad		!0		(%#llx)
+>>>0x448	ulequad		!0		%#llx attributes
+>>>0x450	ulequad		x		at %#llx
+>>>0x458	ulequad		>0		%llu bytes 
+>>>>(0x450.l)	indirect	x
+>>0x480		string		>\0		\b, type %-3.8s
+0		ulelong		<5
+>8		ulelong		=0x00010000
+>>0		use		bootstat-dat
+0	name		bootstat-dat
+>0		ulelong		x		Windows boot log
+!:mime	application/x-ms-dat
+!:ext	dat
+>0		ulelong		>2		\b, version %u
+>4		ulelong		!0x10		\b, header size %#x
+>8		ulelong		!0x00010000	\b, file size %#x
+>0xc		ulelong		x		\b, %#x valid bytes
+>(0x4.l-1)	ubyte		x
+>>&0		use		bootstat-entry
+>(0x4.l-1)	ubyte		x
+>>&(&0x18.l-1)	ubyte		x
+>>>&0		use		bootstat-entry
+0	name		bootstat-entry
+>0x18		ulelong		x		\b; entry size %#x
+>0x00		ulelong		x		\b, %#x seconds
+>0x04		ulelong		!0		\b, not null %u
+>0x08		ubequad		!0		\b, GUID %#16.16llx
+>>0x10		ubequad		x		\b%16.16llx
+>0x1C		ulelong		!1		\b, severity %#x
+>0x20		ulelong		!2		\b, version %u
+>0x24		ulelong		!1
+>>0x24		ulelong		!0x11		\b, event %#x
+>0x24		ulelong		=0x1		\b, Init
+>>0x34		uleshort	!0		\b, not null %u
+>>0x36		uleshort	!7		\b, not seven %u
+>>0x28		uleshort	x		%u
+>>0x2A		uleshort	x		\b-%u
+>>0x2C		uleshort	x		\b-%u
+>>0x2E		uleshort	x		%u
+>>0x30		uleshort	x		\b:%u
+>>0x32		uleshort	x		\b:%u
+>0x24		ulelong		=0x11		\b, launched
+>>0x38		uleshort	!0		\b, type %u
+>>0x3C		lestring16	x		%s
+0	lestring16	Version=	
+>22	lestring16	EventType	Windows Error Report
+!:mime	text/plain
+!:ext	wer
+0	string		\120\115\103\103	MS Windows 3.1 group files
+0	name				help-ver-date
+>0	leshort		0x036C
+>>4	leshort		1		Windows
+!:mime	application/winhelp
+!:ext	hlp
+>>>2	leshort		0x0F		3.x
+>>>2	leshort		0x15		3.0
+>>>2	leshort		0x21		3.1
+>>>2	leshort		0x27		x.y
+>>>2	leshort		0x33		95
+>>>2	default		x		y.z
+>>>>2	leshort		x		%#x
+>>>2	leshort		x		help
+>>>6	ldate		x		\b, %s
+0	lelong		0x00035f3f
+>(4.l+9)	uleshort	0x293B		MS
+>>0xD4		string	=\x62\x6D\x66\x01\x00	Windows help annotation
+!:mime	application/x-winhelp
+!:ext	ann
+>>0xD4		string	!\x62\x6D\x66\x01\x00
+>>>(4.l+0x65)	string	=|Pete			Windows help Global Index
+!:mime	application/x-winhelp
+!:ext	gid
+>>>(4.l+0x65)		string		!|Pete
+>>>>16			search/0x49AF/s	\x6c\x03
+>>>>>&0			use 		help-ver-date
+>>>>>&4			leshort		!1
+>>>>>>&0		search/0x69AF/s	\x6c\x03
+>>>>>>>&0		use 		help-ver-date
+>>>>>>>&4		leshort		!1
+>>>>>>>>&0		search/0x49AF/s	\x6c\x03
+>>>>>>>>>&0		use 		help-ver-date
+>>>>>>>>>&4		leshort		!1
+>>>>>>>>>>&0		search/0x49AF/s	\x6c\x03
+>>>>>>>>>>>&0		use 		help-ver-date
+>>>>>>>>>>>&4		leshort		!1
+>>>>>>>>>>>>&0		search/0x49AF/s	\x6c\x03
+>>>>>>>>>>>>>&0		use 		help-ver-date
+>>>>>>>>>>>>>&4		leshort		!1
+>>>>>>>>>>>>>>&0	search/0x49AF/s	\x6c\x03
+>>>>>>>>>>>>>>>&0	use 		help-ver-date
+>>>>>>>>>>>>>>>&4	leshort		!1
+>>>>>>>>>>>>>>>>&0	search/0x49AF/s	\x6c\x03
+>>>>>>>>>>>>>>>>>&0	use 		help-ver-date
+>>>>>>>>>>>>>>>>>&4	leshort		!1		Windows y.z help
+!:mime	application/winhelp
+!:ext	hlp
+>>>>16			search/0x49AF/s	\x6c\x03
+>>>>16	default				x	Windows help Bookmark
+!:mime	application/x-winhelp
+!:ext	bmk
+>>12	lelong			x		\b, %d bytes
+0		regex		\^(:|;)
+>0		search/45	:Base
+>>&0				use 		cnt-name
+>0		search/45	:Base
+>0		default		x
+>>0		search/45	:Title
+>>>&0				use 		cnt-name
+0	name				cnt-name
+>0     string		\040
+>>1	regex/c		\^([^\xd>]*|.*\\.hlp)	MS Windows help file Content, based "%s"
+!:mime	text/plain
+!:apple	????TEXT
+!:ext	cnt
+0	string		tfMR			MS Windows help Full Text Search index
+!:mime application/x-winhelp-fts
+!:ext	fts
+>16	string		>\0			for "%s"
+0	string		HyperTerminal\040
+>14	string		1.0\ --\ HyperTerminal\ data\ file	MS Windows HyperTerminal profile
+!:mime	application/x-ms-ht
+!:ext	ht
+0	string		\114\0\0\0\001\024\002\0\0\0\0\0\300\0\0\0\0\0\0\106	MS Windows shortcut
+!:mime	application/x-ms-shortcut
+!:ext	lnk
+>20	lelong&1	1	\b, Item id list present
+>20	lelong&2	2	\b, Points to a file or directory
+>20	lelong&4	4	\b, Has Description string
+>20	lelong&8	8	\b, Has Relative path
+>20	lelong&16	16	\b, Has Working directory
+>20	lelong&32	32	\b, Has command line arguments
+>20	lelong&64	64	\b, Icon
+>>56	lelong		x	\b number=%d
+>20	lelong&128	128	\b, Unicoded
+>20	lelong&256	256	\b, NoLinkInfo
+>20	lelong&512	512	\b, HasEnvironment
+>>76	search/1972		\x14\x03\x00\x00\x01\x00\x00\xa0
+>>>&260	lestring16	x	"%s"
+>20	lelong&1024	1024	\b, RunInSeparateProcess
+>20	lelong&4096	4096	\b, HasDarwinID
+>>76	search/1972		\x14\x03\x00\x00\x06\x00\x00\xa0
+>>>&260	lestring16	x	"%s"
+>20	lelong&8192	8192	\b, RunAsUser
+>20	lelong&16384	16384	\b, HasExpIcon
+>>76	search/1972		\x14\x03\x00\x00\x07\x00\x00\xa0
+>>>&260	lestring16	x	"%s"
+>20	lelong&32768	32768	\b, NoPidlAlias
+>20	lelong&131072	131072	\b, RunWithShimLayer
+>20	lelong&262144	262144	\b, ForceNoLinkTrack
+>20	lelong&262144	0
+>>76	search/1972		\x60\x00\x00\x00\x03\x00\x00\xa0\x58\x00\x00\x00\0\0\0\0
+>>>&0	string		x			\b, MachineID %0.16s
+>20	lelong&524288	524288	\b, EnableTargetMetadata
+>20	lelong&1048576	1048576	\b, DisableLinkPathTracking
+>20	lelong&2097152	2097152	\b, DisableKnownFolderTracking
+>20	lelong&2097152	0
+>>76	search/1972		\x1c\x00\x00\x00\x0B\x00\x00\xa0
+>>>&0	guid	x			KnownFolderID %s
+>20	lelong&4194304	4194304	\b, DisableKnownFolderAlias
+>20	lelong&8388608	8388608	\b, AllowLinkToLink
+>20	lelong&16777216 16777216	\b, UnaliasOnSave
+>20	lelong&33554432	33554432	\b, PreferEnvironmentPath
+>20	lelong&67108864	67108864	\b, KeepLocalIDListForUNCTarget
+>24	lelong&1	1	\b, Read-Only
+>24	lelong&2	2	\b, Hidden
+>24	lelong&4	4	\b, System
+>24	lelong&8	8	\b, Reserved1
+>24	lelong&16	16	\b, Directory
+>24	lelong&32	32	\b, Archive
+>24	lelong&64	64	\b, Reserved2
+>24	lelong&128	128	\b, Normal
+>24	lelong&256	256	\b, Temporary
+>24	lelong&512	512	\b, Sparse
+>24	lelong&1024	1024	\b, Reparse point
+>24	lelong&2048	2048	\b, Compressed
+>24	lelong&4096	4096	\b, Offline
+>24	lelong&8192	8192	\b, NeedIndexed
+>24	lelong&16384	16384	\b, Encrypted
+>28	leqwdate	!0	\b, ctime=%s
+>36	leqwdate	!0	\b, atime=%s
+>44	leqwdate	!0	\b, mtime=%s
+>52	lelong		x	\b, length=%u, window=
+>60	lelong		x
+>>60	lelong		3	\bshowmaximized
+>>60	lelong		7	\bshowminnoactive
+>>60	default		x	\bnormal
+>64	uleshort	>0	\b, hot key
+>>64	ubyte		x	%c
+>>65	ubyte&1		1	\b+SHIFT
+>>65	ubyte&2		2	\b+CONTROL
+>>65	ubyte&4		4	\b+ALT
+>20	lelong&1	1
+>>76	uleshort	x	\b, IDListSize %#4.4x
+>>78	use		lnk-item
+>>(78.s+78)	uleshort	>0
+>>>(78.s+78)	use			lnk-item
+>>>&(&-2.s-2)	uleshort	>0
+>>>>&-2		use			lnk-item
+>>>>&(&-2.s-2)	uleshort	>0
+>>>>>&-2	use			lnk-item
+>20	lelong&2	2
+>>20	lelong&1	=0
+>>>76	use			lnk-info
+>>20	lelong&1	=1
+>>>76	uleshort	>0
+>>>>(76.s+78)	ubelong	x
+>>>>>&-8	ubelong	x
+>>>>>>&(&16.l) string	x	\b, LocalBasePath "%s"
+0	name		lnk-item
+>0	uleshort	>0
+>>2	ubyte		=0x1f	\b, Root folder
+>>>4	guid		x	"%s"
+>>2	ubyte		=0x2f	\b, Volume
+>>>3	string		x	"%s"
+0	name		lnk-info
+>0	ulelong		x	\b, LinkInfoSize %#x
+>4	ulelong		x	\b, LinkInfoHeaderSize %#x
+>8	ulelong&1 	1	\b, VolumeIDAndLocalBasePath
+>>12	ulelong	  	x	\b, VolumeIDOffset %#x
+>>16	ulelong		x	\b, LocalBasePathOffset %#x
+>>4	ulelong		>23
+>>>28	ulelong		x	\b, LocalBasePathOffsetUnicode %#x
+>8	ulelong&2 	2	\b, CommonNetworkRelativeLinkAndPathSuffix
+>>20	ulelong		x	\b, CommonNetworkRelativeLinkOffset %#x
+>24	ulelong		x	\b, CommonPathSuffixOffset %#x
+>4	ulelong		>23
+>>32	ulelong		x	\b, CommonPathSuffixOffsetUnicode %#x
+0	lelong		0x4E444221
+>14	ubyte	x		Microsoft Outlook
+!:mime		application/vnd.ms-outlook
+>>8	leshort		0x4142			Personal Address Book
+!:ext	pab
+>>8	leshort		0x4D53			Personal Storage
+!:ext	pst
+>>8	leshort		0x4F53			Offline Storage
+!:ext	ost
+>>10	uleshort	x			(
+>>10	leshort		<0x10			\b<=2002, ANSI,
+>>10	leshort		>0x14			\b>=2003, Unicode,
+>>10	uleshort	x			version %u)
+>>14	ubyte		>1			\b, bPlatformCreate=%u
+>>15	ubyte		>1			\b, bPlatformAccess=%u
+>>16	ulelong		!0			\b, dwReserved1=%#x
+>>20	ulelong		!0			\b, dwReserved2=%#x
+>>10	uleshort	<16
+>>>32		ulelong	!0			\b, dwUnique=%#x
+>>>164		ulelong	!0			\b, dwReserved=%#x
+>>>168		ulelong	x			\b, %u bytes
+>>>460		ubyte	!0x80			\b, bSentinel=%#x
+>>>461		ubyte	>0			\b, bCryptMethod=%u
+>>10	uleshort >20
+>>>24		ulequad	!0x0000000100000004	\b, bidUnused=%#16.16llx
+>>>40		ulelong	!0			\b, dwUnique=%#x
+>>>184		ulequad	x			\b, %llu bytes
+>>>512		ubyte	!0x80			\b, bSentinel=%#x
+>>>513		ubyte	>0			\b, bCryptMethod=%u
+>>>524		ulelong		x		\b, CRC32 %#x
+0	string		\164\146\115\122\012\000\000\000\001\000\000\000	MS Windows help cache
+0	string	Client\ UrlCache\ MMF 	Internet Explorer cache file
+>20	string	>\0			version %s
+0	string		regf		MS Windows registry file, NT/2000 or above
+0	string		CREG		MS Windows 95/98/ME registry file
+0	string		SHCC3		MS Windows 3.1 registry file
+0	string		REGEDIT
+>7	search/3	\n			Windows Registry text
+!:mime	text/x-ms-regedit
+!:ext	reg
+>>0	string		REGEDIT4		(Win95 or above)
+0	string		Windows\ Registry\ Editor\ 
+>&0	string		Version\ 5.00\r\n\r\n	Windows Registry text (Win2K or above)
+!:mime	text/x-ms-regedit
+!:ext	reg
+2	lestring16	Windows\ Registry\ Editor\ 
+>0x32	lestring16	Version\ 5.00\r\n\r\n	Windows Registry little-endian text (Win2K or above)
+!:mime	text/x-ms-regedit
+!:ext	reg
+0	string	WINE\ REGISTRY\ Version\ 	WINE registry text
+>&0	string	x				\b, version %s
+!:mime	text/x-wine-extension-reg
+!:ext	reg
+0	ubeshort	0x0D0A
+>0	use		ini-file
+0	string		;
+>1	search/3548	END\040CATEGORY
+>1	default		x
+>>0	use		ini-file
+0	string		[
+>0	use		ini-file
+0	name		ini-file
+>0	search/8192	[
+>>&0	regex/c		\^autorun
+>>>&0	string		=]\r\n[					Total commander directory treeinfo.wc
+!:mime text/plain
+!:ext	wc
+>>>&0	string		!]\r\n[					Microsoft Windows Autorun file
+!:mime application/x-setupscript
+!:ext	inf
+>>&0	regex/c		\^(version|strings)]				Windows setup INFormation
+!:mime	application/x-setupscript
+!:ext	inf
+>>&0	regex/c		\^(WinsockCRCList|OEMCPL)]			Windows setup INFormation
+!:mime	application/x-setupscript
+!:ext	inf
+>>&0	regex/1024c	\^(\\.ShellClassInfo|DeleteOnCopy|LocalizedFileNames)]	Windows desktop.ini
+!:mime application/x-wine-extension-ini
+>>&0	regex/c		\^don't\ load]					Windows CONTROL.INI
+!:mime application/x-wine-extension-ini
+!:ext	ini
+>>&0	regex/c		\^(ndishlp\\$|protman\\$|NETBEUI\\$)]		Windows PROTOCOL.INI
+!:mime application/x-wine-extension-ini
+!:ext	ini
+>>&0	regex/c		\^(windows|Compatibility|embedding)]		Windows WIN.INI
+!:mime application/x-wine-extension-ini
+!:ext	ini
+>>&0	regex/c		\^(boot|386enh|drivers)]			Windows SYSTEM.INI
+!:mime application/x-wine-extension-ini
+!:ext	ini
+>>&0	regex/c		\^SafeList]					Windows IOS.INI
+!:mime application/x-wine-extension-ini
+!:ext	ini
+>>&0	regex/c		\^boot\x20loader]				Windows boot.ini
+!:mime application/x-wine-extension-ini
+!:ext	ini
+>>&0	regex/c		\^menu]						MS-DOS CONFIG.SYS
+!:ext	sys/dos/w40
+>>&0	regex/c		\^Paths]\r\n					MS-DOS MSDOS.SYS
+!:ext	sys/dos
+>>&0	regex/c		\^options]\r\n					Microsoft HTML Help Project
+!:mime text/plain
+!:ext	hhp
+>>&0	regex/c		\^Windows\ (Latin|Cyrillic)			Windows codepage translator
+!:mime	text/x-ms-cpx
+!:ext	cpx
+>>&0	regex/c		\^Shell]\r\n					Windows Explorer Shell Command File
+!:mime	text/x-ms-scf
+!:ext	scf
+>>>1		search/128	IconFile=				\b, icon
+>>>>&0		string		x					"%s"
+>>&0	regex/c		\^SCF]\r\n					VIA setup configuration
+!:mime	text/x-via-scf
+!:ext	scf
+>>&0	regex/c		\^Languages]					InstallShield Language Identifier
+!:mime	text/x-installshield-lid
+!:ext	lid
+>>&0	regex/c		\^TagInfo]					TagInfo
+!:mime	text/x-ms-tag
+!:ext	tag
+>>&0	string		Flatpak\ Ref]					Flatpak repository reference
+!:mime	application/vnd.flatpak.ref
+!:ext	flatpakref
+>>&0	string		CloneCD]					CloneCD CD-image Description
+!:mime	text/x-ccd
+!:ext	ccd
+>>&0	default				x
+>>>&0	search/8192			[
+>>>>&0	string/c			version				Windows setup INFormation
+!:mime application/x-setupscript
+!:ext	inf
+>>>>&0	string				FileExplorer]			cdrtfe Project
+!:mime	text/x-cfp
+!:ext	cfp
+>>>>&0	default				x
+>>>>>&0	ubyte				x
+>>>>>>&-1	regex/T			\^([A-Za-z0-9_\(\)\ ]+)\]\r	Generic INItialization configuration [%-.40s
+!:mime	application/x-wine-extension-ini
+!:ext	ini/inf
+0	ubeshort		=0xFFFE
+>2	search/0x384A	E\0N\0D\0\040\0C\0A\0T\0E\0G\0O\0R\0Y\0
+>>0	use		windows-adm
+>2	default		x
+>>0	ubelong&0xFFff89FF	=0xFFFE0900
+>>>2	search/8192		[
+>>>>&3	lestring16		ersion]			Windows setup INFormation
+!:mime	application/x-setupscript
+!:ext	inf
+>>>>&3	lestring16		trings]			Windows setup INFormation
+!:mime	application/x-setupscript
+!:ext	inf
+>>>>&3	lestring16		ourceDisksNames]	Windows setup INFormation
+!:mime	application/x-setupscript
+!:ext	inf
+>>>>&3	default			x
+>>>>>&0	search/8192		\x0A\x00\x5b
+>>>>>>&3 lestring16		ersion]			Windows setup INFormation
+!:mime	application/x-setupscript
+!:ext	inf
+0	search/0x4E	CLASS\040
+>&0	string		MACHINE
+>>0	use		windows-adm
+>&0	string		USER
+>>0	use		windows-adm
+0	name		windows-adm	Windows Policy Administrative Template
+!:mime	text/x-ms-adm
+!:ext	adm
+>0	ubeshort		=0xFFFE
+>>2	lestring16		x		\b, 1st line "%s"
+>>>2	search/0x3A		\r\0\n\0
+>>>>&0	lestring16		x		\b, 2nd line "%s"
+>0	ubeshort		!0xFFFE
+>>0		string		x		\b, 1st line "%s"
+>>>&2		beshort		=0x0D0A
+>>>>&0		beshort		!0x0D0A		\b, 3th line
+>>>>>&-2	string		x		"%s"
+>>>&2		beshort		!0x0D0A		\b, 2nd line
+>>>>&-2		string		x		"%s"
+0		leshort&0xFcFc	=0x0000
+>0		leshort&0x0303	!0x0000
+>>2		uleshort	>0
+>>>2		uleshort	<3
+>>>>(20.l)	ubelong		>0x40004000
+>>>>>0	use	PreCompiledInf
+0	name	PreCompiledInf
+>0		uleshort	x	Windows Precompiled iNF
+!:mime	application/x-pnf
+!:ext	pnf
+>1		ubyte		x		\b, version %u
+>0		ubyte		x		\b.%u
+>0		uleshort	=0x0101		(Windows
+>>4	ulelong&0x00000001	!0x00000001	95-98)
+>>4	ulelong&0x00000001	=0x00000001	XP)
+>0		uleshort	=0x0301		(Windows Vista-8.1)
+>0		uleshort	=0x0302		(Windows 10 older)
+>0		uleshort	=0x0303		(Windows 10-11)
+>2		uleshort	!2		\b, InfStyle %u
+>4	ulelong&0x03000180	>0		\b, flags
+>>4	ulelong			x		%#x
+>4	ulelong&0x00000001	0x00000001	\b, unicoded
+>4	ulelong&0x00000002	0x00000002	\b, has strings
+>4	ulelong&0x00000004	0x00000004	\b, src URL
+>4	ulelong&0x00000008	0x00000008	\b, volatile dir ids
+>4	ulelong&0x00000010	0x00000010	\b, verified
+>4	ulelong&0x00000020	0x00000020	\b, digitally signed
+>20		ulelong		x		\b, at %#x
+>4	ulelong&0x00000001	=0x00000001
+>>(20.l)	lestring16	x		"%s"
+>4	ulelong&0x00000001	!0x00000001
+>>(20.l)	string		x		"%s"
+>24		qwdate		x		\b, InfVersionLastWriteTime %s
+>0		uleshort	<0x0102
+>>68		ulelong		x
+>>>4	ulelong&0x00000001	=0x00000001
+>>>>(68.l)	ubequad		!0x43003a005c005700
+>>>>>(68.l)	lestring16	x		\b, WinDirPath "%s"
+>>>4	ulelong&0x00000001	!0x00000001
+>>>>(68.l)	string		!C:\\WINDOWS
+>>>>>(68.l)	string		x		\b, WinDirPath "%s"
+>>>72		ulelong		>0		\b,
+>>>>4	ulelong&0x00000001	=0x00000001
+>>>>>(72.l)	lestring16	x		OsLoaderPath "%s"
+>>>>4	ulelong&0x00000001	!0x00000001
+>>>>>(72.l)	string		x		OsLoaderPath "%s"
+>>>78		uleshort	!0x409		\b, LanguageID %x
+>>>80		ulelong		>0		\b, at %#x
+>>>>4	ulelong&0x00000001	=0x00000001
+>>>>>(80.l)	lestring16	x		SourcePath "%s"
+>>>>4	ulelong&0x00000001	!0x00000001
+>>>>>(80.l)	string		>\0		SourcePath "%s"
+>>>84		ulelong		>0		\b, at %#x
+>>>>4	ulelong&0x00000001	=0x00000001
+>>>>>(84.l)	lestring16	x		InfName "%s"
+>>>>4	ulelong&0x00000001	!0x00000001
+>>>>>(84.l)	string		>\0		InfName "%s"
+>0		uleshort	>0x0101
+>>80	ulelong			x		\b, at %#x WinDirPath
+>>>4	ulelong&0x00000001	0x00000001
+>>>>(80.l)	ubequad		!0x43003a005c005700
+>>>>>(80.l)	lestring16	x		"%s"
+>>90		uleshort	!0x409		\b, LanguageID %x
+>>92	ulelong			>0		\b, at %#x
+>>>4	ulelong&0x00000001	0x00000001
+>>>>(92.l)	lestring16	x		language %s
+0	string			TAPE
+>20	ulequad			0
+>>28	uleshort		0
+>>>36	ulelong			0
+>>>>4	ulelong&0xFFfcFFe0	0		Windows NTbackup archive
+!:ext bkf
+>>>>>10	ubyte			1		\b NetWare
+>>>>>10	ubyte			13		\b NetWare SMS
+>>>>>10	ubyte			14		\b NT
+>>>>>10	ubyte			24		\b 3
+>>>>>10	ubyte			25		\b OS/2
+>>>>>10	ubyte			26		\b 95
+>>>>>10	ubyte			27		\b Macintosh
+>>>>>10	ubyte			28		\b UNIX
+>>>>>4	ulelong&0x00000004	!0		\b, compressed
+>>>>>4	ulelong&0x00000008	!0		\b, End Of Medium hit
+>>>>>4	ulelong&0x00020000	0
+>>>>>>4	ulelong&0x00010000	!0		\b, with catalog
+>>>>>4	ulelong&0x00020000	!0		\b, with file catalog
+>>>>>60	uleshort		>1		\b, sequence %u
+>>>>>62	uleshort		>0		\b, %#x encrypted
+>>>>>64	uleshort		!2		\b, soft size %u*512
+>>>>>68	uleshort		>0
+>>>>>>70	uleshort	>0
+>>>>>>>48	ubyte		1
+>>>>>>>>(70.s)	string		>\0		\b, name: %s
+>>>>>>>48	ubyte		2
+>>>>>>>>(70.s)	lestring16	x		\b, name: %s
+>>>>>72	uleshort		>0
+>>>>>74		uleshort	>0
+>>>>>>48	ubyte		1
+>>>>>>>(74.s)	string		>\0		\b, label: %s
+>>>>>>48	ubyte		2
+>>>>>>>(74.s)	lestring16	x		\b, label: %s
+>>>>>86	uleshort		x		\b, software (%#x)
+>>>>>80	uleshort		>0
+>>>>>>82	uleshort	>0
+>>>>>>>48	ubyte		1
+>>>>>>>>(82.s)	string		>\0		\b: %s
+>>>>>>>48	ubyte		2
+>>>>>>>>(82.s)	lestring16	x		\b: %s
+>>>>>84	uleshort		!1024		\b, block size %u
+0	string	JASC-PAL\r\n	PaintShop Pro color palette
+!:ext	pal/PspPalette
+>10	string	!0100		\b, version %.4s
+>16	string	x		\b, %.3s colors
+0	string	Inno\ Setup\ Uninstall\ Log\ (b)	InnoSetup Log
+!:mime	application/x-innosetup
+!:ext	dat
+>0x1c	string		>\0				\b%.7s
+>0xc0	string		x				%s
+>0x40	ubyte		0x7b
+>>0x40	string		x				%-.38s
+>0x140	ulelong		x				\b, version %#x
+>0x148	ulelong		x				\b, %u bytes
+>0x140	ulelong		<1000
+>>0x1d6	pstring		x				\b, %s
+>>>&0	pstring		x				\b\%s
+>>>>&0	pstring		x				\b, "%s"
+>0x140	ulelong		>999
+>>0x1db	lestring16	x				\b, %-.9s
+>>0x1db	search/43	\xFF\xFF\xFF			
+>>>&0	lestring16	x				\b\%-.9s
+>>>&0	search/43	\xFF\xFF\xFF			
+>>>>&0	lestring16	x				\b, %-.42s
+0	string	Inno\ Setup\ Messages\ (
+>0x38	quad		0				InnoSetup messages
+!:mime	application/x-innosetup-msg
+!:ext	msg
+>>0x15	string		x				\b, version %.5s
+>>>0x1a	ubyte		!0x29				\b%c
+>>0x40	ulelong		x				\b, %u messages
+>>0x40	ulelong		x
+>>>0x1c	search/2	(u)				(UTF-16),
+>>>>0x50 lestring16	x				%s
+>>>0x1c	default		x				(ASCII),
+>>>>0x50 string		x				%s
+0	string		MSWIM\000\000\000
+>0	use		wim-archive
+0	string		WLPWM\000\000\000
+>0	use		wim-archive
+0	name		wim-archive
+>0	string		x			Windows imaging
+!:mime	application/x-ms-wim
+>16	ulelong		&0x00000008		(SWM
+!:ext	swm
+>>40	uleshort	x			\b %u
+>>42	uleshort	x			\b of %u) image
+>16	ulelong		^0x00000008
+>>12	ulelong		3584			(ESD) image
+!:ext	esd
+>>12	ulelong		!3584			(
+>>>156	search/68233/s		RunTime.xml	\bWindows provisioning package)
+!:ext	ppkg
+>>>156	default			x		\bWIM) image
+!:ext	wim/wim2
+>0	string/b	WLPWM\000\000\000	\b, wimlib pipable format
+>14	uleshort	x			v%u
+>13	ubyte		x			\b.%u
+>44	ulelong		>1			\b, %u images
+>0x78	ulelong		>0			\b, bootable no. %u
+>16	ulelong		&0x00100000		\b, XPRESS2
+>16	ulelong		&0x00080000		\b, LZMS
+>16	ulelong		&0x00040000		\b, LZX
+>16	ulelong		&0x00020000		\b, XPRESS
+>16	ulelong		&0x00000002		compressed
+>16	ulelong		&0x00000004		\b, read only
+>16	ulelong		&0x00000010		\b, resource only
+>16	ulelong		&0x00000020		\b, metadata only
+>16	ulelong		&0x00000080		\b, reparse point fixup
+0		string		1giM	Windows Easy Transfer migration data
+!:mime		application/x-ms-mig
+!:ext		mig
+>0x18		string		=MRTS	without password
+>>0x1c		ulelong+0x38	x	\b, at %#x 
+>>(0x1c.l+0x38)	ubyte		x
+>>>&-1	indirect	x
+>0x18		string		!MRTS	with password
+>0x18		search/29/b	MRTS
+>>&20		lestring16	x	\b, 1st %-s
+0	string	ID;P	Microsoft SYLK program
+>4	string	>0	\b, created by %s
+!:ext	slk/sylk
+0	ubelong			=0xDC058340
+>4	ubyte			=0		Windows Performance Monitor Alert
+!:mime		application/x-perfmon 
+!:ext		pma
+>>80	string			x		\b, "%s"
+0	ubelong	0xB8C90C00	InstallShield Script
+!:mime	application/x-installshield-ins
+!:ext	ins
+>13	pstring/h	x		"%s"
+>1	search/0x121/s	SRCDIR	\b, variable names:
+>>&-4		leshort		x	#%u
+>>&-2		pstring/h	x	%s
+>>>&0		leshort		x	#%u
+>>>&2		pstring/h	x	%s
+>>>>&0		leshort		x	#%u
+>>>>&2		pstring/h	x	%s
+>0		ubelong		x	...
+0	string		screen\040mode\040id:i:	Remote Desktop Protocol connection
+!:mime	text/x-ms-rdp
+!:ext	rdp
+>17	string		1			\b, window mode
+>17	string		2			\b, full screen mode
+0	guid	7B5C52E4-D88C-4DA7-AEB1-5378D02996D3	Microsoft OneNote
+!:ext one
+!:mime	application/onenote
+0	guid	43FF2FA1-EFD9-4C76-9EE2-10EA5722765F	Microsoft OneNote Revision Store File
+0	string	XBF\0
+>12	ulelong	<0xFF
+>>16	ulelong	<0xFF	Microsoft XAML Binary Format
+!:ext xbf
+>>>12	ulelong	x	%d
+>>>16	ulelong	x	\b.%d
+>>>4	ulelong	x	\b, metadata size: %d bytes
+>>>8	ulelong	x	\b, node size: %d bytes
+0	string	MetaView\x20Service\x20Assurance\x20Export\x20File	MetaView SAS export
+>39     string  Version\x20
+>>47    byte    x                                                       \b, version %c
+0	string	PReg
+>4	lelong	x	Group Policy Registry Policy, Version=%d

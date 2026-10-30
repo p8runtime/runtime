@@ -1,0 +1,39 @@
+0	string/t		#\ Magic\ 	magic text file for file(1) cmd
+!:mime	text/x-file
+!:ext	/
+0	ubyte		=0x23
+>4	string		--------
+>>0	use		magic-fragment
+>4	default		x
+>>1	search/112	regex\x09
+>>>0	use		magic-fragment
+>>1	default		x
+>>>1	search/471	string\x09
+>>>>0	use		magic-fragment
+>>>1	default		x
+>>>>1	search/1716	short\x09
+>>>>>0	use		magic-fragment
+0	ubyte		=0x0A
+>4	string		--------
+>>0	use		magic-fragment
+>4	default		x
+>>1	search/581	\041:mime
+>>>0	use		magic-fragment
+0	name		magic-fragment
+>0	string		x		magic text fragment for file(1) cmd
+!:mime	text/x-file
+!:ext	/news/out/script
+>0	ubyte		!0x0A
+>>0	string		x		\b, 1st line "%s"
+>>>&1	string		x		\b, 2nd line "%s"
+>0	ubyte		=0x0A
+>>1	string		x		\b, 2nd line "%s"
+>>>&1	string		x		\b, 3rd line "%s"
+0	lelong		0xF11E041C	magic binary file for file(1) cmd
+!:mime application/x-file
+!:ext	mgc
+>4	lelong		x		(version %d) (little endian)
+0	belong		0xF11E041C	magic binary file for file(1) cmd
+!:mime application/x-file
+!:ext	mgc
+>4	belong		x		(version %d) (big endian)

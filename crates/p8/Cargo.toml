@@ -20,3 +20,4 @@ p8-ext-pcre = { path = "../p8-ext-pcre" }
 p8-ext-mysqli = { path = "../p8-ext-mysqli" }
 p8-ext-curl = { path = "../p8-ext-curl" }
 p8-ext-gd = { path = "../p8-ext-gd" }
+p8-ext-fileinfo = { path = "../p8-ext-fileinfo" }

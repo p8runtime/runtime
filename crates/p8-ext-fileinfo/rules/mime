@@ -1,0 +1,4 @@
+0	string/t		Content-Type:\040
+>14	string		>\0		%s
+0	string/t		Content-Type:
+>13	string		>\0		%s

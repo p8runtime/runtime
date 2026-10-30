@@ -1,0 +1,340 @@
+0   string  \320\317\021\340\241\261\032\341
+>0x1A	ushort		!0xABAB		OLE 2 Compound Document
+>>0x1C	ubeshort		=0xfffe			\b, big-endian
+>>>546	string	jbjb			: Microsoft Word Document
+!:mime	application/msword
+!:apple	MSWDWDBN
+!:ext	doc
+>>0x1C	uleshort		=0xfffe
+>>>0x1A	uleshort		x			\b, v%u
+>>>0x18	uleshort		x			\b.%u
+>>>48	ulelong			x			\b, SecID %#x
+>>>32	uleshort		!6			\b, exponent of short stream %u
+>>>44	ulelong			>1			\b, %u FAT sectors
+>>>60	ulelong			!0xffFFffFE		\b, Mini FAT start sector %#x
+>>>64	ulelong			!1			\b, %u Mini FAT sector
+>>>>64	ulelong			>1			\bs
+>>>68	ulelong			!0xffFFffFE		\b, DIFAT start sector %#x
+>>>72	ulelong			>0			\b, %u DIFAT sectors
+>>>48	ulelong			>0x800			too big for FILE_BYTES_MAX = 1 MiB
+>>>0x1E	uleshort		0xc			\b, blocksize 4096
+>>>>(48.l*4096)	ubyte	x
+>>>>>&4095 	use		ole2-directory
+>>>0x1E	uleshort		9
+>>>>(48.l*512)	ubyte		x
+>>>>>&511 	use		ole2-directory
+0	name			ole2-directory
+>66 	ubyte		5
+>>88 	ubequad		0x0
+>>>80 	ubequad		0x0
+>>>>128 	lestring16	Dgn~			: Microstation V8 CAD
+!:mime	application/x-bentley-dgn
+!:ext	dgn
+>>>>128 	lestring16	PerfectOffice_		: WordPerfect 7-X3 presentations Master, Document or Graphic
+!:mime	application/vnd.wordperfect
+!:apple	????WPC7
+!:ext	mst/wpd/wpg
+>>>>128 	lestring16	MatOST			: Microsoft Works 3.0 document
+!:mime	application/vnd.ms-works
+!:apple	????AWWP
+!:ext	wps
+>>>>256 	lestring16	WksSSWorkBook		: Microsoft Works 6-9 spreadsheet
+!:mime	application/vnd.ms-works
+!:apple	????AWSS
+!:ext	xlr
+>>>>128 	lestring16	Workbook
+>>>>>256 	lestring16	!WksSSWorkBook		: Microsoft Excel 97-2003 worksheet 0 clsid
+!:mime	application/vnd.ms-excel
+!:apple	????XLS9
+!:ext	xls
+>>>>128 	lestring16	Object			: Microsoft PowerPoint 4 presentation
+!:mime	application/vnd.ms-powerpoint
+!:apple	????PPT3
+!:ext	ppt
+>>>>128 	lestring16	__CollDataStm		: Microsoft Outlook Send Receive Settings
+!:mime	application/x-ms-srs
+!:ext	srs
+>>>>128 	lestring16	Category		: Microsoft Clip Art Gallery
+!:mime	application/x-ms-cag
+!:apple	MScgCGdb
+!:ext	cag/
+>>>>256 	lestring16	StrIndex_StringTable	: Windows temporarily installer
+!:mime	application/x-ms-rra
+!:ext	rra
+>>>>256 	lestring16	DestList		: Windows jump list
+!:mime	application/x-ms-jumplist
+!:ext	automaticDestinations-ms
+>>>>128 	lestring16	256_			: Windows thumbnail database 256
+!:mime	application/x-ms-thumbnail
+!:ext	db
+>>>>128 	lestring16	96_			: Windows thumbnail database 96
+!:mime	application/x-ms-thumbnail
+!:ext	db
+>>>>256 	lestring16	Catalog			: Windows thumbnail database
+!:mime	application/x-ms-thumbnail
+!:ext	db
+>>>>128 	lestring16	Control000		: Microsoft old Systeminfo
+!:mime	application/x-ms-info
+!:ext	nfo
+>>>>128 	lestring16	Header		: Microsoft sysinternals AutoRuns data, version 14
+!:mime		application/x-ms-arn
+!:ext		arn
+>>>>384 	lestring16	TemplateID		: Microsoft Access wizard template
+!:mime	application/x-ms-mdz
+!:ext	mdz
+>>>>128 	lestring16	Thumbnail		: Corel PrintHouse image
+!:mime	application/x-corel-cph
+!:ext	cph
+>>>>256 	lestring16	Thumbnail		: Corel PrintHouse image
+!:mime	application/x-corel-cph
+!:ext	cph
+>>>>256 	lestring16	_INFO_			: Corel Gallery
+!:mime	application/x-corel-gal
+!:ext	gal
+>>>>128 	lestring16	TplHeader		: Ulead iPhoto Template
+!:mime	image/x-ulead-tpl
+!:ext	tpl
+>>>>128 	lestring16	FileHeader		: Hancom HWP (Hangul Word Processor) file, version 5.0
+!:mime	application/x-hwp
+!:ext	hwp
+>>>>128 	lestring16	dd2			: StarOffice Gallery view
+!:mime	application/x-star-sdv
+!:ext	sdv
+>>>>128 	lestring16	Current\ User		: SoftMaker
+>>>>>256	lestring16	SMNativeObjData		
+>>>>>>512	lestring16	PowerPoint		PowerPoint presentation or template
+!:mime	application/vnd.ms-powerpoint
+!:ext	ppt/pps/pot
+>>>>>384	lestring16	PowerPoint		Presentations or template
+!:mime	application/vnd.softmaker.presentations
+!:ext	prd/prv
+>>>>256 	lestring16	Current\ User		: SoftMaker
+>>>>>512	lestring16	PowerPoint		Presentations or template
+!:mime	application/vnd.softmaker.presentations
+!:ext	prd/prv
+>>>>>>128 	lestring16	Pictures		with pictures
+>>>>128 	lestring16	PageMaker		:
+>>>>>0	search/0xa900/s	\0\0\0\0\0\0\xff\x99
+>>>>>>&0	indirect	x
+>>>>128 	default		x
+>>>>>0 	use		ole2-unknown
+>>>80 	ubequad		!0x0
+>>>>80 	ubequad		0x5702000000000000	: Family Tree Maker Windows database, version 1-4
+!:mime	application/x-fmt
+!:ext	ftw/fbk
+>>>>80 	default		x
+>>>>>0 	use		ole2-unknown
+>>88 	ubequad		0xc000000000000046
+>>>80 	ubequad		0x131a020000000000	: Microsoft Visio 2000-2002 Document, stencil or template
+!:mime	application/vnd.visio
+!:ext	vsd/vss/vst
+>>>80 	ubequad		0x141a020000000000	: Microsoft Visio 2003-2010 Document, stencil or template
+!:mime	application/vnd.visio
+!:ext	vsd/vss/vst
+>>>80 	ubequad		0x84100c0000000000	: Microsoft Windows Installer Package or validation module
+!:mime	application/x-msi
+!:ext	msi/cub
+>>>80 	ubequad		0x82100c0000000000	: Microsoft Windows Installer transform script
+!:mime	application/x-ms-mst
+!:ext	mst
+>>>80 	ubequad		0x86100c0000000000	: Microsoft Windows Installer Patch
+!:mime	application/x-wine-extension-msp
+!:ext	msp
+>>>80 	ubequad		0x0009020000000000	: Microsoft Word 6-95 document or template
+!:mime	application/msword
+!:apple	MSWDWDBN
+!:ext	doc/dot
+>>>80 	ubequad		0x0609020000000000	: Microsoft Word 97-2003 document or template
+!:mime	application/msword
+!:apple	MSWDWDBN
+!:ext	doc/dot/
+>>>80 	ubequad		0x0213020000000000	: Microsoft Works 3-4 document or template
+!:mime	application/vnd.ms-works
+!:apple	????AWWP
+!:ext	wps/ps/bps
+>>>80 	ubequad		0x0313020000000000	: Microsoft Works 3-4 database or template
+!:mime	application/vnd.ms-works-db
+!:apple	????AWDB
+!:ext	wdb/db/bdb
+>>>80 	ubequad		0x1008020000000000	: Microsoft Excel 5-95 worksheet, addin or template
+!:mime	application/vnd.ms-excel
+!:apple	????XLS5
+!:ext	xls/xla/xlt/
+>>>80 	ubequad		0x2008020000000000	: Microsoft Excel 97-2003
+!:mime	application/vnd.ms-excel
+!:apple	????XLS9
+>>>>256 	lestring16	_VBA_PROJECT_CUR	addin
+!:ext	xla/
+>>>>384 	lestring16	_VBA_PROJECT_CUR	addin
+!:ext	xla
+>>>>256 	default		x			worksheet or template
+!:ext	xls/xlt
+>>>80 	ubequad		0x0b0d020000000000	: Microsoft Outlook 97-2003 item
+!:mime	application/x-ms-msg
+!:ext	msg
+>>>80 	ubequad		0x46f0060000000000	: Microsoft Outlook 97-2003 item template
+!:mime	application/x-ms-oft
+!:ext	oft
+>>>80 	ubequad		0x5148040000000000	: Microsoft PowerPoint 4.0 presentation
+!:mime	application/vnd.ms-powerpoint
+!:apple	????PPT3
+!:ext	ppt
+>>>80 	ubequad		0x602c020000000000	: Greenstreet Art drawing
+!:mime	image/x-greenstreet-art
+!:ext	art
+>>>80 	default		x
+>>>>0 	use		ole2-unknown
+>>88 	ubequad		0xa29a00aa004a1a72	: Microsoft
+>>>80 	ubequad		0xc2dbcd28e20ace11	Works 4 document
+!:mime	application/vnd.ms-works
+!:apple	????AWWP
+!:ext	wps
+>>>80 	ubequad		0xc3dbcd28e20ace11	Works 4 database
+!:mime	application/vnd.ms-works-db
+!:apple	????AWDB
+!:ext	wdb/bdb
+>>88 	ubequad		0xa40700c04fb932ba	: Microsoft
+>>>80 	ubequad		0xb25aa40e0a9ed111	Works 5-6 document
+!:mime	application/vnd.ms-works
+!:apple	????AWWP
+!:ext	wps
+>>88 	ubequad		0xa1c800c04f612452	: Microsoft
+>>>80 	ubequad		0xc0c7266eb98cd311	Works portfolio
+!:mime	application/vnd.ms-works
+!:ext	wsb
+>>88 	ubequad		0x00c0000000000046	: Microsoft
+>>>80 	ubequad		0x0112020000000000	Publisher
+!:mime	application/vnd.ms-publisher
+!:ext	pub
+>>88 	ubequad		0xa90300aa00510ea3	: Microsoft
+>>>80 	ubequad		0x70ae7bea3bfbcd11	PowerPoint 95 presentation
+!:mime	application/vnd.ms-powerpoint
+!:apple	????PPT3
+!:ext	ppt/pot
+>>88 	ubequad		0x86ea00aa00b929e8	: Microsoft
+>>>80 	ubequad		0x108d81649b4fcf11	PowerPoint 97-2003 presentation or template
+!:mime	application/vnd.ms-powerpoint
+!:apple	????PPT3
+!:ext	ppt/pps/pot
+>>88 	ubequad		0x871800aa0060263b	: Microsoft
+>>>80 	ubequad		0xf04672810a72cf11	PowerPoint Addin or Wizard
+!:mime	application/vnd.ms-powerpoint
+!:ext	ppa/pwz
+>>88 	ubequad		0xb29400dd010f2bf9	: Microsoft
+>>>80 	ubequad		0x801cb0023de01a10	At Work fax Document
+!:mime	image/x-ms-awd
+!:ext	awd
+>>88 	ubequad		0xbe1100c04fb6faf1	: Microsoft
+>>>80 	ubequad		0x3a8fb774c8c8d111	Project
+!:mime	application/vnd.ms-project
+!:ext	mpp
+>>88 	ubequad		0xb21c00aa004ba90b	: Microsoft
+>>>80 	ubequad		0x0004855964661b10	Office Binder Document, Template or wizard
+!:mime	application/x-msbinder
+!:ext	obd/obt/obz
+>>88 	ubequad		0x19370000929679cd	: WordPerfect 7
+>>>80 	ubequad		0xff739851ad2d2002	Document
+!:mime	application/vnd.wordperfect
+!:ext	wpd
+>>88 	ubequad		0x99ae04021c007002	: WordPerfect
+>>>80 	ubequad		0x62fe2e4099191b10	7-X3 presentation
+!:mime	application/x-corelpresentations
+!:ext	shw
+>>>80 	ubequad		0x60fe2e4099191b10	9 Graphic
+!:mime	image/x-wpg
+!:apple	????WPC9
+!:ext	wpg
+>>88 	ubequad		0xbe26db67235e2689	: Corel
+>>>80 	ubequad		0x20f414de1cacce11	\bCAD Drawing or Template
+!:mime	application/x-corel-cad
+!:ext	ccd/cct
+>>88 	ubequad		0x996104021c007002	: StarOffice
+>>>80 	ubequad		0x407e5cdc5cb31b10	StarWriter 3.0 document or template
+!:mime	application/x-starwriter
+!:ext	sdw/vor
+>>>80 	ubequad		0xa03f543fa6b61b10	StarCalc 3.0 spreadsheet or template
+!:mime	application/x-starcalc
+!:ext	sdc/vor
+>>>80 	ubequad		0xe0aa10af6db31b10	StarDraw 3.0 drawing or template
+!:mime	application/x-starimpress
+!:ext	sdd/sda/vor
+>>88 	ubequad		0x89cb008029e4b0b1	: StarOffice
+>>>80 	ubequad		0x41d461633542d011	StarCalc 4.0 spreadsheet or template
+!:mime	application/x-starcalc
+!:ext	sdc/vor
+>>>80 	ubequad		0x61b8a5c6d685d111	StarCalc 5.0 spreadsheet or template
+!:mime	application/vnd.stardivision.cal
+!:ext	sdc/vor
+>>>80 	ubequad		0xc03c2d011642d011	StarImpress 4.0 presentation or template
+!:mime	application/x-starimpress
+!:ext	sdd/vor
+>>88 	ubequad		0xb12a04021c007002	: StarOffice
+>>>80 	ubequad		0x600459d4fd351c10	StarMath 3.0
+!:mime	application/x-starmath
+!:ext	smf
+>>88 	ubequad		0x8e2c00001b4cc711	: StarOffice
+>>>80 	ubequad		0xe0999cfb6d2c1c10	StarChart 3.0
+!:mime	application/x-starchart
+!:ext	sds
+>>88 	ubequad		0xa45e00a0249d57b1	: StarOffice
+>>>80 	ubequad		0xb0e9048b0e42d011	StarWriter 4.0 document or template
+!:mime	application/x-starwriter
+!:ext	sdw/vor
+>>88 	ubequad		0x89ca008029e4b0b1	: StarOffice
+>>>80 	ubequad		0xe1b7b3022542d011	StarMath 4.0
+!:mime	application/x-starmath
+!:ext	smf
+>>>80 	ubequad		0xe0b7b3022542d011	StarChart 4.0
+!:mime	application/x-starchart
+!:ext	sds
+>>88 	ubequad		0xa53f00a0249d57b1	: StarOffice
+>>>80 	ubequad		0x70c90a340de3d011	Master 4.0 document
+!:mime	application/x-starwriter-global
+!:ext	sgl
+>>88 	ubequad		0x89d0008029e4b0b1	: StarOffice
+>>>80 	ubequad		0x40e6b5ffde85d111	StarMath 5.0
+!:mime	application/vnd.stardivision.math
+!:ext	smf
+>>>80 	ubequad		0xa005892ebd85d111	StarDraw 5.0 drawing or template
+!:mime	application/vnd.stardivision.draw
+!:ext	sda/vor
+>>>80 	ubequad		0x21725c56bc85d111	StarImpress 5.0 presentation or template
+!:mime	application/vnd.stardivision.impress
+!:ext	sdd/vor/sda
+>>>80 	ubequad		0x214388bfdd85d111	StarChart 5.0
+!:mime	application/vnd.stardivision.chart
+!:ext	sds
+>>88 	ubequad		0xaab4006097da561a	: StarOffice
+>>>80 	ubequad		0xd1f90cc2ae85d111	StarWriter 5.0 document or template
+!:mime	application/vnd.stardivision.writer
+!:ext	sdw/vor
+>>>80 	ubequad		0xd3f90cc2ae85d111	Master 5.0 document
+!:mime	application/vnd.stardivision.writer-global
+!:ext	sgl
+>>88 	ubequad		0x855300aa00a1f95b	: Kodak
+>>>80 	ubequad		0x0067615654c1ce11	FlashPIX Image
+!:mime	image/vnd.fpx
+!:apple	????FPix
+!:ext	fpx
+>>88 	ubequad		0x95f600a0cc3cca14	: PlanMaker
+>>>80 	ubequad		0x9174088a6452d411	document or template
+!:mime	application/vnd.softmaker.planmaker
+!:ext	pmd/pmv
+>>88 	ubequad		0x9fed04143144cc1e	: Autodesk
+>>>80 	ubequad		0x7b8cdd1cc081a045	3ds Max
+!:mime	model/x-autodesk-max
+!:ext	max
+>>88 	default		x
+>>>0 	use		ole2-unknown
+0	name			ole2-unknown
+>80 	ubequad		x			: UNKNOWN
+!:mime	application/x-ole-storage
+>80 	ubequad		!0			\b, clsid %#16.16llx
+>>88 ubequad		x			\b%16.16llx
+>>80	guid		x			{%s}
+>128	lestring16	x with names %.20s
+>256	lestring16	x %.20s
+>384	lestring16	x %.25s
+>512	lestring16	x %.10s
+>640	lestring16	x %.10s
+>768	lestring16	x %.10s

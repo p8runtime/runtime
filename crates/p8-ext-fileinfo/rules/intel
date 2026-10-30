@@ -1,0 +1,117 @@
+0	leshort		0502		basic-16 executable
+>12	lelong		>0		not stripped
+0	leshort		0503		basic-16 executable (TV)
+>12	lelong		>0		not stripped
+0	leshort		0510		x86 executable
+>12	lelong		>0		not stripped
+0	leshort		0511		x86 executable (TV)
+>12	lelong		>0		not stripped
+0	leshort		=0512		iAPX 286 executable small model (COFF)
+>12	lelong		>0		not stripped
+0	leshort		=0522		iAPX 286 executable large model (COFF)
+>12	lelong		>0		not stripped
+0	leshort		=0514
+>0	use				display-coff
+0	leshort		0x0200
+>18	leshort		^0x0002
+>>20	ubyte		>0x1F
+>>>0	use				display-coff
+>18	leshort		&0x0002
+>>0	use				display-coff
+0	leshort		0x8664
+>0	use				display-coff
+0	beshort		0x55AA
+>2	ubeshort	!0xF00F
+>>0	use		rom-x86
+0	name		rom-x86
+>0	beshort		x		BIOS (ia32) ROM Ext.
+!:mime	application/x-ibm-rom
+!:ext	rom/bin
+>(26.s)	ubelong		!0x24506e50
+>>(24.s)	ubelong	!0x50434952
+>>>5	string		USB		USB
+>>>7	string		LDR		UNDI image
+>>>26	string		Adaptec		Adaptec
+>>>42	string		PROMISE		Promise
+>30      string          IBM          IBM comp. Video
+>>33	ubyte		!0
+>>>30	string		x		"%s"
+>2       ubyte            x            (%u*512)
+>3	ubyte			=0xE9	jmp
+>>4	uleshort		x	%#4.4x
+>3	ubyte			!0xE9	instruction
+>>3	ubelong			x	%#8.8x
+>(26.s)	string		=$PnP		\b;
+>>26		uleshort	x	at %#x PNP
+>>(26.s+0x0A)	uleshort	!0
+>>>(26.s+0x0C)	use		\^PCI-vendor
+>>>(26.s+0x0A)	ubeshort	x	device=%#4.4x
+>>(26.s+0x12)	use		PCI-class
+>>(26.s+4)	ubyte		!1	\b, revision %u
+>>(26.s+5)	uleshort	!2	\b, length %u*16
+>>(26.s+7)	uleshort	!0	\b, at %#x next header
+>>(26.s+8)	ubyte		!0	\b, reserved %#x
+>>(26.s+9)	ubyte		!0	\b, CRC %#x
+>>(26.s+0x0E)	uleshort	>0	\b, at %#x
+>>>(26.s+0x0C)	uleshort	x
+>>>>(&0.s)	string		x	"%s"
+>>(26.s+0x10)	uleshort	>0	\b, at %#x
+>>>(26.s+0x0E)	uleshort	x
+>>>>(&0.s)	string		x	"%s"
+>>(26.s+0x15)	ubyte		&0x01	\b, display
+>>(26.s+0x15)	ubyte		&0x02	\b, input
+>>(26.s+0x15)	ubyte		&0x04	\b, IPL
+>>(26.s+0x15)	ubyte		&0x10	\b, bootable
+>>(26.s+0x15)	ubyte		&0x20	\b, cacheable
+>>(26.s+0x15)	ubyte		&0x40	\b, shadowable
+>>(26.s+0x15)	ubyte		&0x80	\b, InitialModel
+>>(26.s+0x16)	uleshort	!0	\b, boot vector offset %#x
+>>(26.s+0x18)	uleshort	!0	\b, disconnect offset %#x
+>>(26.s+0x1A)	uleshort	!0	\b, bootstrap offset %#x
+>>(26.s+0x1C)	uleshort	!0	\b, 2nd reserved %#x
+>>(26.s+0x1E)	uleshort	!0	\b, static offset %#4.4x
+>(24.s)	string			=PCIR	\b;
+>>24	uleshort		x	at %#x PCI
+>>(24.s+4)	use		PCI-vendor
+>>(24.s+6)	uleshort	x	device=%#4.4x
+>>(24.s+0x0D)	use		PCI-class
+>>(24.s+8)	uleshort	!0	\b, at %#x VPD
+>>(24.s+0xA)	uleshort	>0x28	\b, length %u
+>>(24.s+0xC)	ubyte		>0	\b, revision %u
+>>(24.s+0xC)	ubyte		>1	\b, code revision %#x
+>>(24.s+0x14)	ubyte		>0	\b, code type %#x
+>>(24.s+0x15)	ubyte		>0
+>>>(24.s+0x15)	ubyte		=0x80	\b, last ROM
+>>>(24.s+0x15)	ubyte		!0x80	\b, indicator %x
+>>(24.s+0x16)	ubeshort	!0	\b, 3rd reserved %#x
+0	lelong		0x0ff0a55a	Intel serial flash for ICH/PCH ROM <= 5 or 3400 series A-step
+16	lelong		0x0ff0a55a	Intel serial flash for PCH ROM
+0	string		DSDT
+>0	use		acpi-table
+0	string		APIC
+>0	use		acpi-table
+0	string		FACP
+>0	use		acpi-table
+0	string		MCFG
+>0	use		acpi-table
+0	string		SLIC
+>0	use		acpi-table
+0	string		SSDT
+>0	use		acpi-table
+0	name		acpi-table
+>8	ubyte		<17	ACPI Machine Language file
+>>0	string		x	'%.4s'
+!:mime	application/x-intel-aml
+!:ext	aml
+>>16	string		>\0	%.8s
+>>>24	ulelong		x	%x
+>>10	ubyte		>040	by %c
+>>>11		ubyte	>040	\b%c
+>>>>12		ubyte	>040	\b%c
+>>>>>13		ubyte	>040	\b%c
+>>>>>>14	ubyte	>040	\b%c
+>>>>>>>15	ubyte	>040	\b%c
+>>8	ubyte		x	\b, revision %u
+>>4	ulelong		x	\b, %u bytes
+>>28	string		>\0	\b, created by %.4s
+>>>32	ulelong		x	%x

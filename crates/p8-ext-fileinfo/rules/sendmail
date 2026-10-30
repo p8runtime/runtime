@@ -1,0 +1,9 @@
+0	byte	046
+>16	regex/s	=^[0-78][0-9.]{4}	Sendmail frozen configuration
+!:ext fc
+>>16	string	>\0			- version %s
+0	short	0x271c
+>16	regex/s	=^[0-78][0-9.]{4}	Sendmail frozen configuration
+!:ext fc
+>>16	string	>\0			- version %s
+0   string  divert(-1)\n    sendmail m4 text file

@@ -1,0 +1,41 @@
+0		name		msooxml
+>0		string		word/		Microsoft Word 2007+
+!:mime application/vnd.openxmlformats-officedocument.wordprocessingml.document
+!:ext	docx
+>0		string		ppt/		Microsoft PowerPoint 2007+
+!:mime application/vnd.openxmlformats-officedocument.presentationml.presentation
+!:ext	pptx
+>0		string		xl/		Microsoft Excel 2007+
+!:mime application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+!:ext	xlsx
+>0		string		visio/		Microsoft Visio 2013+
+!:mime application/vnd.ms-visio.drawing.main+xml
+>0		string		AppManifest.xaml	Microsoft Silverlight Application
+!:mime application/x-silverlight-app
+0		string		PK\003\004
+!:strength +10
+>0x1E		use		msooxml
+>0x1E		default		x
+>>0x1E		regex		\\[Content_Types\\]\\.xml|_rels/\\.rels|docProps|customXml
+>>>(18.l+49)	search/6000	PK\003\004
+>>>>&26		search/6000	PK\003\004
+>>>>>&26		use		msooxml	
+>>>>>&26		default		x
+>>>>>>&26	search/6000	PK\003\004
+>>>>>>>&26	use		msooxml	
+>>>>>>>&26	default		x
+>>>>>>>>&26	search/6000	PK\003\004
+>>>>>>>>>&26	use		msooxml	
+>>>>>>>>>&26	default		x		Microsoft OOXML
+>>>>>>>&26	default		x		Microsoft OOXML
+>>>>>&26	default		x		Microsoft OOXML
+>>0x1E		regex		\\[trash\\]
+>>>&26		search/6000	PK\003\004
+>>>>&26		search/6000	PK\003\004
+>>>>>&26	use		msooxml	
+>>>>>&26	default		x	
+>>>>>>&26	search/6000	PK\003\004
+>>>>>>>&26	use		msooxml	
+>>>>>>>&26	default		x		Microsoft OOXML
+>>>>>>&26	default		x		Microsoft OOXML
+>>>>>&26	default		x		Microsoft OOXML

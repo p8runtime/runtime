@@ -1,0 +1,10 @@
+[package]
+name = "p8-ext-fileinfo"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's fileinfo extension: finfo and mime_content_type over a pure-Rust detector (no libmagic)"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+p8-pcre = { path = "../p8-pcre" }

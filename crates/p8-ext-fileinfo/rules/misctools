@@ -1,0 +1,49 @@
+0	search/1	%%!!			X-Post-It-Note text
+0	string/c			BEGIN:vcalendar
+>15	ubyte&0xF8			=0x08
+>>0	search/188			VERSION
+>>>&0		search/81		:2.0		iCalendar calendar
+>>>>15			search/278	:VFREEBUSY	file, with Free/Busy component
+!:mime							text/calendar
+!:apple							????iFBf
+!:ext							ifb
+>>>>15			default		x
+>>>>>15				search/154 	:VALARM	file, with ALARM component
+!:mime							text/calendar
+!:apple							????iCal
+!:ext							icsalarm/ics
+>>>>>15				default		x	file
+!:mime							text/calendar
+!:apple							????iCal
+!:ext							ics
+>>>&0		default			x		vCalendar calendar file
+!:mime							text/x-vcalendar
+!:ext							vcs
+>>0	default				x		vCalendar calendar file, without VERSION
+!:mime							text/x-vcalendar
+!:ext							ics/vcs
+>>15	ubeshort			!0x0D0A		\b, without CRLF
+0	string/c	begin:vcard
+>13	string		!VERSION:END		vCard visiting card
+!:mime	text/vcard
+!:apple	????vCrd
+!:ext	vcf/vcard
+>>12	search/0x113b4/c	version:
+>>>&0	string		x			\b, version %-.3s
+>>>&0	string		!2.1
+>>>>13	string		!VERSION:		\b, 2nd line does not start with VERSION:
+>>0	string		!BEGIN			\b, not up case
+>>11	beshort		!0x0D0A			\b, lines not separated by CRLF
+0	search/80	.la\ -\ a\ libtool\ library\ file	libtool library file
+0	search/80	.lo\ -\ a\ libtool\ object\ file	libtool object file
+0	string		MDMP					Mini DuMP crash report
+!:mime	application/x-dmp
+!:ext	dmp/mdmp
+>4	ulelong&0x0000FFFF	!0xA793				\b, version %#4.4x
+>8	ulelong			x				\b, %d streams
+>12	ulelong			!0x20				\b, %#8.8x RVA
+>16	ulelong			!0				\b, CheckSum %#8.8x
+>20	ledate			x				\b, %s
+>24	ulelong			x				\b, %#x type
+0	string	#\x20abook\x20addressbook\x20file abook address book
+!:mime application/x-abook-addressbook

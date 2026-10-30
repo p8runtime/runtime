@@ -1,0 +1,9 @@
+0		string		wsdl		PHP WSDL cache,
+>4		byte		x		version %#02x
+>6		ledate		x		\b, created %s
+>10		lelong		<0x7fffffff
+>>10		pstring/l	x		\b, uri: "%s"
+>>>&0		lelong		<0x7fffffff
+>>>>&-4		pstring/l	x		\b, source: "%s"
+>>>>>&0		lelong		<0x7fffffff
+>>>>>>&-4	pstring/l	x		\b, target_ns: "%s"

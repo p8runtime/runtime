@@ -1,0 +1,38 @@
+0	search/1/w	#!\ /usr/bin/ruby				Ruby script text executable
+!:strength + 15
+!:mime text/x-ruby
+0	search/1/w	#!\ /usr/local/bin/ruby	Ruby script text executable
+!:strength + 15
+!:mime text/x-ruby
+0	search/1	#!/usr/bin/env\ ruby				Ruby script text executable
+!:strength + 15
+!:mime text/x-ruby
+0	search/1	#!\ /usr/bin/env\ ruby			Ruby script text executable
+!:strength + 15
+!:mime text/x-ruby
+0	search/8192	require
+>0	regex		\^[[:space:]]*require[[:space:]]'[A-Za-z_/.]+'
+>>0	regex		def\ [a-z]|\ do$
+>>>&0	regex		\^[[:space:]]*end([[:space:]]+[;#].*)?$		Ruby script text
+!:strength + 30
+!:mime	text/x-ruby
+0	regex		\^[[:space:]]*(class|module)[[:space:]][A-Z]
+>0	regex		(modul|includ)e\ [A-Z]|def\ [a-z]
+>>&0	regex		\^[[:space:]]*end([[:space:]]+[;#].*)?$		Ruby script text
+!:strength + 30
+!:mime	text/x-ruby
+0	regex		\^[[:space:]]*(class|module)[[:space:]][A-Z]
+>&0	regex	\^[[:space:]]*end([[:space:]]+[;#if].*)?$		Ruby script text
+!:strength + 10
+!:mime	text/x-ruby
+0	search/8192	def\ 
+>0	regex		\^[[:space:]]*def\ [a-z]|def\ [[:alpha:]]+::[a-z]
+>>&0	regex		\^[[:space:]]*end([[:space:]]+[;#].*)?$		Ruby script text
+!:strength + 10
+!:mime	text/x-ruby
+0	search/8192	require
+>0	regex		\^[[:space:]]*require[[:space:]]'[A-Za-z_/.]+'	Ruby script text
+!:mime	text/x-ruby
+0	search/8192	include
+>0 regex 	\^[[:space:]]*include\ ([A-Z]+[a-z]*(::))+	Ruby script text
+!:mime	text/x-ruby

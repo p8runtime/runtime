@@ -1,0 +1,12 @@
+0	string/wt	#!\ 	a
+>&-1	string/T	x	%s script text executable
+!:strength / 3
+0	string/wb	#!\ 	a
+>&-1	string/T	x	%s script executable (binary data)
+!:strength / 3
+0	string/wt	#!\ /usr/bin/env		a
+>15	string/T	>\0			%s script text executable
+!:strength / 6
+0	string/wb	#!\ /usr/bin/env		a
+>15	string/T	>\0			%s script executable (binary data)
+!:strength / 6

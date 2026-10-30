@@ -1,0 +1,64 @@
+0	string		\336\22\4\225	GNU message catalog (little endian),
+>4	ulelong		x		revision
+!:mime	application/x-gettext-translation
+!:ext	gmo/mo
+>4	ulelong/0xFFff	x		%u.
+>4	ulelong&0x0000FFff	x	\b%u
+>>8	ulelong		x		\b, %u message
+>>8	ulelong		>1		\bs
+>4	ulelong&0x0000FFff	=0
+>>12	ulelong		!0x1C		\b, at %#x string table
+>4	ulelong&0x0000FFff	>0
+>>12	ulelong		!0x30		\b, at %#x string table
+>>36	ulelong		x		\b, %u sysdep message
+>>36	ulelong		>1		\bs
+>(16.l)		ulelong	>0
+>>&0		ulelong	x
+>>>(&-4)	string	x		\b, %s
+>(16.l+8)	ulelong	>1
+>>&0		ulelong	x
+>>>(&-4)	ubyte	!0x0A
+>>>>&-1		string	x		'%s'
+>>>(&-4)	ubyte	=0x0A
+>>>>&0		ubyte	!0x0A
+>>>>>&-1	string	x		'%s'
+>>>>&0		ubyte	=0x0A
+>>>>>&0		string	x		'%s'
+0	string		\225\4\22\336	GNU message catalog (big endian),
+!:mime	application/x-gettext-translation
+!:ext	gmo/mo
+>4	beshort		x		revision %d.
+>6	beshort		>0		\b%d,
+>>8	belong		x		%d messages,
+>>36	belong		x		%d sysdep messages
+>6	beshort		=0		\b%d,
+>>8	belong		x		%d messages
+0	string          \001gpg                 GPG key trust database
+>4	byte            x                       version %d
+0	beshort		0x8502			GPG encrypted data
+!:mime	text/PGP # encoding: data
+0	leshort		0x0d8c
+>4	leshort		0x0203
+>>2	leshort		0x0204		GPG symmetrically encrypted data (3DES cipher)
+>>2	leshort		0x0304		GPG symmetrically encrypted data (CAST5 cipher)
+>>2	leshort		0x0404		GPG symmetrically encrypted data (BLOWFISH cipher)
+>>2	leshort		0x0704		GPG symmetrically encrypted data (AES cipher)
+>>2	leshort		0x0804		GPG symmetrically encrypted data (AES192 cipher)
+>>2	leshort		0x0904		GPG symmetrically encrypted data (AES256 cipher)
+>>2	leshort		0x0a04		GPG symmetrically encrypted data (TWOFISH cipher)
+>>2	leshort		0x0b04		GPG symmetrically encrypted data (CAMELLIA128 cipher)
+>>2	leshort		0x0c04		GPG symmetrically encrypted data (CAMELLIA192 cipher)
+>>2	leshort		0x0d04		GPG symmetrically encrypted data (CAMELLIA256 cipher)
+0	belong	32
+>4	byte	1
+>>8	string	KBXf	GPG keybox database
+>>>5	byte	1	version %d
+>>>16	bedate	x	\b, created-at %s
+>>>20	bedate	x	\b, last-maintained %s
+0	string	\0LOCATE	GNU findutils locate database data
+>7	string	>\0		\b, format %s
+>7	string	02		\b (frcode)
+0	search/1024	\nmsgid
+>&0	search/1024	\nmsgstr	GNU gettext message catalogue text
+!:strength +100
+!:mime text/x-po

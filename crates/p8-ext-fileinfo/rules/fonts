@@ -1,0 +1,195 @@
+0	search/1	FONT		ASCII vfont text
+0	short		0436		Berkeley vfont data
+0	short		017001		byte-swapped Berkeley vfont data
+0	string		%!PS-AdobeFont-1.	PostScript Type 1 font text
+>20	string		>\0			(%s)
+6	string		%!PS-AdobeFont-1.
+>24	ubyte		x			PostScript Type 1 font program data
+!:mime	font/x-postscript-pfb
+!:ext	pfb
+>>24	ubyte		=0x3A
+>>>26	string		>\0			(%s)
+>>24	ubyte		!0x3A
+>>>25	search/1247	/FontName\040/
+>>>>&0	regex		[A-Za-z0-9-]+		(%s)
+6	string		%PS-AdobeFont-1.	PostScript Type 1 font program data
+!:mime	font/x-postscript-pfb
+!:ext	pfb
+>25	string		>\0			(%s)
+0	string		%!FontType1	PostScript Type 1 font program data
+6	string		%!FontType1	PostScript Type 1 font program data
+!:mime	font/x-postscript-pfb
+!:ext	pfb
+>23	string		>\0			(%s)
+230	string		%!FontType1	PostScript Type 1 font program data
+!:mime	font/x-postscript-pfb
+!:ext	pfb
+>247	string		>\0			(%s)
+0	string		%!PS-Adobe-3.0\ Resource-Font	PostScript Type 1 font text
+0		uleshort	0x0100
+>66		uleshort	0x0081
+>>(101.l)	string/c	Postscript	Printer Font Metrics
+!:mime	application/x-font-pfm
+!:ext	pfm
+>>>139		ulelong		>0
+>>>>(139.l)	string		x		%s
+>>>2		ulelong		x		\b, %d bytes
+>>>105		ulelong		>0
+>>>>(105.l)	string		x		\b, %s
+>>>80		ubyte		1		italic
+>>>81		ubyte		1		underline
+>>>82		ubyte		1		strikeout
+>>>83		uleshort	>699		bold
+>>>90		ubyte		16		serif
+>>>90		ubyte		17		serif proportional
+>>>90		ubyte		49		proportional
+>>>90		ubyte		64		script
+>>>90		ubyte		65		script proportional
+0	belong		00000004
+>104	belong		00000004		X11 SNF font data, MSB first
+!:mime	application/x-font-sfn
+!:ext	snf
+0	lelong		00000004
+>104	lelong		00000004		X11 SNF font data, LSB first
+!:mime	application/x-font-sfn
+!:ext	snf
+0	search/1	STARTFONT\ 		X11 BDF font text
+0			string		FILE
+>8			string		PFF2
+>>4			ubelong		4
+>>>12			string		NAME		GRUB2 font
+!:mime			application/x-font-pf2
+!:ext			pf2
+>>>>16			ubelong		>0
+>>>>>20			string		>\0		"%-s"
+0	string		\001fcp			X11 Portable Compiled Font data,
+>12	lelong		^0x08			bit: LSB,
+>12	lelong		&0x08			bit: MSB,
+>12	lelong		^0x04			byte: LSB first
+>12	lelong		&0x04			byte: MSB first
+0	string		D1.0\015		X11 Speedo font data
+0	string		flf		FIGlet font
+>3	string		>2a		version %-2.2s
+0	string		flc		FIGlet controlfile
+>3	string		>2a		version %-2.2s
+0	belong		0x14025919	libGrx font data,
+>8	leshort		x		%dx
+>10	leshort		x		\b%d
+>40	string		x		%s
+0	belong		0xff464f4e	DOS code page font data collection
+!:mime	font/x-dos-cpi
+!:ext	cpi
+0	string		\x7fDRFONT	DR-DOS code page font data collection
+!:mime	font/x-drdos-cpi
+!:ext	cpi
+7	belong		0x00454741	DOS code page font data
+7	belong		0x00564944	DOS code page font data (from Linux?)
+4098	string		DOSFONT		DOSFONT2 encrypted font data
+0	name		gdos-font
+>0	uleshort	x		GEM GDOS font
+!:mime	application/x-font-gdos
+!:ext	fnt/gtf
+>4	string		x		%.32s
+>2	uleshort	x		%u
+>0	uleshort	x		\b, ID %#4.4x
+>62	uleshort	!0x5555		\b, lightening mask %#x
+>64	uleshort	!0x5555		\b, skewing mask %#x
+>76	ulelong		x		\b, %#x foffset
+0	string		PFR1		Portable Font Resource font data (new)
+>102	string		>0		\b: %s
+0	string		PFR0		Portable Font Resource font data (old)
+>4	beshort		>0		version %d
+0	string	typ1
+>0	use		sfnt-font
+>0	use		sfnt-names
+0	string	true
+>0	use		sfnt-font
+>0	use		sfnt-names
+0	string	\000\001\000\000
+>0	use		sfnt-font
+>0	use		sfnt-names
+0	name		sfnt-font
+>4	ubeshort	<47		
+>>12	regex/4l	\^[A-Za-z][A-Za-z][A-Za-z/][A-Za-z2\ ]	
+>>>0	ubelong	!0x4f54544f	TrueType
+!:mime	font/sfnt
+!:apple	????tfil
+!:ext	ttf/tte
+>>>0	ubelong	=0x4f54544f	OpenType
+!:mime	font/otf
+!:apple	????OTTO
+!:ext	otf
+>>>0	ubelong	x		Font data
+>>>12	search/432	DSIG		\b, digitally signed
+>>>4	ubeshort	x		\b, %d tables
+>>>12	string		x		\b, 1st "%4.4s"
+0	name		sfnt-names
+>12	search/432/s	name		
+>>&8	ubelong		>0x00100000	
+>>>&-4	ubelong		x		\b, name offset %#x
+>>&8	ubelong		<0x00100000	
+>>>&-16	ubelong		x		
+>>>>(&8.L)	ubequad	x		
+>>>>>&-6	ubeshort	x	\b, %d names
+>>>>>&-2	ubeshort	0	\b, Unicode
+>>>>>&-2	ubeshort	1	\b, Macintosh
+>>>>>&-2	ubeshort	3	\b, Microsoft
+>>>>>&2		ubeshort	>0	\b, language %#x
+>>>>>&4		ubeshort	>0	\b, type %d string
+>>>>>&0		ubeshort	0	
+>>>>>>&6		ubeshort	0	
+>>>>>>>&(&-14.S-18)	ubyte		!0	
+>>>>>>>>&-1		string		x	\b, %-11.96s
+>>>>>>>&(&-14.S-18)	ubyte		0	
+>>>>>>>>&0		lestring16	x	\b, %-11.96s
+>>>>>&0		ubeshort	>0	
+>>>>>>&6		ubeshort	0	
+>>>>>>>&(&-14.S-17)	lestring16	x	\b, %-11.96s
+0	string		\007\001\001\000Copyright\ (c)\ 199	Adobe Multiple Master font
+0	string		\012\001\001\000Copyright\ (c)\ 199	Adobe Multiple Master font
+0	string		ttcf
+>4	ubyte		0		
+>>(12.L)	ubelong	!0x4f54544f	TrueType
+!:mime	font/ttf
+!:apple	????tfil
+!:ext	ttc
+>>(12.L)	ubelong	=0x4f54544f	OpenType
+!:mime	font/otf
+!:apple	????OTTO
+!:ext	ttc/otc
+>>4	ubyte		x		font collection data
+>>4	belong		0x00010000	\b, 1.0
+>>4	belong		0x00020000	\b, 2.0
+>>8	ubelong		>0		\b, %d fonts
+>>(8.L*4) ubequad	x		
+>>>&4	belong		0x44534947	\b, digitally signed
+>>12	ubelong		x		\b, at %#x
+>>(12.L) use		sfnt-font
+0	string		OTTO		OpenType font data
+!:mime application/vnd.ms-opentype
+0	string		SplineFontDB:	Spline Font Database
+!:mime application/vnd.font-fontforge-sfd
+>14	string		x		version %s
+0x40	string		\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0
+>0x22	string		LP		Embedded OpenType (EOT)
+>>0x52	short	!0
+>>>0x54	lestring16	x		\b, %s family
+!:mime application/vnd.ms-fontobject
+0	name		woff
+>4	belong		0x00010000	\b, TrueType
+>4	belong		0x4F54544F	\b, CFF
+>4	belong		0x74727565	\b, TrueType
+>4	default		x
+>>4	belong		x		\b, flavor %d
+>8	belong		x		\b, length %d
+0	string		wOFF	Web Open Font Format
+!:mime font/woff
+>0	use		woff
+>20	beshort		x	\b, version %d
+>22	beshort		x	\b.%d
+0	string		wOF2	Web Open Font Format (Version 2)
+!:mime font/woff2
+!:ext	woff2
+>0	use		woff
+>24	beshort		x	\b, version %d
+>26	beshort		x	\b.%d

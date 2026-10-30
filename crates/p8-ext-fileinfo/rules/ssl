@@ -1,0 +1,8 @@
+0	string	-----BEGIN\040CERTIFICATE-----	PEM certificate
+0	string	-----BEGIN\040CERTIFICATE\040REQ	PEM certificate request
+0	string	-----BEGIN\040RSA\040PRIVATE	PEM RSA private key
+0	string	-----BEGIN\040DSA\040PRIVATE	PEM DSA private key
+0	string	-----BEGIN\040EC\040PRIVATE	PEM EC private key
+0	string	-----BEGIN\040ECDSA\040PRIVATE	PEM ECDSA private key
+0	string	Salted__	openssl enc'd data with salted password
+0	string U2FsdGVkX1	openssl enc'd data with salted password, base64 encoded

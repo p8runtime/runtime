@@ -1,0 +1,9 @@
+0	string	XPCOM\nMozFASL\r\n\x1A		Mozilla XUL fastload data
+0	string	mozLz4a				Mozilla lz4 compressed bookmark data
+0	string	mozLz40\0			Mozilla lz4 compressed data
+!:mime	application/x-lz4+json
+!:ext	jsonlz4/mozlz4
+>8	ulelong	x				\b, originally %u bytes
+4	string	PK\001\002	Mozilla archive omni.ja
+!:mime	application/x-zip
+!:ext	ja
