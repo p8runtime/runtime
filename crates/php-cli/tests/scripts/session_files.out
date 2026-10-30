@@ -1,0 +1,52 @@
+== strict mode
+bool(false)
+int(32)
+bool(true)
+array(1) {
+  ["k"]=>
+  int(1)
+}
+int(1)
+== regenerate
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+string(6) "r|i:1;"
+string(6) "r|i:2;"
+== depth and mode
+bool(true)
+bool(true)
+string(3) "640"
+bool(true)
+
+Warning: session_save_path(): Session save path cannot be changed when a session is active in %s on line 62
+
+Warning: session_id(): Session ID cannot be changed when a session is active in %s on line 63
+bool(true)
+== garbage collection
+
+Warning: session_save_path(): Session save path cannot be changed when a session is active in %s on line 67
+
+Warning: ini_set(): Session ini settings cannot be changed when a session is active in %s on line 68
+
+Warning: session_id(): Session ID cannot be changed when a session is active in %s on line 73
+
+Notice: session_start(): Ignoring session_start() because a session is already active (started from %s on line 61) in %s on line 74
+int(0)
+bool(true)
+bool(true)
+bool(true)
+
+Warning: session_gc(): Session cannot be garbage collected when there is no active session in %s on line 78
+bool(false)
+== a file that cannot be written
+bool(false)
+session_start(): Failed to read session data: files (path: ...)
+bool(true)
+string(0) ""
+bool(false)
+session_start(): Failed to read session data: files (path: ...)

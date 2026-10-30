@@ -1,0 +1,30 @@
+bool(true)
+bool(true)
+bool(false)
+open: Error: Session is not active
+close: Error: Session is not active
+read: Error: Session is not active
+write: Error: Session is not active
+destroy: Error: Session is not active
+gc: Error: Session is not active
+create_sid: Error: Session is not active
+bool(true)
+string(4) "user"
+open
+read: ''
+bool(true)
+bool(true)
+write: k|s:1:"v";
+close
+string(10) "k|s:1:"v";"
+open
+read: 'k|s:1:"v";'
+string(10) "k|s:1:"v";"
+close
+-- parent calls before the session is open
+Error: Session is not active
+-- the base class used as a handler
+bool(true)
+bool(true)
+bool(true)
+string(6) "n|i:1;"

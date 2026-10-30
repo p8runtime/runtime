@@ -1,0 +1,9 @@
+[buffer: 109 bytes]
+open
+read
+end of script
+shutdown 1: session active
+shutdown 2: session active
+write(x|i:1;)
+close
+destructor

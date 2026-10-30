@@ -1,0 +1,99 @@
+== php
+bool(true)
+int|i:42;float|d:1.5;str|s:5:"a|b\000c";bool|b:0;null|N;list|a:2:{i:0;i:1;i:1;a:2:{i:0;i:2;i:1;i:3;}}obj|O:5:"Point":3:{s:1:"x";i:1;s:4:"\000*\000y";i:2;s:8:"\000Point\000z";i:3;}
+bool(true)
+bool(true)
+array(7) {
+  [0]=>
+  string(3) "int"
+  [1]=>
+  string(5) "float"
+  [2]=>
+  string(3) "str"
+  [3]=>
+  string(4) "bool"
+  [4]=>
+  string(4) "null"
+  [5]=>
+  string(4) "list"
+  [6]=>
+  string(3) "obj"
+}
+bool(true)
+bool(true)
+== php_binary
+bool(true)
+\003inti:42;\005floatd:1.5;\003strs:5:"a|b\000c";\004boolb:0;\004nullN;\004lista:2:{i:0;i:1;i:1;a:2:{i:0;i:2;i:1;i:3;}}\003objO:5:"Point":3:{s:1:"x";i:1;s:4:"\000*\000y";i:2;s:8:"\000Point\000z";i:3;}
+bool(true)
+bool(true)
+array(7) {
+  [0]=>
+  string(3) "int"
+  [1]=>
+  string(5) "float"
+  [2]=>
+  string(3) "str"
+  [3]=>
+  string(4) "bool"
+  [4]=>
+  string(4) "null"
+  [5]=>
+  string(4) "list"
+  [6]=>
+  string(3) "obj"
+}
+bool(true)
+bool(true)
+== php_serialize
+bool(true)
+a:7:{s:3:"int";i:42;s:5:"float";d:1.5;s:3:"str";s:5:"a|b\000c";s:4:"bool";b:0;s:4:"null";N;s:4:"list";a:2:{i:0;i:1;i:1;a:2:{i:0;i:2;i:1;i:3;}}s:3:"obj";O:5:"Point":3:{s:1:"x";i:1;s:4:"\000*\000y";i:2;s:8:"\000Point\000z";i:3;}}
+bool(true)
+bool(true)
+array(7) {
+  [0]=>
+  string(3) "int"
+  [1]=>
+  string(5) "float"
+  [2]=>
+  string(3) "str"
+  [3]=>
+  string(4) "bool"
+  [4]=>
+  string(4) "null"
+  [5]=>
+  string(4) "list"
+  [6]=>
+  string(3) "obj"
+}
+bool(true)
+bool(true)
+== a name with the separator, a number as a name
+bool(false)
+
+Warning: session_encode(): Skipping numeric key 5 in %s on line 45
+string(7) "ok|i:2;"
+bool(false)
+== decoding bad data
+php x => false [] 1
+php x| => false [] 1
+php x|i:1 => false [] 1
+php x|i:1;y| => false [] 1
+php \005abc => false [] 1
+php garbage => false [] 1
+php_binary x => false [] 1
+php_binary x| => false [] 1
+php_binary x|i:1 => false [] 1
+php_binary x|i:1;y| => false [] 1
+php_binary \005abc => false [] 1
+php_binary garbage => false [] 1
+php_serialize x => false [] 1
+php_serialize x| => false [] 1
+php_serialize x|i:1 => false [] 1
+php_serialize x|i:1;y| => false [] 1
+php_serialize \005abc => false [] 1
+php_serialize garbage => false [] 1
+== an unknown handler
+
+Warning: ini_set(): Serialization handler "nope" cannot be found in %s on line 68
+bool(false)
+string(13) "php_serialize"

@@ -1,0 +1,15 @@
+[package]
+name = "p8-ext-session"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's session extension: session_* functions, the files and user save handlers, the php/php_binary/php_serialize serializers"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+# serialize() and unserialize() for the session serializers
+p8-ext-standard = { path = "../p8-ext-standard" }
+# session ids: the OS's randomness (already a dependency of p8-ext-standard)
+getrandom = "0.2"
+# O_NOFOLLOW, for the files handler (constants only; already a dependency of p8-ext-standard)
+libc = "0.2"
