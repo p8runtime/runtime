@@ -78,6 +78,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "pathinfo", run: pathinfo, by_ref: &[] },
     Builtin { name: "scandir", run: scandir, by_ref: &[] },
     Builtin { name: "glob", run: glob, by_ref: &[] },
+    Builtin { name: "fnmatch", run: fnmatch, by_ref: &[] },
     Builtin { name: "opendir", run: opendir, by_ref: &[] },
     Builtin { name: "stream_get_wrappers", run: stream_get_wrappers, by_ref: &[] },
     Builtin { name: "readdir", run: readdir, by_ref: &[] },
@@ -927,6 +928,87 @@ fn wildcard(pattern: &[u8], name: &[u8]) -> bool {
             hit != negate && wildcard(after, tail)
         }
         Some((&p, rest)) => name.first() == Some(&p) && wildcard(rest, &name[1..]),
+    }
+}
+
+const FNM_NOESCAPE: i64 = 2;
+const FNM_PATHNAME: i64 = 1;
+const FNM_PERIOD: i64 = 4;
+const FNM_CASEFOLD: i64 = 16;
+
+/// fnmatch(string $pattern, string $filename, int $flags = 0): glibc's
+/// fnmatch, with FNM_NOESCAPE, FNM_PATHNAME, FNM_PERIOD and FNM_CASEFOLD.
+fn fnmatch(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let pattern = str_arg(args, 0);
+    let name = str_arg(args, 1);
+    let flags = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+    Ok(Value::Bool(fn_match(pattern.as_bytes(), name.as_bytes(), flags, true)))
+}
+
+/// Whether `name` matches `pattern`; `start`: `name` begins a path
+/// component (where FNM_PERIOD wants a leading dot matched literally).
+fn fn_match(pattern: &[u8], name: &[u8], flags: i64, start: bool) -> bool {
+    let fold = |c: u8| if flags & FNM_CASEFOLD != 0 { c.to_ascii_lowercase() } else { c };
+    let hidden = start && flags & FNM_PERIOD != 0 && name.first() == Some(&b'.');
+    // A character a wildcard may stand for here.
+    let wild_ok = |c: u8| !(flags & FNM_PATHNAME != 0 && c == b'/');
+    let next_start = |c: u8| flags & FNM_PATHNAME != 0 && c == b'/';
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some((b'*', rest)) => {
+            if hidden {
+                return false;
+            }
+            let mut i = 0;
+            loop {
+                if fn_match(rest, &name[i..], flags, i > 0 && next_start(name[i - 1]) || (i == 0 && start)) {
+                    return true;
+                }
+                if i == name.len() || !wild_ok(name[i]) {
+                    return false;
+                }
+                i += 1;
+            }
+        }
+        Some((b'?', rest)) => match name.split_first() {
+            Some((&c, tail)) if wild_ok(c) && !hidden => fn_match(rest, tail, flags, next_start(c)),
+            _ => false,
+        },
+        Some((b'[', rest)) => {
+            let Some((&c, tail)) = name.split_first() else { return false };
+            if !wild_ok(c) || hidden {
+                return false;
+            }
+            let (negate, body) = match rest.split_first() {
+                Some((b'!' | b'^', b)) => (true, b),
+                _ => (false, rest),
+            };
+            // `]` first in the set is a member; find the closing one.
+            let Some(close) = body.iter().skip(1).position(|&x| x == b']').map(|p| p + 1) else {
+                return c == b'[' && fn_match(rest, tail, flags, false);
+            };
+            let set = &body[..close];
+            let mut hit = false;
+            let mut i = 0;
+            while i < set.len() {
+                if i + 2 < set.len() && set[i + 1] == b'-' {
+                    hit |= fold(set[i]) <= fold(c) && fold(c) <= fold(set[i + 2]);
+                    i += 3;
+                } else {
+                    hit |= fold(set[i]) == fold(c);
+                    i += 1;
+                }
+            }
+            hit != negate && fn_match(&body[close + 1..], tail, flags, next_start(c))
+        }
+        Some((b'\\', rest)) if flags & FNM_NOESCAPE == 0 && !rest.is_empty() => match name.split_first() {
+            Some((&c, tail)) => fold(c) == fold(rest[0]) && fn_match(&rest[1..], tail, flags, next_start(c)),
+            None => false,
+        },
+        Some((&p, rest)) => match name.split_first() {
+            Some((&c, tail)) => fold(c) == fold(p) && fn_match(rest, tail, flags, next_start(c)),
+            None => false,
+        },
     }
 }
 
