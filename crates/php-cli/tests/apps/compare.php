@@ -1,15 +1,21 @@
 <?php
-// Compares WordPress's PHPUnit run under PHP (a JUnit log) with p8's (a
+// Compares an app's own PHPUnit run under PHP (a JUnit log) with p8's (a
 // TeamCity log, written as each test ends, so a run that stops early still
 // counts what it ran), test by test: a test counts for p8 when PHP passes
 // it and p8 passes it too. Prints the score and the classes that differ
 // most, and writes the run as a p8-test-suite "suite" line (apps.jsonl).
+// Shared by every app's suite.sh (crates/php-cli/tests/<app>/suite.sh), so
+// all apps are scored alike.
 //
-// Usage: php compare.php PHP.xml P8.tc SUITE.jsonl P8_COMMIT PHP_VERSION WP_VERSION
-[, $php_log, $p8_log, $out, $commit, $php_version, $wp_version] = $argv;
+// Usage: php compare.php PHP.xml P8.tc SUITE.jsonl P8_COMMIT PHP_VERSION
+//          APP APP_VERSION SUITE_NAME SOURCE TESTS_ROOT
+// A test's group is the directory (or file) right under TESTS_ROOT (a path
+// fragment such as tests/phpunit/tests/; several, comma-separated, are
+// tried in order).
+[, $php_log, $p8_log, $out, $commit, $php_version, $app, $app_version, $suite_name, $source, $tests_root] = $argv;
 
 // PHP's outcomes, and each test's group: its directory (or file) under
-// tests/phpunit/tests.
+// TESTS_ROOT.
 $php = [];
 $group = [];
 $xml = simplexml_load_file($php_log) or exit("$php_log: not a JUnit log\n");
@@ -24,7 +30,13 @@ foreach ($xml->xpath('//testcase') as $case) {
         default => 'pass',
     };
     $file = (string) $case['file'];
-    $rel = preg_replace('#^.*/tests/phpunit/tests/#', '', $file);
+    $rel = basename($file);
+    foreach (explode(',', $tests_root) as $root) {
+        if (($at = strpos($file, $root)) !== false) {
+            $rel = substr($file, $at + strlen($root));
+            break;
+        }
+    }
     $group[$key] = str_contains($rel, '/') ? strstr($rel, '/', true) : basename($rel, '.php');
 }
 
@@ -83,10 +95,10 @@ foreach (array_slice($by_class, 0, 15, true) as $class => $n) {
 
 $line = [
     'type' => 'suite',
-    'apps' => ['WordPress'],
-    'name' => "WordPress's PHPUnit tests",
-    'version' => $wp_version,
-    'source' => "https://github.com/WordPress/wordpress-develop/tree/$wp_version/tests/phpunit",
+    'apps' => [$app],
+    'name' => $suite_name,
+    'version' => $app_version,
+    'source' => $source,
     'p8' => $commit,
     'php' => $php_version,
     'tests' => count($passing),
