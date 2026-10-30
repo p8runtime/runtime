@@ -3148,7 +3148,20 @@ impl Context<'_> {
                     }
                     Rare::CallableArgByRef => {
                         let callee = reg!(b).clone();
-                        let by_ref = self.resolve_callable(&callee).is_ok_and(|t| self.takes_ref(&t, class as usize));
+                        let retry = self.autoload_retry.clone();
+                        let by_ref = match self.resolve_callable(&callee) {
+                            Ok(t) => self.takes_ref(&t, class as usize),
+                            // A class not loaded yet: the autoloaders run and the
+                            // question is asked again (not answered "no", which
+                            // left the class unloaded for the call itself).
+                            Err(t @ Throw::Autoload(_)) => return Err(t),
+                            // Still not there after they ran: the call itself is
+                            // told so too, not running them again.
+                            Err(_) => {
+                                self.autoload_retry = retry;
+                                false
+                            }
+                        };
                         reg!(a) = Value::Bool(by_ref);
                     }
                     Rare::ReturnRef => {
