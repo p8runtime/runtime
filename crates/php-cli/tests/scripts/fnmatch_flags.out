@@ -1,0 +1,26 @@
+*.txt | a.txt | 0             true
+*.txt | dir/a.txt | 0         true
+*.txt | dir/a.txt | 1         false
+*/*.txt | dir/a.txt | 1       true
+* | .hidden | 0               true
+* | .hidden | 4               false
+.* | .hidden | 4              true
+dir/* | dir/.h | 5            false
+dir/* | dir/.h | 4            true
+A?C | abc | 16                true
+A?C | abc | 0                 false
+[a-c]x | bx | 0               true
+[!a-c]x | bx | 0              false
+[]] | ] | 0                   true
+\* | * | 0                    true
+\* | \x | 2                   true
+\* | \* | 2                   true
+a\b | ab | 0                  true
+192.168.* | 192.168.1.1 | 0   true
+*.example.com | www.example.com | 0true
+? | / | 1                     false
+[/] | / | 1                   false
+ |  | 0                       true
+* |  | 0                      true
+a*b*c | axxbyyc | 0           true
+a*b*c | axxbyy | 0            false

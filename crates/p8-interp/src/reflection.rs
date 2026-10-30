@@ -737,6 +737,10 @@ fn_method!(fa_get_static_variables, |ctx, info, this, args| {
     let callee = callee_of(ctx, this)?;
     Ok(Value::Array(Rc::new(ctx.static_variables(&callee))))
 });
+fn_method!(fa_get_closure_used_variables, |ctx, info, this, args| {
+    let callee = callee_of(ctx, this)?;
+    Ok(Value::Array(Rc::new(ctx.closure_used_variables(&callee))))
+});
 fn_method!(fa_get_closure_this, |ctx, info, this, args| Ok(info.closure_this.clone().map_or(Value::Null, Value::Object)));
 fn_method!(fa_get_closure_scope_class, |ctx, info, this, args| Ok(match &info.closure_scope {
     Some(c) => new_class_reflection(ctx, c),
@@ -985,7 +989,8 @@ fn default_constant_value(ctx: &mut dyn Ctx, class: Option<&Rc<Class>>, name: &[
         let owner = match owner.to_ascii_lowercase().as_slice() {
             b"self" | b"static" => class.cloned(),
             b"parent" => class.and_then(|c| c.parent.clone()),
-            _ => ctx.class(owner),
+            // Autoloaded if need be, as evaluating the default does.
+            _ => ctx.class_load(owner)?,
         };
         let Some(owner) = owner else {
             return Err(missing(ctx, format!("Class \"{}\" not found", String::from_utf8_lossy(&name[..at]))));
@@ -1724,6 +1729,29 @@ fn ra_get_arguments(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
     Ok(Value::Array(Rc::new(ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?)))
 }
 
+/// ReflectionAttribute::__toString(): "Attribute [ Name ]" and its
+/// arguments, each as a default value prints (php_reflection.c).
+fn ra_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let subject = decode_subject(ctx, &get(this, "\0subject"))?;
+    let args = ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?;
+    let mut out = format!("Attribute [ {} ]", text(&get(this, "name")));
+    if args.len() > 0 {
+        out.push_str(&format!(" {{\n  - Arguments [{}] {{\n", args.len()));
+        for (i, (k, v)) in args.iter().enumerate() {
+            out.push_str(&format!("    Argument #{i} [ "));
+            if let Key::Str(name) = k {
+                out.push_str(&String::from_utf8_lossy(name.as_bytes()));
+                out.push_str(" = ");
+            }
+            default_text(&mut out, v);
+            out.push_str(" ]\n");
+        }
+        out.push_str("  }\n}");
+    }
+    out.push('\n');
+    Ok(s(out.as_bytes()))
+}
+
 /// The attribute names of the builtin attribute classes (they take any target).
 const BUILTIN_ATTRIBUTES: [&[u8]; 6] = [b"attribute", b"returntypewillchange", b"allowdynamicproperties", b"sensitiveparameter", b"override", b"deprecated"];
 
@@ -2014,6 +2042,7 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("getAttributes", Some(Native::Method(fa_get_attributes))),
     ("getStaticVariables", Some(Native::Method(fa_get_static_variables))),
     ("getClosureThis", Some(Native::Method(fa_get_closure_this))),
+    ("getClosureUsedVariables", Some(Native::Method(fa_get_closure_used_variables))),
     ("getClosureScopeClass", Some(Native::Method(fa_get_closure_scope_class))),
     ("getClosureCalledClass", Some(Native::Method(fa_get_closure_called_class))),
 ];
@@ -2349,6 +2378,7 @@ pub static CLASSES: &[ClassSpec] = &[
             ("isRepeated", Some(Native::Method(ra_is_repeated))),
             ("getArguments", Some(Native::Method(ra_get_arguments))),
             ("newInstance", Some(Native::Method(ra_new_instance))),
+            ("__toString", Some(Native::Method(ra_to_string))),
         ],
         constants: &[("IS_INSTANCEOF", Constant::Int(2))],
         debug_info: Some(info_name),

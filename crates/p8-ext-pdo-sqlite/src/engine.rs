@@ -3,7 +3,7 @@
 
 use std::num::NonZero;
 use std::sync::Arc;
-use turso_core::{Connection, Database, LimboError, OpenFlags, OpenOptions, PlatformIO, SqliteDialect, StepResult, Value, IO};
+use turso_core::{Connection, Database, DatabaseOpts, LimboError, OpenFlags, OpenOptions, PlatformIO, SqliteDialect, StepResult, Value, IO};
 
 /// SQLite's primary result codes, the ones PDO tells apart.
 pub const SQLITE_ERROR: i64 = 1;
@@ -62,19 +62,22 @@ impl Engine {
         if readonly {
             flags |= OpenFlags::ReadOnly;
         }
-        let db = Database::open(io, path, OpenOptions::new(Arc::new(SqliteDialect)).flags(flags)).map_err(|e| map_error(&e))?;
+        // SQLite has generated columns and views; Turso keeps them behind
+        // options (an error otherwise: "Generated columns require ...").
+        let features = DatabaseOpts::default().with_generated_columns(true).with_views(true);
+        let db = Database::open(io, path, OpenOptions::new(Arc::new(SqliteDialect)).flags(flags).db_opts(features)).map_err(|e| map_error(&e))?;
         let conn = db.connect().map_err(|e| map_error(&e))?;
         Ok(Engine { _db: db, conn })
     }
 
     /// Run SQL that returns no rows (one or more statements); the rows changed.
     pub fn exec(&self, sql: &str) -> Result<i64, EngineError> {
-        self.conn.prepare_execute_batch(sql).map_err(|e| map_error(&e))?;
+        self.conn.prepare_execute_batch(&main_schema_dropped(sql)).map_err(|e| map_error(&e))?;
         Ok(self.conn.changes())
     }
 
     pub fn prepare(&self, sql: &str) -> Result<Prepared, EngineError> {
-        let stmt = self.conn.prepare(sql).map_err(|e| map_error(&e))?;
+        let stmt = self.conn.prepare(main_schema_dropped(sql).as_ref()).map_err(|e| map_error(&e))?;
         Ok(Prepared { stmt, conn: Arc::clone(&self.conn) })
     }
 
@@ -88,6 +91,102 @@ impl Engine {
 
     pub fn busy_timeout_ms(&self, ms: u64) {
         self.conn.set_busy_timeout(std::time::Duration::from_millis(ms));
+    }
+}
+
+/// `pragma_table_xinfo('t', 'main')` as `pragma_table_xinfo('t')`: Turso
+/// refuses a schema argument to a table-valued pragma ("Schema argument is
+/// not supported yet"), even "main", the only schema a connection has
+/// here. Laravel's SQLite grammar always passes it. Only a trailing
+/// `'main'` string literal is dropped; text inside string literals and
+/// quoted names is left alone.
+fn main_schema_dropped(sql: &str) -> std::borrow::Cow<'_, str> {
+    let b = sql.as_bytes();
+    if !sql.to_ascii_lowercase().contains("pragma_") {
+        return std::borrow::Cow::Borrowed(sql);
+    }
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    let mut copied = 0;
+    while i < b.len() {
+        match b[i] {
+            // A quoted string or name: skipped whole ('' / "" escape a quote).
+            q @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < b.len() {
+                    if b[i] == q {
+                        if b.get(i + 1) == Some(&q) {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            c if (c == b'p' || c == b'P') && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_')) && b[i..].len() > 7 && b[i..i + 7].eq_ignore_ascii_case(b"pragma_") => {
+                let mut j = i + 7;
+                while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+                    j += 1;
+                }
+                while j < b.len() && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if b.get(j) != Some(&b'(') {
+                    i = j;
+                    continue;
+                }
+                // Find the closing parenthesis, skipping string literals.
+                let mut k = j + 1;
+                let mut last_comma = None;
+                while k < b.len() && b[k] != b')' {
+                    match b[k] {
+                        b'\'' => {
+                            k += 1;
+                            while k < b.len() && !(b[k] == b'\'' && b.get(k + 1) != Some(&b'\'')) {
+                                k += if b[k] == b'\'' { 2 } else { 1 };
+                            }
+                            k += 1;
+                        }
+                        b',' => {
+                            last_comma = Some(k);
+                            k += 1;
+                        }
+                        _ => k += 1,
+                    }
+                }
+                if let Some(comma) = last_comma
+                    && k < b.len()
+                    && sql[comma + 1..k].trim().eq_ignore_ascii_case("'main'")
+                {
+                    out.push_str(&sql[copied..comma]);
+                    copied = k;
+                }
+                i = k;
+            }
+            _ => i += 1,
+        }
+    }
+    if copied == 0 {
+        return std::borrow::Cow::Borrowed(sql);
+    }
+    out.push_str(&sql[copied..]);
+    std::borrow::Cow::Owned(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::main_schema_dropped;
+
+    #[test]
+    fn drops_only_a_trailing_main_literal() {
+        assert_eq!(main_schema_dropped("select * from pragma_table_xinfo('t', 'main') order by cid"), "select * from pragma_table_xinfo('t') order by cid");
+        assert_eq!(main_schema_dropped("select * from PRAGMA_index_list( 'a''b' ,  'MAIN' )"), "select * from PRAGMA_index_list( 'a''b' )");
+        assert_eq!(main_schema_dropped("select * from pragma_table_info('t', 'other')"), "select * from pragma_table_info('t', 'other')");
+        assert_eq!(main_schema_dropped("select 'pragma_x(1, ''main'')'"), "select 'pragma_x(1, ''main'')'");
+        assert_eq!(main_schema_dropped("select * from pragma_table_info('t')"), "select * from pragma_table_info('t')");
+        assert_eq!(main_schema_dropped("select my_pragma_x('a', 'main')"), "select my_pragma_x('a', 'main')");
     }
 }
 

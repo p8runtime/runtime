@@ -335,12 +335,21 @@ pub struct Ids {
     /// Every object, by id (an id is one live object's at a time):
     /// gc_collect_cycles walks them.
     all: RefCell<Vec<std::rc::Weak<Object>>>,
+    /// Where these objects' destructors are queued, when not here (a
+    /// resource's: with the objects', which the interpreter runs).
+    queue: Option<Rc<Ids>>,
 }
 
 impl Ids {
     /// Numbers that only go up.
     pub fn monotonic() -> Ids {
         Ids { monotonic: true, ..Ids::default() }
+    }
+
+    /// Numbers that only go up, for objects whose destructors queue with
+    /// `objects`' (resources: a user-space stream is closed when it goes).
+    pub fn monotonic_beside(objects: &Rc<Ids>) -> Ids {
+        Ids { monotonic: true, queue: Some(Rc::clone(objects)), ..Ids::default() }
     }
 
     pub fn take(&self) -> u32 {
@@ -559,8 +568,9 @@ impl Drop for Object {
                 lazy: Cell::new(0),
                 lazy_info: RefCell::new(None),
             });
-            self.ids.pending.borrow_mut().push_back(revived);
-            self.ids.due.set(self.ids.due.get() + 1);
+            let queue = self.ids.queue.as_deref().unwrap_or(&self.ids);
+            queue.pending.borrow_mut().push_back(revived);
+            queue.due.set(queue.due.get() + 1);
             return;
         }
         self.ids.give_back(self.id);

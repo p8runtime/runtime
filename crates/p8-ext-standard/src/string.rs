@@ -46,6 +46,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "str_ireplace", run: str_ireplace, by_ref: &[3] },
     Builtin { name: "strtr", run: strtr, by_ref: &[] },
     Builtin { name: "strstr", run: strstr, by_ref: &[] },
+    Builtin { name: "strchr", run: strstr, by_ref: &[] },
     Builtin { name: "stristr", run: stristr, by_ref: &[] },
     Builtin { name: "strrchr", run: strrchr, by_ref: &[] },
     Builtin { name: "substr_replace", run: substr_replace, by_ref: &[] },

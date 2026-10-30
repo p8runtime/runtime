@@ -47,7 +47,8 @@ fn flush(ctx: &mut dyn Ctx, open: &mut Open) -> Option<usize> {
         Sink::Stream(v) => {
             let o = p8_runtime::stream::resource_of(v)?;
             let r = p8_runtime::stream::resource(&o).filter(|r| !r.closed.get())?;
-            r.stream.borrow_mut().write(ctx, &bytes)?;
+            // (A user-space wrapper's exception has nowhere to go here.)
+            r.stream.borrow_mut().write(ctx, &bytes).ok().flatten()?;
         }
     }
     Some(bytes.len())

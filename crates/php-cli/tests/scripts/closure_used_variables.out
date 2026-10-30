@@ -1,0 +1,27 @@
+array(3) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  &array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(3)
+  }
+  ["c"]=>
+  string(1) "x"
+}
+array(1) {
+  ["a"]=>
+  int(1)
+}
+array(0) {
+}
+array(0) {
+}
+array(0) {
+}
+array(1) {
+  ["q"]=>
+  int(4)
+}

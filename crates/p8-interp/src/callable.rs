@@ -610,7 +610,7 @@ impl Context<'_> {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
             "[]" => Value::Array(Rc::new(PhpArray::new())),
-            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::Str(PhpStr::from(&t[1..t.len() - 1])),
+            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::Str(PhpStr::from(&unquote(t)[..])),
             _ => {
                 if let Ok(i) = t.parse::<i64>() {
                     Value::Int(i)
@@ -677,6 +677,40 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
             params.insert(Key::from_string(PhpStr::from(name)), Value::str(kind));
         }
         out.insert(key("parameter"), Value::Array(Rc::new(params)));
+    }
+    out
+}
+
+/// A stub default's string literal as its value: `"\""` is `"`, `'\\'` is `\`
+/// (the escapes stubs use).
+fn unquote(t: &str) -> Vec<u8> {
+    let double = t.starts_with('"');
+    let body = &t.as_bytes()[1..t.len() - 1];
+    let mut out = Vec::with_capacity(body.len());
+    let mut i = 0;
+    while i < body.len() {
+        let c = body[i];
+        if c == b'\\' && i + 1 < body.len() {
+            let n = body[i + 1];
+            let v = match (double, n) {
+                (_, b'\\') => Some(b'\\'),
+                (true, b'"') => Some(b'"'),
+                (false, b'\'') => Some(b'\''),
+                (true, b'n') => Some(b'\n'),
+                (true, b't') => Some(b'\t'),
+                (true, b'r') => Some(b'\r'),
+                (true, b'0') => Some(0),
+                (true, b'$') => Some(b'$'),
+                _ => None,
+            };
+            if let Some(v) = v {
+                out.push(v);
+                i += 2;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
     }
     out
 }

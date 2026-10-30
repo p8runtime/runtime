@@ -8,7 +8,7 @@
 //! Reference: $PHP_SRC_PATH/main/streams/streams.c,
 //! $PHP_SRC_PATH/main/streams/plain_wrapper.c, $PHP_SRC_PATH/ext/standard/file.c
 
-use crate::ext::Ctx;
+use crate::ext::{Ctx, Throw};
 use crate::object::Object;
 use crate::value::Value;
 use std::cell::{Cell, RefCell};
@@ -54,6 +54,10 @@ pub enum Target {
     PipeIn(std::process::ChildStdin),
     /// A child process (proc_open); it has no bytes of its own.
     Process(Box<std::process::Child>),
+    /// A user-space wrapper's stream (stream_wrapper_register): its
+    /// methods are PHP code, reached through the `_in` methods, which
+    /// take the context.
+    User(Box<crate::user_stream::UserStream>),
 }
 
 /// A pipe read on a thread of its own, so that a read can wait or not
@@ -176,6 +180,9 @@ pub struct Stream {
     pub zlib: bool,
     /// stream_set_blocking(false): a read does not wait (sockets, pipes).
     pub nonblocking: bool,
+    /// stream_set_chunk_size(): what it was set to (8192 to begin with);
+    /// reads take what they ask for, so it is only reported back.
+    pub chunk_size: i64,
 }
 
 impl Drop for Stream {
@@ -186,7 +193,7 @@ impl Drop for Stream {
 
 impl Stream {
     pub fn new(target: Target, path: &str, mode: &str) -> Stream {
-        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false, nonblocking: false }
+        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false, nonblocking: false, chunk_size: 8192 }
     }
 
     /// stream_select's read test: whether a read would not wait (bytes
@@ -276,7 +283,7 @@ impl Stream {
                 }
                 bytes
             }
-            Target::Stdout | Target::Stderr | Target::PipeIn(_) | Target::Process(_) => Vec::new(),
+            Target::Stdout | Target::Stderr | Target::PipeIn(_) | Target::Process(_) | Target::User(_) => Vec::new(),
         }
     }
 
@@ -346,7 +353,12 @@ impl Stream {
         out
     }
 
-    pub fn write(&mut self, ctx: &mut dyn Ctx, bytes: &[u8]) -> Option<usize> {
+    /// fwrite: the bytes written (None: the write failed). A user-space
+    /// stream's stream_write may throw.
+    pub fn write(&mut self, ctx: &mut dyn Ctx, bytes: &[u8]) -> Result<Option<usize>, Throw> {
+        if let Target::User(_) = self.target {
+            return crate::user_stream::write(ctx, self, bytes);
+        }
         // Writing after reading ahead: back to where the script is.
         if !self.buffer.is_empty() {
             let back = self.buffer.len();
@@ -360,7 +372,7 @@ impl Stream {
             }
         }
         let append = self.mode.starts_with('a');
-        match &mut self.target {
+        Ok(match &mut self.target {
             Target::File(f) => f.write_all(bytes).ok().map(|()| bytes.len()),
             Target::Memory(data) => {
                 if append {
@@ -384,8 +396,8 @@ impl Stream {
             }
             Target::Tcp(sock) => sock.write_all(bytes).ok().map(|()| bytes.len()),
             Target::PipeIn(pipe) => pipe.write_all(bytes).ok().map(|()| bytes.len()),
-            Target::Stdin | Target::PipeOut(_) | Target::Process(_) => None,
-        }
+            Target::Stdin | Target::PipeOut(_) | Target::Process(_) | Target::User(_) => None,
+        })
     }
 
     pub fn tell(&mut self) -> i64 {
@@ -393,6 +405,8 @@ impl Stream {
         match &mut self.target {
             Target::File(f) => f.stream_position().map(|p| p as i64 - ahead).unwrap_or(0),
             Target::Memory(_) => self.pos as i64 - ahead,
+            // PHP's own position: the script has what was read ahead.
+            Target::User(_) => self.pos as i64,
             _ => 0,
         }
     }
@@ -450,5 +464,76 @@ impl Stream {
     /// feof: whether a read hit the end (and nothing is buffered).
     pub fn at_end(&self) -> bool {
         self.eof && self.buffer.is_empty()
+    }
+
+    /// fread through the context: a user-space stream's stream_read runs
+    /// (None: it failed).
+    pub fn read_in(&mut self, ctx: &mut dyn Ctx, n: usize) -> Result<Option<Vec<u8>>, Throw> {
+        match self.target {
+            Target::User(_) => crate::user_stream::read(ctx, "", self, n),
+            _ => Ok(Some(self.read(n))),
+        }
+    }
+
+    /// fgets through the context.
+    pub fn gets_in(&mut self, ctx: &mut dyn Ctx, limit: Option<usize>) -> Result<Option<Vec<u8>>, Throw> {
+        match self.target {
+            Target::User(_) => crate::user_stream::gets(ctx, self, limit),
+            _ => Ok(self.gets(limit)),
+        }
+    }
+
+    /// Everything left (up to `max` bytes) through the context.
+    pub fn read_all_in(&mut self, ctx: &mut dyn Ctx, max: Option<usize>) -> Result<Vec<u8>, Throw> {
+        match (&self.target, max) {
+            (Target::User(_), _) => crate::user_stream::read_all(ctx, self, max),
+            (_, Some(n)) => Ok(self.read(n)),
+            (_, None) => Ok(self.read_all()),
+        }
+    }
+
+    /// fseek through the context.
+    pub fn seek_in(&mut self, ctx: &mut dyn Ctx, offset: i64, whence: i64) -> Result<bool, Throw> {
+        match self.target {
+            Target::User(_) => crate::user_stream::seek(ctx, self, offset, whence),
+            _ => Ok(self.seek(offset, whence)),
+        }
+    }
+
+    /// fflush through the context.
+    pub fn flush_in(&mut self, ctx: &mut dyn Ctx) -> Result<bool, Throw> {
+        match self.target {
+            Target::User(_) => crate::user_stream::flush(ctx, self),
+            _ => Ok(self.flush()),
+        }
+    }
+
+    /// feof through the context: a user-space stream is asked (stream_eof)
+    /// when nothing said it ended yet.
+    pub fn at_end_in(&mut self, ctx: &mut dyn Ctx) -> Result<bool, Throw> {
+        match self.target {
+            Target::User(_) => crate::user_stream::at_end(ctx, self),
+            _ => Ok(self.at_end()),
+        }
+    }
+
+    /// fclose through the context: a user-space stream is flushed and
+    /// told (stream_close).
+    pub fn close_in(&mut self, ctx: &mut dyn Ctx) -> Result<(), Throw> {
+        match self.target {
+            Target::User(_) => crate::user_stream::close(ctx, self),
+            _ => {
+                self.close();
+                Ok(())
+            }
+        }
+    }
+
+    /// A user-space wrapper's stream, if this is one.
+    pub fn user(&self) -> Option<&crate::user_stream::UserStream> {
+        match &self.target {
+            Target::User(u) => Some(u),
+            _ => None,
+        }
     }
 }

@@ -1,0 +1,15 @@
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(3) "b c"
+}
+string(3) "  x"
+array(2) {
+  [0]=>
+  string(1) "1"
+  [1]=>
+  string(1) "2"
+}
+string(28) "&lt;a href=&#039;x&#039;&gt;"
+string(7) "{"a":1}"

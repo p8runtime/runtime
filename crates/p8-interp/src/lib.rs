@@ -1135,6 +1135,8 @@ impl Isolate {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
         let stop = Arc::clone(&self.interrupt);
         let classes = self.builtin_classes.clone();
+        let ids = Rc::new(Ids::default());
+        let resource_ids = Rc::new(Ids::monotonic_beside(&ids));
         Context {
             stop,
             isolate: self,
@@ -1164,11 +1166,12 @@ impl Isolate {
             loader: None,
             included: std::collections::HashSet::new(),
             included_order: Vec::new(),
-            ids: Rc::new(Ids::default()),
+            ids,
             native_class: None,
             ext_state: HashMap::new(),
+            ended_globals: Vec::new(),
             resource_classes: HashMap::new(),
-            resource_ids: Rc::new(Ids::monotonic()),
+            resource_ids,
             enum_objects: HashMap::new(),
             resolved: std::collections::HashSet::new(),
             stack_base: 0,
@@ -1274,8 +1277,12 @@ pub struct Context<'i> {
     arg_buf: Vec<Value>,
     /// Extensions' per-request state (Ctx::state).
     ext_state: HashMap<&'static str, Value>,
-    /// The class of each kind of resource, and their numbers.
-    resource_classes: HashMap<&'static str, Rc<Class>>,
+    /// The main frame's globals as the script left them, kept until the
+    /// request's end hooks have run.
+    ended_globals: Vec<Value>,
+    /// The class of each kind of resource (and whether it is a user-space
+    /// wrapper's stream, which has a destructor), and their numbers.
+    resource_classes: HashMap<(&'static str, bool), Rc<Class>>,
     resource_ids: Rc<Ids>,
     /// The class a static builtin method runs for (an enum's cases()).
     native_class: Option<Rc<Class>>,
@@ -1888,6 +1895,7 @@ impl Context<'_> {
             self.end_buffers(&mut regs);
         }
         // The request's variables go now (the isolate keeps the capacity).
+        self.ended_globals.clear();
         regs.clear();
         self.frames.clear();
         self.isolate.regs = regs;
@@ -3391,14 +3399,19 @@ impl Context<'_> {
                 }
                 Instr::Include { dst, src, kind } => {
                     let v = self.operand(w, func, src);
-                    let Some(program) = self.load_include(&v, kind, &func.file)? else {
-                        reg!(dst) = Value::Bool(kind.once());
+                    // The registers are lent: a user-space wrapper's methods
+                    // may serve the file.
+                    self.isolate.regs = std::mem::take(regs);
+                    let loaded = self.load_include(&v, kind, &func.file);
+                    *regs = std::mem::take(&mut self.isolate.regs);
+                    let Some(program) = loaded? else {
+                        regs[base + dst as usize] = Value::Bool(kind.once());
                         return Ok(Next::Go(pc));
                     };
                     let program = match program {
                         Ok(p) => p,
                         Err(()) => {
-                            reg!(dst) = Value::Bool(false);
+                            regs[base + dst as usize] = Value::Bool(false);
                             return Ok(Next::Go(pc));
                         }
                     };
@@ -3438,8 +3451,25 @@ impl Context<'_> {
                     let list: Vec<Value> = match self.operand(w, func, args) {
                         // Named arguments: placed by the target's parameters.
                         Value::Array(a) if a.iter().any(|(k, _)| matches!(k, p8_runtime::array::Key::Str(_))) => {
-                            let t = self.resolve_callable(&target)?;
-                            self.place_args(&t, &a)?
+                            match self.resolve_callable(&target)? {
+                                // __call / __callStatic take the named ones
+                                // in their array, by name.
+                                callable::Target::Frame(mut m) if m.trampoline.is_some() => {
+                                    let name = m.trampoline.take().unwrap_or_else(PhpStr::empty);
+                                    let mut packed = PhpArray::new();
+                                    for (k, v) in a.iter() {
+                                        packed.insert(k.clone(), v.deref());
+                                    }
+                                    let at = base + func.nregs as usize;
+                                    if regs.len() < at + 3 {
+                                        regs.resize(at + 3, Value::Undef);
+                                    }
+                                    regs[at] = Value::Str(name);
+                                    regs[at + 1] = Value::Array(Rc::new(packed));
+                                    return self.call_method(regs, m, at, 2, (base + dst as usize) as u32, pc);
+                                }
+                                t => self.place_args(&t, &a)?,
+                            }
                         }
                         // References (the arguments compiled as ones) kept
                         // for the parameters that take them.
@@ -4209,14 +4239,18 @@ impl Context<'_> {
 
     /// A resource object (numbered by the resources' own counter).
     fn make_resource(&mut self, resource: p8_runtime::stream::Resource) -> Rc<Object> {
+        // A user-space wrapper's stream is closed (its stream_close run)
+        // when the resource goes: its class has that as a destructor.
+        let user = resource.stream.borrow().user().is_some();
+        let dtor: Option<p8_runtime::object::NativeMethod> = if user { Some(p8_runtime::user_stream::free) } else { None };
         let class = self
             .resource_classes
-            .entry(resource.kind)
+            .entry((resource.kind, user))
             .or_insert_with(|| {
                 Rc::new(Class {
                     name: PhpStr::from(resource.kind),
                     lower: resource.kind.as_bytes().to_vec(),
-                    flags: p8_runtime::object::CLASS_RESOURCE | p8_runtime::object::CLASS_FINAL,
+                    flags: p8_runtime::object::CLASS_RESOURCE | p8_runtime::object::CLASS_FINAL | if user { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 },
                     parent: None,
                     interfaces: Vec::new(),
                     properties: Vec::new(),
@@ -4231,7 +4265,7 @@ impl Context<'_> {
                     clone_data: None,
                     forward_calls: None,
                     make_data: None,
-                    native_dtor: None,
+                    native_dtor: dtor,
                     enum_cases: Vec::new(),
                     enum_backing: None,
                     static_inits: Vec::new(),
@@ -5222,6 +5256,10 @@ impl Ctx for Context<'_> {
         self.static_variables_of(callee)
     }
 
+    fn closure_used_variables(&mut self, callee: &p8_runtime::reflect::Callee) -> PhpArray {
+        self.used_variables_of(callee)
+    }
+
     fn invoke(&mut self, callee: &p8_runtime::reflect::Callee, this: Option<Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
         self.invoke_callee(callee, this, args)
     }
@@ -5251,7 +5289,25 @@ impl Ctx for Context<'_> {
     }
 
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
-        self.class_if_loaded(name)
+        match self.class_if_loaded(name) {
+            // The autoloaders run here when the builtin lent its registers
+            // (it runs PHP code), so the builtin carries on. Unwinding to
+            // run them and re-running the call instead lost a temporary
+            // receiver: `$attributes[0]->newInstance()` became a call on
+            // null (#220).
+            Err(Throw::Autoload(n)) => {
+                let mut regs = std::mem::take(&mut self.isolate.regs);
+                if regs.is_empty() {
+                    self.isolate.regs = regs;
+                    return Err(Throw::Autoload(n));
+                }
+                let r = self.run_autoload(&mut regs, n);
+                self.isolate.regs = regs;
+                r?;
+                self.class_if_loaded(name)
+            }
+            other => other,
+        }
     }
 
     fn called_class(&self) -> Option<Rc<Class>> {

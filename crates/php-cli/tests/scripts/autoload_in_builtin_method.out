@@ -1,0 +1,11 @@
+autoload UF
+UF(60)
+int(60)
+UF(60)
+int(60)
+autoload Lazy
+enum(Lazy::A)
+autoload Missing
+Error: Class "Missing" not found
+autoload Nope
+Class "Nope" does not exist
