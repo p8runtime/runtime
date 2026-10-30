@@ -169,6 +169,11 @@ fn open(ctx: &mut dyn Ctx, func: &str, path: &PhpStr, mode: &str) -> Result<Opti
         };
         return Ok(Some(Stream::new(target, &p, mode)));
     }
+    if let Some((scheme, _)) = p.split_once("://")
+        && let Some(open) = p8_runtime::stream::wrapper(&scheme.to_ascii_lowercase())
+    {
+        return Ok(open(ctx, func, &p, mode));
+    }
     let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
     // The first letter and whether a '+' is anywhere in it ("rb+" is "r+"),
     // as php_stream_parse_fopen_modes.
@@ -395,6 +400,11 @@ fn read_path(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Result<Option<Vec<
     }
     if p.to_ascii_lowercase().starts_with("http://") {
         return Ok(http_get(ctx, func, &p));
+    }
+    if let Some((scheme, _)) = p.split_once("://")
+        && let Some(open_wrapper) = p8_runtime::stream::wrapper(&scheme.to_ascii_lowercase())
+    {
+        return Ok(open_wrapper(ctx, func, &p, "r").map(|mut s| s.read_all()));
     }
     let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
     if Path::new(&p).is_dir() {
@@ -887,8 +897,42 @@ fn glob(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Array(Rc::new(PhpArray::from_list(out))))
 }
 
+/// GLOB_BRACE's first group of alternatives expanded: "a{b,c}d" is "abd"
+/// and "acd" (None: no group; "{}" is literal, as in glibc).
+fn expand_braces(pattern: &str) -> Option<Vec<String>> {
+    let b = pattern.as_bytes();
+    let open = (0..b.len()).find(|&i| b[i] == b'{' && b.get(i + 1) != Some(&b'}'))?;
+    let mut depth = 0;
+    let mut close = None;
+    let mut cuts = vec![open];
+    for (i, &c) in b.iter().enumerate().skip(open) {
+        match c {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            b',' if depth == 1 => cuts.push(i),
+            _ => {}
+        }
+    }
+    let close = close?;
+    cuts.push(close);
+    let (head, tail) = (&pattern[..open], &pattern[close + 1..]);
+    Some(cuts.windows(2).map(|w| format!("{head}{}{tail}", &pattern[w[0] + 1..w[1]])).collect())
+}
+
 /// The paths `pattern` matches, sorted (glob(), GlobIterator).
 pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
+    const GLOB_BRACE: i64 = 1024;
+    if flags & GLOB_BRACE != 0
+        && let Some(alternatives) = expand_braces(pattern)
+    {
+        return alternatives.iter().flat_map(|p| glob_paths(p, flags)).collect();
+    }
     let absolute = pattern.starts_with('/');
     let mut found: Vec<String> = vec![if absolute { "/".into() } else { String::new() }];
     for part in pattern.split('/').filter(|s| !s.is_empty()) {
@@ -930,10 +974,10 @@ pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
 }
 
 /// stream_get_wrappers: the URL schemes p8's streams open, in PHP's order
-/// (no https, ftp(s) or phar yet).
+/// (no https, ftp(s) or phar yet), then those extensions registered (zip).
 fn stream_get_wrappers(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let names = ["compress.zlib", "php", "file", "glob", "data", "http"];
-    Ok(Value::Array(Rc::new(PhpArray::from_list(names.iter().map(|n| Value::str(*n)).collect()))))
+    let names = ["compress.zlib", "php", "file", "glob", "data", "http"].into_iter().chain(p8_runtime::stream::wrapper_schemes());
+    Ok(Value::Array(Rc::new(PhpArray::from_list(names.map(Value::str).collect()))))
 }
 
 /// opendir: a stream whose lines are the directory's entries (as readdir gives).

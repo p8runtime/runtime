@@ -1,0 +1,80 @@
+== count unopened: ValueError: Invalid or uninitialized Zip object
+== addFromString unopened: ValueError: Invalid or uninitialized Zip object
+== statIndex unopened: ValueError: Invalid or uninitialized Zip object
+== close unopened: ValueError: Invalid or uninitialized Zip object
+== getStatusString unopened: 'No error'
+== open empty name: ValueError: ZipArchive::open(): Argument #1 ($filename) must not be empty
+== open nul: ValueError: ZipArchive::open(): Argument #1 ($filename) must not contain any null bytes
+== open missing: 9
+== open type: TypeError: ZipArchive::open(): Argument #1 ($filename) must be of type string, array given
+== open too many: ArgumentCountError: ZipArchive::open() expects at most 2 arguments, 3 given
+== status unopened: [0,0,0,"","",-1]
+== addFromString: true
+== addFromString empty name: true
+== addEmptyDir empty: false
+== addEmptyDir twice: [true,false,-1,"File already exists"]
+== addEmptyDir overwrite: [true,2]
+== addFile empty: ValueError: ZipArchive::addFile(): Argument #1 ($filepath) must not be empty
+== addFile missing: [W: ZipArchive::addFile(): No such file or directory] false
+== addFile nul: ValueError: ZipArchive::addFile(): Argument #1 ($filepath) must not contain any null bytes
+== addFile bad length: false
+== addFile bad start: false
+== addFile start past end: false
+== addFile length past end: false
+== addFile unchecked length: true
+== addFile OPEN_FILE_NOW: [true,4]
+== replaceFile bad index: [false,"Invalid argument"]
+== replaceFile negative: ValueError: ZipArchive::replaceFile(): Argument #2 ($index) must be greater than or equal to 0
+== replaceFile: [true,4]
+== renameIndex empty: ValueError: ZipArchive::renameIndex(): Argument #2 ($new_name) must not be empty
+== renameIndex negative: false
+== renameName empty: ValueError: ZipArchive::renameName(): Argument #1 ($name) must not be empty
+== renameName empty new: ValueError: ZipArchive::renameName(): Argument #2 ($new_name) must not be empty
+== deleteName empty: false
+== deleteName missing: false
+== statName empty: ValueError: ZipArchive::statName(): Argument #1 ($name) must not be empty
+== locateName empty: false
+== getFromName empty: ValueError: ZipArchive::getFromName(): Argument #1 ($name) must not be empty
+== getFromName negative len: false
+== getFromIndex negative: false
+== getFromIndex pending: false
+== getStream empty: ValueError: ZipArchive::getStream(): Argument #1 ($name) must not be empty
+== getStreamName empty: ValueError: ZipArchive::getStreamName(): Argument #1 ($name) must not be empty
+== getStreamIndex bad: false
+== getStream pending: false
+== setCommentName empty: ValueError: ZipArchive::setCommentName(): Argument #1 ($name) must not be empty
+== setCommentName missing: false
+== setCommentIndex long: ValueError: ZipArchive::setCommentIndex(): Argument #2 ($comment) must be less than 65535 bytes
+== setArchiveComment long: ValueError: ZipArchive::setArchiveComment(): Argument #1 ($comment) must be less than 65535 bytes
+== getCommentName empty: ValueError: ZipArchive::getCommentName(): Argument #1 ($name) must not be empty
+== getCommentIndex bad: false
+== setExternalAttributesName empty: ValueError: ZipArchive::setExternalAttributesName(): Argument #1 ($name) must not be empty
+== getExternalAttributesName empty: ValueError: ZipArchive::getExternalAttributesName(): Argument #1 ($name) must not be empty
+== getExternalAttributesIndex bad: false
+== setCompressionName empty: ValueError: ZipArchive::setCompressionName(): Argument #1 ($name) must not be empty
+== setCompressionName unknown: false
+== pending stat after setCompression: [true,{"name":"a","index":0,"crc":0,"size":4,"comp_size":4,"comp_method":0,"encryption_method":0}]
+== setMtimeName empty: ValueError: ZipArchive::setMtimeName(): Argument #1 ($name) must not be empty
+== unchangeName empty: false
+== unchangeName missing: false
+== unchangeIndex bad: false
+== extractTo empty: false
+== addGlob empty: ValueError: ZipArchive::addGlob(): Argument #1 ($pattern) must not be empty
+== addPattern empty: ValueError: ZipArchive::addPattern(): Argument #1 ($pattern) must not be empty
+== addGlob bad flags: [W: ZipArchive::addGlob(): At least one of the passed flags is invalid or not supported on this platform] false
+== addGlob bad option type: TypeError: Option "add_path" must be of type string, int given
+== addGlob empty option: ValueError: Option "remove_path" must not be empty
+== addGlob nomatch: []
+== addPattern bad regex: [W: ZipArchive::addPattern(): No ending delimiter '/' found] [W: ZipArchive::addPattern(): Invalid expression] false
+== addPattern nomatch: []
+== setPassword empty: false
+== getArchiveFlag unknown: 0
+== setArchiveFlag unknown: false
+== clearError: [18,0,"No error"]
+== Countable: 5
+== lastId after failure: -1
+== statIndex unchanged on new entry: false
+== close: true
+== close again: ValueError: Invalid or uninitialized Zip object
+== closed status: [0,0,""]
+== wrong type: TypeError: ZipArchive::addFromString(): Argument #1 ($name) must be of type string, array given

@@ -1,0 +1,24 @@
+== addGlob: ["src\/a.txt","src\/b.txt"]
+== names: ["src\/a.txt","src\/b.txt"]
+== addGlob remove_all_path + add_path: ["src\/c.md"]
+== addGlob remove_path: ["src\/sub\/d.txt"]
+== addGlob brace: ["src\/a.txt","src\/c.md"]
+== names: ["src\/a.txt","src\/b.txt","flat\/c.md","sub\/d.txt","brace\/a.txt","brace\/c.md"]
+== addGlob again fails without overwrite: false
+== status: 'File already exists'
+== addGlob again overwrites: ["src\/a.txt","src\/b.txt"]
+== count: 6
+== addGlob onlydir: ["src\/sub"]
+== a directory is no source to write: true
+== addGlob compression: ["src\/c.md"]
+== stored method: 0
+== too long add_path: false
+== close: true
+== final: ["src\/a.txt","src\/b.txt","flat\/c.md","sub\/d.txt","brace\/a.txt","brace\/c.md","stored\/c.md"]
+== content: 'd'
+== addPattern: ["src\/a.txt","src\/b.txt"]
+== addPattern remove_all_path: ["src\/c.md"]
+== addPattern remove_path: ["src\/sub\/d.txt"]
+== addPattern nothing: []
+[W: ZipArchive::addPattern(): No ending delimiter '/' found] [W: ZipArchive::addPattern(): Invalid expression] == addPattern bad regex: false
+== names: ["src\/a.txt","src\/b.txt","md\/c.md","sub\/d.txt"]

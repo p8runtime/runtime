@@ -146,7 +146,7 @@ impl Context<'_> {
         let mut r = Ok(());
         while let Some(object) = self.ids.next_pending() {
             if let Some(dtor) = object.class.native_dtor {
-                r = dtor(self, &object, &mut []).map(|_| ());
+                r = self.run_native_dtor(regs, dtor, &object).map(|_| ());
                 if r.is_err() {
                     break;
                 }
@@ -197,6 +197,15 @@ impl Context<'_> {
         self.destruct_remaining(regs)
     }
 
+    /// A native class's cleanup, with the registers lent so that it may call
+    /// back into PHP (a ZipArchive closed on destruction runs its callbacks).
+    fn run_native_dtor(&mut self, regs: &mut Vec<Value>, dtor: p8_runtime::object::NativeMethod, object: &Rc<p8_runtime::object::Object>) -> Result<Value, Throw> {
+        self.isolate.regs = std::mem::take(regs);
+        let r = dtor(self, object, &mut []);
+        *regs = std::mem::take(&mut self.isolate.regs);
+        r
+    }
+
     /// Destruct every object (with a destructor) still alive, oldest first.
     pub(crate) fn destruct_remaining(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
         for object in self.ids.undestructed() {
@@ -204,7 +213,7 @@ impl Context<'_> {
                 continue;
             }
             if let Some(dtor) = object.class.native_dtor {
-                dtor(self, &object, &mut [])?;
+                self.run_native_dtor(regs, dtor, &object)?;
             }
             if let Some(m) = self.destructor(&object) {
                 self.run_nested(regs, m, &mut [])?;

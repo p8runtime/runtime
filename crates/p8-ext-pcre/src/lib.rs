@@ -127,10 +127,36 @@ fn to_str(ctx: &mut dyn Ctx, v: &Value) -> Result<PhpStr, Throw> {
     }
 }
 
+thread_local! {
+    /// The name warnings carry instead of the running builtin's, while
+    /// another extension compiles a pattern (see [`Pattern::compile`]).
+    static LABEL: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
 /// A warning as php_error_docref() gives it: "preg_match(): …".
 fn warn(ctx: &mut dyn Ctx, message: &str) {
-    let name = ctx.builtin_name();
+    let name = LABEL.with(|l| l.borrow().clone()).unwrap_or_else(|| ctx.builtin_name().to_string());
     ctx.warn(&format!("{name}(): {message}"));
+}
+
+/// A compiled pattern for other extensions (zip's addPattern matches file
+/// names with one).
+pub struct Pattern(Rc<Compiled>);
+
+impl Pattern {
+    /// Compile a delimited regex, as preg_match() would; a malformed one
+    /// warns as "`label`(): ..." and gives None.
+    pub fn compile(ctx: &mut dyn Ctx, label: &str, regex: &[u8]) -> Option<Pattern> {
+        LABEL.with(|l| *l.borrow_mut() = Some(label.to_string()));
+        let c = compiled(ctx, regex);
+        LABEL.with(|l| *l.borrow_mut() = None);
+        c.map(Pattern)
+    }
+
+    /// Whether the pattern matches somewhere in `subject`.
+    pub fn is_match(&self, ctx: &dyn Ctx, subject: &[u8]) -> bool {
+        matches!(exec(ctx, &self.0, &PhpStr::new(subject.to_vec()), 0, Flags::default(), true), Ok(Some(_)))
+    }
 }
 
 fn set_error(ctx: &mut dyn Ctx, code: i64) {

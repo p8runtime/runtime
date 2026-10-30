@@ -1,0 +1,84 @@
+== numFiles before open: 0
+== open CREATE: true
+== addFromString: true
+== addFromString dir: true
+== addEmptyDir: true
+== addEmptyDir slash: true
+== addFile: true
+== addFile slice: true
+== addFile default name: true
+[W: ZipArchive::addFile(): No such file or directory] == addFile missing: false
+== add duplicate: false
+== status after dup: 'File already exists'
+== overwrite: true
+== lastId: 0
+== numFiles: 7
+== count: 7
+== close: true
+== file exists: true
+== open RDONLY: true
+== numFiles: 7
+== name 0: 'hello.txt'
+== name 1: 'dir/nested.txt'
+== name 2: 'empty/'
+== name 3: 'empty2/'
+== name 4: 'copied.txt'
+== name 5: 'slice.txt'
+== name 6: 'on-disk.txt'
+== stat 0: {"name":"hello.txt","index":0,"crc":3943299212,"size":36,"comp_method":8,"encryption_method":0}
+== stat dir: {"name":"empty\/","index":2,"crc":0,"size":0,"comp_method":0,"encryption_method":0}
+== stat missing: false
+== status: 'Invalid argument'
+== statName: 18
+== locateName: 0
+== locateName nocase: 0
+== locateName nodir: 1
+== locateName miss: false
+== getFromName: 'hello world
+hello world
+hello world
+'
+== getFromName len: 'hello'
+== getFromIndex: 'nested'
+== getFromName copied: 'line one
+line two
+'
+== getFromName slice: '56789a'
+== getFromName miss: false
+== status: 'No such file'
+== getFromIndex miss: false
+== getStream: true
+== fgets: 'hello world
+'
+== fread: 'hello'
+== rest: ' world
+hello world
+'
+== eof: true
+== getStream miss: false
+== attrs: [3,32768]
+== modify refused: false
+== status: 'Read-only archive'
+== close: true
+== extractTo: true
+== extracted: ["copied.txt:18","dir\/","dir\/nested.txt:6","empty\/","empty2\/","hello.txt:36","on-disk.txt:18","slice.txt:6"]
+== extractTo one: true
+== only: 'nested'
+== extractTo list: true
+== some: ["copied.txt","hello.txt"]
+== extractTo missing: false
+== extractTo empty array: false
+== close: true
+== open missing: 9
+== open missing status: 'No error'
+== open junk: 19
+== open EXCL existing: 10
+== open CHECKCONS: true
+== numFiles: 7
+== OVERWRITE: true
+== numFiles: 0
+== close: true
+== names after overwrite: ["fresh.txt",1]
+== constants: [9,10,19,21,8192,8]
+== extension: [true,true,true]
+== implicit close wrote: true
