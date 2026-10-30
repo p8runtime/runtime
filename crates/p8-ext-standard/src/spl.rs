@@ -1427,6 +1427,19 @@ fn class_parents(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     Ok(Value::Array(Rc::new(out)))
 }
 
+/// class_uses(object|string $object_or_class, bool $autoload = true): the
+/// traits the class itself uses, name => name
+fn class_uses(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let autoload = args.len() < 2 || arg(args, 1).to_bool();
+    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_uses")? else { return Ok(Value::Bool(false)) };
+    let mut out = PhpArray::new();
+    for t in ctx.reflect_meta(&p8_runtime::reflect::Subject::Class(class)).traits {
+        let name = ctx.class(t.as_bytes()).map_or(t, |c| c.name.clone());
+        out.insert(Key::from_string(name.clone()), Value::Str(name));
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
 /// iterator_apply(Traversable $iterator, callable $callback, ?array $args = null): the count
 fn iterator_apply(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(it) = arg(args, 0) else {
@@ -1453,11 +1466,12 @@ fn iterator_apply(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "class_implements", run: class_implements, by_ref: &[] },
     Builtin { name: "class_parents", run: class_parents, by_ref: &[] },
+    Builtin { name: "class_uses", run: class_uses, by_ref: &[] },
     Builtin { name: "iterator_apply", run: iterator_apply, by_ref: &[] },
 ];
 
 /// They call PHP code (autoloaders, the callback).
-pub const REENTER: &[&str] = &["class_implements", "class_parents", "iterator_apply"];
+pub const REENTER: &[&str] = &["class_implements", "class_parents", "class_uses", "iterator_apply"];
 
 // ---------------------------------------------------------------------------
 // The classes

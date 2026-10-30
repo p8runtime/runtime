@@ -810,6 +810,45 @@ fn rm_get_declaring_class(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value])
     Ok(new_class_reflection(ctx, &declaring))
 }
 
+/// The method `lower` of class `declaring` overrides or implements, as
+/// zend_do_inheritance records it: a parent's (non-private) method's own
+/// prototype or that method, else an interface's; a constructor has one
+/// only when what it overrides is abstract.
+fn prototype_of(ctx: &mut dyn Ctx, declaring: &Rc<Class>, lower: &[u8]) -> Option<(Rc<Class>, PhpStr)> {
+    if let Some(parent) = &declaring.parent
+        && let Some(m) = parent.method(lower).filter(|m| m.visibility != Visibility::Private).cloned()
+    {
+        let owner = ctx.class(&m.declaring).unwrap_or_else(|| Rc::clone(parent));
+        let found = prototype_of(ctx, &owner, lower);
+        if lower != b"__construct" || m.is_abstract || found.is_some() {
+            return found.or(Some((owner, m.name)));
+        }
+    }
+    for i in &declaring.interfaces {
+        if let Some(iface) = ctx.class(i)
+            && let Some(m) = iface.method(lower).cloned()
+        {
+            return Some((ctx.class(&m.declaring).unwrap_or(iface), m.name));
+        }
+    }
+    None
+}
+
+fn rm_get_prototype(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (class, m) = held_method(ctx, this)?;
+    let declaring = ctx.class(&m.declaring).unwrap_or(class);
+    match prototype_of(ctx, &declaring, &m.name.as_bytes().to_ascii_lowercase()) {
+        Some((owner, name)) => Ok(new_method(ctx, &owner, name.as_bytes())),
+        None => Err(fail(ctx, format!("Method {}::{} does not have a prototype", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes())))),
+    }
+}
+
+fn rm_has_prototype(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (class, m) = held_method(ctx, this)?;
+    let declaring = ctx.class(&m.declaring).unwrap_or(class);
+    Ok(Value::Bool(prototype_of(ctx, &declaring, &m.name.as_bytes().to_ascii_lowercase()).is_some()))
+}
+
 fn rm_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (class, m) = held_method(ctx, this)?;
     let target = match arg(args, 0) {
@@ -1991,6 +2030,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("isDestructor", Some(Native::Method(rm_is_destructor))),
             ("getModifiers", Some(Native::Method(rm_get_modifiers))),
             ("getDeclaringClass", Some(Native::Method(rm_get_declaring_class))),
+            ("getPrototype", Some(Native::Method(rm_get_prototype))),
+            ("hasPrototype", Some(Native::Method(rm_has_prototype))),
         ],
         constants: &[
             ("IS_STATIC", Constant::Int(16)),

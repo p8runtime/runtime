@@ -1,0 +1,18 @@
+B::m -> I::m true
+C::m -> I::m true
+B::own -> A::own true
+B::priv: Method B::priv does not have a prototype false
+B::__construct -> A::__construct true
+C::__construct -> A::__construct true
+B::extra: Method B::extra does not have a prototype false
+A::m -> I::m true
+D::count -> Countable::count true
+C::t: Method C::t does not have a prototype false
+B::__toString -> Stringable::__toString true
+array(1) {
+  ["T"]=>
+  string(1) "T"
+}
+array(0) {
+}
+bool(false)

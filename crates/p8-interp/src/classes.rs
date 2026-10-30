@@ -362,6 +362,10 @@ impl Context<'_> {
                 constants.entry(k.clone()).or_insert_with(|| c.clone());
             }
         }
+        // A class (or interface) with __toString() implements Stringable.
+        if (methods.contains_key(b"__tostring".as_slice()) || own.iter().any(|m| m == b"__tostring")) && lower.as_slice() != b"stringable" && !interfaces.iter().any(|i| i == b"stringable") {
+            interfaces.push(b"stringable".to_vec());
+        }
         // An enum: its cases are constants (objects made when first used),
         // `name` (and `value`) readonly properties, cases()/from()/tryFrom().
         if def.flags & CLASS_ENUM != 0 {
