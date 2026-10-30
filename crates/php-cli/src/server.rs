@@ -493,7 +493,7 @@ pub fn run(config: Config) -> i32 {
     let (tx, rx) = mpsc::channel::<Incoming>();
     std::thread::spawn(move || accept_loop(listener, tx));
 
-    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::SERVER, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::MBSTRING, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL, p8::extensions::GD, p8::extensions::ZIP, p8::extensions::FILEINFO, p8::extensions::SESSION, p8::extensions::PDO, p8::extensions::PDO_SQLITE])
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::SERVER, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::MBSTRING, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL, p8::extensions::GD, p8::extensions::ZIP, p8::extensions::FILEINFO, p8::extensions::SESSION, p8::extensions::PDO, p8::extensions::PDO_SQLITE, p8::extensions::INTL])
         // Each file is compiled once, and again only when its source changes.
         .keep_compiled();
     let mut isolate = platform.new_isolate();

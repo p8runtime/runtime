@@ -1,0 +1,33 @@
+[package]
+name = "p8-ext-intl"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's intl extension over ICU4X (pure Rust, compiled CLDR data; no ICU4C, no C)"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+# ICU4X 2.x with its compiled (baked) CLDR data
+icu_locale_core = "2.4"
+icu_locale = "2.4"
+icu_provider = "2.4"
+icu_decimal = "2.4"
+icu_datetime = "2.4"
+icu_calendar = "2.4"
+icu_time = "2.4"
+icu_normalizer = "2.4"
+icu_collator = "2.4"
+icu_properties = "2.4"
+icu_collections = "2.4"
+icu_casemap = "2.4"
+icu_segmenter = "2.4"
+icu_plurals = "2.4"
+icu_experimental = "=0.7.0"
+fixed_decimal = "0.7"
+icu_pattern = "0.5"
+writeable = "0.6"
+# idn_to_ascii / idn_to_utf8: UTS 46 (its normalization is icu_normalizer's)
+idna = "1.1"
+# Time zones for IntlDateFormatter (the same database the date functions use)
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = { version = "0.10", default-features = false, features = ["std", "case-insensitive"] }
