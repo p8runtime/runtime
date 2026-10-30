@@ -1,0 +1,12 @@
+/etc/passwd true
+file:///x true
+php://memory true
+http://x false
+HTTPS://x false
+ftp://x false
+data:text/plain,hi false
+data://text/plain,hi false
+compress.zlib:///x true
+relative/path true
+bool(true)
+bool(true)

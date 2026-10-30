@@ -40,6 +40,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "fpassthru", run: fpassthru, by_ref: &[] },
     Builtin { name: "stream_get_contents", run: stream_get_contents, by_ref: &[] },
     Builtin { name: "stream_copy_to_stream", run: stream_copy_to_stream, by_ref: &[] },
+    Builtin { name: "stream_is_local", run: stream_is_local, by_ref: &[] },
     Builtin { name: "tmpfile", run: tmpfile, by_ref: &[] },
     Builtin { name: "file_get_contents", run: file_get_contents, by_ref: &[] },
     Builtin { name: "file_put_contents", run: file_put_contents, by_ref: &[] },
@@ -412,6 +413,17 @@ fn stream_copy_to_stream(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
     let r = resource(&to).expect("a stream resource");
     let written = r.stream.borrow_mut().write(ctx, &bytes);
     Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
+}
+
+/// stream_is_local(resource|string $stream): whether it is not over a
+/// network (a URL wrapper: http, https, ftp, data; a socket).
+fn stream_is_local(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    if let Some(o) = resource_of(&arg(args, 0)) {
+        return Ok(Value::Bool(resource(&o).is_some_and(|r| !matches!(r.stream.borrow().target, Target::Tcp(_)))));
+    }
+    let url = text(&str_arg(args, 0)).to_ascii_lowercase();
+    let scheme = url.split_once("://").map(|(s, _)| s).or_else(|| url.starts_with("data:").then_some("data"));
+    Ok(Value::Bool(!matches!(scheme, Some("http" | "https" | "ftp" | "ftps" | "data"))))
 }
 
 fn tmpfile(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
