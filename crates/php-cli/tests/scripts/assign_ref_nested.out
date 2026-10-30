@@ -1,0 +1,8 @@
+string(6) "made a"
+string(6) "made a"
+array(1) {
+  ["a"]=>
+  string(6) "made a"
+}
+string(2) "v1"
+int(2)

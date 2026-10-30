@@ -691,7 +691,7 @@ fn os_magic_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
         return Err(bad(ctx));
     };
     let items: Vec<Value> = pairs.values().map(Value::deref).collect();
-    if items.len() % 2 != 0 {
+    if !items.len().is_multiple_of(2) {
         return Err(ctx.throw("UnexpectedValueException", "Odd number of elements".into()));
     }
     for pair in items.chunks(2) {

@@ -1,0 +1,6 @@
+bool(true)
+NULL
+bool(true)
+int(20)
+bool(false)
+ReflectionException: Array key not found

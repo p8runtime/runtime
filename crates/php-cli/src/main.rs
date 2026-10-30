@@ -39,7 +39,7 @@ fn main() {
         },
     };
     let named = path == STDIN_NAME || path == "Command line code";
-    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::MBSTRING, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL, p8::extensions::GD, p8::extensions::ZIP, p8::extensions::FILEINFO, p8::extensions::SESSION, p8::extensions::PDO, p8::extensions::PDO_SQLITE])
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::MBSTRING, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL, p8::extensions::GD, p8::extensions::ZIP, p8::extensions::FILEINFO, p8::extensions::SESSION, p8::extensions::PDO, p8::extensions::PDO_SQLITE, p8::extensions::SOCKETS])
         // A file included again (a template part per post) is not compiled again.
         .keep_compiled();
     let file = if named { path.clone() } else { std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };

@@ -2610,6 +2610,14 @@ impl<'src> Compiler<'src> {
                     _ => Err(self.unsupported(e.span(), "this constant expression")),
                 }
             }
+            // `C::class` names a class known now (an enum case's value).
+            Expr::ClassConstFetch { class: Expr::Variable { name: class, .. }, constant: Expr::Variable { name, .. }, .. }
+                if self.text(*name).eq_ignore_ascii_case(b"class")
+                    && !self.text(*class).starts_with(b"$")
+                    && !matches!(self.text(*class).to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") =>
+            {
+                Ok(Frozen::Str(Text::from(self.class_name(self.text(*class)).as_slice())))
+            }
             _ => Err(self.unsupported(e.span(), "this constant expression")),
         }
     }

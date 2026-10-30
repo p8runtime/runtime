@@ -1,0 +1,9 @@
+[package]
+name = "p8-ext-sockets"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's sockets extension: Socket over the standard library's TCP and Unix sockets"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }

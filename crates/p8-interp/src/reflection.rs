@@ -1399,6 +1399,45 @@ fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &s
     Ok(list(out))
 }
 
+/// ReflectionReference::fromArrayElement(array $array, int|string $key):
+/// the element's reference, or null when the element is not one.
+fn rr_from_array_element(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let Value::Array(array) = arg(args, 0) else { return Ok(Value::Null) };
+    let key = match Key::from_value(&arg(args, 1)) {
+        Ok((key, _)) => key,
+        Err(_) => return Err(fail(ctx, "Array key not found".into())),
+    };
+    match array.get(&key) {
+        None => Err(fail(ctx, "Array key not found".into())),
+        Some(r @ Value::Ref(_)) => {
+            let o = make(ctx, b"ReflectionReference");
+            set(&o, "\0ref", r.clone());
+            Ok(Value::Object(o))
+        }
+        Some(_) => Ok(Value::Null),
+    }
+}
+
+/// ReflectionReference::getId(): 20 bytes that are the same for every
+/// ReflectionReference of one reference while it lives.
+fn rr_get_id(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let Value::Ref(r) = get(this, "\0ref") else { return Ok(Value::Str(PhpStr::empty())) };
+    let mut x = Rc::as_ptr(&r) as usize as u64 ^ 0x9e37_79b9_7f4a_7c15;
+    let mut id = Vec::with_capacity(20);
+    while id.len() < 20 {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        x ^= x >> 29;
+        id.extend_from_slice(&x.to_le_bytes());
+    }
+    id.truncate(20);
+    Ok(Value::Str(PhpStr::from(&id[..])))
+}
+
+fn rr_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Err(fail(ctx, "Cannot directly instantiate ReflectionReference".into()))
+}
+
 fn ra_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     Err(fail(ctx, "Cannot directly instantiate ReflectionAttribute".into()))
 }
@@ -2006,6 +2045,21 @@ pub static CLASSES: &[ClassSpec] = &[
         ],
         constants: &[("IS_PUBLIC", Constant::Int(1)), ("IS_PROTECTED", Constant::Int(2)), ("IS_PRIVATE", Constant::Int(4)), ("IS_FINAL", Constant::Int(32))],
         debug_info: Some(info_name_class),
+    },
+    ClassSpec {
+        name: "ReflectionReference",
+        parent: None,
+        interfaces: &[],
+        flags: 0,
+        properties: &[("\0ref", Constant::Null, PUBLIC)],
+        methods: &[
+            ("__construct", Some(Native::Method(rr_construct))),
+            ("__clone", Some(Native::Method(ra_clone))),
+            ("fromArrayElement", Some(Native::Static(rr_from_array_element))),
+            ("getId", Some(Native::Method(rr_get_id))),
+        ],
+        constants: &[],
+        debug_info: None,
     },
     ClassSpec {
         name: "ReflectionAttribute",

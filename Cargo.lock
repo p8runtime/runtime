@@ -3312,6 +3312,7 @@ dependencies = [
  "p8-ext-pdo",
  "p8-ext-pdo-sqlite",
  "p8-ext-session",
+ "p8-ext-sockets",
  "p8-ext-standard",
  "p8-ext-tokenizer",
  "p8-ext-xml",
@@ -3414,6 +3415,13 @@ dependencies = [
  "getrandom 0.2.16",
  "libc",
  "p8-ext-standard",
+ "p8-runtime",
+]
+
+[[package]]
+name = "p8-ext-sockets"
+version = "0.1.0"
+dependencies = [
  "p8-runtime",
 ]
 
