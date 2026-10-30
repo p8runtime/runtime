@@ -1,0 +1,47 @@
+0 DateTime 2026-01-01 10:00
+1 DateTime 2026-01-02 10:00
+2 DateTime 2026-01-03 10:00
+3 DateTime 2026-01-04 10:00
+--
+0 DateTime 2026-01-02 10:00
+1 DateTime 2026-01-03 10:00
+2 DateTime 2026-01-04 10:00
+--
+0 DateTime 2026-01-01 10:00
+1 DateTime 2026-01-02 10:00
+2 DateTime 2026-01-03 10:00
+--
+0 DateTime 2026-01-01 10:00
+1 DateTime 2026-01-02 10:00
+2 DateTime 2026-01-03 10:00
+3 DateTime 2026-01-04 10:00
+--
+0 DateTime 2026-01-02 10:00
+1 DateTime 2026-01-03 10:00
+2 DateTime 2026-01-04 10:00
+--
+0 DateTimeImmutable 2026-01-31 00:00
+1 DateTimeImmutable 2026-03-03 00:00
+2 DateTimeImmutable 2026-04-03 00:00
+--
+int(2)
+NULL
+string(8) "DateTime"
+string(25) "2026-01-01T10:00:00+00:00"
+int(1)
+int(3)
+bool(true)
+bool(false)
+NULL
+NULL
+string(10) "2026-01-03"
+int(1)
+int(2)
+int(2)
+bool(false)
+2026
+bool(true)
+bool(true)
+int(3)
+DateMalformedPeriodStringException: DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640
+MyPeriod 2

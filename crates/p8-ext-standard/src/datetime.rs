@@ -166,6 +166,32 @@ pub static CLASSES: &[ClassSpec] = &[
     ClassSpec { name: "DateMalformedStringException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
     ClassSpec { name: "DateInvalidTimeZoneException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
     ClassSpec { name: "DateMalformedIntervalStringException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
+    ClassSpec { name: "DateMalformedPeriodStringException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
+    ClassSpec {
+        name: "DatePeriod",
+        parent: None,
+        interfaces: &["IteratorAggregate"],
+        flags: 0,
+        properties: &[
+            ("start", Constant::Null, Visibility::Public),
+            ("current", Constant::Null, Visibility::Public),
+            ("end", Constant::Null, Visibility::Public),
+            ("interval", Constant::Null, Visibility::Public),
+            ("recurrences", Constant::Int(1), Visibility::Public),
+            ("include_start_date", Constant::Bool(true), Visibility::Public),
+            ("include_end_date", Constant::Bool(false), Visibility::Public),
+        ],
+        methods: &[
+            ("__construct", Some(Native::Method(period_construct))),
+            ("getStartDate", Some(Native::Method(period_start))),
+            ("getEndDate", Some(Native::Method(period_end))),
+            ("getDateInterval", Some(Native::Method(period_interval))),
+            ("getRecurrences", Some(Native::Method(period_recurrences))),
+            ("getIterator", Some(Native::Method(period_iterator))),
+        ],
+        constants: &[("EXCLUDE_START_DATE", Constant::Int(1)), ("INCLUDE_END_DATE", Constant::Int(2))],
+        debug_info: None,
+    },
 ];
 
 pub static BUILTINS: &[Builtin] = &[
@@ -1261,4 +1287,118 @@ fn timezone_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 
 fn timezone_name_get(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     with_object(ctx, args, zone_name)
+}
+
+// ---- DatePeriod ----
+
+/// A copy of an object (a DateTime or DateInterval): its class, its slots.
+fn copy_object(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Rc<Object> {
+    let copy = ctx.new_object(&o.class);
+    *copy.slots.borrow_mut() = o.slots.borrow().clone();
+    copy
+}
+
+fn copy_value(ctx: &mut dyn Ctx, v: Value) -> Value {
+    match v {
+        Value::Object(o) => Value::Object(copy_object(ctx, &o)),
+        v => v,
+    }
+}
+
+/// DatePeriod::__construct(DateTimeInterface $start, DateInterval $interval,
+/// int|DateTimeInterface $end_or_recurrences, int $options = 0).
+fn period_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let (Value::Object(start), Value::Object(interval)) = (arg(args, 0), arg(args, 1)) else {
+        return Err(ctx.throw("Error", "p8 cannot construct a DatePeriod from an ISO 8601 string yet".into()));
+    };
+    let options = arg(args, 3).to_int();
+    let include_start = options & 1 == 0;
+    let include_end = options & 2 != 0;
+    let (end, recurrences) = match arg(args, 2) {
+        Value::Object(e) => (Value::Object(copy_object(ctx, &e)), 1),
+        v => {
+            let r = v.to_int();
+            if !(1..2147483640).contains(&r) {
+                return Err(ctx.throw(
+                    "DateMalformedPeriodStringException",
+                    "DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640".into(),
+                ));
+            }
+            (Value::Null, r + i64::from(include_start))
+        }
+    };
+    let start = Value::Object(copy_object(ctx, &start));
+    let interval = Value::Object(copy_object(ctx, &interval));
+    write(this, "start", start);
+    write(this, "current", Value::Null);
+    write(this, "end", end);
+    write(this, "interval", interval);
+    write(this, "recurrences", Value::Int(recurrences));
+    write(this, "include_start_date", Value::Bool(include_start));
+    write(this, "include_end_date", Value::Bool(include_end));
+    Ok(Value::Null)
+}
+
+fn period_start(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(copy_value(ctx, read(this, "start")))
+}
+
+fn period_end(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(copy_value(ctx, read(this, "end")))
+}
+
+fn period_interval(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(copy_value(ctx, read(this, "interval")))
+}
+
+/// The recurrences asked for; null for a period with an end date.
+fn period_recurrences(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    if !matches!(read(this, "end"), Value::Null) {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Int(read(this, "recurrences").to_int() - i64::from(read(this, "include_start_date").to_bool())))
+}
+
+/// The dates: from the start (or one interval on), an interval apart, up
+/// to the end (or through it) or for the recurrences.
+fn period_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    // A bound for a period that never reaches its end (a zero interval).
+    const MOST: usize = 1 << 20;
+    let Value::Object(start) = read(this, "start") else { return crate::weak::internal_iterator(ctx, Vec::new()) };
+    let interval = read(this, "interval");
+    let end = match read(this, "end") {
+        Value::Object(e) => Some(state(&e)),
+        _ => None,
+    };
+    let include_start = read(this, "include_start_date").to_bool();
+    let include_end = read(this, "include_end_date").to_bool();
+    let count = read(this, "recurrences").to_int().max(0) as usize;
+    let step = |ctx: &mut dyn Ctx, d: &Rc<Object>| -> Result<Rc<Object>, Throw> {
+        // A copy moved on (shift() makes its own for an immutable date).
+        let copy = copy_object(ctx, d);
+        Ok(match shift(ctx, &copy, std::slice::from_ref(&interval), 1)? {
+            Value::Object(next) => next,
+            _ => copy,
+        })
+    };
+    let mut d = copy_object(ctx, &start);
+    if !include_start {
+        d = step(ctx, &d)?;
+    }
+    let mut items = Vec::new();
+    loop {
+        let at = state(&d);
+        let more = match &end {
+            Some(e) if include_end => (at.ts, at.us) <= (e.ts, e.us),
+            Some(e) => (at.ts, at.us) < (e.ts, e.us),
+            None => items.len() < count,
+        };
+        if !more || items.len() >= MOST {
+            break;
+        }
+        let next = step(ctx, &d)?;
+        items.push((Value::Int(items.len() as i64), Value::Object(d)));
+        d = next;
+    }
+    crate::weak::internal_iterator(ctx, items)
 }

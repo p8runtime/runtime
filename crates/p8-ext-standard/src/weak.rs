@@ -172,7 +172,7 @@ pub fn make_internal() -> Rc<dyn std::any::Any> {
     Rc::new(Internal::default())
 }
 
-fn internal_iterator(ctx: &mut dyn Ctx, items: Vec<(Value, Value)>) -> R {
+pub(crate) fn internal_iterator(ctx: &mut dyn Ctx, items: Vec<(Value, Value)>) -> R {
     let class = ctx.class(b"InternalIterator").expect("declared");
     let it = ctx.new_object(&class);
     *it.native::<Internal>().expect("InternalIterator state").items.borrow_mut() = items;
