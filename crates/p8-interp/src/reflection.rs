@@ -356,7 +356,8 @@ class_method!(rc_get_method, |ctx, class, this, args| {
     Ok(new_method(ctx, &class, name.as_bytes()))
 });
 class_method!(rc_get_methods, |ctx, class, this, args| {
-    let filter = args.first().map(|v| v.deref().to_int());
+    // `null` (PHPUnit passes it) means no filter, like no argument.
+    let filter = args.first().map(Value::deref).filter(|v| !matches!(v, Value::Null | Value::Undef)).map(|v| v.to_int());
     let mut out = Vec::new();
     for m in class.methods.values() {
         if m.name.as_bytes().starts_with(b"$") {
@@ -401,7 +402,8 @@ class_method!(rc_get_property, |ctx, class, this, args| {
     Ok(new_property(ctx, &class, name.as_bytes()))
 });
 class_method!(rc_get_properties, |ctx, class, this, args| {
-    let filter = args.first().map(|v| v.deref().to_int());
+    // `null` (PHPUnit passes it) means no filter, like no argument.
+    let filter = args.first().map(Value::deref).filter(|v| !matches!(v, Value::Null | Value::Undef)).map(|v| v.to_int());
     let mut out = Vec::new();
     let mut names: Vec<PhpStr> = Vec::new();
     // Class by class (the class itself, then its parents): its static
