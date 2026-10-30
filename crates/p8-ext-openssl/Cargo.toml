@@ -1,0 +1,40 @@
+[package]
+name = "p8-ext-openssl"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's openssl extension over pure-Rust cryptography (RustCrypto): no OpenSSL, no C"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+# Every crate below is pure Rust (RustCrypto and dalek); none builds or links C.
+rand_core = { version = "0.6", features = ["getrandom"] }
+cipher = "0.4"
+aes = "0.8"
+des = "0.8"
+camellia = "0.1"
+chacha20 = "0.9"
+ghash = "0.5"
+poly1305 = "0.8"
+universal-hash = "0.5"
+digest = "0.10"
+md-5 = "0.10"
+md4 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+ripemd = "0.1"
+whirlpool = "0.10"
+blake2 = "0.10"
+sm3 = "0.4"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+rsa = { version = "0.9", default-features = false, features = ["std", "hazmat"] }
+ecdsa = { version = "0.16", features = ["der", "signing", "verifying"] }
+elliptic-curve = { version = "0.13", features = ["sec1", "ecdh", "arithmetic"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "std"] }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "std"] }
+p521 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "std"] }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "std"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }

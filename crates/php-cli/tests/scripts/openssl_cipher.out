@@ -1,0 +1,128 @@
+bool(true)
+bool(true)
+bool(true)
+aes-128-cbc 16 16 vDPjTh2f6b3JCF9jXHo0W/Z3bpxEJxg1ACIJGakLyy5ldaWsOqu7ZtK0O7fAD4XP
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-192-cbc 24 16 JRDuIvvfCcL8f63Z/FpmlsrtmHblMc5zSSsrX2C24fS+m78NJhhqQ3gi2bDdmPH6
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-256-cbc 32 16 1HYkDMY9MnFjRVITEvLPT7V1DJUa0qYG99gKMRq9djKoNHe+lE+zoWtlWxhBrKbx
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-128-ecb 16 0 nwP7qjrr1ZDWWcIJZH8X8o3SQ/Hv5W9pBnnrQv6SGzzVIrmzV9TVb4NxT0mXvzgN
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-256-ctr 32 16 za6rtvoL6KqAW1M//8h29QpLmDQkO0pyEiT4U8ndDYIQd/eX41G4mkwjTw==
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-128-cfb 16 16 MeVBZu7MD6jH1bmPQnhEZ4zeBOYMZR+hczT2GYhrGy8BKuVHbZB9FT6Jwg==
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-128-cfb8 16 16 MYcVQ1RTzHW4+K/Q4f4SHBrfnRe+7uWvn4orqBg4aoKqvs8mLte2bP7hoQ==
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-128-cfb1 16 16 IpZmoGjE8IdQqI4xV56SXjZO2UDFHqirJMuHTOXu1sT6X7xMAEOGW4keSg==
+string(43) "The quick brown fox jumps over the lazy dog"
+aes-128-ofb 16 16 MeVBZu7MD6jH1bmPQnhEZ/MASlCTZnD+qqtNiLPvOYNEFzToF6ZzR0eyYg==
+string(43) "The quick brown fox jumps over the lazy dog"
+camellia-256-cbc 32 16 chH+EbqEmF8lxFcCSBcECUXD0xIaslpA950HfBMF888v275Qy22zyLnHSdDdQ/Nc
+string(43) "The quick brown fox jumps over the lazy dog"
+chacha20 32 16 HN9wngZ+awem+vz/NRvpQvtCQ7JxBrGQGyIBWu/Rvuj80bumuCYu3sq1Tw==
+string(43) "The quick brown fox jumps over the lazy dog"
+AES-256-CBC 32 16 1HYkDMY9MnFjRVITEvLPT7V1DJUa0qYG99gKMRq9djKoNHe+lE+zoWtlWxhBrKbx
+string(43) "The quick brown fox jumps over the lazy dog"
+aes256 32 16 1HYkDMY9MnFjRVITEvLPT7V1DJUa0qYG99gKMRq9djKoNHe+lE+zoWtlWxhBrKbx
+string(43) "The quick brown fox jumps over the lazy dog"
+des-ede3-cbc 7eD9fAcQJT4K1Fp+kO6TFUlUATkSjUu3TZ+lo91N9nU=
+string(26) "abcdefghijklmnopqrstuvwxyz"
+des-ede-cbc sxgqOqH2q/4D38/jfCe0sBVZXIqERe3DxPLA4mqwwjY=
+string(26) "abcdefghijklmnopqrstuvwxyz"
+des-ede3-cfb MH7WHPh+qiGxXoGYoMQC2oKBvBvx6cInTDc=
+string(26) "abcdefghijklmnopqrstuvwxyz"
+des-ede3-ofb MH7WHPh+qiFlNMJsCRkltklZJTAVVD6hWs0=
+string(26) "abcdefghijklmnopqrstuvwxyz"
+string(36) "I2/ATsFsaWqwrZpe+i7Si2dyfEKHsJImb4I="
+string(20) "c823349fcd33ee54bb97"
+string(26) "abcdefghijklmnopqrstuvwxyz"
+bool(false)
+
+Warning: openssl_encrypt(): Setting of IV length for AEAD mode failed in %s on line 20
+bool(false)
+string(36) "yOjYRwAxaR5dC35WNRjs3frFssqgBznjIRo="
+string(10) "2d7caec8f0"
+string(26) "abcdefghijklmnopqrstuvwxyz"
+string(36) "OxfX4uaIz8HUTEjpFYfOCB0FVPyrhD0NqRo="
+string(8) "664cb198"
+string(26) "abcdefghijklmnopqrstuvwxyz"
+bool(false)
+
+Warning: openssl_encrypt(): A tag should be provided when using AEAD mode in %s on line 26
+bool(false)
+
+Warning: openssl_encrypt(): Retrieving verification tag failed in %s on line 27
+bool(false)
+
+Warning: openssl_encrypt(): IV passed is 2 bytes long which is longer than the 0 expected by selected cipher, truncating in %s on line 29
+string(24) "qiFYYs+gSbKIbn4Kl+yK0w=="
+string(24) "qiFYYs+gSbKIbn4Kl+yK0w=="
+
+Warning: openssl_encrypt(): Using an empty Initialization Vector (iv) is potentially insecure and not recommended in %s on line 31
+string(24) "qiFYYs+gSbKIbn4Kl+yK0w=="
+
+Warning: openssl_encrypt(): IV passed is only 5 bytes long, cipher expects an IV of precisely 16 bytes, padding with \0 in %s on line 32
+string(24) "jvIBC+85EB8tBqPGaZ5Fkw=="
+
+Warning: openssl_encrypt(): IV passed is 24 bytes long which is longer than the 16 expected by selected cipher, truncating in %s on line 33
+string(24) "RfIu3ScTXlyNja5LLs4IuA=="
+
+Warning: openssl_decrypt(): The tag cannot be used because the cipher algorithm does not support AEAD in %s on line 34
+bool(false)
+
+Warning: openssl_encrypt(): Key length cannot be set for the cipher algorithm in %s on line 35
+bool(false)
+error:1C80006D:Provider routines::invalid iv length
+error:1C800066:Provider routines::cipher operation failed
+error:1C80006E:Provider routines::invalid tag
+error:1C80006B:Provider routines::wrong final block length
+error:03000082:digital envelope routines::invalid key length
+string(32) "0097e4b61ebc06303a9d861fc52603ce"
+error:03000082:digital envelope routines::invalid key length
+bool(false)
+string(24) "hOlA4wgUUiUucHwiwb9HNg=="
+bool(false)
+bool(false)
+error:1C80006B:Provider routines::wrong final block length
+error:1C800064:Provider routines::bad decrypt
+error:1C80006B:Provider routines::wrong final block length
+bool(false)
+
+Warning: openssl_encrypt(): Unknown cipher algorithm in %s on line 45
+bool(false)
+
+Warning: openssl_cipher_iv_length(): Unknown cipher algorithm in %s on line 46
+bool(false)
+openssl_cipher_iv_length(): Argument #1 ($cipher_algo) must not be empty
+openssl_decrypt(): Argument #2 ($cipher_algo) must not be empty
+md5 900150983cd24fb0d6963f7d28e17f72
+sha1 a9993e364706816aba3e25717850c26c9cd0d89d
+SHA256 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+sha384 cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+sha512 ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+sha512-256 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+sha3-256 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+ripemd160 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+whirlpool 
+blake2b512 ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923
+sm3 66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0
+md4 
+shake128 
+RSA-SHA1 a9993e364706816aba3e25717850c26c9cd0d89d
+string(40) "a9993e364706816aba3e25717850c26c9cd0d89d"
+
+Warning: openssl_digest(): Unknown digest algorithm in %s on line 62
+bool(false)
+string(40) "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"
+string(64) "ad35240ac683febfaf3cd49d845473fbbbaa2437f5f82d5a415ae00ac76c6bfc"
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+int(17)
+bool(true)
+openssl_random_pseudo_bytes(): Argument #1 ($length) must be greater than 0
