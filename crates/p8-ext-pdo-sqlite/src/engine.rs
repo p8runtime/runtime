@@ -3,7 +3,7 @@
 
 use std::num::NonZero;
 use std::sync::Arc;
-use turso_core::{Connection, Database, LimboError, OpenFlags, OpenOptions, PlatformIO, SqliteDialect, StepResult, Value, IO};
+use turso_core::{Connection, Database, DatabaseOpts, LimboError, OpenFlags, OpenOptions, PlatformIO, SqliteDialect, StepResult, Value, IO};
 
 /// SQLite's primary result codes, the ones PDO tells apart.
 pub const SQLITE_ERROR: i64 = 1;
@@ -62,7 +62,10 @@ impl Engine {
         if readonly {
             flags |= OpenFlags::ReadOnly;
         }
-        let db = Database::open(io, path, OpenOptions::new(Arc::new(SqliteDialect)).flags(flags)).map_err(|e| map_error(&e))?;
+        // SQLite has generated columns and views; Turso keeps them behind
+        // options (an error otherwise: "Generated columns require ...").
+        let features = DatabaseOpts::default().with_generated_columns(true).with_views(true);
+        let db = Database::open(io, path, OpenOptions::new(Arc::new(SqliteDialect)).flags(flags).db_opts(features)).map_err(|e| map_error(&e))?;
         let conn = db.connect().map_err(|e| map_error(&e))?;
         Ok(Engine { _db: db, conn })
     }
