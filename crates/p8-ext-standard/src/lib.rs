@@ -198,7 +198,7 @@ fn register(registry: &mut Registry) {
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
-    for (_, name, value, _) in defaults::CONSTANTS {
+    for (module, name, value, _) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
             defaults::ConstValue::Float(bits) => Constant::Float(f64::from_bits(*bits)),
@@ -206,7 +206,7 @@ fn register(registry: &mut Registry) {
             defaults::ConstValue::Bool(b) => Constant::Bool(*b),
             defaults::ConstValue::Null => Constant::Null,
         };
-        registry.add_constant(name, value);
+        registry.add_constant_in(module, name, value);
     }
 }
 

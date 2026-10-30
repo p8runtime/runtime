@@ -1141,7 +1141,7 @@ impl Isolate {
             frames: Frames::default(),
             functions: HashMap::new(),
             closures: Vec::new(),
-            constants: HashMap::new(),
+            constants: indexmap::IndexMap::new(),
             globals: indexmap::IndexMap::new(),
             out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false },
             request: None,
@@ -1226,7 +1226,8 @@ pub struct Context<'i> {
     /// Every closure this context made. Call sites refer to them by index.
     closures: Vec<Rc<Closure>>,
     /// Constants the script defined (define(), const).
-    constants: HashMap<Vec<u8>, Value>,
+    /// The script's own constants, in the order defined.
+    constants: indexmap::IndexMap<Vec<u8>, Value>,
     /// Globals not held in the main frame's registers.
     /// In the order made, as PHP's symbol table ($GLOBALS, get_defined_vars).
     globals: indexmap::IndexMap<Vec<u8>, Rc<RefCell<Value>>>,
@@ -5002,6 +5003,23 @@ impl Ctx for Context<'_> {
 
     fn modules(&self) -> &[&'static str] {
         self.isolate.registry.modules()
+    }
+
+    fn defined_constants(&self) -> Vec<(String, PhpStr, Value)> {
+        // PHP's module names: its core is "Core", the rest as their extensions are named.
+        let module = |m: &str| if m.eq_ignore_ascii_case("core") { "Core".to_string() } else { m.to_string() };
+        let mut out: Vec<(String, PhpStr, Value)> =
+            self.isolate.registry.constant_list().map(|(m, name, c)| (module(m), PhpStr::from(name), c.to_value())).collect();
+        // The CLI's stream constants are made at startup like the script's,
+        // but PHP counts them as Core's.
+        let streams = |n: &[u8]| matches!(n, b"STDIN" | b"STDOUT" | b"STDERR");
+        out.extend(self.constants.iter().map(|(name, v)| {
+            let m = if streams(name) { "Core" } else { "user" };
+            (m.to_string(), PhpStr::from(name.as_slice()), v.clone())
+        }));
+        // Core's first, as PHP registers it before every extension.
+        out.sort_by_key(|(m, _, _)| m != "Core");
+        out
     }
 
     fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>) {

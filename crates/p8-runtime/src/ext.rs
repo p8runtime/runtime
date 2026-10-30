@@ -136,6 +136,9 @@ pub trait Ctx {
     /// get_defined_functions(): the builtins' names, and the script's
     /// functions (lowercase) in the order declared.
     fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>);
+    /// get_defined_constants(): each constant with its module (PHP's
+    /// extension names; "user" for the script's own), builtins first.
+    fn defined_constants(&self) -> Vec<(String, PhpStr, Value)>;
     /// Where `include name` would find its file (include_path, then the
     /// running file's directory), as a canonical path.
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf>;
@@ -402,6 +405,11 @@ pub struct Registry {
     reenters: Vec<bool>,
     index: HashMap<&'static str, usize>,
     constants: HashMap<&'static [u8], Constant>,
+    /// The constants in the order they were added, each with its module
+    /// (get_defined_constants(true) groups by it: "Core", "pcre", ...).
+    constant_order: Vec<(&'static str, &'static [u8])>,
+    /// The extension registering now (its constants' module, by default).
+    module: &'static str,
     /// Classes extensions declare, in order (a parent before its children).
     classes: Vec<&'static ClassSpec>,
     /// Native classes' per-object state makers, by class name.
@@ -451,6 +459,7 @@ impl Registry {
     pub fn new(extensions: &[Extension]) -> Registry {
         let mut registry = Registry::default();
         for extension in extensions {
+            registry.module = extension.name;
             (extension.register)(&mut registry);
         }
         registry
@@ -581,7 +590,19 @@ impl Registry {
     }
 
     pub fn add_constant(&mut self, name: &'static [u8], value: Constant) {
-        self.constants.insert(name, value);
+        self.add_constant_in(self.module, name, value);
+    }
+
+    /// A constant that belongs to `module` (PHP's name for its extension).
+    pub fn add_constant_in(&mut self, module: &'static str, name: &'static [u8], value: Constant) {
+        if self.constants.insert(name, value).is_none() {
+            self.constant_order.push((module, name));
+        }
+    }
+
+    /// Every constant with its module, in the order they were added.
+    pub fn constant_list(&self) -> impl Iterator<Item = (&'static str, &'static [u8], Constant)> + '_ {
+        self.constant_order.iter().filter_map(|&(module, name)| self.constants.get(name).map(|c| (module, name, *c)))
     }
 
     /// The builtin named `name` (lowercase).

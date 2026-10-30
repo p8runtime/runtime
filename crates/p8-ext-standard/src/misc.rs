@@ -31,6 +31,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "version_compare", run: version_compare, by_ref: &[] },
     Builtin { name: "error_log", run: error_log, by_ref: &[] },
     Builtin { name: "get_defined_functions", run: get_defined_functions, by_ref: &[] },
+    Builtin { name: "get_defined_constants", run: get_defined_constants, by_ref: &[] },
     Builtin { name: "zend_version", run: zend_version, by_ref: &[] },
     Builtin { name: "quoted_printable_encode", run: quoted_printable_encode, by_ref: &[] },
     Builtin { name: "quoted_printable_decode", run: quoted_printable_decode, by_ref: &[] },
@@ -659,6 +660,39 @@ fn getopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     if let Some(Value::Ref(c)) = args.get(2) {
         *c.borrow_mut() = Value::Int(optind as i64);
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+/// get_defined_constants(bool $categorize = false): name => value for
+/// every constant, builtins first in the order their extensions made them,
+/// then the script's; categorized, grouped by module ("Core", "pcre", ...,
+/// "user").
+fn get_defined_constants(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let categorize = args.first().is_some_and(|v| v.deref().to_bool());
+    let mut flat = PhpArray::new();
+    let mut groups: Vec<(String, PhpArray)> = Vec::new();
+    for (module, name, value) in ctx.defined_constants() {
+        let key = Key::from_string(name);
+        if categorize {
+            match groups.iter_mut().find(|(m, _)| *m == module) {
+                Some((_, g)) => g.insert(key, value),
+                None => {
+                    let mut g = PhpArray::new();
+                    g.insert(key, value);
+                    groups.push((module, g));
+                }
+            }
+        } else {
+            flat.insert(key, value);
+        }
+    }
+    if !categorize {
+        return Ok(Value::Array(Rc::new(flat)));
+    }
+    let mut out = PhpArray::new();
+    for (module, g) in groups {
+        out.insert(Key::from_string(PhpStr::from(module.as_str())), Value::Array(Rc::new(g)));
     }
     Ok(Value::Array(Rc::new(out)))
 }
