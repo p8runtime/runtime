@@ -244,8 +244,32 @@ fn is_label(kind: K) -> bool {
     )
 }
 
-/// PHP's tokens for `src`.
-fn tokens(src: &[u8]) -> Vec<Token> {
+/// Whether a token's text is a word (an identifier, a keyword or a
+/// word operator such as `and`): what a name position can take.
+fn is_word(text: &[u8]) -> bool {
+    text.first().is_some_and(|&c| c.is_ascii_alphabetic() || c == b'_' || c >= 0x80) && text.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80)
+}
+
+/// TOKEN_PARSE: whether the word at `i` is one the parser reads as a name
+/// (zend_lex_tstring: a keyword there is T_STRING): after `->`, `?->` and
+/// `::`, a function's or a constant's name, an enum case's name, and a
+/// named argument.
+fn parsed_as_name(raw: &[p8_syntax::lexer::token::Token], i: usize) -> bool {
+    let significant = |k: K| !matches!(k, K::Comment | K::DocComment);
+    let prev: Vec<K> = raw[..i].iter().rev().map(|t| t.kind).filter(|&k| significant(k)).take(2).collect();
+    let next: Vec<K> = raw[i + 1..].iter().map(|t| t.kind).filter(|&k| significant(k)).take(1).collect();
+    let amp = |k: K| matches!(k, K::Ampersand | K::AmpersandFollowedByVarOrVararg | K::AmpersandNotFollowedByVarOrVararg | K::AmpersandFollowedByVar | K::AmpersandNotFollowedByVar);
+    match (prev.first().copied(), prev.get(1).copied(), next.first().copied()) {
+        (Some(K::Arrow | K::NullSafeArrow | K::DoubleColon | K::Function | K::Const), _, _) => true,
+        (Some(a), Some(K::Function), _) if amp(a) => true,
+        (Some(K::Case), _, Some(K::SemiColon | K::Eq)) => true,
+        (Some(K::OpenParen | K::Comma), _, Some(K::Colon)) => true,
+        _ => false,
+    }
+}
+
+/// PHP's tokens for `src` (`parse`: TOKEN_PARSE's names).
+fn tokens(src: &[u8], parse: bool) -> Vec<Token> {
     let raw: Vec<p8_syntax::lexer::token::Token> = Lexer::new(src).take_while(|t| t.kind != K::Eof).collect();
     let mut out: Vec<Token> = Vec::new();
     let mut line = 1i64;
@@ -317,7 +341,8 @@ fn tokens(src: &[u8]) -> Vec<Token> {
                 continue;
             }
         }
-        let tok = if property && is_label(kind) {
+        let word = is_word(&src[start..end]) && kind != K::Variable;
+        let tok = if (property && word) || (parse && word && parsed_as_name(&raw, i)) {
             Tok::Id(id("T_STRING"))
         } else if kind == K::Identifier {
             // Words the lexer leaves as names.
@@ -356,7 +381,7 @@ fn tokens(src: &[u8]) -> Vec<Token> {
                 end = start + keep.min(tag.len());
             }
         }
-        property = matches!(kind, K::Arrow | K::NullSafeArrow) || (property && !is_label(kind) && kind == K::Error);
+        property = matches!(kind, K::Arrow | K::NullSafeArrow) || (property && !word && matches!(kind, K::Error | K::Comment | K::DocComment));
         push(&mut out, tok, start, end, &mut line);
         at = end;
         i += 1;
@@ -385,9 +410,9 @@ fn code_arg(args: &[Value]) -> PhpStr {
 fn token_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let code = code_arg(args);
     let src = code.as_bytes();
-    check(ctx, src, args)?;
+    let parse = check(ctx, src, args)?;
     let mut out = PhpArray::new();
-    for t in tokens(src) {
+    for t in tokens(src, parse) {
         let v = match t.tok {
             Tok::Char(c) => Value::Str(PhpStr::from(&[c][..])),
             Tok::Id(i) => Value::Array(Rc::new(PhpArray::from_list(vec![Value::Int(i), text(src, &t), Value::Int(t.line)]))),
@@ -397,15 +422,15 @@ fn token_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     Ok(Value::Array(Rc::new(out)))
 }
 
-/// TOKEN_PARSE: the code must parse (a ParseError if not).
-fn check(ctx: &mut dyn Ctx, src: &[u8], args: &[Value]) -> Result<(), Throw> {
+/// TOKEN_PARSE: the code must parse (a ParseError if not); whether it is set.
+fn check(ctx: &mut dyn Ctx, src: &[u8], args: &[Value]) -> Result<bool, Throw> {
     let flags = args.get(1).map_or(0, |v| v.deref().to_int());
     if flags & 1 == 0 {
-        return Ok(());
+        return Ok(false);
     }
     match ctx.parse_check(src) {
         Some((message, _line)) => Err(ctx.throw("ParseError", message)),
-        None => Ok(()),
+        None => Ok(true),
     }
 }
 
@@ -444,13 +469,13 @@ fn construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<V
 fn tokenize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let code = code_arg(args);
     let src = code.as_bytes();
-    check(ctx, src, args)?;
+    let parse = check(ctx, src, args)?;
     let Some(class) = ctx.native_class() else { return Ok(Value::Null) };
     if class.flags & p8_runtime::object::CLASS_ABSTRACT != 0 {
         return Err(ctx.throw("Error", format!("Cannot instantiate abstract class {}", String::from_utf8_lossy(class.name.as_bytes()))));
     }
     let mut out = PhpArray::new();
-    for t in tokens(src) {
+    for t in tokens(src, parse) {
         let o = ctx.new_object(&class);
         let id = match t.tok {
             Tok::Char(c) => i64::from(c),
@@ -518,7 +543,7 @@ mod tests {
     use super::*;
 
     fn kinds(src: &str) -> Vec<(String, String)> {
-        tokens(src.as_bytes())
+        tokens(src.as_bytes(), false)
             .iter()
             .map(|t| {
                 let name = match t.tok {
