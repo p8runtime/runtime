@@ -87,6 +87,25 @@ impl PipeOut {
         PipeOut { rx, left: Vec::new(), done: false }
     }
 
+    /// Whether a read would not wait: bytes have come, or the end.
+    fn ready(&mut self) -> bool {
+        if !self.left.is_empty() || self.done {
+            return true;
+        }
+        match self.rx.try_recv() {
+            Ok(chunk) => {
+                self.done = chunk.is_empty();
+                self.left = chunk;
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.done = true;
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+        }
+    }
+
     /// Up to `n` bytes (none when it would wait, if `nonblocking`), and
     /// whether the pipe has ended.
     fn take(&mut self, n: usize, nonblocking: bool) -> (Vec<u8>, bool) {
@@ -168,6 +187,29 @@ impl Drop for Stream {
 impl Stream {
     pub fn new(target: Target, path: &str, mode: &str) -> Stream {
         Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false, nonblocking: false }
+    }
+
+    /// stream_select's read test: whether a read would not wait (bytes
+    /// buffered or arrived, or the end).
+    pub fn read_ready(&mut self) -> bool {
+        if !self.buffer.is_empty() {
+            return true;
+        }
+        match &mut self.target {
+            Target::PipeOut(p) => p.ready(),
+            Target::Tcp(sock) => {
+                let blocking = !self.nonblocking;
+                if blocking && sock.set_nonblocking(true).is_err() {
+                    return true;
+                }
+                let ready = !matches!(sock.peek(&mut [0u8]), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock);
+                if blocking {
+                    let _ = sock.set_nonblocking(false);
+                }
+                ready
+            }
+            _ => true,
+        }
     }
 
     /// Close: flushed, the close hook run, the target let go.

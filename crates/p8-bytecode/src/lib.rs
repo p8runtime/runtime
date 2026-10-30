@@ -638,6 +638,9 @@ pub struct Param {
     /// Its default when that is a constant value (for reflection; the
     /// default itself runs as code).
     pub default: Option<Frozen>,
+    /// Its default when that is a constant, by name as reflection shows
+    /// it (`N\PHP_EOL`, `self::A`).
+    pub default_const: Option<Text>,
     /// A promoted constructor parameter (`public int $x`).
     pub promoted: bool,
     pub attrs: Vec<AttrDef>,

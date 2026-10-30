@@ -10,7 +10,7 @@ use crate::classes::{Code, MethodFrame};
 use crate::{Closure, Context, Next};
 use p8_bytecode::Function;
 use p8_runtime::ext::Throw;
-use p8_runtime::object::{Class, Object};
+use p8_runtime::object::{Class, Native, Object};
 use p8_runtime::string::PhpStr;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::value::Value;
@@ -20,8 +20,7 @@ use std::sync::Arc;
 
 /// What a Closure object holds.
 pub(crate) struct ClosureData {
-    /// What it runs: user code, or (from a builtin's name) a builtin.
-    pub func: Result<Rc<Closure>, usize>,
+    pub func: ClosureFunc,
     pub is_static: bool,
     pub this: Option<Rc<Object>>,
     pub scope: Option<Rc<Class>>,
@@ -30,6 +29,36 @@ pub(crate) struct ClosureData {
     pub captured: RefCell<Vec<Value>>,
     /// A Closure of a __call / __callStatic trampoline: the method name.
     pub trampoline: Option<PhpStr>,
+}
+
+/// What a Closure runs.
+pub(crate) enum ClosureFunc {
+    User(Rc<Closure>),
+    /// A builtin function (its index), from its name.
+    Builtin(usize),
+    /// A builtin class's method (`$doc->createElement(...)`), as its
+    /// MethodFrame holds it.
+    Method(Native, PhpStr),
+}
+
+impl ClosureFunc {
+    /// The user code it runs, if it is user code.
+    pub(crate) fn user(&self) -> Option<&Rc<Closure>> {
+        match self {
+            ClosureFunc::User(c) => Some(c),
+            _ => None,
+        }
+    }
+}
+
+impl Clone for ClosureFunc {
+    fn clone(&self) -> ClosureFunc {
+        match self {
+            ClosureFunc::User(c) => ClosureFunc::User(Rc::clone(c)),
+            ClosureFunc::Builtin(i) => ClosureFunc::Builtin(*i),
+            ClosureFunc::Method(n, name) => ClosureFunc::Method(*n, name.clone()),
+        }
+    }
 }
 
 /// The closure data of a Closure object.
@@ -78,7 +107,7 @@ impl Context<'_> {
             Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called.clone()),
             None => (None, None, None),
         };
-        let data = ClosureData { func: Ok(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None };
+        let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None };
         let class = Rc::clone(&self.classes[b"closure".as_slice()]);
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
@@ -87,7 +116,7 @@ impl Context<'_> {
     fn closure_target(&self, o: &Object) -> Option<Target> {
         let data = closure_data(o)?;
         Some(match &data.func {
-            Ok(func) => Target::Frame(MethodFrame {
+            ClosureFunc::User(func) => Target::Frame(MethodFrame {
                 func: Code::User(Rc::clone(func)),
                 this: data.this.clone(),
                 scope: data.scope.clone(),
@@ -95,7 +124,15 @@ impl Context<'_> {
                 captured: data.captured.borrow().clone(),
                 trampoline: data.trampoline.clone(),
             }),
-            Err(builtin) => Target::Builtin(*builtin),
+            ClosureFunc::Method(native, name) => Target::Frame(MethodFrame {
+                func: Code::Native(*native, name.clone()),
+                this: data.this.clone(),
+                scope: data.scope.clone(),
+                called: data.called.clone(),
+                captured: Vec::new(),
+                trampoline: None,
+            }),
+            ClosureFunc::Builtin(builtin) => Target::Builtin(*builtin),
         })
     }
 
@@ -157,7 +194,7 @@ impl Context<'_> {
         }
         let data = match self.resolve_callable(callable)? {
             Target::Builtin(i) => ClosureData {
-                func: Err(i),
+                func: ClosureFunc::Builtin(i),
                 is_static: true,
                 this: None,
                 scope: None,
@@ -166,7 +203,7 @@ impl Context<'_> {
                 trampoline: None,
             },
             Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, captured, trampoline }) => ClosureData {
-                func: Ok(func),
+                func: ClosureFunc::User(func),
                 is_static: this.is_none(),
                 this,
                 scope,
@@ -174,9 +211,15 @@ impl Context<'_> {
                 captured: RefCell::new(captured),
                 trampoline,
             },
-            Target::Frame(MethodFrame { func: Code::Native(..), .. }) => {
-                return Err(self.throw("Error", "Cannot make a closure of a builtin class's method yet"));
-            }
+            Target::Frame(MethodFrame { func: Code::Native(native, name), this, scope, called, .. }) => ClosureData {
+                func: ClosureFunc::Method(native, name),
+                is_static: this.is_none(),
+                this,
+                scope,
+                called,
+                captured: RefCell::new(Vec::new()),
+                trampoline: None,
+            },
         };
         Ok(self.new_closure(data))
     }
@@ -592,10 +635,7 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
     let key = |k: &str| Key::from_string(PhpStr::from(k));
     let mut out = PhpArray::new();
     let Some(data) = closure_data(o) else { return out };
-    let func = match &data.func {
-        Ok(f) => &f.code,
-        Err(_) => return out,
-    };
+    let Some(func) = data.func.user().map(|f| &f.code) else { return out };
     out.insert(key("name"), Value::Str(PhpStr::from(func.name.as_bytes())));
     out.insert(key("file"), Value::Str(PhpStr::from(&*func.file)));
     out.insert(key("line"), Value::Int(i64::from(func.line)));

@@ -1888,6 +1888,7 @@ impl<'src> Compiler<'src> {
             f.cv(&text[1..]);
             let ty = p.ty.map(|t| self.type_decl(t));
             let default = p.default.and_then(|d| self.const_value(d).ok());
+            let default_const = p.default.and_then(|d| self.default_const_name(d));
             let promoted = visibility_of(self, p.modifiers).is_some();
             let attrs = self.attr_defs(p.attributes, 32)?;
             f.params.push(Param {
@@ -1897,6 +1898,7 @@ impl<'src> Compiler<'src> {
                 variadic: p.variadic,
                 ty,
                 default,
+                default_const,
                 promoted,
                 attrs,
             });
@@ -1904,7 +1906,7 @@ impl<'src> Compiler<'src> {
         // A set hook written without its parameter takes `$value`.
         if std::mem::take(&mut self.hook_value) && params.is_empty() {
             f.cv(b"value");
-            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, promoted: false, attrs: Vec::new() });
+            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, default_const: None, promoted: false, attrs: Vec::new() });
         }
         f.decl_line = f.line;
         if params.last().is_some_and(|p| p.variadic) {
@@ -2622,6 +2624,35 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    /// A parameter default that is a constant, named as reflection shows
+    /// it: global and namespaced constants resolved (an unqualified one in
+    /// a namespace is the namespaced name), `self::`/`parent::`/`static::`
+    /// as written, other classes resolved.
+    fn default_const_name(&self, e: &Expr) -> Option<Text> {
+        match e {
+            Expr::Variable { name, .. } => {
+                let text = self.text(*name);
+                let bare = text.strip_prefix(b"\\").unwrap_or(text);
+                if text.starts_with(b"$") || matches!(bare.to_ascii_lowercase().as_slice(), b"true" | b"false" | b"null") {
+                    return None;
+                }
+                Some(Text::from(self.ns_name(text, &self.use_consts, false).0.as_slice()))
+            }
+            Expr::ClassConstFetch { class: Expr::Variable { name: class, .. }, constant: Expr::Variable { name, .. }, .. } => {
+                let (class, name) = (self.text(*class), self.text(*name));
+                if class.starts_with(b"$") || name.starts_with(b"$") || name.eq_ignore_ascii_case(b"class") {
+                    return None;
+                }
+                let class = match class.to_ascii_lowercase().as_slice() {
+                    b"self" | b"parent" | b"static" => class.to_vec(),
+                    _ => self.class_name(class),
+                };
+                Some(Text::from([class.as_slice(), b"::", name].concat().as_slice()))
+            }
+            _ => None,
+        }
+    }
+
     /// The index of the class a name expression names: `self` and
     /// `parent` resolved now, `static` when the code runs.
     fn class_ref(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<u16> {
@@ -2832,6 +2863,11 @@ impl<'src> Compiler<'src> {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
                 let var = f.cv(&self.text(*name)[1..]);
                 f.emit(if call { Instr::rare(Rare::BindRefResult, var, src, 0, 0) } else { Instr::BindRef { var, src } });
+                // A temporary holding the reference lets go of it: a later
+                // write to that register would go through to the variable.
+                if src >> KIND_SHIFT == TEMP {
+                    f.emit(Instr::Free { reg: src });
+                }
                 var
             }
             Expr::ArrayDimFetch { .. } => {

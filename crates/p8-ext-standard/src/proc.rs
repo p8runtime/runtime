@@ -27,6 +27,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "proc_close", run: proc_close, by_ref: &[] },
     Builtin { name: "fsockopen", run: fsockopen, by_ref: &[2, 3] },
     Builtin { name: "stream_set_blocking", run: stream_set_blocking, by_ref: &[] },
+    Builtin { name: "stream_select", run: stream_select, by_ref: &[0, 1, 2] },
     Builtin { name: "stream_set_timeout", run: stream_set_timeout, by_ref: &[] },
 ];
 
@@ -278,6 +279,61 @@ fn stream_set_blocking(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
     let r = resource(&o).expect("a stream");
     r.stream.borrow_mut().nonblocking = !enable;
     Ok(Value::Bool(true))
+}
+
+/// stream_select(?array &$read, ?array &$write, ?array &$except, ?int
+/// $seconds, ?int $microseconds = null): the arrays keep the streams that
+/// are ready (writes always are; nothing is exceptional), waiting up to the
+/// timeout (forever when null) for a read to be. Pipes are read on threads
+/// and sockets peeked, so the wait is a poll every millisecond.
+fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let list = |v: &Value| match v.deref() {
+        Value::Array(a) => Some(a),
+        _ => None,
+    };
+    let (read, write, except) = (args.first().and_then(list), args.get(1).and_then(list), args.get(2).and_then(list));
+    if read.is_none() && write.is_none() && except.is_none() {
+        return Err(ctx.throw("ValueError", "No stream arrays were passed".into()));
+    }
+    let timeout = match args.get(3).map(Value::deref) {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let seconds = v.to_int();
+            let micros = args.get(4).map(Value::deref).map_or(0, |v| v.to_int());
+            if seconds < 0 {
+                return Err(ctx.throw("ValueError", "stream_select(): Argument #4 ($seconds) must be greater than or equal to 0".into()));
+            }
+            if micros < 0 {
+                return Err(ctx.throw("ValueError", "stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0".into()));
+            }
+            Some(Duration::from_secs(seconds as u64) + Duration::from_micros(micros as u64))
+        }
+    };
+    let deadline = timeout.map(|t| std::time::Instant::now() + t);
+    let writable = write.as_ref().map_or(0, |w| w.len());
+    let ready_reads = loop {
+        let mut ready = PhpArray::new();
+        for (k, v) in read.iter().flat_map(|a| a.iter()) {
+            let Some(o) = resource_of(v) else { continue };
+            let Some(r) = resource(&o) else { continue };
+            if !r.closed.get() && r.stream.borrow_mut().read_ready() {
+                ready.insert(k.clone(), v.clone());
+            }
+        }
+        if !ready.is_empty() || writable > 0 || deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            break ready;
+        }
+        let pause = Duration::from_millis(1);
+        std::thread::sleep(deadline.map_or(pause, |d| pause.min(d.saturating_duration_since(std::time::Instant::now()))));
+    };
+    let count = ready_reads.len() + writable;
+    if let (Some(Value::Ref(cell)), Some(_)) = (args.first(), &read) {
+        *cell.borrow_mut() = Value::Array(Rc::new(ready_reads));
+    }
+    if let (Some(Value::Ref(cell)), Some(_)) = (args.get(2), &except) {
+        *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
+    }
+    Ok(Value::Int(count as i64))
 }
 
 /// stream_set_timeout(resource $stream, int $seconds, int $microseconds = 0)

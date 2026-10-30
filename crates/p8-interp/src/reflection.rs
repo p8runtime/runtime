@@ -664,7 +664,9 @@ fn rf_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
         }
     };
     let info = ctx.function_info(&callee).expect("checked");
-    let shown = if info.is_closure { PhpStr::from("{closure}") } else { info.name.clone() };
+    // A closure of a builtin (`strlen(...)`, `$doc->createElement(...)`)
+    // keeps the builtin's name.
+    let shown = if info.is_closure && info.user { PhpStr::from("{closure}") } else { info.name.clone() };
     let shown = if info.is_closure && info.name.as_bytes().starts_with(b"{closure") { info.name.clone() } else { shown };
     set(this, "name", Value::Str(shown));
     set(this, "\0callee", encode(&callee));
@@ -735,6 +737,10 @@ fn_method!(fa_get_static_variables, |ctx, info, this, args| {
 });
 fn_method!(fa_get_closure_this, |ctx, info, this, args| Ok(info.closure_this.clone().map_or(Value::Null, Value::Object)));
 fn_method!(fa_get_closure_scope_class, |ctx, info, this, args| Ok(match &info.closure_scope {
+    Some(c) => new_class_reflection(ctx, c),
+    None => Value::Null,
+}));
+fn_method!(fa_get_closure_called_class, |ctx, info, this, args| Ok(match &info.closure_called {
     Some(c) => new_class_reflection(ctx, c),
     None => Value::Null,
 }));
@@ -909,8 +915,51 @@ param_method!(rp_get_default_value, |ctx, p, pos, info, this| {
     if !p.optional || p.variadic {
         return Err(fail(ctx, "Internal error: Failed to retrieve the default value".into()));
     }
+    if p.default.is_none()
+        && let Some(name) = &p.default_const
+    {
+        return default_constant_value(ctx, info.class.as_ref(), name.as_bytes());
+    }
     Ok(p.default.clone().unwrap_or(Value::Null))
 });
+param_method!(rp_is_default_value_constant, |ctx, p, pos, info, this| {
+    if !p.optional || p.variadic {
+        return Err(fail(ctx, "Internal error: Failed to retrieve the default value".into()));
+    }
+    Ok(Value::Bool(p.default_const.is_some()))
+});
+param_method!(rp_get_default_value_constant_name, |ctx, p, pos, info, this| {
+    if !p.optional || p.variadic {
+        return Err(fail(ctx, "Internal error: Failed to retrieve the default value".into()));
+    }
+    Ok(p.default_const.clone().map_or(Value::Null, Value::Str))
+});
+
+/// The value of a parameter default that is the constant `name`
+/// (`self::A` in `class`'s method, `N\X` falling back to the global `X`).
+fn default_constant_value(ctx: &mut dyn Ctx, class: Option<&Rc<Class>>, name: &[u8]) -> Result<Value, Throw> {
+    let missing = |ctx: &mut dyn Ctx, what: String| ctx.throw("Error", what);
+    if let Some(at) = name.windows(2).position(|w| w == b"::") {
+        let (owner, constant) = (&name[..at], &name[at + 2..]);
+        let owner = match owner.to_ascii_lowercase().as_slice() {
+            b"self" | b"static" => class.cloned(),
+            b"parent" => class.and_then(|c| c.parent.clone()),
+            _ => ctx.class(owner),
+        };
+        let Some(owner) = owner else {
+            return Err(missing(ctx, format!("Class \"{}\" not found", String::from_utf8_lossy(&name[..at]))));
+        };
+        return match ctx.class_constant(&owner, constant)? {
+            Some(v) => Ok(v),
+            None => Err(missing(ctx, format!("Undefined constant {}::{}", String::from_utf8_lossy(owner.name.as_bytes()), String::from_utf8_lossy(constant)))),
+        };
+    }
+    let global = name.rsplit(|&c| c == b'\\').next().unwrap_or(name);
+    match ctx.constant(name).or_else(|| ctx.constant(global)) {
+        Some(v) => Ok(v),
+        None => Err(missing(ctx, format!("Undefined constant \"{}\"", String::from_utf8_lossy(name)))),
+    }
+}
 param_method!(rp_get_type, |ctx, p, pos, info, this| Ok(type_value(ctx, &p.ty)));
 param_method!(rp_has_type, |ctx, p, pos, info, this| Ok(Value::Bool(p.ty.is_some())));
 param_method!(rp_allows_null, |ctx, p, pos, info, this| Ok(Value::Bool(
@@ -1754,6 +1803,7 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("getStaticVariables", Some(Native::Method(fa_get_static_variables))),
     ("getClosureThis", Some(Native::Method(fa_get_closure_this))),
     ("getClosureScopeClass", Some(Native::Method(fa_get_closure_scope_class))),
+    ("getClosureCalledClass", Some(Native::Method(fa_get_closure_called_class))),
 ];
 
 pub static CLASSES: &[ClassSpec] = &[
@@ -1965,6 +2015,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("isOptional", Some(Native::Method(rp_is_optional))),
             ("isDefaultValueAvailable", Some(Native::Method(rp_is_default_value_available))),
             ("getDefaultValue", Some(Native::Method(rp_get_default_value))),
+            ("isDefaultValueConstant", Some(Native::Method(rp_is_default_value_constant))),
+            ("getDefaultValueConstantName", Some(Native::Method(rp_get_default_value_constant_name))),
             ("getType", Some(Native::Method(rp_get_type))),
             ("hasType", Some(Native::Method(rp_has_type))),
             ("allowsNull", Some(Native::Method(rp_allows_null))),

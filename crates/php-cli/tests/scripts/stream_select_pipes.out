@@ -1,0 +1,16 @@
+int(0)
+array(0) {
+}
+array(2) {
+  [0]=>
+  string(4) "out
+"
+  [1]=>
+  string(4) "err
+"
+}
+array(0) {
+}
+int(0)
+int(1)
+No stream arrays were passed
