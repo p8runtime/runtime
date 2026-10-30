@@ -1,0 +1,40 @@
+array(17) {
+  [0]=>
+  string(10) "ru_oublock"
+  [1]=>
+  string(10) "ru_inblock"
+  [2]=>
+  string(9) "ru_msgsnd"
+  [3]=>
+  string(9) "ru_msgrcv"
+  [4]=>
+  string(9) "ru_maxrss"
+  [5]=>
+  string(8) "ru_ixrss"
+  [6]=>
+  string(8) "ru_idrss"
+  [7]=>
+  string(9) "ru_minflt"
+  [8]=>
+  string(9) "ru_majflt"
+  [9]=>
+  string(11) "ru_nsignals"
+  [10]=>
+  string(8) "ru_nvcsw"
+  [11]=>
+  string(9) "ru_nivcsw"
+  [12]=>
+  string(8) "ru_nswap"
+  [13]=>
+  string(16) "ru_utime.tv_usec"
+  [14]=>
+  string(15) "ru_utime.tv_sec"
+  [15]=>
+  string(16) "ru_stime.tv_usec"
+  [16]=>
+  string(15) "ru_stime.tv_sec"
+}
+bool(true)
+bool(true)
+bool(true)
+int(17)

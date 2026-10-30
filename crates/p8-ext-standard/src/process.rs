@@ -22,6 +22,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "passthru", run: passthru, by_ref: &[1] },
     Builtin { name: "putenv", run: putenv, by_ref: &[] },
     Builtin { name: "getmypid", run: getmypid, by_ref: &[] },
+    Builtin { name: "getrusage", run: getrusage, by_ref: &[] },
     Builtin { name: "memory_get_usage", run: memory_get_usage, by_ref: &[] },
     Builtin { name: "memory_get_peak_usage", run: memory_get_usage, by_ref: &[] },
     Builtin { name: "memory_reset_peak_usage", run: memory_reset_peak_usage, by_ref: &[] },
@@ -200,6 +201,39 @@ fn passthru(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn getmypid(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(i64::from(std::process::id())))
+}
+
+/// getrusage(int $mode = 0): this process's resource usage (1: its
+/// children's), with PHP's keys in its order.
+fn getrusage(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    use nix::sys::resource::{UsageWho, getrusage};
+    let who = if args.first().is_some_and(|v| v.deref().to_int() == 1) { UsageWho::RUSAGE_CHILDREN } else { UsageWho::RUSAGE_SELF };
+    let Ok(u) = getrusage(who) else { return Ok(Value::Bool(false)) };
+    let (ut, st) = (u.user_time(), u.system_time());
+    let fields: [(&str, i64); 17] = [
+        ("ru_oublock", u.block_writes()),
+        ("ru_inblock", u.block_reads()),
+        ("ru_msgsnd", u.ipc_sends()),
+        ("ru_msgrcv", u.ipc_receives()),
+        ("ru_maxrss", u.max_rss()),
+        ("ru_ixrss", u.shared_integral()),
+        ("ru_idrss", u.unshared_data_integral()),
+        ("ru_minflt", u.minor_page_faults()),
+        ("ru_majflt", u.major_page_faults()),
+        ("ru_nsignals", u.signals()),
+        ("ru_nvcsw", u.voluntary_context_switches()),
+        ("ru_nivcsw", u.involuntary_context_switches()),
+        ("ru_nswap", u.full_swaps()),
+        ("ru_utime.tv_usec", i64::from(ut.tv_usec())),
+        ("ru_utime.tv_sec", ut.tv_sec()),
+        ("ru_stime.tv_usec", i64::from(st.tv_usec())),
+        ("ru_stime.tv_sec", st.tv_sec()),
+    ];
+    let mut out = PhpArray::new();
+    for (k, v) in fields {
+        out.insert(Key::from_string(PhpStr::from(k)), Value::Int(v));
+    }
+    Ok(Value::Array(Rc::new(out)))
 }
 
 /// memory_get_usage(): p8 does not count PHP's allocations; a steady
