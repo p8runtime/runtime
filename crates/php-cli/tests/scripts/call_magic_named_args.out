@@ -1,0 +1,42 @@
+array(2) {
+  [0]=>
+  array(1) {
+    ["a"]=>
+    int(1)
+  }
+  ["asConditions"]=>
+  bool(false)
+}
+array(3) {
+  [0]=>
+  array(1) {
+    ["a"]=>
+    int(1)
+  }
+  [1]=>
+  NULL
+  [2]=>
+  bool(false)
+}
+array(3) {
+  [0]=>
+  string(1) "v"
+  [1]=>
+  bool(true)
+  ["asConditions"]=>
+  bool(false)
+}
+array(3) {
+  [0]=>
+  string(1) "v"
+  [1]=>
+  bool(true)
+  [2]=>
+  bool(false)
+}
+array(2) {
+  [0]=>
+  int(1)
+  ["x"]=>
+  int(2)
+}

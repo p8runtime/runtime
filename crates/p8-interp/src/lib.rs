@@ -3438,8 +3438,25 @@ impl Context<'_> {
                     let list: Vec<Value> = match self.operand(w, func, args) {
                         // Named arguments: placed by the target's parameters.
                         Value::Array(a) if a.iter().any(|(k, _)| matches!(k, p8_runtime::array::Key::Str(_))) => {
-                            let t = self.resolve_callable(&target)?;
-                            self.place_args(&t, &a)?
+                            match self.resolve_callable(&target)? {
+                                // __call / __callStatic take the named ones
+                                // in their array, by name.
+                                callable::Target::Frame(mut m) if m.trampoline.is_some() => {
+                                    let name = m.trampoline.take().unwrap_or_else(PhpStr::empty);
+                                    let mut packed = PhpArray::new();
+                                    for (k, v) in a.iter() {
+                                        packed.insert(k.clone(), v.deref());
+                                    }
+                                    let at = base + func.nregs as usize;
+                                    if regs.len() < at + 3 {
+                                        regs.resize(at + 3, Value::Undef);
+                                    }
+                                    regs[at] = Value::Str(name);
+                                    regs[at + 1] = Value::Array(Rc::new(packed));
+                                    return self.call_method(regs, m, at, 2, (base + dst as usize) as u32, pc);
+                                }
+                                t => self.place_args(&t, &a)?,
+                            }
                         }
                         // References (the arguments compiled as ones) kept
                         // for the parameters that take them.
