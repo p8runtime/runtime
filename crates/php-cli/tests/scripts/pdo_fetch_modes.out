@@ -1,0 +1,89 @@
+== ASSOC
+{"id":1,"name":"a","grp":"x"}
+== NUM
+[1,"a","x"]
+== BOTH
+{"id":1,"0":1,"name":"a","1":"a","grp":"x","2":"x"}
+== OBJ
+{"id":1,"name":"a","grp":"x"}
+== NAMED
+{"id":1,"name":"a","grp":"x"}
+== BOTH var_dump
+array(6) {
+  ["id"]=>
+  int(1)
+  [0]=>
+  int(1)
+  ["name"]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+  ["grp"]=>
+  string(1) "x"
+  [2]=>
+  string(1) "x"
+}
+== CLASS
+SQLSTATE[HY000]: General error: No fetch class specified
+
+Deprecated: Creation of dynamic property Plain::$grp is deprecated in %s on line 37
+{"id":1,"name":"a","grp":"x"}
+{"id":2,"name":"b","grp":"x","args":["one","two"]}
+{"id":1,"name":"a","grp":"x","args":["late"]}
+== CLASSTYPE
+string(8) "stdClass"
+== INTO
+
+Deprecated: Creation of dynamic property Plain::$grp is deprecated in %s on line 53
+bool(true)
+string(1) "a"
+== COLUMN
+int(1)
+string(1) "b"
+["x","x","y"]
+== KEY_PAIR
+{"1":"a","2":"b","3":"c"}
+== GROUP
+{"x":[{"id":1,"name":"a"},{"id":2,"name":"b"}],"y":[{"id":3,"name":"c"}]}
+{"x":["a","b"],"y":["c"]}
+== UNIQUE
+{"x":{"id":2,"name":"b"},"y":{"id":3,"name":"c"}}
+== FUNC
+["1-a-x","2-b-x","3-c-y"]
+== NAMED duplicate columns
+[{"id":1,"name":["a","b"]},{"id":2,"name":["b","c"]}]
+[{"id":1,"name":"b"},{"id":2,"name":"c"}]
+== LAZY
+string(6) "PDORow"
+int(1)
+string(1) "a"
+string(39) "SELECT id, name, grp FROM t ORDER BY id"
+== fetchObject
+string(8) "stdClass"
+
+Deprecated: Creation of dynamic property Plain::$grp is deprecated in %s on line 88
+string(5) "Plain"
+{"id":3,"name":"c","grp":"y","args":["arg"]}
+bool(false)
+== default fetch mode
+[1,"a","x"]
+[{"id":1,"name":"a","grp":"x"},{"id":2,"name":"b","grp":"x"},{"id":3,"name":"c","grp":"y"}]
+int(2)
+== BOUND
+int(1)
+string(1) "a"
+string(1) "x"
+int(2)
+string(1) "b"
+string(1) "x"
+int(3)
+string(1) "c"
+string(1) "y"
+== fetch after end
+array(1) {
+  [0]=>
+  int(1)
+}
+bool(false)
+array(0) {
+}

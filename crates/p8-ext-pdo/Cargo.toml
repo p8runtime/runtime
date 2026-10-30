@@ -1,0 +1,9 @@
+[package]
+name = "p8-ext-pdo"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's pdo extension: the driver-agnostic PDO core (PDO, PDOStatement, PDOException, PDORow) and the driver trait pdo_sqlite and pdo_mysql plug into"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }

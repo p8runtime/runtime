@@ -44,6 +44,9 @@ fn p8_links_no_c() {
     let offenders: Vec<&str> = tree
         .lines()
         .filter_map(|line| line.split_whitespace().next())
+        // core-foundation-sys is Rust declarations of macOS's own framework (chrono's
+        // time zone lookup, which turso_core also uses): no C is compiled for it.
+        .filter(|name| *name != "core-foundation-sys")
         .filter(|name| name.ends_with("-sys") || ["cc", "openssl", "native-tls", "ring", "aws-lc-rs"].contains(name))
         .collect();
     assert!(offenders.is_empty(), "p8 depends on C: {offenders:?}");

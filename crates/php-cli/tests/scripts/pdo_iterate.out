@@ -1,0 +1,50 @@
+== foreach
+0 {"id":1,"0":1,"v":"a","1":"a"}
+1 {"id":2,"0":2,"v":"b","1":"b"}
+2 {"id":3,"0":3,"v":"c","1":"c"}
+3 {"id":4,"0":4,"v":"d","1":"d"}
+bool(false)
+== prepared, executed twice
+cd
+abcd
+== break and continue
+ab|c
+== iterator_to_array and getIterator
+[["a"],["b"],["c"],["d"]]
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+== fetch modes in foreach
+[{"1":"a"},{"2":"b"},{"3":"c"},{"4":"d"}]
+stdClass:a stdClass:b 
+== nested loops on separate statements
+1b 1c 2c 2d 
+== statement class
+string(6) "MyStmt"
+string(6) "custom"
+string(8) "SELECT 1"
+string(6) "MyStmt"
+string(6) "custom"
+array(2) {
+  [0]=>
+  string(6) "MyStmt"
+  [1]=>
+  array(1) {
+    [0]=>
+    string(6) "custom"
+  }
+}
+PDO::ATTR_STATEMENT_CLASS value must be of type array, string given
+PDO::ATTR_STATEMENT_CLASS class must be a valid class
+PDO::ATTR_STATEMENT_CLASS class must be derived from PDOStatement
+== subclass of PDO
+string(9) "hi sqlite"
+bool(true)
+int(5)
+Trying to clone an uncloneable object of class MyPDO
+PDOException: You may not create a PDORow manually
+bool(true)
+string(12) "PDOStatement"
+PDOException: could not find driver
+Error: Call to undefined method Pdo\Sqlite::nothing()

@@ -1,0 +1,16 @@
+[package]
+name = "p8-ext-pdo-sqlite"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's pdo_sqlite driver: PDO over Turso's Rust rewrite of SQLite (turso_core), no C library"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+p8-ext-pdo = { path = "../p8-ext-pdo" }
+# Turso's Rust rewrite of SQLite (MIT), pinned exactly as zega pins it: the
+# engine moves weekly. No default features: those pull simsimd (C++).
+# `fs` is the file I/O; `uuid`/`json`/`time` are needed to build 0.8.3 at
+# all; `pure-rust-crypto` keeps aegis (page encryption) from compiling its
+# bundled C on non-macOS targets.
+turso_core = { version = "=0.8.3", default-features = false, features = ["fs", "uuid", "json", "time", "pure-rust-crypto"] }

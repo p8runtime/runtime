@@ -1,0 +1,58 @@
+== native
+[0,"integer",0] integer integer
+[-1,"integer",-1] integer integer
+[9223372036854775807,"integer",9223372036854775807] integer integer
+[-9223372036854775808,"integer",-9223372036854775808] integer integer
+["1.5","text","1.5"] string string
+["0.1","text","0.1"] string string
+["1.0E+100","text","1.0E+100"] string string
+["-2.5E-10","text","-2.5E-10"] string string
+["","text",""] string string
+["0","text","0"] string string
+["h\u00e9llo w\u00f6rld","text","h\u00e9llo w\u00f6rld"] string string
+["line\nbreak","text","line\nbreak"] string string
+[null,"null",null] NULL NULL
+[12,"integer",3] integer double
+[null,"blob","text"] string string
+[1000,"real",-0.5] double double
+[9223372036854775807,"integer",9.223372036854776e+18] integer double
+== stringify
+string:'0' string:'0'
+string:'-1' string:'-1'
+string:'9223372036854775807' string:'9223372036854775807'
+string:'-9223372036854775808' string:'-9223372036854775808'
+string:'1.5' string:'1.5'
+string:'0.1' string:'0.1'
+bool(true)
+== case
+{"MixedCase":1,"lower":2,"UPPER":3}
+{"mixedcase":1,"lower":2,"upper":3}
+{"MIXEDCASE":1,"LOWER":2,"UPPER":3}
+int(1)
+== oracle nulls
+["",null]
+[null,null]
+["",""]
+== column meta for each type
+i integer 1 []
+f double 2 []
+s string 2 []
+b string 2 ["blob"]
+n null 0 []
+== misc attributes
+bool(false)
+array(1) {
+  [0]=>
+  string(12) "PDOStatement"
+}
+bool(true)
+bool(true)
+bool(false)
+int(1000)
+int(1)
+int(2048)
+int(2)
+int(65536)
+int(196608)
+int(1)
+string(5) "00000"
