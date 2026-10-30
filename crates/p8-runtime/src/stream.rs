@@ -113,6 +113,31 @@ impl PipeOut {
     }
 }
 
+/// Opens a URL of a scheme an extension serves (zip://): the function
+/// name for warnings, the URL and the fopen mode. The wrapper warns by
+/// itself when it cannot open the stream.
+pub type WrapperOpen = fn(&mut dyn Ctx, &str, &str, &str) -> Option<Stream>;
+
+static WRAPPERS: std::sync::Mutex<Vec<(&'static str, WrapperOpen)>> = std::sync::Mutex::new(Vec::new());
+
+/// Serve URLs of `scheme` (lowercase, no "://") with `open`.
+pub fn register_wrapper(scheme: &'static str, open: WrapperOpen) {
+    let mut wrappers = WRAPPERS.lock().unwrap_or_else(|e| e.into_inner());
+    if !wrappers.iter().any(|(s, _)| *s == scheme) {
+        wrappers.push((scheme, open));
+    }
+}
+
+/// The schemes extensions registered, in the order they did.
+pub fn wrapper_schemes() -> Vec<&'static str> {
+    WRAPPERS.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(s, _)| *s).collect()
+}
+
+/// The opener for `scheme` (lowercase), if an extension registered one.
+pub fn wrapper(scheme: &str) -> Option<WrapperOpen> {
+    WRAPPERS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(s, _)| *s == scheme).map(|(_, open)| *open)
+}
+
 /// What runs with a stream's bytes when it closes.
 pub type OnClose = Box<dyn FnOnce(&[u8])>;
 

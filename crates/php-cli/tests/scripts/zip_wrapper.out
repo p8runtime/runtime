@@ -1,0 +1,20 @@
+== fopen: true
+== fgets: 'first line
+'
+== fgets: 'second line
+'
+== rest: 'third line
+'
+== eof: true
+== file_get_contents: '' . "\0" . ''
+== file(): ["first line","second line","third line"]
+[W: fopen(ZIPURL): Failed to open stream: operation failed] == missing entry: false
+[W: fopen(ZIPURL): Failed to open stream: operation failed] == missing archive: false
+[W: fopen(ZIPURL): Failed to open stream: operation failed] == no entry given: false
+[W: fopen(ZIPURL): Failed to open stream: operation failed] == write mode: false
+== copy: true
+== getStream: 'first line
+second line
+third line
+'
+== getStreamIndex: '00010203'

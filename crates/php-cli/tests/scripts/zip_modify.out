@@ -1,0 +1,77 @@
+== entries: [["a.txt",300,8],["b.txt",5,0],["c\/d.txt",5,0]]
+== renameName: true
+== renameIndex: true
+== rename onto existing: false
+== status: 'File already exists'
+== rename missing: false
+== rename bad index: false
+== names: ["a.txt","b2.txt","c\/e.txt"]
+== names unchanged: ["b.txt","c\/d.txt"]
+== locate new: 1
+== locate old: false
+== locate old unchanged: 1
+== stat unchanged: 'b.txt'
+== deleteName: true
+== numFiles after delete: 3
+== getNameIndex deleted: false
+== statIndex deleted: false
+== locate deleted: false
+== delete twice: false
+== unchangeIndex: true
+== restored: 'a.txt'
+== unchangeName: false
+== unchangeAll: true
+== after unchangeAll: [["a.txt",300,8],["b.txt",5,0],["c\/d.txt",5,0]]
+== close unchanged: true
+== file untouched by an undone change: true
+== getCommentIndex: ''
+== setCommentIndex: true
+== setCommentName: true
+== setCommentName missing: false
+== getCommentName: 'second'
+== getCommentIndex unchanged: ''
+== getArchiveComment: ''
+== setArchiveComment: true
+== comment property: 'the archive'
+== getArchiveComment unchanged: ''
+== unchangeArchive: true
+== getArchiveComment: ''
+== close: true
+== reopened comments: ["first comment","second","kept","kept"]
+== getExternalAttributesIndex: true
+== default os: 3
+== setExternalAttributesIndex: true
+== getExternalAttributesName: true
+== attrs: [3,"100755"]
+== setMtimeName: true
+== mtime: 946080000
+== setCompressionName store: true
+== setCompressionIndex deflate: true
+== status: 'No error'
+== close: true
+== entries: [["a.txt",300,0],["b.txt",5,8],["c\/d.txt",5,0]]
+== attrs kept: [3,"100755"]
+== mtime kept: 946080000
+== content kept: true
+== isCompressionMethodSupported: [true,true]
+== addFromString replaces: true
+== lastId: 1
+== still two files: 3
+== replaced: 'replaced'
+== archive flag rdonly: [0,false]
+== changed archive refuses rdonly: true
+== rdonly now: [true,1]
+== modify rdonly: false
+== status: 'Read-only archive'
+== rdonly off: true
+== numFiles: 3
+== close empties: true
+== file removed: false
+== close kept empty: [true,true]
+== empty archive: [0,""]
+== props: [0,0,1,"p.zip","pc"]
+== isset: [true,true,false,true]
+== write prop: 'Cannot write read-only property ZipArchive::$numFiles'
+== closed props: [0,"","",0]
+== clone: 'Trying to clone an uncloneable object of class ZipArchive'
+== instanceof Countable: true
