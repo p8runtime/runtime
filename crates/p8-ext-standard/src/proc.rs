@@ -27,6 +27,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "proc_close", run: proc_close, by_ref: &[] },
     Builtin { name: "fsockopen", run: fsockopen, by_ref: &[2, 3] },
     Builtin { name: "stream_set_blocking", run: stream_set_blocking, by_ref: &[] },
+    Builtin { name: "stream_set_chunk_size", run: stream_set_chunk_size, by_ref: &[] },
     Builtin { name: "stream_select", run: stream_select, by_ref: &[0, 1, 2] },
     Builtin { name: "stream_set_timeout", run: stream_set_timeout, by_ref: &[] },
 ];
@@ -279,6 +280,18 @@ fn stream_set_blocking(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
     let r = resource(&o).expect("a stream");
     r.stream.borrow_mut().nonblocking = !enable;
     Ok(Value::Bool(true))
+}
+
+/// stream_set_chunk_size(resource $stream, int $size): the size before.
+fn stream_set_chunk_size(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let o = stream_arg(ctx, "stream_set_chunk_size", args, 0)?;
+    let size = arg(args, 1).to_int();
+    if size <= 0 {
+        return Err(ctx.throw("ValueError", "stream_set_chunk_size(): Argument #2 ($size) must be greater than 0".into()));
+    }
+    let r = resource(&o).expect("a stream");
+    let old = std::mem::replace(&mut r.stream.borrow_mut().chunk_size, size);
+    Ok(Value::Int(old))
 }
 
 /// stream_select(?array &$read, ?array &$write, ?array &$except, ?int

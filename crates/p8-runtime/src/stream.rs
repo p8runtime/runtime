@@ -176,6 +176,9 @@ pub struct Stream {
     pub zlib: bool,
     /// stream_set_blocking(false): a read does not wait (sockets, pipes).
     pub nonblocking: bool,
+    /// stream_set_chunk_size(): what it was set to (8192 to begin with);
+    /// reads take what they ask for, so it is only reported back.
+    pub chunk_size: i64,
 }
 
 impl Drop for Stream {
@@ -186,7 +189,7 @@ impl Drop for Stream {
 
 impl Stream {
     pub fn new(target: Target, path: &str, mode: &str) -> Stream {
-        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false, nonblocking: false }
+        Stream { target, path: path.to_string(), mode: mode.to_string(), pos: 0, eof: false, buffer: Vec::new(), on_close: None, zlib: false, nonblocking: false, chunk_size: 8192 }
     }
 
     /// stream_select's read test: whether a read would not wait (bytes

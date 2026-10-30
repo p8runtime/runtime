@@ -34,8 +34,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "is_array", run: is_array, by_ref: &[] },
     Builtin { name: "is_scalar", run: is_scalar, by_ref: &[] },
     Builtin { name: "is_numeric", run: is_numeric, by_ref: &[] },
-    Builtin { name: "is_iterable", run: is_array, by_ref: &[] },
-    Builtin { name: "is_countable", run: is_array, by_ref: &[] },
+    Builtin { name: "is_iterable", run: is_iterable, by_ref: &[] },
+    Builtin { name: "is_countable", run: is_countable, by_ref: &[] },
     Builtin { name: "intval", run: intval, by_ref: &[] },
     Builtin { name: "floatval", run: floatval, by_ref: &[] },
     Builtin { name: "doubleval", run: floatval, by_ref: &[] },
@@ -133,6 +133,24 @@ fn is_string(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn is_array(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(matches!(arg(args, 0), Value::Array(_))))
+}
+
+/// is_iterable(): an array or a Traversable object.
+fn is_iterable(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(match arg(args, 0) {
+        Value::Array(_) => true,
+        Value::Object(o) => o.class.is_a(b"traversable"),
+        _ => false,
+    }))
+}
+
+/// is_countable(): an array or a Countable object.
+fn is_countable(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(match arg(args, 0) {
+        Value::Array(_) => true,
+        Value::Object(o) => o.class.is_a(b"countable"),
+        _ => false,
+    }))
 }
 
 fn is_scalar(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
