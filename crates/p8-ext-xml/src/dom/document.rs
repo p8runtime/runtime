@@ -282,18 +282,18 @@ fn save(ctx: &mut dyn Ctx, this: &Rc<Object>, node: Option<NodeRef>, options: i6
 
 /// registerNodeClass(string $baseClass, ?string $extendedClass): node
 /// objects of the DOM class `baseClass` made from now on are of
-/// `extendedClass` (null: of the base class again).
+/// `extendedClass` (null: of the base class again). Both are autoloaded.
 pub fn register_node_class(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     const F: &str = "DOMDocument::registerNodeClass()";
     let base_name = bytes(&arg(args, 0));
     let shown = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-    let base = match ctx.class(&base_name) {
+    let base = match ctx.class_load(&base_name)? {
         Some(c) if c.is_a(b"domnode") => c,
         _ => return Err(ctx.throw("TypeError", format!("{F}: Argument #1 ($baseClass) must be a class name derived from DOMNode, {} given", shown(&base_name)))),
     };
     let extended = match opt_bytes(&arg(args, 1)) {
         None => None,
-        Some(name) => match ctx.class(&name) {
+        Some(name) => match ctx.class_load(&name)? {
             None => return Err(ctx.throw("TypeError", format!("{F}: Argument #2 ($extendedClass) must be a valid class name or null, {} given", shown(&name)))),
             Some(c) if !c.is_a(&base.lower) => {
                 return Err(ctx.throw("Error", format!("{F}: Argument #2 ($extendedClass) must be a class name derived from {} or null, {} given", shown(base.name.as_bytes()), shown(&name))));

@@ -15,3 +15,5 @@ Error: DOMDocument::registerNodeClass(): Argument #2 ($extendedClass) must be a 
 bool(true)
 string(11) "DOMDocument"
 string(4) "MyEl"
+bool(true)
+string(6) "LazyEl"

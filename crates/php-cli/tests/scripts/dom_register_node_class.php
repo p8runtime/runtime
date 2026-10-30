@@ -1,6 +1,6 @@
 <?php
 // DOMDocument::registerNodeClass: node objects made with the registered class
-// (it holds across loads); the argument checks (Parsoid registers its DOM classes).
+// (it holds across loads, classes autoload); the argument checks (Parsoid registers its DOM classes).
 class MyEl extends DOMElement { function hi() { return 'hi ' . $this->nodeName; } }
 class MyText extends DOMText {}
 class MyDoc extends DOMDocument {}
@@ -17,3 +17,5 @@ foreach ([['DOMElement', 'Other'], ['Other', 'MyEl'], ['DOMElement', 'Nope'], ['
 }
 var_dump($d->registerNodeClass('DOMDocument', 'MyDoc'), get_class($d->documentElement->ownerDocument));
 $p = new DOMDocument; $p->registerNodeClass('DOMElement', 'MyEl'); $p->loadXML('<r/>'); $c = $p->documentElement; unset($c); var_dump(get_class($p->documentElement));
+spl_autoload_register(function ($c) { if ($c === 'LazyEl') { eval('class LazyEl extends DOMElement {}'); } });
+$q = new DOMDocument; var_dump($q->registerNodeClass('DOMElement', 'LazyEl'), get_class($q->createElement('l')));
