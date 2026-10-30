@@ -128,6 +128,9 @@ pub trait Ctx {
     fn constant(&self, name: &[u8]) -> Option<Value>;
     /// define(): false when `name` is already defined.
     fn define(&mut self, name: &[u8], value: Value) -> bool;
+    /// Set the constant `name`, whether or not it is defined: for the one
+    /// PHP changes while it runs (SID).
+    fn set_constant(&mut self, name: &[u8], value: Value);
     /// Whether a function `name` exists (any case, optional leading `\`).
     fn function_exists(&self, name: &[u8]) -> bool;
     /// get_defined_functions(): the builtins' names, and the script's
@@ -230,6 +233,21 @@ pub trait Ctx {
     fn autoloaders(&self) -> Vec<Value>;
     /// register_shutdown_function()
     fn on_shutdown(&mut self, callable: Value, args: Vec<Value>);
+    /// A shutdown function kept under `name`: set (replacing the one of
+    /// that name where it stands in the list, else appended) with
+    /// `Some`, removed with `None` (PHP's register_user_shutdown_function
+    /// and remove_user_shutdown_function, which ext/session uses).
+    fn shutdown_named(&mut self, name: &'static str, entry: Option<(Value, Vec<Value>)>);
+    /// Typed state an extension keeps for the request (dropped with it):
+    /// the slot for `key`, empty until the extension fills it.
+    fn ext_data(&mut self, key: &'static str) -> &mut Option<Box<dyn std::any::Any>>;
+    /// The cell of global variable `name`, made (null) when the global is
+    /// not set: what a reference to the global shares (for a builtin
+    /// marked as reentering: the registers are lent to the context then).
+    fn global_cell(&mut self, name: &[u8]) -> Rc<std::cell::RefCell<Value>>;
+    /// The file and line the running code is at (an empty file when no
+    /// code is running).
+    fn location(&self) -> (Rc<str>, u32);
     /// Every class, interface, trait and enum, as get_declared_classes()
     /// lists them, each with the name it is listed by: the built-in ones
     /// (by name), then the script's in the order it declared them, an
@@ -313,6 +331,17 @@ pub trait Ctx {
     }
 }
 
+/// An ini directive's update handler (PHP's OnUpdate): called before
+/// ini_set() stores `new` for the directive `name`; false refuses it (the
+/// handler has said why) and ini_set() returns false.
+pub type IniCheck = fn(&mut dyn Ctx, &[u8], &PhpStr) -> bool;
+
+/// Work at the start or the end of a request (PHP's RINIT and RSHUTDOWN).
+/// The end hooks run after the shutdown functions, the destructors and the
+/// output buffers; a diagnostic they raise is located "Unknown" on line 0,
+/// as PHP words one from RSHUTDOWN.
+pub type RequestHook = fn(&mut dyn Ctx) -> Result<(), Throw>;
+
 /// A builtin function: arguments arrive by value (moved out of the caller's
 /// registers); a by-reference parameter receives the variable's reference cell.
 pub type Run = fn(&mut dyn Ctx, &mut [Value]) -> Result<Value, Throw>;
@@ -380,6 +409,11 @@ pub struct Registry {
     hooks: HashMap<&'static str, ClassHooks>,
     /// The PHP modules provided ("standard", "json", ...), in order.
     modules: Vec<&'static str>,
+    /// ini directives with an update handler, by name.
+    ini_checks: HashMap<&'static [u8], IniCheck>,
+    request_start: Vec<RequestHook>,
+    request_end: Vec<RequestHook>,
+    startup_checks: Vec<fn(&mut dyn Ctx)>,
 }
 
 /// A class an extension declares: its methods are Rust. The engine links
@@ -496,6 +530,46 @@ impl Registry {
     /// An ini directive and its default (None: PHP has no value for it).
     pub fn add_ini(&mut self, name: &'static str, default: Option<&'static [u8]>) {
         self.ini.insert(name.as_bytes(), default);
+    }
+
+    /// Run `check` before ini_set() stores a value for the directive `name`.
+    pub fn add_ini_check(&mut self, name: &'static str, check: IniCheck) {
+        self.ini_checks.insert(name.as_bytes(), check);
+    }
+
+    /// The update handler of the directive `name`, if it has one.
+    pub fn ini_check(&self, name: &[u8]) -> Option<IniCheck> {
+        self.ini_checks.get(name).copied()
+    }
+
+    /// Run `hook` when a request starts (after the host's settings and the
+    /// request's variables are set, before the script runs).
+    pub fn add_request_start(&mut self, hook: RequestHook) {
+        self.request_start.push(hook);
+    }
+
+    /// Run `hook` when a request ends (see [`RequestHook`]).
+    pub fn add_request_end(&mut self, hook: RequestHook) {
+        self.request_end.push(hook);
+    }
+
+    /// Say what PHP says at startup about the host's settings once they
+    /// are all set (a deprecated one), as the standard extension does for
+    /// assert.*; the checks run in the order extensions registered them.
+    pub fn add_startup_check(&mut self, check: fn(&mut dyn Ctx)) {
+        self.startup_checks.push(check);
+    }
+
+    pub fn startup_checks(&self) -> &[fn(&mut dyn Ctx)] {
+        &self.startup_checks
+    }
+
+    pub fn request_start_hooks(&self) -> &[RequestHook] {
+        &self.request_start
+    }
+
+    pub fn request_end_hooks(&self) -> &[RequestHook] {
+        &self.request_end
     }
 
     /// An ini directive's default: None if PHP has no such directive.

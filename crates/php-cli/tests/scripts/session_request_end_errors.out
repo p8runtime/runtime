@@ -1,0 +1,3 @@
+end of script
+
+Warning: PHP Request Shutdown: Failed to write session data using user defined save handler. (session.save_path: , handler: Failing::write) in Unknown on line 0

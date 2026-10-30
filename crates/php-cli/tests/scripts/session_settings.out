@@ -1,0 +1,213 @@
+== values
+
+Warning: ini_set(): session.name "" must not be numeric, empty, contain null bytes or any of the following characters "=,;.[ \t\r\n\013\014" in %s on line 22
+session.name =  -> false now 'PHPSESSID'
+
+Warning: ini_set(): session.name "123" must not be numeric, empty, contain null bytes or any of the following characters "=,;.[ \t\r\n\013\014" in %s on line 22
+session.name = 123 -> false now 'PHPSESSID'
+
+Warning: ini_set(): session.name "a b" must not be numeric, empty, contain null bytes or any of the following characters "=,;.[ \t\r\n\013\014" in %s on line 22
+session.name = a b -> false now 'PHPSESSID'
+
+Warning: ini_set(): session.name "a=b" must not be numeric, empty, contain null bytes or any of the following characters "=,;.[ \t\r\n\013\014" in %s on line 22
+session.name = a=b -> false now 'PHPSESSID'
+
+Warning: ini_set(): session.name "a.b" must not be numeric, empty, contain null bytes or any of the following characters "=,;.[ \t\r\n\013\014" in %s on line 22
+session.name = a.b -> false now 'PHPSESSID'
+
+Warning: ini_set(): session.name "a" must not be numeric, empty, contain null bytes or any of the following characters "=,;.[ \t\r\n\013\014" in %s on line 22
+session.name = a\000b -> false now 'PHPSESSID'
+session.name = P8 -> 'PHPSESSID' now 'P8'
+
+Warning: ini_set(): Session save handler "nope" cannot be found in %s on line 22
+session.save_handler = nope -> false now 'files'
+
+Warning: ini_set(): Session save handler "user" cannot be set by ini_set() in %s on line 22
+session.save_handler = user -> false now 'files'
+session.save_handler = files -> 'files' now 'files'
+
+Warning: ini_set(): Serialization handler "nope" cannot be found in %s on line 22
+session.serialize_handler = nope -> false now 'php'
+session.serialize_handler = php_binary -> 'php' now 'php_binary'
+session.serialize_handler = php -> 'php_binary' now 'php'
+
+Warning: ini_set(): CookieLifetime cannot be negative in %s on line 22
+session.cookie_lifetime = -1 -> false now '0'
+session.cookie_lifetime = 3600 -> '0' now '3600'
+session.cookie_lifetime = 0 -> '3600' now '0'
+
+Deprecated: ini_set(): session.sid_length INI setting is deprecated in %s on line 22
+
+Warning: ini_set(): session.configuration "session.sid_length" must be between 22 and 256 in %s on line 22
+session.sid_length = 10 -> false now '32'
+
+Deprecated: ini_set(): session.sid_length INI setting is deprecated in %s on line 22
+
+Warning: ini_set(): session.configuration "session.sid_length" must be between 22 and 256 in %s on line 22
+session.sid_length = 300 -> false now '32'
+
+Deprecated: ini_set(): session.sid_length INI setting is deprecated in %s on line 22
+
+Warning: ini_set(): session.configuration "session.sid_length" must be between 22 and 256 in %s on line 22
+session.sid_length = 40x -> false now '32'
+session.sid_length = 32 -> '32' now '32'
+
+Deprecated: ini_set(): session.sid_bits_per_character INI setting is deprecated in %s on line 22
+
+Warning: ini_set(): session.configuration "session.sid_bits_per_character" must be between 4 and 6 in %s on line 22
+session.sid_bits_per_character = 3 -> false now '4'
+
+Deprecated: ini_set(): session.sid_bits_per_character INI setting is deprecated in %s on line 22
+
+Warning: ini_set(): session.configuration "session.sid_bits_per_character" must be between 4 and 6 in %s on line 22
+session.sid_bits_per_character = 7 -> false now '4'
+
+Deprecated: ini_set(): session.sid_bits_per_character INI setting is deprecated in %s on line 22
+session.sid_bits_per_character = 5 -> '4' now '5'
+session.sid_bits_per_character = 4 -> '5' now '4'
+
+Warning: ini_set(): session.gc_probability must be greater than or equal to 0 in %s on line 22
+session.gc_probability = -1 -> false now '0'
+session.gc_probability = 1 -> '0' now '1'
+session.gc_probability = 0 -> '1' now '0'
+
+Warning: ini_set(): session.gc_divisor must be greater than 0 in %s on line 22
+session.gc_divisor = 0 -> false now '100'
+
+Warning: ini_set(): session.gc_divisor must be greater than 0 in %s on line 22
+session.gc_divisor = -5 -> false now '100'
+session.gc_divisor = 100 -> '100' now '100'
+session.auto_start = 1 -> false now '0'
+session.upload_progress.freq = 5% -> false now '1%'
+== while a session is active
+
+Warning: ini_set(): Session ini settings cannot be changed when a session is active in %s on line 30
+bool(false)
+
+Warning: ini_set(): Session ini settings cannot be changed when a session is active in %s on line 31
+bool(false)
+
+Warning: session_name(): Session name cannot be changed when a session is active in %s on line 32
+bool(false)
+
+Warning: session_module_name(): Session save handler module cannot be changed when a session is active in %s on line 33
+bool(false)
+
+Warning: session_save_path(): Session save path cannot be changed when a session is active in %s on line 34
+bool(false)
+
+Warning: session_cache_limiter(): Session cache limiter cannot be changed when a session is active in %s on line 35
+bool(false)
+
+Warning: session_cache_expire(): Session cache expiration cannot be changed when a session is active in %s on line 36
+int(180)
+
+Warning: session_set_cookie_params(): Session cookie parameters cannot be changed when a session is active in %s on line 37
+bool(false)
+
+Warning: session_id(): Session ID cannot be changed when a session is active in %s on line 38
+bool(false)
+string(2) "P8"
+== session_name, session_module_name, session_save_path
+string(2) "P8"
+string(6) "P8NAME"
+string(6) "P8NAME"
+session_name(): Argument #1 ($name) must not contain any null bytes
+session_module_name(): Argument #1 ($module) cannot be "user"
+
+Warning: session_module_name(): Session handler module "nope" cannot be found in %s on line 56
+bool(false)
+string(5) "files"
+session_save_path(): Argument #1 ($path) must not contain any null bytes
+== cache limiter, expire
+string(7) "nocache"
+int(180)
+string(7) "nocache"
+string(7) "private"
+int(180)
+int(7)
+== cookie parameters
+array(6) {
+  ["lifetime"]=>
+  int(0)
+  ["path"]=>
+  string(1) "/"
+  ["domain"]=>
+  string(0) ""
+  ["secure"]=>
+  bool(false)
+  ["httponly"]=>
+  bool(false)
+  ["samesite"]=>
+  string(0) ""
+}
+bool(true)
+array(6) {
+  ["lifetime"]=>
+  int(3600)
+  ["path"]=>
+  string(2) "/p"
+  ["domain"]=>
+  string(12) "example.test"
+  ["secure"]=>
+  bool(true)
+  ["httponly"]=>
+  bool(true)
+  ["samesite"]=>
+  string(0) ""
+}
+
+Warning: session_set_cookie_params(): Argument #1 ($lifetime_or_options) contains an unrecognized key "bogus" in %s on line 75
+
+Warning: session_set_cookie_params(): Argument #1 ($lifetime_or_options) cannot contain numeric keys in %s on line 75
+bool(true)
+array(6) {
+  ["lifetime"]=>
+  int(10)
+  ["path"]=>
+  string(2) "/p"
+  ["domain"]=>
+  string(12) "example.test"
+  ["secure"]=>
+  bool(true)
+  ["httponly"]=>
+  bool(true)
+  ["samesite"]=>
+  string(6) "Strict"
+}
+session_set_cookie_params(): Argument #1 ($lifetime_or_options) must contain at least 1 valid key
+session_set_cookie_params(): Argument #2 ($path) must be null when argument #1 ($lifetime_or_options) is an array
+session_set_cookie_params(): Argument #3 ($domain) must be null when argument #1 ($lifetime_or_options) is an array
+session_set_cookie_params(): Argument #4 ($secure) must be null when argument #1 ($lifetime_or_options) is an array
+session_set_cookie_params(): Argument #5 ($httponly) must be null when argument #1 ($lifetime_or_options) is an array
+bool(false)
+
+Warning: session_set_cookie_params(): Session cookies cannot be used when session.use_cookies is disabled in %s on line 85
+bool(false)
+== deprecated
+
+Deprecated: ini_set(): Disabling session.use_only_cookies INI setting is deprecated in %s on line 89
+string(1) "1"
+string(1) "0"
+
+Deprecated: ini_set(): Enabling session.use_trans_sid INI setting is deprecated in %s on line 91
+string(1) "0"
+string(1) "1"
+
+Deprecated: ini_set(): Usage of session.referer_check INI setting is deprecated in %s on line 93
+string(0) ""
+string(1) "x"
+
+Deprecated: ini_set(): session.sid_length INI setting is deprecated in %s on line 95
+string(2) "32"
+string(2) "40"
+
+Deprecated: ini_set(): session.sid_bits_per_character INI setting is deprecated in %s on line 97
+string(1) "4"
+string(1) "5"
+
+Deprecated: ini_set(): Usage of session.trans_sid_tags INI setting is deprecated in %s on line 99
+string(32) "a=href,area=href,frame=src,form="
+
+Deprecated: ini_set(): Usage of session.trans_sid_hosts INI setting is deprecated in %s on line 100
+string(0) ""

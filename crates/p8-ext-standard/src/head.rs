@@ -139,6 +139,14 @@ fn header_op(ctx: &mut dyn Ctx, line: &[u8], code: i64, replace: bool) -> bool {
     true
 }
 
+/// A header line added as header($line, $replace) adds it (the checks, the
+/// response code it implies, and the line itself under a host that sends
+/// headers): whether it was taken. The session extension sends its cookie
+/// and cache headers this way.
+pub fn header_line(ctx: &mut dyn Ctx, line: &[u8], replace: bool) -> bool {
+    header_op(ctx, line, 0, replace)
+}
+
 /// C's atoi(): optional whitespace and sign, then digits (as an int).
 fn atoi(s: &[u8]) -> i64 {
     let s = &s[s.iter().position(|&c| !is_space(c)).unwrap_or(s.len())..];
@@ -235,7 +243,7 @@ fn c_bytes(s: &PhpStr) -> &[u8] {
 }
 
 /// `D, d M Y H:i:s \G\M\T` for a timestamp (UTC).
-fn cookie_date(ts: i64) -> String {
+pub fn cookie_date(ts: i64) -> String {
     let days = ts.div_euclid(86400);
     let secs = ts.rem_euclid(86400);
     // Civil date from days since 1970-01-01 (Hinnant's algorithm).

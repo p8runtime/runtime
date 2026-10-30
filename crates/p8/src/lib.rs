@@ -52,6 +52,7 @@ pub mod extensions {
     pub use p8_ext_gd::EXTENSION as GD;
     pub use p8_ext_zip::EXTENSION as ZIP;
     pub use p8_ext_fileinfo::EXTENSION as FILEINFO;
+    pub use p8_ext_session::EXTENSION as SESSION;
     /// What the built-in web server adds (register it after STANDARD).
     pub use p8_ext_standard::server::EXTENSION as SERVER;
 }
