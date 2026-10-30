@@ -284,6 +284,16 @@ impl Context<'_> {
                     if methods.get(&key).is_some_and(|x| x.native.is_none() && m.native.is_none() && x.func == m.func) {
                         return Ok(());
                     }
+                    // An abstract method meets another trait's (abstract or
+                    // not) without collision: a concrete one wins.
+                    if m.is_abstract {
+                        return Ok(());
+                    }
+                    if methods.get(&key).is_some_and(|x| x.is_abstract) {
+                        from_trait.insert(key.clone(), t.name.clone());
+                        methods.insert(key, m);
+                        return Ok(());
+                    }
                     return Err(c.fatal_at(
                         format!(
                             "Trait method {}::{} has not been applied as {name}::{}, because of collision with {}::{}",
