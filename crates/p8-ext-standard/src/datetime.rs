@@ -114,6 +114,7 @@ pub static CLASSES: &[ClassSpec] = &[
             ("__construct", Some(Native::Method(zone_construct))),
             ("getName", Some(Native::Method(zone_name))),
             ("getOffset", Some(Native::Method(zone_offset))),
+            ("getTransitions", Some(Native::Method(zone_transitions))),
             ("listIdentifiers", Some(Native::Static(list_identifiers))),
             ("__serialize", Some(Native::Method(zone_serialize))),
             ("__unserialize", Some(Native::Method(zone_unserialize))),
@@ -890,6 +891,61 @@ fn zone_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 
 fn zone_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(read(this, ZONE))
+}
+
+/// DateTimeZone::getTransitions(begin, end): the offset in force at
+/// `begin`, then each change up to `end`. Changes are found by scanning
+/// (chrono-tz keeps no list of them), only between 1900 and 2037 when the
+/// range is open, as the zone database's own list ends in 2037.
+fn zone_transitions(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    if read(this, ZTYPE).to_int() != 3 {
+        return Ok(Value::Bool(false));
+    }
+    let bound = |i: usize, default: i64| match args.get(i).map(Value::deref) {
+        None | Some(Value::Null) | Some(Value::Undef) => default,
+        Some(v) => v.to_int(),
+    };
+    let (begin, end) = (bound(0, i64::MIN), bound(1, i64::MAX));
+    let zone = zone_of(&State {
+        ts: 0,
+        us: 0,
+        ztype: 3,
+        zone: String::from_utf8_lossy(read(this, ZONE).to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
+    });
+    let entry = |ts: i64| {
+        let l = zone.at(ts);
+        let utc = Zone::Fixed(0).at(ts);
+        let mut e = PhpArray::new();
+        e.insert(Key::from_string(PhpStr::from("ts")), Value::Int(ts));
+        e.insert(Key::from_string(PhpStr::from("time")), Value::Str(PhpStr::new(format(b"Y-m-d\\TH:i:sP", ts, &utc, "UTC"))));
+        e.insert(Key::from_string(PhpStr::from("offset")), Value::Int(i64::from(l.offset)));
+        e.insert(Key::from_string(PhpStr::from("isdst")), Value::Bool(l.dst));
+        e.insert(Key::from_string(PhpStr::from("abbr")), Value::str(l.abbr.as_str()));
+        Value::Array(Rc::new(e))
+    };
+    let state = |ts: i64| {
+        let l = zone.at(ts);
+        (l.offset, l.dst, l.abbr)
+    };
+    let mut out = PhpArray::new();
+    let _ = out.push(entry(begin));
+    const DAY: i64 = 86_400;
+    let (from, to) = (begin.max(-2_208_988_800), end.min(2_145_916_800));
+    let mut t = from;
+    while t < to {
+        let next = (t + DAY).min(to);
+        if state(next) != state(t) {
+            // The first second with the new state.
+            let (mut lo, mut hi) = (t, next);
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if state(mid) == state(t) { lo = mid } else { hi = mid }
+            }
+            let _ = out.push(entry(hi));
+        }
+        t = next;
+    }
+    Ok(Value::Array(Rc::new(out)))
 }
 
 fn zone_offset(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {

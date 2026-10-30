@@ -10,6 +10,7 @@
 //! $PHP_SRC_PATH/ext/mbstring/php_unicode.c, $PHP_SRC_PATH/ext/mbstring/libmbfl/
 
 mod enc;
+mod ereg;
 mod funcs;
 mod gendata;
 mod mime;
@@ -25,6 +26,7 @@ pub const EXTENSION: Extension = Extension { name: "mbstring", register };
 
 fn register(registry: &mut Registry) {
     registry.add_functions(funcs::BUILTINS);
+    registry.add_functions(ereg::BUILTINS);
     // mb_parse_str() runs parse_str() for the caller.
     registry.mark_reenters(&["mb_parse_str"]);
     for (name, v) in [
