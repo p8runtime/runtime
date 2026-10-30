@@ -4285,7 +4285,7 @@ impl Context<'_> {
     /// cast): an object becomes what its __toString() returns, run here
     /// as PHP code when it is; one without __toString stays for the caller
     /// to report.
-    fn string_of(&mut self, regs: &mut Vec<Value>, v: Value) -> Result<Value, Throw> {
+    pub(crate) fn string_of(&mut self, regs: &mut Vec<Value>, v: Value) -> Result<Value, Throw> {
         let v = match v {
             Value::Ref(cell) => cell.borrow().clone(),
             v => v,

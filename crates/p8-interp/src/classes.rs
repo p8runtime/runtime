@@ -1406,7 +1406,7 @@ impl Context<'_> {
 
     /// Function entry: the passed arguments against their declared types
     /// (the caller's strict_types decides the conversions).
-    pub(crate) fn verify_args(&mut self, regs: &mut [Value], base: usize, argc: usize) -> Result<(), Throw> {
+    pub(crate) fn verify_args(&mut self, regs: &mut Vec<Value>, base: usize, argc: usize) -> Result<(), Throw> {
         let n = self.frames.len();
         let Some(frame) = self.frames.last() else { return Ok(()) };
         let func = Rc::clone(&frame.func);
@@ -1427,7 +1427,11 @@ impl Context<'_> {
                 let Value::Array(list) = regs[base + i].clone() else { continue };
                 let mut checked = (*list).clone();
                 for (k, v) in list.iter() {
-                    match self.check_type(ty, &v.deref(), strict) {
+                    let coerced = match self.check_type(ty, &v.deref(), strict) {
+                        Err(()) => self.stringable(regs, ty, &v.deref(), strict)?.map(Some).ok_or(()),
+                        other => other,
+                    };
+                    match coerced {
                         Ok(Some(converted)) => checked.insert(k, converted),
                         Ok(None) => {}
                         Err(()) => {
@@ -1446,16 +1450,34 @@ impl Context<'_> {
                 continue;
             }
             let v = regs[base + i].deref();
-            match self.check_type(ty, &v, strict) {
-                Ok(Some(converted)) => match &regs[base + i] {
+            let converted = match self.check_type(ty, &v, strict) {
+                Ok(converted) => converted,
+                Err(()) => match self.stringable(regs, ty, &v, strict)? {
+                    Some(s) => Some(s),
+                    None => return Err(self.arg_type_error(i + 1, Some(&p.name), ty, &v, called_at)),
+                },
+            };
+            if let Some(converted) = converted {
+                match &regs[base + i] {
                     Value::Ref(cell) => *cell.borrow_mut() = converted,
                     _ => regs[base + i] = converted,
-                },
-                Ok(None) => {}
-                Err(()) => return Err(self.arg_type_error(i + 1, Some(&p.name), ty, &v, called_at)),
+                }
             }
         }
         Ok(())
+    }
+
+    /// Coercive typing's last resort: an object with __toString() for a
+    /// type that takes a string, as the string (None: not so).
+    fn stringable(&mut self, regs: &mut Vec<Value>, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, Throw> {
+        let Value::Object(o) = v else { return Ok(None) };
+        if strict || ty.mask & p8_runtime::types::T_STRING == 0 || o.class.method(b"__tostring").is_none() {
+            return Ok(None);
+        }
+        Ok(match self.string_of(regs, v.clone())? {
+            s @ Value::Str(_) => Some(s),
+            _ => None,
+        })
     }
 
     fn arg_type_error(&self, pos: usize, name: Option<&p8_runtime::frozen::Text>, ty: &p8_runtime::types::TypeDecl, v: &Value, called_at: Option<(Rc<str>, u32)>) -> Throw {
