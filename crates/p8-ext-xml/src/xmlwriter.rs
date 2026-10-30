@@ -486,7 +486,7 @@ fn path_arg(ctx: &mut dyn Ctx, args: &[Value], i: usize, shown: &str, param: &st
 }
 
 fn new_writer(ctx: &mut dyn Ctx) -> Result<Rc<Object>, Throw> {
-    let class = ctx.class_load(b"XMLWriter")?.expect("XMLWriter is declared");
+    let class = ctx.class(b"XMLWriter").expect("XMLWriter is declared");
     Ok(ctx.new_object(&class))
 }
 

@@ -96,8 +96,10 @@ fn is_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             _ => false,
         }));
     }
-    // A class named by the callable is autoloaded first, as PHP's
-    // zend_is_callable does ([Class, 'm'], 'Class::m').
+    // The class a callable names is looked up (autoloaded) first, as
+    // zend_is_callable_check_class does ([Class, 'm'], 'Class::m'): an
+    // exception an autoloader throws goes on, and a class still missing
+    // makes it not callable. self, parent and static name no class.
     let class = match &v {
         Value::Array(a) if a.len() == 2 => match a.get_int(0).map(Value::deref) {
             Some(Value::Str(c)) => Some(c),
@@ -106,8 +108,11 @@ fn is_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Value::Str(s) => s.as_bytes().windows(2).position(|w| w == b"::").map(|at| PhpStr::from(&s.as_bytes()[..at])),
         _ => None,
     };
-    if let Some(c) = class {
-        ctx.class_load_now(c.as_bytes())?;
+    if let Some(c) = class
+        && !matches!(c.as_bytes().to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static")
+        && ctx.class_load(c.as_bytes())?.is_none()
+    {
+        return Ok(Value::Bool(false));
     }
     Ok(Value::Bool(ctx.is_callable(&v)))
 }

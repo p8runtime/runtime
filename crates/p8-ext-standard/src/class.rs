@@ -47,8 +47,12 @@ pub static BUILTINS: &[Builtin] = &[
 ];
 
 /// Builtins that run PHP code: constant() computes a class constant
-/// written as an expression.
-pub const REENTER: &[&str] = &["constant"];
+/// written as an expression; those that look a class up by name run the
+/// autoloaders (zend_lookup_class).
+pub const REENTER: &[&str] = &[
+    "constant", "get_class_methods", "class_alias", "get_parent_class", "get_class_vars", "method_exists", "property_exists", "class_exists",
+    "interface_exists", "trait_exists", "enum_exists", "is_a", "is_subclass_of",
+];
 
 /// get_class_methods(object|string $object_or_class): the methods the
 /// calling code can see, as declared.
