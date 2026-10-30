@@ -1,0 +1,25 @@
+<?php
+$d = new DateTime('2026-01-01 00:00:00');
+$i = new DateInterval('PT1S'); $i->f = 0.75;
+$d->add($i); echo $d->format('H:i:s.u'), "\n";
+$d->add($i); echo $d->format('H:i:s.u'), "\n";
+$d->sub($i); echo $d->format('H:i:s.u'), "\n";
+$i->invert = 1; $d->add($i); echo $d->format('H:i:s.u'), "\n";
+$x = new DateTime('2026-01-01 00:00:00.250000');
+$x->modify('+500000 microseconds'); echo $x->format('H:i:s.u'), "\n";
+$x->modify('+600 msec'); echo $x->format('H:i:s.u'), "\n";
+$x->modify('-2 ms'); echo $x->format('H:i:s.u'), "\n";
+$x->modify('+3 usec'); echo $x->format('H:i:s.u'), "\n";
+$x->modify('+1 day'); echo $x->format('Y-m-d H:i:s.u'), "\n";
+$x->modify('10:00'); echo $x->format('Y-m-d H:i:s.u'), "\n";
+$a = new DateTimeImmutable('2026-01-01 00:00:01.900000');
+$b = new DateTimeImmutable('2026-01-01 00:00:03.100000');
+$df = $a->diff($b); var_dump($df->s, $df->f, $df->invert);
+$df = $b->diff($a); var_dump($df->s, $df->f, $df->invert);
+$df = $a->diff($a->modify('+250 msec')); var_dump($df->s, $df->f, $df->invert);
+$c = DateInterval::createFromDateString('1 second 500 milliseconds'); var_dump($c->s, $c->f);
+echo $a->add($c)->format('H:i:s.u'), "\n";
+$u = DateTimeImmutable::createFromFormat('U.u', '1767225600.500000');
+echo $u->format('Y-m-d H:i:s.u e'), "\n";
+$u = DateTime::createFromFormat('U.u', $a->format('U.u'));
+echo $u->format('Y-m-d H:i:s.u'), "\n";

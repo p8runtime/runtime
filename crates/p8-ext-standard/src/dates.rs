@@ -549,7 +549,8 @@ fn date_default_timezone_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Va
 struct Parsed {
     date: Option<(i64, i64, i64)>,
     time: Option<(i64, i64, i64)>,
-    rel: [i64; 6],
+    /// Years, months, days, hours, minutes, seconds, microseconds.
+    rel: [i64; 7],
     weekday: Option<(u32, i64)>,
     first_last_day: Option<bool>,
     zone: Option<Zone>,
@@ -581,6 +582,11 @@ fn day_number(word: &str) -> Option<u32> {
 /// A relative unit's index in `rel` and its multiplier.
 fn unit(word: &str) -> Option<(usize, i64)> {
     let w = word.to_ascii_lowercase();
+    match w.as_str() {
+        "ms" => return Some((6, 1000)),
+        "µs" => return Some((6, 1)),
+        _ => {}
+    }
     let w = w.trim_end_matches('s');
     Some(match w {
         "year" => (0, 1),
@@ -591,6 +597,8 @@ fn unit(word: &str) -> Option<(usize, i64)> {
         "hour" => (3, 1),
         "minute" | "min" => (4, 1),
         "second" | "sec" => (5, 1),
+        "millisecond" | "msec" => (6, 1000),
+        "microsecond" | "usec" | "µsec" => (6, 1),
         "weekday" => (2, 1),
         _ => return None,
     })
@@ -947,7 +955,30 @@ pub(crate) type NamedZone = (Zone, i64, String);
 /// The moment `text` names, and the zone it named (if any): its Zone,
 /// DateTime's timezone_type and its name.
 pub(crate) fn resolve_zone(text: &str, base: i64, zone: Zone) -> Option<(i64, Option<NamedZone>)> {
-    let p = parse(text)?;
+    resolve_moment(text, base, zone).map(|m| (m.ts, m.named))
+}
+
+/// What a text resolves to, down to the microsecond.
+pub(crate) struct Moment {
+    pub ts: i64,
+    pub named: Option<NamedZone>,
+    /// Microseconds the text moves by ("+500 msec"), beyond `ts`.
+    pub us: i64,
+    /// The text set the time of day, so earlier microseconds are dropped.
+    pub time_set: bool,
+}
+
+pub(crate) fn resolve_moment(text: &str, base: i64, zone: Zone) -> Option<Moment> {
+    let mut p = parse(text)?;
+    // Whole seconds of the microsecond move join the seconds.
+    p.rel[5] += p.rel[6].div_euclid(1_000_000);
+    let us = p.rel[6].rem_euclid(1_000_000);
+    let time_set = p.time.is_some() || p.reset_time || p.date.is_some();
+    let (ts, named) = resolve_parsed(&p, base, zone)?;
+    Some(Moment { ts, named, us, time_set })
+}
+
+fn resolve_parsed(p: &Parsed, base: i64, zone: Zone) -> Option<(i64, Option<NamedZone>)> {
     let named = match (p.zone, &p.zone_label) {
         (Some(z), Some((t, n))) => Some((z, *t, n.clone())),
         _ => None,
