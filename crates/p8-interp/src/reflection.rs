@@ -737,6 +737,10 @@ fn_method!(fa_get_static_variables, |ctx, info, this, args| {
     let callee = callee_of(ctx, this)?;
     Ok(Value::Array(Rc::new(ctx.static_variables(&callee))))
 });
+fn_method!(fa_get_closure_used_variables, |ctx, info, this, args| {
+    let callee = callee_of(ctx, this)?;
+    Ok(Value::Array(Rc::new(ctx.closure_used_variables(&callee))))
+});
 fn_method!(fa_get_closure_this, |ctx, info, this, args| Ok(info.closure_this.clone().map_or(Value::Null, Value::Object)));
 fn_method!(fa_get_closure_scope_class, |ctx, info, this, args| Ok(match &info.closure_scope {
     Some(c) => new_class_reflection(ctx, c),
@@ -2014,6 +2018,7 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("getAttributes", Some(Native::Method(fa_get_attributes))),
     ("getStaticVariables", Some(Native::Method(fa_get_static_variables))),
     ("getClosureThis", Some(Native::Method(fa_get_closure_this))),
+    ("getClosureUsedVariables", Some(Native::Method(fa_get_closure_used_variables))),
     ("getClosureScopeClass", Some(Native::Method(fa_get_closure_scope_class))),
     ("getClosureCalledClass", Some(Native::Method(fa_get_closure_called_class))),
 ];

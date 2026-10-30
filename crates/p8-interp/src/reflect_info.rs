@@ -26,6 +26,19 @@ fn stub_type(mask: u32, classes: &'static [&'static str]) -> Option<TypeDecl> {
 impl Context<'_> {
     /// ReflectionFunctionAbstract::getStaticVariables: a closure's `use`
     /// values, then the `static` variables in the order they are declared.
+    /// A closure's `use` variables by name, their values now.
+    pub(crate) fn used_variables_of(&self, callee: &Callee) -> PhpArray {
+        let mut out = PhpArray::new();
+        let Callee::Closure(o) = callee else { return out };
+        let Some(data) = closure_data(o) else { return out };
+        let Some(clo) = data.func.user() else { return out };
+        let code = &clo.code;
+        for (r, v) in code.bound.iter().zip(data.captured.borrow().iter()) {
+            out.insert(Key::from_string(PhpStr::from(code.cv_names[usize::from(*r)].as_bytes())), v.clone());
+        }
+        out
+    }
+
     pub(crate) fn static_variables_of(&self, callee: &Callee) -> PhpArray {
         let mut out = PhpArray::new();
         let (clo, captured) = match callee {

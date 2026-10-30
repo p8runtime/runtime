@@ -5222,6 +5222,10 @@ impl Ctx for Context<'_> {
         self.static_variables_of(callee)
     }
 
+    fn closure_used_variables(&mut self, callee: &p8_runtime::reflect::Callee) -> PhpArray {
+        self.used_variables_of(callee)
+    }
+
     fn invoke(&mut self, callee: &p8_runtime::reflect::Callee, this: Option<Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
         self.invoke_callee(callee, this, args)
     }

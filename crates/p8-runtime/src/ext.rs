@@ -204,6 +204,11 @@ pub trait Ctx {
     /// Reflection: a function's static variables (a closure's `use` values
     /// first), by name: their values now, null for one not yet initialized.
     fn static_variables(&mut self, callee: &crate::reflect::Callee) -> crate::array::PhpArray;
+    /// Reflection: a closure's `use` variables, by name (empty for anything
+    /// else): getClosureUsedVariables().
+    fn closure_used_variables(&mut self, _callee: &crate::reflect::Callee) -> crate::array::PhpArray {
+        crate::array::PhpArray::new()
+    }
     /// Reflection: call it (whatever its visibility), with `this` for a method.
     fn invoke(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>, args: &mut [Value]) -> Result<Value, Throw>;
     /// `new C(...args)` as the engine makes it (the instantiation checks,
