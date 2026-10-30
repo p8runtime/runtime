@@ -227,6 +227,7 @@ impl Context<'_> {
     pub(crate) fn run_shutdown(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
         while !self.shutdown.is_empty() {
             let (callable, mut args) = self.shutdown.remove(0);
+            self.shutdown_names.remove(0);
             self.call_with_regs(regs, &callable, &mut args)?;
             if !self.pending_errors.is_empty() {
                 self.dispatch_errors(regs)?;

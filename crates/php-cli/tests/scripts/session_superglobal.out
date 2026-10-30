@@ -1,0 +1,58 @@
+bool(false)
+string(7) "not set"
+string(3) "set"
+array(2) {
+  ["from_function"]=>
+  bool(true)
+  ["late"]=>
+  int(1)
+}
+array(3) {
+  [0]=>
+  string(13) "from_function"
+  [1]=>
+  string(4) "late"
+  [2]=>
+  string(13) "via_reference"
+}
+string(45) "from_function|b:1;late|i:1;via_reference|i:2;"
+array(3) {
+  [0]=>
+  string(13) "from_function"
+  [1]=>
+  string(4) "late"
+  [2]=>
+  string(13) "via_reference"
+}
+== replacing the array
+string(13) "replaced|b:1;"
+== no longer an array
+
+Warning: session_encode(): Cannot encode non-existent session in %s on line 52
+bool(false)
+string(13) "replaced|b:1;"
+== unset
+bool(true)
+string(19) "replaced|b:1;x|i:1;"
+bool(false)
+array(2) {
+  ["replaced"]=>
+  bool(true)
+  ["x"]=>
+  int(1)
+}
+== numeric keys are skipped
+string(6) "a|i:1;"
+== objects
+sleep
+string(41) "user|O:4:"User":1:{s:4:"name";s:3:"ann";}"
+wakeup
+object(User)#1 (2) {
+  ["name"]=>
+  string(3) "ann"
+  ["roles"]=>
+  array(1) {
+    [0]=>
+    string(8) "restored"
+  }
+}

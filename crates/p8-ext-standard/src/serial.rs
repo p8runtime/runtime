@@ -9,7 +9,7 @@ use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{CLASS_ENUM, Object, Visibility};
+use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Object, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -74,6 +74,8 @@ impl Writer<'_> {
                 }
                 self.out.push(b'}');
             }
+            // a resource is written as 0
+            Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => self.out.extend_from_slice(b"i:0;"),
             Value::Object(o) => self.object(o)?,
         }
         Ok(())
@@ -205,6 +207,78 @@ pub(crate) fn read_value(ctx: &mut dyn Ctx, data: &[u8]) -> Option<(Value, usize
     let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new(), missing: Vec::new() };
     let v = r.value(ctx).ok()?;
     Some((v, r.at))
+}
+
+/// Values written one after another as serialize() writes one: they share
+/// the numbering the `r:N;` and `R:N;` back-references count by (the
+/// session extension writes its variables this way).
+pub struct Serializer<'c> {
+    w: Writer<'c>,
+}
+
+impl<'c> Serializer<'c> {
+    pub fn new(ctx: &'c mut dyn Ctx) -> Serializer<'c> {
+        Serializer { w: Writer { ctx, out: Vec::new(), count: 0, objects: Vec::new() } }
+    }
+
+    /// Bytes written as they are (a variable's name and its delimiter).
+    pub fn raw(&mut self, bytes: &[u8]) {
+        self.w.out.extend_from_slice(bytes);
+    }
+
+    pub fn value(&mut self, v: &Value) -> Result<(), Throw> {
+        self.w.value(v)
+    }
+
+    pub fn finish(self) -> Vec<u8> {
+        self.w.out
+    }
+}
+
+/// Values read one after another from one string as unserialize() reads
+/// one, sharing the back-references' numbering (see [`Serializer`]).
+pub struct Unserializer<'a> {
+    r: Reader<'a>,
+}
+
+impl<'a> Unserializer<'a> {
+    pub fn new(data: &'a [u8]) -> Unserializer<'a> {
+        Unserializer { r: Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new(), missing: Vec::new() } }
+    }
+
+    /// The offset the next value is read from.
+    pub fn at(&self) -> usize {
+        self.r.at
+    }
+
+    /// Continue from `at` (after bytes the caller read itself).
+    pub fn seek(&mut self, at: usize) {
+        self.r.at = at;
+    }
+
+    /// The next value; the offset it stopped at where there is none.
+    pub fn value(&mut self, ctx: &mut dyn Ctx) -> Result<Value, usize> {
+        self.r.value(ctx).map_err(|Bad(at)| at)
+    }
+
+    /// The end of the read: classes it named are autoloaded and the
+    /// objects it made get their __unserialize() or __wakeup().
+    pub fn finish(&mut self, ctx: &mut dyn Ctx) -> Result<(), Throw> {
+        for name in std::mem::take(&mut self.r.missing) {
+            ctx.class_load(&name)?;
+        }
+        for (o, data) in std::mem::take(&mut self.r.wakeups) {
+            match data {
+                Some(d) => {
+                    ctx.call(&method(&o, b"__unserialize"), &mut [Value::Array(Rc::new(d))])?;
+                }
+                None => {
+                    ctx.call(&method(&o, b"__wakeup"), &mut [])?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn serialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

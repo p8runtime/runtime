@@ -22,3 +22,4 @@ p8-ext-curl = { path = "../p8-ext-curl" }
 p8-ext-gd = { path = "../p8-ext-gd" }
 p8-ext-zip = { path = "../p8-ext-zip" }
 p8-ext-fileinfo = { path = "../p8-ext-fileinfo" }
+p8-ext-session = { path = "../p8-ext-session" }

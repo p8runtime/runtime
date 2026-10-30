@@ -1,0 +1,60 @@
+array(0) {
+}
+bool(true)
+array(0) {
+}
+bool(true)
+bool(true)
+string(13) "p8head-cookie"
+array(0) {
+}
+bool(false)
+bool(false)
+int(32)
+int(32)
+string(0) ""
+output
+bool(true)
+
+Warning: session_start(): Session cannot be started after headers have already been sent in %s on line 56
+bool(false)
+bool(true)
+
+Warning: session_id(): Session ID cannot be changed after headers have already been sent in %s on line 58
+bool(false)
+string(7) "p8head1"
+
+Warning: session_name(): Session name cannot be changed after headers have already been sent in %s on line 60
+bool(false)
+
+Warning: session_save_path(): Session save path cannot be changed after headers have already been sent in %s on line 61
+bool(false)
+
+Warning: session_cache_limiter(): Session cache limiter cannot be changed after headers have already been sent in %s on line 62
+bool(false)
+
+Warning: session_cache_expire(): Session cache expiration cannot be changed after headers have already been sent in %s on line 63
+bool(false)
+
+Warning: session_module_name(): Session save handler module cannot be changed after headers have already been sent in %s on line 64
+bool(false)
+
+Warning: session_set_cookie_params(): Session cookie parameters cannot be changed after headers have already been sent in %s on line 65
+bool(false)
+
+Warning: ini_set(): Session ini settings cannot be changed after headers have already been sent in %s on line 66
+bool(false)
+
+Warning: session_regenerate_id(): Session ID cannot be regenerated when there is no active session in %s on line 67
+bool(false)
+int(0)
+
+Warning: ini_set(): Session ini settings cannot be changed after headers have already been sent in %s on line 71
+
+Warning: session_id(): Session ID cannot be changed after headers have already been sent in %s on line 72
+bool(false)
+
+Warning: session_start(): Session cannot be started after headers have already been sent in %s on line 73
+bool(false)
+bool(false)
+string(7) "nocache"

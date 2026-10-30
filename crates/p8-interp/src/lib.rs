@@ -1183,6 +1183,10 @@ impl Isolate {
             error_handlers: Vec::new(),
             exception_handlers: Vec::new(),
             shutdown: Vec::new(),
+            shutdown_names: Vec::new(),
+            ext_data: HashMap::new(),
+            request_end: false,
+            deprecated_made: Default::default(),
             pending_errors: Vec::new(),
             last_error: None,
             in_handler: false,
@@ -1305,6 +1309,17 @@ pub struct Context<'i> {
     exception_handlers: Vec<Value>,
     /// register_shutdown_function's (callable, arguments).
     shutdown: Vec<(Value, Vec<Value>)>,
+    /// The name each of `shutdown` was registered under, if any
+    /// (Ctx::shutdown_named).
+    shutdown_names: Vec<Option<&'static str>>,
+    /// Typed per-request state of the extensions (Ctx::ext_data).
+    ext_data: HashMap<&'static str, Option<Box<dyn std::any::Any>>>,
+    /// The constants an extension made while the request ran that are
+    /// deprecated (SID), by constant key.
+    deprecated_made: std::collections::HashSet<Vec<u8>>,
+    /// The request-end hooks of the extensions are running: what they
+    /// report is located "Unknown" on line 0, as PHP words RSHUTDOWN's.
+    request_end: bool,
     /// Diagnostics for the error handler, raised by the running instruction.
     pending_errors: Vec<(i64, String, Rc<str>, u32)>,
     /// error_get_last(): the last error that reached the default handler.
@@ -1457,7 +1472,20 @@ impl Context<'_> {
     /// An ini setting from the host (`-d`); false when unknown.
     pub fn set_ini(&mut self, name: &[u8], value: &str) -> bool {
         self.cfg.push((name.to_vec(), value.to_string()));
-        Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some()
+        // The ini scanner reads an unquoted true, on and yes as "1", and
+        // false, off, no and none as "".
+        let value = match value.to_ascii_lowercase().as_str() {
+            "true" | "on" | "yes" => "1",
+            "false" | "off" | "no" | "none" => "",
+            _ => value,
+        };
+        // (what PHP says about a setting is said at startup: it does not
+        // send the headers)
+        let (started, start_at) = (self.out.started, self.output_start.clone());
+        let set = Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some();
+        self.out.started = started;
+        self.output_start = start_at;
+        set
     }
 
     pub fn set_args(&mut self, argv: Vec<String>) {
@@ -1628,6 +1656,19 @@ impl Context<'_> {
     /// assert.* ones are deprecated away from their defaults (in the order
     /// ext/standard registers them).
     pub fn startup_diagnostics(&mut self) {
+        // (what PHP says at startup is not output of the script: the
+        // headers are not sent by it)
+        let (started, start_at) = (self.out.started, self.output_start.clone());
+        self.startup_diagnostics_inner();
+        let registry = Arc::clone(&self.isolate.registry);
+        for check in registry.startup_checks() {
+            check(self);
+        }
+        self.out.started = started;
+        self.output_start = start_at;
+    }
+
+    fn startup_diagnostics_inner(&mut self) {
         let on = |v: Option<Value>| match v {
             Some(Value::Str(s)) => {
                 let t = s.as_bytes().to_ascii_lowercase();
@@ -1797,7 +1838,8 @@ impl Context<'_> {
             }
         }
         let defs = std::mem::take(&mut self.class_defs);
-        let mut result = match self.early_bind(&defs, Some(Rc::from(&*main.file))) {
+        let started = self.run_request_hooks(&mut regs, false);
+        let mut result = match started.and_then(|()| self.early_bind(&defs, Some(Rc::from(&*main.file)))) {
             Ok(()) => self.execute(&mut regs),
             Err(e) => Err(self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), e)),
         };
@@ -1835,6 +1877,15 @@ impl Context<'_> {
             status = self.report_end(Err(t));
         }
         self.end_buffers(&mut regs);
+        // The extensions' request-end work (a session is written here).
+        let ended = self.run_request_hooks(&mut regs, true);
+        let ended = ended.and_then(|()| if self.pending_errors.is_empty() { Ok(()) } else { self.dispatch_errors(&mut regs) });
+        if let Err(t) = ended {
+            let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
+            let t = self.handle_uncaught(&mut regs, t);
+            status = self.report_end(Err(t));
+            self.end_buffers(&mut regs);
+        }
         // The request's variables go now (the isolate keeps the capacity).
         regs.clear();
         self.frames.clear();
@@ -1842,6 +1893,33 @@ impl Context<'_> {
         self.out.flush_all();
         self.out.send_head();
         status
+    }
+
+    /// The extensions' hooks for the start (`end` false) or the end of the
+    /// request, the registers lent to them so that they may run PHP code.
+    fn run_request_hooks(&mut self, regs: &mut Vec<Value>, end: bool) -> Result<(), Throw> {
+        let registry = Arc::clone(&self.isolate.registry);
+        let hooks = if end { registry.request_end_hooks() } else { registry.request_start_hooks() };
+        if hooks.is_empty() {
+            return Ok(());
+        }
+        self.isolate.regs = std::mem::take(regs);
+        self.request_end = true;
+        let mut result = Ok(());
+        for hook in hooks {
+            // A hook that throws at the end does not stop the others.
+            if let Err(t) = hook(self) {
+                if result.is_ok() {
+                    result = Err(t);
+                }
+                if !end {
+                    break;
+                }
+            }
+        }
+        self.request_end = false;
+        *regs = std::mem::take(&mut self.isolate.regs);
+        result
     }
 
     /// The exit status for how the code ended, with PHP's message for an
@@ -1908,6 +1986,9 @@ impl Context<'_> {
     }
 
     fn location(&self) -> (Rc<str>, u32) {
+        if self.request_end {
+            return (Rc::from("Unknown"), 0);
+        }
         match self.frames.last() {
             // A constant expression's code: where it was needed.
             Some(f) if f.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() => {
@@ -1966,6 +2047,8 @@ impl Context<'_> {
             return;
         }
         let (file, line) = self.location();
+        // (an error raised where no file runs is located "Unknown")
+        let file = if file.is_empty() { Rc::from("Unknown") } else { file };
         self.print_diag(level, message, &file, line);
     }
 
@@ -2779,7 +2862,7 @@ impl Context<'_> {
                         Some(Callee::Constant(v)) => v.clone(),
                         _ => match self.constant_value(s.name.as_bytes()).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_value(g.as_bytes()))) {
                             // Deprecated: said on every fetch, so never cached.
-                            Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.as_bytes())) => {
+                            Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.as_bytes())).map(str::to_string).or_else(|| self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.as_bytes()))) => {
                                 self.diags.push(Diag::Deprecated(format!("Constant {name} is deprecated")));
                                 self.report_diags();
                                 v
@@ -4766,6 +4849,19 @@ impl Context<'_> {
 
 impl Context<'_> {
     /// The constant `name`: the script's own, else an extension's.
+    /// The name of a constant an extension made deprecated while running.
+    fn runtime_deprecated(&self, name: &[u8], fallback: Option<&[u8]>) -> Option<String> {
+        if self.deprecated_made.is_empty() {
+            return None;
+        }
+        [Some(name), fallback]
+            .into_iter()
+            .flatten()
+            .map(|n| n.strip_prefix(b"\\").unwrap_or(n))
+            .find(|n| self.deprecated_made.contains(const_key(n).as_ref()))
+            .map(|n| String::from_utf8_lossy(n).into_owned())
+    }
+
     fn constant_value(&self, name: &[u8]) -> Option<Value> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
         let key = const_key(name);
@@ -4849,6 +4945,11 @@ impl Ctx for Context<'_> {
     fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value> {
         let old = self.ini_get(name)?;
         let text = value.to_php_string().unwrap_or_else(PhpStr::empty);
+        if let Some(check) = self.isolate.registry.ini_check(name)
+            && !check(self, name, &text)
+        {
+            return None;
+        }
         match name {
             // An expression of E_* constants (`E_ALL & ~E_NOTICE`).
             b"error_reporting" => self.error_level = self.ini_bits(&String::from_utf8_lossy(text.as_bytes())),
@@ -4873,6 +4974,17 @@ impl Ctx for Context<'_> {
 
     fn constant(&self, name: &[u8]) -> Option<Value> {
         self.constant_value(name)
+    }
+
+    fn set_constant(&mut self, name: &[u8], value: Value) {
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        let key = const_key(name).into_owned();
+        // One made here is deprecated (CONST_DEPRECATED); the script's own
+        // define() of the name is replaced, as it was made.
+        if !self.constants.contains_key(&key) {
+            self.deprecated_made.insert(key.clone());
+        }
+        self.constants.insert(key, value);
     }
 
     fn define(&mut self, name: &[u8], value: Value) -> bool {
@@ -5225,6 +5337,42 @@ impl Ctx for Context<'_> {
 
     fn on_shutdown(&mut self, callable: Value, args: Vec<Value>) {
         self.shutdown.push((callable, args));
+        self.shutdown_names.push(None);
+    }
+
+    fn shutdown_named(&mut self, name: &'static str, entry: Option<(Value, Vec<Value>)>) {
+        let at = self.shutdown_names.iter().position(|n| *n == Some(name));
+        match (at, entry) {
+            (Some(i), Some(e)) => self.shutdown[i] = e,
+            (Some(i), None) => {
+                self.shutdown.remove(i);
+                self.shutdown_names.remove(i);
+            }
+            (None, Some(e)) => {
+                self.shutdown.push(e);
+                self.shutdown_names.push(Some(name));
+            }
+            (None, None) => {}
+        }
+    }
+
+    fn ext_data(&mut self, key: &'static str) -> &mut Option<Box<dyn std::any::Any>> {
+        self.ext_data.entry(key).or_default()
+    }
+
+    fn global_cell(&mut self, name: &[u8]) -> Rc<RefCell<Value>> {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let cell = if self.frames.first().is_none() {
+            self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone()
+        } else {
+            Context::global_cell(self, &mut regs, name)
+        };
+        self.isolate.regs = regs;
+        cell
+    }
+
+    fn location(&self) -> (Rc<str>, u32) {
+        Context::location(self)
     }
 
     fn declared_classes(&self) -> Vec<(PhpStr, Rc<Class>)> {

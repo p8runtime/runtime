@@ -2935,6 +2935,7 @@ dependencies = [
  "p8-ext-mbstring",
  "p8-ext-mysqli",
  "p8-ext-pcre",
+ "p8-ext-session",
  "p8-ext-standard",
  "p8-ext-tokenizer",
  "p8-ext-xml",
@@ -3011,6 +3012,16 @@ name = "p8-ext-pcre"
 version = "0.1.0"
 dependencies = [
  "p8-pcre",
+ "p8-runtime",
+]
+
+[[package]]
+name = "p8-ext-session"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.16",
+ "libc",
+ "p8-ext-standard",
  "p8-runtime",
 ]
 

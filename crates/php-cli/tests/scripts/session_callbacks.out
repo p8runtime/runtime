@@ -1,0 +1,75 @@
+== argument checks
+ArgumentCountError: session_set_save_handler() expects at least 1 argument, 0 given
+TypeError: session_set_save_handler(): Argument #1 ($open) must be of type SessionHandlerInterface, string given
+ArgumentCountError: session_set_save_handler() expects at least 6 arguments, 3 given
+TypeError: session_set_save_handler(): Argument #2 ($close) must be a valid callback, function "nope" not found or invalid function name
+TypeError: session_set_save_handler(): Argument #7 ($create_sid) must be a valid callback or null, function "nope" not found or invalid function name
+TypeError: session_set_save_handler(): Argument #1 ($open) must be of type SessionHandlerInterface, stdClass given
+TypeError: session_set_save_handler(): Argument #1 ($open) must be of type SessionHandlerInterface, stdClass given
+== the callbacks
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 27
+bool(true)
+string(4) "user"
+open
+read(cb1)
+bool(true)
+gc(1440)
+int(7)
+write(cb1, v|i:1;)
+close
+== create_sid
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 36
+open
+create
+read(made-by-callback)
+string(16) "made-by-callback"
+destroy(made-by-callback)
+close
+int(32)
+== closures and methods
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 50
+static open
+closure write
+method close
+== return values
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 58
+open
+read(cb3)
+null: null: TypeError: Session callback must have a return value of type bool, null returned
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 58
+open
+read(cb3)
+1: 1: TypeError: Session callback must have a return value of type bool, int returned
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 58
+open
+read(cb3)
+0: close
+true
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 58
+open
+read(cb3)
+-1: close
+true
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 58
+open
+read(cb3)
+"x": "x": TypeError: Session callback must have a return value of type bool, string returned
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 58
+open
+read(cb3)
+[]: []: TypeError: Session callback must have a return value of type bool, array returned
+== an exception from a callback
+
+Deprecated: session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated in %s on line 71
+open
+no read
+bool(false)

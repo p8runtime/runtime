@@ -1,0 +1,76 @@
+bool(true)
+string(4) "user"
+string(4) "user"
+open(PHPSESSID)
+create_sid
+read(created-id)
+bool(true)
+string(10) "created-id"
+gc
+int(3)
+write(created-id, a|i:1;)
+close
+bool(true)
+-- the same data: only the timestamp
+open(PHPSESSID)
+read(created-id)
+updateTimestamp(created-id, a|i:1;)
+close
+-- changed data: written
+open(PHPSESSID)
+read(created-id)
+write(created-id, a|i:2;)
+close
+-- strict mode: an id that does not exist is replaced
+open(PHPSESSID)
+validateId(nothere)
+create_sid
+read(created-id)
+string(10) "created-id"
+updateTimestamp(created-id, a|i:2;)
+close
+-- regenerate
+open(PHPSESSID)
+validateId(created-id)
+read(created-id)
+destroy(created-id)
+close
+open(PHPSESSID)
+create_sid
+validateId(created-id)
+read(created-id)
+bool(true)
+string(10) "created-id"
+destroy(created-id)
+close
+-- create_id inside an active session asks the handler
+open(PHPSESSID)
+create_sid
+read(created-id)
+create_sid
+validateId(created-id)
+string(12) "x-created-id"
+close
+-- collection by chance runs after the read
+open(PHPSESSID)
+validateId(created-id)
+create_sid
+read(created-id)
+gc
+close
+-- recursive calls are refused
+open(PHPSESSID)
+validateId(abc)
+create_sid
+
+Notice: session_start(): Ignoring session_start() because a session is already active (started from %s on line 65) in %s on line 74
+bool(true)
+close
+-- what a handler returns
+close
+bool(false)
+validateId(r1)
+create_sid
+read(created-id)
+bool(true)
+close
