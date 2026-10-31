@@ -1,0 +1,2 @@
+
+Fatal error: Set access level of B::$foo must be protected(set) (as in class A) or weaker in %s on line 6

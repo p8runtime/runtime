@@ -111,6 +111,7 @@ fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty:
         name: PhpStr::from(name),
         default,
         visibility,
+        set_visibility: None,
         declaring: declaring.to_ascii_lowercase().into_bytes(),
         declaring_name: PhpStr::from(declaring),
         readonly: false,

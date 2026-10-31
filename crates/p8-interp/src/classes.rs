@@ -160,6 +160,18 @@ impl Context<'_> {
         Ok(())
     }
 
+    /// A virtual property has a set visibility only with both hooks
+    /// (zend_verify_hooked_property; the compiler checks a class with no
+    /// parent). A redeclaration without hooks of its own is not virtual.
+    fn check_virtual_set_visibility(&self, def: &ClassDef, own_hooks: u8, class: &str, prop: &Property, line: u32) -> Result<(), Throw> {
+        use p8_runtime::object::{HOOK_GET, HOOK_SET, HOOK_VIRTUAL};
+        if def.parent.is_none() || own_hooks == 0 || prop.set_visibility.is_none() || prop.hooks & HOOK_VIRTUAL == 0 || prop.hooks & (HOOK_GET | HOOK_SET) == HOOK_GET | HOOK_SET {
+            return Ok(());
+        }
+        let what = if prop.hooks & HOOK_GET == 0 { "Write-only" } else { "Read-only" };
+        Err(self.fatal_at(format!("{what} virtual property {class}::${} must not specify asymmetric visibility", text(&prop.name)), line))
+    }
+
     fn fatal_at(&self, message: String, line: u32) -> Throw {
         let (file, _) = self.location();
         Throw::Fatal { message, file, line }
@@ -227,6 +239,7 @@ impl Context<'_> {
                 name: PhpStr::from(p.name.as_bytes()),
                 default,
                 visibility: p.visibility,
+                set_visibility: p.set_visibility,
                 declaring: lower.clone(),
                 declaring_name: PhpStr::from(def.name.as_bytes()),
                 readonly: p.readonly,
@@ -239,7 +252,29 @@ impl Context<'_> {
             match properties.iter().position(|q| q.name.as_bytes() == pname.as_slice() && q.visibility != Visibility::Private) {
                 Some(at) => {
                     let inherited = &properties[at];
-                    if visibility_rank(p.visibility) > visibility_rank(inherited.visibility) {
+                    if inherited.is_final {
+                        return Err(self.fatal_at(format!("Cannot override final property {}::${}", text(&inherited.declaring_name), text_of(&p.name)), def.line));
+                    }
+                    // A set visibility no wider than the parent's (its
+                    // visibility when it has none); a get-only virtual
+                    // property (an abstract one too) has none to keep.
+                    use p8_runtime::object::HOOK_VIRTUAL;
+                    let hook = |kind: &[u8]| methods.get([b"$", pname.as_slice(), b"::", kind].concat().to_ascii_lowercase().as_slice());
+                    let get_only = hook(b"set").is_none() && (inherited.hooks & HOOK_VIRTUAL != 0 || hook(b"get").is_some_and(|m| m.is_abstract));
+                    if let Some(set) = p.set_visibility
+                        && !get_only
+                        && set.rank() > inherited.set_visibility.unwrap_or(inherited.visibility).rank()
+                    {
+                        let (parent_set, weaker) = match inherited.set_visibility {
+                            Some(v) => (format!("{}(set)", v.word()), " or weaker"),
+                            None => ("omitted".to_string(), ""),
+                        };
+                        return Err(self.fatal_at(
+                            format!("Set access level of {name}::${} must be {parent_set} (as in class {}){weaker}", text_of(&p.name), text(&inherited.declaring_name)),
+                            def.line,
+                        ));
+                    }
+                    if p.visibility.rank() > inherited.visibility.rank() {
                         return Err(self.fatal_at(
                             format!(
                                 "Access level to {name}::${} must be {} (as in class {}){}",
@@ -259,9 +294,13 @@ impl Context<'_> {
                         let virtual_ = inherited.hooks & HOOK_VIRTUAL != 0 && (prop.hooks == 0 || prop.hooks & HOOK_VIRTUAL != 0);
                         prop.hooks = (prop.hooks | inherited.hooks) & !HOOK_VIRTUAL | if virtual_ { HOOK_VIRTUAL } else { 0 };
                     }
+                    self.check_virtual_set_visibility(def, p.hooks, &name, &prop, def.line)?;
                     properties[at] = prop;
                 }
-                None => properties.push(prop),
+                None => {
+                    self.check_virtual_set_visibility(def, p.hooks, &name, &prop, def.line)?;
+                    properties.push(prop);
+                }
             }
         }
         // Traits: their methods (the class's own win, then theirs over
@@ -379,6 +418,7 @@ impl Context<'_> {
                 name: PhpStr::from(n),
                 default: Value::Undef,
                 visibility: Visibility::Public,
+                set_visibility: Some(Visibility::Protected),
                 declaring: lower.clone(),
                 declaring_name: PhpStr::from(def.name.as_bytes()),
                 readonly: true,
@@ -855,6 +895,44 @@ impl Context<'_> {
         Ok(Some((slot, prop)))
     }
 
+    /// Whether the running code may write `prop` of `object`, under its
+    /// set visibility (zend_asymmetric_property_has_set_access): its
+    /// declaring class may; for protected(set), so may a class related
+    /// to the one that first declared it.
+    pub(crate) fn may_set(&self, object: &Object, prop: &Property) -> bool {
+        let Some(set) = prop.set_visibility else { return true };
+        let Some(scope) = self.scope().0 else { return false };
+        if scope.lower == prop.declaring {
+            return true;
+        }
+        if set != Visibility::Protected {
+            return false;
+        }
+        let mut root = self.declaring(&object.class, &prop.declaring);
+        while let Some(parent) = root.parent.clone()
+            && parent.properties.iter().any(|q| q.name == prop.name && q.visibility != Visibility::Private)
+        {
+            root = parent;
+        }
+        scope.is_a(&root.lower) || root.is_a(&scope.lower)
+    }
+
+    /// "Cannot modify private(set) property C::$p from global scope"
+    /// (zend_asymmetric_visibility_property_modification_error), naming
+    /// the called scope.
+    pub(crate) fn set_visibility_error(&self, prop: &Property, operation: &str) -> Throw {
+        let visibility = match (prop.set_visibility, prop.readonly) {
+            (Some(Visibility::Private), _) => "private(set)",
+            (_, true) => "protected(set) readonly",
+            _ => "protected(set)",
+        };
+        let scope = match self.scope().1 {
+            Some(c) => format!("scope {}", text(&c.name)),
+            None => "global scope".into(),
+        };
+        self.throw("Error", format!("Cannot {operation} {visibility} property {}::${} from {scope}", text(&prop.declaring_name), text(&prop.name)))
+    }
+
     /// What `$obj->name` holds, read without hooks, magic or diagnostics:
     /// None unless it is a property visible here.
     pub(crate) fn peek_prop(&self, target: &Value, name: &Value) -> Option<Value> {
@@ -939,7 +1017,9 @@ impl Context<'_> {
     /// Write `value` to property `name` of `object` (checks visibility,
     /// readonly, and that a dynamic property may be created).
     /// `&$obj->name`: the property made a reference (a dynamic one made).
-    pub(crate) fn prop_ref(&mut self, target: &Value, name: &Value) -> Result<Rc<RefCell<Value>>, Throw> {
+    /// `for_unset`: for `unset($obj->name[k])`, which leaves an
+    /// uninitialized property alone.
+    pub(crate) fn prop_ref(&mut self, target: &Value, name: &Value, for_unset: bool) -> Result<Rc<RefCell<Value>>, Throw> {
         let name = self.prop_name(name)?;
         let object = self.target_object(target, &name, "modify")?;
         if let Some(p) = self.hooked_property(&object, name.as_bytes()) {
@@ -949,6 +1029,16 @@ impl Context<'_> {
             Some((slot, prop)) => {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
+                }
+                if prop.set_visibility.is_some() && !self.may_set(&object, &prop) {
+                    // An object is handed out as a copy (writes through it
+                    // change the object, not the property).
+                    match object.slots.borrow()[slot].deref() {
+                        v @ Value::Object(_) => return Ok(Rc::new(RefCell::new(v))),
+                        Value::Undef if for_unset => return Ok(Rc::new(RefCell::new(Value::Null))),
+                        _ => {}
+                    }
+                    return Err(self.set_visibility_error(&prop, "indirectly modify"));
                 }
                 Ok(crate::refs::make_ref(&mut object.slots.borrow_mut()[slot]))
             }
@@ -980,6 +1070,12 @@ impl Context<'_> {
             return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&pname))));
         }
         match self.prop_slot(&object, pname.as_bytes())? {
+            Some((slot, prop)) if prop.set_visibility.is_some() && !self.may_set(&object, &prop) => {
+                if matches!(object.slots.borrow()[slot].deref(), Value::Object(_)) {
+                    return Err(self.throw("Error", "Cannot assign by reference to overloaded object"));
+                }
+                return Err(self.set_visibility_error(&prop, "indirectly modify"));
+            }
             Some((slot, _)) => object.slots.borrow_mut()[slot] = Value::Ref(cell),
             None => {
                 self.write_prop(target, name, Value::Null)?;
@@ -994,18 +1090,13 @@ impl Context<'_> {
         let object = self.target_object(target, &name, "assign")?;
         match self.prop_slot(&object, name.as_bytes())? {
             Some((slot, prop)) => {
-                if prop.readonly {
-                    let initialized = !matches!(object.slots.borrow()[slot], Value::Undef);
-                    let scope = self.scope().0;
-                    if initialized {
-                        return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
-                    }
-                    if scope.as_ref().is_none_or(|s| s.lower != prop.declaring) {
-                        return Err(self.throw(
-                            "Error",
-                            format!("Cannot initialize readonly property {}::${} from {}", text(&object.class.name), text(&name), self.scope_name()),
-                        ));
-                    }
+                // Who may initialize a readonly property is its set
+                // visibility's business (implicitly protected(set)).
+                if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) {
+                    return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(&name))));
+                }
+                if prop.set_visibility.is_some() && !self.may_set(&object, &prop) {
+                    return Err(self.set_visibility_error(&prop, "modify"));
                 }
                 // A typed property: the value checked (and converted) by the
                 // writing code's strict_types.
@@ -1076,6 +1167,12 @@ impl Context<'_> {
         let pname = self.prop_name(name)?;
         let object = self.target_object(target, &pname, "assign")?;
         let slot = self.prop_slot(&object, pname.as_bytes())?;
+        if let Some((_, prop)) = &slot
+            && prop.set_visibility.is_some()
+            && !self.may_set(&object, prop)
+        {
+            return Err(self.set_visibility_error(prop, "indirectly modify"));
+        }
         let mut root = match &slot {
             Some((i, _)) => {
                 let mut slots = object.slots.borrow_mut();
@@ -1135,6 +1232,9 @@ impl Context<'_> {
             Some((i, prop)) => {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot unset readonly property {}::${}", text(&object.class.name), text(&name))));
+                }
+                if prop.set_visibility.is_some() && !self.may_set(&object, &prop) {
+                    return Err(self.set_visibility_error(&prop, "unset"));
                 }
                 object.slots.borrow_mut()[i] = Value::Undef;
             }
@@ -1242,6 +1342,9 @@ impl Context<'_> {
             }
             let what = if bit == p8_runtime::object::HOOK_GET { "write-only" } else { "read-only" };
             return Some(Err(self.throw("Error", format!("Property {}::${} is {what}", text(&p.declaring_name), text(&name)))));
+        }
+        if bit == p8_runtime::object::HOOK_SET && check_visibility && !self.may_set(o, p) {
+            return Some(Err(self.set_visibility_error(p, "modify")));
         }
         let key = [b"$", name.as_bytes(), b"::", kind].concat().to_ascii_lowercase();
         let m = o.class.method(&key)?;
@@ -1644,14 +1747,6 @@ fn text_of(t: &p8_runtime::frozen::Text) -> String {
 }
 
 /// Narrower is larger: public < protected < private.
-fn visibility_rank(v: Visibility) -> u8 {
-    match v {
-        Visibility::Public => 0,
-        Visibility::Protected => 1,
-        Visibility::Private => 2,
-    }
-}
-
 /// A magic property method.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Magic {

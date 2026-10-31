@@ -422,7 +422,7 @@ class_method!(rc_get_properties, |ctx, class, this, args| {
             names.push(PhpStr::from(n.as_slice()));
         }
         for p in class.properties.iter().filter(|p| p.declaring == c.lower && !p.is_internal() && (depth == 0 || p.visibility != Visibility::Private)) {
-            let modifiers = vis_bits(p.visibility) | if p.readonly { 128 } else { 0 };
+            let modifiers = vis_bits(p.visibility) | set_bits(p.set_visibility) | if p.readonly { 128 } else { 0 } | if p.is_final { 32 } else { 0 };
             if filter.is_some_and(|f| modifiers & f == 0) || names.contains(&p.name) {
                 continue;
             }
@@ -600,6 +600,15 @@ fn vis_bits(v: Visibility) -> i64 {
         Visibility::Public => 1,
         Visibility::Protected => 2,
         Visibility::Private => 4,
+    }
+}
+
+/// A set visibility's modifier bit (IS_PROTECTED_SET, IS_PRIVATE_SET).
+fn set_bits(v: Option<Visibility>) -> i64 {
+    match v {
+        Some(Visibility::Protected) => 2048,
+        Some(Visibility::Private) => 4096,
+        _ => 0,
     }
 }
 
@@ -1596,13 +1605,23 @@ prop_flag!(rpr_has_type, |v, st, ro, def, ty, declared| Ok(Value::Bool(ty.is_som
 fn rpr_get_modifiers(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (v, st, ro, _, _, _) = prop_facts(ctx, this)?;
     let h = prop_hooks(ctx, this)?;
-    let mut bits = vis_bits(v) | if st { 16 } else { 0 } | if ro { 128 } else { 0 };
-    // A public readonly property is implicitly protected(set).
-    if ro && v == Visibility::Public {
-        bits |= 2048;
-    }
+    let mut bits = vis_bits(v) | set_bits(prop_set_visibility(ctx, this)?) | if st { 16 } else { 0 } | if ro { 128 } else { 0 };
     bits |= if h.is_final { 32 } else { 0 } | if h.is_abstract { 64 } else { 0 } | if h.virtual_ { 512 } else { 0 };
     Ok(Value::Int(bits))
+}
+
+/// Who may write a property, when narrower than its visibility.
+fn prop_set_visibility(ctx: &mut dyn Ctx, this: &Object) -> Result<Option<Visibility>, Throw> {
+    let (class, name, slot) = held_property(ctx, this)?;
+    Ok(slot.filter(|_| !class.statics.contains_key(name.as_bytes())).and_then(|i| class.properties[i].set_visibility))
+}
+
+fn rpr_is_private_set(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(prop_set_visibility(ctx, this)? == Some(Visibility::Private)))
+}
+
+fn rpr_is_protected_set(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(prop_set_visibility(ctx, this)? == Some(Visibility::Protected)))
 }
 
 /// What a property declares beyond its visibility: final, its hooks.
@@ -2428,6 +2447,8 @@ pub static CLASSES: &[ClassSpec] = &[
             ("isProtected", Some(Native::Method(rpr_is_protected))),
             ("isStatic", Some(Native::Method(rpr_is_static))),
             ("isReadOnly", Some(Native::Method(rpr_is_readonly))),
+            ("isPrivateSet", Some(Native::Method(rpr_is_private_set))),
+            ("isProtectedSet", Some(Native::Method(rpr_is_protected_set))),
             ("isDefault", Some(Native::Method(rpr_is_default))),
             ("isPromoted", Some(Native::Method(rpr_is_promoted))),
             ("hasDefaultValue", Some(Native::Method(rpr_has_default_value))),

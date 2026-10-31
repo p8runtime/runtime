@@ -598,6 +598,9 @@ pub struct PropDef {
     /// `$name::get` and `$name::set`.
     pub hooks: u8,
     pub visibility: Visibility,
+    /// Who may write it (`private(set)`), when narrower than `visibility`
+    /// (a public readonly property is implicitly protected(set)).
+    pub set_visibility: Option<Visibility>,
     pub is_static: bool,
     pub readonly: bool,
     pub is_final: bool,

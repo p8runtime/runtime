@@ -1,0 +1,2 @@
+
+Fatal error: Set access level of B::$foo must be omitted (as in class A) in %s on line 6
