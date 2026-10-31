@@ -46,7 +46,7 @@ test('a page given the request reads $_GET and $_SERVER, and sets headers', asyn
   // The query string reached PHP as $_GET, escaped by the page.
   assert.match(html, /<h1>Hello Ada &lt;b&gt;<\/h1>/);
   assert.match(html, /GET \/hello\?name=Ada%20%3Cb%3E,/);
-  assert.match(html, /rendered by PHP 8\.4\.\d+ on p8/);
+  assert.match(html, /rendered by P8 inside a Hono route/);
 });
 
 test('a path no route takes is Hono\'s 404', async () => {

@@ -8,6 +8,6 @@ header('X-Greeting: hello');
 <body>
   <h1>Hello <?= $name ?></h1>
   <p><?= htmlspecialchars($_SERVER['REQUEST_METHOD']) ?> <?= htmlspecialchars($_SERVER['REQUEST_URI']) ?>,
-     rendered by PHP <?= PHP_VERSION ?> on p8 inside a Hono route.</p>
+     rendered by P8 inside a Hono route.</p>
 </body>
 </html>
