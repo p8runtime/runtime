@@ -179,3 +179,38 @@ Not built; what would carry over:
   is a new instance, so a Durable Object would add a per-object writable
   directory (session files, SQLite through pdo_sqlite) kept in its storage,
   not a long-lived PHP process.
+
+## With Hono (server-side rendering)
+
+On the server, `import Page from './Page.php'` renders in-process, so a route
+handler can return PHP-rendered HTML. `vite-plugin-p8/runtime` has
+`renderToResponse`, which needs neither Node nor Vite:
+
+```ts
+// vite.config.ts
+import devServer from '@hono/vite-dev-server';
+import { defineConfig } from 'vite';
+import p8 from 'vite-plugin-p8';
+
+export default defineConfig({
+  plugins: [p8(), devServer({ entry: 'src/app.ts' })],
+});
+```
+
+```ts
+// src/app.ts
+import { Hono } from 'hono';
+import { renderToResponse } from 'vite-plugin-p8/runtime';
+import Page from './components/Page.php';
+
+const app = new Hono();
+
+app.get('/hello/:name', (c) =>
+  renderToResponse(Page, { props: { name: c.req.param('name') } }),
+);
+
+export default app;
+```
+
+`Page.php` reads the props as `$props`. Run `npm run dev:hono` for
+`example-hono/`, then open `/hello/YourName`.

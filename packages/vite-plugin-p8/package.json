@@ -6,7 +6,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./runtime": "./src/response.ts"
   },
   "files": [
     "src",
@@ -20,13 +21,16 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-concurrency=1 test/*.test.ts",
     "bench": "node scripts/bench.ts",
-    "dev": "vite example"
+    "dev": "vite example",
+    "dev:hono": "vite example-hono"
   },
   "peerDependencies": {
     "vite": ">=6"
   },
   "devDependencies": {
+    "@hono/vite-dev-server": "^0.26.1",
     "@types/node": "^24.19.2",
+    "hono": "^4.13.14",
     "typescript": "^5.9.3",
     "vite": "^7.3.7"
   }
