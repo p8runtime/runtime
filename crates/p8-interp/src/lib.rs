@@ -884,8 +884,6 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::Construct { .. }
                 | Instr::Rare { .. }
                 | Instr::ConstructSpread { .. }
-                | Instr::This { .. }
-                | Instr::FetchProp { .. }
                 | Instr::AssignProp { .. }
                 | Instr::AssignPropOp { .. }
                 | Instr::PropIncDec { .. }
