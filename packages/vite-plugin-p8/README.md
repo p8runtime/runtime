@@ -182,16 +182,10 @@ Not built; what would carry over:
 
 ## With Hono (server-side rendering)
 
-On the server a `.php` module can run two ways, and `renderToResponse`
-(`vite-plugin-p8/runtime`, no Node or Vite imports) takes either:
-
-- **`{ request }`: the page gets the request itself**, as `php -S` gives a
-  router script one: `$_GET`, `$_POST`, `$_COOKIE`, `$_SERVER`,
-  `php://input`, and its `header()` / status are the response's. This is
-  plain PHP, the way pages are written.
-- **`{ props }`: a template gets data the route computed**, as `$props`
-  (Twig and Blade views get variables the same way). Use it for values PHP
-  has no superglobal for, such as a path parameter the router parsed.
+On the server, `renderToResponse` (`vite-plugin-p8/runtime`, no Node or
+Vite imports) runs a `.php` page for a request, the way `php -S` runs a
+router script: the page reads `$_GET`, `$_POST`, `$_COOKIE`, `$_SERVER` and
+`php://input`, and its `header()` / status are the response's.
 
 ```ts
 // vite.config.ts
@@ -208,7 +202,6 @@ export default defineConfig({
 // src/app.ts
 import { Hono } from 'hono';
 import { renderToResponse } from 'vite-plugin-p8/runtime';
-import Card from './components/Card.php';
 import Page from './components/Page.php';
 
 const app = new Hono();
@@ -216,13 +209,8 @@ const app = new Hono();
 // /hello?name=Ada: Page.php reads $_GET['name'].
 app.get('/hello', (c) => renderToResponse(Page, { request: c.req.raw }));
 
-// /card/Ada: Card.php reads $props['name'].
-app.get('/card/:name', (c) =>
-  renderToResponse(Card, { props: { name: c.req.param('name') } }),
-);
-
 export default app;
 ```
 
-Run `npm run dev:hono` for `example-hono/`, then open `/hello?name=YourName`
-or `/card/YourName`.
+Run `npm run dev:hono` for `example-hono/`, then open
+`http://localhost:5173/hello?name=YourName`.

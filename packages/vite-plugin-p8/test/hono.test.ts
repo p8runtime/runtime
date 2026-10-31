@@ -1,4 +1,4 @@
-// The Hono example: a route that renders a PHP component with
+// The Hono example: a route that renders a PHP page with
 // renderToResponse, run by @hono/vite-dev-server inside Vite.
 
 import assert from 'node:assert/strict';
@@ -47,13 +47,6 @@ test('a page given the request reads $_GET and $_SERVER, and sets headers', asyn
   assert.match(html, /<h1>Hello Ada &lt;b&gt;<\/h1>/);
   assert.match(html, /GET \/hello\?name=Ada%20%3Cb%3E,/);
   assert.match(html, /rendered by PHP 8\.4\.\d+ on p8/);
-});
-
-test('a template given props reads them as $props', async () => {
-  const r = await fetch(`${base}/card/Grace%20%3Ci%3E`);
-  assert.equal(r.status, 200);
-  assert.equal(r.headers.get('content-type'), 'text/html; charset=utf-8');
-  assert.match(await r.text(), /<h2>Grace &lt;i&gt;<\/h2>/);
 });
 
 test('a path no route takes is Hono\'s 404', async () => {
