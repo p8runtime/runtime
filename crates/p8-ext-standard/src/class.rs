@@ -110,8 +110,9 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let text = full.as_bytes();
     if let Some(at) = text.windows(2).position(|w| w == b"::") {
         let (class_name, name) = (&text[..at], &text[at + 2..]);
-        let Some(class) = ctx.class_load(class_name)? else {
-            return Err(ctx.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(class_name))));
+        let class = match class_named(ctx, class_name)? {
+            Some(c) => c,
+            None => return Err(ctx.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(class_name)))),
         };
         if name.eq_ignore_ascii_case(b"class") {
             return Ok(Value::Str(class.name.clone()));
@@ -139,8 +140,31 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// Whether class constant `class_name::name` exists and the running code
 /// can see it (defined()): no error when the class or constant is missing.
+/// The class a constant name's class part names: self, parent and static
+/// are the caller's (zend_get_class_constant_ex; an Error where there is
+/// none), any other is looked up (autoloaded); None when there is no such
+/// class.
+fn class_named(ctx: &mut dyn Ctx, class_name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
+    let (word, class) = match class_name.to_ascii_lowercase().as_slice() {
+        b"self" => ("self", ctx.scope()),
+        b"parent" => ("parent", ctx.scope().and_then(|c| c.parent.clone())),
+        b"static" => ("static", ctx.called_class()),
+        _ => return ctx.class_load(class_name),
+    };
+    match class {
+        Some(c) => Ok(Some(c)),
+        None => {
+            let message = match (word, ctx.scope()) {
+                ("parent", Some(_)) => "Cannot access \"parent\" when current class scope has no parent".to_string(),
+                _ => format!("Cannot access \"{word}\" when no class scope is active"),
+            };
+            Err(ctx.throw("Error", message))
+        }
+    }
+}
+
 pub(crate) fn class_constant_defined(ctx: &mut dyn Ctx, class_name: &[u8], name: &[u8]) -> Result<bool, Throw> {
-    let Some(class) = ctx.class_load(class_name)? else { return Ok(false) };
+    let Some(class) = class_named(ctx, class_name)? else { return Ok(false) };
     // A trait's constants are its users' (read through the trait, never).
     if class.flags & CLASS_TRAIT != 0 {
         return Ok(false);

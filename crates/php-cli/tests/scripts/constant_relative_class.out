@@ -1,0 +1,33 @@
+array(5) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "x"
+  [2]=>
+  string(1) "p"
+  [3]=>
+  string(4) "priv"
+  [4]=>
+  string(1) "x"
+}
+array(5) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(2) "dx"
+  [2]=>
+  string(1) "p"
+  [3]=>
+  string(4) "priv"
+  [4]=>
+  string(1) "x"
+}
+Cannot access "parent" when current class scope has no parent
+Cannot access "self" when no class scope is active
+Cannot access "static" when no class scope is active
+
+Fatal error: Uncaught Error: Cannot access "static" when no class scope is active in %s:13
+Stack trace:
+#0 %s(13): defined('static::X')
+#1 {main}
+  thrown in %s on line 13
