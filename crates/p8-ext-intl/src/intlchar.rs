@@ -4,9 +4,9 @@
 //! UProperty numbers, simple case mappings, bidi mirroring, digits.
 //!
 //! Not available (null with U_UNSUPPORTED_ERROR): character names
-//! (charName, charFromName, enumCharNames), charAge and the Unicode
-//! version, property (value) name lookups, getFC_NFKC_Closure, and the
-//! numeric values of characters that are not decimal digits.
+//! (charName, charFromName, enumCharNames), charAge, property (value)
+//! name lookups, getFC_NFKC_Closure, and the numeric values of characters
+//! that are not decimal digits.
 
 use crate::{R, U_ILLEGAL_ARGUMENT_ERROR, U_UNSUPPORTED_ERROR, arg};
 use icu_collections::codepointtrie::TrieValue;
@@ -55,7 +55,7 @@ pub static CLASSES: &[ClassSpec] = &[ClassSpec {
         "digit" => digit;
         "forDigit" => for_digit;
         "charAge" => unsupported_null;
-        "getUnicodeVersion" => unsupported_null;
+        "getUnicodeVersion" => get_unicode_version;
         "getFC_NFKC_Closure" => unsupported_null;
         "isUAlphabetic" => is_ualphabetic;
         "isULowercase" => is_ulowercase;
@@ -508,6 +508,19 @@ fn get_int_property_max_value(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
     };
     Ok(Value::Int(max))
+}
+
+/// IntlChar::getUnicodeVersion() (u_getUnicodeVersion): the version of the
+/// Unicode data the properties come from, IntlChar::UNICODE_VERSION's, as
+/// its four numbers.
+fn get_unicode_version(_: &mut dyn Ctx, _: &mut [Value]) -> R {
+    let version = crate::consts::INTL_CHAR.iter().find_map(|(name, c)| match (*name, c) {
+        ("UNICODE_VERSION", p8_runtime::ext::Constant::Str(v)) => Some(*v),
+        _ => None,
+    });
+    let mut parts: Vec<Value> = version.unwrap_or_default().split(|&b| b == b'.').map(|n| Value::Int(String::from_utf8_lossy(n).parse().unwrap_or(0))).collect();
+    parts.resize(4, Value::Int(0));
+    Ok(Value::Array(std::rc::Rc::new(p8_runtime::array::PhpArray::from_list(parts))))
 }
 
 fn unsupported(ctx: &mut dyn Ctx, ret: Value) -> R {

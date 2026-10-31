@@ -1148,6 +1148,7 @@ impl Isolate {
             closures: Vec::new(),
             constants: indexmap::IndexMap::new(),
             globals: indexmap::IndexMap::new(),
+            main_cvs: None,
             out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false },
             request: None,
             main_return: None,
@@ -1213,6 +1214,8 @@ impl Isolate {
             gc_runs: 0,
             gc_collected: 0,
             cfg: Vec::new(),
+            ini_master: HashMap::new(),
+            disabled: std::collections::HashSet::new(),
             argv: None,
             started: std::time::Instant::now(),
         }
@@ -1238,6 +1241,10 @@ pub struct Context<'i> {
     /// Globals not held in the main frame's registers.
     /// In the order made, as PHP's symbol table ($GLOBALS, get_defined_vars).
     globals: indexmap::IndexMap<Vec<u8>, Rc<RefCell<Value>>>,
+    /// The main script's variables by name (its code, identified by its
+    /// address): superglobal uses look a global up each time, as PHP does
+    /// in its symbol table.
+    main_cvs: Option<(usize, HashMap<Vec<u8>, usize>)>,
     out: Output<'i>,
     diags: Vec<Diag>,
     /// ini settings this request changed (ini_set, error_reporting()).
@@ -1374,6 +1381,11 @@ pub struct Context<'i> {
     gc_collected: i64,
     /// The host's settings, as given (get_cfg_var).
     cfg: Vec<(Vec<u8>, String)>,
+    /// The value each host setting gave a directive (its master value).
+    ini_master: HashMap<Vec<u8>, Value>,
+    /// The builtins disable_functions took away: they are undefined, and
+    /// the script may declare functions of their names.
+    disabled: std::collections::HashSet<Vec<u8>>,
     /// The command line, when the host gives one: $argv, $argc, $_SERVER.
     argv: Option<Vec<String>>,
     /// When the request started.
@@ -1404,7 +1416,7 @@ impl Context<'_> {
             let first = &self.closures[i as usize].code;
             return Err(format!("Cannot redeclare function {name}() (previously declared in {}:{})", first.file, first.line));
         }
-        if self.isolate.registry.lookup(&key).is_some() {
+        if self.builtin(&key).is_some() {
             return Err(format!("Cannot redeclare function {name}()"));
         }
         self.closures.push(Closure::new(func));
@@ -1432,7 +1444,12 @@ impl Context<'_> {
 
     pub fn function_exists(&self, name: &[u8]) -> bool {
         let key = name.strip_prefix(b"\\").unwrap_or(name).to_ascii_lowercase();
-        self.functions.contains_key(&key) || self.isolate.registry.lookup(&key).is_some()
+        self.functions.contains_key(&key) || self.builtin(&key).is_some()
+    }
+
+    /// The builtin named `lower`, unless disable_functions took it away.
+    pub(crate) fn builtin(&self, lower: &[u8]) -> Option<usize> {
+        self.isolate.registry.lookup(lower).filter(|&i| self.disabled.is_empty() || !self.disabled.contains(self.isolate.registry.function(i).name.as_bytes()))
     }
 
     /// An ini value that may be an expression (`E_ALL & ~E_NOTICE`):
@@ -1500,6 +1517,15 @@ impl Context<'_> {
         let set = Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some();
         self.out.started = started;
         self.output_start = start_at;
+        if let Some(v) = set.then(|| self.ini.get(name).cloned()).flatten() {
+            if name == b"disable_functions" {
+                // zend_disable_functions: names split at spaces and commas,
+                // matched as written (exit and die are not functions).
+                let list = v.to_php_string().unwrap_or_else(PhpStr::empty);
+                self.disabled = list.as_bytes().split(|&b| b == b' ' || b == b',').filter(|n| !n.is_empty()).map(<[u8]>::to_vec).collect();
+            }
+            self.ini_master.insert(name.to_vec(), v);
+        }
         set
     }
 
@@ -2180,11 +2206,11 @@ impl Context<'_> {
         let global = s.fallback.as_ref().map(|g| g.as_bytes());
         let callee = if let Some(f) = self.functions.get(key) {
             Callee::User(*f)
-        } else if let Some(i) = self.isolate.registry.lookup(key) {
+        } else if let Some(i) = self.builtin(key) {
             Callee::Builtin(i)
         } else if let Some(f) = global.and_then(|g| self.functions.get(g)) {
             Callee::User(*f)
-        } else if let Some(i) = global.and_then(|g| self.isolate.registry.lookup(g)) {
+        } else if let Some(i) = global.and_then(|g| self.builtin(g)) {
             Callee::Builtin(i)
         } else {
             let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
@@ -3139,6 +3165,12 @@ impl Context<'_> {
                         } else {
                             self.var_unset(w, in_main, &name);
                         }
+                    }
+                    Rare::AutoGlobal => {
+                        // The name is a constant string: read, not converted.
+                        let Value::Str(name) = self.operand(w, func, b) else { unreachable!("AutoGlobal names a constant string") };
+                        let main: &mut [Value] = if in_main { w } else { below };
+                        reg!(a) = Value::Ref(self.global_slot(main, name.as_bytes()));
                     }
                     Rare::GlobalBind => {
                         let name = self.var_name(w, func, a);
@@ -4268,6 +4300,7 @@ impl Context<'_> {
                     get_properties: None,
                     cast_bool: None,
                     cast_string: None,
+                    cast_int: None,
                     clone_data: None,
                     forward_calls: None,
                     make_data: None,
@@ -4687,8 +4720,28 @@ impl Context<'_> {
         out
     }
 
+    /// The main script's variable `name`, by its register.
+    fn main_cv(&mut self, name: &[u8]) -> Option<usize> {
+        let code = &self.frames.first().expect("the main frame").func.code;
+        let key = Arc::as_ptr(code) as usize;
+        if self.main_cvs.as_ref().is_none_or(|(k, _)| *k != key) {
+            let index = code.cv_names.iter().enumerate().map(|(i, n)| (n.as_bytes().to_vec(), i)).collect();
+            self.main_cvs = Some((key, index));
+        }
+        self.main_cvs.as_ref().and_then(|(_, m)| m.get(name).copied())
+    }
+
+    /// The global variable `name`'s cell as it is now; one not set is a
+    /// new unset one (not null, as `global $x` makes it).
+    fn global_slot(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
+        if let Some(r) = self.main_cv(name) {
+            return make_ref(main, r as Reg);
+        }
+        self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Undef))).clone()
+    }
+
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
-        if let Some(r) = self.frames.first().expect("the main frame").func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+        if let Some(r) = self.main_cv(name) {
             // `global $x` makes a global that is not set a null one.
             match &mut main[r] {
                 Value::Ref(cell) if matches!(*cell.borrow(), Value::Undef) => *cell.borrow_mut() = Value::Null,
@@ -5100,6 +5153,14 @@ impl Ctx for Context<'_> {
         })
     }
 
+    fn ini_master(&self, name: &[u8]) -> Option<Value> {
+        let default = self.isolate.registry.ini_default(name)?;
+        Some(match self.ini_master.get(name) {
+            Some(v) => v.clone(),
+            None => default.map_or(Value::Null, |d| Value::Str(PhpStr::from(d))),
+        })
+    }
+
     fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value> {
         let old = self.ini_get(name)?;
         let text = value.to_php_string().unwrap_or_else(PhpStr::empty);
@@ -5182,7 +5243,8 @@ impl Ctx for Context<'_> {
     fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>) {
         let mut user: Vec<(&u32, &Vec<u8>)> = self.functions.iter().map(|(k, i)| (i, k)).collect();
         user.sort();
-        (self.isolate.registry.function_names().collect(), user.into_iter().map(|(_, k)| k.clone()).collect())
+        let builtins = self.isolate.registry.function_names().filter(|n| !self.disabled.contains(n.as_bytes())).collect();
+        (builtins, user.into_iter().map(|(_, k)| k.clone()).collect())
     }
 
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf> {

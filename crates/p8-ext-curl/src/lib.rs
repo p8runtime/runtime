@@ -45,8 +45,9 @@ fn register(registry: &mut Registry) {
     registry.add_classes(CLASSES);
     registry.add_classes(multi::CLASSES);
     registry.add_data("CurlHandle", || Rc::new(Handle::default()));
-    registry.add_hooks("CurlHandle", ClassHooks { clone_data: Some(clone_handle), ..ClassHooks::default() });
+    registry.add_hooks("CurlHandle", ClassHooks { clone_data: Some(clone_handle), cast_int: Some(object_id), ..ClassHooks::default() });
     registry.add_data("CurlMultiHandle", || Rc::new(multi::Multi::default()));
+    registry.add_hooks("CurlMultiHandle", ClassHooks { cast_int: Some(object_id), ..ClassHooks::default() });
     registry.add_data("CurlShareHandle", || Rc::new(multi::Share::default()));
     for (name, value) in constants::CONSTANTS {
         registry.add_constant(name.as_bytes(), Constant::Int(match value {
@@ -153,6 +154,12 @@ pub struct Handle {
     pub(crate) in_callback: Cell<bool>,
     /// Added to a CurlMultiHandle.
     pub(crate) in_multi: Cell<bool>,
+}
+
+/// `(int) $handle` (curl_cast_object): the object's id, as the resource
+/// number it was before PHP 8 (Composer keys its transfers by it).
+fn object_id(o: &Object) -> i64 {
+    i64::from(o.id)
 }
 
 fn clone_handle(o: &Object) -> Rc<dyn std::any::Any> {

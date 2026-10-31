@@ -1,7 +1,8 @@
 //! The Reflection classes: ReflectionClass (and ReflectionObject),
 //! ReflectionMethod, ReflectionFunction, ReflectionParameter,
 //! ReflectionProperty, ReflectionClassConstant, ReflectionNamedType,
-//! ReflectionUnionType, ReflectionException.
+//! ReflectionUnionType, ReflectionExtension, ReflectionZendExtension,
+//! ReflectionException.
 //!
 //! Each keeps what it reflects in hidden properties ("\0..."), shown by
 //! var_dump as PHP shows it (name, class). Function declarations come from
@@ -570,6 +571,7 @@ class_method!(rc_get_extension_name, |ctx, class, this, args| Ok(match class_ext
     Some(m) => s(m.as_bytes()),
     None => Value::Bool(false),
 }));
+class_method!(rc_get_extension, |ctx, class, this, args| Ok(extension_value(ctx, class_extension(&class))));
 
 fn ro_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else {
@@ -1095,6 +1097,7 @@ fn_method!(fa_get_extension_name, |ctx, info, this, args| Ok(match function_exte
     Some(m) => s(m.as_bytes()),
     None => Value::Bool(false),
 }));
+fn_method!(fa_get_extension, |ctx, info, this, args| Ok(extension_value(ctx, function_extension(&info))));
 
 /// ReflectionFunction / ReflectionMethod::__toString() (php_reflection.c
 /// _function_string).
@@ -2154,6 +2157,238 @@ fn info_none(_: &Object) -> PhpArray {
 }
 
 // ---------------------------------------------------------------------------
+// Extensions
+
+/// A ReflectionExtension of the loaded module `module` (as PHP names it).
+fn new_extension_reflection(ctx: &mut dyn Ctx, module: &'static str) -> Value {
+    let o = make(ctx, b"ReflectionExtension");
+    set(&o, "name", s(module.as_bytes()));
+    set(&o, "\0module", s(module.as_bytes()));
+    Value::Object(o)
+}
+
+/// The ReflectionExtension of `module`, if p8 provides it (getExtension());
+/// null otherwise.
+fn extension_value(ctx: &mut dyn Ctx, module: Option<&'static str>) -> Value {
+    match module.and_then(|m| p8_runtime::info::loaded_module(ctx, m.as_bytes())) {
+        Some(m) => new_extension_reflection(ctx, m),
+        None => Value::Null,
+    }
+}
+
+fn rex_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let name = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    let Some(module) = p8_runtime::info::loaded_module(ctx, name.as_bytes()) else {
+        return Err(fail(ctx, format!("Extension \"{}\" does not exist", String::from_utf8_lossy(name.as_bytes()))));
+    };
+    set(this, "name", s(module.as_bytes()));
+    set(this, "\0module", s(module.as_bytes()));
+    Ok(Value::Null)
+}
+
+/// The module a ReflectionExtension holds, with what PHP knows of it.
+fn held_module(ctx: &mut dyn Ctx, o: &Object) -> Result<(&'static str, Option<&'static p8_stubs::ModuleSpec>), Throw> {
+    let name = get(o, "\0module").to_php_string().unwrap_or_else(PhpStr::empty);
+    match p8_runtime::info::loaded_module(ctx, name.as_bytes()) {
+        Some(m) => Ok((m, p8_stubs::module_spec(m.as_bytes()))),
+        None => Err(ctx.throw("Error", "Internal error: Failed to retrieve the reflection object".into())),
+    }
+}
+
+fn rex_get_name(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(s(held_module(ctx, this)?.0.as_bytes()))
+}
+
+fn rex_get_version(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (module, _) = held_module(ctx, this)?;
+    Ok(p8_runtime::info::module_version(module).map_or(Value::Null, |v| s(v.as_bytes())))
+}
+
+/// The module's functions p8 has, in PHP's order.
+fn module_functions(ctx: &mut dyn Ctx, spec: Option<&'static p8_stubs::ModuleSpec>) -> Vec<&'static str> {
+    let builtins = ctx.defined_functions().0;
+    spec.map_or(&[][..], |s| s.functions).iter().copied().filter(|f| builtins.contains(f)).collect()
+}
+
+fn new_function_reflection(ctx: &mut dyn Ctx, name: &str) -> Result<Rc<Object>, Throw> {
+    let o = make(ctx, b"ReflectionFunction");
+    rf_construct(ctx, &o, &mut [s(name.as_bytes())])?;
+    Ok(o)
+}
+
+fn rex_get_functions(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (_, spec) = held_module(ctx, this)?;
+    let mut out = PhpArray::new();
+    for f in module_functions(ctx, spec) {
+        let o = new_function_reflection(ctx, f)?;
+        out.insert(Key::from_string(PhpStr::from(f)), Value::Object(o));
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+/// The module's constants, in the order they were defined.
+fn module_constants(ctx: &mut dyn Ctx, module: &str) -> Vec<(PhpStr, Value)> {
+    ctx.defined_constants().into_iter().filter(|(m, _, _)| m.eq_ignore_ascii_case(module)).map(|(_, n, v)| (n, v)).collect()
+}
+
+fn rex_get_constants(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (module, _) = held_module(ctx, this)?;
+    let mut out = PhpArray::new();
+    for (name, v) in module_constants(ctx, module) {
+        out.insert(Key::from_string(name), v);
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn rex_get_ini_entries(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (_, spec) = held_module(ctx, this)?;
+    let mut out = PhpArray::new();
+    if let Some(spec) = spec {
+        for (name, _, _) in p8_runtime::info::ini_entries(ctx, spec) {
+            let v = ctx.ini_get(name.as_bytes()).unwrap_or(Value::Null);
+            out.insert(Key::from_string(PhpStr::from(name)), v);
+        }
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+/// The module's classes p8 has (built-in ones), in PHP's order.
+fn module_classes(ctx: &mut dyn Ctx, spec: Option<&'static p8_stubs::ModuleSpec>) -> Vec<Rc<Class>> {
+    let names = spec.map_or(&[][..], |s| s.classes);
+    names.iter().filter_map(|n| ctx.class(n.as_bytes())).filter(|c| c.flags & CLASS_INTERNAL != 0).collect()
+}
+
+fn rex_get_classes(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (_, spec) = held_module(ctx, this)?;
+    let mut out = PhpArray::new();
+    for c in module_classes(ctx, spec) {
+        let r = new_class_reflection(ctx, &c);
+        out.insert(Key::from_string(c.name.clone()), r);
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn rex_get_class_names(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (_, spec) = held_module(ctx, this)?;
+    Ok(list(module_classes(ctx, spec).iter().map(|c| Value::Str(c.name.clone())).collect()))
+}
+
+fn rex_get_dependencies(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (_, spec) = held_module(ctx, this)?;
+    let mut out = PhpArray::new();
+    for (dep, relation) in spec.map_or(&[][..], |s| s.deps) {
+        out.insert(Key::from_string(PhpStr::from(*dep)), s(relation.as_bytes()));
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+fn rex_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (module, _) = held_module(ctx, this)?;
+    p8_runtime::info::print_module(ctx, module)?;
+    Ok(Value::Null)
+}
+
+/// Every module p8 has is compiled in: persistent, never temporary (dl()).
+fn rex_is_persistent(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    held_module(ctx, this)?;
+    Ok(Value::Bool(true))
+}
+
+fn rex_is_temporary(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    held_module(ctx, this)?;
+    Ok(Value::Bool(false))
+}
+
+/// `text` with `indent` before each line that is not empty.
+fn indented(text: &str, indent: &str) -> String {
+    text.split_inclusive('\n').map(|l| if l == "\n" { l.to_string() } else { format!("{indent}{l}") }).collect()
+}
+
+/// ReflectionExtension::__toString() (php_reflection.c _extension_string):
+/// the module, its dependencies, directives, constants and functions. Its
+/// classes are not listed: p8's ReflectionClass has no __toString() to
+/// print them with.
+fn rex_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let (module, spec) = held_module(ctx, this)?;
+    let number = ctx.modules().iter().position(|m| *m == module).unwrap_or(0);
+    let version = p8_runtime::info::module_version(module).unwrap_or("<no_version>");
+    let mut out = format!("Extension [ <persistent> extension #{number} {module} version {version} ] {{\n").into_bytes();
+    let deps = spec.map_or(&[][..], |s| s.deps);
+    if !deps.is_empty() {
+        out.extend_from_slice(b"\n  - Dependencies {\n");
+        for (dep, relation) in deps {
+            out.extend_from_slice(format!("    Dependency [ {dep} ({relation}) ]\n").as_bytes());
+        }
+        out.extend_from_slice(b"  }\n");
+    }
+    if let Some(spec) = spec {
+        let entries = p8_runtime::info::ini_entries(ctx, spec);
+        if !entries.is_empty() {
+            out.extend_from_slice(b"\n  - INI {\n");
+            for (name, access, _) in entries {
+                // ZEND_INI_ALL, or each level that may change it.
+                let levels = if access == 7 {
+                    "ALL".to_string()
+                } else {
+                    [(1, "USER"), (2, "PERDIR"), (4, "SYSTEM")].iter().filter(|(bit, _)| access & bit != 0).map(|(_, l)| *l).collect::<Vec<_>>().join(",")
+                };
+                out.extend_from_slice(format!("    Entry [ {name} <{levels}> ]\n").as_bytes());
+                let value = |v: Option<Value>| v.and_then(|v| v.to_php_string()).unwrap_or_else(PhpStr::empty);
+                let current = value(ctx.ini_get(name.as_bytes()));
+                let master = value(ctx.ini_master(name.as_bytes()));
+                out.extend_from_slice(b"      Current = '");
+                out.extend_from_slice(current.as_bytes());
+                out.extend_from_slice(b"'\n");
+                if current.as_bytes() != master.as_bytes() {
+                    out.extend_from_slice(b"      Default = '");
+                    out.extend_from_slice(master.as_bytes());
+                    out.extend_from_slice(b"'\n");
+                }
+                out.extend_from_slice(b"    }\n");
+            }
+            out.extend_from_slice(b"  }\n");
+        }
+    }
+    let constants = module_constants(ctx, module);
+    if !constants.is_empty() {
+        out.extend_from_slice(format!("\n  - Constants [{}] {{\n", constants.len()).as_bytes());
+        for (name, v) in &constants {
+            let flags = p8_stubs::constant_flags(name.as_bytes());
+            out.extend_from_slice(format!("    Constant [ <{flags}> {} {} ] {{ ", v.type_name(), String::from_utf8_lossy(name.as_bytes())).as_bytes());
+            match v {
+                Value::Array(_) => out.extend_from_slice(b"Array"),
+                v => out.extend_from_slice(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
+            }
+            out.extend_from_slice(b" }\n");
+        }
+        out.extend_from_slice(b"  }\n");
+    }
+    let functions = module_functions(ctx, spec);
+    if !functions.is_empty() {
+        out.extend_from_slice(b"\n  - Functions {\n");
+        for f in functions {
+            let o = new_function_reflection(ctx, f)?;
+            let shown = fa_to_string(ctx, &o, &mut [])?;
+            out.extend_from_slice(indented(&text(&shown), "    ").as_bytes());
+        }
+        out.extend_from_slice(b"  }\n");
+    }
+    out.extend_from_slice(b"}\n");
+    Ok(Value::Str(PhpStr::from(&out[..])))
+}
+
+/// p8 has no Zend extensions (no OPcache, no Xdebug): none to reflect.
+fn rzx_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let name = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
+    Err(fail(ctx, format!("Zend Extension \"{}\" does not exist", String::from_utf8_lossy(name.as_bytes()))))
+}
+
+/// A ReflectionZendExtension made without its constructor holds nothing.
+fn rzx_unset(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Err(ctx.throw("Error", "Internal error: Failed to retrieve the reflection object".into()))
+}
+
+// ---------------------------------------------------------------------------
 // The class specs
 
 const NAME: (&str, Constant, Visibility) = ("name", Constant::Str(b""), Visibility::Public);
@@ -2191,6 +2426,7 @@ const FUNCTION_ABSTRACT: &[(&str, Option<Native>)] = &[
     ("getStaticVariables", Some(Native::Method(fa_get_static_variables))),
     ("getClosureThis", Some(Native::Method(fa_get_closure_this))),
     ("getExtensionName", Some(Native::Method(fa_get_extension_name))),
+    ("getExtension", Some(Native::Method(fa_get_extension))),
     ("__toString", Some(Native::Method(fa_to_string))),
     ("getClosureUsedVariables", Some(Native::Method(fa_get_closure_used_variables))),
     ("getClosureScopeClass", Some(Native::Method(fa_get_closure_scope_class))),
@@ -2321,6 +2557,7 @@ pub static CLASSES: &[ClassSpec] = &[
             ("getTraitNames", Some(Native::Method(rc_get_trait_names))),
             ("getTraits", Some(Native::Method(rc_get_traits))),
             ("getExtensionName", Some(Native::Method(rc_get_extension_name))),
+            ("getExtension", Some(Native::Method(rc_get_extension))),
         ],
         constants: &[
             ("IS_IMPLICIT_ABSTRACT", Constant::Int(16)),
@@ -2500,6 +2737,50 @@ pub static CLASSES: &[ClassSpec] = &[
         ],
         constants: &[("IS_PUBLIC", Constant::Int(1)), ("IS_PROTECTED", Constant::Int(2)), ("IS_PRIVATE", Constant::Int(4)), ("IS_FINAL", Constant::Int(32))],
         debug_info: Some(info_name_class),
+    },
+    ClassSpec {
+        name: "ReflectionExtension",
+        parent: None,
+        interfaces: &["Reflector"],
+        flags: 0,
+        properties: &[NAME, ("\0module", Constant::Null, PUBLIC)],
+        methods: &[
+            ("__construct", Some(Native::Method(rex_construct))),
+            ("__clone", Some(Native::Method(ra_clone))),
+            ("__toString", Some(Native::Method(rex_to_string))),
+            ("getName", Some(Native::Method(rex_get_name))),
+            ("getVersion", Some(Native::Method(rex_get_version))),
+            ("getFunctions", Some(Native::Method(rex_get_functions))),
+            ("getConstants", Some(Native::Method(rex_get_constants))),
+            ("getINIEntries", Some(Native::Method(rex_get_ini_entries))),
+            ("getClasses", Some(Native::Method(rex_get_classes))),
+            ("getClassNames", Some(Native::Method(rex_get_class_names))),
+            ("getDependencies", Some(Native::Method(rex_get_dependencies))),
+            ("info", Some(Native::Method(rex_info))),
+            ("isPersistent", Some(Native::Method(rex_is_persistent))),
+            ("isTemporary", Some(Native::Method(rex_is_temporary))),
+        ],
+        constants: &[],
+        debug_info: Some(info_name),
+    },
+    ClassSpec {
+        name: "ReflectionZendExtension",
+        parent: None,
+        interfaces: &["Reflector"],
+        flags: 0,
+        properties: &[NAME],
+        methods: &[
+            ("__construct", Some(Native::Method(rzx_construct))),
+            ("__clone", Some(Native::Method(ra_clone))),
+            ("__toString", Some(Native::Method(rzx_unset))),
+            ("getName", Some(Native::Method(rzx_unset))),
+            ("getVersion", Some(Native::Method(rzx_unset))),
+            ("getAuthor", Some(Native::Method(rzx_unset))),
+            ("getURL", Some(Native::Method(rzx_unset))),
+            ("getCopyright", Some(Native::Method(rzx_unset))),
+        ],
+        constants: &[],
+        debug_info: Some(info_name),
     },
     ClassSpec {
         name: "ReflectionReference",

@@ -91,8 +91,21 @@ impl Context<'_> {
     pub(crate) fn aa_write(&mut self, regs: &mut Vec<Value>, root: &Value, keys: &[Value], append: bool, op: DimOp) -> Result<Value, Throw> {
         let mut cur = root.deref();
         let walk = if append { keys.len() } else { keys.len() - 1 };
-        for k in &keys[..walk] {
+        for (i, k) in keys[..walk].iter().enumerate() {
             cur = match cur {
+                // An internal class whose read_dimension for writing gives the
+                // element itself (zend_weakmap_read_dimension,
+                // spl_array_get_dimension_ptr): what is under it is changed
+                // in place; one not there is the class's own error.
+                Value::Object(o) if writes_in_place(&o, &op) => {
+                    let mut entry = self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?.deref();
+                    if let Value::Object(_) = entry {
+                        return self.aa_write(regs, &entry, &keys[i + 1..], append, op);
+                    }
+                    let r = self.write_in(regs, &mut entry, &keys[i + 1..], append, op)?;
+                    self.aa_call(regs, &o, "offsetSet", &mut [k.clone(), entry])?;
+                    return Ok(r);
+                }
                 Value::Object(o) => {
                     let got = self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?;
                     match got.deref() {
@@ -142,13 +155,76 @@ impl Context<'_> {
         }
     }
 
+    /// The write `op` at `keys` inside `target` (an element an internal
+    /// container holds; see writes_in_place),
+    /// arrays made where there are none, as an assignment to a variable's
+    /// elements does; the expression's value.
+    fn write_in(&mut self, regs: &mut Vec<Value>, target: &mut Value, keys: &[Value], append: bool, op: DimOp) -> Result<Value, Throw> {
+        if matches!(target, Value::Null | Value::Undef) {
+            *target = Value::Array(Rc::new(p8_runtime::array::PhpArray::new()));
+        }
+        let Value::Array(a) = target else {
+            if let Value::Object(_) = target {
+                let obj = target.clone();
+                return self.aa_write(regs, &obj, keys, append, op);
+            }
+            return Err(self.throw("Error", "Cannot use a scalar value as an array"));
+        };
+        let arr = Rc::make_mut(a);
+        let last = if append { keys.len() + 1 } else { keys.len() };
+        if last > 1 {
+            let k = Key::from_value(&keys[0]).map_err(|_| self.throw("TypeError", "Illegal offset type"))?.0;
+            if arr.get(&k).is_none() {
+                arr.insert(k.clone(), Value::Null);
+            }
+            let mut inner = arr.get(&k).map(Value::deref).unwrap_or(Value::Null);
+            let r = self.write_in(regs, &mut inner, &keys[1..], append, op)?;
+            if let Value::Array(a) = target {
+                Rc::make_mut(a).insert(k, inner);
+            }
+            return Ok(r);
+        }
+        if append {
+            let DimOp::Set(v) = op else { return Err(self.throw("Error", "Cannot use [] for reading")) };
+            if arr.push(v.clone()).is_err() {
+                return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
+            }
+            return Ok(v);
+        }
+        let k = Key::from_value(&keys[0]).map_err(|_| self.throw("TypeError", "Illegal offset type"))?.0;
+        Ok(match op {
+            DimOp::Set(v) => {
+                arr.insert(k, v.clone());
+                v
+            }
+            DimOp::Op(op, v) => {
+                let old = arr.get(&k).map(Value::deref).unwrap_or(Value::Null);
+                let r = p8_runtime::ops::binary(op, &old, &v, &mut self.diags);
+                self.report_diags();
+                let new = r.map_err(|e| self.op_error(e))?;
+                arr.insert(k, new.clone());
+                new
+            }
+            DimOp::IncDec { inc, post } => {
+                let old = arr.get(&k).map(Value::deref).unwrap_or(Value::Null);
+                let r = if inc { p8_runtime::ops::increment(&old, &mut self.diags) } else { p8_runtime::ops::decrement(&old, &mut self.diags) };
+                self.report_diags();
+                let new = r.map_err(|e| self.op_error(e))?;
+                arr.insert(k, new.clone());
+                if post { old } else { new }
+            }
+            DimOp::Unset => {
+                arr.remove(&k);
+                Value::Null
+            }
+        })
+    }
+
     /// A nested write through an element offsetGet returned (not an
     /// object): it changes nothing.
     fn no_effect(&mut self, o: &Object, op: DimOp) -> Result<Value, Throw> {
-        if !matches!(op, DimOp::Unset) {
-            let message = format!("Indirect modification of overloaded element of {} has no effect", String::from_utf8_lossy(o.class.name.as_bytes()));
-            self.notice(&message);
-        }
+        let message = format!("Indirect modification of overloaded element of {} has no effect", String::from_utf8_lossy(o.class.name.as_bytes()));
+        self.notice(&message);
         Ok(match op {
             DimOp::Set(v) | DimOp::Op(_, v) => v,
             _ => Value::Null,
@@ -180,4 +256,16 @@ impl Context<'_> {
         }
         Ok(!matches!(cur, Value::Null | Value::Undef))
     }
+}
+
+/// Whether a write below `o[k]` changes the element `o` holds, as PHP's
+/// read_dimension for writing does for WeakMap, ArrayObject and
+/// ArrayIterator, unless a subclass's own offsetGet() answers (then it is
+/// the usual copy). WeakMap's unset reads plainly: nothing changes there.
+fn writes_in_place(o: &Object, op: &DimOp) -> bool {
+    let native_get = o.class.method(b"offsetget").is_some_and(|m| m.native.is_some());
+    if o.class.is_a(b"weakmap") {
+        return !matches!(op, DimOp::Unset);
+    }
+    native_get && (o.class.is_a(b"arrayobject") || o.class.is_a(b"arrayiterator"))
 }

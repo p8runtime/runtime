@@ -218,6 +218,10 @@ pub struct Class {
     /// `(int)`, `(float)`, arithmetic and comparisons with scalars read. None:
     /// no such cast.
     pub cast_string: Option<fn(&Object) -> PhpStr>,
+    /// `(int)` of its objects when the class casts to int itself (zend's
+    /// cast_object to IS_LONG: a CurlHandle is its object id). None: as
+    /// cast_string reads, else 1.
+    pub cast_int: Option<fn(&Object) -> i64>,
     /// The native state a clone gets (zend's clone_obj for internal
     /// classes): None shares the original's.
     pub clone_data: Option<CloneData>,

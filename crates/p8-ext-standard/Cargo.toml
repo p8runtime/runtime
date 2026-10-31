@@ -29,8 +29,8 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 # Host names: the system resolver's getnameinfo (reverse lookups), safely
 dns-lookup = "2"
 libc = "0.2"
-# getrusage(): the system call, safely (nix's wrapper; no C compiled)
-nix = { version = "0.30", default-features = false, features = ["resource"] }
+# getrusage() and php_uname(): the system calls, safely (nix's wrappers; no C compiled)
+nix = { version = "0.30", default-features = false, features = ["resource", "feature"] }
 # Dates: time zones (the IANA database, built in)
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
