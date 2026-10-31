@@ -398,8 +398,14 @@ impl Context<'_> {
                 }
                 statics.entry(k.clone()).or_insert((fresh, *visibility, lower.clone()));
             }
+            // A trait's constants are the using class's own (declared by
+            // it: its private ones are its to use, and reflection says so).
             for (k, c) in &t.constants {
-                constants.entry(k.clone()).or_insert_with(|| c.clone());
+                constants.entry(k.clone()).or_insert_with(|| {
+                    let mut c = c.clone();
+                    c.declaring_name = PhpStr::from(def.name.as_bytes());
+                    c
+                });
             }
         }
         // A class (or interface) with __toString() implements Stringable.
