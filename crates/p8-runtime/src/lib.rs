@@ -7,6 +7,7 @@ pub mod sort;
 pub mod args;
 pub mod array;
 pub mod ext;
+pub mod fast;
 pub mod frozen;
 pub mod gc;
 pub mod info;
@@ -14,6 +15,7 @@ pub mod number;
 pub mod numeric;
 pub mod object;
 pub mod ops;
+pub mod os;
 pub mod reflect;
 /// The builtins' declared signatures (for reflection).
 pub use p8_stubs as stubs;

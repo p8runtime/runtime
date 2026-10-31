@@ -7,11 +7,57 @@ use crate::state::{errno, notice, warn};
 use p8_runtime::ext::Ctx;
 use p8_runtime::stream::MAXPATHLEN;
 use std::fs::{File, OpenOptions};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
-use std::path::PathBuf;
+use p8_runtime::os::OsStrExt;
+use std::path::{Path, PathBuf};
 
 const FILE_PREFIX: &[u8] = b"sess_";
+
+/// open(path, O_CREAT | O_RDWR | O_NOFOLLOW, mode)
+#[cfg(unix)]
+fn open_nofollow(path: &Path, mode: u32) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new().read(true).write(true).create(true).mode(mode).custom_flags(libc::O_NOFOLLOW).open(path)
+}
+
+/// open(path, O_CREAT | O_RDWR | O_NOFOLLOW): WASI has no permission bits,
+/// and std reaches its no-follow lookup only through an unstable API, so a
+/// link is refused before the open, with O_NOFOLLOW's ELOOP (WASI's 32).
+#[cfg(target_os = "wasi")]
+fn open_nofollow(path: &Path, _mode: u32) -> std::io::Result<File> {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::from_raw_os_error(32));
+    }
+    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
+}
+
+/// pread(fd, buf, size, 0)
+#[cfg(unix)]
+fn read_at_start(file: &File, buf: &mut [u8]) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(file, buf, 0)
+}
+
+/// lseek(fd, 0, SEEK_SET) and read(), as mod_files does without pread
+/// (std reaches WASI's pread only through an unstable API).
+#[cfg(target_os = "wasi")]
+fn read_at_start(mut file: &File, buf: &mut [u8]) -> std::io::Result<()> {
+    use std::io::{Read, Seek};
+    file.seek(std::io::SeekFrom::Start(0))?;
+    file.read_exact(buf)
+}
+
+/// pwrite(fd, val, size, 0)
+#[cfg(unix)]
+fn write_at_start(file: &File, val: &[u8]) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, val, 0)
+}
+
+/// lseek(fd, 0, SEEK_SET) and write(), as mod_files does without pwrite.
+#[cfg(target_os = "wasi")]
+fn write_at_start(mut file: &File, val: &[u8]) -> std::io::Result<()> {
+    use std::io::{Seek, Write};
+    file.seek(std::io::SeekFrom::Start(0))?;
+    file.write_all(val)
+}
 
 /// ps_files
 pub(crate) struct Files {
@@ -70,7 +116,7 @@ pub(crate) fn open(ctx: &mut dyn Ctx, save_path: &[u8]) -> Option<Files> {
     let temp;
     let mut save_path = save_path;
     if save_path.is_empty() {
-        temp = std::env::temp_dir().into_os_string().into_encoded_bytes();
+        temp = p8_runtime::os::temp_dir().into_os_string().into_encoded_bytes();
         save_path = &temp;
     }
     // split up the parameter: at most two ';' parts before the path
@@ -129,7 +175,7 @@ impl Files {
         };
         self.last_key = Some(key.to_vec());
         // O_NOFOLLOW keeps us from following evil symlinks
-        match OpenOptions::new().read(true).write(true).create(true).mode(self.filemode).custom_flags(libc::O_NOFOLLOW).open(&path) {
+        match open_nofollow(&path, self.filemode) {
             Ok(file) => {
                 let _ = file.lock();
                 self.file = Some(file);
@@ -150,7 +196,7 @@ impl Files {
             return Some(Vec::new());
         }
         let mut buf = vec![0u8; size as usize];
-        match file.read_exact_at(&mut buf, 0) {
+        match read_at_start(file, &mut buf) {
             Ok(()) => Some(buf),
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 warn(ctx, "Read returned less bytes than requested");
@@ -173,7 +219,7 @@ impl Files {
         if (val.len() as u64) < self.st_size {
             let _ = file.set_len(0);
         }
-        match file.write_all_at(val, 0) {
+        match write_at_start(file, val) {
             Ok(()) => true,
             Err(e) => {
                 warn(ctx, &format!("Write failed: {}", errno(&e)));

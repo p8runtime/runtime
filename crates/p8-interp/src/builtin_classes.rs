@@ -10,7 +10,7 @@ use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::object::{CLASS_INTERFACE, Class, Method, Native, NativeMethod, Object, Property, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::collections::HashMap;
+use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 
 pub(crate) type Classes = HashMap<Vec<u8>, Rc<Class>>;
@@ -56,7 +56,7 @@ fn declare(
             None => props.push(p),
         }
     }
-    let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
     for (i, p) in props.iter().enumerate() {
         slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
     }
@@ -86,7 +86,7 @@ fn declare(
         slots,
         methods: table,
         constants,
-        statics: HashMap::new(),
+        statics: HashMap::default(),
         debug_info: None,
         get_properties: inherited_props,
         cast_bool: inherited_bool,
@@ -154,7 +154,7 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
 ];
 
 pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
-    let mut c = Classes::new();
+    let mut c = Classes::default();
     // #[AllowDynamicProperties], which its subclasses inherit.
     declare(&mut c, "stdClass", p8_runtime::object::CLASS_ALLOW_DYNAMIC, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);

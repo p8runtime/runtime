@@ -93,6 +93,10 @@ pub const EXTENSION: Extension = Extension { name: "standard", register };
 /// The PHP release p8 reports (PHP_VERSION).
 pub const PHP_VERSION: &str = "8.4.27";
 
+/// Whether this is a debug build (ZEND_DEBUG): PHP_DEBUG, ZEND_DEBUG_BUILD
+/// and phpinfo()'s "Debug Build" all report it.
+pub const DEBUG_BUILD: bool = cfg!(debug_assertions);
+
 /// The constants examples/gen_defaults.php leaves out because they describe
 /// the build and the host rather than PHP: here, p8's own. The version is
 /// the release whose php-src suite p8 is measured against.
@@ -113,9 +117,9 @@ const HOST_CONSTANTS: &[(&str, Constant)] = &[
     ("PHP_FD_SETSIZE", Constant::Int(1024)),
     ("PHP_SHLIB_SUFFIX", Constant::Str(b"so")),
     ("PHP_ZTS", Constant::Bool(false)),
-    ("PHP_DEBUG", Constant::Bool(false)),
+    ("PHP_DEBUG", Constant::Bool(DEBUG_BUILD)),
     ("ZEND_THREAD_SAFE", Constant::Bool(false)),
-    ("ZEND_DEBUG_BUILD", Constant::Bool(false)),
+    ("ZEND_DEBUG_BUILD", Constant::Bool(DEBUG_BUILD)),
 ];
 
 fn register(registry: &mut Registry) {

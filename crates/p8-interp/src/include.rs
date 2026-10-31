@@ -72,7 +72,7 @@ impl Context<'_> {
             }
             return self.include_failed(kind, &shown, &include_path);
         };
-        let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let real = p8_runtime::os::canonicalize(&path).unwrap_or_else(|_| path.clone());
         if kind.once() && self.included.contains(&real) {
             return Ok(None);
         }
@@ -185,7 +185,7 @@ impl Context<'_> {
             c.extend(Path::new(&*current).parent().map(|d| d.join(name)));
             c
         };
-        candidates.into_iter().find_map(|p| std::fs::canonicalize(p).ok())
+        candidates.into_iter().find_map(|p| p8_runtime::os::canonicalize(p).ok())
     }
 
     /// eval(): the code compiled, its functions and classes declared. A

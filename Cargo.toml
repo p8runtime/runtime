@@ -128,6 +128,11 @@ name = "php-test"
 path = "src/bin/php-test.rs"
 required-features = ["cli"]
 
+[[bin]]
+name = "php-perf"
+path = "src/bin/php-perf.rs"
+required-features = ["cli"]
+
 [features]
 # The default build is pure Rust: no C library is compiled or linked
 # (SECURITY.md). Features that need C are opt-in and listed below it.
@@ -165,3 +170,11 @@ router = [
 # modules: whole-program optimization lets them inline into one another.
 lto = "fat"
 codegen-units = 1
+
+# php2 for wasm32-wasip1 (packages/vite-plugin-p8): release, optimized for
+# size and without its symbol names, so the module a host downloads and
+# compiles is smaller; the native release profile is left as it is.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+strip = true

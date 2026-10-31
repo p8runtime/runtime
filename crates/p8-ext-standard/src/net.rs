@@ -8,7 +8,9 @@ use p8_runtime::array::PhpArray;
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+#[cfg(unix)]
+use std::net::SocketAddr;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
@@ -33,8 +35,15 @@ fn path_arg(ctx: &mut dyn Ctx, args: &[Value], func: &str, name: &str) -> Result
     Ok(String::from_utf8_lossy(v.as_bytes()).into_owned())
 }
 
+#[cfg(unix)]
 fn gethostname(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(dns_lookup::get_hostname().map_or(Value::Bool(false), Value::str))
+}
+
+/// gethostname() on WASI: wasi-libc's, uname()'s node name.
+#[cfg(target_os = "wasi")]
+fn gethostname(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::str(crate::phpinfo::WASI_UNAME[1]))
 }
 
 /// The IPv4 addresses `name` resolves to, in the resolver's order.
@@ -82,11 +91,23 @@ fn gethostbyaddr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         ctx.warn("gethostbyaddr(): Address is not a valid IPv4 or IPv6 address");
         return Ok(Value::Bool(false));
     };
-    // NI_NAMEREQD: no name is a failure, not the address as text.
-    match dns_lookup::getnameinfo(&SocketAddr::new(addr, 0), libc::NI_NAMEREQD) {
-        Ok((name, _)) => Ok(Value::str(name)),
-        Err(_) => Ok(Value::str(ip)),
+    match reverse(addr) {
+        Some(name) => Ok(Value::str(name)),
+        None => Ok(Value::str(ip)),
     }
+}
+
+/// The name an address reverses to.
+#[cfg(unix)]
+fn reverse(addr: IpAddr) -> Option<String> {
+    // NI_NAMEREQD: no name is a failure, not the address as text.
+    dns_lookup::getnameinfo(&SocketAddr::new(addr, 0), libc::NI_NAMEREQD).ok().map(|(name, _)| name)
+}
+
+/// The name an address reverses to: WASI has no resolver, so none.
+#[cfg(target_os = "wasi")]
+fn reverse(_: IpAddr) -> Option<String> {
+    None
 }
 
 /// inet_pton($ip): the address in binary (4 or 16 bytes), false when it is

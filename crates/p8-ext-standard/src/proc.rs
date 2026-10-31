@@ -15,8 +15,7 @@ use p8_runtime::string::PhpStr;
 use p8_runtime::user_stream;
 use p8_runtime::value::Value;
 use std::cell::{Cell, RefCell};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::ExitStatusExt;
+use p8_runtime::os::OsStrExt;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::Duration;
@@ -175,7 +174,7 @@ fn proc_get_status(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let status = child.try_wait().ok().flatten();
     let (running, signaled, termsig, mut exitcode) = match status {
         None => (true, false, 0, -1),
-        Some(st) => (false, st.signal().is_some(), st.signal().map_or(0, i64::from), st.code().map_or(-1, i64::from)),
+        Some(st) => (false, p8_runtime::os::exit_signal(&st).is_some(), p8_runtime::os::exit_signal(&st).map_or(0, i64::from), st.code().map_or(-1, i64::from)),
     };
     if !running {
         if reported {

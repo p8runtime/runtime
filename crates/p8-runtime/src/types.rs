@@ -17,6 +17,9 @@ pub use p8_stubs::{T_ARRAY, T_BOOL, T_CALLABLE, T_FALSE, T_FLOAT, T_INT, T_MIXED
 pub struct TypeDecl {
     pub mask: u32,
     pub classes: Vec<Text>,
+    /// `classes` lowercased, as checks compare them (zend_compile_typename
+    /// lowercases the names in a function's arg_info once, at compile time).
+    pub lower: Vec<Text>,
     /// The class names as written (`self` stays `self`), for messages.
     pub written: Vec<Text>,
     /// `A&B`: the classes all apply (else any one does).
@@ -33,6 +36,11 @@ pub enum Verdict {
 }
 
 impl TypeDecl {
+    pub fn new(mask: u32, classes: Vec<Text>, written: Vec<Text>, intersection: bool) -> TypeDecl {
+        let lower = classes.iter().map(|c| Text::from(c.as_bytes().to_ascii_lowercase().as_slice())).collect();
+        TypeDecl { mask, classes, lower, written, intersection }
+    }
+
     /// As PHP prints it for a property (`self` as written).
     pub fn shown(&self) -> String {
         self.render(&self.written)
@@ -71,8 +79,8 @@ impl TypeDecl {
                 self.mask & T_OBJECT != 0
                     || self.mask & T_STATIC != 0 && static_ok(o)
                     || !self.classes.is_empty() && {
-                        let hit = |c: &Text| is_a(o, &c.as_bytes().to_ascii_lowercase());
-                        if self.intersection { self.classes.iter().all(hit) } else { self.classes.iter().any(hit) }
+                        let hit = |c: &Text| is_a(o, c.as_bytes());
+                        if self.intersection { self.lower.iter().all(hit) } else { self.lower.iter().any(hit) }
                     }
             }
             Value::Ref(_) => false,

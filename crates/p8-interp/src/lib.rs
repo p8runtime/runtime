@@ -27,9 +27,9 @@ use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -42,13 +42,142 @@ pub struct Closure {
     code: Arc<Function>,
     consts: Box<[Value]>,
     sites: Box<[OnceCell<Callee>]>,
+    /// Where `$o->name` found its property last, one entry per constant
+    /// (the name is one): PHP's runtime cache slot of FETCH_OBJ_R.
+    props: Box<[Cell<PropSite>]>,
+    /// What `$o->m()` called last, one entry per call site: PHP's cache
+    /// slot of INIT_METHOD_CALL.
+    methods: Box<[RefCell<Option<MethodSite>>]>,
 }
 
 impl Closure {
     fn new(code: Arc<Function>) -> Rc<Closure> {
         let consts = code.consts.iter().map(|c| c.to_value()).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
-        Rc::new(Closure { code, consts, sites })
+        let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
+        let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
+        Rc::new(Closure { code, consts, sites, props, methods })
+    }
+}
+
+/// A property read's cache entry: objects of `class` (its address), read
+/// from code in `scope` (0: any, for a public property), keep it at `slot`.
+/// What it skips on a hit is the name lookup and the visibility check, as
+/// PHP's does (zend_fetch_property_address / FETCH_OBJ_R's CACHED_PTR).
+#[derive(Clone, Copy, Default)]
+struct PropSite {
+    class: usize,
+    scope: usize,
+    slot: u32,
+}
+
+/// A method call's cache entry: on an object of `class` (its address),
+/// from code in `scope`, the call runs this code with this declaring class.
+/// Held weakly, so the cache keeps no function or class alive (a method
+/// calling itself would otherwise hold its own code).
+struct MethodSite {
+    class: usize,
+    scope: usize,
+    code: MethodCode,
+    declaring: std::rc::Weak<Class>,
+    is_static: bool,
+}
+
+enum MethodCode {
+    User(std::rc::Weak<Closure>),
+    Native(p8_runtime::object::Native, PhpStr),
+}
+
+/// A property read the cache answers: the same class, a scope that may
+/// see it, an object not lazy, and a value there (an unset one takes the
+/// full path: its warning, __get).
+#[inline]
+fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<Value> {
+    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+        return None;
+    }
+    match o.slots.borrow().get(site.slot as usize)? {
+        Value::Undef => None,
+        Value::Ref(cell) => Some(cell.borrow().clone()),
+        v => Some(v.clone()),
+    }
+}
+
+/// The declared slot a property write the cache answers goes to: as for
+/// a read; an unset slot only in a class without __set and its kin (writing
+/// one there may be theirs).
+#[inline]
+fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<usize> {
+    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+        return None;
+    }
+    let slot = site.slot as usize;
+    let unset = matches!(o.slots.borrow().get(slot)?, Value::Undef);
+    (!unset || o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0).then_some(slot)
+}
+
+impl Context<'_> {
+    /// The running code's class (its address; 0 outside one): what a
+    /// private or protected property's cache entry is valid for.
+    #[inline]
+    fn scope_addr(&self) -> usize {
+        self.frames.last().and_then(|f| f.scope.as_ref()).map_or(0, |c| Rc::as_ptr(c) as usize)
+    }
+
+    /// The frame a cached method call makes: the same class from the same
+    /// scope, and its code and declaring class still there.
+    #[inline]
+    fn cached_method(&self, site: &RefCell<Option<MethodSite>>, o: &Rc<p8_runtime::object::Object>) -> Option<crate::classes::MethodFrame> {
+        let site = site.borrow();
+        let s = site.as_ref()?;
+        if s.class != Rc::as_ptr(&o.class) as usize || s.scope != self.scope_addr() {
+            return None;
+        }
+        let declaring = s.declaring.upgrade()?;
+        let func = match &s.code {
+            MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
+            MethodCode::Native(n, name) => crate::classes::Code::Native(*n, name.clone()),
+        };
+        let this = (!s.is_static).then(|| Rc::clone(o));
+        Some(crate::classes::MethodFrame::method(func, this, declaring, Rc::clone(&o.class)))
+    }
+
+    /// After a full method lookup: remember an ordinary call (the object's
+    /// own class's method, not __call or a forwarded inner iterator's).
+    fn remember_method(&self, site: &RefCell<Option<MethodSite>>, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
+        let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
+        let on_this = m.this.as_ref().is_none_or(|t| Rc::ptr_eq(t, o));
+        if m.trampoline.is_some() || !own_class || !on_this || !m.captured.is_empty() {
+            return;
+        }
+        let Some(declaring) = &m.scope else { return };
+        let code = match &m.func {
+            crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone()),
+        };
+        *site.borrow_mut() = Some(MethodSite {
+            class: Rc::as_ptr(&o.class) as usize,
+            scope: self.scope_addr(),
+            code,
+            declaring: Rc::downgrade(declaring),
+            is_static: m.this.is_none(),
+        });
+    }
+
+    /// After a full property read: remember where a declared, visible,
+    /// hookless property of this class is, for the next read here.
+    fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, name: &Value) {
+        let Value::Str(name) = name else { return };
+        let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes()) else { return };
+        if prop.hooks != 0 {
+            return;
+        }
+        // Any scope may use a public property's entry, unless a parent's
+        // private one of the same name is there too (which one a scope
+        // sees then depends on it).
+        let shared = o.class.slots.get(name.as_bytes()).is_some_and(|slots| slots.len() == 1);
+        let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { self.scope_addr() };
+        site.set(PropSite { class: Rc::as_ptr(&o.class) as usize, scope, slot: slot as u32 });
     }
 }
 
@@ -1144,10 +1273,10 @@ impl Isolate {
             stop,
             isolate: self,
             frames: Frames::default(),
-            functions: HashMap::new(),
+            functions: HashMap::default(),
             closures: Vec::new(),
             constants: indexmap::IndexMap::new(),
-            globals: indexmap::IndexMap::new(),
+            globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
             out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false },
             request: None,
@@ -1155,16 +1284,16 @@ impl Isolate {
             carry: None,
             output_start: None,
             diags: Vec::new(),
-            ini: HashMap::new(),
+            ini: HashMap::default(),
             error_level: E_DEFAULT,
             display_errors: true,
             pc: 0,
             classes,
             failed_call: None,
             class_defs: Vec::new(),
-            declared: HashMap::new(),
-            class_origins: HashMap::new(),
-            defs_by_name: HashMap::new(),
+            declared: HashMap::default(),
+            class_origins: HashMap::default(),
+            defs_by_name: HashMap::default(),
             declared_order: Vec::new(),
             binding_file: None,
             loader: None,
@@ -1172,17 +1301,17 @@ impl Isolate {
             included_order: Vec::new(),
             ids,
             native_class: None,
-            ext_state: HashMap::new(),
+            ext_state: HashMap::default(),
             ended_globals: Vec::new(),
-            resource_classes: HashMap::new(),
+            resource_classes: HashMap::default(),
             resource_ids,
-            enum_objects: HashMap::new(),
+            enum_objects: HashMap::default(),
             resolved: std::collections::HashSet::new(),
             stack_base: 0,
             ref_wanted: Vec::new(),
             named_extra: None,
-            class_defaults: HashMap::new(),
-            const_cache: HashMap::new(),
+            class_defaults: HashMap::default(),
+            const_cache: HashMap::default(),
             const_evaluating: Vec::new(),
             autoloaders: Vec::new(),
             autoload_tried: std::collections::HashSet::new(),
@@ -1191,18 +1320,18 @@ impl Isolate {
             exception_handlers: Vec::new(),
             shutdown: Vec::new(),
             shutdown_names: Vec::new(),
-            ext_data: HashMap::new(),
+            ext_data: HashMap::default(),
             request_end: false,
             deprecated_made: Default::default(),
             pending_errors: Vec::new(),
             last_error: None,
             in_handler: false,
             arg_buf: Vec::new(),
-            lambdas: HashMap::new(),
+            lambdas: HashMap::default(),
             natives: Vec::new(),
             native_args: Vec::new(),
             running_builtin: None,
-            statics: HashMap::new(),
+            statics: HashMap::default(),
             magic_guard: Vec::new(),
             result_reg: 0,
             header_throw: None,
@@ -1214,7 +1343,7 @@ impl Isolate {
             gc_runs: 0,
             gc_collected: 0,
             cfg: Vec::new(),
-            ini_master: HashMap::new(),
+            ini_master: HashMap::default(),
             disabled: std::collections::HashSet::new(),
             argv: None,
             started: std::time::Instant::now(),
@@ -1240,7 +1369,7 @@ pub struct Context<'i> {
     constants: indexmap::IndexMap<Vec<u8>, Value>,
     /// Globals not held in the main frame's registers.
     /// In the order made, as PHP's symbol table ($GLOBALS, get_defined_vars).
-    globals: indexmap::IndexMap<Vec<u8>, Rc<RefCell<Value>>>,
+    globals: p8_runtime::fast::IndexMap<Vec<u8>, Rc<RefCell<Value>>>,
     /// The main script's variables by name (its code, identified by its
     /// address): superglobal uses look a global up each time, as PHP does
     /// in its symbol table.
@@ -1858,7 +1987,7 @@ impl Context<'_> {
 
     /// Run a file's top-level code; returns the exit status.
     pub fn run_main(&mut self, main: Arc<Function>) -> i32 {
-        if let Ok(path) = std::fs::canonicalize(&*main.file) {
+        if let Ok(path) = p8_runtime::os::canonicalize(&*main.file) {
             self.included_order.push(path.to_string_lossy().into_owned());
             self.included.insert(path);
         }
@@ -3611,6 +3740,14 @@ impl Context<'_> {
                 },
                 Instr::FetchProp { dst, obj, name, quiet } => {
                     let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
+                    // The name's constant: its cache entry.
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
+                    {
+                        reg!(dst) = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
@@ -3646,10 +3783,23 @@ impl Context<'_> {
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
+                    if let (Some(site), Value::Object(o)) = (site, &target) {
+                        self.remember_prop(site, o, &name);
+                    }
                 }
                 Instr::AssignProp { obj, name, val, dst } => {
                     let target = self.operand(w, func, obj);
                     let v = self.operand(w, func, val);
+                    // The name's constant: the same cache entry reads use.
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                        && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
+                    {
+                        let (o, pname) = (Rc::clone(o), pname.clone());
+                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, v.clone())?;
+                        reg!(dst) = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
@@ -3668,11 +3818,31 @@ impl Context<'_> {
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     self.write_prop(&target, &name, v.clone())?;
+                    // A site already holding this class missed for another
+                    // reason (an unset slot with __set): looking again finds the same.
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && site.get().class != Rc::as_ptr(&o.class) as usize
+                    {
+                        self.remember_prop(site, o, &name);
+                    }
                     reg!(dst) = v;
                 }
                 Instr::AssignPropOp { op, obj, name, val, dst } => {
                     let target = self.operand(w, func, obj);
                     let y = self.operand(w, func, val);
+                    // The name's constant: the cache entry reads and writes use.
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                        && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
+                    {
+                        let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
+                        let r = ops::binary(op, &x, &y, &mut self.diags);
+                        self.report_diags();
+                        let v = r.map_err(|e| self.op_error(e))?;
+                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, v.clone())?;
+                        reg!(dst) = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
@@ -3702,10 +3872,27 @@ impl Context<'_> {
                     self.report_diags();
                     let v = r.map_err(|e| self.op_error(e))?;
                     self.write_prop(&target, &name, v.clone())?;
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && site.get().class != Rc::as_ptr(&o.class) as usize
+                    {
+                        self.remember_prop(site, o, &name);
+                    }
                     reg!(dst) = v;
                 }
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
                     let target = self.operand(w, func, obj);
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                        && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
+                    {
+                        let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
+                        let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
+                        self.report_diags();
+                        let new = r.map_err(|e| self.op_error(e))?;
+                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, new.clone())?;
+                        reg!(dst) = if post { old } else { new };
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
@@ -3735,6 +3922,11 @@ impl Context<'_> {
                     self.report_diags();
                     let new = r.map_err(|e| self.op_error(e))?;
                     self.write_prop(&target, &name, new.clone())?;
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && site.get().class != Rc::as_ptr(&o.class) as usize
+                    {
+                        self.remember_prop(site, o, &name);
+                    }
                     reg!(dst) = if post { old } else { new };
                 }
                 Instr::AssignPropDim { op, base: at, n, append, val, dst } => {
@@ -3844,8 +4036,16 @@ impl Context<'_> {
                     if is_temp(func, obj) {
                         clear(&mut reg!(obj));
                     }
+                    if let Value::Object(o) = &target
+                        && let Some(m) = self.cached_method(&clo.methods[method as usize], o)
+                    {
+                        return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                    }
                     let site = &func.sites[method as usize];
                     let m = self.method_frame(&target, site.name.as_bytes(), site.display.as_bytes())?;
+                    if let Value::Object(o) = &target {
+                        self.remember_method(&clo.methods[method as usize], o, &m);
+                    }
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::StaticCall { dst, class, method, base: args, argc } => {
@@ -4292,10 +4492,10 @@ impl Context<'_> {
                     parent: None,
                     interfaces: Vec::new(),
                     properties: Vec::new(),
-                    slots: HashMap::new(),
+                    slots: HashMap::default(),
                     methods: Default::default(),
-                    constants: p8_runtime::object::Constants::new(),
-                    statics: HashMap::new(),
+                    constants: p8_runtime::object::Constants::default(),
+                    statics: HashMap::default(),
                     debug_info: None,
                     get_properties: None,
                     cast_bool: None,

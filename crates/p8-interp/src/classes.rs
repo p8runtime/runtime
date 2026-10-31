@@ -17,7 +17,7 @@ use p8_runtime::object::{
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -306,7 +306,7 @@ impl Context<'_> {
         // Traits: their methods (the class's own win, then theirs over
         // the parent's), properties, statics and constants, as the class's.
         let own: Vec<Vec<u8>> = def.methods.iter().map(|m| m.func.name.as_bytes().to_ascii_lowercase()).collect();
-        let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::new();
+        let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::default();
         let mut trait_order: Vec<Vec<u8>> = Vec::new();
         for tname in &def.traits {
             let t = self.lookup_class(tname)?;
@@ -472,7 +472,7 @@ impl Context<'_> {
                 );
             }
         }
-        let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+        let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
         for (i, p) in properties.iter().enumerate() {
             slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
         }
@@ -546,7 +546,7 @@ impl Context<'_> {
         }
         // PHP's order: the class's own methods, the inherited ones, then
         // the traits' (get_class_methods, reflection).
-        let mut ordered = p8_runtime::object::Methods::with_capacity(methods.len());
+        let mut ordered = p8_runtime::object::Methods::with_capacity_and_hasher(methods.len(), Default::default());
         for key in &own {
             if let Some(m) = methods.shift_remove(key) {
                 ordered.insert(key.clone(), m);
@@ -885,10 +885,12 @@ impl Context<'_> {
 
     /// The declared slot (or None: dynamic) of property `name` on
     /// `object`, after the visibility check for code in the current scope.
-    fn prop_slot(&self, object: &Object, name: &[u8]) -> Result<Option<(usize, Property)>, Throw> {
+    pub(crate) fn prop_slot<'o>(&self, object: &'o Object, name: &[u8]) -> Result<Option<(usize, &'o Property)>, Throw> {
         let scope = self.scope().0;
         let Some(slot) = object.class.slot(name, scope.as_ref().map(|s| s.lower.as_slice())) else { return Ok(None) };
-        let prop = object.class.properties[slot].clone();
+        // Borrowed from the class: a property read must not copy its
+        // declaration (and the declaring name's allocation) each time.
+        let prop = &object.class.properties[slot];
         let declaring = self.declaring(&object.class, &prop.declaring);
         if !visible(prop.visibility, &declaring, scope.as_deref()) {
             // A parent's private property is invisible here: as if absent.
@@ -1097,45 +1099,7 @@ impl Context<'_> {
         let name = self.prop_name(name)?;
         let object = self.target_object(target, &name, "assign")?;
         match self.prop_slot(&object, name.as_bytes())? {
-            Some((slot, prop)) => {
-                // Who may initialize a readonly property is its set
-                // visibility's business (implicitly protected(set)).
-                if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) {
-                    return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(&name))));
-                }
-                if prop.set_visibility.is_some() && !self.may_set(&object, &prop) {
-                    return Err(self.set_visibility_error(&prop, "modify"));
-                }
-                // A typed property: the value checked (and converted) by the
-                // writing code's strict_types.
-                let value = match &prop.ty_decl {
-                    Some(ty) => {
-                        let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
-                        match self.check_type(ty, &value, strict) {
-                            Ok(Some(converted)) => converted,
-                            Ok(None) => value,
-                            Err(()) => {
-                                return Err(self.throw(
-                                    "TypeError",
-                                    format!(
-                                        "Cannot assign {} to property {}::${} of type {}",
-                                        p8_runtime::args::value_name(&value),
-                                        text(&prop.declaring_name),
-                                        text(&name),
-                                        ty.shown()
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    None => value,
-                };
-                let mut slots = object.slots.borrow_mut();
-                match &slots[slot] {
-                    Value::Ref(cell) => *cell.borrow_mut() = value,
-                    _ => slots[slot] = value,
-                }
-            }
+            Some((slot, prop)) => self.write_slot(&object, slot, prop, &name, value)?,
             None => {
                 let key = Key::from_string(name.clone());
                 let exists = object.dynamic.borrow().contains_key(&key);
@@ -1149,6 +1113,51 @@ impl Context<'_> {
                 }
                 object.dynamic.borrow_mut().insert(key, value);
             }
+        }
+        Ok(())
+    }
+
+
+    /// Store `value` in declared property `slot` of `object` (`prop`, named
+    /// `name`): its readonly and set-visibility rules and its type checked,
+    /// as zend_std_write_property does once it has the property's offset.
+    pub(crate) fn write_slot(&mut self, object: &Object, slot: usize, prop: &Property, name: &PhpStr, value: Value) -> Result<(), Throw> {
+        // Who may initialize a readonly property is its set
+        // visibility's business (implicitly protected(set)).
+        if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) {
+            return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(name))));
+        }
+        if prop.set_visibility.is_some() && !self.may_set(object, prop) {
+            return Err(self.set_visibility_error(prop, "modify"));
+        }
+        // A typed property: the value checked (and converted) by the
+        // writing code's strict_types.
+        let value = match &prop.ty_decl {
+            Some(ty) => {
+                let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
+                match self.check_type(ty, &value, strict) {
+                    Ok(Some(converted)) => converted,
+                    Ok(None) => value,
+                    Err(()) => {
+                        return Err(self.throw(
+                            "TypeError",
+                            format!(
+                                "Cannot assign {} to property {}::${} of type {}",
+                                p8_runtime::args::value_name(&value),
+                                text(&prop.declaring_name),
+                                text(name),
+                                ty.shown()
+                            ),
+                        ));
+                    }
+                }
+            }
+            None => value,
+        };
+        let mut slots = object.slots.borrow_mut();
+        match &slots[slot] {
+            Value::Ref(cell) => *cell.borrow_mut() = value,
+            _ => slots[slot] = value,
         }
         Ok(())
     }
@@ -1492,13 +1501,13 @@ impl Context<'_> {
     /// the converted value, Ok(None) as it is, Err a TypeError's case.
     /// (A deprecation it brings is reported here.)
     pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, ()> {
-        let (scope, called) = self.scope();
+        let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
         let is_a = |o: &Object, name: &[u8]| match name {
-            b"self" => scope.as_ref().is_some_and(|s| o.class.is_a(&s.lower)),
-            b"parent" => scope.as_ref().and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
+            b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
+            b"parent" => scope.and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
             n => o.class.is_a(n),
         };
-        let static_ok = |o: &Object| called.as_ref().is_some_and(|c| o.class.is_a(&c.lower));
+        let static_ok = |o: &Object| called.is_some_and(|c| o.class.is_a(&c.lower));
         let verdict = ty.verify(v, strict, &is_a, &static_ok);
         match verdict {
             p8_runtime::types::Verdict::Accepted(c) => Ok(c),
@@ -1530,7 +1539,9 @@ impl Context<'_> {
         let caller = (n >= 2 && n - 1 > self.frames.floor.saturating_sub(1)).then(|| &self.frames.slots[n - 2]);
         let from_native = self.natives.iter().any(|x| x.depth == n - 1);
         let strict = !from_native && caller.is_some_and(|c| c.func.code.strict);
-        let called_at = match caller {
+        // Where the call was made, for a TypeError's message: only once a
+        // check fails (the frames are as they were here by then).
+        let called_at = |cx: &Self| match (n >= 2 && n - 1 > cx.frames.floor.saturating_sub(1)).then(|| &cx.frames.slots[n - 2]) {
             Some(c) if !from_native => {
                 let line = c.func.code.lines.get((c.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
                 Some((Rc::<str>::from(&*c.func.code.file), line))
@@ -1556,7 +1567,7 @@ impl Context<'_> {
                                 Key::Int(j) => i as i64 + j + 1,
                                 Key::Str(_) => i as i64 + 1,
                             };
-                            return Err(self.arg_type_error(pos as usize, None, ty, &v.deref(), called_at.clone()));
+                            return Err(self.arg_type_error(pos as usize, None, ty, &v.deref(), called_at(self)));
                         }
                     }
                 }
@@ -1571,7 +1582,7 @@ impl Context<'_> {
                 Ok(converted) => converted,
                 Err(()) => match self.stringable(regs, ty, &v, strict)? {
                     Some(s) => Some(s),
-                    None => return Err(self.arg_type_error(i + 1, Some(&p.name), ty, &v, called_at)),
+                    None => return Err(self.arg_type_error(i + 1, Some(&p.name), ty, &v, called_at(self))),
                 },
             };
             if let Some(converted) = converted {

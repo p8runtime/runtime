@@ -11,7 +11,7 @@ use p8_runtime::stream::{Target, resource, resource_of};
 use p8_runtime::user_stream::{self, Located, Stat};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::os::unix::fs::MetadataExt;
+use p8_runtime::os::MetadataExt;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
@@ -142,7 +142,7 @@ fn os_error(e: &std::io::Error) -> String {
 
 fn symlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (target, link) = (path(args), String::from_utf8_lossy(str_arg(args, 1).as_bytes()).into_owned());
-    match std::os::unix::fs::symlink(&target, &link) {
+    match p8_runtime::os::symlink(&target, &link) {
         Ok(()) => Ok(Value::Bool(true)),
         Err(e) => {
             ctx.warn(&format!("symlink(): {}", os_error(&e)));
@@ -328,7 +328,7 @@ fn change_owner(ctx: &mut dyn Ctx, args: &mut [Value], func: &str, group: bool, 
     let id = if group { id_of(ctx, func, &arg(args, 1), "/etc/group", "gid") } else { id_of(ctx, func, &arg(args, 1), "/etc/passwd", "uid") };
     let Some(id) = id else { return Ok(Value::Bool(false)) };
     let (uid, gid) = if group { (None, Some(id)) } else { (Some(id), None) };
-    let r = if link { std::os::unix::fs::lchown(&path, uid, gid) } else { std::os::unix::fs::chown(&path, uid, gid) };
+    let r = if link { p8_runtime::os::lchown(&path, uid, gid) } else { p8_runtime::os::chown(&path, uid, gid) };
     match r {
         Ok(()) => Ok(Value::Bool(true)),
         Err(e) => {
