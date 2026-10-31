@@ -1,0 +1,95 @@
+object(Foo)#1 (7) {
+  ["count"]=>
+  int(0)
+  ["name"]=>
+  string(3) "foo"
+  ["items"]=>
+  array(0) {
+  }
+  ["bar"]=>
+  object(Bar)#2 (1) {
+    ["n"]=>
+    int(0)
+  }
+  ["late"]=>
+  uninitialized(int)
+  ["ro"]=>
+  int(3)
+  ["id"]=>
+  string(1) "g"
+  ["promoted"]=>
+  int(1)
+}
+\Foo::__set_state(array(
+   'count' => 0,
+   'name' => 'foo',
+   'items' => 
+  array (
+  ),
+   'bar' => 
+  \Bar::__set_state(array(
+     'n' => 0,
+  )),
+   'ro' => 3,
+   'id' => 'g',
+   'promoted' => 1,
+))
+Foo Object
+(
+    [count] => 0
+    [name] => foo
+    [items] => Array
+        (
+        )
+
+    [bar] => Bar Object
+        (
+            [n] => 0
+        )
+
+    [ro] => 3
+    [id] => g
+    [promoted] => 1
+)
+
+array(7) {
+  ["count"]=>
+  int(0)
+  ["name"]=>
+  string(3) "foo"
+  ["items"]=>
+  array(0) {
+  }
+  ["bar"]=>
+  object(Bar)#2 (1) {
+    ["n"]=>
+    int(0)
+  }
+  ["ro"]=>
+  int(3)
+  ["id"]=>
+  string(1) "g"
+  ["promoted"]=>
+  int(1)
+}
+array(7) {
+  ["count"]=>
+  int(0)
+  ["name"]=>
+  string(3) "foo"
+  ["items"]=>
+  array(0) {
+  }
+  ["bar"]=>
+  object(Bar)#2 (1) {
+    ["n"]=>
+    int(0)
+  }
+  ["ro"]=>
+  int(3)
+  ["id"]=>
+  string(1) "g"
+  ["promoted"]=>
+  int(1)
+}
+{"count":0,"name":"foo","items":[],"bar":{"n":0},"ro":3,"id":"g","promoted":1}

@@ -472,6 +472,44 @@ fn visibility_of(c: &Compiler, modifiers: &[p8_syntax::lexer::token::Token]) -> 
     })
 }
 
+/// A property's set visibility as written (`private(set)`). Two are a
+/// fatal error, as zend_add_member_modifier reports them.
+fn set_visibility_of(c: &Compiler, modifiers: &[p8_syntax::lexer::token::Token]) -> Result<Option<Visibility>> {
+    use p8_syntax::lexer::token::TokenKind;
+    let mut found = None;
+    for m in modifiers {
+        let v = match m.kind {
+            TokenKind::PublicSet => Visibility::Public,
+            TokenKind::ProtectedSet => Visibility::Protected,
+            TokenKind::PrivateSet => Visibility::Private,
+            _ => continue,
+        };
+        if found.is_some() {
+            return Err(CompileError { message: "Multiple access type modifiers are not allowed".into(), line: c.line(m.span) });
+        }
+        found = Some(v);
+    }
+    Ok(found)
+}
+
+/// The set visibility a property keeps, as zend_declare_typed_property
+/// settles it: a public readonly one is protected(set) unless declared
+/// otherwise, and one no narrower than the visibility is dropped. An
+/// untyped property cannot have one, nor one wider than its visibility.
+fn settled_set_visibility(what: (&[u8], &[u8]), visibility: Visibility, declared: Option<Visibility>, readonly: bool, typed: bool, line: u32) -> Result<Option<Visibility>> {
+    let Some(set) = declared else {
+        return Ok((readonly && visibility == Visibility::Public).then_some(Visibility::Protected));
+    };
+    let what = format!("{}::${}", String::from_utf8_lossy(what.0), String::from_utf8_lossy(what.1));
+    if !typed {
+        return Err(CompileError { message: format!("Property with asymmetric visibility {what} must have type"), line });
+    }
+    if visibility.rank() > set.rank() {
+        return Err(CompileError { message: format!("Visibility of property {what} must not be weaker than set visibility"), line });
+    }
+    Ok((set != visibility).then_some(set))
+}
+
 /// A declared type as PHP prints it (`?int`, `A|B`).
 fn type_text(c: &Compiler, t: &p8_syntax::ast::Type) -> Vec<u8> {
     use p8_syntax::ast::Type;
@@ -923,6 +961,9 @@ pub struct Compiler<'src> {
     anonymous: u32,
     /// The function being compiled is a set hook: no parameter list means `$value`.
     hook_value: bool,
+    /// A reference taken for `unset($obj->p[k])`: an uninitialized
+    /// property is left alone, not modified.
+    ref_for_unset: bool,
     /// The file declares strict_types=1.
     strict: bool,
     /// The declared return type of the function about to be compiled.
@@ -970,6 +1011,7 @@ impl<'src> Compiler<'src> {
             use_consts: HashMap::new(),
             anonymous: 0,
             hook_value: false,
+            ref_for_unset: false,
             halt_offset: None,
             strict: false,
             pending_ret: None,
@@ -1585,7 +1627,10 @@ impl<'src> Compiler<'src> {
                         }
                         // (A property's dimensions: through a reference to it.)
                         Expr::ArrayDimFetch { .. } => {
-                            let (var, keys, n, append, held) = self.ref_dim_path(f, v)?;
+                            self.ref_for_unset = true;
+                            let path = self.ref_dim_path(f, v);
+                            self.ref_for_unset = false;
+                            let (var, keys, n, append, held) = path?;
                             if append {
                                 return Err(CompileError { message: "Cannot use [] for unsetting".into(), line: f.line });
                             }
@@ -1894,7 +1939,9 @@ impl<'src> Compiler<'src> {
             let ty = p.ty.map(|t| self.type_decl(t));
             let default = p.default.and_then(|d| self.const_value(d).ok());
             let default_const = p.default.and_then(|d| self.default_const_name(d));
-            let promoted = visibility_of(self, p.modifiers).is_some();
+            let promoted = visibility_of(self, p.modifiers).is_some()
+                || p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"))
+                || set_visibility_of(self, p.modifiers)?.is_some();
             let attrs = self.attr_defs(p.attributes, 32)?;
             f.params.push(Param {
                 name: Text::from(&text[1..]),
@@ -1935,18 +1982,27 @@ impl<'src> Compiler<'src> {
         // Constructor promotion: `public int $x` declares the property and
         // assigns the argument to it first thing.
         for (i, p) in params.iter().enumerate() {
-            let Some(visibility) = visibility_of(self, p.modifiers) else { continue };
+            if !f.params[i].promoted {
+                continue;
+            }
+            let visibility = visibility_of(self, p.modifiers).unwrap_or(Visibility::Public);
             let text = self.text(p.name.span);
             let name = Text::from(&text[1..]);
+            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"));
+            let class = self.scope.as_ref().map_or_else(|| Text::from(""), |s| s.name.clone());
+            let set_declared = set_visibility_of(self, p.modifiers)?;
+            let set_visibility = settled_set_visibility((class.as_bytes(), name.as_bytes()), visibility, set_declared, readonly, p.ty.is_some(), line)?;
             self.promoted.push(PropDef {
                 name: name.clone(),
                 default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
                 code: None,
                 hooks: 0,
                 visibility,
+                set_visibility,
                 is_static: false,
-                readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
-                is_final: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")),
+                readonly,
+                // private(set) is implicitly final.
+                is_final: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")) || set_visibility == Some(Visibility::Private),
                 ty: p.ty.map(|t| Text::from(type_text(self, t).as_slice())),
                 ty_decl: p.ty.map(|t| self.type_decl(t)),
                 meta: Meta { attrs: f.params[i].attrs.clone(), ..Meta::default() },
@@ -2274,6 +2330,13 @@ impl<'src> Compiler<'src> {
                 ClassMember::Property { attributes, modifiers, ty, entries, doc_comment, .. } => {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
+                    let set_declared = set_visibility_of(self, modifiers)?;
+                    if has(b"static") && set_declared.is_some() {
+                        let line = entries.first().map_or(line, |e| self.line(e.name.span));
+                        return Err(CompileError { message: "Static property may not have asymmetric visibility".into(), line });
+                    }
+                    let visibility = visibility_of(self, modifiers).unwrap_or(Visibility::Public);
+                    let readonly = has(b"readonly") || flags & CLASS_READONLY != 0;
                     for (n, e) in entries.iter().enumerate() {
                         let text = self.text(e.name.span);
                         let (default, code) = match e.default {
@@ -2285,16 +2348,21 @@ impl<'src> Compiler<'src> {
                             None => (Some(Frozen::Null), None),
                         };
                         let meta = self.meta_of(attributes, if n == 0 { *doc_comment } else { None }, e.span, 8)?;
+                        let name = Text::from(text.strip_prefix(b"$").unwrap_or(text));
+                        let set_visibility =
+                            settled_set_visibility((display.as_bytes(), name.as_bytes()), visibility, set_declared, readonly && !has(b"static"), ty.is_some(), self.line(e.name.span))?;
                         properties.push(PropDef {
                             meta,
-                            name: Text::from(text.strip_prefix(b"$").unwrap_or(text)),
+                            name,
                             default,
                             code,
                             hooks: 0,
-                            visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
+                            visibility,
+                            set_visibility,
                             is_static: has(b"static"),
-                            readonly: has(b"readonly") || flags & CLASS_READONLY != 0,
-                            is_final: has(b"final"),
+                            readonly,
+                            // private(set) is implicitly final.
+                            is_final: has(b"final") || set_visibility == Some(Visibility::Private),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
                             ty_decl: ty.map(|t| self.type_decl(t)),
                         });
@@ -2305,6 +2373,8 @@ impl<'src> Compiler<'src> {
                     let pname = Text::from(text.strip_prefix(b"$").unwrap_or(text));
                     let visibility = visibility_of(self, modifiers).unwrap_or(Visibility::Public);
                     let line = self.line(name.span);
+                    let set_declared = set_visibility_of(self, modifiers)?;
+                    let set_visibility = settled_set_visibility((display.as_bytes(), pname.as_bytes()), visibility, set_declared, false, ty.is_some(), line)?;
                     let fatal = |message: &str| CompileError { message: message.to_string(), line };
                     let has = |c: &Self, w: &[u8]| modifiers.iter().any(|m| c.text(m.span).eq_ignore_ascii_case(w));
                     let prop_abstract = has(self, b"abstract");
@@ -2421,6 +2491,19 @@ impl<'src> Compiler<'src> {
                     if !backed && bits != 0 && default.is_none() {
                         bits |= HOOK_VIRTUAL;
                     }
+                    // A virtual property has a set visibility only with both
+                    // hooks (checked after inheritance when there is a parent).
+                    if parent.is_none() && set_visibility.is_some() && bits & HOOK_VIRTUAL != 0 && seen.len() < 2 {
+                        let what = if seen.iter().any(|h| h == b"get") { "Read-only" } else { "Write-only" };
+                        return Err(CompileError {
+                            message: format!(
+                                "{what} virtual property {}::${} must not specify asymmetric visibility",
+                                String::from_utf8_lossy(display.as_bytes()),
+                                String::from_utf8_lossy(pname.as_bytes())
+                            ),
+                            line: hooks.last().map_or(line, |h| self.line(h.span)),
+                        });
+                    }
                     let (default, code) = match default {
                         Some(x) => {
                             let (v, code) = self.const_init(x)?;
@@ -2438,9 +2521,11 @@ impl<'src> Compiler<'src> {
                             code,
                             hooks: bits,
                             visibility,
+                            set_visibility,
                             is_static: false,
                             readonly: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
-                            is_final: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")),
+                            // private(set) is implicitly final.
+                            is_final: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")) || set_visibility == Some(Visibility::Private),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
                             ty_decl: ty.map(|t| self.type_decl(t)),
                         });
@@ -2839,10 +2924,11 @@ impl<'src> Compiler<'src> {
                 Ok((t, false))
             }
             Expr::PropertyFetch { target, property, .. } => {
+                let for_unset = std::mem::take(&mut self.ref_for_unset);
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, property)?;
                 let dst = f.temp();
-                f.emit(Instr::rare(Rare::PropRef, dst, obj, name, 0));
+                f.emit(Instr::rare(Rare::PropRef, dst, obj, name, u16::from(for_unset)));
                 Ok((dst, false))
             }
             Expr::IndirectVariable { name, .. } => Ok((self.var_ref(f, name)?, false)),

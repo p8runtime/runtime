@@ -1,0 +1,2 @@
+
+Fatal error: Property with asymmetric visibility Foo::$bar must have type in %s on line 4

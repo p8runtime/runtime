@@ -1,0 +1,2 @@
+
+Fatal error: Visibility of property Foo::$bar must not be weaker than set visibility in %s on line 4
