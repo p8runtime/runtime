@@ -633,7 +633,8 @@ fn tokens(s: &str) -> Vec<String> {
                 i += 1;
             }
         } else {
-            i += 1;
+            // One character (a multibyte one whole: the text is UTF-8 here).
+            i += s[i..].chars().next().map_or(1, char::len_utf8);
         }
         out.push(s[start..i].to_string());
     }
