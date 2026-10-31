@@ -145,12 +145,12 @@ Zend Extension => 420240924
 Zend Extension Build => API420240924,NTS
 PHP Extension Build => API20240924,NTS
 PHP Integer Size => 64 bits
-Debug Build => no
 Thread Safety => disabled
 Zend Max Execution Timers => disabled
 IPv6 Support => enabled
 DTrace Support => disabled
 This program makes use of the Zend Scripting Language Engine:
+bool(true)
 bool(true)
 int(1)
 --

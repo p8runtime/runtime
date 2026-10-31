@@ -31,8 +31,9 @@ $general = info(INFO_GENERAL);
 lines($general, ['phpinfo()', 'This program makes use of the Zend Scripting Language Engine:'], [
     'PHP Version', 'Server API', 'Virtual Directory Support', 'Loaded Configuration File', 'PHP API',
     'PHP Extension', 'Zend Extension', 'Zend Extension Build', 'PHP Extension Build', 'PHP Integer Size',
-    'Debug Build', 'Thread Safety', 'Zend Max Execution Timers', 'IPv6 Support', 'DTrace Support',
+    'Thread Safety', 'Zend Max Execution Timers', 'IPv6 Support', 'DTrace Support',
 ]);
+var_dump(str_contains($general, "\nDebug Build => " . (PHP_DEBUG ? "yes" : "no") . "\n"));
 var_dump(str_starts_with($general, "phpinfo()\nPHP Version => " . PHP_VERSION . "\n\nSystem => "));
 var_dump(preg_match('/^Registered PHP Streams => .*\bfile\b/m', $general));
 echo "--\n";

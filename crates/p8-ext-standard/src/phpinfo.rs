@@ -150,7 +150,7 @@ fn general(ctx: &mut dyn Ctx) {
         ("Zend Extension Build", "API420240924,NTS"),
         ("PHP Extension Build", "API20240924,NTS"),
         ("PHP Integer Size", "64 bits"),
-        ("Debug Build", if cfg!(debug_assertions) { "yes" } else { "no" }),
+        ("Debug Build", if crate::DEBUG_BUILD { "yes" } else { "no" }),
         ("Thread Safety", "disabled"),
         ("Zend Signal Handling", "disabled"),
         ("Zend Memory Manager", "disabled"),
