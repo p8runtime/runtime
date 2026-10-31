@@ -4,7 +4,9 @@ import Page from './components/Page.php';
 
 const app = new Hono();
 
-// Page.php gets the request itself: $_GET, $_SERVER, header().
-app.get('/hello', (c) => renderToResponse(Page, { request: c.req.raw }));
+// Page.php reads $props['name'].
+app.get('/hello/:name', (c) =>
+  renderToResponse(Page, { props: { name: c.req.param('name') } }),
+);
 
 export default app;

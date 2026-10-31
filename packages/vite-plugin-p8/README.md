@@ -183,9 +183,9 @@ Not built; what would carry over:
 ## With Hono (server-side rendering)
 
 On the server, `renderToResponse` (`vite-plugin-p8/runtime`, no Node or
-Vite imports) runs a `.php` page for a request, the way `php -S` runs a
-router script: the page reads `$_GET`, `$_POST`, `$_COOKIE`, `$_SERVER` and
-`php://input`, and its `header()` / status are the response's.
+Vite imports) renders a `.php` page into a Response. Give it `{ props }` and
+the page reads them as `$props`; give it `{ request }` instead and the page
+gets the request itself, as under `php -S` (`$_GET`, `$_SERVER`, `header()`).
 
 ```ts
 // vite.config.ts
@@ -206,11 +206,13 @@ import Page from './components/Page.php';
 
 const app = new Hono();
 
-// /hello?name=Ada: Page.php reads $_GET['name'].
-app.get('/hello', (c) => renderToResponse(Page, { request: c.req.raw }));
+// /hello/Ada: Page.php reads $props['name'].
+app.get('/hello/:name', (c) =>
+  renderToResponse(Page, { props: { name: c.req.param('name') } }),
+);
 
 export default app;
 ```
 
 Run `npm run dev:hono` for `example-hono/`, then open
-`http://localhost:5173/hello?name=YourName`.
+`http://localhost:5173/hello/YourName`.
