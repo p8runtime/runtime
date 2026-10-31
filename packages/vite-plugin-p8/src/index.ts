@@ -65,6 +65,32 @@ export async function renderFile(config: RenderConfig, file: string, props?: unk
   return render(await host(config), file, props);
 }
 
+/** Run `file` for a web request, as `php -S` runs a router script: PHP
+ * gets the request itself ($_GET, $_POST, $_COOKIE, $_SERVER, php://input)
+ * and its response (status, header(), the body) is the Response. */
+export async function fetchFile(config: RenderConfig, file: string, request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const body = request.method === 'GET' || request.method === 'HEAD' ? new Uint8Array() : new Uint8Array(await request.arrayBuffer());
+  const response = await serve(
+    await host(config),
+    {
+      method: request.method,
+      url: url.pathname + url.search,
+      headers: [...request.headers],
+      body,
+      server: { host: url.hostname, port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)) },
+      client: { address: '127.0.0.1', port: 0 },
+    },
+    file,
+  );
+  if (response.log.trim()) console.warn(response.log.trim());
+  const headers = new Headers();
+  for (const [name, value] of response.headers) {
+    if (!['connection', 'transfer-encoding', 'keep-alive'].includes(name.toLowerCase())) headers.append(name, value);
+  }
+  return new Response(response.body.length > 0 ? new Uint8Array(response.body) : null, { status: response.status, headers });
+}
+
 /** Whether a request path names a PHP script under `root` for PHP to serve. */
 function phpTarget(root: string, pathname: string): boolean {
   // A .php file that is there, possibly with PATH_INFO after it
@@ -111,6 +137,7 @@ const VIRTUAL = '\0p8:';
  * run in the same process (the dev server's), and use the wasm the plugin
  * compiled. Outside it (a built server bundle) they import the package. */
 const RENDERER = Symbol.for('vite-plugin-p8.renderFile');
+const FETCHER = Symbol.for('vite-plugin-p8.fetchFile');
 const RENDER_ENDPOINT = '/@p8/render';
 
 export default function p8(options: P8Options = {}): Plugin {
@@ -134,6 +161,7 @@ export default function p8(options: P8Options = {}): Plugin {
       const tmpDir = options.tmpDir === false ? undefined : resolve(options.tmpDir ?? join(resolved.root, 'node_modules/.p8/tmp'));
       if (tmpDir) mkdirSync(tmpDir, { recursive: true });
       (globalThis as Record<symbol, unknown>)[RENDERER] = renderFile;
+      (globalThis as Record<symbol, unknown>)[FETCHER] = fetchFile;
       config = {
         root: resolve(options.root ?? resolved.root),
         wasm: resolve(options.wasm ?? DEFAULT_WASM),
@@ -184,10 +212,12 @@ export default function p8(options: P8Options = {}): Plugin {
         // On the server: rendered here, by the wasm.
         return [
           `const renderFile = globalThis[Symbol.for('vite-plugin-p8.renderFile')] ?? (await import('vite-plugin-p8')).renderFile;`,
+          `const fetchFile = globalThis[Symbol.for('vite-plugin-p8.fetchFile')] ?? (await import('vite-plugin-p8')).fetchFile;`,
           `const config = ${JSON.stringify(config)};`,
           `export const file = ${JSON.stringify(file)};`,
           `export function render(props) { return renderFile(config, file, props); }`,
-          `export default { file, render };`,
+          `export function fetch(request) { return fetchFile(config, file, request); }`,
+          `export default { file, render, fetch };`,
         ].join('\n');
       }
       // In the browser: rendered by the dev server.

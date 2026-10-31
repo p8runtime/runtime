@@ -96,9 +96,11 @@ export function parseResponse(raw: Buffer): Omit<PhpResponse, 'log'> {
   return { status, headers, body: raw.subarray(end + 4) };
 }
 
-/** Serve one request with the cli-server SAPI, as `php -S -t root` would. */
-export async function serve(host: Host, request: PhpRequest): Promise<PhpResponse> {
-  const args = ['-S', address(request.server.host, request.server.port), '--stdio', address(request.client.address, request.client.port), '-t', host.root, '-q', ...iniArgs(host.ini)];
+/** Serve one request with the cli-server SAPI, as `php -S -t root` would;
+ * with `router`, as `php -S -t root router.php` would (that file runs for
+ * the request, whatever its path). */
+export async function serve(host: Host, request: PhpRequest, router?: string): Promise<PhpResponse> {
+  const args = ['-S', address(request.server.host, request.server.port), '--stdio', address(request.client.address, request.client.port), '-t', host.root, '-q', ...iniArgs(host.ini), ...(router ? [router] : [])];
   const ran = await run(host, args, requestBytes(request));
   if (ran.stdout.length === 0) throw new Error(`php2 served no response (exit ${ran.status}): ${ran.stderr.toString()}`);
   return { ...parseResponse(ran.stdout), log: ran.stderr.toString() };

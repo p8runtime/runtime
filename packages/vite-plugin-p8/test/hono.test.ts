@@ -37,14 +37,23 @@ after(async () => {
   await vite.close();
 });
 
-test('a Hono route renders a PHP component with its props', async () => {
-  const r = await fetch(`${base}/hello/Ada%20%3Cb%3E`);
+test('a page given the request reads $_GET and $_SERVER, and sets headers', async () => {
+  const r = await fetch(`${base}/hello?name=Ada%20%3Cb%3E`);
+  assert.equal(r.status, 200);
+  // header() in PHP is the response's.
+  assert.equal(r.headers.get('x-greeting'), 'hello');
+  const html = await r.text();
+  // The query string reached PHP as $_GET, escaped by the page.
+  assert.match(html, /<h1>Hello Ada &lt;b&gt;<\/h1>/);
+  assert.match(html, /GET \/hello\?name=Ada%20%3Cb%3E,/);
+  assert.match(html, /rendered by PHP 8\.4\.\d+ on p8/);
+});
+
+test('a template given props reads them as $props', async () => {
+  const r = await fetch(`${base}/card/Grace%20%3Ci%3E`);
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('content-type'), 'text/html; charset=utf-8');
-  const html = await r.text();
-  // The route's param reached PHP as $props, escaped by the template.
-  assert.match(html, /<h1>Hello Ada &lt;b&gt;<\/h1>/);
-  assert.match(html, /Rendered by PHP 8\.4\.\d+ on p8/);
+  assert.match(await r.text(), /<h2>Grace &lt;i&gt;<\/h2>/);
 });
 
 test('a path no route takes is Hono\'s 404', async () => {
