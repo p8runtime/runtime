@@ -45,6 +45,9 @@ pub struct Closure {
     /// Where `$o->name` found its property last, one entry per constant
     /// (the name is one): PHP's runtime cache slot of FETCH_OBJ_R.
     props: Box<[Cell<PropSite>]>,
+    /// What `$o->m()` called last, one entry per call site: PHP's cache
+    /// slot of INIT_METHOD_CALL.
+    methods: Box<[RefCell<Option<MethodSite>>]>,
 }
 
 impl Closure {
@@ -52,7 +55,8 @@ impl Closure {
         let consts = code.consts.iter().map(|c| c.to_value()).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
         let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
-        Rc::new(Closure { code, consts, sites, props })
+        let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
+        Rc::new(Closure { code, consts, sites, props, methods })
     }
 }
 
@@ -65,6 +69,23 @@ struct PropSite {
     class: usize,
     scope: usize,
     slot: u32,
+}
+
+/// A method call's cache entry: on an object of `class` (its address),
+/// from code in `scope`, the call runs this code with this declaring class.
+/// Held weakly, so the cache keeps no function or class alive (a method
+/// calling itself would otherwise hold its own code).
+struct MethodSite {
+    class: usize,
+    scope: usize,
+    code: MethodCode,
+    declaring: std::rc::Weak<Class>,
+    is_static: bool,
+}
+
+enum MethodCode {
+    User(std::rc::Weak<Closure>),
+    Native(p8_runtime::object::Native, PhpStr),
 }
 
 /// A property read the cache answers: the same class, a scope that may
@@ -88,6 +109,46 @@ impl Context<'_> {
     #[inline]
     fn scope_addr(&self) -> usize {
         self.frames.last().and_then(|f| f.scope.as_ref()).map_or(0, |c| Rc::as_ptr(c) as usize)
+    }
+
+    /// The frame a cached method call makes: the same class from the same
+    /// scope, and its code and declaring class still there.
+    #[inline]
+    fn cached_method(&self, site: &RefCell<Option<MethodSite>>, o: &Rc<p8_runtime::object::Object>) -> Option<crate::classes::MethodFrame> {
+        let site = site.borrow();
+        let s = site.as_ref()?;
+        if s.class != Rc::as_ptr(&o.class) as usize || s.scope != self.scope_addr() {
+            return None;
+        }
+        let declaring = s.declaring.upgrade()?;
+        let func = match &s.code {
+            MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
+            MethodCode::Native(n, name) => crate::classes::Code::Native(*n, name.clone()),
+        };
+        let this = (!s.is_static).then(|| Rc::clone(o));
+        Some(crate::classes::MethodFrame::method(func, this, declaring, Rc::clone(&o.class)))
+    }
+
+    /// After a full method lookup: remember an ordinary call (the object's
+    /// own class's method, not __call or a forwarded inner iterator's).
+    fn remember_method(&self, site: &RefCell<Option<MethodSite>>, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
+        let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
+        let on_this = m.this.as_ref().is_none_or(|t| Rc::ptr_eq(t, o));
+        if m.trampoline.is_some() || !own_class || !on_this || !m.captured.is_empty() {
+            return;
+        }
+        let Some(declaring) = &m.scope else { return };
+        let code = match &m.func {
+            crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone()),
+        };
+        *site.borrow_mut() = Some(MethodSite {
+            class: Rc::as_ptr(&o.class) as usize,
+            scope: self.scope_addr(),
+            code,
+            declaring: Rc::downgrade(declaring),
+            is_static: m.this.is_none(),
+        });
     }
 
     /// After a full property read: remember where a declared, visible,
@@ -3910,8 +3971,16 @@ impl Context<'_> {
                     if is_temp(func, obj) {
                         clear(&mut reg!(obj));
                     }
+                    if let Value::Object(o) = &target
+                        && let Some(m) = self.cached_method(&clo.methods[method as usize], o)
+                    {
+                        return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                    }
                     let site = &func.sites[method as usize];
                     let m = self.method_frame(&target, site.name.as_bytes(), site.display.as_bytes())?;
+                    if let Value::Object(o) = &target {
+                        self.remember_method(&clo.methods[method as usize], o, &m);
+                    }
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::StaticCall { dst, class, method, base: args, argc } => {
