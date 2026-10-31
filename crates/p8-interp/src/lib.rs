@@ -3000,7 +3000,7 @@ impl Context<'_> {
                             return Ok(Next::Go(insn_at));
                         }
                         let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                        let cell = self.prop_ref(&target, &name)?;
+                        let cell = self.prop_ref(&target, &name, class != 0)?;
                         reg!(dst) = Value::Ref(cell);
                     }
                     Rare::AssignPropRef => {

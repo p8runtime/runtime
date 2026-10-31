@@ -1,0 +1,30 @@
+Cannot modify private(set) property P::$pPrivate from scope C
+C initialized: 2 2 2 2
+Cannot modify protected(set) readonly property P::$pDefault from global scope
+Cannot modify private(set) property P::$pPrivate from global scope
+Cannot modify protected(set) readonly property P::$pProtected from global scope
+pPublic = 3
+Cannot modify readonly property P::$pPublic
+Cannot modify private(set) property P::$pPrivate from scope C
+C initialized: 2 2 2 2
+Cannot modify readonly property P::$pDefault
+sibling: 9
+widened
+public(set)
+redeclared
+Cannot modify protected(set) property B3::$foo from global scope
+hook: 8
+Cannot modify private(set) property Hooked::$h from global scope
+a: modifiers=4129 privateSet=true protectedSet=false final=true final public
+b: modifiers=2049 privateSet=false protectedSet=true final=false public
+c: modifiers=4130 privateSet=true protectedSet=false final=true final protected
+d: modifiers=2177 privateSet=false protectedSet=true final=false public readonly
+e: modifiers=129 privateSet=false protectedSet=false final=false public readonly
+f: modifiers=2 privateSet=false protectedSet=false final=false protected
+g: modifiers=4 privateSet=false protectedSet=false final=false private
+h: modifiers=1 privateSet=false protectedSet=false final=false public
+i: modifiers=4129 privateSet=true protectedSet=false final=true final public
+IS_PRIVATE_SET=4096 IS_PROTECTED_SET=2048
+private(set): a,c,i
+protected(set): b,d
+setValue: 42

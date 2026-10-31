@@ -1377,7 +1377,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let mut has_final = false;
         let mut has_static = false;
         let mut has_readonly = false;
-        let mut has_set_visibility = false;
 
         for m in modifiers {
             match m.kind {
@@ -1408,15 +1407,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     }
                     has_private = true;
                 }
-                TokenKind::PublicSet | TokenKind::ProtectedSet | TokenKind::PrivateSet => {
-                    if has_set_visibility {
-                        self.errors.push(ParseError {
-                            span: m.span,
-                            message: "Multiple set visibility modifiers",
-                        });
-                    }
-                    has_set_visibility = true;
-                }
+                // Two set visibilities: the compiler's fatal error, as PHP's.
                 TokenKind::Abstract => {
                     if has_abstract {
                         self.errors.push(ParseError {
@@ -1724,7 +1715,13 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let mut modifiers = std::vec::Vec::new();
         while matches!(
             self.current_token.kind,
-            TokenKind::Public | TokenKind::Protected | TokenKind::Private | TokenKind::Readonly
+            TokenKind::Public
+                | TokenKind::Protected
+                | TokenKind::Private
+                | TokenKind::PublicSet
+                | TokenKind::ProtectedSet
+                | TokenKind::PrivateSet
+                | TokenKind::Readonly
         ) {
             modifiers.push(self.current_token);
             self.bump();

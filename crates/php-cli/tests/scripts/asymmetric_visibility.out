@@ -1,0 +1,38 @@
+read: 0 foo id 1 bare
+assign: Error: Cannot modify private(set) property Foo::$count from global scope
+compound: Error: Cannot modify private(set) property Foo::$count from global scope
+concat: Error: Cannot modify protected(set) property Foo::$name from global scope
+pre-inc: Error: Cannot modify private(set) property Foo::$count from global scope
+post-dec: Error: Cannot modify private(set) property Foo::$count from global scope
+append: Error: Cannot indirectly modify private(set) property Foo::$items from global scope
+dim set: Error: Cannot indirectly modify private(set) property Foo::$items from global scope
+unset: Error: Cannot unset private(set) property Foo::$count from global scope
+unset dim: Error: Cannot indirectly modify private(set) property Foo::$items from global scope
+reference: Error: Cannot indirectly modify private(set) property Foo::$count from global scope
+assign ref: Error: Cannot indirectly modify private(set) property Foo::$count from global scope
+by-ref arg: Error: Cannot indirectly modify private(set) property Foo::$items from global scope
+foreach by ref: Error: Cannot indirectly modify private(set) property Foo::$items from global scope
+promoted: Error: Cannot modify private(set) property Foo::$id from global scope
+promoted protected: Error: Cannot modify protected(set) property Foo::$promoted from global scope
+promoted bare: Error: Cannot modify private(set) property Foo::$bare from global scope
+uninitialized: Error: Cannot modify private(set) property Foo::$late from global scope
+null coalesce assign (set): ok
+list assign: Error: Cannot modify private(set) property Foo::$count from global scope
+nested write: ok
+bar->n: 42
+object reference: ok
+bool(true)
+assign ref to object prop: Error: Cannot assign by reference to overloaded object
+bump: 3
+add: 1
+refBump: 4
+late: 7
+renameChild: child
+private(set) from subclass: Error: Cannot modify private(set) property Foo::$count from scope Child
+promotedChild: 5
+protected(set) from unrelated class: Error: Cannot modify protected(set) property Foo::$name from scope Stranger
+private(set) from static method: Error: Cannot modify private(set) property Foo::$count from scope Stranger
+read after unset: Error: Typed property Foo::$count must not be accessed before initialization
+bound: 100
+bound to unrelated: Error: Cannot modify private(set) property Foo::$count from scope Foo
+bound to subclass: Error: Cannot modify private(set) property Foo::$count from scope Foo

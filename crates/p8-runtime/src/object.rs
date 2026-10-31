@@ -38,6 +38,15 @@ impl Visibility {
             Visibility::Private => "private",
         }
     }
+
+    /// How narrow it is: public 0, protected 1, private 2.
+    pub fn rank(self) -> u8 {
+        match self {
+            Visibility::Public => 0,
+            Visibility::Protected => 1,
+            Visibility::Private => 2,
+        }
+    }
 }
 
 pub const CLASS_ABSTRACT: u32 = 1;
@@ -92,6 +101,9 @@ pub struct Property {
     /// with no default (uninitialized until assigned).
     pub default: Value,
     pub visibility: Visibility,
+    /// Who may write it (`private(set)`, `protected(set)`), when narrower
+    /// than `visibility`; None: whoever may read it.
+    pub set_visibility: Option<Visibility>,
     /// The class that declares it (lowercase), for private access.
     pub declaring: Vec<u8>,
     /// As declared, for messages and var_dump.
