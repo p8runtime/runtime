@@ -563,6 +563,7 @@ impl Context<'_> {
         let make_data = parent.as_ref().and_then(|p| p.make_data);
         let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
         let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
+        let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
         Ok(Rc::new(Class {
             name: PhpStr::from(def.name.as_bytes()),
             lower,
@@ -578,6 +579,7 @@ impl Context<'_> {
             get_properties: inherited_props,
             cast_bool: inherited_bool,
             cast_string: inherited_string,
+            cast_int: inherited_int,
             clone_data: inherited_clone,
             forward_calls: inherited_forward,
             make_data,

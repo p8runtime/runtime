@@ -4289,6 +4289,7 @@ impl Context<'_> {
                     get_properties: None,
                     cast_bool: None,
                     cast_string: None,
+                    cast_int: None,
                     clone_data: None,
                     forward_calls: None,
                     make_data: None,
