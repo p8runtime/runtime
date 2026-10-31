@@ -219,6 +219,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "timezone_open", run: timezone_open, by_ref: &[] },
     Builtin { name: "timezone_name_get", run: timezone_name_get, by_ref: &[] },
     Builtin { name: "timezone_identifiers_list", run: list_identifiers, by_ref: &[] },
+    Builtin { name: "timezone_version_get", run: timezone_version_get, by_ref: &[] },
 ];
 
 /// A DateTime's moment: the instant, microseconds, and its zone (PHP's
@@ -1004,6 +1005,15 @@ fn zone_offset(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
 /// DateTimeZone::ALL lists: PHP 8.4.27's (timezonedb 2026.5), one a line.
 /// chrono-tz cannot tell them from the "backward" aliases it also has.
 const CANONICAL_ZONES: &str = include_str!("tz_canonical.txt");
+
+/// timezone_version_get(): the version of the built-in time zone database,
+/// as PHP's builtin one names it (IANA's 2025b is 2025.2).
+fn timezone_version_get(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let iana = chrono_tz::IANA_TZDB_VERSION;
+    let (year, letter) = iana.split_at(iana.len() - 1);
+    let n = letter.bytes().next().map_or(0, |b| b.wrapping_sub(b'a') + 1);
+    Ok(Value::str(format!("{year}.{n}")))
+}
 
 /// DateTimeZone::listIdentifiers($timezoneGroup = ALL): the canonical
 /// zones in the groups (DateTimeZone::AFRICA | ...); ALL_WITH_BC adds the

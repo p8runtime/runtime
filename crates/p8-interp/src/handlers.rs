@@ -104,6 +104,7 @@ impl Context<'_> {
             c.get_properties = h.get_properties;
             c.cast_bool = h.cast_bool;
             c.cast_string = h.cast_string;
+            c.cast_int = h.cast_int;
             c.clone_data = h.clone_data;
             c.forward_calls = h.forward_calls;
         }

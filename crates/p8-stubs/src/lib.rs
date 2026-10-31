@@ -6,8 +6,11 @@
 //!
 //! Reference: $PHP_SRC_PATH/Zend/zend_compile.c - zend_type_to_string
 
+mod extensions;
 mod modules;
 mod table;
+
+pub use extensions::{CONSTANT_FLAGS, CREDITS};
 
 pub const T_MIXED: u32 = 1 << 0;
 pub const T_STATIC: u32 = 1 << 1;
@@ -77,6 +80,55 @@ pub fn function_module(name: &[u8]) -> Option<&'static str> {
 /// The extension PHP puts builtin class (or interface, trait) `name` in.
 pub fn class_module(name: &[u8]) -> Option<&'static str> {
     module_in(modules::CLASS_MODULES, name)
+}
+
+/// How phpinfo() shows an ini directive's value (its ini displayer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IniDisplay {
+    /// The value, or "no value".
+    Plain,
+    /// On or Off (zend_ini_boolean_displayer_cb).
+    Bool,
+    /// The colour in a span (zend_ini_color_displayer_cb).
+    Color,
+    /// STDOUT, STDERR or Off (display_errors_mode).
+    DisplayErrors,
+    /// The number, or Unlimited for -1 (display_link_numbers).
+    LinkNumbers,
+}
+
+/// What PHP knows of one of its extensions (a module): what
+/// ReflectionExtension and phpinfo() report of it.
+pub struct ModuleSpec {
+    /// As PHP names it ("Core", "SPL", "pdo_mysql").
+    pub name: &'static str,
+    pub version: Option<&'static str>,
+    /// The modules it depends on, each with its relation ("Required",
+    /// "Conflicts", "Optional", and any version constraint).
+    pub deps: &'static [(&'static str, &'static str)],
+    /// Its functions, in the order PHP registers them.
+    pub functions: &'static [&'static str],
+    /// Its classes, interfaces, traits and enums, in the order PHP declares them.
+    pub classes: &'static [&'static str],
+    /// Its ini directives, in the order it registers them, each with who
+    /// may change it (PHP_INI_USER 1 | PHP_INI_PERDIR 2 | PHP_INI_SYSTEM 4)
+    /// and how phpinfo() shows it.
+    pub ini: &'static [(&'static str, u8, IniDisplay)],
+    /// Its phpinfo() section after the title, a line each: `{ini}` is the
+    /// directives' table, and `{source}` in a row a value p8 computes (the
+    /// row goes when it has none; see p8_runtime::info).
+    pub info: &'static [&'static str],
+}
+
+/// The module PHP names `name` (any case).
+pub fn module_spec(name: &[u8]) -> Option<&'static ModuleSpec> {
+    extensions::MODULES.iter().find(|m| m.name.as_bytes().eq_ignore_ascii_case(name))
+}
+
+/// The flags ReflectionExtension::__toString() shows for builtin constant
+/// `name` ("persistent", "persistent, deprecated", ...).
+pub fn constant_flags(name: &[u8]) -> &'static str {
+    CONSTANT_FLAGS.iter().find(|(n, _)| n.as_bytes() == name).map_or("persistent", |(_, f)| f)
 }
 
 fn module_in(table: &'static [(&'static str, &'static str)], name: &[u8]) -> Option<&'static str> {

@@ -39,6 +39,7 @@ pub use head::{cookie_date, header_line};
 mod misc;
 mod net;
 mod password;
+mod phpinfo;
 pub(crate) mod printf;
 mod proc;
 mod process;
@@ -176,6 +177,8 @@ fn register(registry: &mut Registry) {
     registry.add_functions(math::BUILTINS);
     registry.add_functions(head::BUILTINS);
     registry.add_functions(misc::BUILTINS);
+    registry.add_functions(phpinfo::BUILTINS);
+    registry.mark_reenters(phpinfo::REENTER);
     registry.add_functions(password::BUILTINS);
     registry.add_functions(context::BUILTINS);
     registry.add_functions(process::BUILTINS);

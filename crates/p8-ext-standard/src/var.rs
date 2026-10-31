@@ -258,7 +258,7 @@ fn print_r(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Bool(true))
 }
 
-fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>) {
+pub(crate) fn print_r_to(v: &Value, indent: usize, out: &mut Vec<u8>, seen: &mut Vec<Rc<Object>>) {
     match v {
         Value::Array(a) => {
             out.extend_from_slice(b"Array\n");

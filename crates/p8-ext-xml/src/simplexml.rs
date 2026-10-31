@@ -1496,4 +1496,4 @@ pub const BUILTINS: &[Builtin] = &[
 /// its registers).
 pub const REENTER: &[&str] = &["simplexml_load_string", "simplexml_load_file", "simplexml_import_dom"];
 
-pub const HOOKS: ClassHooks = ClassHooks { get_properties: Some(get_properties), cast_bool: Some(cast_bool), cast_string: Some(cast_string), clone_data: None, forward_calls: None };
+pub const HOOKS: ClassHooks = ClassHooks { get_properties: Some(get_properties), cast_bool: Some(cast_bool), cast_string: Some(cast_string), cast_int: None, clone_data: None, forward_calls: None };
