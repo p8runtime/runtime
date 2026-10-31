@@ -1516,6 +1516,9 @@ impl Context<'_> {
     /// the converted value, Ok(None) as it is, Err a TypeError's case.
     /// (A deprecation it brings is reported here.)
     pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, ()> {
+        if ty.quick(v) {
+            return Ok(None);
+        }
         let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
         let is_a = |o: &Object, name: &[u8]| match name {
             b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
@@ -1589,7 +1592,7 @@ impl Context<'_> {
                 regs[base + i] = Value::Array(Rc::new(checked));
                 continue;
             }
-            if i >= argc || matches!(regs[base + i], Value::Undef) {
+            if i >= argc || matches!(regs[base + i], Value::Undef) || ty.quick(&regs[base + i]) {
                 continue;
             }
             let v = regs[base + i].deref();

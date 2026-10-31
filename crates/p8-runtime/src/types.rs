@@ -61,6 +61,26 @@ impl TypeDecl {
         p8_stubs::type_to_string(self.mask, &refs)
     }
 
+    /// Whether `v` is plainly of this type, needing no conversion and no
+    /// class hierarchy: its kind's bit is set, or an object is of a named
+    /// class itself (ZEND_TYPE_CONTAINS_CODE, before zend_check_type_slow).
+    /// False only means the full check (`verify`) decides.
+    #[inline]
+    pub fn quick(&self, v: &Value) -> bool {
+        let bit = match v {
+            Value::Null => T_NULL,
+            Value::Bool(true) => T_BOOL | T_TRUE,
+            Value::Bool(false) => T_BOOL | T_FALSE,
+            Value::Int(_) => T_INT,
+            Value::Float(_) => T_FLOAT,
+            Value::Str(_) => T_STRING,
+            Value::Array(_) => T_ARRAY,
+            Value::Object(o) => return self.mask & (T_OBJECT | T_MIXED) != 0 || (!self.intersection && self.lower.iter().any(|c| c.as_bytes() == o.class.lower.as_slice())),
+            Value::Undef | Value::Ref(_) => return false,
+        };
+        self.mask & (bit | T_MIXED) != 0
+    }
+
     /// Check `v`. `is_a(o, class)`: whether object `o` is an instance of
     /// a class this type names (the caller resolves self/parent/static).
     pub fn verify(&self, v: &Value, strict: bool, is_a: &dyn Fn(&Object, &[u8]) -> bool, static_ok: &dyn Fn(&Object) -> bool) -> Verdict {
