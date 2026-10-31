@@ -174,7 +174,7 @@ impl Context<'_> {
                 if let Some(&i) = self.functions.get(&lower) {
                     return Some(self.user_info(&Rc::clone(&self.closures[i as usize]), None));
                 }
-                let i = self.isolate.registry.lookup(&lower)?;
+                let i = self.builtin(&lower)?;
                 let b = self.isolate.registry.function(i);
                 Some(self.stub_info(b.name, PhpStr::from(b.name), None))
             }

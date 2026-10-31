@@ -289,7 +289,7 @@ impl Context<'_> {
             let func = Rc::clone(&self.closures[f as usize]);
             return Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None }));
         }
-        match self.isolate.registry.lookup(&lower) {
+        match self.builtin(&lower) {
             Some(i) => Ok(Target::Builtin(i)),
             None => Err(self.throw("Error", format!("Call to undefined function {}()", text(name)))),
         }

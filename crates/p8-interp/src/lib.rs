@@ -1213,6 +1213,8 @@ impl Isolate {
             gc_runs: 0,
             gc_collected: 0,
             cfg: Vec::new(),
+            ini_master: HashMap::new(),
+            disabled: std::collections::HashSet::new(),
             argv: None,
             started: std::time::Instant::now(),
         }
@@ -1374,6 +1376,11 @@ pub struct Context<'i> {
     gc_collected: i64,
     /// The host's settings, as given (get_cfg_var).
     cfg: Vec<(Vec<u8>, String)>,
+    /// The value each host setting gave a directive (its master value).
+    ini_master: HashMap<Vec<u8>, Value>,
+    /// The builtins disable_functions took away: they are undefined, and
+    /// the script may declare functions of their names.
+    disabled: std::collections::HashSet<Vec<u8>>,
     /// The command line, when the host gives one: $argv, $argc, $_SERVER.
     argv: Option<Vec<String>>,
     /// When the request started.
@@ -1404,7 +1411,7 @@ impl Context<'_> {
             let first = &self.closures[i as usize].code;
             return Err(format!("Cannot redeclare function {name}() (previously declared in {}:{})", first.file, first.line));
         }
-        if self.isolate.registry.lookup(&key).is_some() {
+        if self.builtin(&key).is_some() {
             return Err(format!("Cannot redeclare function {name}()"));
         }
         self.closures.push(Closure::new(func));
@@ -1432,7 +1439,12 @@ impl Context<'_> {
 
     pub fn function_exists(&self, name: &[u8]) -> bool {
         let key = name.strip_prefix(b"\\").unwrap_or(name).to_ascii_lowercase();
-        self.functions.contains_key(&key) || self.isolate.registry.lookup(&key).is_some()
+        self.functions.contains_key(&key) || self.builtin(&key).is_some()
+    }
+
+    /// The builtin named `lower`, unless disable_functions took it away.
+    pub(crate) fn builtin(&self, lower: &[u8]) -> Option<usize> {
+        self.isolate.registry.lookup(lower).filter(|&i| self.disabled.is_empty() || !self.disabled.contains(self.isolate.registry.function(i).name.as_bytes()))
     }
 
     /// An ini value that may be an expression (`E_ALL & ~E_NOTICE`):
@@ -1500,6 +1512,15 @@ impl Context<'_> {
         let set = Ctx::ini_set(self, name, Value::Str(PhpStr::from(value))).is_some();
         self.out.started = started;
         self.output_start = start_at;
+        if let Some(v) = set.then(|| self.ini.get(name).cloned()).flatten() {
+            if name == b"disable_functions" {
+                // zend_disable_functions: names split at spaces and commas,
+                // matched as written (exit and die are not functions).
+                let list = v.to_php_string().unwrap_or_else(PhpStr::empty);
+                self.disabled = list.as_bytes().split(|&b| b == b' ' || b == b',').filter(|n| !n.is_empty()).map(<[u8]>::to_vec).collect();
+            }
+            self.ini_master.insert(name.to_vec(), v);
+        }
         set
     }
 
@@ -2180,11 +2201,11 @@ impl Context<'_> {
         let global = s.fallback.as_ref().map(|g| g.as_bytes());
         let callee = if let Some(f) = self.functions.get(key) {
             Callee::User(*f)
-        } else if let Some(i) = self.isolate.registry.lookup(key) {
+        } else if let Some(i) = self.builtin(key) {
             Callee::Builtin(i)
         } else if let Some(f) = global.and_then(|g| self.functions.get(g)) {
             Callee::User(*f)
-        } else if let Some(i) = global.and_then(|g| self.isolate.registry.lookup(g)) {
+        } else if let Some(i) = global.and_then(|g| self.builtin(g)) {
             Callee::Builtin(i)
         } else {
             let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
@@ -5100,6 +5121,14 @@ impl Ctx for Context<'_> {
         })
     }
 
+    fn ini_master(&self, name: &[u8]) -> Option<Value> {
+        let default = self.isolate.registry.ini_default(name)?;
+        Some(match self.ini_master.get(name) {
+            Some(v) => v.clone(),
+            None => default.map_or(Value::Null, |d| Value::Str(PhpStr::from(d))),
+        })
+    }
+
     fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value> {
         let old = self.ini_get(name)?;
         let text = value.to_php_string().unwrap_or_else(PhpStr::empty);
@@ -5182,7 +5211,8 @@ impl Ctx for Context<'_> {
     fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>) {
         let mut user: Vec<(&u32, &Vec<u8>)> = self.functions.iter().map(|(k, i)| (i, k)).collect();
         user.sort();
-        (self.isolate.registry.function_names().collect(), user.into_iter().map(|(_, k)| k.clone()).collect())
+        let builtins = self.isolate.registry.function_names().filter(|n| !self.disabled.contains(n.as_bytes())).collect();
+        (builtins, user.into_iter().map(|(_, k)| k.clone()).collect())
     }
 
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf> {

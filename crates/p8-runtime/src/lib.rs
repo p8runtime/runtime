@@ -9,6 +9,7 @@ pub mod array;
 pub mod ext;
 pub mod frozen;
 pub mod gc;
+pub mod info;
 pub mod number;
 pub mod numeric;
 pub mod object;

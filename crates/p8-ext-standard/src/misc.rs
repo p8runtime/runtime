@@ -87,8 +87,10 @@ fn ini_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         ctx.warn(&format!("ini_get_all(): Extension \"{x}\" cannot be found"));
         return Ok(Value::Bool(false));
     }
-    // zend_ini_sort_entries: names compared ignoring case.
+    // zend_ini_sort_entries: names compared ignoring case; PHP's table
+    // stays sorted after.
     rows.sort_by_key(|(_, name, _)| name.to_ascii_lowercase());
+    *ctx.state(p8_runtime::info::INI_SORTED) = Value::Bool(true);
     let text = |v: Option<Value>| match v {
         None | Some(Value::Null) => Value::Null,
         Some(v) => v,
@@ -380,15 +382,16 @@ fn php_sapi_name(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::str(if ctx.response().server { "cli-server" } else { "cli" }))
 }
 
-/// phpversion($extension = null): PHP's version, or an extension's (which
-/// for bundled extensions is PHP's own); false for an extension p8 lacks.
+/// phpversion($extension = null): PHP's version, or a loaded extension's
+/// (zend_get_module_version, any case); false for one p8 lacks or one
+/// without a version.
 fn phpversion(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let version = ctx.constant(b"PHP_VERSION").unwrap_or(Value::Bool(false));
     match args.first().map(Value::deref) {
-        None | Some(Value::Null) => Ok(version),
+        None | Some(Value::Null) => Ok(Value::str(crate::PHP_VERSION)),
         Some(ext) => {
-            let name = ext.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_ascii_lowercase();
-            Ok(if matches!(name.as_slice(), b"standard" | b"core") { version } else { Value::Bool(false) })
+            let name = ext.to_php_string().unwrap_or_else(PhpStr::empty);
+            let version = p8_runtime::info::loaded_module(ctx, name.as_bytes()).and_then(p8_runtime::info::module_version);
+            Ok(version.map_or(Value::Bool(false), Value::str))
         }
     }
 }

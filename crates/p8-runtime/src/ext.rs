@@ -112,6 +112,12 @@ pub trait Ctx {
     /// ini_set(): set a known directive for this request; its old value,
     /// or None for an unknown directive.
     fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value>;
+    /// A directive's master value (phpinfo()'s "Master Value"): the host's
+    /// setting for it, else its built-in default; None for an unknown
+    /// directive.
+    fn ini_master(&self, name: &[u8]) -> Option<Value> {
+        self.ini_get(name)
+    }
     /// error_get_last(): the last error not handled by a user handler, as
     /// (type, message, file, line); error_clear_last() when `clear`.
     fn last_error(&mut self, _clear: bool) -> Option<(i64, String, String, u32)> {
