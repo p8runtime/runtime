@@ -122,6 +122,9 @@ struct FnBuilder<'a> {
     class_index: HashMap<Vec<u8>, u16>,
     /// For a method: its class, as declared.
     class: Option<Text>,
+    /// A function's (not the main script's): superglobals are looked up
+    /// in the global table where they are used.
+    auto_globals: bool,
     is_static: bool,
     tries: Vec<TryCtx<'a>>,
     handlers: Vec<Handler>,
@@ -175,6 +178,7 @@ impl FnBuilder<'_> {
             classes: Vec::new(),
             class_index: HashMap::new(),
             class: None,
+            auto_globals: false,
             is_static: false,
             tries: Vec::new(),
             handlers: Vec::new(),
@@ -276,7 +280,15 @@ impl FnBuilder<'_> {
     fn cv(&mut self, name: &[u8]) -> Reg {
         let next = self.cvs.len();
         let index = *self.cvs.entry(name.to_vec()).or_insert(next);
-        reg(CV, index)
+        let r = reg(CV, index);
+        // In a function, a superglobal is the global table's variable at
+        // each use (`unset($GLOBALS['_GET'])` then `$_GET = …` makes it
+        // again, where a binding made once would keep the old one).
+        if self.auto_globals && SUPERGLOBALS.iter().any(|g| g.as_bytes() == name) {
+            let n = self.constant(Frozen::Str(Text::from(name)));
+            self.emit(Instr::rare(Rare::AutoGlobal, r, n, 0, 0));
+        }
+        r
     }
 
     fn constant(&mut self, value: Frozen) -> Reg {
@@ -1621,6 +1633,12 @@ impl<'src> Compiler<'src> {
                         continue;
                     }
                     match v {
+                        // `unset($_POST)`: the global itself, which stays
+                        // bound here (an auto-global).
+                        Expr::Variable { name, .. } if SUPERGLOBALS.iter().any(|g| self.text(*name).get(1..) == Some(g.as_bytes())) => {
+                            let n = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                            f.emit(Instr::rare(Rare::VarUnset, n, 1, 0, 0));
+                        }
                         Expr::Variable { name, .. } => {
                             let var = f.cv(&self.text(*name)[1..]);
                             f.emit(Instr::UnsetVar { var });
@@ -2021,15 +2039,9 @@ impl<'src> Compiler<'src> {
             let r = f.cv(&text[1..]);
             f.bound.push(r & ((1 << KIND_SHIFT) - 1));
         }
-        // Superglobals: the global variable in every scope, so a function
-        // that names one binds it first thing (as `global $_SERVER;`).
-        let span = match &body {
-            Body::Stmts(stmts) => stmts.first().zip(stmts.last()).map(|(a, b)| (a.span().start, b.span().end)),
-            Body::Expr(e) | Body::Get(e) | Body::Set(_, e) => Some((e.span().start, e.span().end)),
-        };
-        if let Some((start, end)) = span {
-            self.bind_superglobals(&mut f, start, end);
-        }
+        // Superglobals: the global variable in every scope, found at each
+        // use (FnBuilder::cv).
+        f.auto_globals = true;
         let mut captures = Vec::new();
         match body {
             Body::Stmts(body) => {

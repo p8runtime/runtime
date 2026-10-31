@@ -347,6 +347,11 @@ pub enum Rare {
     /// Throw an Error whose message is the string in a (what PHP finds
     /// wrong only as the code runs: `f($a[])` when f takes a value).
     ThrowError,
+    /// A function's CV a (a superglobal) is the global variable named by
+    /// the string in b, as it is now: PHP's auto-globals are looked up in
+    /// the global table at each use, never bound once. One not set stays
+    /// unset (a read is not a `global` statement, which makes it null).
+    AutoGlobal,
 }
 
 impl Instr {

@@ -1148,6 +1148,7 @@ impl Isolate {
             closures: Vec::new(),
             constants: indexmap::IndexMap::new(),
             globals: indexmap::IndexMap::new(),
+            main_cvs: None,
             out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false },
             request: None,
             main_return: None,
@@ -1238,6 +1239,10 @@ pub struct Context<'i> {
     /// Globals not held in the main frame's registers.
     /// In the order made, as PHP's symbol table ($GLOBALS, get_defined_vars).
     globals: indexmap::IndexMap<Vec<u8>, Rc<RefCell<Value>>>,
+    /// The main script's variables by name (its code, identified by its
+    /// address): superglobal uses look a global up each time, as PHP does
+    /// in its symbol table.
+    main_cvs: Option<(usize, HashMap<Vec<u8>, usize>)>,
     out: Output<'i>,
     diags: Vec<Diag>,
     /// ini settings this request changed (ini_set, error_reporting()).
@@ -3140,6 +3145,12 @@ impl Context<'_> {
                             self.var_unset(w, in_main, &name);
                         }
                     }
+                    Rare::AutoGlobal => {
+                        // The name is a constant string: read, not converted.
+                        let Value::Str(name) = self.operand(w, func, b) else { unreachable!("AutoGlobal names a constant string") };
+                        let main: &mut [Value] = if in_main { w } else { below };
+                        reg!(a) = Value::Ref(self.global_slot(main, name.as_bytes()));
+                    }
                     Rare::GlobalBind => {
                         let name = self.var_name(w, func, a);
                         let cell = make_ref(w, b);
@@ -4687,8 +4698,28 @@ impl Context<'_> {
         out
     }
 
+    /// The main script's variable `name`, by its register.
+    fn main_cv(&mut self, name: &[u8]) -> Option<usize> {
+        let code = &self.frames.first().expect("the main frame").func.code;
+        let key = Arc::as_ptr(code) as usize;
+        if self.main_cvs.as_ref().is_none_or(|(k, _)| *k != key) {
+            let index = code.cv_names.iter().enumerate().map(|(i, n)| (n.as_bytes().to_vec(), i)).collect();
+            self.main_cvs = Some((key, index));
+        }
+        self.main_cvs.as_ref().and_then(|(_, m)| m.get(name).copied())
+    }
+
+    /// The global variable `name`'s cell as it is now; one not set is a
+    /// new unset one (not null, as `global $x` makes it).
+    fn global_slot(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
+        if let Some(r) = self.main_cv(name) {
+            return make_ref(main, r as Reg);
+        }
+        self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Undef))).clone()
+    }
+
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
-        if let Some(r) = self.frames.first().expect("the main frame").func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
+        if let Some(r) = self.main_cv(name) {
             // `global $x` makes a global that is not set a null one.
             match &mut main[r] {
                 Value::Ref(cell) if matches!(*cell.borrow(), Value::Undef) => *cell.borrow_mut() = Value::Null,
