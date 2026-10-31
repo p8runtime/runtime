@@ -236,6 +236,7 @@ fn phpcredits(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// uname(2), as php_get_uname() reads it: one field, or all five ('a').
+#[cfg(unix)]
 fn uname(mode: char) -> String {
     let Ok(u) = nix::sys::utsname::uname() else { return String::new() };
     let field = |s: &std::ffi::OsStr| s.to_string_lossy().into_owned();
@@ -246,6 +247,25 @@ fn uname(mode: char) -> String {
         'v' => field(u.version()),
         'm' => field(u.machine()),
         _ => format!("{} {} {} {} {}", field(u.sysname()), field(u.nodename()), field(u.release()), field(u.version()), field(u.machine())),
+    }
+}
+
+/// What wasi-libc's uname() says: sysname, nodename, release, version,
+/// machine.
+#[cfg(target_os = "wasi")]
+pub(crate) const WASI_UNAME: [&str; 5] = ["wasi", "(none)", "0.0.0", "0.0.0", "wasm32"];
+
+/// uname(2), as php_get_uname() reads it: one field, or all five ('a').
+#[cfg(target_os = "wasi")]
+fn uname(mode: char) -> String {
+    let [sysname, nodename, release, version, machine] = WASI_UNAME;
+    match mode {
+        's' => sysname.into(),
+        'n' => nodename.into(),
+        'r' => release.into(),
+        'v' => version.into(),
+        'm' => machine.into(),
+        _ => format!("{sysname} {nodename} {release} {version} {machine}"),
     }
 }
 

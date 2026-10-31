@@ -14,6 +14,7 @@ pub mod number;
 pub mod numeric;
 pub mod object;
 pub mod ops;
+pub mod os;
 pub mod reflect;
 /// The builtins' declared signatures (for reflection).
 pub use p8_stubs as stubs;
