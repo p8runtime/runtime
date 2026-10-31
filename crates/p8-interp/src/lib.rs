@@ -3830,6 +3830,19 @@ impl Context<'_> {
                 Instr::AssignPropOp { op, obj, name, val, dst } => {
                     let target = self.operand(w, func, obj);
                     let y = self.operand(w, func, val);
+                    // The name's constant: the cache entry reads and writes use.
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                        && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
+                    {
+                        let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
+                        let r = ops::binary(op, &x, &y, &mut self.diags);
+                        self.report_diags();
+                        let v = r.map_err(|e| self.op_error(e))?;
+                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, v.clone())?;
+                        reg!(dst) = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
@@ -3859,10 +3872,27 @@ impl Context<'_> {
                     self.report_diags();
                     let v = r.map_err(|e| self.op_error(e))?;
                     self.write_prop(&target, &name, v.clone())?;
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && site.get().class != Rc::as_ptr(&o.class) as usize
+                    {
+                        self.remember_prop(site, o, &name);
+                    }
                     reg!(dst) = v;
                 }
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
                     let target = self.operand(w, func, obj);
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                        && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
+                    {
+                        let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
+                        let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
+                        self.report_diags();
+                        let new = r.map_err(|e| self.op_error(e))?;
+                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, new.clone())?;
+                        reg!(dst) = if post { old } else { new };
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
@@ -3892,6 +3922,11 @@ impl Context<'_> {
                     self.report_diags();
                     let new = r.map_err(|e| self.op_error(e))?;
                     self.write_prop(&target, &name, new.clone())?;
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && site.get().class != Rc::as_ptr(&o.class) as usize
+                    {
+                        self.remember_prop(site, o, &name);
+                    }
                     reg!(dst) = if post { old } else { new };
                 }
                 Instr::AssignPropDim { op, base: at, n, append, val, dst } => {
