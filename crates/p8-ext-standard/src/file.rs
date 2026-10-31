@@ -221,6 +221,7 @@ pub(crate) fn user_stat(ctx: &mut dyn Ctx, func: &str, path: &str, link: bool, q
 
 /// The uid this process runs as, which php_stat compares a file's owner
 /// with (getuid()): a new file's owner, learnt once.
+#[cfg(unix)]
 fn process_uid() -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
     static UID: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
@@ -231,6 +232,13 @@ fn process_uid() -> Option<u32> {
         let _ = std::fs::remove_file(&probe);
         uid
     })
+}
+
+/// The uid this process runs as: WASI has no users, and wasi-libc's stat()
+/// gives every file the owner 0.
+#[cfg(target_os = "wasi")]
+fn process_uid() -> Option<u32> {
+    Some(0)
 }
 
 /// is_readable/is_writable/is_executable for a user-space wrapper's stat:
@@ -282,6 +290,10 @@ pub(crate) fn os_error(e: &std::io::Error) -> String {
         std::io::ErrorKind::DirectoryNotEmpty => "Directory not empty".into(),
         std::io::ErrorKind::IsADirectory => "Is a directory".into(),
         std::io::ErrorKind::NotADirectory => "Not a directory".into(),
+        // What std says of a call WASI lacks (a process, a socket), as
+        // wasi-libc's strerror(ENOTSUP) says it.
+        #[cfg(target_os = "wasi")]
+        std::io::ErrorKind::Unsupported => "Not supported".into(),
         _ => {
             let s = e.to_string();
             match s.find(" (os error") {
@@ -1174,8 +1186,31 @@ fn file_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 pub(crate) fn mode_bits(p: &str) -> Option<u32> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p).ok().map(|m| m.permissions().mode())
+    use p8_runtime::os::MetadataExt;
+    std::fs::metadata(p).ok().map(|m| m.mode())
+}
+
+/// Whether the file allows what `bits` of a mode say (0o444 reading,
+/// 0o222 writing, 0o111 executing): is_readable() and the like.
+#[cfg(unix)]
+pub(crate) fn access(p: &str, bits: u32) -> bool {
+    mode_bits(p).is_some_and(|m| m & bits != 0)
+}
+
+/// Whether the file allows what `bits` of a mode say, as wasi-libc's
+/// access() answers: WASI has no permission bits, so a file may be read
+/// or written when its directory's rights let it be opened so, and
+/// executing is never refused.
+#[cfg(target_os = "wasi")]
+pub(crate) fn access(p: &str, bits: u32) -> bool {
+    let Ok(m) = std::fs::metadata(p) else { return false };
+    if bits & 0o222 != 0 {
+        if m.is_dir() { !m.permissions().readonly() } else { std::fs::OpenOptions::new().write(true).open(p).is_ok() }
+    } else if bits & 0o444 != 0 {
+        if m.is_dir() { std::fs::read_dir(p).is_ok() } else { std::fs::File::open(p).is_ok() }
+    } else {
+        true
+    }
 }
 
 fn is_readable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1183,7 +1218,7 @@ fn is_readable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, "is_readable", &p, false, |st| user_access(st, 0o400))? {
         return Ok(v);
     }
-    Ok(Value::Bool(mode_bits(&p).is_some_and(|m| m & 0o444 != 0)))
+    Ok(Value::Bool(access(&p, 0o444)))
 }
 
 fn is_writable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1192,7 +1227,7 @@ fn is_writable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, func, &p, false, |st| user_access(st, 0o200))? {
         return Ok(v);
     }
-    Ok(Value::Bool(mode_bits(&p).is_some_and(|m| m & 0o222 != 0)))
+    Ok(Value::Bool(access(&p, 0o222)))
 }
 
 fn is_executable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1200,7 +1235,7 @@ fn is_executable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     if let Some(v) = user_check(ctx, "is_executable", &p, false, |st| user_access(st, 0o100))? {
         return Ok(v);
     }
-    Ok(Value::Bool(Path::new(&p).is_file() && mode_bits(&p).is_some_and(|m| m & 0o111 != 0)))
+    Ok(Value::Bool(Path::new(&p).is_file() && access(&p, 0o111)))
 }
 
 /// A stat of `p`, or PHP's "stat failed" warning.
@@ -1251,7 +1286,6 @@ fn fileperms(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn chmod(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    use std::os::unix::fs::PermissionsExt;
     let p = path_arg(args);
     let mut call = [Value::str(p.as_str()), Value::Int(user_stream::META_ACCESS), Value::Int(arg(args, 1).to_int())];
     if let Some(done) = user_op(ctx, "chmod", &p, "stream_metadata", &mut call, None)? {
@@ -1259,7 +1293,7 @@ fn chmod(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     user_stream::clear_stat_cache(ctx);
     let mode = arg(args, 1).to_int() as u32;
-    let r = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode));
+    let r = p8_runtime::os::set_mode(&p, mode);
     Ok(match r {
         Ok(()) => Value::Bool(true),
         Err(e) => {
@@ -1281,7 +1315,7 @@ fn clearstatcache(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn temp_dir() -> String {
-    let d = std::env::temp_dir().to_string_lossy().into_owned();
+    let d = p8_runtime::os::temp_dir().to_string_lossy().into_owned();
     d.trim_end_matches('/').to_string()
 }
 
@@ -1328,7 +1362,7 @@ fn chdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn realpath(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
     let p = if p.is_empty() { ".".to_string() } else { p };
-    Ok(std::fs::canonicalize(&p).map_or(Value::Bool(false), |d| Value::Str(PhpStr::from(d.to_string_lossy().into_owned()))))
+    Ok(p8_runtime::os::canonicalize(&p).map_or(Value::Bool(false), |d| Value::Str(PhpStr::from(d.to_string_lossy().into_owned()))))
 }
 
 const PATHINFO_DIRNAME: i64 = 1;
@@ -1384,7 +1418,7 @@ fn pathinfo(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// PHP keeps and code like WordPress's theme scan shows), "." and ".."
 /// first.
 pub(crate) fn entries(p: &str) -> std::io::Result<Vec<Vec<u8>>> {
-    use std::os::unix::ffi::OsStrExt;
+    use p8_runtime::os::OsStrExt;
     let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
     for e in std::fs::read_dir(p)? {
         names.push(e?.file_name().as_bytes().to_vec());

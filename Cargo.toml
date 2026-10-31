@@ -165,3 +165,11 @@ router = [
 # modules: whole-program optimization lets them inline into one another.
 lto = "fat"
 codegen-units = 1
+
+# php2 for wasm32-wasip1 (packages/vite-plugin-p8): release, optimized for
+# size and without its symbol names, so the module a host downloads and
+# compiles is smaller; the native release profile is left as it is.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+strip = true

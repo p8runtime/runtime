@@ -17,16 +17,21 @@ p8-syntax = { path = "../p8-syntax" }
 p8-ext-tokenizer = { path = "../p8-ext-tokenizer" }
 p8-ext-mbstring = { path = "../p8-ext-mbstring" }
 p8-ext-pcre = { path = "../p8-ext-pcre" }
-p8-ext-mysqli = { path = "../p8-ext-mysqli" }
-p8-ext-curl = { path = "../p8-ext-curl" }
 p8-ext-gd = { path = "../p8-ext-gd" }
 p8-ext-zip = { path = "../p8-ext-zip" }
 p8-ext-fileinfo = { path = "../p8-ext-fileinfo" }
 p8-ext-session = { path = "../p8-ext-session" }
 p8-ext-pdo = { path = "../p8-ext-pdo" }
 p8-ext-pdo-sqlite = { path = "../p8-ext-pdo-sqlite" }
-p8-ext-sockets = { path = "../p8-ext-sockets" }
 p8-ext-openssl = { path = "../p8-ext-openssl" }
 p8-ext-intl = { path = "../p8-ext-intl" }
+
+# The extensions that exist to talk over the network (to a server, a
+# database or a socket): not in a WASI build, where wasm32-wasip1 has no
+# sockets; that p8 is a PHP built without them.
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+p8-ext-mysqli = { path = "../p8-ext-mysqli" }
+p8-ext-curl = { path = "../p8-ext-curl" }
+p8-ext-sockets = { path = "../p8-ext-sockets" }
 p8-ext-pdo-pgsql = { path = "../p8-ext-pdo-pgsql" }
 p8-ext-pdo-mysql = { path = "../p8-ext-pdo-mysql" }

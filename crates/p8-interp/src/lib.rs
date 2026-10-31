@@ -1974,7 +1974,7 @@ impl Context<'_> {
 
     /// Run a file's top-level code; returns the exit status.
     pub fn run_main(&mut self, main: Arc<Function>) -> i32 {
-        if let Ok(path) = std::fs::canonicalize(&*main.file) {
+        if let Ok(path) = p8_runtime::os::canonicalize(&*main.file) {
             self.included_order.push(path.to_string_lossy().into_owned());
             self.included.insert(path);
         }

@@ -487,7 +487,7 @@ fn temp_file(dir: &std::path::Path) -> Option<(std::fs::File, PathBuf)> {
     // number in base 32, then what mkstemp() adds.
     let random = |salt: u64| {
         let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u64(u64::from(std::process::id()) ^ salt);
+        h.write_u64(u64::from(p8_runtime::os::process_id().unwrap_or(0)) ^ salt);
         h.finish()
     };
     for attempt in 0..100 {
@@ -508,12 +508,24 @@ fn temp_file(dir: &std::path::Path) -> Option<(std::fs::File, PathBuf)> {
             })
             .collect();
         let path = dir.join(format!("php{prefix}{suffix}"));
-        use std::os::unix::fs::OpenOptionsExt;
-        if let Ok(f) = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
+        if let Ok(f) = create_private(&path) {
             return Some((f, path));
         }
     }
     None
+}
+
+/// A new file only its owner may read or write (mode 0600).
+#[cfg(unix)]
+fn create_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+}
+
+/// A new file: WASI has no permission bits.
+#[cfg(target_os = "wasi")]
+fn create_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path)
 }
 
 /// The system temporary directory, as sys_get_temp_dir() has it.

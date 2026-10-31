@@ -15,7 +15,7 @@ use p8_runtime::object::{Class, Native, Object};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cell::RefCell;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use p8_runtime::os::MetadataExt;
 use std::rc::Rc;
 
 type R = Result<Value, Throw>;
@@ -306,7 +306,7 @@ macro_rules! stat_getter {
     };
 }
 
-stat_getter!(get_perms, "getPerms", false, |m| Value::Int(m.permissions().mode() as i64));
+stat_getter!(get_perms, "getPerms", false, |m| Value::Int(m.mode() as i64));
 stat_getter!(get_inode, "getInode", false, |m| Value::Int(m.ino() as i64));
 stat_getter!(get_size, "getSize", false, |m| Value::Int(m.len() as i64));
 stat_getter!(get_owner, "getOwner", false, |m| Value::Int(m.uid() as i64));
@@ -317,7 +317,7 @@ stat_getter!(get_ctime, "getCTime", false, |m| Value::Int(m.ctime()));
 stat_getter!(get_type, "getType", true, |m| Value::str(file_type(&m)));
 
 fn file_type(m: &std::fs::Metadata) -> &'static str {
-    use std::os::unix::fs::FileTypeExt;
+    use p8_runtime::os::FileTypeExt;
     let t = m.file_type();
     if t.is_symlink() {
         "link"
@@ -346,7 +346,7 @@ fn check(ctx: &mut dyn Ctx, this: &Object, f: impl Fn(&str) -> bool) -> R {
 
 /// The access checks, as is_readable() and the like make them.
 fn mode_has(name: &str, bits: u32) -> bool {
-    crate::file::mode_bits(name).is_some_and(|m| m & bits != 0)
+    crate::file::access(name, bits)
 }
 
 fn is_writable(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -396,7 +396,7 @@ fn get_real_path(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
         None => return Ok(Value::Bool(false)),
     };
     let name = if name.is_empty() { b".".to_vec() } else { name };
-    Ok(match std::fs::canonicalize(s(&name)) {
+    Ok(match p8_runtime::os::canonicalize(s(&name)) {
         Ok(p) => string(p.into_os_string().into_encoded_bytes()),
         Err(_) => Value::Bool(false),
     })

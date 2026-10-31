@@ -12,7 +12,7 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use p8_runtime::os::{OsStrExt, OsStringExt};
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
@@ -199,12 +199,15 @@ fn passthru(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Null)
 }
 
+/// getmypid(): false where there are no processes (WASI), as PHP gives
+/// when getpid() fails.
 fn getmypid(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(i64::from(std::process::id())))
+    Ok(p8_runtime::os::process_id().map_or(Value::Bool(false), |pid| Value::Int(i64::from(pid))))
 }
 
 /// getrusage(int $mode = 0): this process's resource usage (1: its
 /// children's), with PHP's keys in its order.
+#[cfg(unix)]
 fn getrusage(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     use nix::sys::resource::{UsageWho, getrusage};
     let who = if args.first().is_some_and(|v| v.deref().to_int() == 1) { UsageWho::RUSAGE_CHILDREN } else { UsageWho::RUSAGE_SELF };
@@ -234,6 +237,13 @@ fn getrusage(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         out.insert(Key::from_string(PhpStr::from(k)), Value::Int(v));
     }
     Ok(Value::Array(Rc::new(out)))
+}
+
+/// getrusage(): false, as PHP gives when getrusage(2) fails: WASI has no
+/// resource usage to report.
+#[cfg(target_os = "wasi")]
+fn getrusage(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(false))
 }
 
 /// memory_get_usage(): p8 does not count PHP's allocations; a steady

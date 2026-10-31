@@ -618,7 +618,7 @@ fn write_file(zip: &mut Zip) -> Result<(), Error> {
         return Ok(());
     }
     let data = zip.a.build()?;
-    let tmp = format!("{}.{:x}", zip.path, std::process::id());
+    let tmp = format!("{}.{:x}", zip.path, p8_runtime::os::process_id().unwrap_or(0));
     std::fs::write(&tmp, &data).map_err(|e| Error::io(11, &e))?;
     if let Ok(m) = std::fs::metadata(&zip.path) {
         let _ = std::fs::set_permissions(&tmp, m.permissions());
@@ -808,13 +808,13 @@ fn file_source(ctx: &mut dyn Ctx, func: &str, path: &[u8], start: i64, len: i64,
 
 /// File attributes and time an added file carries.
 fn file_attrs(z: &mut Zip, i: usize) {
-    use std::os::unix::fs::PermissionsExt;
+    use p8_runtime::os::MetadataExt;
     let path = match &z.a.slots[i].cur.source {
         Source::File { path, .. } => path.clone(),
         _ => return,
     };
     if let Ok(m) = std::fs::metadata(&path) {
-        z.a.slots[i].cur.attr = (m.permissions().mode() & 0xFFFF) << 16;
+        z.a.slots[i].cur.attr = (m.mode() & 0xFFFF) << 16;
         if let Some(d) = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
             z.a.slots[i].cur.mtime = d.as_secs() as i64;
         }

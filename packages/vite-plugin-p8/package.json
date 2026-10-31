@@ -1,0 +1,33 @@
+{
+  "name": "vite-plugin-p8",
+  "version": "0.1.0",
+  "description": "PHP pages and templates in Vite, run by p8 (a PHP 8.4 runtime in Rust) as WebAssembly",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "php2.wasm"
+  ],
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "bench": "node scripts/bench.ts",
+    "dev": "vite example"
+  },
+  "peerDependencies": {
+    "vite": ">=6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7"
+  }
+}
