@@ -7,6 +7,7 @@ description = "p8's compiler: PHP AST to register bytecode"
 
 [dependencies]
 indexmap = "2.0"
+memchr = "2.7"
 p8-bytecode = { path = "../p8-bytecode" }
 p8-runtime = { path = "../p8-runtime" }
 p8-syntax = { path = "../p8-syntax" }

@@ -3900,6 +3900,7 @@ name = "p8-compiler"
 version = "0.1.0"
 dependencies = [
  "indexmap",
+ "memchr",
  "p8-bytecode",
  "p8-runtime",
  "p8-syntax",
