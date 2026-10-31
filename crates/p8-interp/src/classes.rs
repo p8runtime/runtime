@@ -1099,45 +1099,7 @@ impl Context<'_> {
         let name = self.prop_name(name)?;
         let object = self.target_object(target, &name, "assign")?;
         match self.prop_slot(&object, name.as_bytes())? {
-            Some((slot, prop)) => {
-                // Who may initialize a readonly property is its set
-                // visibility's business (implicitly protected(set)).
-                if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) {
-                    return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(&name))));
-                }
-                if prop.set_visibility.is_some() && !self.may_set(&object, &prop) {
-                    return Err(self.set_visibility_error(&prop, "modify"));
-                }
-                // A typed property: the value checked (and converted) by the
-                // writing code's strict_types.
-                let value = match &prop.ty_decl {
-                    Some(ty) => {
-                        let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
-                        match self.check_type(ty, &value, strict) {
-                            Ok(Some(converted)) => converted,
-                            Ok(None) => value,
-                            Err(()) => {
-                                return Err(self.throw(
-                                    "TypeError",
-                                    format!(
-                                        "Cannot assign {} to property {}::${} of type {}",
-                                        p8_runtime::args::value_name(&value),
-                                        text(&prop.declaring_name),
-                                        text(&name),
-                                        ty.shown()
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    None => value,
-                };
-                let mut slots = object.slots.borrow_mut();
-                match &slots[slot] {
-                    Value::Ref(cell) => *cell.borrow_mut() = value,
-                    _ => slots[slot] = value,
-                }
-            }
+            Some((slot, prop)) => self.write_slot(&object, slot, prop, &name, value)?,
             None => {
                 let key = Key::from_string(name.clone());
                 let exists = object.dynamic.borrow().contains_key(&key);
@@ -1151,6 +1113,51 @@ impl Context<'_> {
                 }
                 object.dynamic.borrow_mut().insert(key, value);
             }
+        }
+        Ok(())
+    }
+
+
+    /// Store `value` in declared property `slot` of `object` (`prop`, named
+    /// `name`): its readonly and set-visibility rules and its type checked,
+    /// as zend_std_write_property does once it has the property's offset.
+    pub(crate) fn write_slot(&mut self, object: &Object, slot: usize, prop: &Property, name: &PhpStr, value: Value) -> Result<(), Throw> {
+        // Who may initialize a readonly property is its set
+        // visibility's business (implicitly protected(set)).
+        if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) {
+            return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(name))));
+        }
+        if prop.set_visibility.is_some() && !self.may_set(object, prop) {
+            return Err(self.set_visibility_error(prop, "modify"));
+        }
+        // A typed property: the value checked (and converted) by the
+        // writing code's strict_types.
+        let value = match &prop.ty_decl {
+            Some(ty) => {
+                let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
+                match self.check_type(ty, &value, strict) {
+                    Ok(Some(converted)) => converted,
+                    Ok(None) => value,
+                    Err(()) => {
+                        return Err(self.throw(
+                            "TypeError",
+                            format!(
+                                "Cannot assign {} to property {}::${} of type {}",
+                                p8_runtime::args::value_name(&value),
+                                text(&prop.declaring_name),
+                                text(name),
+                                ty.shown()
+                            ),
+                        ));
+                    }
+                }
+            }
+            None => value,
+        };
+        let mut slots = object.slots.borrow_mut();
+        match &slots[slot] {
+            Value::Ref(cell) => *cell.borrow_mut() = value,
+            _ => slots[slot] = value,
         }
         Ok(())
     }

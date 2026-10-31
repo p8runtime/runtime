@@ -103,6 +103,19 @@ fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize)
     }
 }
 
+/// The declared slot a property write the cache answers goes to: as for
+/// a read; an unset slot only in a class without __set and its kin (writing
+/// one there may be theirs).
+#[inline]
+fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<usize> {
+    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+        return None;
+    }
+    let slot = site.slot as usize;
+    let unset = matches!(o.slots.borrow().get(slot)?, Value::Undef);
+    (!unset || o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0).then_some(slot)
+}
+
 impl Context<'_> {
     /// The running code's class (its address; 0 outside one): what a
     /// private or protected property's cache entry is valid for.
@@ -3777,6 +3790,16 @@ impl Context<'_> {
                 Instr::AssignProp { obj, name, val, dst } => {
                     let target = self.operand(w, func, obj);
                     let v = self.operand(w, func, val);
+                    // The name's constant: the same cache entry reads use.
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                        && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
+                    {
+                        let (o, pname) = (Rc::clone(o), pname.clone());
+                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, v.clone())?;
+                        reg!(dst) = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
@@ -3795,6 +3818,13 @@ impl Context<'_> {
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     self.write_prop(&target, &name, v.clone())?;
+                    // A site already holding this class missed for another
+                    // reason (an unset slot with __set): looking again finds the same.
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && site.get().class != Rc::as_ptr(&o.class) as usize
+                    {
+                        self.remember_prop(site, o, &name);
+                    }
                     reg!(dst) = v;
                 }
                 Instr::AssignPropOp { op, obj, name, val, dst } => {
