@@ -27,7 +27,7 @@ use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Ordering;
 use p8_runtime::fast::HashMap;
 use std::rc::Rc;
@@ -42,13 +42,68 @@ pub struct Closure {
     code: Arc<Function>,
     consts: Box<[Value]>,
     sites: Box<[OnceCell<Callee>]>,
+    /// Where `$o->name` found its property last, one entry per constant
+    /// (the name is one): PHP's runtime cache slot of FETCH_OBJ_R.
+    props: Box<[Cell<PropSite>]>,
 }
 
 impl Closure {
     fn new(code: Arc<Function>) -> Rc<Closure> {
         let consts = code.consts.iter().map(|c| c.to_value()).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
-        Rc::new(Closure { code, consts, sites })
+        let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
+        Rc::new(Closure { code, consts, sites, props })
+    }
+}
+
+/// A property read's cache entry: objects of `class` (its address), read
+/// from code in `scope` (0: any, for a public property), keep it at `slot`.
+/// What it skips on a hit is the name lookup and the visibility check, as
+/// PHP's does (zend_fetch_property_address / FETCH_OBJ_R's CACHED_PTR).
+#[derive(Clone, Copy, Default)]
+struct PropSite {
+    class: usize,
+    scope: usize,
+    slot: u32,
+}
+
+/// A property read the cache answers: the same class, a scope that may
+/// see it, an object not lazy, and a value there (an unset one takes the
+/// full path: its warning, __get).
+#[inline]
+fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<Value> {
+    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+        return None;
+    }
+    match o.slots.borrow().get(site.slot as usize)? {
+        Value::Undef => None,
+        Value::Ref(cell) => Some(cell.borrow().clone()),
+        v => Some(v.clone()),
+    }
+}
+
+impl Context<'_> {
+    /// The running code's class (its address; 0 outside one): what a
+    /// private or protected property's cache entry is valid for.
+    #[inline]
+    fn scope_addr(&self) -> usize {
+        self.frames.last().and_then(|f| f.scope.as_ref()).map_or(0, |c| Rc::as_ptr(c) as usize)
+    }
+
+    /// After a full property read: remember where a declared, visible,
+    /// hookless property of this class is, for the next read here.
+    fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, name: &Value) {
+        let Value::Str(name) = name else { return };
+        let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes()) else { return };
+        if prop.hooks != 0 {
+            return;
+        }
+        // Any scope may use a public property's entry, unless a parent's
+        // private one of the same name is there too (which one a scope
+        // sees then depends on it).
+        let shared = o.class.slots.get(name.as_bytes()).is_some_and(|slots| slots.len() == 1);
+        let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { self.scope_addr() };
+        site.set(PropSite { class: Rc::as_ptr(&o.class) as usize, scope, slot: slot as u32 });
     }
 }
 
@@ -3611,6 +3666,14 @@ impl Context<'_> {
                 },
                 Instr::FetchProp { dst, obj, name, quiet } => {
                     let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
+                    // The name's constant: its cache entry.
+                    let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
+                    {
+                        reg!(dst) = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let name = reg!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
@@ -3646,6 +3709,9 @@ impl Context<'_> {
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
+                    if let (Some(site), Value::Object(o)) = (site, &target) {
+                        self.remember_prop(site, o, &name);
+                    }
                 }
                 Instr::AssignProp { obj, name, val, dst } => {
                     let target = self.operand(w, func, obj);

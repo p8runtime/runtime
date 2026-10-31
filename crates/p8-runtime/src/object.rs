@@ -19,7 +19,6 @@ use crate::ext::{Ctx, Throw};
 use crate::string::PhpStr;
 use crate::value::Value;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Who may see a member.

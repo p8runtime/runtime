@@ -885,7 +885,7 @@ impl Context<'_> {
 
     /// The declared slot (or None: dynamic) of property `name` on
     /// `object`, after the visibility check for code in the current scope.
-    fn prop_slot<'o>(&self, object: &'o Object, name: &[u8]) -> Result<Option<(usize, &'o Property)>, Throw> {
+    pub(crate) fn prop_slot<'o>(&self, object: &'o Object, name: &[u8]) -> Result<Option<(usize, &'o Property)>, Throw> {
         let scope = self.scope().0;
         let Some(slot) = object.class.slot(name, scope.as_ref().map(|s| s.lower.as_slice())) else { return Ok(None) };
         // Borrowed from the class: a property read must not copy its
