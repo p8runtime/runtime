@@ -3691,12 +3691,10 @@ impl Context<'_> {
                         self.resolve_class(regs, &class)?;
                         return Ok(Next::Go(at));
                     }
-                    let (object, ctor) = {
+                    let object = {
                         let read = |i: usize| if i < base { below[i].clone() } else { w[i - base].clone() };
                         self.instantiate(&read, class)?
                     };
-                    // Construct finds the constructor again, after the arguments.
-                    drop(ctor);
                     // Not destructed unless constructed (an argument may throw first).
                     object.destructed.set(true);
                     reg!(dst) = Value::Object(object);

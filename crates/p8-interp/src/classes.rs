@@ -629,15 +629,22 @@ impl Context<'_> {
         }
     }
 
-    /// `new C(args)`: the object, and its constructor's frame (if any).
-    pub(crate) fn instantiate(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
-        self.instantiate_as(regs, class, true)
+    /// `new C(args)`: the object, once its constructor (if any) may be
+    /// called from here (ZEND_NEW checks that before the arguments; the
+    /// Construct after them makes the call).
+    pub(crate) fn instantiate(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>) -> Result<Rc<Object>, Throw> {
+        Ok(self.make_object(regs, class, true, false)?.0)
     }
 
-    /// `instantiate`, with `construct` false for an object made without
-    /// its constructor (newInstanceWithoutConstructor): then the
-    /// constructor's visibility does not matter.
+    /// `instantiate`, also giving the constructor's frame; with `construct`
+    /// false for an object made without its constructor
+    /// (newInstanceWithoutConstructor): then the constructor's visibility
+    /// does not matter.
     pub(crate) fn instantiate_as(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>, construct: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
+        self.make_object(regs, class, construct, true)
+    }
+
+    fn make_object(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>, construct: bool, frame: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
         if class.flags & CLASS_INTERFACE != 0 {
             return Err(self.throw("Error", format!("Cannot instantiate interface {}", text(&class.name))));
         }
@@ -668,12 +675,17 @@ impl Context<'_> {
             let trace = self.trace(regs);
             class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
         }
-        let Some(ctor) = class.method(b"__construct").cloned() else { return Ok((object, None)) };
+        // Borrowed from the class: a `new` must not copy the declaration.
+        let Some(ctor) = class.method(b"__construct") else { return Ok((object, None)) };
         if !construct {
             return Ok((object, None));
         }
+        // A public constructor may be called from anywhere.
+        if ctor.visibility == Visibility::Public && !frame {
+            return Ok((object, None));
+        }
         let declaring = self.declaring(&class, &ctor.declaring);
-        if !visible(ctor.visibility, &declaring, self.scope().0.as_deref()) {
+        if !visible(ctor.visibility, &declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
             let t = self.throw("Error", format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()));
             // Made while the object still is (PHP numbers the Error after it).
             let e = self.exception(regs, t);
@@ -682,7 +694,10 @@ impl Context<'_> {
             drop(object);
             return Err(e);
         }
-        let func = self.code_of(&ctor);
+        if !frame {
+            return Ok((object, None));
+        }
+        let func = self.code_of(ctor);
         Ok((Rc::clone(&object), Some(MethodFrame::method(func, Some(object), declaring, class))))
     }
 
