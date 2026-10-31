@@ -20,7 +20,7 @@ fn stub_type(mask: u32, classes: &'static [&'static str]) -> Option<TypeDecl> {
         return None;
     }
     let names: Vec<p8_runtime::frozen::Text> = classes.iter().map(|c| p8_runtime::frozen::Text::from(*c)).collect();
-    Some(TypeDecl { mask, classes: names.clone(), written: names, intersection: false })
+    Some(TypeDecl::new(mask, names.clone(), names, false))
 }
 
 impl Context<'_> {

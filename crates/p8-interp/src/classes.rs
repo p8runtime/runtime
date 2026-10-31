@@ -1494,13 +1494,13 @@ impl Context<'_> {
     /// the converted value, Ok(None) as it is, Err a TypeError's case.
     /// (A deprecation it brings is reported here.)
     pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, ()> {
-        let (scope, called) = self.scope();
+        let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
         let is_a = |o: &Object, name: &[u8]| match name {
-            b"self" => scope.as_ref().is_some_and(|s| o.class.is_a(&s.lower)),
-            b"parent" => scope.as_ref().and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
+            b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
+            b"parent" => scope.and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
             n => o.class.is_a(n),
         };
-        let static_ok = |o: &Object| called.as_ref().is_some_and(|c| o.class.is_a(&c.lower));
+        let static_ok = |o: &Object| called.is_some_and(|c| o.class.is_a(&c.lower));
         let verdict = ty.verify(v, strict, &is_a, &static_ok);
         match verdict {
             p8_runtime::types::Verdict::Accepted(c) => Ok(c),
@@ -1532,7 +1532,9 @@ impl Context<'_> {
         let caller = (n >= 2 && n - 1 > self.frames.floor.saturating_sub(1)).then(|| &self.frames.slots[n - 2]);
         let from_native = self.natives.iter().any(|x| x.depth == n - 1);
         let strict = !from_native && caller.is_some_and(|c| c.func.code.strict);
-        let called_at = match caller {
+        // Where the call was made, for a TypeError's message: only once a
+        // check fails (the frames are as they were here by then).
+        let called_at = |cx: &Self| match (n >= 2 && n - 1 > cx.frames.floor.saturating_sub(1)).then(|| &cx.frames.slots[n - 2]) {
             Some(c) if !from_native => {
                 let line = c.func.code.lines.get((c.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
                 Some((Rc::<str>::from(&*c.func.code.file), line))
@@ -1558,7 +1560,7 @@ impl Context<'_> {
                                 Key::Int(j) => i as i64 + j + 1,
                                 Key::Str(_) => i as i64 + 1,
                             };
-                            return Err(self.arg_type_error(pos as usize, None, ty, &v.deref(), called_at.clone()));
+                            return Err(self.arg_type_error(pos as usize, None, ty, &v.deref(), called_at(self)));
                         }
                     }
                 }
@@ -1573,7 +1575,7 @@ impl Context<'_> {
                 Ok(converted) => converted,
                 Err(()) => match self.stringable(regs, ty, &v, strict)? {
                     Some(s) => Some(s),
-                    None => return Err(self.arg_type_error(i + 1, Some(&p.name), ty, &v, called_at)),
+                    None => return Err(self.arg_type_error(i + 1, Some(&p.name), ty, &v, called_at(self))),
                 },
             };
             if let Some(converted) = converted {

@@ -3031,7 +3031,7 @@ impl<'src> Compiler<'src> {
     fn type_decl(&self, t: &p8_syntax::ast::Type) -> p8_runtime::types::TypeDecl {
         use p8_runtime::types::*;
         use p8_syntax::ast::Type;
-        let mut d = p8_runtime::types::TypeDecl { mask: 0, classes: Vec::new(), written: Vec::new(), intersection: false };
+        let mut d = p8_runtime::types::TypeDecl::new(0, Vec::new(), Vec::new(), false);
         fn add(c: &Compiler, t: &Type, d: &mut p8_runtime::types::TypeDecl) {
             match t {
                 Type::Simple(token) => add_word(c, c.text(token.span), d),
@@ -3094,7 +3094,7 @@ impl<'src> Compiler<'src> {
             d.mask |= bit;
         }
         add(self, t, &mut d);
-        d
+        p8_runtime::types::TypeDecl::new(d.mask, d.classes, d.written, d.intersection)
     }
 
     /// Call the callable [a, b] (a method named at run time).
