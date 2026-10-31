@@ -72,3 +72,6 @@ var_dump(grapheme_extract($s, 2, GRAPHEME_EXTR_COUNT, 0, $next), $next, grapheme
 var_dump(idn_to_ascii('bücher.de'), idn_to_utf8('xn--bcher-kva.de'), idn_to_ascii('faß.de'), idn_to_ascii('faß.de', 0), idn_to_ascii('-a.de', IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46, $info), $info);
 
 var_dump(IntlChar::ord('A'), IntlChar::chr(0x1F600), IntlChar::charType('A') === IntlChar::CHAR_CATEGORY_UPPERCASE_LETTER, IntlChar::isalpha('é'), IntlChar::isdigit('٣'), IntlChar::charDigitValue('٣'), IntlChar::toupper('ß'), IntlChar::tolower(0x41), IntlChar::totitle('ǆ'), IntlChar::isupper('A'), IntlChar::ispunct('!'), IntlChar::isspace("\t"), IntlChar::isWhitespace("\u{00A0}"), IntlChar::charMirror('('), IntlChar::getBidiPairedBracket(']'), IntlChar::charDirection('a'), IntlChar::getCombiningClass("\u{0301}"), IntlChar::hasBinaryProperty('a', IntlChar::PROPERTY_ALPHABETIC), IntlChar::getIntPropertyValue('a', IntlChar::PROPERTY_SCRIPT), IntlChar::getBlockCode('a') === IntlChar::BLOCK_CODE_BASIC_LATIN, IntlChar::digit('f', 16), IntlChar::digit('z'), IntlChar::forDigit(11, 16), IntlChar::foldCase('A'), IntlChar::ord('ab'), intl_get_error_message());
+
+// The Unicode version the properties are of, as IntlChar::UNICODE_VERSION says.
+var_dump(IntlChar::getUnicodeVersion(), implode('.', array_slice(IntlChar::getUnicodeVersion(), 0, 2)) === IntlChar::UNICODE_VERSION);

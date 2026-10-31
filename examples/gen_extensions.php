@@ -117,7 +117,7 @@ const SOURCES = [
         'ICU version' => 'const:INTL_ICU_VERSION',
         'ICU Data version' => 'const:INTL_ICU_DATA_VERSION',
         'ICU TZData version' => 'call:IntlTimeZone::getTZDataVersion',
-        'ICU Unicode version' => 'omit',
+        'ICU Unicode version' => 'const:IntlChar::UNICODE_VERSION',
     ],
     'mysqli' => [
         'Client API library version' => 'call:mysqli_get_client_info',

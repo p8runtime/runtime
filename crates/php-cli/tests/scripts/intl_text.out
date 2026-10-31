@@ -123,3 +123,14 @@ int(98)
 string(1) "a"
 NULL
 string(126) "Passing a UTF-8 character for codepoint requires a string which is exactly one UTF-8 codepoint long.: U_ILLEGAL_ARGUMENT_ERROR"
+array(4) {
+  [0]=>
+  int(16)
+  [1]=>
+  int(0)
+  [2]=>
+  int(0)
+  [3]=>
+  int(0)
+}
+bool(true)

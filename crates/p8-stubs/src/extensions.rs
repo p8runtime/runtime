@@ -504,6 +504,7 @@ pub static MODULES: &[ModuleSpec] = &[
             "ICU version => {const:INTL_ICU_VERSION}",
             "ICU Data version => {const:INTL_ICU_DATA_VERSION}",
             "ICU TZData version => {call:IntlTimeZone::getTZDataVersion}",
+            "ICU Unicode version => {const:IntlChar::UNICODE_VERSION}",
             "{ini}",
         ],
     },
