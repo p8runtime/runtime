@@ -99,6 +99,7 @@ fn main() -> anyhow::Result<()> {
         let record = json!({
             "p8": commit,
             "php": php_version,
+            "reference": cli.reference,
             "machine": machine()?,
             "runs": cli.runs,
             "ran": now()?,
