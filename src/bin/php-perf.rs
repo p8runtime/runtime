@@ -170,10 +170,11 @@ fn reference_version(reference: &str) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// What a snippet measures: its first comment line.
+/// What a snippet measures: its first comment, its lines joined.
 fn about(file: &Path) -> anyhow::Result<String> {
     let text = std::fs::read_to_string(file)?;
-    Ok(text.lines().find_map(|l| l.strip_prefix("// ")).unwrap_or_default().trim_end_matches(':').to_string())
+    let comment: Vec<&str> = text.lines().skip_while(|l| !l.starts_with("// ")).map_while(|l| l.strip_prefix("// ")).collect();
+    Ok(comment.join(" "))
 }
 
 /// Where it ran: the host's name, OS and CPU architecture.
