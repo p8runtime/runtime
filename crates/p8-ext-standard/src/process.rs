@@ -232,7 +232,7 @@ fn getrusage(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         ("ru_stime.tv_usec", i64::from(st.tv_usec())),
         ("ru_stime.tv_sec", st.tv_sec()),
     ];
-    let mut out = PhpArray::new();
+    let mut out = PhpArray::hashed(fields.len());
     for (k, v) in fields {
         out.insert(Key::from_string(PhpStr::from(k)), Value::Int(v));
     }

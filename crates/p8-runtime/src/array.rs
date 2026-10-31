@@ -241,6 +241,13 @@ impl PhpArray {
         PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0 }
     }
 
+    /// An empty array sized for `capacity` keyed entries (array_init_size,
+    /// as builtins returning a record make theirs): no growth while it fills.
+    pub fn hashed(capacity: usize) -> Self {
+        let h = Hashed { entries: Vec::with_capacity(capacity), index: HashTable::with_capacity(capacity), live: 0 };
+        PhpArray { storage: Storage::Hashed(h), next_free: None, cursor: 0 }
+    }
+
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);

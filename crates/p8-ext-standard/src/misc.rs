@@ -427,7 +427,7 @@ fn gc_mem_caches(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 /// gc_status(): the collector's counters, as PHP 8.4 reports them.
 fn gc_status(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let (runs, collected) = ctx.gc_counts();
-    let mut out = PhpArray::new();
+    let mut out = PhpArray::hashed(12);
     for (k, v) in [
         ("running", Value::Bool(false)),
         ("protected", Value::Bool(false)),
