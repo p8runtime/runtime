@@ -142,7 +142,7 @@ pub enum Native {
 
 /// A class's methods by lowercase name, in declaration order (inherited
 /// ones first): PHP reports and lists them in that order.
-pub type Methods = indexmap::IndexMap<Vec<u8>, Method>;
+pub type Methods = crate::fast::IndexMap<Vec<u8>, Method>;
 
 /// A method in a class's table.
 #[derive(Debug, Clone)]
@@ -163,7 +163,7 @@ pub struct Method {
 }
 
 /// A class's constants by name, in the order they were declared.
-pub type Constants = indexmap::IndexMap<Vec<u8>, Constant>;
+pub type Constants = crate::fast::IndexMap<Vec<u8>, Constant>;
 
 /// A class constant.
 #[derive(Debug, Clone)]
@@ -197,14 +197,14 @@ pub struct Class {
     pub properties: Vec<Property>,
     /// Each property name's slots; more than one when a parent's private
     /// property shares a name with a subclass's.
-    pub slots: HashMap<Vec<u8>, Vec<usize>>,
+    pub slots: crate::fast::HashMap<Vec<u8>, Vec<usize>>,
     /// Lowercase name → method, inherited ones included.
     pub methods: Methods,
     /// In declaration order (reflection lists them so).
     pub constants: Constants,
     /// Static properties: a subclass shares its parent's cell unless it
     /// redeclares the property.
-    pub statics: HashMap<Vec<u8>, Static>,
+    pub statics: crate::fast::HashMap<Vec<u8>, Static>,
     /// What var_dump and print_r show of an object instead of its
     /// properties (a Closure's name, file, bindings).
     pub debug_info: Option<fn(&Object) -> PhpArray>,

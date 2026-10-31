@@ -9,3 +9,5 @@ description = "p8's values: scalars, strings, arrays, references, and PHP 8.4's 
 p8-stubs = { path = "../p8-stubs" }
 hashbrown = { version = "0.16", default-features = false }
 indexmap = "2.0"
+# The name tables' hasher (see fast.rs); already hashbrown's default.
+foldhash = "0.1"

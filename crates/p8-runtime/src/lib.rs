@@ -7,6 +7,7 @@ pub mod sort;
 pub mod args;
 pub mod array;
 pub mod ext;
+pub mod fast;
 pub mod frozen;
 pub mod gc;
 pub mod info;

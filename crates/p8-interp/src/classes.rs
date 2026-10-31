@@ -17,7 +17,7 @@ use p8_runtime::object::{
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -306,7 +306,7 @@ impl Context<'_> {
         // Traits: their methods (the class's own win, then theirs over
         // the parent's), properties, statics and constants, as the class's.
         let own: Vec<Vec<u8>> = def.methods.iter().map(|m| m.func.name.as_bytes().to_ascii_lowercase()).collect();
-        let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::new();
+        let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::default();
         let mut trait_order: Vec<Vec<u8>> = Vec::new();
         for tname in &def.traits {
             let t = self.lookup_class(tname)?;
@@ -472,7 +472,7 @@ impl Context<'_> {
                 );
             }
         }
-        let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+        let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
         for (i, p) in properties.iter().enumerate() {
             slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
         }
@@ -546,7 +546,7 @@ impl Context<'_> {
         }
         // PHP's order: the class's own methods, the inherited ones, then
         // the traits' (get_class_methods, reflection).
-        let mut ordered = p8_runtime::object::Methods::with_capacity(methods.len());
+        let mut ordered = p8_runtime::object::Methods::with_capacity_and_hasher(methods.len(), Default::default());
         for key in &own {
             if let Some(m) = methods.shift_remove(key) {
                 ordered.insert(key.clone(), m);
@@ -885,10 +885,12 @@ impl Context<'_> {
 
     /// The declared slot (or None: dynamic) of property `name` on
     /// `object`, after the visibility check for code in the current scope.
-    fn prop_slot(&self, object: &Object, name: &[u8]) -> Result<Option<(usize, Property)>, Throw> {
+    fn prop_slot<'o>(&self, object: &'o Object, name: &[u8]) -> Result<Option<(usize, &'o Property)>, Throw> {
         let scope = self.scope().0;
         let Some(slot) = object.class.slot(name, scope.as_ref().map(|s| s.lower.as_slice())) else { return Ok(None) };
-        let prop = object.class.properties[slot].clone();
+        // Borrowed from the class: a property read must not copy its
+        // declaration (and the declaring name's allocation) each time.
+        let prop = &object.class.properties[slot];
         let declaring = self.declaring(&object.class, &prop.declaring);
         if !visible(prop.visibility, &declaring, scope.as_deref()) {
             // A parent's private property is invisible here: as if absent.

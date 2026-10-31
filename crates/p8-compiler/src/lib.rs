@@ -20,8 +20,8 @@ use p8_runtime::frozen::{Frozen, Text};
 use p8_syntax::literal::{self, Number};
 use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, MagicConstKind, Stmt, StmtId, UnaryOp};
 use p8_syntax::span::Span;
-use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use p8_runtime::fast::IndexMap;
+use p8_runtime::fast::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// What the compiler cannot (yet) compile, or a compile-time error.
@@ -163,20 +163,20 @@ impl FnBuilder<'_> {
             code: Vec::new(),
             lines: Vec::new(),
             consts: Vec::new(),
-            const_index: HashMap::new(),
-            cvs: IndexMap::new(),
+            const_index: HashMap::default(),
+            cvs: IndexMap::default(),
             temps: 0,
             floor: 0,
             max_temps: 0,
             sites: Vec::new(),
-            site_index: HashMap::new(),
+            site_index: HashMap::default(),
             loops: Vec::new(),
             params: Vec::new(),
             returns_ref: false,
             line: 1,
             decl_line: 1,
             classes: Vec::new(),
-            class_index: HashMap::new(),
+            class_index: HashMap::default(),
             class: None,
             auto_globals: false,
             is_static: false,
@@ -189,7 +189,7 @@ impl FnBuilder<'_> {
             decls: Vec::new(),
             silences: Vec::new(),
             loops_made: 0,
-            labels: HashMap::new(),
+            labels: HashMap::default(),
             gotos: Vec::new(),
             meta: Meta::default(),
         }
@@ -1007,9 +1007,9 @@ impl<'src> Compiler<'src> {
             file: Arc::from(file),
             line_starts,
             functions: Vec::new(),
-            by_ref: HashMap::new(),
-            top_functions: HashSet::new(),
-            top_classes: HashSet::new(),
+            by_ref: HashMap::default(),
+            top_functions: HashSet::default(),
+            top_classes: HashSet::default(),
             declaring_top: false,
             classes: Vec::new(),
             scope: None,
@@ -1018,9 +1018,9 @@ impl<'src> Compiler<'src> {
             ns: Vec::new(),
             eval: false,
             enum_backing: None,
-            use_classes: HashMap::new(),
-            use_functions: HashMap::new(),
-            use_consts: HashMap::new(),
+            use_classes: HashMap::default(),
+            use_functions: HashMap::default(),
+            use_consts: HashMap::default(),
             anonymous: 0,
             hook_value: false,
             ref_for_unset: false,
