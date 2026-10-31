@@ -616,6 +616,27 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
         }
         let switch = loop {
             match code[pc] {
+                // `$this`, in a method that has one (else `step` raises).
+                Instr::This { dst } => match &top.this {
+                    Some(this) => {
+                        w[dst as usize] = Value::Object(Rc::clone(this));
+                        pc += 1;
+                    }
+                    None => return pc,
+                },
+                // A property read the name's cache entry answers (anything
+                // else, `step`: a miss, an unset slot, a reference operand).
+                Instr::FetchProp { dst, obj, name, .. } => {
+                    let site = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i));
+                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                    let hit = match (site, &w[obj as usize]) {
+                        (Some(site), Value::Object(o)) => cached_prop(site.get(), o, scope),
+                        _ => None,
+                    };
+                    let Some(v) = hit else { return pc };
+                    w[dst as usize] = v;
+                    pc += 1;
+                }
                 Instr::Jump { target } => {
                     if back(target, pc) {
                         return pc;
