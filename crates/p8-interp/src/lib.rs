@@ -890,7 +890,6 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::AssignPropDim { .. }
                 | Instr::IssetProp { .. }
                 | Instr::UnsetProp { .. }
-                | Instr::MethodCall { .. }
                 | Instr::StaticCall { .. }
                 | Instr::ClassConst { .. }
                 | Instr::FetchStaticProp { .. }
@@ -903,6 +902,7 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 // Calls and returns leave this loop, so the loop itself
                 // keeps only the code and the registers live.
                 Instr::Call { site, base: args, argc: n, dst } => break Switch::Call(site, args, n, dst),
+                Instr::MethodCall { dst, obj, method, base: args, argc: n } => break Switch::Method(dst, obj, method, args, n),
                 Instr::Return { src } => break Switch::Return(src),
                 Instr::ReturnNull => break Switch::ReturnNull,
             }
@@ -920,6 +920,42 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     caller.pc = (pc + 1) as u32;
                 }
                 frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                enter(frames, regs);
+                pc = 0;
+            }
+            Switch::Method(dst, obj, method, args, n) => {
+                // A user method the call site's cache names for this class
+                // and scope, on an object, with its required arguments, and
+                // no interrupt pending: anything else is `step`'s.
+                let Value::Object(o) = &regs[base + obj as usize] else { return pc };
+                let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                let (target, declaring) = {
+                    let site = clo.methods[method as usize].borrow();
+                    let Some(s) = site.as_ref() else { return pc };
+                    if s.class != Rc::as_ptr(&o.class) as usize || s.scope != scope || s.is_static {
+                        return pc;
+                    }
+                    let MethodCode::User(code) = &s.code else { return pc };
+                    let (Some(target), Some(declaring)) = (code.upgrade(), s.declaring.upgrade()) else { return pc };
+                    (target, declaring)
+                };
+                if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                    return pc;
+                }
+                let this = Rc::clone(o);
+                // A temporary (`(new A)->f()`) is released as it is used:
+                // the call's `$this` holds the object.
+                if is_temp(&clo.code, obj) {
+                    clear(&mut regs[base + obj as usize]);
+                }
+                if let Some(caller) = frames.last_mut() {
+                    caller.pc = (pc + 1) as u32;
+                }
+                frames.push(&target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                let frame = frames.last_mut().expect("the frame just pushed");
+                frame.called = Some(Rc::clone(&this.class));
+                frame.this = Some(this);
+                frame.scope = Some(declaring);
                 enter(frames, regs);
                 pc = 0;
             }
@@ -953,6 +989,8 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
 /// count and result register) or a return (of a register, or of null).
 enum Switch {
     Call(u16, Reg, u8, Reg),
+    /// A method call: dst, obj, method (cache index), args, argc.
+    Method(Reg, Reg, u16, Reg, u8),
     Return(Reg),
     ReturnNull,
 }
