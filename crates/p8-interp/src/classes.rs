@@ -546,15 +546,34 @@ impl Context<'_> {
         }
         // PHP's order: the class's own methods, the inherited ones, then
         // the traits' (get_class_methods, reflection).
+        // One pass over the methods, not a removal (which shifts all after
+        // it) per own or trait method.
         let mut ordered = p8_runtime::object::Methods::with_capacity_and_hasher(methods.len(), Default::default());
+        let own_set: p8_runtime::fast::HashSet<&[u8]> = own.iter().map(Vec::as_slice).collect();
+        let trait_set: p8_runtime::fast::HashSet<&[u8]> = trait_order.iter().map(Vec::as_slice).collect();
+        let mut own_methods = p8_runtime::fast::HashMap::default();
+        let mut trait_methods = p8_runtime::fast::HashMap::default();
+        let mut inherited = Vec::with_capacity(methods.len());
+        for (k, m) in methods {
+            if own_set.contains(k.as_slice()) {
+                own_methods.insert(k, m);
+            } else if trait_set.contains(k.as_slice()) {
+                trait_methods.insert(k, m);
+            } else {
+                inherited.push((k, m));
+            }
+        }
         for key in &own {
-            if let Some(m) = methods.shift_remove(key) {
+            if let Some(m) = own_methods.remove(key) {
                 ordered.insert(key.clone(), m);
             }
         }
-        let traits: Vec<(Vec<u8>, Method)> = trait_order.iter().filter_map(|k| methods.shift_remove(k).map(|m| (k.clone(), m))).collect();
-        ordered.extend(methods);
-        ordered.extend(traits);
+        ordered.extend(inherited);
+        for key in &trait_order {
+            if let Some(m) = trait_methods.remove(key) {
+                ordered.insert(key.clone(), m);
+            }
+        }
         let methods = ordered;
         let native_dtor = parent.as_ref().and_then(|p| p.native_dtor);
         let destructor = if methods.contains_key(b"__destruct".as_slice()) || native_dtor.is_some() { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
