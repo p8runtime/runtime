@@ -1055,7 +1055,7 @@ impl Context<'_> {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
                 }
-                if prop.set_visibility.is_some() && !self.may_set(&object, &prop) {
+                if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
                     // An object is handed out as a copy (writes through it
                     // change the object, not the property).
                     match object.slots.borrow()[slot].deref() {
@@ -1063,7 +1063,7 @@ impl Context<'_> {
                         Value::Undef if for_unset => return Ok(Rc::new(RefCell::new(Value::Null))),
                         _ => {}
                     }
-                    return Err(self.set_visibility_error(&prop, "indirectly modify"));
+                    return Err(self.set_visibility_error(prop, "indirectly modify"));
                 }
                 Ok(crate::refs::make_ref(&mut object.slots.borrow_mut()[slot]))
             }
@@ -1095,11 +1095,11 @@ impl Context<'_> {
             return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&pname))));
         }
         match self.prop_slot(&object, pname.as_bytes())? {
-            Some((slot, prop)) if prop.set_visibility.is_some() && !self.may_set(&object, &prop) => {
+            Some((slot, prop)) if prop.set_visibility.is_some() && !self.may_set(&object, prop) => {
                 if matches!(object.slots.borrow()[slot].deref(), Value::Object(_)) {
                     return Err(self.throw("Error", "Cannot assign by reference to overloaded object"));
                 }
-                return Err(self.set_visibility_error(&prop, "indirectly modify"));
+                return Err(self.set_visibility_error(prop, "indirectly modify"));
             }
             Some((slot, _)) => object.slots.borrow_mut()[slot] = Value::Ref(cell),
             None => {
@@ -1265,8 +1265,8 @@ impl Context<'_> {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot unset readonly property {}::${}", text(&object.class.name), text(&name))));
                 }
-                if prop.set_visibility.is_some() && !self.may_set(&object, &prop) {
-                    return Err(self.set_visibility_error(&prop, "unset"));
+                if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
+                    return Err(self.set_visibility_error(prop, "unset"));
                 }
                 object.slots.borrow_mut()[i] = Value::Undef;
             }
