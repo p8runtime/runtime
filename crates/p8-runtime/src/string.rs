@@ -10,7 +10,29 @@ use std::rc::Rc;
 struct Inner {
     /// 0 until computed (a real hash of 0 is stored as 1).
     hash: Cell<u64>,
-    bytes: Vec<u8>,
+    bytes: Bytes,
+}
+
+/// Up to this many bytes live in the string's own allocation.
+const INLINE: usize = 22;
+
+/// A short string's bytes inside the Rc's allocation, as zend_string keeps
+/// its bytes after its header: one allocation, not two. Written strings
+/// move to a Vec (make_mut), which `.=` then grows in place.
+#[derive(Clone)]
+enum Bytes {
+    Inline { len: u8, buf: [u8; INLINE] },
+    Heap(Vec<u8>),
+}
+
+impl Bytes {
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Bytes::Inline { len, buf } => &buf[..*len as usize],
+            Bytes::Heap(v) => v,
+        }
+    }
 }
 
 /// A PHP string value.
@@ -25,30 +47,47 @@ impl Default for PhpStr {
 
 impl PhpStr {
     pub fn new(bytes: Vec<u8>) -> Self {
-        PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes }))
+        PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes: Bytes::Heap(bytes) }))
+    }
+
+    /// A copy of `bytes`: in the string's own allocation when short.
+    fn copy_of(bytes: &[u8]) -> Self {
+        if bytes.len() > INLINE {
+            return Self::new(bytes.to_vec());
+        }
+        let mut buf = [0; INLINE];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes: Bytes::Inline { len: bytes.len() as u8, buf } }))
     }
 
     pub fn empty() -> Self {
-        Self::new(Vec::new())
+        Self::copy_of(b"")
     }
 
+    #[inline]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0.bytes
+        self.0.bytes.as_slice()
     }
 
     pub fn len(&self) -> usize {
-        self.0.bytes.len()
+        self.as_bytes().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.bytes.is_empty()
+        self.as_bytes().is_empty()
     }
 
     /// The bytes for writing; copies them first if the string is shared.
     pub fn make_mut(&mut self) -> &mut Vec<u8> {
         let inner = Rc::make_mut(&mut self.0);
         inner.hash.set(0);
-        &mut inner.bytes
+        if let Bytes::Inline { len, buf } = &inner.bytes {
+            inner.bytes = Bytes::Heap(buf[..*len as usize].to_vec());
+        }
+        match &mut inner.bytes {
+            Bytes::Heap(v) => v,
+            Bytes::Inline { .. } => unreachable!("moved to the heap above"),
+        }
     }
 
     /// Append, as `.=` does (in place when this is the only reference).
@@ -63,7 +102,7 @@ impl PhpStr {
             return cached;
         }
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for &b in &self.0.bytes {
+        for &b in self.as_bytes() {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0100_0000_01b3);
         }
@@ -88,13 +127,13 @@ impl Eq for PhpStr {}
 
 impl From<&[u8]> for PhpStr {
     fn from(bytes: &[u8]) -> Self {
-        Self::new(bytes.to_vec())
+        Self::copy_of(bytes)
     }
 }
 
 impl From<&str> for PhpStr {
     fn from(s: &str) -> Self {
-        Self::new(s.as_bytes().to_vec())
+        Self::copy_of(s.as_bytes())
     }
 }
 
@@ -127,6 +166,21 @@ mod tests {
         assert_eq!(a.hash(), h);
         assert_ne!(b.hash(), h);
         assert_eq!(b, PhpStr::from("abc"));
+    }
+
+    #[test]
+    fn short_strings_are_inline_and_move_to_the_heap_when_written() {
+        let short = PhpStr::from("ru_oublock");
+        assert!(matches!(short.0.bytes, Bytes::Inline { .. }));
+        let long = PhpStr::from("a string longer than the inline buffer");
+        assert!(matches!(long.0.bytes, Bytes::Heap(_)));
+        let mut s = short.clone();
+        s.push_bytes(b"!");
+        assert!(matches!(s.0.bytes, Bytes::Heap(_)));
+        assert_eq!(s.as_bytes(), b"ru_oublock!");
+        assert_eq!(short.as_bytes(), b"ru_oublock");
+        assert_eq!(PhpStr::from("x".repeat(INLINE).as_str()).len(), INLINE);
+        assert_eq!(PhpStr::empty().as_bytes(), b"");
     }
 
     #[test]

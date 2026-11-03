@@ -663,7 +663,9 @@ fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Some(v) => v.to_bool(),
         None => false,
     };
-    if !setting(ctx, b"assert.active") || arg(args, 0).to_bool() {
+    // A holding assertion is true whatever assert.active says: checked
+    // first, so the common case reads no setting.
+    if arg(args, 0).to_bool() || !setting(ctx, b"assert.active") {
         return Ok(Value::Bool(true));
     }
     let message = match arg(args, 1) {

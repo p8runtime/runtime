@@ -997,7 +997,7 @@ type Result<T> = std::result::Result<T, CompileError>;
 impl<'src> Compiler<'src> {
     pub fn new(source: &'src [u8], file: &str, registry: &'src Registry) -> Self {
         let mut line_starts = vec![0];
-        line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
+        line_starts.extend(memchr::memchr_iter(b'\n', source).map(|i| i + 1));
         Compiler {
             source,
             superglobals: None,
@@ -1914,8 +1914,12 @@ impl<'src> Compiler<'src> {
         let source = self.source;
         self.superglobals.get_or_insert_with(|| {
             let mut refs = Vec::new();
-            for (at, _) in source.iter().enumerate().filter(|&(_, &c)| c == b'$') {
+            for at in memchr::memchr_iter(b'$', source) {
                 let rest = &source[at + 1..];
+                // Every name in SUPERGLOBALS starts with `_`.
+                if rest.first() != Some(&b'_') {
+                    continue;
+                }
                 if let Some(i) = SUPERGLOBALS.iter().position(|name| rest.starts_with(name.as_bytes())) {
                     refs.push((at, i as u8));
                 }

@@ -546,15 +546,34 @@ impl Context<'_> {
         }
         // PHP's order: the class's own methods, the inherited ones, then
         // the traits' (get_class_methods, reflection).
+        // One pass over the methods, not a removal (which shifts all after
+        // it) per own or trait method.
         let mut ordered = p8_runtime::object::Methods::with_capacity_and_hasher(methods.len(), Default::default());
+        let own_set: p8_runtime::fast::HashSet<&[u8]> = own.iter().map(Vec::as_slice).collect();
+        let trait_set: p8_runtime::fast::HashSet<&[u8]> = trait_order.iter().map(Vec::as_slice).collect();
+        let mut own_methods = p8_runtime::fast::HashMap::default();
+        let mut trait_methods = p8_runtime::fast::HashMap::default();
+        let mut inherited = Vec::with_capacity(methods.len());
+        for (k, m) in methods {
+            if own_set.contains(k.as_slice()) {
+                own_methods.insert(k, m);
+            } else if trait_set.contains(k.as_slice()) {
+                trait_methods.insert(k, m);
+            } else {
+                inherited.push((k, m));
+            }
+        }
         for key in &own {
-            if let Some(m) = methods.shift_remove(key) {
+            if let Some(m) = own_methods.remove(key) {
                 ordered.insert(key.clone(), m);
             }
         }
-        let traits: Vec<(Vec<u8>, Method)> = trait_order.iter().filter_map(|k| methods.shift_remove(k).map(|m| (k.clone(), m))).collect();
-        ordered.extend(methods);
-        ordered.extend(traits);
+        ordered.extend(inherited);
+        for key in &trait_order {
+            if let Some(m) = trait_methods.remove(key) {
+                ordered.insert(key.clone(), m);
+            }
+        }
         let methods = ordered;
         let native_dtor = parent.as_ref().and_then(|p| p.native_dtor);
         let destructor = if methods.contains_key(b"__destruct".as_slice()) || native_dtor.is_some() { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
@@ -629,15 +648,22 @@ impl Context<'_> {
         }
     }
 
-    /// `new C(args)`: the object, and its constructor's frame (if any).
-    pub(crate) fn instantiate(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
-        self.instantiate_as(regs, class, true)
+    /// `new C(args)`: the object, once its constructor (if any) may be
+    /// called from here (ZEND_NEW checks that before the arguments; the
+    /// Construct after them makes the call).
+    pub(crate) fn instantiate(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>) -> Result<Rc<Object>, Throw> {
+        Ok(self.make_object(regs, class, true, false)?.0)
     }
 
-    /// `instantiate`, with `construct` false for an object made without
-    /// its constructor (newInstanceWithoutConstructor): then the
-    /// constructor's visibility does not matter.
+    /// `instantiate`, also giving the constructor's frame; with `construct`
+    /// false for an object made without its constructor
+    /// (newInstanceWithoutConstructor): then the constructor's visibility
+    /// does not matter.
     pub(crate) fn instantiate_as(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>, construct: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
+        self.make_object(regs, class, construct, true)
+    }
+
+    fn make_object(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>, construct: bool, frame: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
         if class.flags & CLASS_INTERFACE != 0 {
             return Err(self.throw("Error", format!("Cannot instantiate interface {}", text(&class.name))));
         }
@@ -668,12 +694,17 @@ impl Context<'_> {
             let trace = self.trace(regs);
             class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
         }
-        let Some(ctor) = class.method(b"__construct").cloned() else { return Ok((object, None)) };
+        // Borrowed from the class: a `new` must not copy the declaration.
+        let Some(ctor) = class.method(b"__construct") else { return Ok((object, None)) };
         if !construct {
             return Ok((object, None));
         }
+        // A public constructor may be called from anywhere.
+        if ctor.visibility == Visibility::Public && !frame {
+            return Ok((object, None));
+        }
         let declaring = self.declaring(&class, &ctor.declaring);
-        if !visible(ctor.visibility, &declaring, self.scope().0.as_deref()) {
+        if !visible(ctor.visibility, &declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
             let t = self.throw("Error", format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()));
             // Made while the object still is (PHP numbers the Error after it).
             let e = self.exception(regs, t);
@@ -682,7 +713,10 @@ impl Context<'_> {
             drop(object);
             return Err(e);
         }
-        let func = self.code_of(&ctor);
+        if !frame {
+            return Ok((object, None));
+        }
+        let func = self.code_of(ctor);
         Ok((Rc::clone(&object), Some(MethodFrame::method(func, Some(object), declaring, class))))
     }
 
@@ -1501,6 +1535,9 @@ impl Context<'_> {
     /// the converted value, Ok(None) as it is, Err a TypeError's case.
     /// (A deprecation it brings is reported here.)
     pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, ()> {
+        if ty.quick(v) {
+            return Ok(None);
+        }
         let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
         let is_a = |o: &Object, name: &[u8]| match name {
             b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
@@ -1574,7 +1611,7 @@ impl Context<'_> {
                 regs[base + i] = Value::Array(Rc::new(checked));
                 continue;
             }
-            if i >= argc || matches!(regs[base + i], Value::Undef) {
+            if i >= argc || matches!(regs[base + i], Value::Undef) || ty.quick(&regs[base + i]) {
                 continue;
             }
             let v = regs[base + i].deref();
