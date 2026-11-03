@@ -1,89 +1,32 @@
-# php-rs
+# p8
 
-A PHP interpreter written in Rust. This project is currently in an experimental state.
+A PHP 8.4 engine in safe Rust. It is embeddable. The hosts are the `php2` command and its built-in server, `php2 -S`.
 
-## Origin and history
+Not released yet. It is graded on php-src's own tests: [p8-test-suite.addis.gg](https://p8-test-suite.addis.gg).
 
-This is a fork of [wudi/php-rs](https://github.com/wudi/php-rs) by Di Wu (MIT). Its full history is kept here, and the work that followed in the deka runtime has been extracted onto the same timeline. Tags mark the points worth going back to:
-
-| tag | date | state |
-|---|---|---|
-| `wudi-init` | 2025-12-31 | Di Wu's php-rs as forked |
-| `gild-progress` | 2026-01-04 | our router, benchmark report and PHP-manual fixtures; **`main` starts here** |
-| `deka-import` | 2026-01-10 | imported into deka; last pure-PHP point |
-| `phpx-added` | 2026-01-25 | PHPX dialect added on top of the PHP VM |
-| `last-full-extensions` | 2026-02-14 | last point with php-fpm, the router and the PDO/MySQLi/OpenSSL/Zip/hash builtins (needs the `deka-validation` crate) |
-| `js-lowering` | 2026-02-21 | PHPX starts lowering to JavaScript |
-| `last-vm` | 2026-02-22 | last commit with the Zend-style VM |
-| `vm-deleted` | 2026-02-25 | VM removed during the move to JavaScript |
-| `wudi-latest` | 2026-02-17 | upstream after the fork (mark-and-sweep GC) |
-
-Branches: `history/deka` (the full deka timeline until the crate was removed), `upstream/wudi`, `archive/gild-progress`.
-
-## Features
-
-- Core PHP language support
-- Standard library extensions (BCMath, JSON, MySQLi, PDO, OpenSSL, Zip, Zlib, etc.)
-- CLI interface (`php`)
-- FastCGI Process Manager (`php-fpm`)
-
-## Limitations
-
-- Fibers are not supported. The Gild runtime targets V8 and does not pause execution, so `Fiber::*` APIs are intentionally unavailable.
-- Magic constants are not supported yet.
-
-## Getting Started
-
-### Prerequisites
-
-- Rust (latest stable release)
-
-### Building
-
-Clone the repository and build using Cargo:
+## Run
 
 ```bash
-git clone https://github.com/addiscorp/php-rs.git
-cd php-rs
-cargo build --release
+cargo build -p php-cli --release
+./target/release/php2 -r 'echo PHP_VERSION, "\n";'
+./target/release/php2 -S 127.0.0.1:8080 -t .
 ```
 
-### Usage
+## Embed
 
-#### CLI
+Hosts talk only to the `p8` crate. `#![forbid(unsafe_code)]` is on the engine and the hosts. [SECURITY.md](SECURITY.md) is the rule.
 
-Run a PHP script:
-
-```bash
-cargo run --bin php -- script.php
+```rust
+let platform = p8::Platform::new(&[p8::extensions::STANDARD]);
+let mut isolate = platform.new_isolate();
+let script = platform.compile(b"<?php echo 1 + 2;", "a.php");
 ```
 
-Interactive shell:
+## See it
 
-```bash
-cargo run --bin php
-```
-
-#### FPM
-
-Start the PHP-FPM server:
-
-```bash
-cargo run --bin php-fpm
-```
-
-## Testing
-
-Run the Rust test suite:
-
-```bash
-cargo test
-```
-
-Legacy integration tests (`*.rs` files) now live under `test-old/`; the new `tests/` directory keeps the Bun-driven PHP fixtures and helpers.
+- [Playground](https://p8-tour.addis.gg), PHP in the browser.
+- [WordPress](https://p8-wordpress.addis.gg), WordPress in the browser.
 
 ## License
 
-This project is licensed under the MIT License.
-
-Created by AI
+MIT

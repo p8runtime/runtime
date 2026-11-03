@@ -1,6 +1,6 @@
 # Basic PHP Doc Examples
 
-This folder collects a handful of scripts inspired by the PHP manual so we have simple, independent files that both the native `php` CLI and `gild` can run through the `testrunner.js`.
+This folder collects a handful of scripts inspired by the PHP manual so we have simple, independent files that both the official `php` CLI and this runtime's `php` binary can run through `testrunner.js`.
 
 Files:
 

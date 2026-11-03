@@ -1,18 +1,19 @@
 [package]
-name = "php-rs"
+name = "runtime"
 version = "0.1.0"
 edition = "2024"
-authors = ["Di Wu <hi@wudi.io>"]
-description = "A PHP interpreter written in Rust"
+description = "Legacy PHP interpreter kept beside the p8 engine"
 keywords = ["php", "php-interpreter", "runtime", "programming-language"]
 license = "MIT"
 exclude = ["tools/*", "tests/*", "bin/*"]
-repository = "https://github.com/wudi/php-rs"
+repository = "https://github.com/p8runtime/runtime"
 
 [workspace]
 members = ["crates/*"]
 
 [lib]
+# The legacy tree imports this crate as `php_rs`. The package name is `runtime`.
+name = "php_rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

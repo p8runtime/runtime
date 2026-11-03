@@ -19,10 +19,10 @@ When you need to expose a new PHP builtin or adjust the interpreter, keep this c
 4. **Add runnable PHP coverage**
    - Drop a script into `tests/<category>/` (e.g., `tests/math/pi.php`) that mirrors the PHP.net example you’re targeting.
    - Add the category/description to `tests/README.md` so future contributors know what each folder is covering.
-   - Use `bun testrunner.js <category>` (from the repo root) to compare `php` vs `gild`, confirm outputs match, and catch regressions early.
+   - Use `bun testrunner.js <category>` (from the repo root) to compare the official `php` CLI with `target/release/php`, confirm outputs match, and catch regressions early.
 
 5. **Build & verify**
    - `cargo check --bin php` catches compile-time mistakes; `cargo build --bin php --release` ensures release optimizations still compile.
-   - Run the router (`cargo run --bin gild-router`) or `bun testrunner.js` to exercise the new builtin through the HTTP server or direct CLI, depending on what you changed.
+   - Run `cargo run --bin php -- path/to/script.php` or `bun testrunner.js` to exercise the new builtin.
 
 By following this routine you expand the runtime in a way that keeps the interpreter, router, and manual-test suites aligned with the official PHP behavior.

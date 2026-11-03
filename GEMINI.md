@@ -1,89 +1,22 @@
-# php-rs
+# p8
 
-## Project Overview
+A PHP 8.4 engine in safe Rust. Hosts use the `p8` crate only. The command-line host is `php2` (`crates/php-cli`), including `php2 -S`.
 
-`php-rs` is an experimental PHP interpreter written in Rust. It aims to support core PHP language features and standard library extensions, providing both a CLI interface (`php`) and a FastCGI Process Manager (`php-fpm`).
+Not released yet. It is graded on php-src's own tests: https://p8-test-suite.addis.gg
 
-### Key Technologies
+## Layout
 
-*   **Language:** Rust (Edition 2024)
-*   **Core Dependencies:** `clap` (CLI), `tokio` (Async/FPM), `rustyline` (REPL), `chokidar` equivalent not used but filesystem watching implies typical dev workflows.
-*   **Extensions:** `mysql`, `rusqlite`, `openssl`, `zip`, `flate2` (Zlib), `rust_decimal` (BCMath).
+- `crates/p8`: the public embedding API.
+- `crates/p8-syntax`, `p8-compiler`, `p8-bytecode`, `p8-runtime`, `p8-interp`, `p8-ext-*`: engine internals. Hosts do not depend on these.
+- `crates/php-cli`: the `php2` host.
+- `src/`: the legacy interpreter. It is replaced by p8 at php-src parity. Its binaries live in `src/bin/`.
 
-### Architecture
-
-The project follows a classic interpreter architecture:
-
-1.  **Parser (`crates/p8-syntax`):** Lexes and parses PHP source code into an AST.
-2.  **Compiler (`src/compiler`):** Compiles the AST into bytecode chunks (`src/compiler/chunk.rs`).
-3.  **Virtual Machine (`src/vm`):** Executes the bytecode instructions.
-4.  **Runtime (`src/runtime`):** Manages memory, contexts, and extensions.
-5.  **Builtins (`src/builtins`):** Implementations of PHP standard library functions (e.g., `array`, `json`, `math`).
-
-## Building and Running
-
-### Prerequisites
-
-*   Rust (latest stable release)
-
-### Build Commands
+## Commands
 
 ```bash
-# Build the project in release mode
-cargo build --release
+cargo build -p php-cli --release
+./target/release/php2 -r 'echo PHP_VERSION, "\n";'
+cargo test -p p8
 ```
 
-### Run Commands
-
-**CLI Interpreter:**
-
-```bash
-# Run a specific PHP script
-cargo run --bin php -- path/to/script.php
-
-# Start the Interactive Shell (REPL)
-cargo run --bin php
-```
-
-**FastCGI Process Manager (FPM):**
-
-```bash
-# Start the PHP-FPM server
-cargo run --bin php-fpm
-```
-
-### Testing
-
-```bash
-# Run all tests (unit and integration)
-cargo test
-
-# Run a specific integration test file
-cargo test --test array_functions
-```
-
-## Development Conventions
-
-*   **Code Style:** Adhere to standard Rust formatting (`cargo fmt`).
-*   **Naming:**
-    *   Functions/Modules: `snake_case`
-    *   Types: `CamelCase`
-    *   Constants: `SCREAMING_SNAKE_CASE`
-*   **Module Structure:**
-    *   New built-in functions should be added to `src/builtins/` and registered in `src/builtins/mod.rs`.
-    *   Integration tests go in `tests/` with descriptive filenames (e.g., `tests/strict_types_eval.rs`).
-    *   Parser tests are in `crates/p8-syntax/src/tests/` (not compiled yet).
-*   **Dependencies:** New dependencies should be justified and scoped to their specific extension module (e.g., adding a crate only for `gd` support).
-
-## Directory Overview
-
-*   **`src/`**: Source code root.
-    *   **`bin/`**: Entry points (`php`, `php-fpm`).
-    *   **`builtins/`**: PHP standard library implementations.
-    *   **`compiler/`**: AST to Bytecode compilation.
-    *   **`core/`**: Core data structures (Values, Heap, Interner).
-    *   **`fcgi/`**: FastCGI protocol implementation.
-    *   **`parser/`**: Lexer and Parser.
-    *   **`runtime/`**: Execution environment and extensions registry.
-    *   **`vm/`**: Virtual Machine execution logic.
-*   **`tests/`**: Integration tests covering various PHP features.
+`#![forbid(unsafe_code)]` is on the engine. [SECURITY.md](SECURITY.md) is the rule. The license is MIT.
