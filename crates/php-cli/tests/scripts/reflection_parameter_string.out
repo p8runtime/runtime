@@ -1,0 +1,17 @@
+Parameter #0 [ <required> int $a ]
+Parameter #1 [ <optional> ?string $b = NULL ]
+Parameter #2 [ <optional> $c = 'x\\ny' ]
+Parameter #3 [ <optional> array $d = [] ]
+Parameter #4 [ <optional> array $e = [1, 2] ]
+Parameter #5 [ <optional> array $g = ['k' => true, 5 => 1.5] ]
+Parameter #6 [ <optional> &$h = N\C ]
+Parameter #7 [ <optional> int|bool $i = \N\K::D ]
+Parameter #8 [ <optional> ...$rest ]
+Parameter #0 [ <optional> ?N\K $x = NULL ]
+Parameter #1 [ <optional> $y = PHP_INT_MAX ]
+Parameter #2 [ <optional> string $pad_string = " " ]
+Parameter #0 [ <required> ?callable $callback ]
+bool(false)
+bool(false)
+Parameter #0 [ <optional> $a = self::Q ]
+Parameter #1 [ <optional> $b = \N\K::D ]

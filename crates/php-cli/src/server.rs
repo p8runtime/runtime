@@ -3,6 +3,10 @@
 //! threads (so a client that connects and says nothing blocks no one), and
 //! the requests they produce run one after the other on the thread that
 //! owns the isolate. Every response closes its connection.
+//!
+//! `-S <addr> --stdio <client>` serves one request the same way, read from
+//! stdin with its response written to stdout: how a host without sockets
+//! (a WASI runtime) hands a connection's bytes over.
 
 use crate::http::{self, HttpRequest, Parse};
 use crate::mime_types::MIME_TYPES;
@@ -112,9 +116,9 @@ fn parse_addr(addr: &str) -> Option<(String, u16)> {
     Some((host, port as u16))
 }
 
-/// A connection with a request read off it.
+/// A connection with a request read off it (no stream: stdin and stdout).
 struct Incoming {
-    stream: TcpStream,
+    stream: Option<TcpStream>,
     peer: String,
     request: Box<HttpRequest>,
 }
@@ -129,10 +133,12 @@ struct Watchdog {
 }
 
 impl Watchdog {
+    /// Where there are no threads (WASI) nothing watches, and the limit is
+    /// not kept, as in a PHP built without timers.
     fn start(handle: p8::InterruptHandle) -> Watchdog {
         let state: Arc<(Mutex<Option<Instant>>, Condvar)> = Arc::new((Mutex::new(None), Condvar::new()));
         let shared = Arc::clone(&state);
-        std::thread::spawn(move || {
+        let _ = std::thread::Builder::new().spawn(move || {
             let (lock, cv) = &*shared;
             let mut deadline = lock.lock().unwrap_or_else(|e| e.into_inner());
             loop {
@@ -165,7 +171,7 @@ impl Watchdog {
 /// response head waits until the first output or the end, so a router
 /// that declines can still discard it.
 struct Conn {
-    out: std::io::BufWriter<TcpStream>,
+    out: std::io::BufWriter<Box<dyn Write>>,
     host: Option<Vec<u8>>,
     head_only: bool,
     protocol: u32,
@@ -336,7 +342,10 @@ struct Resolved {
 }
 
 fn to_path(bytes: &[u8]) -> PathBuf {
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
+    #[cfg(target_os = "wasi")]
+    use std::os::wasi::ffi::OsStrExt;
     PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
 }
 
@@ -441,26 +450,78 @@ fn is_entity(s: &[u8]) -> bool {
 
 const ERROR_CSS: &str = "<style>\nbody { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }\nh1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }\nh1, p { padding-left: 10px; }\ncode.url { background-color: #eeeeee; font-family:monospace; padding:0 2px;}\n</style>\n";
 
-pub fn run(config: Config) -> i32 {
+/// The address and the document root of `config`; none (after saying why)
+/// when either is wrong.
+fn address_and_docroot(config: &Config) -> Option<(String, u16, String)> {
     LOG_LEVEL.store(3u8.saturating_sub(config.quiet).max(1), Ordering::Relaxed);
     let Some((host, port)) = parse_addr(&config.address) else {
         eprintln!("Invalid address: {}", config.address);
-        return 1;
+        return None;
     };
     let docroot = match &config.docroot {
         Some(dir) => {
             let Ok(meta) = std::fs::metadata(dir) else {
                 eprintln!("Directory {dir} does not exist.");
-                return 1;
+                return None;
             };
             if !meta.is_dir() {
                 eprintln!("{dir} is not a directory.");
-                return 1;
+                return None;
             }
-            std::fs::canonicalize(dir).map_or(dir.clone(), |p| p.to_string_lossy().into_owned())
+            p8::canonicalize(dir).map_or(dir.clone(), |p| p.to_string_lossy().into_owned())
         }
         None => std::env::current_dir().map_or(".".into(), |p| p.to_string_lossy().into_owned()),
     };
+    Some((host, port, docroot))
+}
+
+/// The engine and the server's state, for `serve` to run requests with.
+fn with_server(config: &Config, host: String, port: u16, docroot: String, serve: impl FnOnce(&mut Server, &mut p8::Isolate)) {
+    let platform = p8::Platform::new(&crate::extensions(true))
+        // Each file is compiled once, and again only when its source changes.
+        .keep_compiled();
+    let mut isolate = platform.new_isolate();
+    let mut ini: Vec<(String, String)> = SERVER_INI.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
+    ini.extend(config.ini.iter().cloned());
+    let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u32>().ok()).unwrap_or(0);
+    LIMIT_SECONDS.store(limit, Ordering::Relaxed);
+    let watchdog = Watchdog::start(isolate.interrupt_handle());
+    let mut server = Server { platform: &platform, host, port, docroot, router: config.router.clone(), ini, watchdog, limit: u64::from(limit) };
+    serve(&mut server, &mut isolate);
+}
+
+/// `php -S` for one request read from stdin, as from a connection from
+/// `client`; the response goes to stdout. 1 when no request could be read.
+pub fn run_stdio(config: Config, client: String) -> i32 {
+    let Some((host, port, docroot)) = address_and_docroot(&config) else { return 1 };
+    let mut buf = Vec::new();
+    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+        log(LOG_ERROR, &format!("{client} Invalid request ({})", strerror(&e)));
+        return 1;
+    }
+    let request = match http::parse(&buf) {
+        Parse::Complete(request) => request,
+        Parse::Incomplete => {
+            if buf.iter().all(|&c| c == b'\r' || c == b'\n') {
+                log(LOG_MESSAGE, &format!("{client} Closed without sending a request; it was probably just an unused speculative preconnection"));
+            } else {
+                log(LOG_ERROR, &format!("{client} Invalid request (Unexpected EOF)"));
+            }
+            return 1;
+        }
+        Parse::Malformed => {
+            let why = if buf[0] & 0x80 != 0 || buf[0] == 0x16 { "Unsupported SSL request" } else { "Malformed HTTP request" };
+            log(LOG_ERROR, &format!("{client} Invalid request ({why})"));
+            return 1;
+        }
+    };
+    log(LOG_MESSAGE, &format!("{client} Accepted"));
+    with_server(&config, host, port, docroot, |server, isolate| server.handle(isolate, Incoming { stream: None, peer: client, request }));
+    0
+}
+
+pub fn run(config: Config) -> i32 {
+    let Some((host, port, docroot)) = address_and_docroot(&config) else { return 1 };
     // php_network_listen_socket(): the first address that binds.
     let shown = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
     let addrs: Vec<SocketAddr> = match (host.as_str(), port).to_socket_addrs() {
@@ -493,19 +554,11 @@ pub fn run(config: Config) -> i32 {
     let (tx, rx) = mpsc::channel::<Incoming>();
     std::thread::spawn(move || accept_loop(listener, tx));
 
-    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::SERVER, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::MBSTRING, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL, p8::extensions::GD, p8::extensions::ZIP, p8::extensions::FILEINFO, p8::extensions::SESSION, p8::extensions::PDO, p8::extensions::PDO_SQLITE])
-        // Each file is compiled once, and again only when its source changes.
-        .keep_compiled();
-    let mut isolate = platform.new_isolate();
-    let mut ini: Vec<(String, String)> = SERVER_INI.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
-    ini.extend(config.ini.iter().cloned());
-    let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u32>().ok()).unwrap_or(0);
-    LIMIT_SECONDS.store(limit, Ordering::Relaxed);
-    let watchdog = Watchdog::start(isolate.interrupt_handle());
-    let mut server = Server { platform: &platform, host, port, docroot, router: config.router.clone(), ini, watchdog, limit: u64::from(limit) };
-    for incoming in rx {
-        server.handle(&mut isolate, incoming);
-    }
+    with_server(&config, host, port, docroot, |server, isolate| {
+        for incoming in rx {
+            server.handle(isolate, incoming);
+        }
+    });
     0
 }
 
@@ -551,7 +604,7 @@ fn read_request(mut stream: TcpStream, peer: String, tx: mpsc::Sender<Incoming>)
         buf.extend_from_slice(&chunk[..n]);
         match http::parse(&buf) {
             Parse::Complete(request) => {
-                let _ = tx.send(Incoming { stream, peer, request });
+                let _ = tx.send(Incoming { stream: Some(stream), peer, request });
                 return;
             }
             Parse::Incomplete => {}
@@ -601,7 +654,7 @@ impl Server<'_> {
     /// while the source is the same).
     fn compile(&mut self, path: &Path) -> Result<Rc<p8::Script>, CompileFailure> {
         let source = std::fs::read(path).map_err(|_| CompileFailure::Read)?;
-        let file = std::fs::canonicalize(path).map_or_else(|_| path.to_string_lossy().into_owned(), |p| p.to_string_lossy().into_owned());
+        let file = p8::canonicalize(path).map_or_else(|_| path.to_string_lossy().into_owned(), |p| p.to_string_lossy().into_owned());
         Ok(Rc::new(self.platform.compile(&source, &file).map_err(CompileFailure::Source)?))
     }
 
@@ -690,10 +743,16 @@ impl Server<'_> {
 
     fn handle(&mut self, isolate: &mut p8::Isolate, incoming: Incoming) {
         let peer = incoming.peer.clone();
-        let _ = incoming.stream.set_write_timeout(Some(Duration::from_secs(10)));
-        let Ok(write_half) = incoming.stream.try_clone() else {
-            close(&peer);
-            return;
+        let write_half: Box<dyn Write> = match &incoming.stream {
+            Some(stream) => {
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+                let Ok(write_half) = stream.try_clone() else {
+                    close(&peer);
+                    return;
+                };
+                Box::new(write_half)
+            }
+            None => Box::new(std::io::stdout()),
         };
         let request = &incoming.request;
         let mut conn = Conn {
@@ -706,7 +765,9 @@ impl Server<'_> {
         };
         self.dispatch(isolate, &incoming, &mut conn);
         conn.finish();
-        let _ = incoming.stream.shutdown(std::net::Shutdown::Both);
+        if let Some(stream) = &incoming.stream {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
         close(&peer);
     }
 
@@ -825,7 +886,7 @@ impl Server<'_> {
         }
         let mut head = Conn::status_line(req.protocol, status).into_bytes();
         head.extend_from_slice(&conn.essential(false));
-        head.extend_from_slice(format!("X-Powered-By: PHP/{}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\n", p8::PHP_VERSION, body.len()).as_bytes());
+        head.extend_from_slice(format!("X-Powered-By: {}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\n", p8::powered_by(), body.len()).as_bytes());
         if status == 405 {
             head.extend_from_slice(b"Allow: GET, HEAD, POST\r\n");
         }

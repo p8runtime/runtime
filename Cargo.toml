@@ -1,18 +1,19 @@
 [package]
-name = "php-rs"
+name = "runtime"
 version = "0.1.0"
 edition = "2024"
-authors = ["Di Wu <hi@wudi.io>"]
-description = "A PHP interpreter written in Rust"
+description = "Legacy PHP interpreter kept beside the p8 engine"
 keywords = ["php", "php-interpreter", "runtime", "programming-language"]
 license = "MIT"
 exclude = ["tools/*", "tests/*", "bin/*"]
-repository = "https://github.com/wudi/php-rs"
+repository = "https://github.com/p8runtime/runtime"
 
 [workspace]
 members = ["crates/*"]
 
 [lib]
+# The legacy tree imports this crate as `php_rs`. The package name is `runtime`.
+name = "php_rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -128,6 +129,11 @@ name = "php-test"
 path = "src/bin/php-test.rs"
 required-features = ["cli"]
 
+[[bin]]
+name = "php-perf"
+path = "src/bin/php-perf.rs"
+required-features = ["cli"]
+
 [features]
 # The default build is pure Rust: no C library is compiled or linked
 # (SECURITY.md). Features that need C are opt-in and listed below it.
@@ -165,3 +171,11 @@ router = [
 # modules: whole-program optimization lets them inline into one another.
 lto = "fat"
 codegen-units = 1
+
+# php2 for wasm32-wasip1 (packages/vite-plugin-p8): release, optimized for
+# size and without its symbol names, so the module a host downloads and
+# compiles is smaller; the native release profile is left as it is.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+strip = true

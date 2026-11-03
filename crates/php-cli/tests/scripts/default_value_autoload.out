@@ -1,0 +1,7 @@
+autoload Lazy\Dir
+enum(Lazy\Dir::Up)
+autoload LazyGlobal
+enum(LazyGlobal::A)
+string(8) "Lazy\Dir"
+autoload Missing
+Error: Class "Missing" not found

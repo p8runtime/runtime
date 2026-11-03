@@ -1,0 +1,111 @@
+/** doc */
+Method [ <user> public method m ] {
+  @@ %s 7 - 7
+
+  - Parameters [4] {
+    Parameter #0 [ <required> int $a ]
+    Parameter #1 [ <optional> ?string $b = NULL ]
+    Parameter #2 [ <optional> array &$c = [] ]
+    Parameter #3 [ <optional> ...$rest ]
+  }
+  - Return [ ?array ]
+}
+---
+Method [ <user, overwrites N\B, prototype N\B> protected method ab ] {
+  @@ %s 8 - 8
+
+  - Parameters [1] {
+    Parameter #0 [ <required> int $x ]
+  }
+  - Return [ void ]
+}
+---
+Method [ <user> final static public method s ] {
+  @@ %s 9 - 9
+
+  - Parameters [0] {
+  }
+  - Return [ static ]
+}
+---
+Method [ <user> private method p ] {
+  @@ %s 10 - 10
+}
+---
+Method [ <user, ctor> public method __construct ] {
+  @@ %s 11 - 11
+}
+---
+Method [ <user, inherits N\B> public method inh ] {
+  @@ %s 4 - 4
+
+  - Parameters [0] {
+  }
+  - Return [ int ]
+}
+---
+Method [ <user> abstract protected method ab ] {
+  @@ %s 4 - 4
+
+  - Parameters [1] {
+    Parameter #0 [ <required> int $x ]
+  }
+  - Return [ void ]
+}
+---
+Function [ <user> function N\f ] {
+  @@ %s 15 - 15
+
+  - Parameters [1] {
+    Parameter #0 [ <optional> int $a = 1 ]
+  }
+}
+---
+Closure [ <user> function {closure:%s:17} ] {
+  @@ %s 17 - 17
+
+  - Bound Variables [2] {
+      Variable #0 [ $a ]
+      Variable #1 [ $st ]
+  }
+
+  - Parameters [1] {
+    Parameter #0 [ <required> $x ]
+  }
+}
+---
+Method [ <user, overwrites N\B, prototype N\B> protected method ab ] {
+  @@ %s 8 - 8
+
+  - Parameters [1] {
+    Parameter #0 [ <required> int $x ]
+  }
+  - Return [ void ]
+}
+---
+Method [ <user> public method &r ] {
+  @@ %s 19 - 19
+}
+Function [ <internal:Core> function strlen ] {
+
+  - Parameters [1] {
+    Parameter #0 [ <required> string $string ]
+  }
+  - Return [ int ]
+}
+---
+Method [ <internal:SPL, prototype Countable> public method count ] {
+
+  - Parameters [0] {
+  }
+  - Tentative return [ int ]
+}
+---
+string(4) "Core"
+string(8) "standard"
+bool(false)
+string(3) "SPL"
+string(4) "Core"
+string(4) "date"
+bool(false)
+string(3) "PDO"

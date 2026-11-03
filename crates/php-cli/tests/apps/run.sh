@@ -106,9 +106,12 @@ tail -3 "$work/php.txt"
 
 # p8.
 p8_status=0
+# Suites that shell out to `php` (Kimai's bootstrap runs bin/console) get p8.
+mkdir -p "$work/bin"
+ln -sf "$(cd "$(dirname "$php2")" && pwd)/$(basename "$php2")" "$work/bin/php"
 # (macOS has no timeout(1): perl's alarm ends the run after $TIMEOUT seconds)
 # shellcheck disable=SC2086
-env ${p8_env:+"$p8_env"} perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$php2" -d memory_limit=4G $TEST_CMD --log-junit "$work/p8.xml" --log-teamcity "$work/p8.tc" > "$work/p8.txt" 2>&1 || p8_status=$?
+PATH="$work/bin:$PATH" env ${p8_env:+"$p8_env"} perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$php2" -d memory_limit=4G $TEST_CMD --log-junit "$work/p8.xml" --log-teamcity "$work/p8.tc" > "$work/p8.txt" 2>&1 || p8_status=$?
 tail -3 "$work/p8.txt"
 
 php_version=$(docker run --rm "$image" php -r 'echo PHP_VERSION;')

@@ -1,0 +1,6 @@
+autoload V\H\Lazy
+string(9) "a/en/true"
+string(10) "b/fr/false"
+string(11) "V\H\Missing"
+autoload V\H\Missing
+Class "V\H\Missing" not found

@@ -1,0 +1,7 @@
+int(5)
+int(5)
+string(3) "abc"
+string(4) "abc!"
+string(3) "XYZ"
+string(4) "XYZ!"
+May not use setRawValue on static properties

@@ -29,6 +29,8 @@ pub struct ParamInfo {
     pub default: Option<Value>,
     /// A builtin's default as its stub writes it.
     pub default_text: Option<&'static str>,
+    /// A default that is a constant, by name (isDefaultValueConstant).
+    pub default_const: Option<PhpStr>,
     pub ty: Option<TypeDecl>,
     /// A promoted constructor parameter.
     pub promoted: bool,
@@ -55,6 +57,8 @@ pub struct FnInfo {
     pub is_generator: bool,
     pub closure_this: Option<Rc<Object>>,
     pub closure_scope: Option<Rc<Class>>,
+    /// A closure's called scope (`static`): getClosureCalledClass.
+    pub closure_called: Option<Rc<Class>>,
 }
 
 /// A declaration whose doc comment, attributes and lines reflection reads.

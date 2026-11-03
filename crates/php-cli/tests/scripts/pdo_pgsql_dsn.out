@@ -1,0 +1,85 @@
+pgsql:nosuchoption=1
+  PDOException 7
+  SQLSTATE[08006] [7] invalid connection option "nosuchoption"
+array(3) {
+  [0]=>
+  string(5) "08006"
+  [1]=>
+  int(7)
+  [2]=>
+  string(40) "invalid connection option "nosuchoption""
+}
+pgsql:host
+  PDOException 7
+  SQLSTATE[08006] [7] missing "=" after "host" in connection info string
+array(3) {
+  [0]=>
+  string(5) "08006"
+  [1]=>
+  int(7)
+  [2]=>
+  string(50) "missing "=" after "host" in connection info string"
+}
+pgsql:dbname='unterminated
+  PDOException 7
+  SQLSTATE[08006] [7] missing "=" after "u'" in connection info string
+array(3) {
+  [0]=>
+  string(5) "08006"
+  [1]=>
+  int(7)
+  [2]=>
+  string(48) "missing "=" after "u'" in connection info string"
+}
+pgsql:host=localhost;sslmode=sometimes
+  PDOException 7
+  SQLSTATE[08006] [7] invalid sslmode value: "sometimes"
+array(3) {
+  [0]=>
+  string(5) "08006"
+  [1]=>
+  int(7)
+  [2]=>
+  string(34) "invalid sslmode value: "sometimes""
+}
+pgsql:host=127.0.0.1;port=1;dbname=x
+  PDOException 7
+  SQLSTATE[08006] [7] connection to server at "127.0.0.1", port 1 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+array(3) {
+  [0]=>
+  string(5) "08006"
+  [1]=>
+  int(7)
+  [2]=>
+  string(140) "connection to server at "127.0.0.1", port 1 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?"
+}
+pgsql:host=/nonexistent/dir;dbname=x
+  PDOException 7
+  SQLSTATE[08006] [7] connection to server on socket "/nonexistent/dir/.s.PGSQL.5432" failed: No such file or directory
+	Is the server running locally and accepting connections on that socket?
+array(3) {
+  [0]=>
+  string(5) "08006"
+  [1]=>
+  int(7)
+  [2]=>
+  string(170) "connection to server on socket "/nonexistent/dir/.s.PGSQL.5432" failed: No such file or directory
+	Is the server running locally and accepting connections on that socket?"
+}
+pgsql:host=127.0.0.1;port=notaport
+  PDOException 7
+  SQLSTATE[08006] [7] invalid integer value "notaport" for connection option "port"
+array(3) {
+  [0]=>
+  string(5) "08006"
+  [1]=>
+  int(7)
+  [2]=>
+  string(61) "invalid integer value "notaport" for connection option "port""
+}
+Pdo\Pgsql::connect() cannot be used for connecting to the "sqlite" driver, either call Pdo\Sqlite::connect() or PDO::connect() instead
+Pdo\Sqlite::__construct() cannot be used for connecting to the "pgsql" driver, either call Pdo\Pgsql::__construct() or PDO::__construct() instead
+PDOException: SQLSTATE[08006] [7] connection to server on socket "/nonexistent/dir/.s.PGSQL.5432" failed: No such file or directory
+	Is the server running locally and accepting connections on that socket?

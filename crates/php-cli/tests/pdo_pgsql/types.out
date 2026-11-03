@@ -1,0 +1,118 @@
+string(5) "pgsql"
+int(2)
+bool(false)
+bool(false)
+string(31) "Connection OK; waiting to send."
+i: int(1)
+big: int(9223372036854775807)
+small: int(2)
+t: bool(true)
+f: bool(false)
+d: float(1.5)
+inf: float(INF)
+n: string(5) "12.50"
+s: string(4) "text"
+z: NULL
+b: stream 00ff41
+o: int(42)
+dt: string(10) "2024-01-02"
+arr: string(5) "{1,2}"
+j: string(8) "{"a": 1}"
+bool(true)
+int(1)
+string(1) "1"
+string(1) "1"
+bool(true)
+SQLSTATE[22P02]: Invalid text representation: 7 ERROR:  invalid input syntax for type boolean: ""
+CONTEXT:  unnamed portal parameter $2 = ''
+bool(true)
+array(3) {
+  [0]=>
+  array(4) {
+    ["id"]=>
+    int(1)
+    ["name"]=>
+    string(5) "alice"
+    ["flag"]=>
+    bool(true)
+    ["amount"]=>
+    string(5) "10.25"
+  }
+  [1]=>
+  array(4) {
+    ["id"]=>
+    int(2)
+    ["name"]=>
+    string(3) "bob"
+    ["flag"]=>
+    bool(false)
+    ["amount"]=>
+    string(4) "3.00"
+  }
+  [2]=>
+  array(4) {
+    ["id"]=>
+    int(3)
+    ["name"]=>
+    string(5) "carol"
+    ["flag"]=>
+    bool(false)
+    ["amount"]=>
+    NULL
+  }
+}
+array(2) {
+  ["two_a"]=>
+  int(42)
+  ["b"]=>
+  string(1) "x"
+}
+bool(true)
+string(10) "000162696e"
+string(10) "000162696e"
+bool(true)
+array(3) {
+  [0]=>
+  string(4) "it's"
+  [1]=>
+  string(1) "t"
+  [2]=>
+  string(2) "??"
+}
+bool(false)
+array(3) {
+  [0]=>
+  string(4) "it's"
+  [1]=>
+  string(1) "t"
+  [2]=>
+  string(2) "??"
+}
+bool(false)
+array(3) {
+  [0]=>
+  string(4) "it's"
+  [1]=>
+  string(1) "t"
+  [2]=>
+  string(2) "??"
+}
+int(2)
+string(7) "'it''s'"
+string(5) "'a\b'"
+string(8) "'\x00ff'"
+int(3)
+int(0)
+{"pgsql:oid":23,"table":"t","native_type":"int4","pdo_type":1,"name":"id","len":4,"precision":-1}
+{"pgsql:oid":25,"table":"t","native_type":"text","pdo_type":2,"name":"name","len":-1,"precision":-1}
+{"pgsql:oid":1700,"table":"t","native_type":"numeric","pdo_type":2,"name":"amount","len":-1,"precision":655366}
+{"pgsql:oid":16,"table":"t","native_type":"bool","pdo_type":5,"name":"flag","len":1,"precision":-1}
+{"pgsql:oid":17,"table":"t","native_type":"bytea","pdo_type":3,"name":"data","len":-1,"precision":-1}
+array(3) {
+  ["i"]=>
+  string(1) "1"
+  ["b"]=>
+  string(1) "1"
+  ["f"]=>
+  string(3) "1.5"
+}

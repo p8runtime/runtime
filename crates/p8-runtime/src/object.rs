@@ -19,7 +19,6 @@ use crate::ext::{Ctx, Throw};
 use crate::string::PhpStr;
 use crate::value::Value;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Who may see a member.
@@ -36,6 +35,15 @@ impl Visibility {
             Visibility::Public => "public",
             Visibility::Protected => "protected",
             Visibility::Private => "private",
+        }
+    }
+
+    /// How narrow it is: public 0, protected 1, private 2.
+    pub fn rank(self) -> u8 {
+        match self {
+            Visibility::Public => 0,
+            Visibility::Protected => 1,
+            Visibility::Private => 2,
         }
     }
 }
@@ -92,11 +100,15 @@ pub struct Property {
     /// with no default (uninitialized until assigned).
     pub default: Value,
     pub visibility: Visibility,
+    /// Who may write it (`private(set)`, `protected(set)`), when narrower
+    /// than `visibility`; None: whoever may read it.
+    pub set_visibility: Option<Visibility>,
     /// The class that declares it (lowercase), for private access.
     pub declaring: Vec<u8>,
     /// As declared, for messages and var_dump.
     pub declaring_name: PhpStr,
     pub readonly: bool,
+    pub is_final: bool,
     /// The declared type as written (`int`, `?Foo`), if typed.
     pub ty: Option<PhpStr>,
     /// The declared type, checked when a value is stored.
@@ -129,7 +141,7 @@ pub enum Native {
 
 /// A class's methods by lowercase name, in declaration order (inherited
 /// ones first): PHP reports and lists them in that order.
-pub type Methods = indexmap::IndexMap<Vec<u8>, Method>;
+pub type Methods = crate::fast::IndexMap<Vec<u8>, Method>;
 
 /// A method in a class's table.
 #[derive(Debug, Clone)]
@@ -150,7 +162,7 @@ pub struct Method {
 }
 
 /// A class's constants by name, in the order they were declared.
-pub type Constants = indexmap::IndexMap<Vec<u8>, Constant>;
+pub type Constants = crate::fast::IndexMap<Vec<u8>, Constant>;
 
 /// A class constant.
 #[derive(Debug, Clone)]
@@ -184,14 +196,14 @@ pub struct Class {
     pub properties: Vec<Property>,
     /// Each property name's slots; more than one when a parent's private
     /// property shares a name with a subclass's.
-    pub slots: HashMap<Vec<u8>, Vec<usize>>,
+    pub slots: crate::fast::HashMap<Vec<u8>, Vec<usize>>,
     /// Lowercase name → method, inherited ones included.
     pub methods: Methods,
     /// In declaration order (reflection lists them so).
     pub constants: Constants,
     /// Static properties: a subclass shares its parent's cell unless it
     /// redeclares the property.
-    pub statics: HashMap<Vec<u8>, Static>,
+    pub statics: crate::fast::HashMap<Vec<u8>, Static>,
     /// What var_dump and print_r show of an object instead of its
     /// properties (a Closure's name, file, bindings).
     pub debug_info: Option<fn(&Object) -> PhpArray>,
@@ -205,6 +217,10 @@ pub struct Class {
     /// `(int)`, `(float)`, arithmetic and comparisons with scalars read. None:
     /// no such cast.
     pub cast_string: Option<fn(&Object) -> PhpStr>,
+    /// `(int)` of its objects when the class casts to int itself (zend's
+    /// cast_object to IS_LONG: a CurlHandle is its object id). None: as
+    /// cast_string reads, else 1.
+    pub cast_int: Option<fn(&Object) -> i64>,
     /// The native state a clone gets (zend's clone_obj for internal
     /// classes): None shares the original's.
     pub clone_data: Option<CloneData>,
@@ -334,12 +350,21 @@ pub struct Ids {
     /// Every object, by id (an id is one live object's at a time):
     /// gc_collect_cycles walks them.
     all: RefCell<Vec<std::rc::Weak<Object>>>,
+    /// Where these objects' destructors are queued, when not here (a
+    /// resource's: with the objects', which the interpreter runs).
+    queue: Option<Rc<Ids>>,
 }
 
 impl Ids {
     /// Numbers that only go up.
     pub fn monotonic() -> Ids {
         Ids { monotonic: true, ..Ids::default() }
+    }
+
+    /// Numbers that only go up, for objects whose destructors queue with
+    /// `objects`' (resources: a user-space stream is closed when it goes).
+    pub fn monotonic_beside(objects: &Rc<Ids>) -> Ids {
+        Ids { monotonic: true, queue: Some(Rc::clone(objects)), ..Ids::default() }
     }
 
     pub fn take(&self) -> u32 {
@@ -558,8 +583,9 @@ impl Drop for Object {
                 lazy: Cell::new(0),
                 lazy_info: RefCell::new(None),
             });
-            self.ids.pending.borrow_mut().push_back(revived);
-            self.ids.due.set(self.ids.due.get() + 1);
+            let queue = self.ids.queue.as_deref().unwrap_or(&self.ids);
+            queue.pending.borrow_mut().push_back(revived);
+            queue.due.set(queue.due.get() + 1);
             return;
         }
         self.ids.give_back(self.id);

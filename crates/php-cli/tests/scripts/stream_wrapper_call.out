@@ -1,0 +1,43 @@
+bool(true)
+bool(true)
+bool(true)
+int(1)
+array(1) {
+  ["unix"]=>
+  array(1) {
+    ["x"]=>
+    int(1)
+  }
+}
+bool(true)
+int(8)
+int(8)
+string(4) "2:OK"
+bool(true)
+string(16) "{"a":1}
+{"b":2}
+"
+bool(false)
+FakeStream method not implemented [stream_stat]
+closed
+bool(true)
+cast 3
+cast 3
+int(1)
+bool(true)
+cast 3
+
+Warning: stream_select(): Cannot represent a stream of type user-space as a select()able descriptor in %s on line 74
+No stream arrays were passed
+cast 3
+
+Warning: stream_select(): Pipe::stream_cast must not return itself in %s on line 74
+
+Warning: stream_select(): Cannot represent a stream of type user-space as a select()able descriptor in %s on line 74
+No stream arrays were passed
+cast 3
+
+Warning: stream_select(): Pipe::stream_cast must return a stream resource in %s on line 74
+
+Warning: stream_select(): Cannot represent a stream of type user-space as a select()able descriptor in %s on line 74
+No stream arrays were passed

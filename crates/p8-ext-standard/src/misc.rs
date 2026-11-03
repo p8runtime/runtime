@@ -19,6 +19,9 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "assert_options", run: assert_options, by_ref: &[] },
     Builtin { name: "error_reporting", run: error_reporting, by_ref: &[] },
     Builtin { name: "ini_get", run: ini_get, by_ref: &[] },
+    Builtin { name: "ini_get_all", run: ini_get_all, by_ref: &[] },
+    Builtin { name: "php_ini_loaded_file", run: no_ini_file, by_ref: &[] },
+    Builtin { name: "php_ini_scanned_files", run: no_ini_file, by_ref: &[] },
     Builtin { name: "ini_set", run: ini_set, by_ref: &[] },
     Builtin { name: "ini_alter", run: ini_set, by_ref: &[] },
     Builtin { name: "trigger_error", run: trigger_error, by_ref: &[] },
@@ -31,12 +34,14 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "version_compare", run: version_compare, by_ref: &[] },
     Builtin { name: "error_log", run: error_log, by_ref: &[] },
     Builtin { name: "get_defined_functions", run: get_defined_functions, by_ref: &[] },
+    Builtin { name: "get_defined_constants", run: get_defined_constants, by_ref: &[] },
     Builtin { name: "zend_version", run: zend_version, by_ref: &[] },
     Builtin { name: "quoted_printable_encode", run: quoted_printable_encode, by_ref: &[] },
     Builtin { name: "quoted_printable_decode", run: quoted_printable_decode, by_ref: &[] },
     Builtin { name: "getenv", run: getenv, by_ref: &[] },
     Builtin { name: "time", run: time, by_ref: &[] },
     Builtin { name: "gc_collect_cycles", run: gc_collect_cycles, by_ref: &[] },
+    Builtin { name: "gc_mem_caches", run: gc_mem_caches, by_ref: &[] },
     Builtin { name: "gc_status", run: gc_status, by_ref: &[] },
     Builtin { name: "gc_enable", run: gc_switch, by_ref: &[] },
     Builtin { name: "gc_disable", run: gc_switch, by_ref: &[] },
@@ -59,6 +64,53 @@ fn ini_get(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Some(v) => v,
         None => Value::Bool(false),
     })
+}
+
+/// php_ini_loaded_file() / php_ini_scanned_files(): p8 reads no php.ini.
+fn no_ini_file(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Bool(false))
+}
+
+/// ini_get_all(?string $extension = null, bool $details = true): every
+/// directive (or one extension's), sorted by name; with details, each as
+/// [global_value, local_value, access].
+fn ini_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let ext = match arg(args, 0) {
+        Value::Null => None,
+        _ => Some(String::from_utf8_lossy(str_arg(args, 0).as_bytes()).to_ascii_lowercase()),
+    };
+    let details = args.len() < 2 || arg(args, 1).to_bool();
+    let mut rows: Vec<_> = crate::defaults::INI_DEFAULTS.iter().filter(|(e, _, _)| ext.as_deref().is_none_or(|x| x == *e)).collect();
+    if let Some(x) = &ext
+        && !ctx.modules().iter().any(|m| m.eq_ignore_ascii_case(x))
+    {
+        ctx.warn(&format!("ini_get_all(): Extension \"{x}\" cannot be found"));
+        return Ok(Value::Bool(false));
+    }
+    // zend_ini_sort_entries: names compared ignoring case; PHP's table
+    // stays sorted after.
+    rows.sort_by_key(|(_, name, _)| name.to_ascii_lowercase());
+    *ctx.state(p8_runtime::info::INI_SORTED) = Value::Bool(true);
+    let text = |v: Option<Value>| match v {
+        None | Some(Value::Null) => Value::Null,
+        Some(v) => v,
+    };
+    let mut out = PhpArray::new();
+    for (_, name, default) in rows {
+        let local = text(ctx.ini_get(name.as_bytes()));
+        let v = if details {
+            let access = crate::defaults::INI_ACCESS.iter().find(|(n, _)| n == name).map_or(7, |(_, a)| i64::from(*a));
+            let mut d = PhpArray::new();
+            d.insert(Key::Str(PhpStr::from("global_value")), default.map_or(Value::Null, |b| Value::Str(PhpStr::from(b))));
+            d.insert(Key::Str(PhpStr::from("local_value")), local);
+            d.insert(Key::Str(PhpStr::from("access")), Value::Int(access));
+            Value::Array(Rc::new(d))
+        } else {
+            local
+        };
+        out.insert(Key::Str(PhpStr::from(*name)), v);
+    }
+    Ok(Value::Array(Rc::new(out)))
 }
 
 fn ini_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -330,15 +382,16 @@ fn php_sapi_name(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::str(if ctx.response().server { "cli-server" } else { "cli" }))
 }
 
-/// phpversion($extension = null): PHP's version, or an extension's (which
-/// for bundled extensions is PHP's own); false for an extension p8 lacks.
+/// phpversion($extension = null): PHP's version, or a loaded extension's
+/// (zend_get_module_version, any case); false for one p8 lacks or one
+/// without a version.
 fn phpversion(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let version = ctx.constant(b"PHP_VERSION").unwrap_or(Value::Bool(false));
     match args.first().map(Value::deref) {
-        None | Some(Value::Null) => Ok(version),
+        None | Some(Value::Null) => Ok(Value::str(crate::PHP_VERSION)),
         Some(ext) => {
-            let name = ext.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_ascii_lowercase();
-            Ok(if matches!(name.as_slice(), b"standard" | b"core") { version } else { Value::Bool(false) })
+            let name = ext.to_php_string().unwrap_or_else(PhpStr::empty);
+            let version = p8_runtime::info::loaded_module(ctx, name.as_bytes()).and_then(p8_runtime::info::module_version);
+            Ok(version.map_or(Value::Bool(false), Value::str))
         }
     }
 }
@@ -365,10 +418,16 @@ fn gc_collect_cycles(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw>
     Ok(Value::Int(ctx.gc_collect()?))
 }
 
+/// gc_mem_caches(): bytes handed back from the memory manager's caches;
+/// p8 keeps no such caches (Rust's allocator owns memory), so none.
+fn gc_mem_caches(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::Int(0))
+}
+
 /// gc_status(): the collector's counters, as PHP 8.4 reports them.
 fn gc_status(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let (runs, collected) = ctx.gc_counts();
-    let mut out = PhpArray::new();
+    let mut out = PhpArray::hashed(12);
     for (k, v) in [
         ("running", Value::Bool(false)),
         ("protected", Value::Bool(false)),
@@ -659,6 +718,39 @@ fn getopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     if let Some(Value::Ref(c)) = args.get(2) {
         *c.borrow_mut() = Value::Int(optind as i64);
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+/// get_defined_constants(bool $categorize = false): name => value for
+/// every constant, builtins first in the order their extensions made them,
+/// then the script's; categorized, grouped by module ("Core", "pcre", ...,
+/// "user").
+fn get_defined_constants(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let categorize = args.first().is_some_and(|v| v.deref().to_bool());
+    let mut flat = PhpArray::new();
+    let mut groups: Vec<(String, PhpArray)> = Vec::new();
+    for (module, name, value) in ctx.defined_constants() {
+        let key = Key::from_string(name);
+        if categorize {
+            match groups.iter_mut().find(|(m, _)| *m == module) {
+                Some((_, g)) => g.insert(key, value),
+                None => {
+                    let mut g = PhpArray::new();
+                    g.insert(key, value);
+                    groups.push((module, g));
+                }
+            }
+        } else {
+            flat.insert(key, value);
+        }
+    }
+    if !categorize {
+        return Ok(Value::Array(Rc::new(flat)));
+    }
+    let mut out = PhpArray::new();
+    for (module, g) in groups {
+        out.insert(Key::from_string(PhpStr::from(module.as_str())), Value::Array(Rc::new(g)));
     }
     Ok(Value::Array(Rc::new(out)))
 }

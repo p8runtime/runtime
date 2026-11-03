@@ -1,0 +1,13 @@
+[package]
+name = "p8-ext-pdo-pgsql"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's pdo_pgsql driver: PDO over the PostgreSQL protocol spoken in Rust on a blocking socket, no libpq"
+
+[dependencies]
+p8-runtime = { path = "../p8-runtime" }
+p8-ext-pdo = { path = "../p8-ext-pdo" }
+# SCRAM-SHA-256 and MD5 password authentication (pure Rust: the protocol
+# half of rust-postgres; its async client is not used).
+postgres-protocol = "0.6.9"

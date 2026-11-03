@@ -276,15 +276,15 @@ fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         Err(ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len())))
     };
     let Some(rest) = bytes.strip_prefix(b"x:") else { return bad(ctx, 0) };
-    let Some((Value::Int(flags), n)) = crate::serial::read_value(ctx, rest) else { return bad(ctx, 2) };
+    let Some((Value::Int(flags), n)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, 2) };
     let at = 2 + n;
-    let Some((storage, n)) = crate::serial::read_value(ctx, &bytes[at..]) else { return bad(ctx, at) };
+    let Some((storage, n)) = crate::serial::read_value(ctx, &bytes[at..])? else { return bad(ctx, at) };
     let mut at = at + n;
     if bytes.get(at) == Some(&b';') {
         at += 1;
     }
     let Some(rest) = bytes[at..].strip_prefix(b"m:") else { return bad(ctx, at) };
-    let Some((Value::Array(m), _)) = crate::serial::read_value(ctx, rest) else { return bad(ctx, at + 2) };
+    let Some((Value::Array(m), _)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, at + 2) };
     set(this, "\0flags", Value::Int(flags));
     set(this, "storage", storage);
     for (k, v) in m.iter() {
@@ -612,6 +612,98 @@ fn os_attach_to(this: &Object, o: Rc<Object>, inf: Value) {
     put_store(this, map);
 }
 
+/// SplObjectStorage::serialize(): "x:i:<count>;" then each "object,info;",
+/// then "m:" and the other properties (spl_observer.c).
+fn os_serialize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let map = store(this);
+    let mut s = crate::serial::Serializer::new(ctx);
+    s.raw(b"x:");
+    s.value(&Value::Int(map.len() as i64))?;
+    for pair in map.values() {
+        let pair = array_of(pair.deref());
+        s.value(&pair.get(&Key::Int(0)).map_or(Value::Null, Value::deref))?;
+        s.raw(b",");
+        s.value(&pair.get(&Key::Int(1)).map_or(Value::Null, Value::deref))?;
+        s.raw(b";");
+    }
+    s.raw(b"m:");
+    s.value(&Value::Array(Rc::new(spl_members(this, b"splobjectstorage"))))?;
+    Ok(Value::Str(PhpStr::new(s.finish())))
+}
+
+/// SplObjectStorage::unserialize(string): what serialize() wrote.
+fn os_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let data = crate::str_arg(args, 0);
+    let bytes = data.as_bytes();
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    let bad = |ctx: &mut dyn Ctx, at: usize| ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len()));
+    if !bytes.starts_with(b"x:") {
+        return Err(bad(ctx, 0));
+    }
+    let mut u = crate::serial::Unserializer::new(bytes);
+    u.seek(2);
+    let count = match u.value(ctx)? {
+        Ok(Value::Int(n)) if n >= 0 => n,
+        _ => return Err(bad(ctx, u.at())),
+    };
+    for _ in 0..count {
+        let Ok(Value::Object(o)) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
+        if bytes.get(u.at()) != Some(&b',') {
+            return Err(bad(ctx, u.at()));
+        }
+        u.seek(u.at() + 1);
+        let Ok(inf) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
+        if bytes.get(u.at()) != Some(&b';') {
+            return Err(bad(ctx, u.at()));
+        }
+        u.seek(u.at() + 1);
+        os_attach_to(this, o, inf);
+    }
+    if !bytes[u.at()..].starts_with(b"m:") {
+        return Err(bad(ctx, u.at()));
+    }
+    u.seek(u.at() + 2);
+    let Ok(Value::Array(members)) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
+    u.finish(ctx)?;
+    spl_restore_members(ctx, this, b"splobjectstorage", &members);
+    Ok(Value::Null)
+}
+
+/// SplObjectStorage::__serialize(): [[object, info, ...], other properties].
+fn os_magic_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let mut flat = Vec::new();
+    for pair in store(this).values() {
+        let pair = array_of(pair.deref());
+        flat.push(pair.get(&Key::Int(0)).map_or(Value::Null, Value::deref));
+        flat.push(pair.get(&Key::Int(1)).map_or(Value::Null, Value::deref));
+    }
+    let members = spl_members(this, b"splobjectstorage");
+    Ok(Value::Array(Rc::new(PhpArray::from_list(vec![Value::Array(Rc::new(PhpArray::from_list(flat))), Value::Array(Rc::new(members))]))))
+}
+
+/// SplObjectStorage::__unserialize(array $data).
+fn os_magic_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let data = array_of(arg(args, 0));
+    let bad = |ctx: &mut dyn Ctx| ctx.throw("UnexpectedValueException", "Incomplete or ill-typed serialization data".into());
+    let (Some(Value::Array(pairs)), Some(Value::Array(members))) = (data.get(&Key::Int(0)).map(Value::deref), data.get(&Key::Int(1)).map(Value::deref)) else {
+        return Err(bad(ctx));
+    };
+    let items: Vec<Value> = pairs.values().map(Value::deref).collect();
+    if !items.len().is_multiple_of(2) {
+        return Err(ctx.throw("UnexpectedValueException", "Odd number of elements".into()));
+    }
+    for pair in items.chunks(2) {
+        let Value::Object(o) = &pair[0] else {
+            return Err(ctx.throw("UnexpectedValueException", "Non-object key".into()));
+        };
+        os_attach_to(this, Rc::clone(o), pair[1].clone());
+    }
+    spl_restore_members(ctx, this, b"splobjectstorage", &members);
+    Ok(Value::Null)
+}
+
 fn os_attach(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "attach")?;
     os_attach_to(this, o, arg(args, 1));
@@ -799,6 +891,119 @@ fn dll(o: &Object) -> Vec<Value> {
 
 fn put_dll(o: &Object, list: Vec<Value>) {
     set(o, "dllist", Value::Array(Rc::new(PhpArray::from_list(list))));
+}
+
+/// The properties a subclass or its user added to an SPL object whose own
+/// (declared by `own`) are internal, keyed as zend_std_get_properties keys them.
+fn spl_members(o: &Object, own: &[u8]) -> PhpArray {
+    let mut out = PhpArray::new();
+    let slots = o.slots.borrow();
+    for (i, p) in o.class.properties.iter().enumerate() {
+        if p.declaring.as_slice() == own || p.name.as_bytes().starts_with(b"\0") || matches!(slots[i], Value::Undef) {
+            continue;
+        }
+        let key = match p.visibility {
+            Visibility::Public => p.name.as_bytes().to_vec(),
+            Visibility::Protected => [b"\0*\0".as_slice(), p.name.as_bytes()].concat(),
+            Visibility::Private => [b"\0".as_slice(), p.declaring_name.as_bytes(), b"\0", p.name.as_bytes()].concat(),
+        };
+        out.insert(Key::from_string(PhpStr::new(key)), slots[i].deref());
+    }
+    drop(slots);
+    for (k, v) in o.dynamic.borrow().iter() {
+        out.insert(k, v.deref());
+    }
+    out
+}
+
+/// Restores __serialize's members: a declared property by its name (the
+/// mangling dropped), anything else as a dynamic one (deprecated, as any
+/// new dynamic property, where the class does not allow them).
+fn spl_restore_members(ctx: &mut dyn Ctx, o: &Object, own: &[u8], members: &PhpArray) {
+    for (k, v) in members.iter() {
+        let raw = match &k {
+            Key::Str(s) => s.as_bytes().to_vec(),
+            Key::Int(i) => i.to_string().into_bytes(),
+        };
+        let name = match raw.strip_prefix(b"\0") {
+            Some(rest) => rest.iter().position(|&b| b == 0).map_or(rest.to_vec(), |at| rest[at + 1..].to_vec()),
+            None => raw,
+        };
+        match o.class.properties.iter().position(|p| p.name.as_bytes() == name.as_slice() && p.declaring.as_slice() != own) {
+            Some(i) => o.slots.borrow_mut()[i] = v.deref(),
+            None => {
+                if o.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 && !o.dynamic.borrow().contains_key(&k) {
+                    let class = String::from_utf8_lossy(o.class.name.as_bytes()).into_owned();
+                    ctx.deprecated(&format!("Creation of dynamic property {class}::${} is deprecated", String::from_utf8_lossy(&name)));
+                }
+                o.dynamic.borrow_mut().insert(k, v.deref());
+            }
+        }
+    }
+}
+
+/// SplDoublyLinkedList::serialize(): "i:<flags>;" then ":" and each
+/// element serialized (spl_dllist.c).
+fn dll_serialize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let flags = dll_flags(this);
+    let mut s = crate::serial::Serializer::new(ctx);
+    s.raw(format!("i:{flags};").as_bytes());
+    for v in dll(this) {
+        s.raw(b":");
+        s.value(&v)?;
+    }
+    Ok(Value::Str(PhpStr::new(s.finish())))
+}
+
+/// SplDoublyLinkedList::unserialize(string): the elements serialize() wrote.
+fn dll_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let data = crate::str_arg(args, 0);
+    let bytes = data.as_bytes();
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    let bad = |ctx: &mut dyn Ctx, at: usize| ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len()));
+    let mut u = crate::serial::Unserializer::new(bytes);
+    let flags = match u.value(ctx)? {
+        Ok(Value::Int(f)) => f,
+        Ok(_) | Err(_) => return Err(bad(ctx, 0)),
+    };
+    let mut list = Vec::new();
+    while u.at() < bytes.len() {
+        if bytes[u.at()] != b':' {
+            return Err(bad(ctx, u.at()));
+        }
+        u.seek(u.at() + 1);
+        match u.value(ctx)? {
+            Ok(v) => list.push(v),
+            Err(at) => return Err(bad(ctx, at)),
+        }
+    }
+    u.finish(ctx)?;
+    set(this, "flags", Value::Int(flags));
+    put_dll(this, list);
+    Ok(Value::Null)
+}
+
+/// SplDoublyLinkedList::__serialize(): [flags, elements, other properties].
+fn dll_magic_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    let flags = dll_flags(this);
+    let list = Value::Array(Rc::new(PhpArray::from_list(dll(this))));
+    let members = Value::Array(Rc::new(spl_members(this, b"spldoublylinkedlist")));
+    Ok(Value::Array(Rc::new(PhpArray::from_list(vec![Value::Int(flags), list, members]))))
+}
+
+/// SplDoublyLinkedList::__unserialize(array $data).
+fn dll_magic_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let data = array_of(arg(args, 0));
+    let (flags, list, members) = (data.get(&Key::Int(0)).map(Value::deref), data.get(&Key::Int(1)).map(Value::deref), data.get(&Key::Int(2)).map(Value::deref));
+    let (Some(Value::Int(flags)), Some(Value::Array(list)), Some(Value::Array(members))) = (flags, list, members) else {
+        return Err(ctx.throw("UnexpectedValueException", "Incomplete or ill-typed serialization data".into()));
+    };
+    set(this, "flags", Value::Int(flags));
+    put_dll(this, list.values().map(Value::deref).collect());
+    spl_restore_members(ctx, this, b"spldoublylinkedlist", &members);
+    Ok(Value::Null)
 }
 
 fn dll_push(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1222,6 +1427,19 @@ fn class_parents(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     Ok(Value::Array(Rc::new(out)))
 }
 
+/// class_uses(object|string $object_or_class, bool $autoload = true): the
+/// traits the class itself uses, name => name
+fn class_uses(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let autoload = args.len() < 2 || arg(args, 1).to_bool();
+    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_uses")? else { return Ok(Value::Bool(false)) };
+    let mut out = PhpArray::new();
+    for t in ctx.reflect_meta(&p8_runtime::reflect::Subject::Class(class)).traits {
+        let name = ctx.class(t.as_bytes()).map_or(t, |c| c.name.clone());
+        out.insert(Key::from_string(name.clone()), Value::Str(name));
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
 /// iterator_apply(Traversable $iterator, callable $callback, ?array $args = null): the count
 fn iterator_apply(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(it) = arg(args, 0) else {
@@ -1248,11 +1466,12 @@ fn iterator_apply(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "class_implements", run: class_implements, by_ref: &[] },
     Builtin { name: "class_parents", run: class_parents, by_ref: &[] },
+    Builtin { name: "class_uses", run: class_uses, by_ref: &[] },
     Builtin { name: "iterator_apply", run: iterator_apply, by_ref: &[] },
 ];
 
 /// They call PHP code (autoloaders, the callback).
-pub const REENTER: &[&str] = &["class_implements", "class_parents", "iterator_apply"];
+pub const REENTER: &[&str] = &["class_implements", "class_parents", "class_uses", "iterator_apply"];
 
 // ---------------------------------------------------------------------------
 // The classes
@@ -1261,6 +1480,10 @@ pub const REENTER: &[&str] = &["class_implements", "class_parents", "iterator_ap
 const ARRAY_FLAGS: &[(&str, Constant)] = &[("STD_PROP_LIST", Constant::Int(1)), ("ARRAY_AS_PROPS", Constant::Int(2))];
 
 const DLL_METHODS: &[(&str, Option<Native>)] = &[
+    ("serialize", Some(Native::Method(dll_serialize))),
+    ("unserialize", Some(Native::Method(dll_unserialize))),
+    ("__serialize", Some(Native::Method(dll_magic_serialize))),
+    ("__unserialize", Some(Native::Method(dll_magic_unserialize))),
     ("push", Some(Native::Method(dll_push))),
     ("pop", Some(Native::Method(dll_pop))),
     ("shift", Some(Native::Method(dll_shift))),
@@ -1400,6 +1623,10 @@ pub static CLASSES: &[ClassSpec] = &[
         properties: &[H_MAP, H_POS, H_INDEX],
         methods: &[
             ("attach", Some(Native::Method(os_attach))),
+            ("serialize", Some(Native::Method(os_serialize))),
+            ("unserialize", Some(Native::Method(os_unserialize))),
+            ("__serialize", Some(Native::Method(os_magic_serialize))),
+            ("__unserialize", Some(Native::Method(os_magic_unserialize))),
             ("detach", Some(Native::Method(os_detach))),
             ("contains", Some(Native::Method(os_contains))),
             ("addAll", Some(Native::Method(os_add_all))),

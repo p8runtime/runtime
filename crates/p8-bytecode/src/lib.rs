@@ -341,11 +341,17 @@ pub enum Rare {
     VarBind,
     /// A call with `...` in it: a = whether the callable in b takes its
     /// argument number `class` by reference (false when it is not callable;
-    /// the call reports that).
+    /// the call reports that). With `class` u16::MAX, the parameter is the
+    /// one named by the string in c (a named argument).
     CallableArgByRef,
     /// Throw an Error whose message is the string in a (what PHP finds
     /// wrong only as the code runs: `f($a[])` when f takes a value).
     ThrowError,
+    /// A function's CV a (a superglobal) is the global variable named by
+    /// the string in b, as it is now: PHP's auto-globals are looked up in
+    /// the global table at each use, never bound once. One not set stays
+    /// unset (a read is not a `global` statement, which makes it null).
+    AutoGlobal,
 }
 
 impl Instr {
@@ -597,8 +603,12 @@ pub struct PropDef {
     /// `$name::get` and `$name::set`.
     pub hooks: u8,
     pub visibility: Visibility,
+    /// Who may write it (`private(set)`), when narrower than `visibility`
+    /// (a public readonly property is implicitly protected(set)).
+    pub set_visibility: Option<Visibility>,
     pub is_static: bool,
     pub readonly: bool,
+    pub is_final: bool,
     /// The declared type as written.
     pub ty: Option<Text>,
     /// The declared type, checked when a value is stored.
@@ -638,6 +648,9 @@ pub struct Param {
     /// Its default when that is a constant value (for reflection; the
     /// default itself runs as code).
     pub default: Option<Frozen>,
+    /// Its default when that is a constant, by name as reflection shows
+    /// it (`N\PHP_EOL`, `self::A`).
+    pub default_const: Option<Text>,
     /// A promoted constructor parameter (`public int $x`).
     pub promoted: bool,
     pub attrs: Vec<AttrDef>,

@@ -41,7 +41,7 @@ impl Context<'_> {
                 }
                 Some(Arc::clone(&self.closures[m.func as usize].code))
             }
-            Callee::Closure(o) => closure_data(o)?.func.as_ref().ok().map(|c| Arc::clone(&c.code)),
+            Callee::Closure(o) => closure_data(o)?.func.user().map(|c| Arc::clone(&c.code)),
         }
     }
 

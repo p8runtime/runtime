@@ -239,3 +239,15 @@ pub fn record(dbh: &Dbh, at: &Where, e: &crate::driver::DriverError) {
 pub fn str_key(s: &[u8]) -> Key {
     Key::from_string(PhpStr::from(s))
 }
+
+/// Hand the driver's pending notices to the script's callback (pdo_pgsql's
+/// notice processor), once the connection is free again.
+pub fn dispatch_notices(ctx: &mut dyn Ctx, dbh: &Dbh) -> Result<(), Throw> {
+    let pending = dbh.conn.borrow_mut().take_notices();
+    if let Some((callback, messages)) = pending {
+        for m in messages {
+            ctx.call(&callback, &mut [Value::Str(PhpStr::new(m))])?;
+        }
+    }
+    Ok(())
+}

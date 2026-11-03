@@ -112,6 +112,12 @@ pub trait Ctx {
     /// ini_set(): set a known directive for this request; its old value,
     /// or None for an unknown directive.
     fn ini_set(&mut self, name: &[u8], value: Value) -> Option<Value>;
+    /// A directive's master value (phpinfo()'s "Master Value"): the host's
+    /// setting for it, else its built-in default; None for an unknown
+    /// directive.
+    fn ini_master(&self, name: &[u8]) -> Option<Value> {
+        self.ini_get(name)
+    }
     /// error_get_last(): the last error not handled by a user handler, as
     /// (type, message, file, line); error_clear_last() when `clear`.
     fn last_error(&mut self, _clear: bool) -> Option<(i64, String, String, u32)> {
@@ -136,6 +142,9 @@ pub trait Ctx {
     /// get_defined_functions(): the builtins' names, and the script's
     /// functions (lowercase) in the order declared.
     fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>);
+    /// get_defined_constants(): each constant with its module (PHP's
+    /// extension names; "user" for the script's own), builtins first.
+    fn defined_constants(&self) -> Vec<(String, PhpStr, Value)>;
     /// Where `include name` would find its file (include_path, then the
     /// running file's directory), as a canonical path.
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf>;
@@ -175,8 +184,9 @@ pub trait Ctx {
     fn set_local(&mut self, name: &[u8], value: Value) -> bool;
     /// The calling code's set variables, in order (get_defined_vars).
     fn locals(&self) -> Vec<(PhpStr, Value)>;
-    /// The calls that led here, as debug_backtrace() gives them.
-    fn backtrace(&self) -> crate::array::PhpArray;
+    /// The calls that led here, as debug_backtrace() gives them (with each
+    /// method call's `object` when `objects`).
+    fn backtrace(&self, objects: bool) -> crate::array::PhpArray;
     /// get_included_files(): every file run, in order.
     fn included_files(&self) -> Vec<String>;
     /// Per-request state an extension keeps (json_last_error, ...).
@@ -185,8 +195,10 @@ pub trait Ctx {
     fn new_resource(&mut self, resource: crate::stream::Resource) -> Value;
     /// Write to the host directly, past output buffers (PHP's STDOUT).
     fn write_stdout(&mut self, bytes: &[u8]);
-    /// The class `name`, after the autoloaders had their go (an Err of
-    /// Throw::Autoload asks the engine to run them and the call again).
+    /// The class `name`, after the autoloaders had their go: they run
+    /// right here, as zend_lookup_class runs them, so this builtin's frame
+    /// is below theirs (from a builtin marked as reentering, or a method:
+    /// the registers are lent; anything else is an engine error).
     fn class_load(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw>;
     /// The value of `o`'s property at `slot` as `$o->name` reads it here:
     /// through its get hook (from a builtin marked as reentering); None
@@ -200,6 +212,11 @@ pub trait Ctx {
     /// Reflection: a function's static variables (a closure's `use` values
     /// first), by name: their values now, null for one not yet initialized.
     fn static_variables(&mut self, callee: &crate::reflect::Callee) -> crate::array::PhpArray;
+    /// Reflection: a closure's `use` variables, by name (empty for anything
+    /// else): getClosureUsedVariables().
+    fn closure_used_variables(&mut self, _callee: &crate::reflect::Callee) -> crate::array::PhpArray {
+        crate::array::PhpArray::new()
+    }
     /// Reflection: call it (whatever its visibility), with `this` for a method.
     fn invoke(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>, args: &mut [Value]) -> Result<Value, Throw>;
     /// `new C(...args)` as the engine makes it (the instantiation checks,
@@ -402,6 +419,11 @@ pub struct Registry {
     reenters: Vec<bool>,
     index: HashMap<&'static str, usize>,
     constants: HashMap<&'static [u8], Constant>,
+    /// The constants in the order they were added, each with its module
+    /// (get_defined_constants(true) groups by it: "Core", "pcre", ...).
+    constant_order: Vec<(&'static str, &'static [u8])>,
+    /// The extension registering now (its constants' module, by default).
+    module: &'static str,
     /// Classes extensions declare, in order (a parent before its children).
     classes: Vec<&'static ClassSpec>,
     /// Native classes' per-object state makers, by class name.
@@ -428,6 +450,7 @@ pub struct ClassHooks {
     pub get_properties: Option<fn(&crate::object::Object) -> crate::array::PhpArray>,
     pub cast_bool: Option<fn(&crate::object::Object) -> bool>,
     pub cast_string: Option<fn(&crate::object::Object) -> crate::string::PhpStr>,
+    pub cast_int: Option<fn(&crate::object::Object) -> i64>,
     pub clone_data: Option<crate::object::CloneData>,
     pub forward_calls: Option<crate::object::ForwardCalls>,
 }
@@ -451,6 +474,7 @@ impl Registry {
     pub fn new(extensions: &[Extension]) -> Registry {
         let mut registry = Registry::default();
         for extension in extensions {
+            registry.module = extension.name;
             (extension.register)(&mut registry);
         }
         registry
@@ -581,7 +605,19 @@ impl Registry {
     }
 
     pub fn add_constant(&mut self, name: &'static [u8], value: Constant) {
-        self.constants.insert(name, value);
+        self.add_constant_in(self.module, name, value);
+    }
+
+    /// A constant that belongs to `module` (PHP's name for its extension).
+    pub fn add_constant_in(&mut self, module: &'static str, name: &'static [u8], value: Constant) {
+        if self.constants.insert(name, value).is_none() {
+            self.constant_order.push((module, name));
+        }
+    }
+
+    /// Every constant with its module, in the order they were added.
+    pub fn constant_list(&self) -> impl Iterator<Item = (&'static str, &'static [u8], Constant)> + '_ {
+        self.constant_order.iter().filter_map(|&(module, name)| self.constants.get(name).map(|c| (module, name, *c)))
     }
 
     /// The builtin named `name` (lowercase).

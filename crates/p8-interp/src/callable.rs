@@ -10,7 +10,7 @@ use crate::classes::{Code, MethodFrame};
 use crate::{Closure, Context, Next};
 use p8_bytecode::Function;
 use p8_runtime::ext::Throw;
-use p8_runtime::object::{Class, Object};
+use p8_runtime::object::{Class, Native, Object};
 use p8_runtime::string::PhpStr;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::value::Value;
@@ -20,8 +20,7 @@ use std::sync::Arc;
 
 /// What a Closure object holds.
 pub(crate) struct ClosureData {
-    /// What it runs: user code, or (from a builtin's name) a builtin.
-    pub func: Result<Rc<Closure>, usize>,
+    pub func: ClosureFunc,
     pub is_static: bool,
     pub this: Option<Rc<Object>>,
     pub scope: Option<Rc<Class>>,
@@ -30,6 +29,36 @@ pub(crate) struct ClosureData {
     pub captured: RefCell<Vec<Value>>,
     /// A Closure of a __call / __callStatic trampoline: the method name.
     pub trampoline: Option<PhpStr>,
+}
+
+/// What a Closure runs.
+pub(crate) enum ClosureFunc {
+    User(Rc<Closure>),
+    /// A builtin function (its index), from its name.
+    Builtin(usize),
+    /// A builtin class's method (`$doc->createElement(...)`), as its
+    /// MethodFrame holds it.
+    Method(Native, PhpStr),
+}
+
+impl ClosureFunc {
+    /// The user code it runs, if it is user code.
+    pub(crate) fn user(&self) -> Option<&Rc<Closure>> {
+        match self {
+            ClosureFunc::User(c) => Some(c),
+            _ => None,
+        }
+    }
+}
+
+impl Clone for ClosureFunc {
+    fn clone(&self) -> ClosureFunc {
+        match self {
+            ClosureFunc::User(c) => ClosureFunc::User(Rc::clone(c)),
+            ClosureFunc::Builtin(i) => ClosureFunc::Builtin(*i),
+            ClosureFunc::Method(n, name) => ClosureFunc::Method(*n, name.clone()),
+        }
+    }
 }
 
 /// The closure data of a Closure object.
@@ -78,7 +107,7 @@ impl Context<'_> {
             Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called.clone()),
             None => (None, None, None),
         };
-        let data = ClosureData { func: Ok(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None };
+        let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None };
         let class = Rc::clone(&self.classes[b"closure".as_slice()]);
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
@@ -87,7 +116,7 @@ impl Context<'_> {
     fn closure_target(&self, o: &Object) -> Option<Target> {
         let data = closure_data(o)?;
         Some(match &data.func {
-            Ok(func) => Target::Frame(MethodFrame {
+            ClosureFunc::User(func) => Target::Frame(MethodFrame {
                 func: Code::User(Rc::clone(func)),
                 this: data.this.clone(),
                 scope: data.scope.clone(),
@@ -95,7 +124,15 @@ impl Context<'_> {
                 captured: data.captured.borrow().clone(),
                 trampoline: data.trampoline.clone(),
             }),
-            Err(builtin) => Target::Builtin(*builtin),
+            ClosureFunc::Method(native, name) => Target::Frame(MethodFrame {
+                func: Code::Native(*native, name.clone()),
+                this: data.this.clone(),
+                scope: data.scope.clone(),
+                called: data.called.clone(),
+                captured: Vec::new(),
+                trampoline: None,
+            }),
+            ClosureFunc::Builtin(builtin) => Target::Builtin(*builtin),
         })
     }
 
@@ -157,7 +194,7 @@ impl Context<'_> {
         }
         let data = match self.resolve_callable(callable)? {
             Target::Builtin(i) => ClosureData {
-                func: Err(i),
+                func: ClosureFunc::Builtin(i),
                 is_static: true,
                 this: None,
                 scope: None,
@@ -166,7 +203,7 @@ impl Context<'_> {
                 trampoline: None,
             },
             Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, captured, trampoline }) => ClosureData {
-                func: Ok(func),
+                func: ClosureFunc::User(func),
                 is_static: this.is_none(),
                 this,
                 scope,
@@ -174,9 +211,15 @@ impl Context<'_> {
                 captured: RefCell::new(captured),
                 trampoline,
             },
-            Target::Frame(MethodFrame { func: Code::Native(..), .. }) => {
-                return Err(self.throw("Error", "Cannot make a closure of a builtin class's method yet"));
-            }
+            Target::Frame(MethodFrame { func: Code::Native(native, name), this, scope, called, .. }) => ClosureData {
+                func: ClosureFunc::Method(native, name),
+                is_static: this.is_none(),
+                this,
+                scope,
+                called,
+                captured: RefCell::new(Vec::new()),
+                trampoline: None,
+            },
         };
         Ok(self.new_closure(data))
     }
@@ -188,6 +231,21 @@ impl Context<'_> {
             Target::Frame(MethodFrame { func: Code::User(f), .. }) => f.code.param_by_ref(n),
             Target::Frame(MethodFrame { func: Code::Native(..), .. }) => false,
         }
+    }
+
+    /// An argument as parameter `n` gets it: a reference (an argument
+    /// compiled as one) only where the parameter takes one.
+    fn arg_or_ref(&self, target: &Target, n: usize, v: &Value) -> Value {
+        if matches!(v, Value::Ref(_)) && self.takes_ref(target, n) { v.clone() } else { v.deref() }
+    }
+
+    /// Whether the parameter of `target` named `name` takes a reference.
+    /// An unknown name answers yes, so the variable is not read (and
+    /// warned about) before the call reports the name, as in PHP.
+    pub(crate) fn named_takes_ref(&self, target: &Target, name: &[u8]) -> bool {
+        let (_, params) = self.named_params(target);
+        let name = String::from_utf8_lossy(name);
+        params.iter().position(|p| p.name == name && !p.variadic).is_none_or(|i| self.takes_ref(target, i))
     }
 
     /// What `callable` calls, with PHP's error when it is not callable.
@@ -231,7 +289,7 @@ impl Context<'_> {
             let func = Rc::clone(&self.closures[f as usize]);
             return Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None }));
         }
-        match self.isolate.registry.lookup(&lower) {
+        match self.builtin(&lower) {
             Some(i) => Ok(Target::Builtin(i)),
             None => Err(self.throw("Error", format!("Call to undefined function {}()", text(name)))),
         }
@@ -317,7 +375,12 @@ impl Context<'_> {
     /// Call `callable` on `args` above the running frames, whose
     /// registers `regs` is.
     pub(crate) fn call_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
-        let target = self.resolve_callable(callable)?;
+        // Lent while the callable is resolved: a class it names is
+        // autoloaded there (zend_is_callable_ex), not by running it again.
+        std::mem::swap(&mut self.isolate.regs, regs);
+        let target = self.resolve_callable(callable);
+        std::mem::swap(&mut self.isolate.regs, regs);
+        let target = target?;
         let m = match target {
             Target::Builtin(i) => {
                 // A builtin that calls back finds the registers lent; it is
@@ -329,16 +392,19 @@ impl Context<'_> {
                 }
                 std::mem::swap(&mut self.isolate.regs, regs);
                 let name = self.isolate.registry.function(i).name;
-                self.natives.push(crate::NativeCall { depth: self.frames.len(), name, args: args.iter().map(Value::deref).collect(), top: false });
+                self.push_native(name, None, args, false);
                 let r = self.run_builtin(i, args);
-                self.natives.pop();
+                self.pop_native();
                 std::mem::swap(&mut self.isolate.regs, regs);
                 return r;
             }
-            Target::Frame(MethodFrame { func: Code::Native(native, _), this, called, .. }) => {
+            Target::Frame(MethodFrame { func: Code::Native(native, name), this, scope, called, .. }) => {
                 let mut passed: Vec<Value> = args.iter().map(Value::deref).collect();
                 let saved = std::mem::replace(&mut self.native_class, called);
-                let r = self.run_native(native, this.as_ref(), &mut passed);
+                // Lent and running, as a method the code calls is.
+                std::mem::swap(&mut self.isolate.regs, regs);
+                let r = self.run_native_method(native, &name, scope.as_ref(), this.as_ref(), &mut passed);
+                std::mem::swap(&mut self.isolate.regs, regs);
                 self.native_class = saved;
                 return r;
             }
@@ -442,7 +508,7 @@ impl Context<'_> {
         for (k, v) in list.iter() {
             match k {
                 Key::Int(_) => {
-                    out.push(v.deref());
+                    out.push(self.arg_or_ref(target, out.len(), v));
                     set.push(true);
                 }
                 Key::Str(key) => {
@@ -462,7 +528,7 @@ impl Context<'_> {
                         out.resize(i + 1, Value::Undef);
                         set.resize(i + 1, false);
                     }
-                    out[i] = v.deref();
+                    out[i] = self.arg_or_ref(target, i, v);
                     set[i] = true;
                 }
             }
@@ -552,7 +618,7 @@ impl Context<'_> {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
             "[]" => Value::Array(Rc::new(PhpArray::new())),
-            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::Str(PhpStr::from(&t[1..t.len() - 1])),
+            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::Str(PhpStr::from(&unquote(t)[..])),
             _ => {
                 if let Ok(i) = t.parse::<i64>() {
                     Value::Int(i)
@@ -566,12 +632,18 @@ impl Context<'_> {
         })
     }
 
-    /// Whether a value is callable (is_callable, no autoloading).
+    /// Whether a value is callable (is_callable): a class it names is
+    /// autoloaded where the registers are lent.
     pub(crate) fn callable(&mut self, v: &Value) -> bool {
         let saved = std::mem::take(&mut self.failed_call);
-        let ok = self.resolve_callable(v).is_ok();
+        let r = self.resolve_callable(v);
         self.failed_call = saved;
-        ok
+        // Not lent: the class stays unloaded, and a later lookup asks the
+        // autoloaders again.
+        if let Err(Throw::Autoload(name)) = &r {
+            self.autoload_tried.remove(&name.as_bytes().to_ascii_lowercase());
+        }
+        r.is_ok()
     }
 }
 
@@ -592,10 +664,7 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
     let key = |k: &str| Key::from_string(PhpStr::from(k));
     let mut out = PhpArray::new();
     let Some(data) = closure_data(o) else { return out };
-    let func = match &data.func {
-        Ok(f) => &f.code,
-        Err(_) => return out,
-    };
+    let Some(func) = data.func.user().map(|f| &f.code) else { return out };
     out.insert(key("name"), Value::Str(PhpStr::from(func.name.as_bytes())));
     out.insert(key("file"), Value::Str(PhpStr::from(&*func.file)));
     out.insert(key("line"), Value::Int(i64::from(func.line)));
@@ -622,6 +691,40 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
             params.insert(Key::from_string(PhpStr::from(name)), Value::str(kind));
         }
         out.insert(key("parameter"), Value::Array(Rc::new(params)));
+    }
+    out
+}
+
+/// A stub default's string literal as its value: `"\""` is `"`, `'\\'` is `\`
+/// (the escapes stubs use).
+fn unquote(t: &str) -> Vec<u8> {
+    let double = t.starts_with('"');
+    let body = &t.as_bytes()[1..t.len() - 1];
+    let mut out = Vec::with_capacity(body.len());
+    let mut i = 0;
+    while i < body.len() {
+        let c = body[i];
+        if c == b'\\' && i + 1 < body.len() {
+            let n = body[i + 1];
+            let v = match (double, n) {
+                (_, b'\\') => Some(b'\\'),
+                (true, b'"') => Some(b'"'),
+                (false, b'\'') => Some(b'\''),
+                (true, b'n') => Some(b'\n'),
+                (true, b't') => Some(b'\t'),
+                (true, b'r') => Some(b'\r'),
+                (true, b'0') => Some(0),
+                (true, b'$') => Some(b'$'),
+                _ => None,
+            };
+            if let Some(v) = v {
+                out.push(v);
+                i += 2;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
     }
     out
 }

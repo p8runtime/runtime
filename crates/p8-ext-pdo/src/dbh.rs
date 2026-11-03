@@ -249,6 +249,9 @@ pub fn attribute_set(ctx: &mut dyn Ctx, func: &str, dbh: &Rc<Dbh>, attr: i64, va
         ATTR_STRINGIFY_FETCHES => {
             let b = bool_param(ctx, value)?;
             dbh.stringify.set(b);
+            // The driver hears of it too (pdo_mysql decodes rows by it);
+            // what it answers does not matter.
+            let _ = dbh.conn.borrow_mut().set_attribute(ctx, attr, value)?;
             return Ok(true);
         }
         ATTR_STATEMENT_CLASS => return statement_class_set(ctx, func, dbh, value),
@@ -258,6 +261,10 @@ pub fn attribute_set(ctx: &mut dyn Ctx, func: &str, dbh: &Rc<Dbh>, attr: i64, va
     let r = dbh.conn.borrow_mut().set_attribute(ctx, attr, value)?;
     if r {
         return Ok(true);
+    }
+    let refused = dbh.conn.borrow_mut().attribute_error();
+    if let Some(e) = refused {
+        record(dbh, &Where::Dbh, &e);
     }
     // The driver refused: its error state, or "driver does not support".
     // A driver that refuses with no error of its own is silent (PDO_HANDLE_DBH_ERR
@@ -329,10 +336,15 @@ pub fn m_get_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
         ATTR_STRINGIFY_FETCHES => return Ok(Value::Bool(dbh.stringify.get())),
         _ => {}
     }
-    let r = dbh.conn.borrow_mut().get_attribute(attr);
+    let r = dbh.conn.borrow_mut().get_attribute_checked(attr);
     match r {
-        Some(v) => Ok(v),
-        None => {
+        Ok(Some(v)) => Ok(v),
+        Err(e) => {
+            record(&dbh, &Where::Dbh, &e);
+            handle_error(ctx, "PDO::getAttribute", &dbh, Where::Dbh)?;
+            Ok(Value::Bool(false))
+        }
+        Ok(None) => {
             impl_error(ctx, "PDO::getAttribute", &dbh, Where::Dbh, "IM001", Some("driver does not support that attribute"))?;
             Ok(Value::Bool(false))
         }
@@ -415,22 +427,49 @@ pub fn m_prepare(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     // PDO::ATTR_CURSOR: only forward-only cursors.
     if let Some(c) = options.as_ref().and_then(|o| o.get_int(10)).map(Value::deref)
         && c.to_int() != 0
+        && !dbh.conn.borrow().scrollable()
     {
         dbh.error.borrow_mut().sqlstate = "HY000".into();
         dbh.error.borrow_mut().info = Some((1, "SQL logic error".into()));
         handle_error(ctx, func, &dbh, Where::Dbh)?;
         return Ok(Value::Bool(false));
     }
-    match stmt::prepare_driver(&dbh, &query) {
-        Ok((driver, native)) => {
-            *stmt::data(&obj).s.borrow_mut() = Some(stmt::new_state(&dbh, query.clone(), driver, native));
+    let entries: Vec<(i64, Value)> = options
+        .as_ref()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| match k {
+                    Key::Int(i) => Some((i, v.deref())),
+                    Key::Str(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    match stmt::prepare_driver(ctx, func, &dbh, &query, &Options { entries: &entries }) {
+        Ok(prepared) => {
+            *stmt::data(&obj).s.borrow_mut() = Some(stmt::new_state(&dbh, query.clone(), prepared));
             finish_stmt(ctx, &obj, &query, &class)?;
             Ok(Value::Object(obj))
         }
         Err(e) => {
-            record(&dbh, &Where::Dbh, &e);
-            handle_error(ctx, func, &dbh, Where::Dbh)?;
+            prepare_failed(ctx, func, &dbh, e)?;
             Ok(Value::Bool(false))
+        }
+    }
+}
+
+/// Report a failed prepare on the connection.
+fn prepare_failed(ctx: &mut dyn Ctx, func: &str, dbh: &Rc<Dbh>, e: stmt::PrepareError) -> Result<(), Throw> {
+    match e {
+        stmt::PrepareError::Driver(e) => {
+            record(dbh, &Where::Dbh, &e);
+            handle_error(ctx, func, dbh, Where::Dbh)
+        }
+        // pdo_parse_params() raised it on the statement; the preparer then
+        // copies the SQLSTATE to the connection, which PDO reports too.
+        stmt::PrepareError::Impl(state, msg) => {
+            impl_error(ctx, func, dbh, Where::Dbh, state, Some(msg))?;
+            handle_error(ctx, func, dbh, Where::Dbh)
         }
     }
 }
@@ -453,15 +492,14 @@ pub fn m_query(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     dbh.clear_error();
     let class = dbh.stmt_class.borrow().clone();
     let (obj, class) = instantiate(ctx, class)?;
-    match stmt::prepare_driver(&dbh, &query) {
-        Ok((driver, native)) => {
-            let mut st = stmt::new_state(&dbh, query.clone(), driver, native);
+    match stmt::prepare_driver(ctx, func, &dbh, &query, &Options { entries: &[] }) {
+        Ok(prepared) => {
+            let mut st = stmt::new_state(&dbh, query.clone(), prepared);
             st.active_query = Some(query.clone());
             *stmt::data(&obj).s.borrow_mut() = Some(st);
         }
         Err(e) => {
-            record(&dbh, &Where::Dbh, &e);
-            handle_error(ctx, func, &dbh, Where::Dbh)?;
+            prepare_failed(ctx, func, &dbh, e)?;
             return Ok(Value::Bool(false));
         }
     }
@@ -471,12 +509,15 @@ pub fn m_query(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         stmt::setup_fetch_mode(ctx, &obj, func, mode, 2, "fetchMode", &rest)?;
     }
     stmt::data(&obj).err.borrow_mut().clear();
-    if stmt::run(ctx, func, &obj)? {
+    let ran = stmt::run(ctx, func, &obj);
+    if let Ok(true) = ran {
         finish_stmt(ctx, &obj, &query, &class)?;
         return Ok(Value::Object(obj));
     }
-    // Something broke: the statement's error is the connection's until the next call.
+    // Something broke: the statement's error is the connection's until the
+    // next call (also when it was thrown).
     *dbh.query_error.borrow_mut() = Some(stmt::data(&obj).err.borrow().clone());
+    ran?;
     Ok(Value::Bool(false))
 }
 
@@ -492,6 +533,7 @@ pub fn m_exec(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     }
     dbh.clear_error();
     let r = dbh.conn.borrow_mut().exec(sql.as_bytes());
+    dispatch_notices(ctx, &dbh)?;
     match r {
         Ok(n) => Ok(Value::Int(n)),
         Err(e) => {
@@ -613,8 +655,11 @@ pub fn m_error_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
         None => dbh.error.borrow().clone(),
     };
     let mut items = vec![Value::str(e.sqlstate.as_str())];
+    // An error PDO raised itself has no driver part: the driver adds the
+    // last one it holds (fetch_err), if it keeps one.
+    let info = if e.info.is_some() { e.info.clone() } else { dbh.conn.borrow().error_info() };
     if e.sqlstate != "00000"
-        && let Some((code, msg)) = &e.info
+        && let Some((code, msg)) = &info
     {
         items.push(Value::Int(*code));
         items.push(Value::str(msg.as_str()));
@@ -628,12 +673,35 @@ pub fn m_error_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
 /// A driver-specific method PHP lists on PDO (`sqliteCreateFunction`).
 fn driver_method(ctx: &mut dyn Ctx, this: &Rc<Object>, name: &str, args: &mut [Value]) -> R {
     let dbh = dbh_of(ctx, this)?;
+    if let Some(f) = dbh.driver.pdo_method(name) {
+        return f(ctx, this, args);
+    }
     let r = dbh.conn.borrow_mut().call_method(ctx, name, args);
     match r {
         Some(r) => r,
         None => Err(ctx.throw("Error", format!("Call to undefined method {}::{name}()", String::from_utf8_lossy(this.class.shown())))),
     }
 }
+
+macro_rules! pgsql_methods {
+    ($($f:ident => $name:literal),*) => {
+        $(pub fn $f(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+            driver_method(ctx, this, $name, args)
+        })*
+    };
+}
+
+pgsql_methods!(
+    m_pgsql_copy_from_array => "pgsqlCopyFromArray",
+    m_pgsql_copy_from_file => "pgsqlCopyFromFile",
+    m_pgsql_copy_to_array => "pgsqlCopyToArray",
+    m_pgsql_copy_to_file => "pgsqlCopyToFile",
+    m_pgsql_lob_create => "pgsqlLOBCreate",
+    m_pgsql_lob_open => "pgsqlLOBOpen",
+    m_pgsql_lob_unlink => "pgsqlLOBUnlink",
+    m_pgsql_get_notify => "pgsqlGetNotify",
+    m_pgsql_get_pid => "pgsqlGetPid"
+);
 
 pub fn m_sqlite_create_function(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     driver_method(ctx, this, "sqliteCreateFunction", args)

@@ -1,0 +1,146 @@
+Array
+(
+    [0] => sqlite
+    [1] => mysql
+    [2] => pgsql
+)
+PDOException: SQLSTATE[HY000] [1045] Access denied for user 'wp'@'%' (using password: YES)
+int(1045)
+["HY000",1045,"Access denied for user 'wp'@'%' (using password: YES)"]
+PDOException: SQLSTATE[HY000] [1044] Access denied for user 'wp'@'%' to database 'pdo_no_such_db'
+int(1044)
+["HY000",1044,"Access denied for user 'wp'@'%' to database 'pdo_no_such_db'"]
+PDOException: SQLSTATE[HY000] [2002] Connection refused
+int(2002)
+["HY000",2002,"Connection refused"]
+PDOException: SQLSTATE[HY000] [2002] No such file or directory
+int(2002)
+["HY000",2002,"No such file or directory"]
+PDOException: SQLSTATE[HY000] [2002] No such file or directory
+int(2002)
+["HY000",2002,"No such file or directory"]
+PDOException: SQLSTATE[HY000] [2019] Unknown character set
+int(2019)
+["HY000",2019,"Unknown character set"]
+connected
+PDO
+Pdo\Mysql Pdo\Mysql
+bool(true)
+int(0)
+int(1)
+PDOException: Pdo\Sqlite::connect() cannot be used for connecting to the "mysql" driver, either call Pdo\Mysql::connect() or PDO::connect() instead
+int(0)
+null
+int(1000)
+int(1002)
+int(1013)
+int(1005)
+string(5) "mysql"
+string(14) "mysqlnd 8.4.27"
+HOST via TCP/IP
+Uptime: N  Threads: N  Questions: N  Slow queries: N  Opens: N  Open tables: N  Queries per second avg: N.N
+bool(true)
+AUTOCOMMIT: bool(true)
+DEFAULT_STR_PARAM: int(536870912)
+USE_BUFFERED_QUERY: bool(true)
+LOCAL_INFILE: bool(false)
+LOCAL_INFILE_DIRECTORY: NULL
+FETCH_TABLE_NAMES: bool(false)
+DIRECT_QUERY: bool(true)
+EMULATE_PREPARES: bool(true)
+STRINGIFY_FETCHES: bool(false)
+ERRMODE: int(2)
+INIT_COMMAND: PDOException: SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+string(5) "IM001"
+["IM001",0]
+FOUND_ROWS: PDOException: SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+string(5) "IM001"
+["IM001",0]
+MULTI_STATEMENTS: PDOException: SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+string(5) "IM001"
+["IM001",0]
+SSL_CA: PDOException: SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+string(5) "IM001"
+["IM001",0]
+TIMEOUT: PDOException: SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+string(5) "IM001"
+["IM001",0]
+set INIT_COMMAND: bool(false)
+SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+set FOUND_ROWS: bool(false)
+SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+set TIMEOUT: bool(false)
+SQLSTATE[IM001]: Driver does not support this function: driver does not support that attribute
+set LOCAL_INFILE: bool(false)
+bool(false)
+set USE_BUFFERED_QUERY: bool(true)
+bool(false)
+set DIRECT_QUERY: bool(true)
+bool(false)
+set DEFAULT_STR_PARAM: bool(true)
+int(1073741824)
+set AUTOCOMMIT: bool(true)
+bool(false)
+bool(false)
+string(8) "N'it\'s'"
+TypeError: Attribute value must be of type bool for selected attribute, array given
+array(1) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(4) "init"
+    [1]=>
+    string(6) "+05:00"
+    [2]=>
+    int(0)
+  }
+}
+bool(false)
+bool(false)
+bool(false)
+int(0)
+PDOException: SQLSTATE[42000] [1064] You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1
+int(1064)
+["42000",1064,"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELEC 1' at line 1"]
+array(3) {
+  [0]=>
+  string(7) "utf8mb4"
+  [1]=>
+  string(7) "utf8mb4"
+  [2]=>
+  string(7) "utf8mb4"
+}
+array(3) {
+  [0]=>
+  string(6) "latin1"
+  [1]=>
+  string(6) "latin1"
+  [2]=>
+  string(6) "latin1"
+}
+array(3) {
+  [0]=>
+  string(7) "utf8mb3"
+  [1]=>
+  string(7) "utf8mb3"
+  [2]=>
+  string(7) "utf8mb3"
+}
+string(4) "c3a9"
+string(5) "'é\''"
+int(0)
+int(2)
+int(2)
+PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELECT 2' at line 1
+string(5) "42000"
+["42000",1064,"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'SELECT 2' at line 1"]
+int(1)
+array(2) {
+  [0]=>
+  int(3)
+  [1]=>
+  int(3)
+}
+PDOException: SQLSTATE[HY000]: General error: 2068 LOAD DATA LOCAL INFILE is forbidden, check related settings like mysqli.allow_local_infile|mysqli.local_infile_directory or PDO::MYSQL_ATTR_LOCAL_INFILE|PDO::MYSQL_ATTR_LOCAL_INFILE_DIRECTORY
+string(5) "HY000"
+["HY000",2068,"LOAD DATA LOCAL INFILE is forbidden, check related settings like mysqli.allow_local_infile|mysqli.local_infile_directory or PDO::MYSQL_ATTR_LOCAL_INFILE|PDO::MYSQL_ATTR_LOCAL_INFILE_DIRECTORY"]

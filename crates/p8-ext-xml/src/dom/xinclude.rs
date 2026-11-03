@@ -4,6 +4,7 @@
 //! Reference: libxml2 xinclude.c (xmlXIncludeProcessFlags,
 //! xmlXIncludeLoadNode, xmlXIncludeBaseFixup), php-src ext/dom/document.c
 
+use crate::uri::{read_url, relative, resolve};
 use super::build;
 use super::tree::{DOC, Doc, Id, Kind, Node};
 use crate::encoding::{Decoder, decoder};
@@ -430,40 +431,6 @@ fn needs(d: &Doc, el: Id, declared: &mut Vec<(Option<Vec<u8>>, Vec<u8>)>, missin
 
 // ---- reading ----
 
-/// The bytes a URL names: a local file (plain path, file:, or PHP's
-/// compress.zlib: wrapper), None for what libxml2 could not load.
-fn read_url(url: &str) -> Option<Vec<u8>> {
-    let path = match split(url).scheme {
-        None => url.to_string(),
-        Some(s) if s.eq_ignore_ascii_case("file") => {
-            let rest = url[s.len() + 1..].strip_prefix("//").map(|r| r.strip_prefix("localhost").unwrap_or(r)).unwrap_or(&url[s.len() + 1..]);
-            percent_decode(rest)
-        }
-        Some("compress.zlib") => url["compress.zlib://".len()..].to_string(),
-        Some(_) => return None,
-    };
-    std::fs::read(path).ok()
-}
-
-fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%'
-            && i + 2 < b.len()
-            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
-        {
-            out.push(v);
-            i += 3;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// The encodings xmlParseCharEncoding names and libxml2 can convert:
 /// Some(None) for UTF-8 (no conversion), None for unsupported.
 fn text_decoder(name: &str) -> Option<Option<Decoder>> {
@@ -582,176 +549,9 @@ fn child_sequence(doc: &Doc, data: &str) -> Option<Id> {
     (at != DOC).then_some(at)
 }
 
-// ---- URIs (xmlBuildURI, xmlBuildRelativeURI) ----
-
-struct Uri<'a> {
-    scheme: Option<&'a str>,
-    authority: Option<&'a str>,
-    path: &'a str,
-    query: Option<&'a str>,
-    fragment: Option<&'a str>,
-}
-
-fn split(s: &str) -> Uri<'_> {
-    let (s, fragment) = match s.find('#') {
-        Some(i) => (&s[..i], Some(&s[i + 1..])),
-        None => (s, None),
-    };
-    let (s, query) = match s.find('?') {
-        Some(i) => (&s[..i], Some(&s[i + 1..])),
-        None => (s, None),
-    };
-    let mut scheme = None;
-    let mut rest = s;
-    if let Some(i) = s.find(':')
-        && i > 0
-        && s[..i].starts_with(|c: char| c.is_ascii_alphabetic())
-        && s[..i].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    {
-        scheme = Some(&s[..i]);
-        rest = &s[i + 1..];
-    }
-    let mut authority = None;
-    if let Some(r) = rest.strip_prefix("//") {
-        let end = r.find('/').unwrap_or(r.len());
-        authority = Some(&r[..end]);
-        rest = &r[end..];
-    }
-    Uri { scheme, authority, path: rest, query, fragment }
-}
-
-fn assemble(scheme: Option<&str>, authority: Option<&str>, path: &str, query: Option<&str>, fragment: Option<&str>) -> String {
-    let mut out = String::new();
-    if let Some(s) = scheme {
-        out.push_str(s);
-        out.push(':');
-    }
-    if let Some(a) = authority {
-        out.push_str("//");
-        out.push_str(a);
-    }
-    out.push_str(path);
-    if let Some(q) = query {
-        out.push('?');
-        out.push_str(q);
-    }
-    if let Some(f) = fragment {
-        out.push('#');
-        out.push_str(f);
-    }
-    out
-}
-
-/// Removes . and .. segments.
-fn normalize(path: &str) -> String {
-    let abs = path.starts_with('/');
-    let body = if abs { &path[1..] } else { path };
-    let segs: Vec<&str> = body.split('/').collect();
-    let mut out: Vec<&str> = Vec::new();
-    for (i, s) in segs.iter().enumerate() {
-        let last = i + 1 == segs.len();
-        match *s {
-            "." => {
-                if last {
-                    out.push("");
-                }
-            }
-            ".." => {
-                if out.last().is_some_and(|l| *l != "..") {
-                    out.pop();
-                } else if !abs {
-                    out.push("..");
-                }
-                if last {
-                    out.push("");
-                }
-            }
-            s => out.push(s),
-        }
-    }
-    let joined = out.join("/");
-    if abs { format!("/{joined}") } else { joined }
-}
-
-/// `reference` resolved against `base` (RFC 3986 as libxml2 does it).
-fn resolve(reference: &str, base: &str) -> String {
-    if base.is_empty() {
-        return reference.to_string();
-    }
-    let r = split(reference);
-    if r.scheme.is_some() {
-        return reference.to_string();
-    }
-    let b = split(base);
-    if r.authority.is_some() {
-        return assemble(b.scheme, r.authority, &normalize(r.path), r.query, r.fragment);
-    }
-    if r.path.is_empty() {
-        return assemble(b.scheme, b.authority, b.path, r.query.or(b.query), r.fragment);
-    }
-    if r.path.starts_with('/') {
-        return assemble(b.scheme, b.authority, &normalize(r.path), r.query, r.fragment);
-    }
-    let merged = match b.path.rfind('/') {
-        Some(i) => format!("{}{}", &b.path[..=i], r.path),
-        None if b.authority.is_some() => format!("/{}", r.path),
-        None => r.path.to_string(),
-    };
-    assemble(b.scheme, b.authority, &normalize(&merged), r.query, r.fragment)
-}
-
-/// `uri` relative to `base` where they share scheme and host; else `uri`.
-fn relative(uri: &str, base: &str) -> String {
-    if uri.is_empty() || base.is_empty() {
-        return uri.to_string();
-    }
-    let (u, b) = (split(uri), split(base));
-    if u.scheme != b.scheme || u.authority != b.authority || !u.path.starts_with('/') || !b.path.starts_with('/') {
-        return uri.to_string();
-    }
-    let (ub, bb) = (u.path.as_bytes(), b.path.as_bytes());
-    let mut common = 0;
-    let mut i = 0;
-    while i < ub.len() && i < bb.len() && ub[i] == bb[i] {
-        if ub[i] == b'/' {
-            common = i + 1;
-        }
-        i += 1;
-    }
-    let ups = b.path[common..].matches('/').count();
-    let mut out = "../".repeat(ups);
-    out.push_str(&u.path[common..]);
-    if ups == 0 && out.split('/').next().is_some_and(|s| s.contains(':')) {
-        out.insert_str(0, "./");
-    }
-    if let Some(q) = u.query {
-        out.push('?');
-        out.push_str(q);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn resolves_like_libxml2() {
-        assert_eq!(resolve("part.xml", "/work/main.xml"), "/work/part.xml");
-        assert_eq!(resolve("../a/b.xml", "/work/sub/main.xml"), "/work/a/b.xml");
-        assert_eq!(resolve("/x/y.xml", "http://h/dir/f.xml"), "http://h/x/y.xml");
-        assert_eq!(resolve("", "/work/main.xml"), "/work/main.xml");
-        assert_eq!(resolve("file:///a", "/b/"), "file:///a");
-    }
-
-    #[test]
-    fn relative_goes_up_and_down() {
-        assert_eq!(relative("/work/part.xml", "/"), "work/part.xml");
-        assert_eq!(relative("/work/part.xml", "/work/main.xml"), "part.xml");
-        assert_eq!(relative("/work/part.xml", "/work/sub/main.xml"), "../part.xml");
-        assert_eq!(relative("/work/part.xml", "/a/b/main.xml"), "../../work/part.xml");
-        assert_eq!(relative("file:///w/p.xml", "/"), "file:///w/p.xml");
-    }
 
     #[test]
     fn pointer_parts_unescape() {

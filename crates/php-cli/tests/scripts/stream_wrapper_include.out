@@ -1,0 +1,71 @@
+open code://a.php rb 65665 NULL
+set_option 2 0 8192
+stat
+read 8192
+close
+a runs
+int(42)
+string(6) "from a"
+open code://b.php rb 65665 NULL
+set_option 2 0 8192
+stat
+read 8192
+close
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(1) "b"
+open code://a.php rb 65665 NULL
+set_option 2 0 8192
+close
+bool(true)
+open code://b.php rb 65665 NULL
+set_option 2 0 8192
+close
+bool(true)
+open code://b.php rb 65665 NULL
+set_option 2 0 8192
+close
+bool(true)
+open code://named.php rb 65665 NULL
+set_option 2 0 8192
+stat
+read 8192
+close
+the-name.php
+open code://big.php rb 65665 NULL
+set_option 2 0 8192
+stat
+read 8192
+read 8192
+read 8192
+close
+20000
+open code://missing.php rb 65665 NULL
+
+Warning: include(code://missing.php): Failed to open stream: "Code::stream_open" call failed in %s on line 38
+
+Warning: include(): Failed opening 'code://missing.php' for inclusion (include_path='.:/usr/local/lib/php') in %s on line 38
+bool(false)
+open code://missing.php rb 65665 NULL
+
+Warning: require(code://missing.php): Failed to open stream: "Code::stream_open" call failed in %s on line 40
+Error: Failed opening required 'code://missing.php' (include_path='.:/usr/local/lib/php')
+open code://parse.php rb 65665 NULL
+set_option 2 0 8192
+stat
+read 8192
+ParseError
+stream_set_option
+stream_stat
+stream_read
+from stream_read
+
+Warning: include(): Minimal::stream_set_option is not implemented! in %s on line 73
+
+Warning: include(): Minimal::stream_stat is not implemented! in %s on line 73
+minimal
+bool(true)

@@ -59,6 +59,83 @@ pub struct StmtState {
     pub executed: bool,
     pub row_count: i64,
     pub in_param_event: bool,
+    /// Placeholders::Dollar: how `?`/`:name` became `$N` (None when the
+    /// query had none: values go by their own position).
+    pub dollar: Option<Option<parser::DollarMap>>,
+    /// fetch()'s orientation and offset for the next row (FETCH_ORI_NEXT: 0).
+    pub ori: (i64, i64),
+    /// An emulated statement whose driver statement lives across executes.
+    pub shell: bool,
+    /// Placeholders::Positional: the statement's `?`.
+    pub qmarks: Option<QMarks>,
+}
+
+/// The `?` of a Placeholders::Positional statement.
+#[derive(Debug, Clone)]
+pub struct QMarks {
+    /// The `:name` each `?` was written as (bound_param_map); None when the
+    /// query was written with `?`.
+    pub names: Option<Vec<String>>,
+    /// How many there are (the server's count).
+    pub count: usize,
+}
+
+/// Why a parameter of a Placeholders::Positional statement has no `?`.
+enum NoPosition {
+    /// rewrite_name_to_position(): reported as "parameter was not defined".
+    Undefined,
+    /// The driver's EVT_ALLOC check: a bare HY093.
+    OutOfRange,
+}
+
+/// The `?` (from 0) a parameter goes to: a name goes to the first `?` it
+/// was written as.
+fn qmark_position(q: &QMarks, key: &PKey) -> Result<usize, NoPosition> {
+    let pos = match (key, &q.names) {
+        (PKey::Pos(i), Some(names)) if (*i as usize) < names.len() => *i as usize,
+        (PKey::Pos(_), Some(_)) => return Err(NoPosition::Undefined),
+        (PKey::Name(n), Some(names)) => names.iter().position(|x| x == n).ok_or(NoPosition::Undefined)?,
+        (PKey::Pos(i), None) => usize::try_from(*i).map_err(|_| NoPosition::OutOfRange)?,
+        (PKey::Name(_), None) => return Err(NoPosition::OutOfRange),
+    };
+    if pos < q.count { Ok(pos) } else { Err(NoPosition::OutOfRange) }
+}
+
+/// pdo_mysql_stmt_param_hook(EXEC_PRE): a parameter as the PHP type its
+/// value has now (a stream bound as PDO::PARAM_LOB is its contents); None
+/// for what cannot be sent (an array, an object, PDO::PARAM_STMT).
+fn typed_value_of(b: &Bound) -> Option<DbValue> {
+    let v = b.value.deref();
+    let ty = b.ty & 0xFFFF;
+    if ty == PARAM_NULL || matches!(v, Value::Null) {
+        return Some(DbValue::Null);
+    }
+    if ty == PARAM_STMT {
+        return None;
+    }
+    if ty == PARAM_LOB
+        && let Some(r) = p8_runtime::stream::resource_of(&v)
+    {
+        let bytes = p8_runtime::stream::resource(&r).map(|res| res.stream.borrow_mut().read_all()).unwrap_or_default();
+        // The bound variable becomes what was read from it.
+        if let Value::Ref(cell) = &b.value {
+            *cell.borrow_mut() = Value::Str(PhpStr::new(bytes.clone()));
+        }
+        return Some(DbValue::Text(bytes));
+    }
+    match v {
+        Value::Str(s) => Some(DbValue::Text(s.as_bytes().to_vec())),
+        Value::Int(i) => Some(DbValue::Int(i)),
+        Value::Float(f) => Some(DbValue::Float(f)),
+        Value::Bool(b) => Some(DbValue::Bool(b)),
+        _ => None,
+    }
+}
+
+/// A bare HY093 on the statement (the driver's own, with no message).
+fn bare_hy093(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>) -> Result<(), Throw> {
+    *data(this).err.borrow_mut() = ErrState { sqlstate: "HY093".into(), info: None };
+    handle_err(ctx, func, this)
 }
 
 #[derive(Default)]
@@ -114,7 +191,8 @@ fn db_to_value(v: &DbValue) -> Value {
         DbValue::Null => Value::Null,
         DbValue::Int(i) => Value::Int(*i),
         DbValue::Float(f) => Value::Float(*f),
-        DbValue::Text(b) | DbValue::Blob(b) => Value::Str(PhpStr::new(b.clone())),
+        DbValue::Text(b) | DbValue::Blob(b) | DbValue::Lob(b) => Value::Str(PhpStr::new(b.clone())),
+        DbValue::Bool(b) => Value::Bool(*b),
     }
 }
 
@@ -126,8 +204,26 @@ fn lob_stream(ctx: &mut dyn Ctx, bytes: Vec<u8>) -> Value {
 
 /// fetch_value(): column `col` of the current row, as PDO hands it to the script.
 fn column_value(ctx: &mut dyn Ctx, st: &StmtState, col: usize, ty: Option<i64>) -> Value {
-    let mut v = st.row.get(col).map_or(Value::Null, db_to_value);
     let dbh = &st.dbh;
+    // A large object is a stream, unless the script asks for a string (or
+    // another scalar, which is what the string converts to).
+    if let Some(DbValue::Lob(bytes)) = st.row.get(col) {
+        let ty = if dbh.stringify.get() { Some(PARAM_STR) } else { ty };
+        let s = || Value::Str(PhpStr::new(bytes.clone()));
+        return match ty {
+            Some(PARAM_STR) => s(),
+            Some(PARAM_INT) => Value::Int(s().to_int()),
+            Some(PARAM_BOOL) => Value::Bool(true),
+            Some(PARAM_NULL) => Value::Null,
+            _ => lob_stream(ctx, bytes.clone()),
+        };
+    }
+    if ty == Some(PARAM_LOB)
+        && let Some(bytes) = st.driver.as_ref().and_then(|d| d.lob_column(col))
+    {
+        return if dbh.stringify.get() { Value::Str(PhpStr::new(bytes)) } else { lob_stream(ctx, bytes) };
+    }
+    let mut v = st.row.get(col).map_or(Value::Null, db_to_value);
     if let Value::Str(s) = &v
         && s.is_empty()
         && dbh.oracle_nulls.get() == NULL_EMPTY_STRING
@@ -197,7 +293,8 @@ fn next_row(this: &Object, st: &mut StmtState) -> bool {
         return false;
     }
     let Some(driver) = st.driver.as_mut() else { return false };
-    match driver.fetch() {
+    let (ori, offset) = std::mem::take(&mut st.ori);
+    match driver.fetch_scroll(ori, offset) {
         Ok(Some(row)) => {
             st.row = row;
             if st.columns.is_none() {
@@ -267,6 +364,7 @@ fn bind_value_of(ctx: &mut dyn Ctx, b: &Bound) -> Result<Option<DbValue>, Throw>
         PARAM_NULL => DbValue::Null,
         PARAM_INT | PARAM_BOOL => match v {
             Value::Null => DbValue::Null,
+            Value::Bool(b) => DbValue::Bool(b),
             other => DbValue::Int(other.to_int()),
         },
         PARAM_LOB => {
@@ -286,14 +384,94 @@ fn bind_value_of(ctx: &mut dyn Ctx, b: &Bound) -> Result<Option<DbValue>, Throw>
     }))
 }
 
+/// pgsql_stmt_param_hook(EXEC_PRE): what a `$N` parameter is sent as. A
+/// boolean is `t`/`f`, a LOB is its bytes (binary), anything else its text.
+fn dollar_value_of(ctx: &mut dyn Ctx, d: &Dbh, b: &Bound) -> Result<DbValue, Throw> {
+    let v = b.value.deref();
+    let ty = b.ty & 0xFFFF;
+    if ty == PARAM_LOB
+        && let Some(r) = p8_runtime::stream::resource_of(&v)
+    {
+        let Some(res) = p8_runtime::stream::resource(&r) else { return Ok(DbValue::Blob(Vec::new())) };
+        let path = res.stream.borrow().path.clone();
+        if let Some(own) = d.conn.borrow_mut().lob_param(&path) {
+            return Ok(own);
+        }
+        let bytes = res.stream.borrow_mut().read_all();
+        return Ok(DbValue::Blob(bytes));
+    }
+    Ok(match v {
+        _ if ty == PARAM_NULL => DbValue::Null,
+        Value::Null => DbValue::Null,
+        Value::Bool(x) => DbValue::Bool(x),
+        other if ty == PARAM_LOB => DbValue::Blob(to_text(ctx, &other)?.as_bytes().to_vec()),
+        other => DbValue::Text(to_text(ctx, &other)?.as_bytes().to_vec()),
+    })
+}
+
+/// The `$N` position (from 0) a bound parameter goes to; Err is the
+/// message of the HY093 pdo_pgsql raises (EVT_NORMALIZE, EVT_ALLOC).
+fn dollar_position(map: &Option<parser::DollarMap>, key: &PKey) -> Result<usize, String> {
+    match (key, map) {
+        (PKey::Pos(i), None) => Ok(*i as usize),
+        (PKey::Pos(i), Some(m)) => {
+            if (*i as usize) < m.count {
+                Ok(*i as usize)
+            } else {
+                Err("parameter was not defined".into())
+            }
+        }
+        (PKey::Name(n), Some(m)) => m.names.iter().find(|(x, _)| x == n).map(|(_, p)| *p).ok_or_else(|| n.clone()),
+        (PKey::Name(n), None) => Err(n.clone()),
+    }
+}
+
 /// The statement's executer: bind and run.
 pub fn run(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>) -> Result<bool, Throw> {
     let d = dbh(ctx, this)?;
-    let (params, native, query, had_scan) = with(ctx, this, |st| (st.params.clone(), st.driver.is_some() && st.scan.is_none(), st.query.clone(), st.scan.is_some()))?;
-    let _ = had_scan;
+    let (params, native, query, dollar, qmarks) = with(ctx, this, |st| (st.params.clone(), st.driver.is_some() && st.scan.is_none(), st.query.clone(), st.dollar.clone(), st.qmarks.clone()))?;
     if !native {
         // Emulated prepares: quote the values into the query, and prepare that.
-        return run_emulated(ctx, func, this, &d, &params, &query);
+        let r = run_emulated(ctx, func, this, &d, &params, &query);
+        crate::state::dispatch_notices(ctx, &d)?;
+        return r;
+    }
+    if let Some(q) = qmarks {
+        // Too few values bound for the `?` (pdo_mysql_stmt_execute()).
+        if params.len() < q.count {
+            bare_hy093(ctx, func, this)?;
+            return Ok(false);
+        }
+        let mut binds = Vec::with_capacity(params.len());
+        for b in &params {
+            let Ok(pos) = qmark_position(&q, &b.key) else {
+                bare_hy093(ctx, func, this)?;
+                return Ok(false);
+            };
+            // A value the driver cannot send fails the execute, silently.
+            let Some(v) = typed_value_of(b) else { return Ok(false) };
+            binds.push((BindKey::Pos(pos), v));
+        }
+        let result = with(ctx, this, |st| st.driver.as_mut().expect("prepared").execute(&binds))?;
+        return finish_run(ctx, func, this, result);
+    }
+    if let Some(map) = dollar {
+        let mut binds = Vec::with_capacity(params.len());
+        for b in &params {
+            let pos = match dollar_position(&map, &b.key) {
+                Ok(p) => p,
+                Err(msg) => {
+                    *data(this).err.borrow_mut() = ErrState { sqlstate: "HY093".into(), info: Some((0, msg)) };
+                    handle_err(ctx, func, this)?;
+                    return Ok(false);
+                }
+            };
+            binds.push((BindKey::Pos(pos), dollar_value_of(ctx, &d, b)?));
+        }
+        let mapped = map.is_some();
+        let result = with(ctx, this, |st| st.driver.as_mut().expect("prepared").execute_dollar(&binds, mapped))?;
+        crate::state::dispatch_notices(ctx, &d)?;
+        return finish_run(ctx, func, this, result);
     }
     let mut binds = Vec::with_capacity(params.len());
     for b in &params {
@@ -342,19 +520,28 @@ fn finish_run(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, result: Result<E
 /// with the bound values quoted into it.
 fn run_emulated(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, d: &Rc<Dbh>, params: &[Bound], query: &PhpStr) -> Result<bool, Throw> {
     let scan = parser::scan(query.as_bytes(), d.conn.borrow().scanner());
+    if scan.escapes_in_quote {
+        ctx.deprecated(&format!("{func}(): Escaping question marks inside dollar quoted strings is not required anymore and is deprecated"));
+    }
     if scan.named && scan.positional {
         impl_err(ctx, func, this, "HY093", Some("mixed named and positional parameters"))?;
+        return Ok(false);
+    }
+    let nbinds = scan.binds().count();
+    if nbinds != params.len() && !params.is_empty() && !(scan.named && nbinds > params.len()) {
+        impl_err(ctx, func, this, "HY093", Some("number of bound variables does not match number of tokens"))?;
         return Ok(false);
     }
     let sql: PhpStr = if scan.placeholders.is_empty() {
         query.clone()
     } else {
-        if scan.placeholders.len() != params.len() && !(scan.named && scan.placeholders.len() > params.len()) {
-            impl_err(ctx, func, this, "HY093", Some("number of bound variables does not match number of tokens"))?;
-            return Ok(false);
-        }
         let mut quoted: Vec<Vec<u8>> = Vec::new();
         for p in &scan.placeholders {
+            // With nothing bound, PHP leaves the placeholders as they are.
+            if p.escaped || params.is_empty() {
+                quoted.push(if p.escaped { b"?".to_vec() } else { query.as_bytes()[p.pos..p.pos + p.len].to_vec() });
+                continue;
+            }
             let found = if scan.positional {
                 params.iter().find(|b| b.key == PKey::Pos(p.bindno as i64))
             } else {
@@ -366,21 +553,27 @@ fn run_emulated(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, d: &Rc<Dbh>, p
                 return Ok(false);
             };
             let value = b.value.deref();
+            let lob = if b.ty & 0xFFFF == PARAM_LOB { p8_runtime::stream::resource_of(&value) } else { None };
             let ty = if matches!(value, Value::Null) { PARAM_NULL } else { b.ty & 0xFFFF };
             let q = match ty {
-                PARAM_BOOL => if value.to_bool() { b"1".to_vec() } else { b"0".to_vec() },
-                PARAM_INT => value.to_int().to_string().into_bytes(),
-                PARAM_NULL => b"NULL".to_vec(),
-                _ => {
-                    let text = to_text(ctx, &value)?;
-                    match d.conn.borrow_mut().quote(text.as_bytes(), ty) {
-                        Some(q) => q,
-                        None => {
-                            handle_err(ctx, func, this)?;
-                            return Ok(false);
-                        }
-                    }
+                _ if lob.is_some() => {
+                    let bytes = lob.as_ref().and_then(|r| p8_runtime::stream::resource(r)).map(|res| res.stream.borrow_mut().read_all()).unwrap_or_default();
+                    d.conn.borrow_mut().quote(&bytes, PARAM_LOB)
                 }
+                PARAM_BOOL => Some(if value.to_bool() { b"1".to_vec() } else { b"0".to_vec() }),
+                PARAM_INT => Some(value.to_int().to_string().into_bytes()),
+                PARAM_NULL => Some(b"NULL".to_vec()),
+                _ => {
+                    // The quoter sees the type with its flags (PDO::PARAM_STR_NATL).
+                    let text = to_text(ctx, &value)?;
+                    d.conn.borrow_mut().quote(text.as_bytes(), b.ty)
+                }
+            };
+            let Some(q) = q else {
+                // The quoter refused (invalid text): the statement takes the
+                // connection's error code, and nothing is reported.
+                data(this).err.borrow_mut().sqlstate = d.error.borrow().sqlstate.clone();
+                return Ok(false);
             };
             quoted.push(q);
         }
@@ -390,7 +583,16 @@ fn run_emulated(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, d: &Rc<Dbh>, p
             quoted[i - 1].clone()
         }))
     };
-    let prepared = d.conn.borrow_mut().prepare(&String::from_utf8_lossy(sql.as_bytes()));
+    let shell = with(ctx, this, |st| st.shell)?;
+    let prepared = if shell {
+        with(ctx, this, |st| {
+            let mut s = st.driver.take().expect("emulated shell");
+            s.set_query(sql.as_bytes());
+            Ok(s)
+        })?
+    } else {
+        d.conn.borrow_mut().prepare_emulated(sql.as_bytes())
+    };
     match prepared {
         Ok(stmt) => {
             with(ctx, this, |st| {
@@ -409,21 +611,70 @@ fn run_emulated(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, d: &Rc<Dbh>, p
 }
 
 /// Prepare a statement object's driver side: PDO::prepare() and query().
-pub fn prepare_driver(d: &Rc<Dbh>, sql: &PhpStr) -> Result<(Option<Box<dyn Statement>>, bool), crate::driver::DriverError> {
-    let native = d.conn.borrow().placeholders() == Placeholders::Native;
-    if !native {
-        return Ok((None, false));
-    }
-    let stmt = d.conn.borrow_mut().prepare(&String::from_utf8_lossy(sql.as_bytes()))?;
-    Ok((Some(stmt), true))
+pub struct Prepared {
+    driver: Option<Box<dyn Statement>>,
+    native: bool,
+    dollar: Option<Option<parser::DollarMap>>,
+    qmarks: Option<QMarks>,
 }
 
-pub fn new_state(d: &Rc<Dbh>, query: PhpStr, driver: Option<Box<dyn Statement>>, native: bool) -> StmtState {
+/// Why preparing failed: the driver's error, or PDO's own (an SQLSTATE and
+/// its message, pdo_raise_impl_error()).
+pub enum PrepareError {
+    Driver(crate::driver::DriverError),
+    Impl(&'static str, &'static str),
+}
+
+/// Prepare a statement object's driver side: PDO::prepare() and query().
+pub fn prepare_driver(ctx: &mut dyn Ctx, func: &str, d: &Rc<Dbh>, sql: &PhpStr, options: &crate::driver::Options) -> Result<Prepared, PrepareError> {
+    let mode = d.conn.borrow_mut().placeholders_for(options);
+    match mode {
+        Placeholders::None => Ok(Prepared { driver: d.conn.borrow_mut().emulated_shell(options), native: false, dollar: None, qmarks: None }),
+        Placeholders::Native => {
+            let stmt = d.conn.borrow_mut().prepare(&String::from_utf8_lossy(sql.as_bytes())).map_err(PrepareError::Driver)?;
+            Ok(Prepared { driver: Some(stmt), native: true, dollar: None, qmarks: None })
+        }
+        Placeholders::Positional => {
+            let scan = parser::scan(sql.as_bytes(), d.conn.borrow().scanner());
+            if scan.named && scan.positional {
+                return Err(PrepareError::Impl("HY093", "mixed named and positional parameters"));
+            }
+            let (rewritten, names) = parser::qmark_rewrite(sql.as_bytes(), &scan);
+            let stmt = d.conn.borrow_mut().prepare_native(&rewritten, options).map_err(PrepareError::Driver)?;
+            Ok(match stmt {
+                Some(stmt) => {
+                    let count = stmt.param_count().unwrap_or_else(|| scan.binds().count());
+                    Prepared { driver: Some(stmt), native: true, dollar: None, qmarks: Some(QMarks { names, count }) }
+                }
+                // The server cannot prepare it: emulated after all.
+                None => Prepared { driver: None, native: false, dollar: None, qmarks: None },
+            })
+        }
+        Placeholders::Dollar => {
+            let scan = parser::scan(sql.as_bytes(), d.conn.borrow().scanner());
+            if scan.escapes_in_quote {
+                ctx.deprecated(&format!("{func}(): Escaping question marks inside dollar quoted strings is not required anymore and is deprecated"));
+            }
+            if scan.named && scan.positional {
+                return Err(PrepareError::Impl("HY093", "mixed named and positional parameters"));
+            }
+            let (rewritten, map) = parser::dollar_rewrite(sql.as_bytes(), &scan);
+            let stmt = d.conn.borrow_mut().prepare_with(&rewritten, options).map_err(PrepareError::Driver)?;
+            Ok(Prepared { driver: Some(stmt), native: true, dollar: Some(map), qmarks: None })
+        }
+    }
+}
+
+pub fn new_state(d: &Rc<Dbh>, query: PhpStr, prepared: Prepared) -> StmtState {
+    let Prepared { driver, native, dollar, qmarks } = prepared;
     StmtState {
+        ori: (0, 0),
+        shell: !native && driver.is_some(),
         dbh: Rc::clone(d),
         query,
         active_query: None,
         driver,
+        dollar,
         scan: if native { None } else { Some(parser::Scan::default()) },
         params: Vec::new(),
         cols: Vec::new(),
@@ -435,6 +686,7 @@ pub fn new_state(d: &Rc<Dbh>, query: PhpStr, driver: Option<Box<dyn Statement>>,
         executed: false,
         row_count: 0,
         in_param_event: false,
+        qmarks,
     }
 }
 
@@ -487,6 +739,44 @@ fn register(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, mut b: Bound, is_p
             && !n.starts_with(':')
         {
             n.insert(0, ':');
+        }
+        // pdo_pgsql's EVT_NORMALIZE for an emulated prepare: a boolean is
+        // bound as the string 't' or 'f' (the variable itself is let go).
+        if b.ty & 0xFFFF == PARAM_BOOL
+            && b.ty & 0x8000_0000 == 0
+            && with(ctx, this, |st| st.scan.is_some())?
+        {
+            let truth = b.value.deref().to_bool();
+            let d = dbh(ctx, this)?;
+            let text = d.conn.borrow_mut().emulated_bool(truth);
+            if let Some(text) = text {
+                b.value = Value::Str(PhpStr::new(text));
+                b.ty = PARAM_STR;
+            }
+        }
+        // pdo_pgsql's EVT_NORMALIZE/EVT_ALLOC: the name or number must be one
+        // the query has.
+        if let Some(map) = with(ctx, this, |st| st.dollar.clone())?
+            && let Err(msg) = dollar_position(&map, &b.key)
+        {
+            *data(this).err.borrow_mut() = ErrState { sqlstate: "HY093".into(), info: Some((0, msg)) };
+            handle_err(ctx, func, this)?;
+            return Ok(false);
+        }
+        // Placeholders::Positional: rewrite_name_to_position(), then the
+        // driver's range check (EVT_ALLOC).
+        if let Some(q) = with(ctx, this, |st| st.qmarks.clone())? {
+            match qmark_position(&q, &b.key) {
+                Ok(_) => {}
+                Err(NoPosition::Undefined) => {
+                    impl_err(ctx, func, this, "HY093", Some("parameter was not defined"))?;
+                    return Ok(false);
+                }
+                Err(NoPosition::OutOfRange) => {
+                    bare_hy093(ctx, func, this)?;
+                    return Ok(false);
+                }
+            }
         }
     } else if let PKey::Name(n) = &b.key {
         let found = with(ctx, this, |st| st.columns.as_ref().and_then(|c| c.iter().position(|x| x.as_bytes() == n.as_bytes())))?;
@@ -982,8 +1272,9 @@ pub fn m_fetch(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let func = "PDOStatement::fetch";
     let how = if args.is_empty() { FETCH_USE_DEFAULT } else { arg(args, 0).to_int() };
     let ori = arg(args, 1).to_int();
-    let _ = ori;
+    let offset = arg(args, 2).to_int();
     clear_err(this);
+    with(ctx, this, |st| st.ori = (ori, offset))?;
     verify_mode(ctx, this, func, how, 1, "mode", false)?;
     match do_fetch(ctx, func, this, how, None)? {
         Some(v) => Ok(strip_named(v)),
@@ -1200,13 +1491,57 @@ pub fn m_close_cursor(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> 
         return Err(ctx.throw("Error", "Cannot modify a PDOStatement while parameter hooks are running".into()));
     }
     clear_err(this);
-    with(ctx, this, invalidate)?;
+    let r = with(ctx, this, |st| {
+        st.executed = false;
+        st.driver.as_mut().map_or(Ok(()), |d| d.close_cursor_checked())
+    })?;
+    if let Err(e) = r {
+        *data(this).err.borrow_mut() = ErrState { sqlstate: e.sqlstate, info: Some((e.code, e.message)) };
+        handle_err(ctx, "PDOStatement::closeCursor", this)?;
+        return Ok(Value::Bool(false));
+    }
     Ok(Value::Bool(true))
 }
 
 pub fn m_next_rowset(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    impl_err(ctx, "PDOStatement::nextRowset", this, "IM001", Some("driver does not support multiple rowsets"))?;
-    Ok(Value::Bool(false))
+    let func = "PDOStatement::nextRowset";
+    let r = with(ctx, this, |st| st.driver.as_mut().and_then(|d| d.next_rowset()))?;
+    let Some(r) = r else {
+        impl_err(ctx, func, this, "IM001", Some("driver does not support multiple rowsets"))?;
+        return Ok(Value::Bool(false));
+    };
+    clear_err(this);
+    // pdo_stmt_do_next_rowset(): the columns are described anew.
+    let ok = with(ctx, this, |st| {
+        st.columns = None;
+        st.column_count = 0;
+        match r {
+            Ok(Some(info)) => {
+                st.column_count = info.column_count;
+                if let Some(n) = info.row_count {
+                    st.row_count = n;
+                }
+                describe(st);
+                Ok(true)
+            }
+            Ok(None) => {
+                st.executed = false;
+                Ok(false)
+            }
+            Err(e) => {
+                st.executed = false;
+                Err(e)
+            }
+        }
+    })?;
+    match ok {
+        Ok(more) => Ok(Value::Bool(more)),
+        Err(e) => {
+            *data(this).err.borrow_mut() = ErrState { sqlstate: e.sqlstate, info: Some((e.code, e.message)) };
+            handle_err(ctx, func, this)?;
+            Ok(Value::Bool(false))
+        }
+    }
 }
 
 pub fn m_set_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1238,16 +1573,16 @@ pub fn m_get_column_meta(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
         return Err(ctx.throw("ValueError", format!("{func}(): Argument #1 ($column) must be greater than or equal to 0")));
     }
     clear_err(this);
-    let (ok, meta, name, count) = with(ctx, this, |st| {
+    let (ok, meta, name, index_error) = with(ctx, this, |st| {
         let executed = st.executed;
         let count = st.column_count;
         let name = st.columns.as_ref().and_then(|c| c.get(col as usize).cloned());
         let meta = if executed && (col as usize) < count { st.driver.as_mut().and_then(|d| d.column_meta(col as usize)) } else { None };
-        (executed, meta, name, count)
+        let index_error = st.driver.as_ref().is_none_or(|d| d.meta_index_error());
+        (executed, meta, name, index_error)
     })?;
-    let _ = count;
     let Some(meta) = meta else {
-        if !ok {
+        if !ok || !index_error {
             handle_err(ctx, func, this)?;
         } else {
             impl_err(ctx, func, this, "07009", Some("invalid column index"))?;
@@ -1259,18 +1594,24 @@ pub fn m_get_column_meta(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
         return Ok(Value::Bool(false));
     };
     let mut a = PhpArray::new();
-    if let Some(t) = &meta.native_type {
-        a.insert(str_key(b"native_type"), Value::str(t.as_str()));
+    if let Some(entries) = &meta.ordered {
+        for (k, v) in entries {
+            a.insert(str_key(k.as_bytes()), v.clone());
+        }
+    } else {
+        if let Some(t) = &meta.native_type {
+            a.insert(str_key(b"native_type"), Value::str(t.as_str()));
+        }
+        a.insert(str_key(b"pdo_type"), Value::Int(meta.pdo_type));
+        for (k, v) in &meta.extra {
+            a.insert(str_key(k.as_bytes()), Value::str(v.as_str()));
+        }
+        let flags: Vec<Value> = meta.flags.iter().map(|f| Value::str(f.as_str())).collect();
+        a.insert(str_key(b"flags"), Value::Array(Rc::new(PhpArray::from_list(flags))));
     }
-    a.insert(str_key(b"pdo_type"), Value::Int(meta.pdo_type));
-    for (k, v) in &meta.extra {
-        a.insert(str_key(k.as_bytes()), Value::str(v.as_str()));
-    }
-    let flags: Vec<Value> = meta.flags.iter().map(|f| Value::str(f.as_str())).collect();
-    a.insert(str_key(b"flags"), Value::Array(Rc::new(PhpArray::from_list(flags))));
     a.insert(str_key(b"name"), Value::Str(name));
-    a.insert(str_key(b"len"), Value::Int(-1));
-    a.insert(str_key(b"precision"), Value::Int(0));
+    a.insert(str_key(b"len"), Value::Int(meta.len.unwrap_or(-1)));
+    a.insert(str_key(b"precision"), Value::Int(meta.precision.unwrap_or(0)));
     Ok(Value::Array(Rc::new(a)))
 }
 

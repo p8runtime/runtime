@@ -1,0 +1,26 @@
+string(3) "set"
+string(1) "n"
+string(3) "set"
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+}
+int(1)
+array(1) {
+  ["k"]=>
+  string(3) "set"
+}
+string(3) "set"
+Unknown named parameter $nope

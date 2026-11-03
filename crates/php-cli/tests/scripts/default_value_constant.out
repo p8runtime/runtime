@@ -1,0 +1,11 @@
+a true self::A
+b true N\K::A
+c true N\PHP_EOL
+d true N\LOCAL
+e true N\LOCAL
+g false -
+h false -
+i true N\M_PI
+j true N\UNDEFINED_X
+2
+true STR_PAD_RIGHT

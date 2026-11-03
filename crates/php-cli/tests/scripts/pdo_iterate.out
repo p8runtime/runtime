@@ -46,5 +46,5 @@ Trying to clone an uncloneable object of class MyPDO
 PDOException: You may not create a PDORow manually
 bool(true)
 string(12) "PDOStatement"
-PDOException: could not find driver
+PDOException: Pdo\Sqlite::__construct() cannot be used for connecting to the "mysql" driver, either call Pdo\Mysql::__construct() or PDO::__construct() instead
 Error: Call to undefined method Pdo\Sqlite::nothing()

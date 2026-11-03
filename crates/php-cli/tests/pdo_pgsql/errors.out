@@ -1,0 +1,102 @@
+Pdo\Pgsql
+SQLSTATE[42P01]: Undefined table: 7 ERROR:  relation "no_such_table" does not exist
+LINE 1: SELECT * FROM no_such_table
+                      ^
+string(5) "42P01"
+array(3) {
+  [0]=>
+  string(5) "42P01"
+  [1]=>
+  int(7)
+  [2]=>
+  string(107) "ERROR:  relation "no_such_table" does not exist
+LINE 1: SELECT * FROM no_such_table
+                      ^"
+}
+SQLSTATE[42601]: Syntax error: 7 ERROR:  syntax error at or near "SELEC"
+LINE 1: SELEC 1
+        ^
+SQLSTATE[22012]: Division by zero: 7 ERROR:  division by zero
+string(5) "22012"
+array(3) {
+  [0]=>
+  string(5) "22012"
+  [1]=>
+  int(7)
+  [2]=>
+  string(24) "ERROR:  division by zero"
+}
+SQLSTATE[HY093]: Invalid parameter number: :nope
+SQLSTATE[HY093]: Invalid parameter number: mixed named and positional parameters
+SQLSTATE[08006] [7] connection to server at HOST failed: FATAL:  password authentication failed for user "postgres"
+
+Warning: PDO::exec(): SQLSTATE[42P01]: Undefined table: 7 ERROR:  table "nope" does not exist in %s on line 43
+bool(false)
+string(5) "42P01"
+array(3) {
+  [0]=>
+  string(5) "42P01"
+  [1]=>
+  int(7)
+  [2]=>
+  string(35) "ERROR:  table "nope" does not exist"
+}
+
+Warning: PDO::lastInsertId(): SQLSTATE[42P01]: Undefined table: 7 ERROR:  relation "no_seq" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...' in %s on line 45
+bool(false)
+bool(false)
+string(5) "55000"
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+int(0)
+SQLSTATE[23505]: Unique violation: 7 ERROR:  duplicate key value violates unique constraint "acct_pkey"
+DETAIL:  Key (id)=(1) already exists.
+SQLSTATE[25P02]: In failed sql transaction: 7 ERROR:  current transaction is aborted, commands ignored until end of transaction block
+bool(true)
+bool(true)
+bool(false)
+string(14) ""my ""table""""
+bool(true)
+array(3) {
+  [0]=>
+  string(5) "1	10
+"
+  [1]=>
+  string(5) "2	\N
+"
+  [2]=>
+  string(5) "3	30
+"
+}
+array(3) {
+  [0]=>
+  string(5) "10,1
+"
+  [1]=>
+  string(7) "NULL,2
+"
+  [2]=>
+  string(5) "30,3
+"
+}
+bool(true)
+int(80)
+Pdo\Pgsql::copyFromArray(): Argument #2 ($rows) must not be empty
+SQLSTATE[23505]: Unique violation: 7 ERROR:  duplicate key value violates unique constraint "acct_pkey"
+DETAIL:  Key (id)=(1) already exists.
+CONTEXT:  COPY acct, line 1
+bool(true)
+bool(true)
+bool(false)
+string(4) "chan"
+string(5) "hello"
+bool(true)
+int(2)
+bool(false)
+notice: NOTICE:  hi 42
+bool(true)
+bool(true)
+done

@@ -298,7 +298,7 @@ fn open(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<(Option<Opened>
             warns.push(format!("{func}(): File name is longer than the maximum allowed path length on this platform (4096): {shown}"));
             return Ok((None, warns));
         }
-        match std::fs::canonicalize(&shown) {
+        match p8_runtime::os::canonicalize(&shown) {
             Ok(p) => {
                 // libmagic only says so when MAGIC_CHECK (0x40) is among the flags
                 if !p.is_dir() && flags & 0x40 != 0 {
@@ -459,7 +459,7 @@ fn read_source(ctx: &mut dyn Ctx, func: &str, path: &[u8]) -> Result<Option<Sour
                     let mut data = Vec::new();
                     let _ = f.take(BYTES_MAX as u64).read_to_end(&mut data);
                     // A plain file can be read back from its end, and has permission bits.
-                    let mode = std::fs::metadata(p).map_or(0, |m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()));
+                    let mode = std::fs::metadata(p).map_or(0, |m| p8_runtime::os::MetadataExt::mode(&m));
                     Ok(Some(Source::Data(data, magic::Env { mode, tail: true })))
                 }
                 Err(e) => {

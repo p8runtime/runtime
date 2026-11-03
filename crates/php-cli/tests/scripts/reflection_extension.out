@@ -1,0 +1,280 @@
+object(ReflectionExtension)#1 (1) {
+  ["name"]=>
+  string(4) "json"
+}
+string(4) "json"
+string(6) "8.4.27"
+bool(true)
+bool(false)
+object(ReflectionExtension)#1 (1) {
+  ["name"]=>
+  string(4) "json"
+}
+ReflectionException: Extension "nope" does not exist
+ReflectionException: Extension "foo\0bar" does not exist
+Zend Extension "Xdebug" does not exist
+dom: {"libxml":"Required","domxml":"Conflicts"}
+SPL: {"json":"Required"}
+session: {"spl":"Optional"}
+standard: {"session":"Optional"}
+json: []
+ctype: []
+array(5) {
+  [0]=>
+  string(11) "json_encode"
+  [1]=>
+  string(11) "json_decode"
+  [2]=>
+  string(13) "json_validate"
+  [3]=>
+  string(15) "json_last_error"
+  [4]=>
+  string(19) "json_last_error_msg"
+}
+bool(true)
+string(11) "json_encode"
+array(11) {
+  [0]=>
+  string(11) "ctype_alnum"
+  [1]=>
+  string(11) "ctype_alpha"
+  [2]=>
+  string(11) "ctype_cntrl"
+  [3]=>
+  string(11) "ctype_digit"
+  [4]=>
+  string(11) "ctype_lower"
+  [5]=>
+  string(11) "ctype_graph"
+  [6]=>
+  string(11) "ctype_print"
+  [7]=>
+  string(11) "ctype_punct"
+  [8]=>
+  string(11) "ctype_space"
+  [9]=>
+  string(11) "ctype_upper"
+  [10]=>
+  string(12) "ctype_xdigit"
+}
+int(128)
+int(29)
+int(0)
+array(2) {
+  [0]=>
+  string(16) "JsonSerializable"
+  [1]=>
+  string(13) "JsonException"
+}
+array(0) {
+}
+array(1) {
+  [0]=>
+  string(8) "PhpToken"
+}
+string(8) "PhpToken"
+array(0) {
+}
+array(5) {
+  ["date.timezone"]=>
+  string(3) "UTC"
+  ["date.default_latitude"]=>
+  string(4) "12.5"
+  ["date.default_longitude"]=>
+  string(7) "35.2333"
+  ["date.sunset_zenith"]=>
+  string(9) "90.833333"
+  ["date.sunrise_zenith"]=>
+  string(9) "90.833333"
+}
+array(5) {
+  [0]=>
+  string(21) "date.default_latitude"
+  [1]=>
+  string(22) "date.default_longitude"
+  [2]=>
+  string(19) "date.sunrise_zenith"
+  [3]=>
+  string(18) "date.sunset_zenith"
+  [4]=>
+  string(13) "date.timezone"
+}
+
+ctype
+
+ctype functions => enabled
+NULL
+
+json
+
+json support => enabled
+NULL
+
+Reflection
+
+Reflection => enabled
+NULL
+
+tokenizer
+
+Tokenizer Support => enabled
+NULL
+
+SPL
+
+SPL support => enabled
+Interfaces => OuterIterator, RecursiveIterator, SeekableIterator, SplObserver, SplSubject
+Classes => AppendIterator, ArrayIterator, ArrayObject, BadFunctionCallException, BadMethodCallException, CachingIterator, CallbackFilterIterator, DirectoryIterator, DomainException, EmptyIterator, FilesystemIterator, FilterIterator, GlobIterator, InfiniteIterator, InvalidArgumentException, IteratorIterator, LengthException, LimitIterator, LogicException, MultipleIterator, NoRewindIterator, OutOfBoundsException, OutOfRangeException, OverflowException, ParentIterator, RangeException, RecursiveArrayIterator, RecursiveCachingIterator, RecursiveCallbackFilterIterator, RecursiveDirectoryIterator, RecursiveFilterIterator, RecursiveIteratorIterator, RecursiveRegexIterator, RecursiveTreeIterator, RegexIterator, RuntimeException, SplDoublyLinkedList, SplFileInfo, SplFileObject, SplFixedArray, SplHeap, SplMinHeap, SplMaxHeap, SplObjectStorage, SplPriorityQueue, SplQueue, SplStack, SplTempFileObject, UnderflowException, UnexpectedValueException
+NULL
+
+filter
+
+Input Validation and Filtering => enabled
+
+Directive => Local Value => Master Value
+filter.default => unsafe_raw => unsafe_raw
+filter.default_flags => no value => no value
+NULL
+
+session
+
+Session Support => enabled
+Registered save handlers => files user 
+Registered serializer handlers => php_serialize php php_binary 
+
+Directive => Local Value => Master Value
+session.auto_start => Off => Off
+session.cache_expire => 180 => 180
+session.cache_limiter => nocache => nocache
+session.cookie_domain => no value => no value
+session.cookie_httponly => Off => Off
+session.cookie_lifetime => 0 => 0
+session.cookie_path => / => /
+session.cookie_samesite => no value => no value
+session.cookie_secure => Off => Off
+session.gc_divisor => 100 => 100
+session.gc_maxlifetime => 1440 => 1440
+session.gc_probability => 1 => 1
+session.lazy_write => On => On
+session.name => PHPSESSID => PHPSESSID
+session.referer_check => no value => no value
+session.save_handler => files => files
+session.save_path => no value => no value
+session.serialize_handler => php => php
+session.sid_bits_per_character => 4 => 4
+session.sid_length => 32 => 32
+session.upload_progress.cleanup => On => On
+session.upload_progress.enabled => On => On
+session.upload_progress.freq => 1% => 1%
+session.upload_progress.min_freq => 1 => 1
+session.upload_progress.name => PHP_SESSION_UPLOAD_PROGRESS => PHP_SESSION_UPLOAD_PROGRESS
+session.upload_progress.prefix => upload_progress_ => upload_progress_
+session.use_cookies => On => On
+session.use_only_cookies => On => On
+session.use_strict_mode => Off => Off
+session.use_trans_sid => Off => Off
+NULL
+bool(true)
+string(3) "SPL"
+string(4) "json"
+string(4) "Core"
+NULL
+NULL
+bool(true)
+string(6) "8.4.27"
+string(6) "8.4.27"
+string(6) "8.4.27"
+bool(false)
+array(5) {
+  [0]=>
+  string(11) "json_encode"
+  [1]=>
+  string(11) "json_decode"
+  [2]=>
+  string(13) "json_validate"
+  [3]=>
+  string(15) "json_last_error"
+  [4]=>
+  string(19) "json_last_error_msg"
+}
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+Extension [ <persistent> extension #N json version 8.4.27 ] {
+
+  - Constants [29] {
+    Constant [ <persistent> int JSON_HEX_TAG ] { 1 }
+    Constant [ <persistent> int JSON_HEX_AMP ] { 2 }
+    Constant [ <persistent> int JSON_HEX_APOS ] { 4 }
+    Constant [ <persistent> int JSON_HEX_QUOT ] { 8 }
+    Constant [ <persistent> int JSON_FORCE_OBJECT ] { 16 }
+    Constant [ <persistent> int JSON_NUMERIC_CHECK ] { 32 }
+    Constant [ <persistent> int JSON_UNESCAPED_SLASHES ] { 64 }
+    Constant [ <persistent> int JSON_PRETTY_PRINT ] { 128 }
+    Constant [ <persistent> int JSON_UNESCAPED_UNICODE ] { 256 }
+    Constant [ <persistent> int JSON_PARTIAL_OUTPUT_ON_ERROR ] { 512 }
+    Constant [ <persistent> int JSON_PRESERVE_ZERO_FRACTION ] { 1024 }
+    Constant [ <persistent> int JSON_UNESCAPED_LINE_TERMINATORS ] { 2048 }
+    Constant [ <persistent> int JSON_OBJECT_AS_ARRAY ] { 1 }
+    Constant [ <persistent> int JSON_BIGINT_AS_STRING ] { 2 }
+    Constant [ <persistent> int JSON_INVALID_UTF8_IGNORE ] { 1048576 }
+    Constant [ <persistent> int JSON_INVALID_UTF8_SUBSTITUTE ] { 2097152 }
+    Constant [ <persistent> int JSON_THROW_ON_ERROR ] { 4194304 }
+    Constant [ <persistent> int JSON_ERROR_NONE ] { 0 }
+    Constant [ <persistent> int JSON_ERROR_DEPTH ] { 1 }
+    Constant [ <persistent> int JSON_ERROR_STATE_MISMATCH ] { 2 }
+    Constant [ <persistent> int JSON_ERROR_CTRL_CHAR ] { 3 }
+    Constant [ <persistent> int JSON_ERROR_SYNTAX ] { 4 }
+    Constant [ <persistent> int JSON_ERROR_UTF8 ] { 5 }
+    Constant [ <persistent> int JSON_ERROR_RECURSION ] { 6 }
+    Constant [ <persistent> int JSON_ERROR_INF_OR_NAN ] { 7 }
+    Constant [ <persistent> int JSON_ERROR_UNSUPPORTED_TYPE ] { 8 }
+    Constant [ <persistent> int JSON_ERROR_INVALID_PROPERTY_NAME ] { 9 }
+    Constant [ <persistent> int JSON_ERROR_UTF16 ] { 10 }
+    Constant [ <persistent> int JSON_ERROR_NON_BACKED_ENUM ] { 11 }
+  }
+
+  - Functions {
+    Function [ <internal:json> function json_encode ] {
+
+      - Parameters [3] {
+        Parameter #0 [ <required> mixed $value ]
+        Parameter #1 [ <optional> int $flags = 0 ]
+        Parameter #2 [ <optional> int $depth = 512 ]
+      }
+      - Return [ string|false ]
+    }
+    Function [ <internal:json> function json_decode ] {
+
+      - Parameters [4] {
+        Parameter #0 [ <required> string $json ]
+        Parameter #1 [ <optional> ?bool $associative = null ]
+        Parameter #2 [ <optional> int $depth = 512 ]
+        Parameter #3 [ <optional> int $flags = 0 ]
+      }
+      - Return [ mixed ]
+    }
+    Function [ <internal:json> function json_validate ] {
+
+      - Parameters [3] {
+        Parameter #0 [ <required> string $json ]
+        Parameter #1 [ <optional> int $depth = 512 ]
+        Parameter #2 [ <optional> int $flags = 0 ]
+      }
+      - Return [ bool ]
+    }
+    Function [ <internal:json> function json_last_error ] {
+
+      - Parameters [0] {
+      }
+      - Return [ int ]
+    }
+    Function [ <internal:json> function json_last_error_msg ] {
+
+      - Parameters [0] {
+      }
+      - Return [ string ]
+    }
+  }
+}

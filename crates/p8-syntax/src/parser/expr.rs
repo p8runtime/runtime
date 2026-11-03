@@ -317,6 +317,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 expr: right,
                 span,
             })
+        } else if let Expr::Unary { op: UnaryOp::Reference, expr, .. } = right {
+            // `$a = &$b` reassociated (`null === $a = &$b`): a reference
+            // assignment, as it is when parsed in place.
+            self.arena.alloc(Expr::AssignRef { var, expr, span })
         } else {
             self.arena.alloc(Expr::Assign {
                 var,

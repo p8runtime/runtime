@@ -107,6 +107,7 @@ impl Value {
             Value::Array(a) => i64::from(!a.is_empty()),
             // A resource is its number.
             Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => i64::from(o.id),
+            Value::Object(o) if o.class.cast_int.is_some() => o.class.cast_int.expect("checked")(o),
             Value::Object(o) if o.class.cast_string.is_some() => Value::Str(o.class.cast_string.expect("checked")(o)).to_int(),
             // PHP warns "could not be converted to int" (the engine reports it).
             Value::Object(_) => 1,

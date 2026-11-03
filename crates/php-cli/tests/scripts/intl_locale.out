@@ -1,0 +1,65 @@
+bool(true)
+bool(true)
+bool(true)
+string(5) "de_DE"
+string(5) "de_DE"
+bool(true)
+string(5) "fr_CA"
+en_us                            en_US | en |  | US | [] | null | {"language":"en","region":"US"}
+EN-us                            en_US | en |  | US | [] | null | {"language":"en","region":"US"}
+de-DE-u-co-phonebk               de_DE@collation=phonebook | de |  | DE | [] | {"collation":"phonebook"} | {"language":"de","region":"DE"}
+zh-Hant-TW                       zh_Hant_TW | zh | Hant | TW | [] | null | {"language":"zh","script":"Hant","region":"TW"}
+sr_Latn_RS_REVISED@currency=USD  sr_Latn_RS_REVISED@currency=USD | sr | Latn | RS | ["REVISED"] | {"currency":"USD"} | {"language":"sr","script":"Latn","region":"RS","variant0":"REVISED"}
+eng_US                           en_US | en |  | US | [] | null | {"language":"en","region":"US"}
+de-DEVA                          de_Deva | de | Deva |  | [] | null | {"language":"de","script":"Deva"}
+en__POSIX                        en__POSIX | en |  |  | ["POSIX"] | null | {"language":"en","variant0":"POSIX"}
+en_US.UTF-8                      en_US | en |  | US | [] | null | {"language":"en","region":"US"}
+x-klingon                        @x=klingon | x-klingon |  |  | [] | {"x":"klingon"} | {"private0":"klingon"}
+i-klingon                        tlh | i-klingon |  |  | [] | null | {"grandfathered":"i-klingon"}
+und_US                           _US |  |  | US | [] | null | {"region":"US"}
+en_US_                           en_US | en |  | US | [] | null | {"language":"en","region":"US"}
+es-419-u-cu-usd                  es_419@currency=usd | es |  | 419 | [] | {"currency":"usd"} | {"language":"es","region":"419"}
+en-US-u-ca-gregory-co-phonebk    en_US@calendar=gregorian;collation=phonebook | en |  | US | [] | {"calendar":"gregorian","collation":"phonebook"} | {"language":"en","region":"US"}
+DE_de@CURRENCY=eur               de_DE@currency=eur | de |  | DE | [] | {"currency":"eur"} | {"language":"de","region":"DE"}
+de-1996-1901                     de__1996_1901 | de |  |  | ["1996","1901"] | null | {"language":"de","variant0":"1996","variant1":"1901"}
+string(20) "de_Latn_DE_X_x_a1_b2"
+string(9) "i-klingon"
+ValueError: Locale::composeLocale(): Argument #1 ($subtags) must contain a "language" key
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+string(5) "en_us"
+string(5) "en-US"
+string(2) "it"
+string(0) ""
+string(2) "da"
+string(5) "en_US"
+string(2) "de"
+bool(false)
+string(10) "zh_Hant_TW"
+de_DE: German (Germany) / Deutsch (Deutschland) / allemand / Germany
+en_US: English (United States) / Englisch (Vereinigte Staaten) / anglais / United States
+fr: French / Französisch / français / 
+zh_Hant_TW: Chinese (Traditional, Taiwan) / Chinesisch (Traditionell, Taiwan) / chinois / Taiwan
+sr_Latn_RS: Serbian (Latin, Serbia) / Serbisch (Lateinisch, Serbien) / serbe / Serbia
+pt_BR: Portuguese (Brazil) / Portugiesisch (Brasilien) / portugais / Brazil
+es_419: Spanish (Latin America) / Spanisch (Lateinamerika) / espagnol / Latin America
+ja: Japanese / Japanisch / japonais / 
+string(5) "Latin"
+string(10) "Kyrillisch"
+string(8) "Computer"
+string(7) "Klingon"
+bool(false)
+NULL
+bool(false)
+int(1)
+string(114) "locale_get_keywords: Error encountered while getting the keyword  value for the  keyword: U_ILLEGAL_ARGUMENT_ERROR"
+NULL
+string(89) "Locale string too long, should be no longer than 156 characters: U_ILLEGAL_ARGUMENT_ERROR"
+string(24) "U_ILLEGAL_ARGUMENT_ERROR"
+string(12) "U_ZERO_ERROR"
+string(18) "[BOGUS UErrorCode]"
+bool(false)
+bool(true)

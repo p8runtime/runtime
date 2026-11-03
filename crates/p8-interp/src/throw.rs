@@ -23,6 +23,12 @@ impl Context<'_> {
     /// debug_backtrace() gives them: where each was called from, the
     /// function (and class), its arguments. `regs` reads a register.
     pub(crate) fn trace(&self, regs: &dyn Fn(usize) -> Value) -> PhpArray {
+        self.trace_with(regs, false)
+    }
+
+    /// trace(), with each method call's `$this` as `object` when `objects`
+    /// (DEBUG_BACKTRACE_PROVIDE_OBJECT).
+    pub(crate) fn trace_with(&self, regs: &dyn Fn(usize) -> Value, objects: bool) -> PhpArray {
         let mut trace = PhpArray::new();
         let frames = &self.frames.slots[..self.frames.len()];
         // An internal method the error was raised in, called from the top frame.
@@ -52,9 +58,13 @@ impl Context<'_> {
             }
             let code = &frame.func.code;
             entry.insert(key("function"), Value::Str(PhpStr::from(code.name.as_bytes())));
-            if code.class.is_some() {
+            // A closure made in a class shows that class, as a method does.
+            if code.class.is_some() || (frame.scope.is_some() && code.name.as_bytes().starts_with(b"{closure")) {
                 let class = frame.scope.as_ref().map(|c| c.name.clone()).unwrap_or_else(PhpStr::empty);
                 entry.insert(key("class"), Value::Str(class));
+                if objects && let Some(this) = &frame.this {
+                    entry.insert(key("object"), Value::Object(Rc::clone(this)));
+                }
                 entry.insert(key("type"), Value::str(if frame.this.is_some() { "->" } else { "::" }));
             }
             let mut args = PhpArray::new();
@@ -75,7 +85,19 @@ impl Context<'_> {
                 let mut entry = PhpArray::new();
                 entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
                 entry.insert(key("line"), Value::Int(i64::from(line)));
-                entry.insert(key("function"), Value::str(n.name));
+                match &n.method {
+                    Some((name, class, this)) => {
+                        entry.insert(key("function"), Value::Str(name.clone()));
+                        entry.insert(key("class"), Value::Str(class.clone()));
+                        if objects && let Some(this) = this {
+                            entry.insert(key("object"), Value::Object(Rc::clone(this)));
+                        }
+                        entry.insert(key("type"), Value::str(if this.is_some() { "->" } else { "::" }));
+                    }
+                    None => {
+                        entry.insert(key("function"), Value::str(n.name));
+                    }
+                }
                 entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
                 let _ = trace.push(Value::Array(Rc::new(entry)));
             }

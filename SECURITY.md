@@ -1,6 +1,6 @@
 # Memory safety
 
-php-rs exists to run PHP without the class of bug behind most PHP CVEs:
+p8 runs PHP without the class of bug behind most PHP CVEs:
 use-after-free, double free and buffer overflows in C. Three rules keep it
 that way.
 
@@ -21,12 +21,12 @@ that slot. In Zend the same mistake is a use-after-free.
 operating system's own libraries). `tests/pure_rust_build.rs` fails if a
 C-backed crate enters the default dependency graph.
 
-Features that need C are opt-in:
+Features that need C are opt-in. These flags are on the legacy package at the repository root. The `p8` crate does not use them.
 
 | feature | C library | why it is not default |
 |---|---|---|
 | `openssl` | OpenSSL | `openssl_*` functions; a RustCrypto port is planned |
-| `pdo-sqlite` | SQLite | no complete Rust SQLite yet |
+| `pdo-sqlite` | SQLite | legacy engine only; p8's `pdo_sqlite` is Turso, in Rust |
 | `pdo-oci` | Oracle client | proprietary C client |
 | `mysql-tls` | ring (C and assembly) | TLS for MySQL; the driver itself is Rust |
 | `zip-c-codecs` | bzip2, zstd, xz | deflate, deflate64, lzma and AES stay on by default, in Rust |

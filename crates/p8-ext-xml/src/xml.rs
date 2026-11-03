@@ -129,7 +129,7 @@ fn create(ctx: &mut dyn Ctx, args: &[Value], ns: bool, func: &str) -> Result<Val
         Some(v) => bytes(&v).first().copied().unwrap_or(0),
         None => b':',
     });
-    let class = ctx.class_load(b"XMLParser")?.expect("XMLParser is declared");
+    let class = ctx.class(b"XMLParser").expect("XMLParser is declared");
     let o = ctx.new_object(&class);
     let state = o.native::<State>().expect("an XMLParser");
     *state.0.borrow_mut() = Some(XmlParser {

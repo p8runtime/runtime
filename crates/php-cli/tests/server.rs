@@ -190,7 +190,18 @@ fn answers_as_php_does() {
         let expected_path = server_dir().join("expected").join(format!("{name}.res"));
         let expected = std::fs::read_to_string(&expected_path).unwrap_or_else(|_| panic!("{} is missing: record it with real PHP (see the top of this file)", expected_path.display()));
         let server = if *uses_router { &routed } else { &plain };
-        let got = normalize(&server.exchange(&raw(request)), &root);
+        let response = server.exchange(&raw(request));
+        // p8 adds its own product token after PHP's (p8::powered_by); the
+        // rest of the response is PHP's.
+        let text = String::from_utf8_lossy(&response);
+        if text.contains("X-Powered-By: ") && !text.contains(&format!("X-Powered-By: {}", p8::powered_by())) {
+            failures.push(format!("--- {name}
+X-Powered-By is not {}", p8::powered_by()));
+        }
+        // Also as json_encode() shows a headers_list() (`\/`).
+        let ours = format!(" p8/{}", p8::P8_VERSION);
+        let ours_json = format!(" p8\\/{}", p8::P8_VERSION);
+        let got = normalize(text.replace(&ours, "").replace(&ours_json, "").as_bytes(), &root);
         if got != expected {
             failures.push(format!("--- {name}\nexpected:\n{expected}\ngot:\n{got}"));
         }

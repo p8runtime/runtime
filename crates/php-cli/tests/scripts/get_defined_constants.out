@@ -1,0 +1,25 @@
+int(30719)
+string(1) "
+"
+int(1)
+int(1)
+int(2)
+bool(false)
+array(3) {
+  ["ZED"]=>
+  int(1)
+  ["ALPHA"]=>
+  string(1) "a"
+  ["MID"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+string(4) "Core"
+int(30719)
+int(2)
+string(13) "PREG_NO_ERROR"
+string(19) "PREG_BAD_UTF8_ERROR"

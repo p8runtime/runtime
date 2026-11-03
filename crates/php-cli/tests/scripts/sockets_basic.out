@@ -1,0 +1,17 @@
+bool(true)
+bool(true)
+bool(true)
+string(7) "0.0.0.0"
+bool(true)
+bool(true)
+int(11)
+string(6) "hello
+"
+string(5) "world"
+bool(true)
+string(9) "127.0.0.1"
+string(0) ""
+Error: socket_close(): Argument #1 ($socket) has already been closed
+bool(true)
+bool(true)
+bool(true)

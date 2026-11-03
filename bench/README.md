@@ -1,65 +1,15 @@
-# Gild Benchmark (Local)
+# HTTP benchmark
 
-This benchmark compares the Gild router against containerized nginx+php-fpm and apache+php-fpm.
+`bench.php` burns CPU for N milliseconds using a busy loop. Default work is 8ms.
 
-## Bench Script
+`./bench/http-perf.sh` compares a local PHP router with containerized nginx+php-fpm (port 8542) and apache+php-fpm (port 8543). It writes `bench/HTTP-REPORT.md`.
 
-`bench.php` burns CPU for N milliseconds using a busy loop. Default: 8ms.
+Docker is required for the nginx and apache baselines.
 
-Example:
+- `DURATION` (default 10)
+- `CONCURRENCY` (default 50)
+- `WORK_MS` (default 8)
+- `REPORT_PATH` (default `bench/HTTP-REPORT.md`)
 
-```
-http://127.0.0.1:8541/bench.php?ms=8
-```
-
-## 1) Gild Router
-
-Build:
-
-```
-cargo build --release --features router --bin php --bin gild-router
-```
-
-Run:
-
-```
-GILD_NATIVE_BIN=target/release/php GILD_DOC_ROOT=bench target/release/gild-router
-```
-
-Gild listens on `http://127.0.0.1:8541`.
-
-## 2) Docker baselines (nginx + apache)
-
-The perf script uses Docker to spin up:
-
-- nginx + php-fpm on port `8542`
-- apache + php-fpm on port `8543`
-
-## 3) Markdown perf report
-
-Run the harness (starts containers automatically):
-
-```
-./bench/http-perf.sh
-```
-
-Config options:
-
-- `RUNTIMES=gild,nginx,apache`
-- `DURATION=10`
-- `CONCURRENCY=50`
-- `WORK_MS=8`
-- `REPORT_PATH=bench/HTTP-REPORT.md`
-
-Example:
-
-```
-RUNTIMES=gild,nginx DURATION=15 CONCURRENCY=200 WORK_MS=8 ./bench/http-perf.sh
-```
-
-## Notes
-
-- Requires Docker for nginx/apache baselines.
-- Gild router logs: `bench/gild-router.log`.
-- Extension scan helper: `bench/scan-framework-extensions.py` (regenerates `EXTENSIONS_FRAMEWORKS.md`).
-- Packagist scan helper: `bench/scan-packagist-extensions.py` (regenerates `EXTENSIONS_PACKAGES.md`).
+`bench/scan-framework-extensions.py` regenerates `EXTENSIONS_FRAMEWORKS.md`.
+`bench/scan-packagist-extensions.py` regenerates `EXTENSIONS_PACKAGES.md`.

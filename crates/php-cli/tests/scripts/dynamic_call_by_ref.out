@@ -1,0 +1,39 @@
+string(1) "c"
+string(1) "f"
+string(1) "i"
+string(1) "m"
+array(1) {
+  ["config"]=>
+  array(1) {
+    ["k"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["config"]=>
+  array(1) {
+    ["k"]=>
+    int(2)
+  }
+}
+array(1) {
+  ["config"]=>
+  array(1) {
+    ["k"]=>
+    int(3)
+  }
+}
+string(4) "same"
+array(1) {
+  ["k"]=>
+  string(1) "c"
+}
+string(1) "c"
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}

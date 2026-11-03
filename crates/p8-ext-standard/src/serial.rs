@@ -9,7 +9,7 @@ use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Object, Visibility};
+use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Class, Object, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -202,11 +202,15 @@ pub(crate) fn serialized(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw>
 }
 
 /// A value read from the start of `data` as unserialize() reads it, and the
-/// offset after it; None where it is not one.
-pub(crate) fn read_value(ctx: &mut dyn Ctx, data: &[u8]) -> Option<(Value, usize)> {
-    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new(), missing: Vec::new() };
-    let v = r.value(ctx).ok()?;
-    Some((v, r.at))
+/// offset after it; None where it is not one (Err: what an autoloader
+/// threw).
+pub(crate) fn read_value(ctx: &mut dyn Ctx, data: &[u8]) -> Result<Option<(Value, usize)>, Throw> {
+    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new() };
+    match r.value(ctx) {
+        Ok(v) => Ok(Some((v, r.at))),
+        Err(Bad::At(_)) => Ok(None),
+        Err(Bad::Threw(t)) => Err(t),
+    }
 }
 
 /// Values written one after another as serialize() writes one: they share
@@ -243,7 +247,7 @@ pub struct Unserializer<'a> {
 
 impl<'a> Unserializer<'a> {
     pub fn new(data: &'a [u8]) -> Unserializer<'a> {
-        Unserializer { r: Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new(), missing: Vec::new() } }
+        Unserializer { r: Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new() } }
     }
 
     /// The offset the next value is read from.
@@ -256,28 +260,20 @@ impl<'a> Unserializer<'a> {
         self.r.at = at;
     }
 
-    /// The next value; the offset it stopped at where there is none.
-    pub fn value(&mut self, ctx: &mut dyn Ctx) -> Result<Value, usize> {
-        self.r.value(ctx).map_err(|Bad(at)| at)
+    /// The next value (Ok(Err): the offset it stopped at where there is
+    /// none; Err: what an autoloader threw).
+    pub fn value(&mut self, ctx: &mut dyn Ctx) -> Result<Result<Value, usize>, Throw> {
+        match self.r.value(ctx) {
+            Ok(v) => Ok(Ok(v)),
+            Err(Bad::At(at)) => Ok(Err(at)),
+            Err(Bad::Threw(t)) => Err(t),
+        }
     }
 
-    /// The end of the read: classes it named are autoloaded and the
-    /// objects it made get their __unserialize() or __wakeup().
+    /// The end of the read: the objects it made get their __unserialize()
+    /// or __wakeup().
     pub fn finish(&mut self, ctx: &mut dyn Ctx) -> Result<(), Throw> {
-        for name in std::mem::take(&mut self.r.missing) {
-            ctx.class_load(&name)?;
-        }
-        for (o, data) in std::mem::take(&mut self.r.wakeups) {
-            match data {
-                Some(d) => {
-                    ctx.call(&method(&o, b"__unserialize"), &mut [Value::Array(Rc::new(d))])?;
-                }
-                None => {
-                    ctx.call(&method(&o, b"__wakeup"), &mut [])?;
-                }
-            }
-        }
-        Ok(())
+        self.r.wake(ctx)
     }
 }
 
@@ -295,20 +291,44 @@ struct Reader<'a> {
     values: Vec<Value>,
     allowed: Option<Vec<Vec<u8>>>,
     wakeups: Vec<(Rc<Object>, Option<PhpArray>)>,
-    /// Classes named that are not declared (autoloaded after the read).
-    missing: Vec<Vec<u8>>,
 }
 
-/// Where unserialize stopped: the offset PHP reports.
-struct Bad(usize);
+/// Why unserialize stopped: at an offset PHP reports, or an exception
+/// (an autoloader's, the unserialize_callback_func's).
+enum Bad {
+    At(usize),
+    Threw(Throw),
+}
+
+impl From<Throw> for Bad {
+    fn from(t: Throw) -> Bad {
+        Bad::Threw(t)
+    }
+}
 
 impl Reader<'_> {
+    /// The objects read get their __unserialize() or __wakeup(), in order,
+    /// once the whole value is read (PHP's delayed calls).
+    fn wake(&mut self, ctx: &mut dyn Ctx) -> Result<(), Throw> {
+        for (o, data) in std::mem::take(&mut self.wakeups) {
+            match data {
+                Some(d) => {
+                    ctx.call(&method(&o, b"__unserialize"), &mut [Value::Array(Rc::new(d))])?;
+                }
+                None => {
+                    ctx.call(&method(&o, b"__wakeup"), &mut [])?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn expect(&mut self, b: u8) -> Result<(), Bad> {
         if self.s.get(self.at) == Some(&b) {
             self.at += 1;
             Ok(())
         } else {
-            Err(Bad(self.at))
+            Err(Bad::At(self.at))
         }
     }
 
@@ -318,8 +338,8 @@ impl Reader<'_> {
         while self.at < self.s.len() && self.s[self.at] != end {
             self.at += 1;
         }
-        let t = std::str::from_utf8(&self.s[start..self.at]).map_err(|_| Bad(start))?;
-        let n = t.trim_start_matches('+').parse::<i64>().map_err(|_| Bad(start))?;
+        let t = std::str::from_utf8(&self.s[start..self.at]).map_err(|_| Bad::At(start))?;
+        let n = t.trim_start_matches('+').parse::<i64>().map_err(|_| Bad::At(start))?;
         self.expect(end)?;
         Ok(n)
     }
@@ -329,7 +349,7 @@ impl Reader<'_> {
         self.expect(b'"')?;
         let end = self.at + len;
         if end > self.s.len() {
-            return Err(Bad(self.at));
+            return Err(Bad::At(self.at));
         }
         let out = self.s[self.at..end].to_vec();
         self.at = end;
@@ -339,9 +359,9 @@ impl Reader<'_> {
 
     fn value(&mut self, ctx: &mut dyn Ctx) -> Result<Value, Bad> {
         let start = self.at;
-        let Some(&tag) = self.s.get(self.at) else { return Err(Bad(self.at)) };
+        let Some(&tag) = self.s.get(self.at) else { return Err(Bad::At(self.at)) };
         if self.s.get(self.at + 1) != Some(&if tag == b'N' { b';' } else { b':' }) {
-            return Err(Bad(start));
+            return Err(Bad::At(start));
         }
         self.at += 2;
         let slot = self.values.len();
@@ -351,7 +371,7 @@ impl Reader<'_> {
             b'b' => match self.int(b';')? {
                 0 => Value::Bool(false),
                 1 => Value::Bool(true),
-                _ => return Err(Bad(start)),
+                _ => return Err(Bad::At(start)),
             },
             b'i' => Value::Int(self.int(b';')?),
             b'd' => {
@@ -359,12 +379,12 @@ impl Reader<'_> {
                 while self.at < self.s.len() && self.s[self.at] != b';' {
                     self.at += 1;
                 }
-                let t = std::str::from_utf8(&self.s[from..self.at]).map_err(|_| Bad(start))?;
+                let t = std::str::from_utf8(&self.s[from..self.at]).map_err(|_| Bad::At(start))?;
                 let f = match t {
                     "INF" => f64::INFINITY,
                     "-INF" => f64::NEG_INFINITY,
                     "NAN" => f64::NAN,
-                    t => t.parse::<f64>().map_err(|_| Bad(start))?,
+                    t => t.parse::<f64>().map_err(|_| Bad::At(start))?,
                 };
                 self.expect(b';')?;
                 Value::Float(f)
@@ -377,7 +397,7 @@ impl Reader<'_> {
             b'r' | b'R' => {
                 self.values.pop();
                 let n = self.int(b';')? as usize;
-                return self.values.get(n.wrapping_sub(1)).cloned().ok_or(Bad(start));
+                return self.values.get(n.wrapping_sub(1)).cloned().ok_or(Bad::At(start));
             }
             b'a' => {
                 let n = self.int(b':')?;
@@ -394,12 +414,33 @@ impl Reader<'_> {
             b'E' => {
                 let body = self.bytes()?;
                 self.expect(b';')?;
-                let Some(colon) = body.iter().position(|&c| c == b':') else { return Err(Bad(start)) };
-                let class = ctx.class(&body[..colon]).filter(|c| c.flags & CLASS_ENUM != 0).ok_or(Bad(start))?;
-                if !class.enum_cases.iter().any(|c| c.as_bytes() == &body[colon + 1..]) {
-                    return Err(Bad(start));
+                let Some(colon) = body.iter().position(|&c| c == b':') else {
+                    ctx.warn(&format!("unserialize(): Invalid enum name '{}' (missing colon)", text(&body)));
+                    return Err(Bad::At(start));
+                };
+                let (name, case) = (&body[..colon], &body[colon + 1..]);
+                if !valid_class_name(name) {
+                    return Err(Bad::At(start));
                 }
-                ctx.enum_case(&class, &body[colon + 1..])
+                let Some(class) = ctx.class_load(name)? else {
+                    ctx.warn(&format!("unserialize(): Class '{}' not found", text(name)));
+                    return Err(Bad::At(start));
+                };
+                if class.flags & CLASS_ENUM == 0 {
+                    ctx.warn(&format!("unserialize(): Class '{}' is not an enum", text(name)));
+                    return Err(Bad::At(start));
+                }
+                match class.constants.get(case) {
+                    Some(c) if c.is_case => ctx.enum_case(&class, case),
+                    Some(_) => {
+                        ctx.warn(&format!("unserialize(): {}::{} is not an enum case", text(name), text(case)));
+                        return Err(Bad::At(self.at));
+                    }
+                    None => {
+                        ctx.warn(&format!("unserialize(): Undefined constant {}::{}", text(name), text(case)));
+                        return Err(Bad::At(self.at));
+                    }
+                }
             }
             b'O' => {
                 let name = self.bytes()?;
@@ -407,14 +448,11 @@ impl Reader<'_> {
                 let n = self.int(b':')?;
                 self.expect(b'{')?;
                 let allowed = self.allowed.as_ref().is_none_or(|list| list.iter().any(|c| c.eq_ignore_ascii_case(&name)));
-                let class = if allowed { ctx.class(&name) } else { None };
-                if allowed && class.is_none() {
-                    self.missing.push(name.clone());
-                }
+                let class = if allowed { object_class(ctx, &name).map_err(|t| t.map_or(Bad::At(start), Bad::Threw))? } else { None };
                 let (o, incomplete) = match class {
                     Some(c) => (ctx.new_object(&c), false),
                     None => {
-                        let c = ctx.class(b"__PHP_Incomplete_Class").ok_or(Bad(start))?;
+                        let c = ctx.class(b"__PHP_Incomplete_Class").ok_or(Bad::At(start))?;
                         let o = ctx.new_object(&c);
                         o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("__PHP_Incomplete_Class_Name")), Value::Str(PhpStr::new(name)));
                         (o, true)
@@ -440,7 +478,7 @@ impl Reader<'_> {
                 }
                 Value::Object(o)
             }
-            _ => return Err(Bad(start)),
+            _ => return Err(Bad::At(start)),
         };
         self.values[slot] = v.clone();
         Ok(v)
@@ -453,9 +491,46 @@ impl Reader<'_> {
         match k {
             Value::Int(i) => Ok(Key::Int(i)),
             Value::Str(s) => Ok(Key::from_string(s)),
-            _ => Err(Bad(at)),
+            _ => Err(Bad::At(at)),
         }
     }
+}
+
+/// Whether `name` can be a class's (zend_is_valid_class_name).
+fn valid_class_name(name: &[u8]) -> bool {
+    !name.is_empty() && name.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80)
+}
+
+/// The class an `O:` entry names, looked up where the reader meets it as
+/// php_var_unserialize does: declared, else autoloaded, else declared by
+/// unserialize_callback_func; None for __PHP_Incomplete_Class. Err(None):
+/// a name no class can have.
+fn object_class(ctx: &mut dyn Ctx, name: &[u8]) -> Result<Option<Rc<Class>>, Option<Throw>> {
+    if let Some(c) = ctx.class(name) {
+        return Ok(Some(c));
+    }
+    if !valid_class_name(name) {
+        return Err(None);
+    }
+    if let Some(c) = ctx.class_load(name)? {
+        return Ok(Some(c));
+    }
+    let func = match ctx.ini_get(b"unserialize_callback_func") {
+        Some(Value::Str(f)) if !f.is_empty() => f,
+        _ => return Ok(None),
+    };
+    let callback = Value::Str(func.clone());
+    if !func.as_bytes().windows(2).any(|w| w == b"::") && !ctx.is_callable(&callback) {
+        let f = text(func.as_bytes());
+        return Err(Some(ctx.throw("Error", format!("Invalid callback {f}, function \"{f}\" not found or invalid function name"))));
+    }
+    ctx.call(&callback, &mut [Value::Str(PhpStr::from(name))])?;
+    // The callback may have declared it.
+    let class = ctx.class_load(name)?;
+    if class.is_none() {
+        ctx.warn(&format!("unserialize(): Function {}() hasn't defined the class it was called for", text(func.as_bytes())));
+    }
+    Ok(class)
 }
 
 /// A property from its serialized name: "\0*\0p" protected, "\0C\0p"
@@ -507,29 +582,16 @@ fn unserialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if data.is_empty() {
         return Ok(Value::Bool(false));
     }
-    let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new(), missing: Vec::new() };
+    let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new() };
     match r.value(ctx) {
         Ok(v) => {
-            // A class it names that is not declared yet is autoloaded, and
-            // the call runs again with it (one still missing is incomplete).
-            for name in std::mem::take(&mut r.missing) {
-                ctx.class_load(&name)?;
-            }
-            for (o, data) in std::mem::take(&mut r.wakeups) {
-                match data {
-                    Some(d) => {
-                        ctx.call(&method(&o, b"__unserialize"), &mut [Value::Array(Rc::new(d))])?;
-                    }
-                    None => {
-                        ctx.call(&method(&o, b"__wakeup"), &mut [])?;
-                    }
-                }
-            }
+            r.wake(ctx)?;
             Ok(v)
         }
-        Err(Bad(at)) => {
+        Err(Bad::At(at)) => {
             ctx.warn(&format!("unserialize(): Error at offset {at} of {} bytes", data.len()));
             Ok(Value::Bool(false))
         }
+        Err(Bad::Threw(t)) => Err(t),
     }
 }

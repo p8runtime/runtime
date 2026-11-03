@@ -158,7 +158,7 @@ fn weakmap_clone(o: &Object) -> Rc<dyn std::any::Any> {
     Rc::new(WeakMapData { entries: RefCell::new(map(o).entries.borrow().clone()) })
 }
 
-pub const WEAKMAP_HOOKS: ClassHooks = ClassHooks { get_properties: None, cast_bool: None, cast_string: None, clone_data: Some(weakmap_clone), forward_calls: None };
+pub const WEAKMAP_HOOKS: ClassHooks = ClassHooks { get_properties: None, cast_bool: None, cast_string: None, cast_int: None, clone_data: Some(weakmap_clone), forward_calls: None };
 
 // ---- InternalIterator: an internal class's iteration as an Iterator ----
 
@@ -172,7 +172,7 @@ pub fn make_internal() -> Rc<dyn std::any::Any> {
     Rc::new(Internal::default())
 }
 
-fn internal_iterator(ctx: &mut dyn Ctx, items: Vec<(Value, Value)>) -> R {
+pub(crate) fn internal_iterator(ctx: &mut dyn Ctx, items: Vec<(Value, Value)>) -> R {
     let class = ctx.class(b"InternalIterator").expect("declared");
     let it = ctx.new_object(&class);
     *it.native::<Internal>().expect("InternalIterator state").items.borrow_mut() = items;

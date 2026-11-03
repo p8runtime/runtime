@@ -1,0 +1,13 @@
+array: true true
+array: true true
+ArrayIterator: true true
+ArrayObject: true true
+Generator: true false
+C: false true
+stdClass: false false
+string: false false
+int: false false
+null: false false
+int(8192)
+int(1024)
+stream_set_chunk_size(): Argument #2 ($size) must be greater than 0

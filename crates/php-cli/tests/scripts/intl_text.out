@@ -1,0 +1,136 @@
+int(-1)
+int(-1)
+int(1)
+int(0)
+bool(false)
+string(63) "Error converting first argument to UTF-16: U_INVALID_CHAR_FOUND"
+bool(true)
+9,10,Äpfel,apple,Apple,banana,cherry,éclair,zebra
+10,9,Äpfel,apple,Apple,banana,cherry,éclair,zebra
+banana,Apple,cherry,apple,Äpfel,zebra,éclair,9,10
+array(3) {
+  ["y"]=>
+  string(1) "a"
+  ["x"]=>
+  string(1) "b"
+  ["z"]=>
+  string(1) "C"
+}
+0=16 1=21 2=16 3=16 4=16 5=2 6=16 7=16 
+2
+int(0)
+int(0)
+a9,a10,a100
+a,z,å,ä,ö
+bool(false)
+string(55) "Error setting attribute value: U_ILLEGAL_ARGUMENT_ERROR"
+string(2) "sv"
+A,a,B,b
+string(55) "4,560 monkeys on 123 trees make 37.073 monkeys per tree"
+string(71) "{0,number} monkeys on {1,number} trees make {2,number} monkeys per tree"
+string(5) "en_US"
+string(53) "4.560 Affen über 123 Bäume um 37,073 Affen pro Baum"
+string(15) "no files in tmp"
+string(13) "1 file in tmp"
+string(14) "2 files in tmp"
+string(18) "1,234 files in tmp"
+string(11) "She replied"
+string(4) "23rd"
+string(14) "5 файлов"
+string(19) "It's {quoted} and x"
+bool(false)
+string(11) "missing {1}"
+string(11) "Ann is 1234"
+string(11) " 1971-01-01"
+string(4) "many"
+NULL
+int(65799)
+string(116) "pattern syntax error (parse error at offset 11, after "{0, plural,", before or at " one{a}"): U_PATTERN_SYNTAX_ERROR"
+NULL
+string(74) "msgfmt_create: message formatter creation failed: U_ILLEGAL_ARGUMENT_ERROR"
+array(2) {
+  [0]=>
+  int(4560)
+  [1]=>
+  int(123)
+}
+bool(true)
+string(6) "65cc81"
+string(2) "fi"
+string(3) "abc"
+bool(false)
+bool(true)
+bool(false)
+string(61) "Error converting input string to UTF-16: U_INVALID_CHAR_FOUND"
+string(6) "65cc81"
+NULL
+Normalizer::normalize(): Argument #2 ($form) must be a a valid normalization form
+int(4)
+string(12) "a👩‍💻"
+string(1) "b"
+int(3)
+bool(false)
+int(3)
+int(4)
+string(13) "a👩‍💻b"
+string(1) "X"
+array(2) {
+  [0]=>
+  string(4) "éa"
+  [1]=>
+  string(12) "👩‍💻b"
+}
+string(4) "éa"
+int(4)
+string(3) "bcd"
+NULL
+string(16) "xn--bcher-kva.de"
+string(10) "bücher.de"
+string(13) "xn--fa-hia.de"
+string(7) "fass.de"
+bool(false)
+array(3) {
+  ["result"]=>
+  string(5) "-a.de"
+  ["isTransitionalDifferent"]=>
+  bool(false)
+  ["errors"]=>
+  int(8)
+}
+int(65)
+string(4) "😀"
+bool(true)
+bool(true)
+bool(true)
+int(3)
+string(2) "ß"
+int(97)
+string(2) "ǅ"
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+string(1) ")"
+string(1) "["
+int(0)
+int(230)
+bool(true)
+int(25)
+bool(true)
+int(15)
+bool(false)
+int(98)
+string(1) "a"
+NULL
+string(126) "Passing a UTF-8 character for codepoint requires a string which is exactly one UTF-8 codepoint long.: U_ILLEGAL_ARGUMENT_ERROR"
+array(4) {
+  [0]=>
+  int(16)
+  [1]=>
+  int(0)
+  [2]=>
+  int(0)
+  [3]=>
+  int(0)
+}
+bool(true)

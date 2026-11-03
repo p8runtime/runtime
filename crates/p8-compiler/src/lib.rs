@@ -20,8 +20,8 @@ use p8_runtime::frozen::{Frozen, Text};
 use p8_syntax::literal::{self, Number};
 use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, MagicConstKind, Stmt, StmtId, UnaryOp};
 use p8_syntax::span::Span;
-use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use p8_runtime::fast::IndexMap;
+use p8_runtime::fast::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// What the compiler cannot (yet) compile, or a compile-time error.
@@ -122,6 +122,9 @@ struct FnBuilder<'a> {
     class_index: HashMap<Vec<u8>, u16>,
     /// For a method: its class, as declared.
     class: Option<Text>,
+    /// A function's (not the main script's): superglobals are looked up
+    /// in the global table where they are used.
+    auto_globals: bool,
     is_static: bool,
     tries: Vec<TryCtx<'a>>,
     handlers: Vec<Handler>,
@@ -160,21 +163,22 @@ impl FnBuilder<'_> {
             code: Vec::new(),
             lines: Vec::new(),
             consts: Vec::new(),
-            const_index: HashMap::new(),
-            cvs: IndexMap::new(),
+            const_index: HashMap::default(),
+            cvs: IndexMap::default(),
             temps: 0,
             floor: 0,
             max_temps: 0,
             sites: Vec::new(),
-            site_index: HashMap::new(),
+            site_index: HashMap::default(),
             loops: Vec::new(),
             params: Vec::new(),
             returns_ref: false,
             line: 1,
             decl_line: 1,
             classes: Vec::new(),
-            class_index: HashMap::new(),
+            class_index: HashMap::default(),
             class: None,
+            auto_globals: false,
             is_static: false,
             tries: Vec::new(),
             handlers: Vec::new(),
@@ -185,7 +189,7 @@ impl FnBuilder<'_> {
             decls: Vec::new(),
             silences: Vec::new(),
             loops_made: 0,
-            labels: HashMap::new(),
+            labels: HashMap::default(),
             gotos: Vec::new(),
             meta: Meta::default(),
         }
@@ -276,7 +280,15 @@ impl FnBuilder<'_> {
     fn cv(&mut self, name: &[u8]) -> Reg {
         let next = self.cvs.len();
         let index = *self.cvs.entry(name.to_vec()).or_insert(next);
-        reg(CV, index)
+        let r = reg(CV, index);
+        // In a function, a superglobal is the global table's variable at
+        // each use (`unset($GLOBALS['_GET'])` then `$_GET = …` makes it
+        // again, where a binding made once would keep the old one).
+        if self.auto_globals && SUPERGLOBALS.iter().any(|g| g.as_bytes() == name) {
+            let n = self.constant(Frozen::Str(Text::from(name)));
+            self.emit(Instr::rare(Rare::AutoGlobal, r, n, 0, 0));
+        }
+        r
     }
 
     fn constant(&mut self, value: Frozen) -> Reg {
@@ -470,6 +482,44 @@ fn visibility_of(c: &Compiler, modifiers: &[p8_syntax::lexer::token::Token]) -> 
         b"private" => Some(Visibility::Private),
         _ => None,
     })
+}
+
+/// A property's set visibility as written (`private(set)`). Two are a
+/// fatal error, as zend_add_member_modifier reports them.
+fn set_visibility_of(c: &Compiler, modifiers: &[p8_syntax::lexer::token::Token]) -> Result<Option<Visibility>> {
+    use p8_syntax::lexer::token::TokenKind;
+    let mut found = None;
+    for m in modifiers {
+        let v = match m.kind {
+            TokenKind::PublicSet => Visibility::Public,
+            TokenKind::ProtectedSet => Visibility::Protected,
+            TokenKind::PrivateSet => Visibility::Private,
+            _ => continue,
+        };
+        if found.is_some() {
+            return Err(CompileError { message: "Multiple access type modifiers are not allowed".into(), line: c.line(m.span) });
+        }
+        found = Some(v);
+    }
+    Ok(found)
+}
+
+/// The set visibility a property keeps, as zend_declare_typed_property
+/// settles it: a public readonly one is protected(set) unless declared
+/// otherwise, and one no narrower than the visibility is dropped. An
+/// untyped property cannot have one, nor one wider than its visibility.
+fn settled_set_visibility(what: (&[u8], &[u8]), visibility: Visibility, declared: Option<Visibility>, readonly: bool, typed: bool, line: u32) -> Result<Option<Visibility>> {
+    let Some(set) = declared else {
+        return Ok((readonly && visibility == Visibility::Public).then_some(Visibility::Protected));
+    };
+    let what = format!("{}::${}", String::from_utf8_lossy(what.0), String::from_utf8_lossy(what.1));
+    if !typed {
+        return Err(CompileError { message: format!("Property with asymmetric visibility {what} must have type"), line });
+    }
+    if visibility.rank() > set.rank() {
+        return Err(CompileError { message: format!("Visibility of property {what} must not be weaker than set visibility"), line });
+    }
+    Ok((set != visibility).then_some(set))
 }
 
 /// A declared type as PHP prints it (`?int`, `A|B`).
@@ -827,7 +877,12 @@ fn dim_root_is_static(c: &Compiler, e: &Expr) -> bool {
     while let Expr::ArrayDimFetch { array, .. } = cur {
         cur = array;
     }
-    matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if c.text(*name).starts_with(b"$"))
+    match cur {
+        Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } => c.text(*name).starts_with(b"$"),
+        // `C::${expr}`: named when it runs.
+        Expr::ClassConstFetch { constant: Expr::IndirectVariable { .. }, .. } => true,
+        _ => false,
+    }
 }
 
 /// Whether a hook's source uses its property's stored value: `$this->name`,
@@ -918,6 +973,9 @@ pub struct Compiler<'src> {
     anonymous: u32,
     /// The function being compiled is a set hook: no parameter list means `$value`.
     hook_value: bool,
+    /// A reference taken for `unset($obj->p[k])`: an uninitialized
+    /// property is left alone, not modified.
+    ref_for_unset: bool,
     /// The file declares strict_types=1.
     strict: bool,
     /// The declared return type of the function about to be compiled.
@@ -939,7 +997,7 @@ type Result<T> = std::result::Result<T, CompileError>;
 impl<'src> Compiler<'src> {
     pub fn new(source: &'src [u8], file: &str, registry: &'src Registry) -> Self {
         let mut line_starts = vec![0];
-        line_starts.extend(source.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1));
+        line_starts.extend(memchr::memchr_iter(b'\n', source).map(|i| i + 1));
         Compiler {
             source,
             superglobals: None,
@@ -949,9 +1007,9 @@ impl<'src> Compiler<'src> {
             file: Arc::from(file),
             line_starts,
             functions: Vec::new(),
-            by_ref: HashMap::new(),
-            top_functions: HashSet::new(),
-            top_classes: HashSet::new(),
+            by_ref: HashMap::default(),
+            top_functions: HashSet::default(),
+            top_classes: HashSet::default(),
             declaring_top: false,
             classes: Vec::new(),
             scope: None,
@@ -960,11 +1018,12 @@ impl<'src> Compiler<'src> {
             ns: Vec::new(),
             eval: false,
             enum_backing: None,
-            use_classes: HashMap::new(),
-            use_functions: HashMap::new(),
-            use_consts: HashMap::new(),
+            use_classes: HashMap::default(),
+            use_functions: HashMap::default(),
+            use_consts: HashMap::default(),
             anonymous: 0,
             hook_value: false,
+            ref_for_unset: false,
             halt_offset: None,
             strict: false,
             pending_ret: None,
@@ -1331,20 +1390,38 @@ impl<'src> Compiler<'src> {
                     Expr::Array { items, .. } => Some((*items, f.temp())),
                     _ => None,
                 };
+                // `as $this->p`, `as $a[k]`, `as C::$s` (`=> $o->k` too): the
+                // element lands in a temporary, then is assigned, value first
+                // (as zend_compile_foreach does).
+                let plain = |c: &Self, e: &Expr| matches!(e, Expr::Variable { name, .. } if c.text(*name).starts_with(b"$") && c.text(*name) != b"$this");
+                let value_place = (pattern.is_none() && !plain(self, value_var)).then(|| f.temp());
+                // (When the value goes through a temporary the key does too: the
+                // value is assigned before it, and may read the old key.)
+                let key_place = key_var.filter(|k| value_place.is_some() || !plain(self, k)).map(|_| f.temp());
                 let saved = f.temps;
                 let init = f.emit(Instr::IterInit { src, iter, end: 0 });
                 let start = f.here();
-                let val = match pattern {
-                    Some((_, r)) => r,
-                    None => self.var_target(f, value_var)?,
+                let val = match (pattern, value_place) {
+                    (Some((_, r)), _) => r,
+                    (None, Some(t)) => t,
+                    (None, None) => self.var_target(f, value_var)?,
                 };
-                let key = match key_var {
-                    Some(k) => Some(self.var_target(f, k)?),
-                    None => None,
+                let key = match (key_var, key_place) {
+                    (Some(_), Some(t)) => Some(t),
+                    (Some(k), None) => Some(self.var_target(f, k)?),
+                    (None, _) => None,
                 };
                 let next = f.emit(Instr::IterNext { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
                 f.push_loop();
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
+                if let Some(t) = value_place {
+                    self.assign_from(f, value_var, t)?;
+                    f.temps = f.floor;
+                }
+                if let (Some(k), Some(t)) = (key_var, key_place) {
+                    self.assign_from(f, k, t)?;
+                    f.temps = f.floor;
+                }
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, None)?;
                     f.temps = f.floor;
@@ -1556,13 +1633,22 @@ impl<'src> Compiler<'src> {
                         continue;
                     }
                     match v {
+                        // `unset($_POST)`: the global itself, which stays
+                        // bound here (an auto-global).
+                        Expr::Variable { name, .. } if SUPERGLOBALS.iter().any(|g| self.text(*name).get(1..) == Some(g.as_bytes())) => {
+                            let n = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                            f.emit(Instr::rare(Rare::VarUnset, n, 1, 0, 0));
+                        }
                         Expr::Variable { name, .. } => {
                             let var = f.cv(&self.text(*name)[1..]);
                             f.emit(Instr::UnsetVar { var });
                         }
                         // (A property's dimensions: through a reference to it.)
                         Expr::ArrayDimFetch { .. } => {
-                            let (var, keys, n, append, held) = self.ref_dim_path(f, v)?;
+                            self.ref_for_unset = true;
+                            let path = self.ref_dim_path(f, v);
+                            self.ref_for_unset = false;
+                            let (var, keys, n, append, held) = path?;
                             if append {
                                 return Err(CompileError { message: "Cannot use [] for unsetting".into(), line: f.line });
                             }
@@ -1828,8 +1914,12 @@ impl<'src> Compiler<'src> {
         let source = self.source;
         self.superglobals.get_or_insert_with(|| {
             let mut refs = Vec::new();
-            for (at, _) in source.iter().enumerate().filter(|&(_, &c)| c == b'$') {
+            for at in memchr::memchr_iter(b'$', source) {
                 let rest = &source[at + 1..];
+                // Every name in SUPERGLOBALS starts with `_`.
+                if rest.first() != Some(&b'_') {
+                    continue;
+                }
                 if let Some(i) = SUPERGLOBALS.iter().position(|name| rest.starts_with(name.as_bytes())) {
                     refs.push((at, i as u8));
                 }
@@ -1870,7 +1960,10 @@ impl<'src> Compiler<'src> {
             f.cv(&text[1..]);
             let ty = p.ty.map(|t| self.type_decl(t));
             let default = p.default.and_then(|d| self.const_value(d).ok());
-            let promoted = visibility_of(self, p.modifiers).is_some();
+            let default_const = p.default.and_then(|d| self.default_const_name(d));
+            let promoted = visibility_of(self, p.modifiers).is_some()
+                || p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"))
+                || set_visibility_of(self, p.modifiers)?.is_some();
             let attrs = self.attr_defs(p.attributes, 32)?;
             f.params.push(Param {
                 name: Text::from(&text[1..]),
@@ -1879,6 +1972,7 @@ impl<'src> Compiler<'src> {
                 variadic: p.variadic,
                 ty,
                 default,
+                default_const,
                 promoted,
                 attrs,
             });
@@ -1886,7 +1980,7 @@ impl<'src> Compiler<'src> {
         // A set hook written without its parameter takes `$value`.
         if std::mem::take(&mut self.hook_value) && params.is_empty() {
             f.cv(b"value");
-            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, promoted: false, attrs: Vec::new() });
+            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, default_const: None, promoted: false, attrs: Vec::new() });
         }
         f.decl_line = f.line;
         if params.last().is_some_and(|p| p.variadic) {
@@ -1910,17 +2004,27 @@ impl<'src> Compiler<'src> {
         // Constructor promotion: `public int $x` declares the property and
         // assigns the argument to it first thing.
         for (i, p) in params.iter().enumerate() {
-            let Some(visibility) = visibility_of(self, p.modifiers) else { continue };
+            if !f.params[i].promoted {
+                continue;
+            }
+            let visibility = visibility_of(self, p.modifiers).unwrap_or(Visibility::Public);
             let text = self.text(p.name.span);
             let name = Text::from(&text[1..]);
+            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"));
+            let class = self.scope.as_ref().map_or_else(|| Text::from(""), |s| s.name.clone());
+            let set_declared = set_visibility_of(self, p.modifiers)?;
+            let set_visibility = settled_set_visibility((class.as_bytes(), name.as_bytes()), visibility, set_declared, readonly, p.ty.is_some(), line)?;
             self.promoted.push(PropDef {
                 name: name.clone(),
                 default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
                 code: None,
                 hooks: 0,
                 visibility,
+                set_visibility,
                 is_static: false,
-                readonly: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
+                readonly,
+                // private(set) is implicitly final.
+                is_final: p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")) || set_visibility == Some(Visibility::Private),
                 ty: p.ty.map(|t| Text::from(type_text(self, t).as_slice())),
                 ty_decl: p.ty.map(|t| self.type_decl(t)),
                 meta: Meta { attrs: f.params[i].attrs.clone(), ..Meta::default() },
@@ -1939,15 +2043,9 @@ impl<'src> Compiler<'src> {
             let r = f.cv(&text[1..]);
             f.bound.push(r & ((1 << KIND_SHIFT) - 1));
         }
-        // Superglobals: the global variable in every scope, so a function
-        // that names one binds it first thing (as `global $_SERVER;`).
-        let span = match &body {
-            Body::Stmts(stmts) => stmts.first().zip(stmts.last()).map(|(a, b)| (a.span().start, b.span().end)),
-            Body::Expr(e) | Body::Get(e) | Body::Set(_, e) => Some((e.span().start, e.span().end)),
-        };
-        if let Some((start, end)) = span {
-            self.bind_superglobals(&mut f, start, end);
-        }
+        // Superglobals: the global variable in every scope, found at each
+        // use (FnBuilder::cv).
+        f.auto_globals = true;
         let mut captures = Vec::new();
         match body {
             Body::Stmts(body) => {
@@ -2248,6 +2346,13 @@ impl<'src> Compiler<'src> {
                 ClassMember::Property { attributes, modifiers, ty, entries, doc_comment, .. } => {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
+                    let set_declared = set_visibility_of(self, modifiers)?;
+                    if has(b"static") && set_declared.is_some() {
+                        let line = entries.first().map_or(line, |e| self.line(e.name.span));
+                        return Err(CompileError { message: "Static property may not have asymmetric visibility".into(), line });
+                    }
+                    let visibility = visibility_of(self, modifiers).unwrap_or(Visibility::Public);
+                    let readonly = has(b"readonly") || flags & CLASS_READONLY != 0;
                     for (n, e) in entries.iter().enumerate() {
                         let text = self.text(e.name.span);
                         let (default, code) = match e.default {
@@ -2259,15 +2364,21 @@ impl<'src> Compiler<'src> {
                             None => (Some(Frozen::Null), None),
                         };
                         let meta = self.meta_of(attributes, if n == 0 { *doc_comment } else { None }, e.span, 8)?;
+                        let name = Text::from(text.strip_prefix(b"$").unwrap_or(text));
+                        let set_visibility =
+                            settled_set_visibility((display.as_bytes(), name.as_bytes()), visibility, set_declared, readonly && !has(b"static"), ty.is_some(), self.line(e.name.span))?;
                         properties.push(PropDef {
                             meta,
-                            name: Text::from(text.strip_prefix(b"$").unwrap_or(text)),
+                            name,
                             default,
                             code,
                             hooks: 0,
-                            visibility: visibility_of(self, modifiers).unwrap_or(Visibility::Public),
+                            visibility,
+                            set_visibility,
                             is_static: has(b"static"),
-                            readonly: has(b"readonly") || flags & CLASS_READONLY != 0,
+                            readonly,
+                            // private(set) is implicitly final.
+                            is_final: has(b"final") || set_visibility == Some(Visibility::Private),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
                             ty_decl: ty.map(|t| self.type_decl(t)),
                         });
@@ -2278,6 +2389,8 @@ impl<'src> Compiler<'src> {
                     let pname = Text::from(text.strip_prefix(b"$").unwrap_or(text));
                     let visibility = visibility_of(self, modifiers).unwrap_or(Visibility::Public);
                     let line = self.line(name.span);
+                    let set_declared = set_visibility_of(self, modifiers)?;
+                    let set_visibility = settled_set_visibility((display.as_bytes(), pname.as_bytes()), visibility, set_declared, false, ty.is_some(), line)?;
                     let fatal = |message: &str| CompileError { message: message.to_string(), line };
                     let has = |c: &Self, w: &[u8]| modifiers.iter().any(|m| c.text(m.span).eq_ignore_ascii_case(w));
                     let prop_abstract = has(self, b"abstract");
@@ -2394,6 +2507,19 @@ impl<'src> Compiler<'src> {
                     if !backed && bits != 0 && default.is_none() {
                         bits |= HOOK_VIRTUAL;
                     }
+                    // A virtual property has a set visibility only with both
+                    // hooks (checked after inheritance when there is a parent).
+                    if parent.is_none() && set_visibility.is_some() && bits & HOOK_VIRTUAL != 0 && seen.len() < 2 {
+                        let what = if seen.iter().any(|h| h == b"get") { "Read-only" } else { "Write-only" };
+                        return Err(CompileError {
+                            message: format!(
+                                "{what} virtual property {}::${} must not specify asymmetric visibility",
+                                String::from_utf8_lossy(display.as_bytes()),
+                                String::from_utf8_lossy(pname.as_bytes())
+                            ),
+                            line: hooks.last().map_or(line, |h| self.line(h.span)),
+                        });
+                    }
                     let (default, code) = match default {
                         Some(x) => {
                             let (v, code) = self.const_init(x)?;
@@ -2411,8 +2537,11 @@ impl<'src> Compiler<'src> {
                             code,
                             hooks: bits,
                             visibility,
+                            set_visibility,
                             is_static: false,
                             readonly: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")),
+                            // private(set) is implicitly final.
+                            is_final: modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"final")) || set_visibility == Some(Visibility::Private),
                             ty: ty.map(|t| Text::from(type_text(self, t).as_slice())),
                             ty_decl: ty.map(|t| self.type_decl(t)),
                         });
@@ -2592,7 +2721,44 @@ impl<'src> Compiler<'src> {
                     _ => Err(self.unsupported(e.span(), "this constant expression")),
                 }
             }
+            // `C::class` names a class known now (an enum case's value).
+            Expr::ClassConstFetch { class: Expr::Variable { name: class, .. }, constant: Expr::Variable { name, .. }, .. }
+                if self.text(*name).eq_ignore_ascii_case(b"class")
+                    && !self.text(*class).starts_with(b"$")
+                    && !matches!(self.text(*class).to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") =>
+            {
+                Ok(Frozen::Str(Text::from(self.class_name(self.text(*class)).as_slice())))
+            }
             _ => Err(self.unsupported(e.span(), "this constant expression")),
+        }
+    }
+
+    /// A parameter default that is a constant, named as reflection shows
+    /// it: global and namespaced constants resolved (an unqualified one in
+    /// a namespace is the namespaced name), `self::`/`parent::`/`static::`
+    /// as written, other classes resolved.
+    fn default_const_name(&self, e: &Expr) -> Option<Text> {
+        match e {
+            Expr::Variable { name, .. } => {
+                let text = self.text(*name);
+                let bare = text.strip_prefix(b"\\").unwrap_or(text);
+                if text.starts_with(b"$") || matches!(bare.to_ascii_lowercase().as_slice(), b"true" | b"false" | b"null") {
+                    return None;
+                }
+                Some(Text::from(self.ns_name(text, &self.use_consts, false).0.as_slice()))
+            }
+            Expr::ClassConstFetch { class: Expr::Variable { name: class, .. }, constant: Expr::Variable { name, .. }, .. } => {
+                let (class, name) = (self.text(*class), self.text(*name));
+                if class.starts_with(b"$") || name.starts_with(b"$") || name.eq_ignore_ascii_case(b"class") {
+                    return None;
+                }
+                let class = match class.to_ascii_lowercase().as_slice() {
+                    b"self" | b"parent" | b"static" => class.to_vec(),
+                    _ => self.class_name(class),
+                };
+                Some(Text::from([class.as_slice(), b"::", name].concat().as_slice()))
+            }
+            _ => None,
         }
     }
 
@@ -2693,14 +2859,18 @@ impl<'src> Compiler<'src> {
                 let message = if arg.unpack { "Cannot use argument unpacking after named arguments" } else { "Cannot use positional argument after named argument" };
                 return Err(CompileError { message: message.into(), line });
             }
-            // Positional arguments come before any `...`: n is the parameter.
+            // Positional arguments come before any `...`: n is the parameter;
+            // a named one is asked about by its name.
             if let Some(callee) = callee
-                && arg.name.is_none()
                 && !arg.unpack
                 && self.can_ref(arg.value)
             {
                 let flag = f.temp();
-                f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16));
+                let key = arg.name.map(|name| f.constant(Frozen::Str(Text::from(self.text(name.span)))));
+                match key {
+                    Some(key) => f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, key, u16::MAX)),
+                    None => f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16)),
+                };
                 let (by_ref, by_value) = match arg.value {
                     Expr::Variable { name, .. } => (f.cv(&self.text(*name)[1..]), None),
                     value => {
@@ -2711,14 +2881,23 @@ impl<'src> Compiler<'src> {
                     }
                 };
                 let value_at = f.emit(Instr::JumpIfNot { cond: flag, target: 0 });
-                f.emit(Instr::rare(Rare::ArrayPushRef, list, by_ref, 0, 0));
+                match key {
+                    Some(key) => f.emit(Instr::rare(Rare::ArraySetRef, list, key, by_ref, 0)),
+                    None => f.emit(Instr::rare(Rare::ArrayPushRef, list, by_ref, 0, 0)),
+                };
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(value_at, f.here());
                 let v = match by_value {
                     Some(r) => r,
                     None => self.expr(f, arg.value)?,
                 };
-                f.emit(Instr::ArrayPush { arr: list, val: v });
+                match key {
+                    Some(key) => {
+                        named = true;
+                        f.emit(Instr::ArraySet { arr: list, key, val: v })
+                    }
+                    None => f.emit(Instr::ArrayPush { arr: list, val: v }),
+                };
                 f.patch(end, f.here());
                 continue;
             }
@@ -2761,10 +2940,11 @@ impl<'src> Compiler<'src> {
                 Ok((t, false))
             }
             Expr::PropertyFetch { target, property, .. } => {
+                let for_unset = std::mem::take(&mut self.ref_for_unset);
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, property)?;
                 let dst = f.temp();
-                f.emit(Instr::rare(Rare::PropRef, dst, obj, name, 0));
+                f.emit(Instr::rare(Rare::PropRef, dst, obj, name, u16::from(for_unset)));
                 Ok((dst, false))
             }
             Expr::IndirectVariable { name, .. } => Ok((self.var_ref(f, name)?, false)),
@@ -2777,6 +2957,13 @@ impl<'src> Compiler<'src> {
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let dst = f.temp();
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
+                Ok((dst, false))
+            }
+            Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                let class = self.class_ref(f, class)?;
+                let name = self.expr(f, name)?;
                 let dst = f.temp();
                 f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
                 Ok((dst, false))
@@ -2806,6 +2993,11 @@ impl<'src> Compiler<'src> {
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => {
                 let var = f.cv(&self.text(*name)[1..]);
                 f.emit(if call { Instr::rare(Rare::BindRefResult, var, src, 0, 0) } else { Instr::BindRef { var, src } });
+                // A temporary holding the reference lets go of it: a later
+                // write to that register would go through to the variable.
+                if src >> KIND_SHIFT == TEMP {
+                    f.emit(Instr::Free { reg: src });
+                }
                 var
             }
             Expr::ArrayDimFetch { .. } => {
@@ -2843,7 +3035,7 @@ impl<'src> Compiler<'src> {
     fn type_decl(&self, t: &p8_syntax::ast::Type) -> p8_runtime::types::TypeDecl {
         use p8_runtime::types::*;
         use p8_syntax::ast::Type;
-        let mut d = p8_runtime::types::TypeDecl { mask: 0, classes: Vec::new(), written: Vec::new(), intersection: false };
+        let mut d = p8_runtime::types::TypeDecl::new(0, Vec::new(), Vec::new(), false);
         fn add(c: &Compiler, t: &Type, d: &mut p8_runtime::types::TypeDecl) {
             match t {
                 Type::Simple(token) => add_word(c, c.text(token.span), d),
@@ -2906,7 +3098,7 @@ impl<'src> Compiler<'src> {
             d.mask |= bit;
         }
         add(self, t, &mut d);
-        d
+        p8_runtime::types::TypeDecl::new(d.mask, d.classes, d.written, d.intersection)
     }
 
     /// Call the callable [a, b] (a method named at run time).
@@ -2918,7 +3110,7 @@ impl<'src> Compiler<'src> {
         if needs_spread(args) {
             return self.spread_call(f, callee, args);
         }
-        let (base, argc) = self.args_by_value(f, args)?;
+        let (base, argc) = self.value_args(f, args, callee)?;
         f.emit(Instr::CallValue { dst: base, callee, base, argc });
         Ok(base)
     }
@@ -2947,6 +3139,25 @@ impl<'src> Compiler<'src> {
                 value @ (Expr::ArrayDimFetch { .. } | Expr::PropertyFetch { .. }) if self.can_ref_arg(value) => {
                     let flag = f.temp();
                     f.emit(asks(flag, n as u8));
+                    self.ref_or_value_with(f, value, *r, flag)?;
+                }
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        Ok((regs[0], args.len() as u8))
+    }
+
+    /// The arguments of a call of a value (`$f(...)`, `[$o, 'm'](...)`): a
+    /// variable, element or property goes as a reference when the callable
+    /// takes that parameter by one, asked as the call runs (PHP's
+    /// SEND_VAR_EX for a function known only then).
+    fn value_args(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg], callee: Reg) -> Result<(Reg, u8)> {
+        let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
+        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+            match arg.value {
+                value if self.can_ref_arg(value) && !matches!(value, Expr::Variable { name, .. } if matches!(self.text(*name), b"$this" | b"$GLOBALS")) => {
+                    let flag = f.temp();
+                    f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16));
                     self.ref_or_value_with(f, value, *r, flag)?;
                 }
                 value => self.expr_into(f, value, *r)?,
@@ -3139,7 +3350,7 @@ impl<'src> Compiler<'src> {
         {
             cur = array;
         }
-        if matches!(cur, Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$")) {
+        if dim_root_is_static(self, cur) {
             f.emit(Instr::Free { reg: root });
         }
     }
@@ -3347,6 +3558,14 @@ impl<'src> Compiler<'src> {
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
                 let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let dst = f.temp();
+                f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
+                Ok(dst)
+            }
+            // `C::${expr}[k] = v`: the static property named when it runs.
+            Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                let class = self.class_ref(f, class)?;
+                let name = self.expr(f, name)?;
                 let dst = f.temp();
                 f.emit(Instr::rare(Rare::StaticRef, dst, name, 0, class));
                 Ok(dst)
@@ -4590,7 +4809,7 @@ impl<'src> Compiler<'src> {
         }
         if dynamic {
             let callee = self.expr(f, func)?;
-            let (base, argc) = self.args_by_value(f, args)?;
+            let (base, argc) = self.value_args(f, args, callee)?;
             f.emit(Instr::CallValue { dst: base, callee, base, argc });
             let _ = (span, hint, mark);
             return Ok(base);

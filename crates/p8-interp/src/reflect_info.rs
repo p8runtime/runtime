@@ -1,7 +1,7 @@
 //! The engine's side of reflection (Ctx::function_info, invoke,
 //! closure_of): declarations of user code and of builtins (their stubs).
 
-use crate::callable::closure_data;
+use crate::callable::{ClosureFunc, closure_data};
 use crate::classes::{Code, MethodFrame};
 use crate::{Closure, Context};
 use p8_runtime::array::{Key, PhpArray};
@@ -20,12 +20,25 @@ fn stub_type(mask: u32, classes: &'static [&'static str]) -> Option<TypeDecl> {
         return None;
     }
     let names: Vec<p8_runtime::frozen::Text> = classes.iter().map(|c| p8_runtime::frozen::Text::from(*c)).collect();
-    Some(TypeDecl { mask, classes: names.clone(), written: names, intersection: false })
+    Some(TypeDecl::new(mask, names.clone(), names, false))
 }
 
 impl Context<'_> {
     /// ReflectionFunctionAbstract::getStaticVariables: a closure's `use`
     /// values, then the `static` variables in the order they are declared.
+    /// A closure's `use` variables by name, their values now.
+    pub(crate) fn used_variables_of(&self, callee: &Callee) -> PhpArray {
+        let mut out = PhpArray::new();
+        let Callee::Closure(o) = callee else { return out };
+        let Some(data) = closure_data(o) else { return out };
+        let Some(clo) = data.func.user() else { return out };
+        let code = &clo.code;
+        for (r, v) in code.bound.iter().zip(data.captured.borrow().iter()) {
+            out.insert(Key::from_string(PhpStr::from(code.cv_names[usize::from(*r)].as_bytes())), v.clone());
+        }
+        out
+    }
+
     pub(crate) fn static_variables_of(&self, callee: &Callee) -> PhpArray {
         let mut out = PhpArray::new();
         let (clo, captured) = match callee {
@@ -44,9 +57,9 @@ impl Context<'_> {
                 _ => return out,
             },
             Callee::Closure(o) => match closure_data(o) {
-                Some(data) => match &data.func {
-                    Ok(clo) => (Rc::clone(clo), data.captured.borrow().clone()),
-                    Err(_) => return out,
+                Some(data) => match data.func.user() {
+                    Some(clo) => (Rc::clone(clo), data.captured.borrow().clone()),
+                    None => return out,
                 },
                 None => return out,
             },
@@ -95,6 +108,7 @@ impl Context<'_> {
                     optional: p.has_default || p.variadic,
                     default: p.default.as_ref().map(|d| d.to_value()),
                     default_text: None,
+                    default_const: p.default_const.as_ref().map(|c| PhpStr::from(c.as_bytes())),
                     ty: p.ty.clone(),
                     promoted: p.promoted,
                 })
@@ -110,6 +124,7 @@ impl Context<'_> {
             is_generator: code.is_generator,
             closure_this: None,
             closure_scope: None,
+            closure_called: None,
         }
     }
 
@@ -130,6 +145,7 @@ impl Context<'_> {
                             optional: p.optional(),
                             default: p.default.and_then(|d| self.stub_default(d)),
                             default_text: p.default,
+                            default_const: p.default.filter(|d| stub_default_is_constant(d)).map(PhpStr::from),
                             ty: stub_type(p.mask, p.classes),
                             promoted: false,
                         })
@@ -147,6 +163,7 @@ impl Context<'_> {
             is_generator: false,
             closure_this: None,
             closure_scope: None,
+            closure_called: None,
         }
     }
 
@@ -157,7 +174,7 @@ impl Context<'_> {
                 if let Some(&i) = self.functions.get(&lower) {
                     return Some(self.user_info(&Rc::clone(&self.closures[i as usize]), None));
                 }
-                let i = self.isolate.registry.lookup(&lower)?;
+                let i = self.builtin(&lower)?;
                 let b = self.isolate.registry.function(i);
                 Some(self.stub_info(b.name, PhpStr::from(b.name), None))
             }
@@ -179,15 +196,22 @@ impl Context<'_> {
             Callee::Closure(o) => {
                 let data = closure_data(o)?;
                 let mut info = match &data.func {
-                    Ok(clo) => self.user_info(clo, None),
-                    Err(i) => {
+                    ClosureFunc::User(clo) => self.user_info(clo, None),
+                    ClosureFunc::Builtin(i) => {
                         let b = self.isolate.registry.function(*i);
                         self.stub_info(b.name, PhpStr::from(b.name), None)
+                    }
+                    ClosureFunc::Method(_, name) => {
+                        let class = data.scope.as_ref().map_or_else(PhpStr::empty, |c| c.name.clone());
+                        let method = name.as_bytes().rsplit(|&b| b == b':').next().unwrap_or_default();
+                        let stub = format!("{}::{}", String::from_utf8_lossy(class.as_bytes()), String::from_utf8_lossy(method));
+                        self.stub_info(&stub, PhpStr::from(method), data.scope.clone())
                     }
                 };
                 info.is_closure = true;
                 info.closure_this = data.this.clone();
                 info.closure_scope = data.scope.clone();
+                info.closure_called = data.called.clone().or_else(|| data.this.as_ref().map(|t| Rc::clone(&t.class))).or_else(|| data.scope.clone());
                 Some(info)
             }
         }
@@ -272,4 +296,13 @@ impl Context<'_> {
             }
         }
     }
+}
+
+/// Whether a stub's default is a constant's name (`STR_PAD_RIGHT`,
+/// `PHP_ROUND_HALF_UP`, `DateTimeInterface::ATOM`).
+fn stub_default_is_constant(d: &str) -> bool {
+    let first = d.bytes().next().unwrap_or(b'0');
+    (first.is_ascii_alphabetic() || first == b'_' || first == b'\\')
+        && d.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'\\' | b':'))
+        && !matches!(d.to_ascii_lowercase().as_str(), "true" | "false" | "null")
 }

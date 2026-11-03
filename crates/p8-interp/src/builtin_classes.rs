@@ -10,7 +10,7 @@ use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::object::{CLASS_INTERFACE, Class, Method, Native, NativeMethod, Object, Property, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::collections::HashMap;
+use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 
 pub(crate) type Classes = HashMap<Vec<u8>, Rc<Class>>;
@@ -29,6 +29,7 @@ fn declare(
     let parent = parent.map(|p| Rc::clone(&classes[p.to_ascii_lowercase().as_bytes()]));
     let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
     let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
+    let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
     let mut all_interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
     let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
     // Constants are inherited from the parent and the interfaces, as for
@@ -55,7 +56,7 @@ fn declare(
             None => props.push(p),
         }
     }
-    let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
     for (i, p) in props.iter().enumerate() {
         slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
     }
@@ -85,11 +86,12 @@ fn declare(
         slots,
         methods: table,
         constants,
-        statics: HashMap::new(),
+        statics: HashMap::default(),
         debug_info: None,
         get_properties: inherited_props,
         cast_bool: inherited_bool,
         cast_string: inherited_string,
+        cast_int: inherited_int,
         clone_data: inherited_clone,
         forward_calls: inherited_forward,
         make_data: None,
@@ -111,9 +113,11 @@ fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty:
         name: PhpStr::from(name),
         default,
         visibility,
+        set_visibility: None,
         declaring: declaring.to_ascii_lowercase().into_bytes(),
         declaring_name: PhpStr::from(declaring),
         readonly: false,
+        is_final: false,
         ty_decl: None,
         init: None,
         hooks: 0,
@@ -150,7 +154,7 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
 ];
 
 pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
-    let mut c = Classes::new();
+    let mut c = Classes::default();
     // #[AllowDynamicProperties], which its subclasses inherit.
     declare(&mut c, "stdClass", p8_runtime::object::CLASS_ALLOW_DYNAMIC, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);

@@ -11,7 +11,7 @@ use crate::dom::build;
 use crate::dom::tree::Doc;
 use crate::parser::XmlError;
 pub(crate) use schema::Schema;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const FROM_SCHEMASP: i32 = 16;
 pub(crate) const FROM_IO: i32 = 8;
@@ -35,9 +35,12 @@ pub(crate) fn compile(data: Vec<u8>, file: Option<String>) -> Result<Schema, Vec
         return Err(errors);
     }
     let mut compiler = schema::Compiler::new();
+    // A schemaLocation is a URI reference, resolved against the schema
+    // that names it (one read from memory has no base): a file: URI or
+    // a path loads, percent-escapes decoded; other schemes do not.
     let mut loader = |location: &str, base: &str| -> Option<(Doc, String)> {
-        let dir: PathBuf = if base == IN_MEMORY { PathBuf::new() } else { Path::new(base).parent().map(Path::to_path_buf).unwrap_or_default() };
-        let path = dir.join(location);
+        let url = if base == IN_MEMORY { location.to_string() } else { crate::uri::resolve(location, base) };
+        let path = PathBuf::from(crate::uri::local_path(&url)?);
         let data = std::fs::read(&path).ok()?;
         let full = std::path::absolute(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string_lossy().into_owned());
         let mut sub = Doc::new(b"DOMDocument".to_vec());

@@ -245,9 +245,21 @@ fn fgetcsv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let fmt = Format::from_args(ctx, "fgetcsv", args, 2)?;
     let r = resource(&o).expect("a stream resource");
     let limit = (len > 0).then(|| len as usize + 1);
-    let Some(first) = r.stream.borrow_mut().gets(limit) else { return Ok(Value::Bool(false)) };
-    let mut more = || r.stream.borrow_mut().gets(None);
-    Ok(record(parse(first, &mut more, &fmt)))
+    // A user-space wrapper's code reaching for its own stream finds it busy.
+    let Ok(mut s) = r.stream.try_borrow_mut() else { return Ok(Value::Bool(false)) };
+    let Some(first) = s.gets_in(ctx, limit)? else { return Ok(Value::Bool(false)) };
+    // A line more for a quoted field going on; what a wrapper throws
+    // ends the record and goes on up.
+    let mut thrown = None;
+    let mut more = || s.gets_in(ctx, None).unwrap_or_else(|t| {
+        thrown.get_or_insert(t);
+        None
+    });
+    let fields = record(parse(first, &mut more, &fmt));
+    match thrown {
+        Some(t) => Err(t),
+        None => Ok(fields),
+    }
 }
 
 /// One CSV line for `fields`, as fputcsv writes it.
@@ -302,7 +314,6 @@ fn fputcsv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !diags.is_empty() {
         ctx.warn("Array to string conversion");
     }
-    let r = resource(&o).expect("a stream resource");
-    let written = r.stream.borrow_mut().write(ctx, &bytes);
+    let written = crate::file::with_user(ctx, &o, None, |ctx, s| s.write(ctx, &bytes))?;
     Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
 }

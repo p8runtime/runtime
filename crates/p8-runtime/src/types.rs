@@ -17,6 +17,9 @@ pub use p8_stubs::{T_ARRAY, T_BOOL, T_CALLABLE, T_FALSE, T_FLOAT, T_INT, T_MIXED
 pub struct TypeDecl {
     pub mask: u32,
     pub classes: Vec<Text>,
+    /// `classes` lowercased, as checks compare them (zend_compile_typename
+    /// lowercases the names in a function's arg_info once, at compile time).
+    pub lower: Vec<Text>,
     /// The class names as written (`self` stays `self`), for messages.
     pub written: Vec<Text>,
     /// `A&B`: the classes all apply (else any one does).
@@ -33,6 +36,11 @@ pub enum Verdict {
 }
 
 impl TypeDecl {
+    pub fn new(mask: u32, classes: Vec<Text>, written: Vec<Text>, intersection: bool) -> TypeDecl {
+        let lower = classes.iter().map(|c| Text::from(c.as_bytes().to_ascii_lowercase().as_slice())).collect();
+        TypeDecl { mask, classes, lower, written, intersection }
+    }
+
     /// As PHP prints it for a property (`self` as written).
     pub fn shown(&self) -> String {
         self.render(&self.written)
@@ -53,6 +61,26 @@ impl TypeDecl {
         p8_stubs::type_to_string(self.mask, &refs)
     }
 
+    /// Whether `v` is plainly of this type, needing no conversion and no
+    /// class hierarchy: its kind's bit is set, or an object is of a named
+    /// class itself (ZEND_TYPE_CONTAINS_CODE, before zend_check_type_slow).
+    /// False only means the full check (`verify`) decides.
+    #[inline]
+    pub fn quick(&self, v: &Value) -> bool {
+        let bit = match v {
+            Value::Null => T_NULL,
+            Value::Bool(true) => T_BOOL | T_TRUE,
+            Value::Bool(false) => T_BOOL | T_FALSE,
+            Value::Int(_) => T_INT,
+            Value::Float(_) => T_FLOAT,
+            Value::Str(_) => T_STRING,
+            Value::Array(_) => T_ARRAY,
+            Value::Object(o) => return self.mask & (T_OBJECT | T_MIXED) != 0 || (!self.intersection && self.lower.iter().any(|c| c.as_bytes() == o.class.lower.as_slice())),
+            Value::Undef | Value::Ref(_) => return false,
+        };
+        self.mask & (bit | T_MIXED) != 0
+    }
+
     /// Check `v`. `is_a(o, class)`: whether object `o` is an instance of
     /// a class this type names (the caller resolves self/parent/static).
     pub fn verify(&self, v: &Value, strict: bool, is_a: &dyn Fn(&Object, &[u8]) -> bool, static_ok: &dyn Fn(&Object) -> bool) -> Verdict {
@@ -71,8 +99,8 @@ impl TypeDecl {
                 self.mask & T_OBJECT != 0
                     || self.mask & T_STATIC != 0 && static_ok(o)
                     || !self.classes.is_empty() && {
-                        let hit = |c: &Text| is_a(o, &c.as_bytes().to_ascii_lowercase());
-                        if self.intersection { self.classes.iter().all(hit) } else { self.classes.iter().any(hit) }
+                        let hit = |c: &Text| is_a(o, c.as_bytes());
+                        if self.intersection { self.lower.iter().all(hit) } else { self.lower.iter().any(hit) }
                     }
             }
             Value::Ref(_) => false,

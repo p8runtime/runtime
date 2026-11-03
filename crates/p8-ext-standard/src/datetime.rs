@@ -8,7 +8,7 @@
 //!
 //! Reference: $PHP_SRC_PATH/ext/date/php_date.c, $PHP_SRC_PATH/ext/date/lib/interval.c
 
-use crate::dates::{Zone, civil, default_zone, format, resolve_zone};
+use crate::dates::{Zone, civil, default_zone, format, resolve_moment, resolve_zone};
 use crate::{arg, str_arg};
 use chrono::{Datelike, Timelike};
 use chrono_tz::Tz;
@@ -166,6 +166,32 @@ pub static CLASSES: &[ClassSpec] = &[
     ClassSpec { name: "DateMalformedStringException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
     ClassSpec { name: "DateInvalidTimeZoneException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
     ClassSpec { name: "DateMalformedIntervalStringException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
+    ClassSpec { name: "DateMalformedPeriodStringException", parent: Some("DateException"), interfaces: &[], flags: 0, properties: &[], methods: &[], constants: &[], debug_info: None },
+    ClassSpec {
+        name: "DatePeriod",
+        parent: None,
+        interfaces: &["IteratorAggregate"],
+        flags: 0,
+        properties: &[
+            ("start", Constant::Null, Visibility::Public),
+            ("current", Constant::Null, Visibility::Public),
+            ("end", Constant::Null, Visibility::Public),
+            ("interval", Constant::Null, Visibility::Public),
+            ("recurrences", Constant::Int(1), Visibility::Public),
+            ("include_start_date", Constant::Bool(true), Visibility::Public),
+            ("include_end_date", Constant::Bool(false), Visibility::Public),
+        ],
+        methods: &[
+            ("__construct", Some(Native::Method(period_construct))),
+            ("getStartDate", Some(Native::Method(period_start))),
+            ("getEndDate", Some(Native::Method(period_end))),
+            ("getDateInterval", Some(Native::Method(period_interval))),
+            ("getRecurrences", Some(Native::Method(period_recurrences))),
+            ("getIterator", Some(Native::Method(period_iterator))),
+        ],
+        constants: &[("EXCLUDE_START_DATE", Constant::Int(1)), ("INCLUDE_END_DATE", Constant::Int(2))],
+        debug_info: None,
+    },
 ];
 
 pub static BUILTINS: &[Builtin] = &[
@@ -193,6 +219,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "timezone_open", run: timezone_open, by_ref: &[] },
     Builtin { name: "timezone_name_get", run: timezone_name_get, by_ref: &[] },
     Builtin { name: "timezone_identifiers_list", run: list_identifiers, by_ref: &[] },
+    Builtin { name: "timezone_version_get", run: timezone_version_get, by_ref: &[] },
 ];
 
 /// A DateTime's moment: the instant, microseconds, and its zone (PHP's
@@ -429,13 +456,18 @@ fn set_timezone(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
 fn modify(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let text = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
     let s = state(this);
-    let Some(mut new) = parse_state(&text, s.ts, s.ztype, &s.zone) else {
+    let moment = resolve_moment(&text, s.ts, zone_of(&s));
+    let Some(mut new) = parse_state(&text, s.ts, s.ztype, &s.zone).filter(|_| moment.is_some()) else {
         return Err(ctx.throw(
             "DateMalformedStringException",
             format!("{}::modify(): Failed to parse time string ({text}) at position 0 ({})", class_name(this), text.chars().next().unwrap_or(' ')),
         ));
     };
-    new.us = s.us;
+    // A time of day drops the old microseconds; "+N usec" moves them.
+    let moment = moment.expect("parsed above");
+    let us = if moment.time_set { 0 } else { s.us } + moment.us;
+    new.ts += us.div_euclid(1_000_000);
+    new.us = us.rem_euclid(1_000_000);
     let o = target(ctx, this);
     put(&o, &new);
     Ok(Value::Object(o))
@@ -500,6 +532,8 @@ fn shift(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], dir: i64) -> Resu
     let mut s = state(&o);
     let p = parts(&s);
     let d = interval(&iv);
+    let sign = if read(&iv, "invert").to_int() != 0 { -1 } else { 1 };
+    let us = s.us + dir * sign * (read(&iv, "f").to_float() * 1e6).round() as i64;
     // Whole days counted by diff() ("days") move by days.
     let days = read(&iv, "days");
     if let Value::Int(total) = days
@@ -507,7 +541,9 @@ fn shift(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], dir: i64) -> Resu
     {
         let _ = total;
     }
-    set_parts(&mut s, (p.0 + dir * d[0], p.1 + dir * d[1], p.2 + dir * d[2], p.3 + dir * d[3], p.4 + dir * d[4], p.5 + dir * d[5]));
+    let carry = us.div_euclid(1_000_000);
+    set_parts(&mut s, (p.0 + dir * d[0], p.1 + dir * d[1], p.2 + dir * d[2], p.3 + dir * d[3], p.4 + dir * d[4], p.5 + dir * d[5] + carry));
+    s.us = us.rem_euclid(1_000_000);
     put(&o, &s);
     Ok(Value::Object(o))
 }
@@ -521,13 +557,13 @@ fn sub(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value
 }
 
 /// A new DateInterval with these parts.
-fn new_interval(ctx: &mut dyn Ctx, p: [i64; 6], invert: bool, days: Value) -> Value {
+fn new_interval(ctx: &mut dyn Ctx, p: [i64; 6], f: f64, invert: bool, days: Value) -> Value {
     let Some(class) = ctx.class(b"DateInterval") else { return Value::Null };
     let o = ctx.new_object(&class);
     for (k, v) in ["y", "m", "d", "h", "i", "s"].iter().zip(p) {
         write(&o, k, Value::Int(v));
     }
-    write(&o, "f", Value::Float(0.0));
+    write(&o, "f", Value::Float(f));
     write(&o, "invert", Value::Int(i64::from(invert)));
     write(&o, "days", days);
     Value::Object(o)
@@ -540,7 +576,7 @@ fn diff(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Valu
     let absolute = args.len() > 1 && arg(args, 1).to_bool();
     let a = state(this);
     let mut b = state(&other);
-    let invert = b.ts < a.ts;
+    let invert = (b.ts, b.us) < (a.ts, a.us);
     // Both seen in the first one's zone.
     b.ztype = a.ztype;
     b.zone = a.zone.clone();
@@ -549,6 +585,11 @@ fn diff(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Valu
     let (y2, m2, d2, h2, i2, s2) = parts(&to);
     let _ = (&mut y1, &mut m1, &mut d1, &mut h1, &mut i1, &mut s1);
     let mut p = [y2 - y1, m2 - m1, d2 - d1, h2 - h1, i2 - i1, s2 - s1];
+    let mut us = to.us - from.us;
+    if us < 0 {
+        us += 1_000_000;
+        p[5] -= 1;
+    }
     if p[5] < 0 {
         p[5] += 60;
         p[4] -= 1;
@@ -577,11 +618,11 @@ fn diff(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Valu
         (Some(t), Some(f)) => {
             let whole = (t - f).num_days();
             // Not a whole day yet when the time of day is earlier.
-            if (h2, i2, s2) < (h1, i1, s1) { whole - 1 } else { whole }
+            if (h2, i2, s2, to.us) < (h1, i1, s1, from.us) { whole - 1 } else { whole }
         }
         _ => 0,
     };
-    Ok(new_interval(ctx, p, invert && !absolute, Value::Int(total)))
+    Ok(new_interval(ctx, p, us as f64 / 1e6, invert && !absolute, Value::Int(total)))
 }
 
 fn get_last_errors(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
@@ -744,6 +785,7 @@ fn from_format(ctx: &mut dyn Ctx, class: &Rc<p8_runtime::object::Class>, args: &
     }
     if let Some(ts) = stamp {
         s.ts = ts;
+        s.us = us;
         s.ztype = 1;
         s.zone = "+00:00".into();
     } else {
@@ -964,6 +1006,15 @@ fn zone_offset(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
 /// chrono-tz cannot tell them from the "backward" aliases it also has.
 const CANONICAL_ZONES: &str = include_str!("tz_canonical.txt");
 
+/// timezone_version_get(): the version of the built-in time zone database,
+/// as PHP's builtin one names it (IANA's 2025b is 2025.2).
+fn timezone_version_get(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let iana = chrono_tz::IANA_TZDB_VERSION;
+    let (year, letter) = iana.split_at(iana.len() - 1);
+    let n = letter.bytes().next().map_or(0, |b| b.wrapping_sub(b'a') + 1);
+    Ok(Value::str(format!("{year}.{n}")))
+}
+
 /// DateTimeZone::listIdentifiers($timezoneGroup = ALL): the canonical
 /// zones in the groups (DateTimeZone::AFRICA | ...); ALL_WITH_BC adds the
 /// aliases.
@@ -1086,6 +1137,7 @@ fn interval_from_string(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
         return Err(ctx.throw("DateMalformedIntervalStringException", format!("Unknown or bad format ({text})")));
     };
     let mut p = [0i64; 6];
+    let mut us = 0i64;
     let words: Vec<&str> = text.split_whitespace().collect();
     let mut k = 0;
     while k + 1 < words.len() {
@@ -1100,6 +1152,8 @@ fn interval_from_string(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
                 "hour" => p[3] += n,
                 "minute" | "min" => p[4] += n,
                 "second" | "sec" => p[5] += n,
+                "millisecond" | "msec" | "m" => us += 1000 * n,
+                "microsecond" | "usec" | "µ" | "µsec" => us += n,
                 _ => {}
             }
             k += 2;
@@ -1108,7 +1162,7 @@ fn interval_from_string(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
         }
     }
     let _ = after;
-    let v = new_interval(ctx, p, false, Value::Bool(false));
+    let v = new_interval(ctx, p, us as f64 / 1e6, false, Value::Bool(false));
     if let Value::Object(o) = &v {
         write(o, "from_string", Value::Bool(true));
     }
@@ -1243,4 +1297,118 @@ fn timezone_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 
 fn timezone_name_get(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     with_object(ctx, args, zone_name)
+}
+
+// ---- DatePeriod ----
+
+/// A copy of an object (a DateTime or DateInterval): its class, its slots.
+fn copy_object(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Rc<Object> {
+    let copy = ctx.new_object(&o.class);
+    *copy.slots.borrow_mut() = o.slots.borrow().clone();
+    copy
+}
+
+fn copy_value(ctx: &mut dyn Ctx, v: Value) -> Value {
+    match v {
+        Value::Object(o) => Value::Object(copy_object(ctx, &o)),
+        v => v,
+    }
+}
+
+/// DatePeriod::__construct(DateTimeInterface $start, DateInterval $interval,
+/// int|DateTimeInterface $end_or_recurrences, int $options = 0).
+fn period_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    let (Value::Object(start), Value::Object(interval)) = (arg(args, 0), arg(args, 1)) else {
+        return Err(ctx.throw("Error", "p8 cannot construct a DatePeriod from an ISO 8601 string yet".into()));
+    };
+    let options = arg(args, 3).to_int();
+    let include_start = options & 1 == 0;
+    let include_end = options & 2 != 0;
+    let (end, recurrences) = match arg(args, 2) {
+        Value::Object(e) => (Value::Object(copy_object(ctx, &e)), 1),
+        v => {
+            let r = v.to_int();
+            if !(1..2147483640).contains(&r) {
+                return Err(ctx.throw(
+                    "DateMalformedPeriodStringException",
+                    "DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640".into(),
+                ));
+            }
+            (Value::Null, r + i64::from(include_start))
+        }
+    };
+    let start = Value::Object(copy_object(ctx, &start));
+    let interval = Value::Object(copy_object(ctx, &interval));
+    write(this, "start", start);
+    write(this, "current", Value::Null);
+    write(this, "end", end);
+    write(this, "interval", interval);
+    write(this, "recurrences", Value::Int(recurrences));
+    write(this, "include_start_date", Value::Bool(include_start));
+    write(this, "include_end_date", Value::Bool(include_end));
+    Ok(Value::Null)
+}
+
+fn period_start(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(copy_value(ctx, read(this, "start")))
+}
+
+fn period_end(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(copy_value(ctx, read(this, "end")))
+}
+
+fn period_interval(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(copy_value(ctx, read(this, "interval")))
+}
+
+/// The recurrences asked for; null for a period with an end date.
+fn period_recurrences(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    if !matches!(read(this, "end"), Value::Null) {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Int(read(this, "recurrences").to_int() - i64::from(read(this, "include_start_date").to_bool())))
+}
+
+/// The dates: from the start (or one interval on), an interval apart, up
+/// to the end (or through it) or for the recurrences.
+fn period_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    // A bound for a period that never reaches its end (a zero interval).
+    const MOST: usize = 1 << 20;
+    let Value::Object(start) = read(this, "start") else { return crate::weak::internal_iterator(ctx, Vec::new()) };
+    let interval = read(this, "interval");
+    let end = match read(this, "end") {
+        Value::Object(e) => Some(state(&e)),
+        _ => None,
+    };
+    let include_start = read(this, "include_start_date").to_bool();
+    let include_end = read(this, "include_end_date").to_bool();
+    let count = read(this, "recurrences").to_int().max(0) as usize;
+    let step = |ctx: &mut dyn Ctx, d: &Rc<Object>| -> Result<Rc<Object>, Throw> {
+        // A copy moved on (shift() makes its own for an immutable date).
+        let copy = copy_object(ctx, d);
+        Ok(match shift(ctx, &copy, std::slice::from_ref(&interval), 1)? {
+            Value::Object(next) => next,
+            _ => copy,
+        })
+    };
+    let mut d = copy_object(ctx, &start);
+    if !include_start {
+        d = step(ctx, &d)?;
+    }
+    let mut items = Vec::new();
+    loop {
+        let at = state(&d);
+        let more = match &end {
+            Some(e) if include_end => (at.ts, at.us) <= (e.ts, e.us),
+            Some(e) => (at.ts, at.us) < (e.ts, e.us),
+            None => items.len() < count,
+        };
+        if !more || items.len() >= MOST {
+            break;
+        }
+        let next = step(ctx, &d)?;
+        items.push((Value::Int(items.len() as i64), Value::Object(d)));
+        d = next;
+    }
+    crate::weak::internal_iterator(ctx, items)
 }

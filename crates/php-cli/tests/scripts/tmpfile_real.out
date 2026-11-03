@@ -1,0 +1,9 @@
+bool(true)
+bool(true)
+string(5) "hello"
+string(9) "plainfile"
+string(5) "STDIO"
+string(3) "r+b"
+string(5) "hello"
+bool(false)
+bool(false)

@@ -1,0 +1,91 @@
+-- writes
+open log://one w
+write 8192
+write 8192
+write 3616
+int(20000)
+int(0)
+write 3
+int(3)
+int(20003)
+flush
+close log://one
+destruct log://one
+after unset
+-- reads
+open log://one r
+read 8192 -> 5000
+int(10)
+read 8192 -> 5000
+int(9000)
+int(9010)
+read 8192 -> 5000
+read 8192 -> 5000
+read 8192 -> 3
+int(10993)
+seek 20103 0
+tell
+int(0)
+int(20103)
+seek 15000 0
+tell
+int(0)
+
+Warning: stream_get_contents(): Log::stream_stat is not implemented! in %s on line 51
+read 8192 -> 5000
+read 8192 -> 3
+read 8192 -> 0
+int(5003)
+bool(true)
+int(8192)
+seek 0 0
+tell
+bool(true)
+read 8192 -> 5000
+int(1000)
+close log://one
+destruct log://one
+bool(true)
+-- options
+open log://two r+
+set_option 1 0 NULL
+bool(true)
+set_option 4 5 10
+bool(false)
+set_option 3 0 8192
+int(0)
+set_option 3 2 4096
+int(0)
+set_option 2 0 8192
+int(0)
+write 5
+int(5)
+flush
+bool(true)
+write 5
+int(5)
+flush
+close log://two
+destruct log://two
+-- copy between wrappers
+open log://three w+
+write 12
+seek 0 0
+tell
+read 8192 -> 12
+read 8192 -> 0
+int(12)
+string(12) "line1
+line2
+"
+flush
+close log://three
+destruct log://three
+-- left open
+open log://four w
+write 3
+END
+OBJECT DESTRUCT
+DESTRUCT LOG://FOUR
+flush
+close log://four

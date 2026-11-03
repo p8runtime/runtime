@@ -9,17 +9,75 @@ mod mime_types;
 mod server;
 mod status_phrases;
 
+/// The extensions php2 loads (`server`: with what the built-in web server
+/// adds). A WASI build has no sockets, so it is a PHP built without
+/// mysqli, curl, pdo_mysql, sockets and pdo_pgsql: they are not loaded.
+fn extensions(server: bool) -> Vec<p8::Extension> {
+    use p8::extensions::*;
+    let mut all = vec![STANDARD];
+    if server {
+        all.push(SERVER);
+    }
+    all.extend([
+        XML,
+        TOKENIZER,
+        MBSTRING,
+        PCRE,
+        #[cfg(not(target_os = "wasi"))]
+        MYSQLI,
+        #[cfg(not(target_os = "wasi"))]
+        CURL,
+        GD,
+        ZIP,
+        FILEINFO,
+        SESSION,
+        PDO,
+        PDO_SQLITE,
+        #[cfg(not(target_os = "wasi"))]
+        PDO_MYSQL,
+        #[cfg(not(target_os = "wasi"))]
+        SOCKETS,
+        OPENSSL,
+        INTL,
+        #[cfg(not(target_os = "wasi"))]
+        PDO_PGSQL,
+    ]);
+    all
+}
+
+/// Run `f` with a native stack deep enough for deep PHP recursion: on a
+/// thread with a 64 MiB stack. WASI has no threads; there the binary's
+/// own stack is that size (see build.rs).
+#[cfg(not(target_os = "wasi"))]
+fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
+    std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(f).expect("interpreter thread").join().unwrap_or(255)
+}
+
+/// Run `f` with a native stack deep enough for deep PHP recursion: WASI
+/// has no threads, so the binary's own stack is 64 MiB (see build.rs).
+#[cfg(target_os = "wasi")]
+fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
+    f()
+}
+
 fn main() {
-    let Some(Cli { dump, lint, path, code, ini, args, serve, docroot, quiet }) = Cli::parse(std::env::args().skip(1)) else {
+    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, quiet, version }) = Cli::parse(std::env::args().skip(1)) else {
         eprintln!(
-            "usage: php2 [--dump] [-l] [-d name=value]... [-f] <file> [--] [args...]\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]"
+            "usage: php2 [--dump] [-l] [-d name=value]... [-f] <file> [--] [args...]\n       php2 -v   (p8's version)\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)"
         );
         std::process::exit(64);
     };
+    if version {
+        println!("p8 {} (cli), compatible with PHP {}", p8::P8_VERSION, p8::PHP_VERSION);
+        return;
+    }
     // php -S: the built-in web server (the file, if any, is its router).
     if let Some(address) = serve {
         let config = server::Config { address, docroot, router: path, quiet, ini };
-        let status = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || server::run(config)).expect("server thread").join().unwrap_or(255);
+        let status = on_deep_stack(move || match stdio {
+            Some(client) => server::run_stdio(config, client),
+            None => server::run(config),
+        });
         std::process::exit(status);
     }
     // The script: a file, -r's code, or what stdin gives (as php names them).
@@ -39,10 +97,10 @@ fn main() {
         },
     };
     let named = path == STDIN_NAME || path == "Command line code";
-    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::XML, p8::extensions::TOKENIZER, p8::extensions::MBSTRING, p8::extensions::PCRE, p8::extensions::MYSQLI, p8::extensions::CURL, p8::extensions::GD, p8::extensions::ZIP, p8::extensions::FILEINFO, p8::extensions::SESSION, p8::extensions::PDO, p8::extensions::PDO_SQLITE])
+    let platform = p8::Platform::new(&extensions(false))
         // A file included again (a template part per post) is not compiled again.
         .keep_compiled();
-    let file = if named { path.clone() } else { std::fs::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };
+    let file = if named { path.clone() } else { p8::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };
     // -l: compile only, as `php -l` checks a file's syntax.
     if lint {
         match platform.compile(&source, &path) {
@@ -65,38 +123,35 @@ fn main() {
         }
         return;
     }
-    // Deep PHP recursion needs a deep native stack: run on a thread with one.
-    let status = std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn(move || {
-            let mut isolate = platform.new_isolate();
-            // max_execution_time (0, the CLI's default: none): a watchdog
-            // ends the run with PHP's fatal error once it has run that long.
-            // (set_time_limit() calls are not followed yet.)
-            let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u64>().ok()).unwrap_or(0);
-            if limit > 0 {
-                let handle = isolate.interrupt_handle();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(limit));
-                    handle.timeout(limit);
-                });
-            }
-            let mut stdout = Stdout(std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()));
-            let mut context = isolate.new_context(&mut stdout);
-            for (name, value) in &ini {
-                context.set_ini(name, value);
-            }
-            // $argv[0]: the file, or php's name for stdin (-r's too).
-            let argv0 = if named { STDIN_NAME.to_string() } else { path.clone() };
-            context.set_args(std::iter::once(argv0).chain(args).collect());
-            match platform.compile(&source, &file) {
-                Ok(script) => context.run(&script),
-                Err(error) => context.fail(&error),
-            }
-        })
-        .expect("interpreter thread")
-        .join()
-        .unwrap_or(255);
+    // Deep PHP recursion needs a deep native stack.
+    let status = on_deep_stack(move || {
+        let mut isolate = platform.new_isolate();
+        // max_execution_time (0, the CLI's default: none): a watchdog
+        // ends the run with PHP's fatal error once it has run that long.
+        // (set_time_limit() calls are not followed yet.) Where there are
+        // no threads (WASI) there is no watchdog: the limit is not kept,
+        // as in a PHP built without timers.
+        let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u64>().ok()).unwrap_or(0);
+        if limit > 0 {
+            let handle = isolate.interrupt_handle();
+            let _ = std::thread::Builder::new().spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(limit));
+                handle.timeout(limit);
+            });
+        }
+        let mut stdout = Stdout(std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()));
+        let mut context = isolate.new_context(&mut stdout);
+        for (name, value) in &ini {
+            context.set_ini(name, value);
+        }
+        // $argv[0]: the file, or php's name for stdin (-r's too).
+        let argv0 = if named { STDIN_NAME.to_string() } else { path.clone() };
+        context.set_args(std::iter::once(argv0).chain(args).collect());
+        match platform.compile(&source, &file) {
+            Ok(script) => context.run(&script),
+            Err(error) => context.fail(&error),
+        }
+    });
     std::process::exit(status);
 }
 
@@ -116,10 +171,16 @@ struct Cli {
     args: Vec<String>,
     /// -S: serve web requests on this address.
     serve: Option<String>,
+    /// --stdio (with -S): serve one request read from stdin, from this
+    /// client address, the response on stdout (a host without sockets,
+    /// such as WASI, hands the request over that way).
+    stdio: Option<String>,
     /// -t: the document root of -S.
     docroot: Option<String>,
     /// -q: how many times (a quieter -S log).
     quiet: u8,
+    /// -v / --version: say which p8 this is and run nothing.
+    version: bool,
 }
 
 impl Cli {
@@ -132,8 +193,9 @@ impl Cli {
             let (name, value) = text.split_once('=').unwrap_or((text, "1"));
             ini.push((name.trim().to_string(), value.trim().trim_matches('"').to_string()));
         };
-        let (mut serve, mut docroot, mut quiet) = (None, None, 0);
+        let (mut serve, mut stdio, mut docroot, mut quiet) = (None, None, None, 0);
         let (mut path, mut code, mut dashes) = (None, None, false);
+        let mut version = false;
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 // The script's own arguments follow (its code is on stdin
@@ -142,12 +204,14 @@ impl Cli {
                     dashes = true;
                     break;
                 }
+                "-v" | "--version" => version = true,
                 "--dump" => dump = true,
                 "-l" => lint = true,
                 "-r" => code = Some(args.next()?),
                 "-f" => path = Some(args.next()?),
                 "-d" => setting(&args.next()?),
                 "-S" => serve = Some(args.next()?),
+                "--stdio" => stdio = Some(args.next()?),
                 "-t" => docroot = Some(args.next()?),
                 "-q" => quiet += 1,
                 // No php.ini is read anyway.
@@ -163,7 +227,11 @@ impl Cli {
         if path.is_none() && code.is_none() && !dashes {
             path = args.next();
         }
-        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, docroot, quiet })
+        // --stdio is a way to serve; without -S it means nothing.
+        if stdio.is_some() && serve.is_none() {
+            return None;
+        }
+        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, quiet, version })
     }
 }
 
@@ -223,5 +291,25 @@ mod tests {
         assert!(code.code.as_deref() == Some("echo 1;") && code.path.is_none() && code.args == ["z"]);
         let f = Cli::parse(["-f", "t.php", "--", "a"].iter().map(|a| a.to_string())).expect("parsed");
         assert!(f.path == t() && f.args == ["a"]);
+    }
+
+    /// -S with --stdio: one request over stdin and stdout, from a client.
+    #[test]
+    fn version_flag() {
+        assert!(Cli::parse(["-v"].iter().map(|a| a.to_string())).expect("parsed").version);
+        assert!(Cli::parse(["--version"].iter().map(|a| a.to_string())).expect("parsed").version);
+        assert!(!Cli::parse(["t.php"].iter().map(|a| a.to_string())).expect("parsed").version);
+    }
+
+    #[test]
+    fn takes_a_request_over_stdio() {
+        let cli = Cli::parse(["-S", "localhost:5173", "--stdio", "127.0.0.1:50000", "-t", "/site", "-q", "router.php"].iter().map(|a| a.to_string())).expect("parsed");
+        assert_eq!(cli.serve.as_deref(), Some("localhost:5173"));
+        assert_eq!(cli.stdio.as_deref(), Some("127.0.0.1:50000"));
+        assert_eq!(cli.docroot.as_deref(), Some("/site"));
+        assert_eq!(cli.path.as_deref(), Some("router.php"));
+        // Without -S, or without the client, it is a usage error.
+        assert!(Cli::parse(["--stdio", "127.0.0.1:1", "t.php"].iter().map(|a| a.to_string())).is_none());
+        assert!(Cli::parse(["-S", "localhost:1", "--stdio"].iter().map(|a| a.to_string())).is_none());
     }
 }

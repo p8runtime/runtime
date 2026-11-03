@@ -803,7 +803,7 @@ fn forward_to_inner(o: &Object) -> Option<Rc<Object>> {
     inner(o)
 }
 
-pub const DUAL_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks { forward_calls: Some(forward_to_inner), get_properties: None, cast_bool: None, cast_string: None, clone_data: None };
+pub const DUAL_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks { forward_calls: Some(forward_to_inner), get_properties: None, cast_bool: None, cast_string: None, cast_int: None, clone_data: None };
 
 /// RecursiveIteratorIterator's (spl_recursive_it_get_method): to the
 /// iterator at the current level.
@@ -814,7 +814,7 @@ fn forward_to_level(o: &Object) -> Option<Rc<Object>> {
     }
 }
 
-pub const RECURSIVE_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks { forward_calls: Some(forward_to_level), get_properties: None, cast_bool: None, cast_string: None, clone_data: None };
+pub const RECURSIVE_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks { forward_calls: Some(forward_to_level), get_properties: None, cast_bool: None, cast_string: None, cast_int: None, clone_data: None };
 
 // ---------------------------------------------------------------------------
 // RegexIterator: accepts what the regex matches; its mode makes the current

@@ -1,0 +1,20 @@
+enum(L::Debug)
+int(5)
+int(10)
+enum(L::Info)
+enum(L::Debug)
+array(5) {
+  ["Debug"]=>
+  enum(L::Debug)
+  ["Info"]=>
+  enum(L::Info)
+  ["X"]=>
+  int(5)
+  ["Y"]=>
+  int(10)
+  ["Z"]=>
+  enum(L::Info)
+}
+enum(L::Info)
+int(8)
+bool(true)

@@ -1,0 +1,37 @@
+bool(true)
+bool(true)
+bool(true)
+PDO::PGSQL_ATTR_DISABLE_PREPARES = 1000
+PDO::PGSQL_TRANSACTION_IDLE = 0
+PDO::PGSQL_TRANSACTION_ACTIVE = 1
+PDO::PGSQL_TRANSACTION_INTRANS = 2
+PDO::PGSQL_TRANSACTION_INERROR = 3
+PDO::PGSQL_TRANSACTION_UNKNOWN = 4
+Pdo\Pgsql extends PDO
+Pdo\Pgsql::ATTR_DISABLE_PREPARES = 1000
+Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE = 1001
+Pdo\Pgsql::TRANSACTION_IDLE = 0
+Pdo\Pgsql::TRANSACTION_ACTIVE = 1
+Pdo\Pgsql::TRANSACTION_INTRANS = 2
+Pdo\Pgsql::TRANSACTION_INERROR = 3
+Pdo\Pgsql::TRANSACTION_UNKNOWN = 4
+escapeIdentifier
+copyFromArray
+copyFromFile
+copyToArray
+copyToFile
+lobCreate
+lobOpen
+lobUnlink
+getNotify
+getPid
+setNoticeCallback
+bool(true)
+bool(true)
+array(2) {
+  [1000]=>
+  bool(true)
+  [20]=>
+  bool(false)
+}
+Error: Pdo\Pgsql object is uninitialized

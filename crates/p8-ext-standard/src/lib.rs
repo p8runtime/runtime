@@ -39,6 +39,7 @@ pub use head::{cookie_date, header_line};
 mod misc;
 mod net;
 mod password;
+mod phpinfo;
 pub(crate) mod printf;
 mod proc;
 mod process;
@@ -92,11 +93,26 @@ pub const EXTENSION: Extension = Extension { name: "standard", register };
 /// The PHP release p8 reports (PHP_VERSION).
 pub const PHP_VERSION: &str = "8.4.27";
 
+/// p8's own version (P8_VERSION, php2 -v, X-Powered-By, phpinfo()): the
+/// release p8 is built as, from Cargo.
+pub const P8_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// X-Powered-By's value: PHP's product token, then p8's (as `Server:` names
+/// more than one), so what matches `PHP/%s` still does.
+pub fn powered_by() -> String {
+    format!("PHP/{PHP_VERSION} p8/{P8_VERSION}")
+}
+
+/// Whether this is a debug build (ZEND_DEBUG): PHP_DEBUG, ZEND_DEBUG_BUILD
+/// and phpinfo()'s "Debug Build" all report it.
+pub const DEBUG_BUILD: bool = cfg!(debug_assertions);
+
 /// The constants examples/gen_defaults.php leaves out because they describe
 /// the build and the host rather than PHP: here, p8's own. The version is
 /// the release whose php-src suite p8 is measured against.
 const HOST_CONSTANTS: &[(&str, Constant)] = &[
     ("PHP_VERSION", Constant::Str(PHP_VERSION.as_bytes())),
+    ("P8_VERSION", Constant::Str(P8_VERSION.as_bytes())),
     ("PHP_VERSION_ID", Constant::Int(80427)),
     ("PHP_MAJOR_VERSION", Constant::Int(8)),
     ("PHP_MINOR_VERSION", Constant::Int(4)),
@@ -112,9 +128,9 @@ const HOST_CONSTANTS: &[(&str, Constant)] = &[
     ("PHP_FD_SETSIZE", Constant::Int(1024)),
     ("PHP_SHLIB_SUFFIX", Constant::Str(b"so")),
     ("PHP_ZTS", Constant::Bool(false)),
-    ("PHP_DEBUG", Constant::Bool(false)),
+    ("PHP_DEBUG", Constant::Bool(DEBUG_BUILD)),
     ("ZEND_THREAD_SAFE", Constant::Bool(false)),
-    ("ZEND_DEBUG_BUILD", Constant::Bool(false)),
+    ("ZEND_DEBUG_BUILD", Constant::Bool(DEBUG_BUILD)),
 ];
 
 fn register(registry: &mut Registry) {
@@ -142,7 +158,11 @@ fn register(registry: &mut Registry) {
         registry.add_module(module);
     }
     registry.add_functions(file::BUILTINS);
+    // The streams a user-space wrapper opened that are still open close
+    // when the request ends (stream_close), as PHP frees its resources.
+    registry.add_request_end(p8_runtime::user_stream::close_open);
     registry.add_functions(proc::BUILTINS);
+    registry.mark_reenters(file::REENTER);
     registry.add_functions(json::BUILTINS);
     registry.add_functions(hash::BUILTINS);
     registry.add_classes(hash::CLASSES);
@@ -172,6 +192,8 @@ fn register(registry: &mut Registry) {
     registry.add_functions(math::BUILTINS);
     registry.add_functions(head::BUILTINS);
     registry.add_functions(misc::BUILTINS);
+    registry.add_functions(phpinfo::BUILTINS);
+    registry.mark_reenters(phpinfo::REENTER);
     registry.add_functions(password::BUILTINS);
     registry.add_functions(context::BUILTINS);
     registry.add_functions(process::BUILTINS);
@@ -197,8 +219,9 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(&["ob_end_clean", "ob_end_flush", "ob_clean", "ob_flush", "ob_get_clean", "ob_get_flush"]);
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
-    registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
-    for (_, name, value, _) in defaults::CONSTANTS {
+    registry.mark_reenters(class::REENTER);
+    registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
+    for (module, name, value, _) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
             defaults::ConstValue::Float(bits) => Constant::Float(f64::from_bits(*bits)),
@@ -206,7 +229,7 @@ fn register(registry: &mut Registry) {
             defaults::ConstValue::Bool(b) => Constant::Bool(*b),
             defaults::ConstValue::Null => Constant::Null,
         };
-        registry.add_constant(name, value);
+        registry.add_constant_in(module, name, value);
     }
 }
 

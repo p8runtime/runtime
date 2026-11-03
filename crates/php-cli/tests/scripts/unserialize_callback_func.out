@@ -1,0 +1,53 @@
+autoload Gone
+autoload Gone
+array(2) {
+  [0]=>
+  object(__PHP_Incomplete_Class)#2 (1) {
+    ["__PHP_Incomplete_Class_Name"]=>
+    string(4) "Gone"
+  }
+  [1]=>
+  object(__PHP_Incomplete_Class)#3 (1) {
+    ["__PHP_Incomplete_Class_Name"]=>
+    string(4) "Gone"
+  }
+}
+autoload FromCb
+callback FromCb
+object(FromCb)#3 (1) {
+  ["v"]=>
+  int(3)
+}
+autoload Still
+callback Still
+autoload Still
+
+Warning: unserialize(): Function cb() hasn't defined the class it was called for in %s on line 16
+string(22) "__PHP_Incomplete_Class"
+autoload Absent
+Error: Invalid callback nosuchfunc, function "nosuchfunc" not found or invalid function name
+autoload Boom
+RuntimeException: no Boom
+autoload Suit
+enum(Suit::Hearts)
+autoload Nope
+
+Warning: unserialize(): Class 'Nope' not found in %s on line 22
+
+Warning: unserialize(): Error at offset 0 of 16 bytes in %s on line 22
+bool(false)
+
+Warning: unserialize(): Suit::X is not an enum case in %s on line 23
+
+Warning: unserialize(): Error at offset 13 of 13 bytes in %s on line 23
+bool(false)
+
+Warning: unserialize(): Undefined constant Suit::Y in %s on line 24
+
+Warning: unserialize(): Error at offset 13 of 13 bytes in %s on line 24
+bool(false)
+
+Warning: unserialize(): Class 'stdClass' is not an enum in %s on line 25
+
+Warning: unserialize(): Error at offset 0 of 25 bytes in %s on line 25
+bool(false)
