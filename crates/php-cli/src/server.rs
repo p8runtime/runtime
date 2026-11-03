@@ -886,7 +886,7 @@ impl Server<'_> {
         }
         let mut head = Conn::status_line(req.protocol, status).into_bytes();
         head.extend_from_slice(&conn.essential(false));
-        head.extend_from_slice(format!("X-Powered-By: PHP/{}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\n", p8::PHP_VERSION, body.len()).as_bytes());
+        head.extend_from_slice(format!("X-Powered-By: {}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\n", p8::powered_by(), body.len()).as_bytes());
         if status == 405 {
             head.extend_from_slice(b"Allow: GET, HEAD, POST\r\n");
         }

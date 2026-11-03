@@ -136,6 +136,8 @@ fn general(ctx: &mut dyn Ctx) {
     ctx.echo(b"\n");
     row(ctx, &[b"System", uname('a').as_bytes()]);
     row(ctx, &[b"Build Date", build_date().as_bytes()]);
+    // The engine this build is (PHP's own layout above stays as it is).
+    row(ctx, &[b"p8 Version", crate::P8_VERSION.as_bytes()]);
     let server = if ctx.response().server { "Built-in HTTP server" } else { "Command Line Interface" };
     row(ctx, &[b"Server API", server.as_bytes()]);
     let rows: [(&str, &str); 19] = [

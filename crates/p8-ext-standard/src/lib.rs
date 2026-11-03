@@ -93,6 +93,16 @@ pub const EXTENSION: Extension = Extension { name: "standard", register };
 /// The PHP release p8 reports (PHP_VERSION).
 pub const PHP_VERSION: &str = "8.4.27";
 
+/// p8's own version (P8_VERSION, php2 -v, X-Powered-By, phpinfo()): the
+/// release p8 is built as, from Cargo.
+pub const P8_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// X-Powered-By's value: PHP's product token, then p8's (as `Server:` names
+/// more than one), so what matches `PHP/%s` still does.
+pub fn powered_by() -> String {
+    format!("PHP/{PHP_VERSION} p8/{P8_VERSION}")
+}
+
 /// Whether this is a debug build (ZEND_DEBUG): PHP_DEBUG, ZEND_DEBUG_BUILD
 /// and phpinfo()'s "Debug Build" all report it.
 pub const DEBUG_BUILD: bool = cfg!(debug_assertions);
@@ -102,6 +112,7 @@ pub const DEBUG_BUILD: bool = cfg!(debug_assertions);
 /// the release whose php-src suite p8 is measured against.
 const HOST_CONSTANTS: &[(&str, Constant)] = &[
     ("PHP_VERSION", Constant::Str(PHP_VERSION.as_bytes())),
+    ("P8_VERSION", Constant::Str(P8_VERSION.as_bytes())),
     ("PHP_VERSION_ID", Constant::Int(80427)),
     ("PHP_MAJOR_VERSION", Constant::Int(8)),
     ("PHP_MINOR_VERSION", Constant::Int(4)),

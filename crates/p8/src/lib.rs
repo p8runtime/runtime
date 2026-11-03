@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 mod request;
 
 pub use p8_interp::{Host, InterruptHandle};
-pub use p8_ext_standard::PHP_VERSION;
+pub use p8_ext_standard::{P8_VERSION, PHP_VERSION, powered_by};
 pub use p8_runtime::ext::Response;
 pub use p8_runtime::ext::Extension;
 /// realpath(3) as p8 resolves a script's path (WASI has none; p8 walks the
@@ -354,13 +354,9 @@ impl Context<'_> {
         let uploaded: Vec<Value> = self.uploads.iter().map(|p| Value::Str(PhpStr::from(p.to_string_lossy().as_ref()))).collect();
         self.inner.set_state("rfc1867_uploaded_files", Value::Array(Rc::new(PhpArray::from_list(uploaded))));
 
-        let version = match Ctx::constant(&self.inner, b"PHP_VERSION") {
-            Some(Value::Str(s)) => s.as_bytes().to_vec(),
-            _ => b"8".to_vec(),
-        };
         let mut headers = Vec::new();
         if ini(&self.inner, "expose_php").is_none_or(|v| ini_bool(&v)) {
-            headers.push([b"X-Powered-By: PHP/".as_slice(), &version].concat());
+            headers.push(format!("X-Powered-By: {}", powered_by()).into_bytes());
         }
         // The CLI server's proto_num is 101 for HTTP/1.1, never > 1000, so
         // a redirect is never 303.

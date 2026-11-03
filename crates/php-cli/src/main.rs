@@ -61,12 +61,16 @@ fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 }
 
 fn main() {
-    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, quiet }) = Cli::parse(std::env::args().skip(1)) else {
+    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, quiet, version }) = Cli::parse(std::env::args().skip(1)) else {
         eprintln!(
-            "usage: php2 [--dump] [-l] [-d name=value]... [-f] <file> [--] [args...]\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)"
+            "usage: php2 [--dump] [-l] [-d name=value]... [-f] <file> [--] [args...]\n       php2 -v   (p8's version)\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)"
         );
         std::process::exit(64);
     };
+    if version {
+        println!("p8 {} (cli), compatible with PHP {}", p8::P8_VERSION, p8::PHP_VERSION);
+        return;
+    }
     // php -S: the built-in web server (the file, if any, is its router).
     if let Some(address) = serve {
         let config = server::Config { address, docroot, router: path, quiet, ini };
@@ -175,6 +179,8 @@ struct Cli {
     docroot: Option<String>,
     /// -q: how many times (a quieter -S log).
     quiet: u8,
+    /// -v / --version: say which p8 this is and run nothing.
+    version: bool,
 }
 
 impl Cli {
@@ -189,6 +195,7 @@ impl Cli {
         };
         let (mut serve, mut stdio, mut docroot, mut quiet) = (None, None, None, 0);
         let (mut path, mut code, mut dashes) = (None, None, false);
+        let mut version = false;
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 // The script's own arguments follow (its code is on stdin
@@ -197,6 +204,7 @@ impl Cli {
                     dashes = true;
                     break;
                 }
+                "-v" | "--version" => version = true,
                 "--dump" => dump = true,
                 "-l" => lint = true,
                 "-r" => code = Some(args.next()?),
@@ -223,7 +231,7 @@ impl Cli {
         if stdio.is_some() && serve.is_none() {
             return None;
         }
-        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, quiet })
+        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, quiet, version })
     }
 }
 
@@ -286,6 +294,13 @@ mod tests {
     }
 
     /// -S with --stdio: one request over stdin and stdout, from a client.
+    #[test]
+    fn version_flag() {
+        assert!(Cli::parse(["-v"].iter().map(|a| a.to_string())).expect("parsed").version);
+        assert!(Cli::parse(["--version"].iter().map(|a| a.to_string())).expect("parsed").version);
+        assert!(!Cli::parse(["t.php"].iter().map(|a| a.to_string())).expect("parsed").version);
+    }
+
     #[test]
     fn takes_a_request_over_stdio() {
         let cli = Cli::parse(["-S", "localhost:5173", "--stdio", "127.0.0.1:50000", "-t", "/site", "-q", "router.php"].iter().map(|a| a.to_string())).expect("parsed");
