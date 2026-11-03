@@ -1307,12 +1307,21 @@ impl Context<'_> {
         }
         match class.constants.get(name.as_bytes()) {
             Some(c) => {
-                let declaring = self.classes.get(&c.declaring_name.as_bytes().to_ascii_lowercase()).cloned().unwrap_or_else(|| Rc::clone(&class));
-                if !visible(c.visibility, &declaring, self.scope().0.as_deref()) {
-                    return Err(self.throw(
-                        "Error",
-                        format!("Cannot access {} constant {}::{}", c.visibility.word(), text(&class.name), text(&name)),
-                    ));
+                // Only a private or protected constant needs its declaring
+                // class (zend_verify_const_access); the class itself when it
+                // declared it, else looked up by name.
+                if c.visibility != Visibility::Public {
+                    let declaring = if c.declaring_name == class.name {
+                        Rc::clone(&class)
+                    } else {
+                        self.classes.get(&c.declaring_name.as_bytes().to_ascii_lowercase()).cloned().unwrap_or_else(|| Rc::clone(&class))
+                    };
+                    if !visible(c.visibility, &declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
+                        return Err(self.throw(
+                            "Error",
+                            format!("Cannot access {} constant {}::{}", c.visibility.word(), text(&class.name), text(&name)),
+                        ));
+                    }
                 }
                 if c.is_case {
                     return Ok(Value::Object(self.enum_case(&class, name.as_bytes())));
