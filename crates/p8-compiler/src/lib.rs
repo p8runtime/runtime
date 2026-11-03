@@ -48,7 +48,7 @@ enum ConstKey {
     Bool(bool),
     Int(i64),
     Float(u64),
-    Str(Vec<u8>),
+    Str(Text),
 }
 
 /// A function's body: statements, or an arrow function's expression.
@@ -278,13 +278,20 @@ impl FnBuilder<'_> {
     }
 
     fn cv(&mut self, name: &[u8]) -> Reg {
-        let next = self.cvs.len();
-        let index = *self.cvs.entry(name.to_vec()).or_insert(next);
+        // The name is copied only for a variable not seen before.
+        let index = match self.cvs.get(name) {
+            Some(&i) => i,
+            None => {
+                let next = self.cvs.len();
+                self.cvs.insert(name.to_vec(), next);
+                next
+            }
+        };
         let r = reg(CV, index);
         // In a function, a superglobal is the global table's variable at
         // each use (`unset($GLOBALS['_GET'])` then `$_GET = …` makes it
         // again, where a binding made once would keep the old one).
-        if self.auto_globals && SUPERGLOBALS.iter().any(|g| g.as_bytes() == name) {
+        if self.auto_globals && name.first() == Some(&b'_') && SUPERGLOBALS.iter().any(|g| g.as_bytes() == name) {
             let n = self.constant(Frozen::Str(Text::from(name)));
             self.emit(Instr::rare(Rare::AutoGlobal, r, n, 0, 0));
         }
@@ -297,7 +304,7 @@ impl FnBuilder<'_> {
             Frozen::Bool(b) => ConstKey::Bool(*b),
             Frozen::Int(i) => ConstKey::Int(*i),
             Frozen::Float(f) => ConstKey::Float(f.to_bits()),
-            Frozen::Str(s) => ConstKey::Str(s.as_bytes().to_vec()),
+            Frozen::Str(s) => ConstKey::Str(s.clone()),
             // Arrays are not shared between constant registers.
             Frozen::Array(_) => {
                 self.consts.push(value);
@@ -3291,7 +3298,7 @@ impl<'src> Compiler<'src> {
                 Number::Float(x) => Frozen::Float(x),
             },
             Expr::Float { value, .. } => Frozen::Float(literal::float(value)),
-            Expr::String { value, .. } => Frozen::Str(Text::from(literal::string(value))),
+            Expr::String { value, .. } => Frozen::Str(Text::from(&*literal::string(value))),
             Expr::Boolean { value, .. } => Frozen::Bool(*value),
             Expr::Null { .. } => Frozen::Null,
             _ => return None,
@@ -4854,8 +4861,7 @@ impl<'src> Compiler<'src> {
             None => 0,
         };
         let all: Vec<Reg> = (0..args.len() + extra).map(|_| f.temp()).collect();
-        let regs: Vec<Reg> = all[..args.len()].to_vec();
-        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+        for (n, (arg, r)) in args.iter().zip(&all[..args.len()]).enumerate() {
             if arg.unpack || arg.name.is_some() {
                 return Err(self.unsupported(arg.span, "spread or named arguments"));
             }
