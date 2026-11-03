@@ -1068,8 +1068,16 @@ impl<'src> Compiler<'src> {
         if text.contains(&b'\\') {
             return (self.class_name(text), None);
         }
-        let alias = if lower_alias { text.to_ascii_lowercase() } else { text.to_vec() };
-        if let Some(full) = imports.get(&alias) {
+        // The import named so, if any (lowercased for function aliases;
+        // copied only when there are imports and the name has capitals).
+        let imported = if imports.is_empty() {
+            None
+        } else if lower_alias && text.iter().any(u8::is_ascii_uppercase) {
+            imports.get(&text.to_ascii_lowercase())
+        } else {
+            imports.get(text)
+        };
+        if let Some(full) = imported {
             return (full.clone(), None);
         }
         if self.ns.is_empty() {
