@@ -2674,11 +2674,11 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::MagicConst { kind: MagicConstKind::File | MagicConstKind::Dir | MagicConstKind::Line | MagicConstKind::Namespace, .. } => true,
             Expr::Binary { left, op: BinaryOp::Concat, right, .. } => self.foldable(left) && self.foldable(right),
-            Expr::Unary { op: UnaryOp::Minus | UnaryOp::Plus, expr, .. } => self.literal(expr).is_some(),
+            Expr::Unary { op: UnaryOp::Minus | UnaryOp::Plus, expr, .. } => is_literal(expr),
             Expr::Array { items, .. } => items.iter().all(|i| {
-                !i.unpack && !i.by_ref && i.key.is_none_or(|k| matches!(self.literal(k), Some(v) if !matches!(v, Frozen::Float(_)))) && self.foldable(i.value)
+                !i.unpack && !i.by_ref && i.key.is_none_or(|k| is_literal(k) && !float_key(k)) && self.foldable(i.value)
             }),
-            other => self.literal(other).is_some(),
+            other => is_literal(other),
         }
     }
 
@@ -4970,4 +4970,19 @@ fn assign_binop(op: AssignOp) -> Option<BinOp> {
         AssignOp::Pow => BinOp::Pow,
         AssignOp::Coalesce => return None,
     })
+}
+
+/// Whether `e` is a literal (what Compiler::literal makes a constant of),
+/// without making it: a string literal's value is a copy.
+fn is_literal(e: &Expr) -> bool {
+    matches!(e, Expr::Integer { .. } | Expr::Float { .. } | Expr::String { .. } | Expr::Boolean { .. } | Expr::Null { .. })
+}
+
+/// Whether literal `e` is a float (an integer literal can overflow to one).
+fn float_key(e: &Expr) -> bool {
+    match e {
+        Expr::Float { .. } => true,
+        Expr::Integer { value, .. } => matches!(literal::integer(value), Number::Float(_)),
+        _ => false,
+    }
 }
