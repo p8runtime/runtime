@@ -4857,7 +4857,10 @@ impl<'src> Compiler<'src> {
             self.registry.lookup(global).map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
-        let site = f.site(false, Text::from(lower.as_slice()), Text::from(text));
+        // One text for both when the name is written in lowercase.
+        let display = Text::from(text);
+        let lower_text = if lower.as_slice() == text { display.clone() } else { Text::from(lower.as_slice()) };
+        let site = f.site(false, lower_text, display);
         if let Some(global) = &fallback {
             f.sites[site as usize].fallback = Some(Text::from(global.as_slice()));
         }
