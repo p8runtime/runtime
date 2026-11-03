@@ -303,8 +303,11 @@ fn microtime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn number_format(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let num = arg(args, 0).to_float();
     let decimals = arg(args, 1).to_int().max(0) as usize;
-    let point = if args.len() > 2 { str_arg(args, 2).as_bytes().to_vec() } else { b".".to_vec() };
-    let sep = if args.len() > 3 { str_arg(args, 3).as_bytes().to_vec() } else { b",".to_vec() };
+    // ?string $decimal_separator = ".", ?string $thousands_separator = ",":
+    // null (or not given) is the default (math.c, PHP_FUNCTION(number_format)).
+    let given = |args: &[Value], i: usize| args.get(i).is_some_and(|v| !matches!(v.deref(), Value::Null));
+    let point = if given(args, 2) { str_arg(args, 2).as_bytes().to_vec() } else { b".".to_vec() };
+    let sep = if given(args, 3) { str_arg(args, 3).as_bytes().to_vec() } else { b",".to_vec() };
     // _php_math_round: round half away from zero at `decimals` places
     let factor = 10f64.powi(decimals as i32);
     let rounded = (num.abs() * factor).round() / factor;
