@@ -73,7 +73,9 @@ pub fn check(sig: &Sig, args: &mut [Value], diags: &mut Diags) -> Result<(), Ref
     }
     for (i, arg) in args.iter_mut().enumerate() {
         let Some(param) = params.get(i).or_else(|| params.last().filter(|p| p.variadic)) else { break };
-        if param.by_ref {
+        // By reference, or plainly of a type the parameter takes: nothing
+        // to check or convert (accepts would say Yes, convert would keep it).
+        if param.by_ref || plainly(param, arg) {
             continue;
         }
         match accepts(param, arg) {
@@ -105,6 +107,26 @@ pub fn check(sig: &Sig, args: &mut [Value], diags: &mut Diags) -> Result<(), Ref
         }
     }
     Ok(())
+}
+
+/// Whether `value` is of a kind `param` takes as it is: untyped or mixed,
+/// or its kind's bit set (objects, references: the full check).
+#[inline]
+fn plainly(param: &Param, value: &Value) -> bool {
+    let mask = param.mask;
+    if mask & T_MIXED != 0 || param.untyped() {
+        return true;
+    }
+    mask & match value {
+        Value::Null => T_NULL,
+        Value::Bool(true) => T_BOOL | T_TRUE,
+        Value::Bool(false) => T_BOOL | T_FALSE,
+        Value::Int(_) => T_INT,
+        Value::Float(_) => T_FLOAT,
+        Value::Str(_) => T_STRING,
+        Value::Array(_) => T_ARRAY,
+        Value::Undef | Value::Ref(_) | Value::Object(_) => 0,
+    } != 0
 }
 
 /// " ($name)" after "Argument #N"; PHP names no variadic argument.
