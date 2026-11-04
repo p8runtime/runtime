@@ -178,6 +178,9 @@ pub struct Isolate {
     /// The ini defaults as strings, made once (ini_get() of a setting
     /// no request changed hands out the same string each time).
     pub(crate) ini_texts: RefCell<HashMap<(usize, usize), PhpStr>>,
+    /// What a declared function's closure slot holds until the function
+    /// is first resolved (sites.rs `Closure::unbuilt`).
+    pub(crate) unbuilt: Rc<Closure>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -202,6 +205,7 @@ impl Isolate {
                 Known { closure: s.intern(b"closure"), generator: s.intern(b"generator"), stdclass: s.intern(b"stdclass"), error: s.intern(b"error"), fiber: s.intern(b"fiber") }
             },
             ini_texts: RefCell::new(HashMap::default()),
+            unbuilt: Closure::unbuilt(&registry),
             registry,
         }
     }
@@ -234,6 +238,7 @@ impl Isolate {
             frames: Frames::default(),
             functions: HashMap::default(),
             closures: Vec::new(),
+            codes: Vec::new(),
             constants: p8_runtime::fast::IndexMap::default(),
             globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
@@ -323,8 +328,12 @@ pub struct Context<'i> {
     /// (only ever grows, so call sites
     /// can cache what they resolve).
     pub(crate) functions: HashMap<Sym, u32>,
-    /// Every closure this context made. Call sites refer to them by index.
+    /// The closure of every declared function and method, by index (call
+    /// sites refer to them so). A slot is the isolate's `unbuilt` stand-in
+    /// until the function is first resolved: `closure_at` makes it then.
     pub(crate) closures: Vec<Rc<Closure>>,
+    /// The compiled code at each index of `closures`, made or not.
+    pub(crate) codes: Vec<Arc<Function>>,
     /// Constants the script defined (define(), const).
     /// The script's own constants, in the order defined, by key
     /// (p8_runtime::ext::const_key): each with its name as defined.

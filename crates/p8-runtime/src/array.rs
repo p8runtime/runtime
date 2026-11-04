@@ -44,7 +44,10 @@ impl Key {
             Value::Null | Value::Undef => (Key::Str(PhpStr::empty()), None),
             Value::Bool(b) => (Key::Int(i64::from(*b)), None),
             Value::Float(f) => {
-                let issue = (f.fract() != 0.0 || !f.is_finite()).then_some(KeyIssue::LosesPrecision(*f));
+                // Not an int as it is: a fraction, NaN/INF, or out of the
+                // int range (zend_dval_to_lval_safe's deprecation).
+                let fits = (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(f);
+                let issue = (f.fract() != 0.0 || !fits).then_some(KeyIssue::LosesPrecision(*f));
                 (Key::Int(dval_to_lval(*f)), issue)
             }
             Value::Array(_) => return Err(KeyIssue::Illegal("array")),

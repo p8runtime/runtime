@@ -116,6 +116,10 @@ struct FnBuilder<'a> {
     /// Temporaries below this stay live across statements (a foreach's iterator).
     floor: usize,
     max_temps: usize,
+    /// Temporaries holding a reference to a global (`$GLOBALS['x']…` as
+    /// a variable): emptied (Free) when they go out of use, so the
+    /// temporary's next value is not written into the global through it.
+    ref_temps: Vec<usize>,
     sites: Vec<Site>,
     site_index: HashMap<(bool, Vec<u8>), u16>,
     loops: Vec<Loop>,
@@ -180,6 +184,7 @@ impl FnBuilder<'_> {
             temps: 0,
             floor: 0,
             max_temps: 0,
+            ref_temps: Vec::new(),
             sites: Vec::new(),
             site_index: HashMap::default(),
             loops: Vec::new(),
@@ -352,6 +357,22 @@ impl FnBuilder<'_> {
         self.temps += 1;
         self.max_temps = self.max_temps.max(self.temps);
         r
+    }
+
+    /// The temporaries from `to` on are out of use: a reference one of
+    /// them holds is dropped now (Free), so whatever is written there next
+    /// lands in the register, not in the referenced variable.
+    fn reset_temps(&mut self, to: usize) {
+        let mut i = 0;
+        while i < self.ref_temps.len() {
+            if self.ref_temps[i] >= to {
+                let t = self.ref_temps.swap_remove(i);
+                self.emit(Instr::Free { reg: reg(TEMP, t) });
+            } else {
+                i += 1;
+            }
+        }
+        self.temps = to;
     }
 
     fn site(&mut self, constant: bool, name: Text, sym: Sym, display: Text) -> u16 {
@@ -1346,7 +1367,7 @@ impl<'src> Compiler<'src> {
     fn stmts<'a>(&mut self, f: &mut FnBuilder<'a>, stmts: &'a [StmtId<'a>]) -> Result<()> {
         for stmt in stmts {
             self.stmt(f, stmt)?;
-            f.temps = f.floor;
+            f.reset_temps(f.floor);
         }
         Ok(())
     }
@@ -1422,7 +1443,7 @@ impl<'src> Compiler<'src> {
             },
             Stmt::If { condition, then_block, else_block, .. } => {
                 let skip = self.branch(f, condition, false)?;
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.stmts(f, then_block)?;
                 match else_block {
                     Some(else_block) => {
@@ -1443,7 +1464,7 @@ impl<'src> Compiler<'src> {
                 f.patch(to_cond, cond_at);
                 let back = self.branch(f, condition, true)?;
                 f.patch_all(back, body_start);
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.close_loop(f, cond_at);
             }
             Stmt::DoWhile { body, condition, .. } => {
@@ -1453,13 +1474,13 @@ impl<'src> Compiler<'src> {
                 let cont = f.here();
                 let back = self.branch(f, condition, true)?;
                 f.patch_all(back, start);
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.close_loop(f, cont);
             }
             Stmt::For { init, condition, loop_expr, body, .. } => {
                 for e in *init {
                     self.discard(f, e)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 // Body first, then the step and the condition at the bottom.
                 let to_cond = f.emit(Instr::Jump { target: 0 });
@@ -1469,7 +1490,7 @@ impl<'src> Compiler<'src> {
                 let cont = f.here();
                 for e in *loop_expr {
                     self.discard(f, e)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 f.patch(to_cond, f.here());
                 match condition.split_last() {
@@ -1484,7 +1505,7 @@ impl<'src> Compiler<'src> {
                         f.patch_all(back, body_start);
                     }
                 }
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.close_loop(f, cont);
             }
             Stmt::Foreach { expr, key_var, value_var, body, .. }
@@ -1543,7 +1564,7 @@ impl<'src> Compiler<'src> {
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, Some((r, &[])))?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
@@ -1599,15 +1620,15 @@ impl<'src> Compiler<'src> {
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 if let Some(t) = value_place {
                     self.assign_from(f, value_var, t)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 if let (Some(k), Some(t)) = (key_var, key_place) {
                     self.assign_from(f, k, t)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, None)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
@@ -1732,13 +1753,13 @@ impl<'src> Compiler<'src> {
                         Some(c) => {
                             let value = self.expr(f, c)?;
                             to_body.push(Some(f.emit(Instr::jump_cmp(Cmp::Eq, subject, value, true, 0))));
-                            f.temps = keep;
+                            f.reset_temps(keep);
                         }
                         None => to_body.push(None),
                     }
                 }
                 let no_match = f.emit(Instr::Jump { target: 0 });
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 f.push_loop();
                 let mut default = None;
                 for (case, jump) in cases.iter().zip(to_body) {
@@ -1747,7 +1768,7 @@ impl<'src> Compiler<'src> {
                         None => default = Some(f.here()),
                     }
                     self.stmts(f, case.body)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 let end = f.here();
                 f.patch(no_match, default.unwrap_or(end));
@@ -1926,7 +1947,7 @@ impl<'src> Compiler<'src> {
                 let cmp = comparison(*op).expect("a comparison");
                 let a = self.expr(f, left)?;
                 let b = self.expr(f, right)?;
-                f.temps = mark;
+                f.reset_temps(mark);
                 Ok(vec![f.emit(Instr::jump_cmp(cmp, a, b, when, 0))])
             }
             Expr::Binary { left, op, right, .. }
@@ -1950,7 +1971,7 @@ impl<'src> Compiler<'src> {
             Expr::Unary { op: UnaryOp::Not, expr, .. } => self.branch(f, expr, !when),
             _ => {
                 let c = self.expr(f, cond)?;
-                f.temps = mark;
+                f.reset_temps(mark);
                 Ok(vec![f.emit(if when { Instr::JumpIf { cond: c, target: 0 } } else { Instr::JumpIfNot { cond: c, target: 0 } })])
             }
         }
@@ -2181,7 +2202,7 @@ impl<'src> Compiler<'src> {
                 let var = reg(CV, i);
                 let value = self.expr(&mut f, default)?;
                 f.emit(Instr::Assign { var, src: value });
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 f.patch(at, f.here());
             }
         }
@@ -2218,7 +2239,7 @@ impl<'src> Compiler<'src> {
             let key = f.name_constant(Frozen::Str(name));
             let dst = f.temp();
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst });
-            f.temps = f.floor;
+            f.reset_temps(f.floor);
         }
         // `use ($a, &$b)`: variables after the parameters, set from the
         // closure's captured values on each call.
@@ -2318,7 +2339,7 @@ impl<'src> Compiler<'src> {
                 // Fetched for writing, its references made below: no warning
                 // when it is not there yet.
                 Expr::Array { items, .. } if root.is_some() && items.iter().any(|i| i.by_ref) => {
-                    f.emit(Instr::FetchDim { dst: elem, arr: src, key, quiet: true });
+                    f.emit(Instr::FetchDim { dst: elem, arr: src, key, quiet: true, empty: false });
                 }
                 _ => {
                     f.emit(Instr::FetchList { dst: elem, arr: src, key });
@@ -3699,6 +3720,8 @@ impl<'src> Compiler<'src> {
         let n = self.expr(f, name)?;
         let dst = f.temp();
         f.emit(Instr::rare(Rare::VarRef, dst, n, 1, 0));
+        // Dropped when the temporary goes out of use (reset_temps).
+        f.ref_temps.push(usize::from(dst & ((1 << KIND_SHIFT) - 1)));
         Ok(dst)
     }
 
@@ -3877,7 +3900,7 @@ impl<'src> Compiler<'src> {
                     {
                         let mark = f.temps;
                         let src = self.expr_to(f, expr, Some(target))?;
-                        f.temps = mark;
+                        f.reset_temps(mark);
                         if src != target {
                             f.emit(Instr::Assign { var: target, src });
                         }
@@ -4172,22 +4195,22 @@ impl<'src> Compiler<'src> {
                 match if_true {
                     Some(t) => {
                         let else_at = self.branch(f, condition, false)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         self.expr_into(f, t, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         let end = f.emit(Instr::Jump { target: 0 });
                         f.patch_all(else_at, f.here());
                         self.expr_into(f, if_false, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         f.patch(end, f.here());
                     }
                     None => {
                         // `a ?: b`
                         self.expr_into(f, condition, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         let end = f.emit(Instr::JumpIf { cond: dst, target: 0 });
                         self.expr_into(f, if_false, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         f.patch(end, f.here());
                     }
                 }
@@ -4248,7 +4271,7 @@ impl<'src> Compiler<'src> {
                 let arr = self.expr(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = out(f, hint, mark);
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: false });
+                f.emit(Instr::FetchDim { dst, arr, key, quiet: false, empty: false });
                 dst
             }
             Expr::InterpolatedString { parts, .. } => {
@@ -4336,19 +4359,19 @@ impl<'src> Compiler<'src> {
                     for c in conditions {
                         let value = self.expr(f, c)?;
                         to_body.push(f.emit(Instr::jump_cmp(Cmp::Identical, subject, value, true, 0)));
-                        f.temps = keep;
+                        f.reset_temps(keep);
                     }
                     let skip = f.emit(Instr::Jump { target: 0 });
                     f.patch_all(to_body, f.here());
                     self.expr_into(f, arm.body, dst)?;
-                    f.temps = keep;
+                    f.reset_temps(keep);
                     ends.push(f.emit(Instr::Jump { target: 0 }));
                     f.patch(skip, f.here());
                 }
                 match default {
                     Some(body) => {
                         self.expr_into(f, body, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                     }
                     None => {
                         f.emit(Instr::MatchError { src: subject });
@@ -4709,7 +4732,18 @@ impl<'src> Compiler<'src> {
             }
             // empty($x): not set, or false when converted.
             Expr::Empty { expr, .. } => {
-                let v = self.quiet(f, expr)?;
+                let v = match expr {
+                    // `empty($c[k])`: the container read quietly, its last
+                    // dimension with isset's key checks (FetchDim's `empty`).
+                    Expr::ArrayDimFetch { array, dim: Some(dim), .. } if self.globals_dim(expr).is_none() => {
+                        let arr = self.quiet(f, array)?;
+                        let key = self.expr(f, dim)?;
+                        let v = f.temp();
+                        f.emit(Instr::FetchDim { dst: v, arr, key, quiet: true, empty: true });
+                        v
+                    }
+                    _ => self.quiet(f, expr)?,
+                };
                 let t = f.temp();
                 f.emit(Instr::LoadNull { dst: t });
                 let set = f.emit(Instr::JumpIfSet { src: v, dst: t, target: 0 });
@@ -4937,7 +4971,7 @@ impl<'src> Compiler<'src> {
                 let arr = self.quiet(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = f.temp();
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: true });
+                f.emit(Instr::FetchDim { dst, arr, key, quiet: true, empty: false });
                 Ok(dst)
             }
             Expr::PropertyFetch { target, property, .. } => {
@@ -5121,7 +5155,7 @@ impl<'src> Compiler<'src> {
 /// those of its operands (`mark` is where they start; every instruction
 /// reads its operands before it writes its result).
 fn out(f: &mut FnBuilder, hint: Option<Reg>, mark: usize) -> Reg {
-    f.temps = mark;
+    f.reset_temps(mark);
     hint.unwrap_or_else(|| f.temp())
 }
 
