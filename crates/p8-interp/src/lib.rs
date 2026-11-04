@@ -195,6 +195,12 @@ impl Context<'_> {
         self.isolate.registry.symbols().find_lower(name.strip_prefix(b"\\").unwrap_or(name))
     }
 
+    /// The symbol of a method name (any case): None when no code ever
+    /// named it (so no class has such a method). Allocates nothing.
+    pub(crate) fn method_key(&self, name: &[u8]) -> Option<Sym> {
+        self.isolate.registry.symbols().find_lower(name)
+    }
+
     /// The symbol of a function or class name being declared (any case,
     /// optional leading `\`).
     pub(crate) fn intern(&self, name: &[u8]) -> Sym {
@@ -1636,7 +1642,7 @@ impl Context<'_> {
                 Instr::SendVarMethod { obj, method, n, arg, var } => {
                     let site = &func.sites[method as usize];
                     let by_ref = match reg!(obj).deref() {
-                        Value::Object(o) => self.method_takes_ref(&o.class, site.name.as_bytes(), n as usize),
+                        Value::Object(o) => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
                         _ => false,
                     };
                     reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
@@ -1644,13 +1650,13 @@ impl Context<'_> {
                 Instr::SendVarStatic { class, method, n, arg, var } => {
                     let site = &func.sites[method as usize];
                     let target = self.class_of(func, class, w)?;
-                    let by_ref = self.method_takes_ref(&target, site.name.as_bytes(), n as usize);
+                    let by_ref = self.method_takes_ref(&target, Some(site.sym), n as usize);
                     reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
                 }
                 Instr::MethodArgByRef { dst, obj, method, n } => {
                     let site = &func.sites[method as usize];
                     reg!(dst) = Value::Bool(match reg!(obj).deref() {
-                        Value::Object(o) => self.method_takes_ref(&o.class, site.name.as_bytes(), n as usize),
+                        Value::Object(o) => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
                         _ => false,
                     });
                 }
@@ -1664,7 +1670,7 @@ impl Context<'_> {
                 Instr::StaticArgByRef { dst, class, method, n } => {
                     let site = &func.sites[method as usize];
                     let target = self.class_of(func, class, w)?;
-                    reg!(dst) = Value::Bool(self.method_takes_ref(&target, site.name.as_bytes(), n as usize));
+                    reg!(dst) = Value::Bool(self.method_takes_ref(&target, Some(site.sym), n as usize));
                 }
                 // Passed (and not a hole a named argument skipped): no default.
                 Instr::ArgDefault { n, target } => {
@@ -2693,7 +2699,7 @@ impl Context<'_> {
                         return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                     }
                     let site = &func.sites[method as usize];
-                    let m = self.method_frame(&target, site.name.as_bytes(), site.display.as_bytes())?;
+                    let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
                     if let Value::Object(o) = &target {
                         self.remember_method(&clo.methods[method as usize], o, &m);
                     }
@@ -2732,7 +2738,7 @@ impl Context<'_> {
                     let m = match self.cached_static(cache, &target, func, class) {
                         Some(m) => m,
                         None => {
-                            let m = self.static_frame(func, class, site.name.as_bytes(), site.display.as_bytes(), w)?;
+                            let m = self.static_frame(func, class, Some(site.sym), site.display.as_bytes(), w)?;
                             self.remember_static(cache, &target, &m);
                             m
                         }
@@ -3155,9 +3161,9 @@ impl Context<'_> {
                     parent: None,
                     interfaces: Vec::new(),
                     properties: Vec::new(),
-                    slots: HashMap::default(),
-                    methods: Default::default(),
-                    constants: p8_runtime::object::Constants::default(),
+                    slots: p8_runtime::object::Slots::new(self.isolate.registry.symbols()),
+                    methods: p8_runtime::object::Methods::new(self.isolate.registry.symbols()),
+                    constants: p8_runtime::object::Constants::new(self.isolate.registry.symbols()),
                     statics: HashMap::default(),
                     debug_info: None,
                     get_properties: None,
@@ -4559,7 +4565,7 @@ impl Ctx for Context<'_> {
             }
             o.destructed.set(true);
             ran = true;
-            let m = self.method_frame(&Value::Object(Rc::clone(o)), b"__destruct", b"__destruct")?;
+            let m = self.method_frame(&Value::Object(Rc::clone(o)), Some(p8_runtime::symbol::known::DESTRUCT), b"__destruct")?;
             let r = if self.fibers.is_empty() {
                 let mut regs = std::mem::take(&mut self.isolate.regs);
                 let r = self.run_nested(&mut regs, m, &mut []).map(|_| ());

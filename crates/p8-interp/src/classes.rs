@@ -15,6 +15,7 @@ use p8_runtime::object::{
     visible,
 };
 use p8_runtime::string::PhpStr;
+use p8_runtime::symbol::{Sym, known};
 use p8_runtime::value::Value;
 use std::cell::RefCell;
 use p8_runtime::fast::HashMap;
@@ -52,10 +53,17 @@ impl MethodFrame {
 /// As PHP's "%s" prints it: up to a NUL (anonymous class names).
 /// Whether a call to method `lower` on `o` finds something to run: the
 /// method, __call, or an inner object it passes calls to that does.
-fn answers(o: &Object, lower: &[u8]) -> bool {
-    o.class.method(lower).is_some()
-        || o.class.method(b"__call").is_some()
-        || o.class.forward_calls.and_then(|f| f(o)).is_some_and(|inner| answers(&inner, lower))
+fn answers(o: &Object, key: Option<Sym>) -> bool {
+    method_of(&o.class, key).is_some()
+        || o.class.method_sym(known::CALL).is_some()
+        || o.class.forward_calls.and_then(|f| f(o)).is_some_and(|inner| answers(&inner, key))
+}
+
+/// The method of `class` named `key` (None: a name no code ever named,
+/// so no class has such a method).
+#[inline]
+pub(crate) fn method_of(class: &Class, key: Option<Sym>) -> Option<&Rc<Method>> {
+    class.methods.get_sym(key?)
 }
 
 fn text(s: &PhpStr) -> String {
@@ -68,8 +76,8 @@ impl Context<'_> {
     /// Whether method `lower` of `class` takes argument `n` by reference
     /// (no: a method it lacks, which __call or an error answers; a builtin
     /// method, when its stub signature says so).
-    pub(crate) fn method_takes_ref(&self, class: &Class, lower: &[u8], n: usize) -> bool {
-        match class.method(lower) {
+    pub(crate) fn method_takes_ref(&self, class: &Class, key: Option<Sym>, n: usize) -> bool {
+        match method_of(class, key) {
             Some(m) if m.native.is_none() && m.func != u32::MAX => self.closures[m.func as usize].code.param_by_ref(n),
             // A builtin's method, or a builtin interface's abstract one (no code).
             Some(m) => {
@@ -202,8 +210,9 @@ impl Context<'_> {
         // declares, overrides or takes from a trait is made new.
         let declaring: Rc<[u8]> = Rc::from(lower.as_slice());
         let mut interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
-        let mut methods: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
-        let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
+        let symbols = Arc::clone(self.isolate.registry.symbols());
+        let mut methods: p8_runtime::object::Methods = parent.as_ref().map_or_else(|| p8_runtime::object::Methods::new(&symbols), |p| p.methods.clone());
+        let mut constants: p8_runtime::object::Constants = parent.as_ref().map_or_else(|| p8_runtime::object::Constants::new(&symbols), |p| p.constants.clone());
         for i in &def.interfaces {
             let iface = self.lookup_class(i)?;
             if iface.flags & CLASS_INTERFACE == 0 {
@@ -219,10 +228,10 @@ impl Context<'_> {
                 }
             }
             for (k, m) in &iface.methods {
-                methods.entry(k.clone()).or_insert_with(|| Rc::clone(m));
+                methods.entry(*k).or_insert_with(|| Rc::clone(m));
             }
             for (k, c) in &iface.constants {
-                constants.entry(k.clone()).or_insert_with(|| Rc::clone(c));
+                constants.entry(*k).or_insert_with(|| Rc::clone(c));
             }
         }
         // Properties: the parent's slots first; an own declaration
@@ -311,23 +320,23 @@ impl Context<'_> {
         }
         // Traits: their methods (the class's own win, then theirs over
         // the parent's), properties, statics and constants, as the class's.
-        let own: Vec<Vec<u8>> = def.methods.iter().map(|m| m.func.name.as_bytes().to_ascii_lowercase()).collect();
-        let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::default();
-        let mut trait_order: Vec<Vec<u8>> = Vec::new();
+        let own: Vec<Sym> = def.methods.iter().map(|m| m.func.sym).collect();
+        let mut from_trait: HashMap<Sym, PhpStr> = HashMap::default();
+        let mut trait_order: Vec<Sym> = Vec::new();
         for tname in &def.traits {
             let t = self.lookup_class(tname)?;
             if t.flags & CLASS_TRAIT == 0 {
                 return Err(self.fatal_at(format!("{name} cannot use {} - it is not a trait", text(&t.name)), def.line));
             }
             let same = |a: &p8_runtime::frozen::Text, b: &[u8]| a.as_bytes().eq_ignore_ascii_case(b);
-            let mut adopt = |c: &mut Self, key: Vec<u8>, m: Method| -> Result<(), Throw> {
+            let mut adopt = |c: &mut Self, key: Sym, m: Method| -> Result<(), Throw> {
                 if own.contains(&key) {
                     return Ok(());
                 }
                 if let Some(other) = from_trait.get(&key) {
                     // The same trait method reached twice (a trait used
                     // directly and through another trait): no collision.
-                    if methods.get(&key).is_some_and(|x| x.native.is_none() && m.native.is_none() && x.func == m.func) {
+                    if methods.get_sym(key).is_some_and(|x| x.native.is_none() && m.native.is_none() && x.func == m.func) {
                         return Ok(());
                     }
                     // An abstract method meets another trait's (abstract or
@@ -335,9 +344,9 @@ impl Context<'_> {
                     if m.is_abstract {
                         return Ok(());
                     }
-                    if methods.get(&key).is_some_and(|x| x.is_abstract) {
-                        from_trait.insert(key.clone(), t.name.clone());
-                        methods.insert(key, Rc::new(m));
+                    if methods.get_sym(key).is_some_and(|x| x.is_abstract) {
+                        from_trait.insert(key, t.name.clone());
+                        methods.insert_sym(key, Rc::new(m));
                         return Ok(());
                     }
                     return Err(c.fatal_at(
@@ -352,12 +361,12 @@ impl Context<'_> {
                         def.line,
                     ));
                 }
-                if m.is_abstract && methods.get(&key).is_some_and(|x| !x.is_abstract) {
+                if m.is_abstract && methods.get_sym(key).is_some_and(|x| !x.is_abstract) {
                     return Ok(());
                 }
-                from_trait.insert(key.clone(), t.name.clone());
-                trait_order.push(key.clone());
-                methods.insert(key, Rc::new(m));
+                from_trait.insert(key, t.name.clone());
+                trait_order.push(key);
+                methods.insert_sym(key, Rc::new(m));
                 Ok(())
             };
             for (key, m) in &t.methods {
@@ -374,7 +383,7 @@ impl Context<'_> {
                     if let Some(v) = def.trait_rules.iter().filter(rule_for).find(|r| r.alias.is_none()).and_then(|r| r.visibility) {
                         plain.visibility = v;
                     }
-                    adopt(self, key.clone(), plain)?;
+                    adopt(self, *key, plain)?;
                 }
                 for r in def.trait_rules.iter().filter(rule_for) {
                     if let Some(alias) = &r.alias {
@@ -383,7 +392,8 @@ impl Context<'_> {
                         if let Some(v) = r.visibility {
                             aliased.visibility = v;
                         }
-                        adopt(self, alias.as_bytes().to_ascii_lowercase(), aliased)?;
+                        let key = self.intern(alias.as_bytes());
+                        adopt(self, key, aliased)?;
                     }
                 }
             }
@@ -407,7 +417,7 @@ impl Context<'_> {
             // A trait's constants are the using class's own (declared by
             // it: its private ones are its to use, and reflection says so).
             for (k, c) in &t.constants {
-                constants.entry(k.clone()).or_insert_with(|| {
+                constants.entry(*k).or_insert_with(|| {
                     let mut c = p8_runtime::object::Constant::clone(c);
                     c.declaring_name = class_name.clone();
                     Rc::new(c)
@@ -415,7 +425,7 @@ impl Context<'_> {
             }
         }
         // A class (or interface) with __toString() implements Stringable.
-        if (methods.contains_key(b"__tostring".as_slice()) || own.iter().any(|m| m == b"__tostring")) && lower.as_slice() != b"stringable" && !interfaces.iter().any(|i| **i == *b"stringable") {
+        if (methods.get_sym(known::TO_STRING).is_some() || own.contains(&known::TO_STRING)) && lower.as_slice() != b"stringable" && !interfaces.iter().any(|i| **i == *b"stringable") {
             interfaces.push(Rc::from(&b"stringable"[..]));
         }
         // An enum: its cases are constants (objects made when first used),
@@ -478,9 +488,10 @@ impl Context<'_> {
                 );
             }
         }
-        let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
+        let mut slots = p8_runtime::object::Slots::new(&symbols);
         for (i, p) in properties.iter().enumerate() {
-            slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
+            let s = slots.intern(p.name.as_bytes());
+            slots.entry(s).or_default().push(i);
         }
         for c in &def.constants {
             constants.insert(
@@ -495,8 +506,8 @@ impl Context<'_> {
             );
         }
         for m in &def.methods {
-            let mlower = m.func.name.as_bytes().to_ascii_lowercase();
-            if let Some(old) = methods.get(&mlower)
+            let mlower = m.func.sym;
+            if let Some(old) = methods.get_sym(mlower)
                 && old.is_final
                 && !old.is_abstract
             {
@@ -506,7 +517,7 @@ impl Context<'_> {
                 ));
             }
             let func = self.add_closure(Arc::clone(&m.func));
-            methods.insert(
+            methods.insert_sym(
                 mlower,
                 Rc::new(Method {
                     name: PhpStr::from(m.func.name.as_bytes()),
@@ -554,16 +565,16 @@ impl Context<'_> {
         // the traits' (get_class_methods, reflection).
         // One pass over the methods, not a removal (which shifts all after
         // it) per own or trait method.
-        let mut ordered = p8_runtime::object::Methods::with_capacity_and_hasher(methods.len(), Default::default());
-        let own_set: p8_runtime::fast::HashSet<&[u8]> = own.iter().map(Vec::as_slice).collect();
-        let trait_set: p8_runtime::fast::HashSet<&[u8]> = trait_order.iter().map(Vec::as_slice).collect();
+        let mut ordered = p8_runtime::object::Methods::with_capacity(&symbols, methods.len());
+        let own_set: p8_runtime::fast::HashSet<Sym> = own.iter().copied().collect();
+        let trait_set: p8_runtime::fast::HashSet<Sym> = trait_order.iter().copied().collect();
         let mut own_methods = p8_runtime::fast::HashMap::default();
         let mut trait_methods = p8_runtime::fast::HashMap::default();
         let mut inherited = Vec::with_capacity(methods.len());
         for (k, m) in methods {
-            if own_set.contains(k.as_slice()) {
+            if own_set.contains(&k) {
                 own_methods.insert(k, m);
-            } else if trait_set.contains(k.as_slice()) {
+            } else if trait_set.contains(&k) {
                 trait_methods.insert(k, m);
             } else {
                 inherited.push((k, m));
@@ -571,18 +582,18 @@ impl Context<'_> {
         }
         for key in &own {
             if let Some(m) = own_methods.remove(key) {
-                ordered.insert(key.clone(), m);
+                ordered.insert_sym(*key, m);
             }
         }
         ordered.extend(inherited);
         for key in &trait_order {
             if let Some(m) = trait_methods.remove(key) {
-                ordered.insert(key.clone(), m);
+                ordered.insert_sym(*key, m);
             }
         }
         let methods = ordered;
         let native_dtor = parent.as_ref().and_then(|p| p.native_dtor);
-        let destructor = if methods.contains_key(b"__destruct".as_slice()) || native_dtor.is_some() { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
+        let destructor = if methods.get_sym(known::DESTRUCT).is_some() || native_dtor.is_some() { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
         let lazy = properties.iter().any(|p| p.init.is_some())
             || !static_inits.is_empty()
             || constants.values().any(|c| c.init.is_some())
@@ -779,13 +790,13 @@ impl Context<'_> {
     /// The class a method's protected access is checked against: the top
     /// of the classes declaring it (zend_get_function_root_class), so two
     /// subclasses of the class that first declared it may call each other's.
-    fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, lower: &[u8]) -> Rc<Class> {
+    fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, key: Option<Sym>) -> Rc<Class> {
         let mut root = Rc::clone(declaring);
         if method.visibility != Visibility::Protected {
             return root;
         }
         while let Some(parent) = root.parent.clone() {
-            match parent.methods.get(lower) {
+            match method_of(&parent, key) {
                 Some(m) if m.visibility != Visibility::Private => root = self.declaring(&parent, &m.declaring),
                 _ => break,
             }
@@ -794,10 +805,10 @@ impl Context<'_> {
     }
 
     /// `$obj->method(args)`: the frame to push.
-    pub(crate) fn method_frame(&mut self, target: &Value, lower: &[u8], display: &[u8]) -> Result<MethodFrame, Throw> {
+    pub(crate) fn method_frame(&mut self, target: &Value, key: Option<Sym>, display: &[u8]) -> Result<MethodFrame, Throw> {
         let object = match target {
             Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.method_frame(&cell.borrow().clone(), lower, display),
+            Value::Ref(cell) => return self.method_frame(&cell.borrow().clone(), key, display),
             other => {
                 return Err(self.throw(
                     "Error",
@@ -806,7 +817,7 @@ impl Context<'_> {
             }
         };
         let class = Rc::clone(&object.class);
-        let Some(method) = class.methods.get(lower).cloned() else {
+        let Some(method) = method_of(&class, key).cloned() else {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
                 return Ok(m);
             }
@@ -814,9 +825,9 @@ impl Context<'_> {
             // when that can take it (else the error names this class).
             if let Some(forward) = class.forward_calls
                 && let Some(inner) = forward(&object)
-                && answers(&inner, lower)
+                && answers(&inner, key)
             {
-                return self.method_frame(&Value::Object(inner), lower, display);
+                return self.method_frame(&Value::Object(inner), key, display);
             }
             return Err(self.throw(
                 "Error",
@@ -828,14 +839,14 @@ impl Context<'_> {
         // of the same name (zend_std_get_method: the subclass's "changed"
         // the private one).
         let method = match self.scope().0 {
-            Some(scope) if *method.declaring != *scope.lower && class.is_a(&scope.lower) => match scope.methods.get(lower) {
+            Some(scope) if *method.declaring != *scope.lower && class.is_a(&scope.lower) => match method_of(&scope, key) {
                 Some(own) if own.visibility == Visibility::Private && *own.declaring == *scope.lower => Rc::clone(own),
                 _ => method,
             },
             _ => method,
         };
         let declaring = self.declaring(&class, &method.declaring);
-        if !visible(method.visibility, &self.access_class(&declaring, &method, lower), self.scope().0.as_deref()) {
+        if !visible(method.visibility, &self.access_class(&declaring, &method, key), self.scope().0.as_deref()) {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
                 return Ok(m);
             }
@@ -855,10 +866,10 @@ impl Context<'_> {
     /// `C::method(args)`: the frame to push. A non-static method gets the
     /// caller's `$this` when it is an instance of C; `self::` and
     /// `parent::` keep the caller's called class.
-    pub(crate) fn static_frame(&mut self, func: &Function, class: u16, lower: &[u8], display: &[u8], w: &[Value]) -> Result<MethodFrame, Throw> {
+    pub(crate) fn static_frame(&mut self, func: &Function, class: u16, key: Option<Sym>, display: &[u8], w: &[Value]) -> Result<MethodFrame, Throw> {
         let target = self.class_of(func, class, w)?;
         // Borrowed from the class: a call must not copy the declaration.
-        let Some(method) = target.method(lower) else {
+        let Some(method) = method_of(&target, key) else {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(m);
             }
@@ -868,7 +879,7 @@ impl Context<'_> {
             ));
         };
         let declaring = self.declaring(&target, &method.declaring);
-        let access = self.access_class(&declaring, method, lower);
+        let access = self.access_class(&declaring, method, key);
         let scope = self.frames.last().and_then(|f| f.scope.as_deref());
         if !visible(method.visibility, &access, scope) {
             if let Some(m) = self.static_magic_call(&target, display) {
@@ -919,8 +930,7 @@ impl Context<'_> {
     /// The __call (or, `is_static`, __callStatic) frame for a call of
     /// `display` on `class`, if it has one.
     pub(crate) fn magic_call(&self, class: &Rc<Class>, this: Option<Rc<Object>>, display: &[u8], is_static: bool) -> Option<MethodFrame> {
-        let name: &[u8] = if is_static { b"__callstatic" } else { b"__call" };
-        let method = class.method(name)?.clone();
+        let method = class.method_sym(if is_static { known::CALL_STATIC } else { known::CALL })?.clone();
         let declaring = self.declaring(class, &method.declaring);
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).unwrap_or_else(|| Rc::clone(class));
         let this = if is_static { None } else { this };
@@ -1525,10 +1535,11 @@ impl Context<'_> {
             self.resolve_class(regs, parent)?;
         }
         // Its constants (PHP computes them all before the first use).
-        let mut pending: Vec<(&Vec<u8>, &Rc<p8_runtime::object::Constant>)> = class.constants.iter().filter(|(_, c)| c.init.is_some()).collect();
-        pending.sort_by(|a, b| a.0.cmp(b.0));
+        let mut pending: Vec<(Vec<u8>, &Rc<p8_runtime::object::Constant>)> =
+            class.constants.iter().filter(|(_, c)| c.init.is_some()).map(|(&k, c)| (class.constants.name(k).to_vec(), c)).collect();
+        pending.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, c) in pending {
-            let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.clone());
+            let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name);
             if !self.const_cache.contains_key(&key) {
                 let scope = self.class_named(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
                 let thunk = c.init.clone().expect("filtered");

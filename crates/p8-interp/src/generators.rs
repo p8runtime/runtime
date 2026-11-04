@@ -423,7 +423,7 @@ impl Context<'_> {
 
     /// Call method `name` of an object with no arguments (Iterator's).
     pub(crate) fn call_named(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, name: &[u8]) -> Result<Value, Throw> {
-        let m = self.method_frame(&Value::Object(Rc::clone(object)), &name.to_ascii_lowercase(), name)?;
+        let m = self.method_frame(&Value::Object(Rc::clone(object)), self.method_key(name), name)?;
         if let Code::Native(native, _) = m.func {
             // Lent the registers: it may call PHP (SplHeap's compare()).
             std::mem::swap(&mut self.isolate.regs, regs);

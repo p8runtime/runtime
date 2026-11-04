@@ -28,10 +28,60 @@ impl Sym {
 
 /// The symbol table: names in, symbols out. `Send + Sync`; reads (the
 /// lookups of names made at run time) take a shared lock, interning a new
-/// name a short exclusive one.
-#[derive(Default)]
+/// name a short exclusive one. The [`known`] names have fixed symbols and
+/// are found without the lock.
 pub struct Symbols {
     table: RwLock<Table>,
+}
+
+/// Names the engine and the builtins look up by themselves (magic
+/// methods, the interfaces' methods), lowercase: each has a fixed symbol,
+/// its index here.
+const KNOWN: &[&[u8]] = &[
+    b"__construct", b"__destruct", b"__call", b"__callstatic", b"__get", b"__set", b"__isset", b"__unset",
+    b"__tostring", b"__invoke", b"__clone", b"__serialize", b"__unserialize", b"__sleep", b"__wakeup",
+    b"__set_state", b"__debuginfo", b"getiterator", b"current", b"key", b"next", b"valid", b"rewind",
+    b"offsetget", b"offsetset", b"offsetexists", b"offsetunset", b"count", b"jsonserialize",
+];
+
+/// The fixed symbols of the names in `KNOWN`.
+pub mod known {
+    use super::Sym;
+    pub const CONSTRUCT: Sym = Sym(0);
+    pub const DESTRUCT: Sym = Sym(1);
+    pub const CALL: Sym = Sym(2);
+    pub const CALL_STATIC: Sym = Sym(3);
+    pub const GET: Sym = Sym(4);
+    pub const SET: Sym = Sym(5);
+    pub const ISSET: Sym = Sym(6);
+    pub const UNSET: Sym = Sym(7);
+    pub const TO_STRING: Sym = Sym(8);
+    pub const INVOKE: Sym = Sym(9);
+    pub const CLONE: Sym = Sym(10);
+}
+
+/// The fixed symbol of a `KNOWN` name (as given: lowercase).
+fn known_sym(name: &[u8]) -> Option<Sym> {
+    if name.len() < 3 || name.len() > 13 {
+        return None;
+    }
+    KNOWN.iter().position(|k| *k == name).map(|i| Sym(i as u32))
+}
+
+impl std::fmt::Debug for Symbols {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Symbols({} names)", self.len())
+    }
+}
+
+impl Default for Symbols {
+    fn default() -> Symbols {
+        let symbols = Symbols { table: RwLock::new(Table::default()) };
+        for name in KNOWN {
+            symbols.intern(name);
+        }
+        symbols
+    }
 }
 
 #[derive(Default)]
@@ -74,6 +124,9 @@ impl Symbols {
 
     /// The symbol of `name` (exactly as given), if it was interned.
     pub fn find(&self, name: &[u8]) -> Option<Sym> {
+        if let Some(s) = known_sym(name) {
+            return Some(s);
+        }
         self.read().index.get(name).copied()
     }
 
@@ -171,7 +224,24 @@ mod tests {
     #[test]
     fn finding_does_not_intern() {
         let symbols = Symbols::default();
+        let known = symbols.len();
         assert_eq!(symbols.find_lower(b"nothing"), None);
-        assert!(symbols.is_empty());
+        assert_eq!(symbols.len(), known);
+    }
+
+    #[test]
+    fn known_names_have_their_fixed_symbols() {
+        let symbols = Symbols::default();
+        for (i, name) in KNOWN.iter().enumerate() {
+            assert_eq!(symbols.find(name), Some(Sym(i as u32)));
+            assert_eq!(&*symbols.name(Sym(i as u32)), *name);
+        }
+        assert_eq!(symbols.find_lower(b"__CONSTRUCT"), Some(known::CONSTRUCT));
+        assert_eq!(symbols.intern_lower(b"__toString"), known::TO_STRING);
+        assert_eq!(symbols.find(b"__callStatic"), None, "find is exact");
+        assert!(KNOWN.iter().all(|k| (3..=13).contains(&k.len())));
+        for (s, name) in [(known::CONSTRUCT, "__construct"), (known::DESTRUCT, "__destruct"), (known::CALL, "__call"), (known::CALL_STATIC, "__callstatic"), (known::GET, "__get"), (known::SET, "__set"), (known::ISSET, "__isset"), (known::UNSET, "__unset"), (known::TO_STRING, "__tostring"), (known::INVOKE, "__invoke"), (known::CLONE, "__clone")] {
+            assert_eq!(KNOWN[s.index()], name.as_bytes());
+        }
     }
 }

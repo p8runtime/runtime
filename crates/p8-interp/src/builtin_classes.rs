@@ -21,7 +21,7 @@ pub(crate) type Table = HashMap<Sym, Rc<Class>>;
 /// A class table being filled, by lowercase name (each interned).
 pub(crate) struct Classes<'a> {
     pub(crate) table: &'a mut Table,
-    pub(crate) symbols: &'a Symbols,
+    pub(crate) symbols: &'a std::sync::Arc<Symbols>,
 }
 
 impl Classes<'_> {
@@ -63,14 +63,14 @@ fn declare(
     let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
     let declaring: Rc<[u8]> = Rc::from(lower.as_slice());
     let mut all_interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
-    let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
+    let mut table: p8_runtime::object::Methods = parent.as_ref().map_or_else(|| p8_runtime::object::Methods::new(classes.symbols), |p| p.methods.clone());
     // Constants are inherited from the parent and the interfaces, as for
     // a user class (RecursiveRegexIterator::GET_MATCH is RegexIterator's).
-    let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
+    let mut constants: p8_runtime::object::Constants = parent.as_ref().map_or_else(|| p8_runtime::object::Constants::new(classes.symbols), |p| p.constants.clone());
     for i in interfaces {
         let iface = &classes[i.to_ascii_lowercase().as_bytes()];
         for (k, c) in &iface.constants {
-            constants.entry(k.clone()).or_insert_with(|| Rc::clone(c));
+            constants.entry(*k).or_insert_with(|| Rc::clone(c));
         }
         if !all_interfaces.iter().any(|x| **x == *iface.lower) {
             all_interfaces.push(Rc::from(iface.lower.as_slice()));
@@ -81,7 +81,7 @@ fn declare(
             }
         }
         for (k, m) in &iface.methods {
-            table.entry(k.clone()).or_insert_with(|| Rc::clone(m));
+            table.entry(*k).or_insert_with(|| Rc::clone(m));
         }
     }
     let mut props: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
@@ -91,9 +91,10 @@ fn declare(
             None => props.push(p),
         }
     }
-    let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
+    let mut slots = p8_runtime::object::Slots::new(classes.symbols);
     for (i, p) in props.iter().enumerate() {
-        slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
+        let s = slots.intern(p.name.as_bytes());
+        slots.entry(s).or_default().push(i);
     }
     for (m, native, is_final) in methods {
         table.insert(

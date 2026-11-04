@@ -17,9 +17,160 @@
 use crate::array::PhpArray;
 use crate::ext::{Ctx, Throw};
 use crate::string::PhpStr;
+use crate::symbol::{Sym, Symbols};
 use crate::value::Value;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
+
+/// A class's members by name ([`Sym`]), in the order they were added:
+/// methods (`FOLD`: names in any case), constants and properties (names
+/// as written). Compiled code looks members up by symbol; a name given as
+/// bytes (a builtin's, a dynamic one) is found through the symbol table
+/// the table holds, without allocating.
+#[derive(Debug, Clone)]
+pub struct Names<V, const FOLD: bool> {
+    map: crate::fast::IndexMap<Sym, V>,
+    symbols: Arc<Symbols>,
+}
+
+impl<V, const FOLD: bool> Names<V, FOLD> {
+    pub fn new(symbols: &Arc<Symbols>) -> Self {
+        Self::with_capacity(symbols, 0)
+    }
+
+    pub fn with_capacity(symbols: &Arc<Symbols>, n: usize) -> Self {
+        Names { map: crate::fast::IndexMap::with_capacity_and_hasher(n, Default::default()), symbols: Arc::clone(symbols) }
+    }
+
+    /// An empty table on the same symbols.
+    pub fn empty_like(&self) -> Self {
+        Self::new(&self.symbols)
+    }
+
+    pub fn symbols(&self) -> &Arc<Symbols> {
+        &self.symbols
+    }
+
+    /// The symbol a member named `name` would have, if any code named it.
+    pub fn find(&self, name: &[u8]) -> Option<Sym> {
+        if FOLD { self.symbols.find_lower(name) } else { self.symbols.find(name) }
+    }
+
+    /// The symbol of `name`, interned.
+    pub fn intern(&self, name: &[u8]) -> Sym {
+        if FOLD { self.symbols.intern_lower(name) } else { self.symbols.intern(name) }
+    }
+
+    /// The name a symbol stands for (lowercase for methods).
+    pub fn name(&self, s: Sym) -> Arc<[u8]> {
+        self.symbols.name(s)
+    }
+
+    pub fn get(&self, name: &[u8]) -> Option<&V> {
+        self.map.get(&self.find(name)?)
+    }
+
+    pub fn get_mut(&mut self, name: &[u8]) -> Option<&mut V> {
+        let s = self.find(name)?;
+        self.map.get_mut(&s)
+    }
+
+    pub fn contains_key(&self, name: &[u8]) -> bool {
+        self.get(name).is_some()
+    }
+
+    #[inline]
+    pub fn get_sym(&self, s: Sym) -> Option<&V> {
+        self.map.get(&s)
+    }
+
+    pub fn get_sym_mut(&mut self, s: Sym) -> Option<&mut V> {
+        self.map.get_mut(&s)
+    }
+
+    pub fn insert(&mut self, name: impl AsRef<[u8]>, v: V) -> Option<V> {
+        let s = self.intern(name.as_ref());
+        self.map.insert(s, v)
+    }
+
+    pub fn insert_sym(&mut self, s: Sym, v: V) -> Option<V> {
+        self.map.insert(s, v)
+    }
+
+    pub fn entry(&mut self, s: Sym) -> indexmap::map::Entry<'_, Sym, V> {
+        self.map.entry(s)
+    }
+
+    pub fn shift_remove(&mut self, name: &[u8]) -> Option<V> {
+        let s = self.find(name)?;
+        self.map.shift_remove(&s)
+    }
+
+    pub fn iter(&self) -> indexmap::map::Iter<'_, Sym, V> {
+        self.map.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> indexmap::map::IterMut<'_, Sym, V> {
+        self.map.iter_mut()
+    }
+
+    pub fn keys(&self) -> indexmap::map::Keys<'_, Sym, V> {
+        self.map.keys()
+    }
+
+    pub fn values(&self) -> indexmap::map::Values<'_, Sym, V> {
+        self.map.values()
+    }
+
+    pub fn values_mut(&mut self) -> indexmap::map::ValuesMut<'_, Sym, V> {
+        self.map.values_mut()
+    }
+
+    pub fn get_index(&self, i: usize) -> Option<(&Sym, &V)> {
+        self.map.get_index(i)
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+impl<V, const FOLD: bool> Extend<(Sym, V)> for Names<V, FOLD> {
+    fn extend<I: IntoIterator<Item = (Sym, V)>>(&mut self, entries: I) {
+        self.map.extend(entries);
+    }
+}
+
+impl<V, const FOLD: bool> IntoIterator for Names<V, FOLD> {
+    type Item = (Sym, V);
+    type IntoIter = indexmap::map::IntoIter<Sym, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.into_iter()
+    }
+}
+
+impl<V, const FOLD: bool> std::ops::Index<&[u8]> for Names<V, FOLD> {
+    type Output = V;
+
+    fn index(&self, name: &[u8]) -> &V {
+        self.get(name).expect("a member of that name")
+    }
+}
+
+impl<'a, V, const FOLD: bool> IntoIterator for &'a Names<V, FOLD> {
+    type Item = (&'a Sym, &'a V);
+    type IntoIter = indexmap::map::Iter<'a, Sym, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.iter()
+    }
+}
 
 /// Who may see a member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +295,7 @@ pub enum Native {
 /// table shares its parent's entries (zend_duplicate_function: the same
 /// op_array, its refcount bumped); only a method the subclass declares,
 /// overrides or takes from a trait is a new one.
-pub type Methods = crate::fast::IndexMap<Vec<u8>, Rc<Method>>;
+pub type Methods = Names<Rc<Method>, true>;
 
 /// A method in a class's table.
 #[derive(Debug, Clone)]
@@ -167,7 +318,10 @@ pub struct Method {
 
 /// A class's constants by name, in the order they were declared; shared
 /// with the parent and interfaces as methods are.
-pub type Constants = crate::fast::IndexMap<Vec<u8>, Rc<Constant>>;
+pub type Constants = Names<Rc<Constant>, false>;
+
+/// Each property name's slots (see [`Class::slots`]).
+pub type Slots = Names<Vec<usize>, false>;
 
 /// A class constant.
 #[derive(Debug, Clone)]
@@ -187,7 +341,7 @@ pub struct Constant {
 pub type Static = (Rc<RefCell<Value>>, Visibility, Vec<u8>);
 
 /// A class as linked for one request.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Class {
     /// As declared.
     pub name: PhpStr,
@@ -201,7 +355,7 @@ pub struct Class {
     pub properties: Vec<Property>,
     /// Each property name's slots; more than one when a parent's private
     /// property shares a name with a subclass's.
-    pub slots: crate::fast::HashMap<Vec<u8>, Vec<usize>>,
+    pub slots: Slots,
     /// Lowercase name → method, inherited ones included.
     pub methods: Methods,
     /// In declaration order (reflection lists them so).
@@ -251,7 +405,31 @@ impl Class {
     /// A plain class with nothing declared (for tests).
     #[cfg(test)]
     pub(crate) fn stub(name: &str) -> Class {
-        Class { name: PhpStr::from(name), lower: name.to_ascii_lowercase().into_bytes(), ..Class::default() }
+        let symbols = Arc::new(Symbols::default());
+        Class {
+            name: PhpStr::from(name),
+            lower: name.to_ascii_lowercase().into_bytes(),
+            flags: 0,
+            parent: None,
+            interfaces: Vec::new(),
+            properties: Vec::new(),
+            slots: Slots::new(&symbols),
+            methods: Methods::new(&symbols),
+            constants: Constants::new(&symbols),
+            statics: crate::fast::HashMap::default(),
+            debug_info: None,
+            get_properties: None,
+            cast_bool: None,
+            cast_string: None,
+            cast_int: None,
+            clone_data: None,
+            forward_calls: None,
+            make_data: None,
+            native_dtor: None,
+            enum_cases: Vec::new(),
+            enum_backing: None,
+            static_inits: Vec::new(),
+        }
     }
 
     /// The name as PHP prints it with "%s": up to a NUL (an anonymous
@@ -292,6 +470,12 @@ impl Class {
 
     pub fn method(&self, lower: &[u8]) -> Option<&Method> {
         self.methods.get(lower).map(|m| &**m)
+    }
+
+    /// The method whose (lowercase) name is `sym`.
+    #[inline]
+    pub fn method_sym(&self, sym: Sym) -> Option<&Method> {
+        self.methods.get_sym(sym).map(|m| &**m)
     }
 
     /// The value of the property `name` as code in class `scope` sees it
