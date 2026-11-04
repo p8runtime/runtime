@@ -667,6 +667,16 @@ impl PhpArray {
         }
     }
 
+    /// `entry_at` without the key (no copy of a string key's handle): the
+    /// position and value of the first entry at or after `pos`.
+    #[inline]
+    pub fn value_at(&self, pos: usize) -> Option<(usize, &Value)> {
+        match &self.storage {
+            Storage::Packed(p) => p.slots.get(pos..)?.iter().enumerate().find_map(|(i, x)| (!matches!(x, Value::Undef)).then_some((pos + i, x))),
+            Storage::Hashed(h) => h.buckets.get(pos..)?.iter().enumerate().find_map(|(i, b)| h.is_set(pos + i).then_some((pos + i, &b.value))),
+        }
+    }
+
     /// The last entry before position `pos`.
     pub fn entry_before(&self, pos: usize) -> Option<(usize, Key, &Value)> {
         match &self.storage {
