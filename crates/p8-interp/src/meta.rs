@@ -103,7 +103,7 @@ impl Context<'_> {
                         .map(|c| &c.meta)
                         .or_else(|| d.cases.iter().position(|(c, _)| c.as_bytes() == n).and_then(|i| d.case_meta.get(i)))
                 })?;
-                Some(Found { meta, attrs: &meta.attrs, scope: self.class_named(&declaring).cloned(), def: None })
+                Some(Found { meta, attrs: &meta.attrs, scope: self.class_named(declaring).cloned(), def: None })
             }
         }
     }
