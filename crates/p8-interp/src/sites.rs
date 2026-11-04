@@ -18,6 +18,13 @@ pub struct Closure {
     /// What `$o->m()` called last, one entry per call site: PHP's cache
     /// slot of INIT_METHOD_CALL.
     pub(crate) methods: Box<[RefCell<Option<MethodSite>>]>,
+    /// What `new` of each class the code names made last: the class and
+    /// how to make its objects (instances.rs).
+    pub(crate) news: Box<[RefCell<crate::instances::NewSite>]>,
+    /// The class each named class reference (`C`, and `self`/`parent`
+    /// in a class's code) resolved to: a name, once declared, is always
+    /// the same class. Held weakly.
+    pub(crate) class_refs: Box<[RefCell<std::rc::Weak<Class>>]>,
 }
 
 impl Closure {
@@ -26,7 +33,9 @@ impl Closure {
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
         let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
         let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
-        Rc::new(Closure { code, consts, sites, props, methods })
+        let news = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
+        let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs })
     }
 }
 
@@ -87,6 +96,37 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
 }
 
 impl Context<'_> {
+    /// `class_of` through the closure's cache: a named class reference
+    /// is looked up by name once.
+    #[inline]
+    pub(crate) fn class_at(&mut self, clo: &Closure, i: u16, w: &[Value]) -> Result<Rc<Class>, Throw> {
+        let named = matches!(clo.code.classes[i as usize], p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..));
+        if named && let Some(c) = clo.class_refs[i as usize].borrow().upgrade() {
+            return Ok(c);
+        }
+        let c = self.class_of(&clo.code, i, w)?;
+        if named {
+            *clo.class_refs[i as usize].borrow_mut() = Rc::downgrade(&c);
+        }
+        Ok(c)
+    }
+
+    /// Whether argument `n` of the call at `site` is passed by reference,
+    /// when the site's cache knows the method it calls on `class` from
+    /// this scope (the call made last time): no lookup by name.
+    #[inline]
+    pub(crate) fn cached_takes_ref(&self, site: &RefCell<Option<MethodSite>>, class: &Rc<Class>, n: usize) -> Option<bool> {
+        let site = site.borrow();
+        let s = site.as_ref()?;
+        if s.class != Rc::as_ptr(class) as usize || s.scope != self.scope_addr() {
+            return None;
+        }
+        match &s.code {
+            MethodCode::User(c) => Some(c.upgrade()?.code.param_by_ref(n)),
+            MethodCode::Native(..) => None,
+        }
+    }
+
     /// The running code's class (its address; 0 outside one): what a
     /// private or protected property's cache entry is valid for.
     #[inline]
@@ -153,14 +193,14 @@ impl Context<'_> {
         if s.is_static {
             let forward = matches!(func.classes[class as usize], p8_bytecode::ClassRef::Forward(..) | p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope);
             let called = match frame.and_then(|f| f.called.as_ref()) {
-                Some(c) if forward && c.is_a(&target.lower) => Rc::clone(c),
+                Some(c) if forward && (extends(c, target) || c.is_a(&target.lower)) => Rc::clone(c),
                 _ => Rc::clone(target),
             };
             return Some(crate::classes::MethodFrame::method(code, None, declaring, called));
         }
         // An instance method: `$this` of the target's kind, or `static_frame`
         // raises the error.
-        let this = frame.and_then(|f| f.this.clone()).filter(|t| t.class.is_a(&target.lower))?;
+        let this = frame.and_then(|f| f.this.clone()).filter(|t| extends(&t.class, target) || t.class.is_a(&target.lower))?;
         let called = Rc::clone(&this.class);
         Some(crate::classes::MethodFrame::method(code, Some(this), declaring, called))
     }
@@ -201,6 +241,20 @@ impl Context<'_> {
         let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { self.scope_addr() };
         site.set(PropSite { class: Rc::as_ptr(&o.class) as usize, scope, slot: slot as u32 });
     }
+}
+
+/// Whether `class` is `target` or a subclass of it, by address (the
+/// common case of `is_a`, with no names compared).
+#[inline]
+fn extends(class: &Rc<Class>, target: &Rc<Class>) -> bool {
+    let mut c = Some(class);
+    while let Some(k) = c {
+        if Rc::ptr_eq(k, target) {
+            return true;
+        }
+        c = k.parent.as_ref();
+    }
+    false
 }
 
 /// What a call site or constant fetch resolved to, in one context.
