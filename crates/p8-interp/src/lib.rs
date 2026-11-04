@@ -1204,6 +1204,20 @@ impl Context<'_> {
                 w[$r as usize]
             };
         }
+        // A name operand (a property's, a class constant's, a static
+        // property's): its constant, read in place (a constant only used
+        // as a name is never copied into a register: see
+        // `Function::value_consts`), else the register a run-time name is in.
+        macro_rules! name {
+            ($r:expr) => {
+                // A register below the constants wraps to a huge index: one
+                // bounds check covers both ends.
+                match clo.consts.get(($r as usize).wrapping_sub(func.consts_at as usize)) {
+                    Some(c) => c,
+                    None => &w[$r as usize],
+                }
+            };
+        }
         match instr {
                 Instr::Move { dst, src } => {
                     let v = self.operand(w, func, src);
@@ -1864,7 +1878,7 @@ impl Context<'_> {
                     Rare::PropRef => {
                             let (dst, obj, name) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
                             return Ok(Next::Go(insn_at));
@@ -1876,7 +1890,7 @@ impl Context<'_> {
                     Rare::AssignPropRef => {
                             let (obj, name, src) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = make_ref(w, src);
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
@@ -1891,7 +1905,7 @@ impl Context<'_> {
                             self.resolve_class(regs, &c)?;
                             return Ok(Next::Go(at));
                         }
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = self.static_cell(func, class, &name, w)?;
                         let inner = match &*cell.borrow() {
                             Value::Ref(r) => Some(Rc::clone(r)),
@@ -1917,7 +1931,7 @@ impl Context<'_> {
                             self.resolve_class(regs, &c)?;
                             return Ok(Next::Go(at));
                         }
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = self.static_cell(func, class, &name, w)?;
                         let r = make_ref(w, src);
                         *cell.borrow_mut() = Value::Ref(r);
@@ -2471,7 +2485,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = v;
@@ -2515,7 +2529,7 @@ impl Context<'_> {
                     let v = self.operand(w, func, val);
                     // The name's constant: the same cache entry reads use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                     {
                         let (o, pname) = (Rc::clone(o), pname.clone());
@@ -2523,7 +2537,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
                         regs[base + dst as usize] = v;
@@ -2555,7 +2569,7 @@ impl Context<'_> {
                     let y = self.operand(w, func, val);
                     // The name's constant: the cache entry reads and writes use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
                     {
                         let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
@@ -2566,7 +2580,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = ops::binary(op, x, &y, &mut c.diags);
@@ -2605,7 +2619,7 @@ impl Context<'_> {
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
                     let target = self.operand(w, func, obj);
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
                     {
                         let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
@@ -2616,7 +2630,7 @@ impl Context<'_> {
                         reg!(dst) = if post { old } else { new };
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = if inc { ops::increment(x, &mut c.diags) } else { ops::decrement(x, &mut c.diags) };
@@ -2711,7 +2725,7 @@ impl Context<'_> {
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = Value::Bool(!matches!(v.deref(), Value::Null | Value::Undef));
@@ -2732,7 +2746,7 @@ impl Context<'_> {
                 }
                 Instr::UnsetProp { obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let (Value::Object(o), Some(n)) = (&target, name.to_php_string())
                         && let Some(p) = self.hooked_property(o, n.as_bytes())
                     {
@@ -2811,7 +2825,7 @@ impl Context<'_> {
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::ClassConst { dst, class, name } => {
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     // `self::class` with no class to name (zend_compile's
                     // ZEND_FETCH_CLASS_NAME): its own error.
                     let is_class = matches!(&name, Value::Str(n) if n.as_bytes().eq_ignore_ascii_case(b"class"));
@@ -2843,7 +2857,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = match cell.borrow().deref() {
                         Value::Undef => Value::Null,
@@ -2856,7 +2870,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = self.operand(w, func, val);
                     store(&cell, v.clone());
@@ -2867,7 +2881,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let y = self.operand(w, func, val);
                     let x = cell.borrow().deref();
