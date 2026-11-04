@@ -61,9 +61,9 @@ impl TypeDecl {
         p8_stubs::type_to_string(self.mask, &refs)
     }
 
-    /// Whether `v` is plainly of this type, needing no conversion and no
-    /// class hierarchy: its kind's bit is set, or an object is of a named
-    /// class itself (ZEND_TYPE_CONTAINS_CODE, before zend_check_type_slow).
+    /// Whether `v` is plainly of this type, needing no conversion: its
+    /// kind's bit is set, or an object is an instance of the named
+    /// class(es) (ZEND_TYPE_CONTAINS_CODE, then instanceof_function).
     /// False only means the full check (`verify`) decides.
     #[inline]
     pub fn quick(&self, v: &Value) -> bool {
@@ -75,7 +75,18 @@ impl TypeDecl {
             Value::Float(_) => T_FLOAT,
             Value::Str(_) => T_STRING,
             Value::Array(_) => T_ARRAY,
-            Value::Object(o) => return self.mask & (T_OBJECT | T_MIXED) != 0 || (!self.intersection && self.lower.iter().any(|c| c.as_bytes() == o.class.lower.as_slice())),
+            // A named class or interface the object's class is or extends
+            // (`self`/`parent` never match a class name here: `verify`
+            // resolves them), or a Closure where a callable is wanted.
+            Value::Object(o) => {
+                return self.mask & (T_OBJECT | T_MIXED) != 0
+                    || (self.mask & T_CALLABLE != 0 && o.class.lower.as_slice() == b"closure")
+                    || if self.intersection {
+                        !self.lower.is_empty() && self.lower.iter().all(|c| o.class.is_a(c.as_bytes()))
+                    } else {
+                        self.lower.iter().any(|c| o.class.is_a(c.as_bytes()))
+                    };
+            }
             Value::Undef | Value::Ref(_) => return false,
         };
         self.mask & (bit | T_MIXED) != 0
