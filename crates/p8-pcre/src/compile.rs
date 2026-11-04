@@ -157,13 +157,43 @@ pub(crate) struct Prog {
     /// (the pattern starts with `.*` and `.` stops at newlines).
     pub startline: bool,
     /// The bytes a match can start with, when they're known.
-    pub first: Option<Box<[bool; 256]>>,
+    pub first: First,
     pub match_limit: Option<u64>,
     pub depth_limit: Option<u64>,
     pub not_empty: bool,
     pub not_empty_atstart: bool,
     /// How far back (in characters) a match may look before its start.
     pub max_lookbehind: u32,
+    /// The backtrack stack's room, kept between matches (exec.rs).
+    pub stack: std::cell::Cell<Vec<crate::exec::Bt>>,
+}
+
+/// The bytes a match can start with: few enough to look for with memchr,
+/// or a table of them.
+pub(crate) enum First {
+    Any,
+    One(u8),
+    Two(u8, u8),
+    Three(u8, u8, u8),
+    Set(Box<[bool; 256]>),
+    /// The pattern starts with these bytes (two or more): memmem.
+    Text(Box<memchr::memmem::Finder<'static>>),
+}
+
+impl First {
+    fn of(set: Option<Box<[bool; 256]>>, prefix: Vec<u8>) -> First {
+        let Some(set) = set else { return First::Any };
+        if prefix.len() >= 2 {
+            return First::Text(Box::new(memchr::memmem::Finder::new(&prefix).into_owned()));
+        }
+        let mut bytes = (0..=255u8).filter(|&b| set[b as usize]);
+        match (bytes.next(), bytes.next(), bytes.next(), bytes.next()) {
+            (Some(a), None, _, _) => First::One(a),
+            (Some(a), Some(b), None, _) => First::Two(a, b),
+            (Some(a), Some(b), Some(c), None) => First::Three(a, b, c),
+            _ => First::Set(set),
+        }
+    }
 }
 
 struct Compiler<'a> {
@@ -217,7 +247,13 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
     let dotstar = if names_groups(&parsed.node) { None } else { dot_star(&parsed.node) };
     let anchored = anchored_opt || starts_anchored(&parsed.node) || dotstar == Some(true);
     let startline = !anchored && dotstar == Some(false);
-    let first = if anchored { None } else { first_bytes(&parsed.node, &c) };
+    let first = if anchored {
+        First::Any
+    } else {
+        let mut prefix = Vec::new();
+        literal_prefix(&parsed.node, parsed.utf, &mut prefix);
+        First::of(first_bytes(&parsed.node, &c), prefix)
+    };
     Ok(Prog {
         insts: c.insts,
         sets: c.sets,
@@ -236,6 +272,7 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
         not_empty: parsed.not_empty,
         not_empty_atstart: parsed.not_empty_atstart,
         max_lookbehind: c.max_lookbehind,
+        stack: Default::default(),
     })
 }
 
@@ -310,6 +347,29 @@ fn starts_anchored(node: &Node) -> bool {
         Node::Concat(v) => v.first().is_some_and(starts_anchored),
         Node::Alt(v) => v.iter().all(starts_anchored),
         Node::Group(b, _) | Node::Atomic(b) => starts_anchored(b),
+        _ => false,
+    }
+}
+
+/// Adds the bytes every match starts with: the pattern's leading
+/// case-sensitive characters (through groups); false once something else
+/// comes, so nothing after it counts.
+fn literal_prefix(node: &Node, utf: bool, out: &mut Vec<u8>) -> bool {
+    match node {
+        Node::Char { c, nocase: false, .. } => {
+            if utf {
+                let Some(ch) = char::from_u32(*c) else { return false };
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+            } else if *c < 256 {
+                out.push(*c as u8);
+            } else {
+                return false;
+            }
+            true
+        }
+        Node::Group(b, _) => literal_prefix(b, utf, out),
+        Node::Concat(v) => v.iter().all(|n| literal_prefix(n, utf, out)),
         _ => false,
     }
 }
