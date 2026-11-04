@@ -335,10 +335,10 @@ fn concat(a: &Value, b: &Value, diags: &mut Diags) -> Value {
     if let (Value::Str(x), Value::Str(y)) = (a, b) {
         return Value::Str(PhpStr::concat(x.as_bytes(), y.as_bytes()));
     }
-    let mut bytes = Vec::with_capacity(string_len_hint(a) + string_len_hint(b));
+    let mut bytes = PhpStr::scratch(string_len_hint(a) + string_len_hint(b));
     push_string(&mut bytes, a, diags);
     push_string(&mut bytes, b, diags);
-    Value::Str(PhpStr::new(bytes))
+    Value::Str(PhpStr::from_scratch(bytes))
 }
 
 /// Append `v` as a string (what `.` and interpolation do), the same text

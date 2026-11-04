@@ -1855,24 +1855,20 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     if let Some(props) = o.class.get_properties {
         return props(o);
     }
-    let mut out = p8_runtime::array::PhpArray::new();
     let slots = o.slots.borrow();
+    let mut out = p8_runtime::array::PhpArray::hashed(slots.len() + o.dynamic.borrow().len());
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if matches!(v, Value::Undef) || p.is_internal() {
             continue;
         }
-        let mut name = Vec::new();
-        match p.visibility {
-            Visibility::Public => {}
-            Visibility::Protected => name.extend_from_slice(b"\0*\0"),
-            Visibility::Private => {
-                name.push(0);
-                name.extend_from_slice(p.declaring_name.as_bytes());
-                name.push(0);
-            }
-        }
-        name.extend_from_slice(p.name.as_bytes());
-        out.insert(Key::from_string(PhpStr::new(name)), v.clone());
+        // A public property's key is its name itself; the others' are
+        // mangled ("\0*\0name", "\0Class\0name"), made in one piece.
+        let name = match p.visibility {
+            Visibility::Public => p.name.clone(),
+            Visibility::Protected => PhpStr::concat_all(&[b"\0*\0", p.name.as_bytes()]),
+            Visibility::Private => PhpStr::concat_all(&[b"\0", p.declaring_name.as_bytes(), b"\0", p.name.as_bytes()]),
+        };
+        out.insert(Key::from_string(name), v.clone());
     }
     for (k, v) in o.dynamic.borrow().iter() {
         out.insert(k, v.clone());

@@ -5212,10 +5212,11 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Reg) -> bool {
         w[dst as usize] = Value::Str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
         return true;
     }
-    let mut bytes = Vec::with_capacity(ops::string_len_hint(x) + ops::string_len_hint(y));
+    // Built in the thread's buffer: a short result is one allocation.
+    let mut bytes = PhpStr::scratch(ops::string_len_hint(x) + ops::string_len_hint(y));
     ops::push_string(&mut bytes, x, &mut diags);
     ops::push_string(&mut bytes, y, &mut diags);
-    w[dst as usize] = Value::Str(PhpStr::new(bytes));
+    w[dst as usize] = Value::Str(PhpStr::from_scratch(bytes));
     true
 }
 
@@ -5227,11 +5228,13 @@ fn concat_n(w: &mut [Value], dst: Reg, start: Reg, n: u8) -> bool {
         return false;
     }
     let mut diags = Vec::new();
-    let mut bytes = Vec::with_capacity(parts.iter().map(ops::string_len_hint).sum());
+    // ZEND_ROPE_END: the parts measured, then written into one buffer (the
+    // thread's: a short result is one allocation, a long one its buffer).
+    let mut bytes = PhpStr::scratch(parts.iter().map(ops::string_len_hint).sum());
     for v in parts {
         ops::push_string(&mut bytes, v, &mut diags);
     }
-    w[dst as usize] = Value::Str(PhpStr::new(bytes));
+    w[dst as usize] = Value::Str(PhpStr::from_scratch(bytes));
     true
 }
 
