@@ -1520,8 +1520,8 @@ impl Context<'_> {
                         let next = match &cur {
                             // A string's offset: the character there.
                             Value::Str(s) => isset_string_offset(s, &reg!(keys + i as Reg).deref()),
-                            Value::Array(a) => match Key::from_value(&reg!(keys + i as Reg)) {
-                                Ok((k, _)) => a.get(&k).map(|v| v.deref()),
+                            Value::Array(a) => match self.resource_key(&reg!(keys + i as Reg)).map_or_else(|| Key::from_value(&reg!(keys + i as Reg)).map(|(k, _)| k), Ok) {
+                                Ok(k) => a.get(&k).map(|v| v.deref()),
                                 Err(_) => None,
                             },
                             _ => None,
@@ -1557,19 +1557,25 @@ impl Context<'_> {
                     reg!(var) = Value::Undef;
                 }
                 Instr::UnsetDim { var, keys, n } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).clone()).collect();
-                    let derefed: Vec<Value> = key_values.iter().map(Value::deref).collect();
+                    // The keys' values (a reference key is read now, so
+                    // the unset can't see the array it is changing).
+                    let derefed: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
                     if arrayaccess::path_has_object(&reg!(var), &derefed, false) {
                         let root = reg!(var).deref();
                         self.aa_write(regs, &root, &derefed, false, arrayaccess::DimOp::Unset)?;
                         return Ok(Next::Go(pc));
                     }
+                    // An undefined variable is warned (ZEND_UNSET_DIM's op1
+                    // is fetched for unset), then there is nothing to do.
+                    if matches!(reg!(var), Value::Undef) {
+                        if let Some(name) = func.cv_names.get(var as usize) {
+                            self.warn(format!("Undefined variable ${}", String::from_utf8_lossy(name.as_bytes())));
+                        }
+                        return Ok(Next::Go(pc));
+                    }
                     // In place: a copy of the variable's array would make
                     // every unset copy the whole array (copy-on-write).
-                    match &mut reg!(var) {
-                        Value::Ref(cell) => unset_path(&mut cell.borrow_mut(), &key_values),
-                        v => unset_path(v, &key_values),
-                    };
+                    self.unset_path(&mut reg!(var), &derefed)?;
                 }
                 Instr::IterInit { src, iter, end } => {
                     let v = self.operand(w, func, src);
@@ -3642,7 +3648,29 @@ impl Context<'_> {
     /// An array key from register `r`, reporting what PHP reports.
     fn key(&mut self, w: &[Value], func: &Function, r: Reg) -> Result<Key, Throw> {
         let v = self.operand(w, func, r);
-        match Key::from_value(&v) {
+        self.key_of(&v, "access")
+    }
+
+    /// A resource used as an array key: its number, warned
+    /// (zend_use_resource_as_offset). None for anything else.
+    fn resource_key(&mut self, v: &Value) -> Option<Key> {
+        let Value::Object(o) = v.deref() else { return None };
+        if o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0 {
+            return None;
+        }
+        self.warn(format!("Resource ID#{} used as offset, casting to integer ({})", o.id, o.id));
+        Some(Key::Int(i64::from(o.id)))
+    }
+
+    /// The array key `v` names, reporting what PHP reports: a float that
+    /// is not an int loses precision (deprecated), a resource is its
+    /// number (warned), an array or object is a TypeError ("Cannot `what`
+    /// offset of type …": access, unset).
+    fn key_of(&mut self, v: &Value, what: &str) -> Result<Key, Throw> {
+        if let Some(k) = self.resource_key(v) {
+            return Ok(k);
+        }
+        match Key::from_value(v) {
             Ok((k, None)) => Ok(k),
             Ok((k, Some(KeyIssue::LosesPrecision(f)))) => {
                 let shown = float_to_string(f, Precision::Shortest, 'E');
@@ -3654,13 +3682,59 @@ impl Context<'_> {
             Ok((k, Some(KeyIssue::Illegal(_)))) => Ok(k),
             Err(KeyIssue::Illegal(t)) => {
                 // An object is named by its class (zend_illegal_container_offset).
-                let t = match &v {
+                let t = match v.deref() {
                     Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
                     _ => t.to_string(),
                 };
-                Err(self.throw("TypeError", format!("Cannot access offset of type {t} on array")))
+                Err(self.throw("TypeError", format!("Cannot {what} offset of type {t} on array")))
             }
             Err(KeyIssue::LosesPrecision(f)) => Ok(Key::Int(f as i64)),
+        }
+    }
+
+    /// `unset($c[k1]..[kn])` on `target`, in place (ZEND_UNSET_DIM, the
+    /// containers on the way fetched as FETCH_DIM_UNSET fetches them).
+    /// An element that is a reference is followed (`$r = &$a['k'];
+    /// unset($a['k'][0])` changes what both see). A missing element or a
+    /// null on the way ends it quietly, false with a deprecation; a key
+    /// is converted only when its level is reached. (An ArrayAccess object
+    /// on the path is the caller's: offsetUnset.)
+    fn unset_path(&mut self, target: &mut Value, keys: &[Value]) -> Result<(), Throw> {
+        let Some((first, rest)) = keys.split_first() else { return Ok(()) };
+        let last = rest.is_empty();
+        match target {
+            Value::Ref(cell) => {
+                // Out of the reference while it changes (no borrow held
+                // across the warnings a key may raise).
+                let mut held = std::mem::take(&mut *cell.borrow_mut());
+                let r = self.unset_path(&mut held, keys);
+                *cell.borrow_mut() = held;
+                r
+            }
+            Value::Array(a) => {
+                let k = self.key_of(first, if last { "unset" } else { "access" })?;
+                if !a.contains_key(&k) {
+                    return Ok(());
+                }
+                let a = Rc::make_mut(a);
+                if last {
+                    a.remove(&k);
+                    return Ok(());
+                }
+                let child = a.get_mut(&k).expect("checked");
+                self.unset_path(child, rest)
+            }
+            Value::Undef | Value::Null => Ok(()),
+            Value::Bool(false) => {
+                self.diags.push(Diag::Deprecated("Automatic conversion of false to array is deprecated".into()));
+                self.report_diags();
+                Ok(())
+            }
+            Value::Str(_) if last => Err(self.throw("Error", "Cannot unset string offsets")),
+            Value::Str(_) => Err(self.throw("Error", "Cannot use string offset as an array")),
+            // Reached through path_has_object's ArrayAccess path instead.
+            Value::Object(_) => Ok(()),
+            _ => Err(self.throw("Error", "Cannot unset offset in a non-array variable")),
         }
     }
 
@@ -4757,22 +4831,6 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 #[cold]
 fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
     Some(Box::new(Extra { args: regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect(), vars: Vars::default(), shared: None }))
-}
-
-/// unset(a[k1]..[kn]) on a value; whether anything changed.
-fn unset_path(target: &mut Value, keys: &[Value]) -> bool {
-    let Value::Array(a) = target else { return false };
-    let Some((first, rest)) = keys.split_first() else { return false };
-    let Ok((k, _)) = Key::from_value(first) else { return false };
-    if rest.is_empty() {
-        if !a.contains_key(&k) {
-            return false;
-        }
-        Rc::make_mut(a).remove(&k);
-        return true;
-    }
-    let Some(child) = Rc::make_mut(a).get_mut(&k) else { return false };
-    unset_path(child, rest)
 }
 
 /// `$a[k] op= v` for an int or string `k`, `$a` an array holding a number
