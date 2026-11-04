@@ -1210,7 +1210,9 @@ impl Context<'_> {
         // `Function::value_consts`), else the register a run-time name is in.
         macro_rules! name {
             ($r:expr) => {
-                match ($r as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.consts.get(i)) {
+                // A register below the constants wraps to a huge index: one
+                // bounds check covers both ends.
+                match clo.consts.get(($r as usize).wrapping_sub(func.consts_at as usize)) {
                     Some(c) => c,
                     None => &w[$r as usize],
                 }
