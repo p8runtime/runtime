@@ -190,6 +190,10 @@ impl Context<'_> {
             top.pc = pc as u32;
         }
         let mut r = Ok(());
+        // A destructor's exception doesn't stop the others freed with it
+        // (PHP destroys each object as it goes, one exception pending): each
+        // new one takes the ones before as its previous.
+        let mut thrown: Option<Rc<p8_runtime::object::Object>> = None;
         // What is due now, as one batch, in the order it went: each
         // destructor runs to its end before the next starts (the nested run
         // a destructor is sees only what it frees itself), as PHP calls
@@ -200,23 +204,40 @@ impl Context<'_> {
                 break;
             }
             while let Some(object) = batch.pop_front() {
+                let mut one = Ok(());
                 if let Some(dtor) = object.class.native_dtor {
-                    r = self.run_native_dtor(regs, dtor, &object).map(|_| ());
+                    one = self.run_native_dtor(regs, dtor, &object).map(|_| ());
                 }
-                if r.is_ok()
+                if one.is_ok()
                     && let Some(m) = self.destructor(&object)
                 {
-                    r = self.run_nested(regs, m, &mut []).map(|_| ());
+                    one = self.run_nested(regs, m, &mut []).map(|_| ());
                 }
                 // Let go of it (its id goes back unless something kept it),
                 // then the ids that waited for this destructor.
                 drop(object);
                 self.ids.destructor_ran();
-                if r.is_err() {
-                    self.ids.requeue(batch);
-                    break 'batches;
+                match one {
+                    Ok(()) => {}
+                    Err(Throw::Object(e)) if e.class.is_a(b"throwable") => {
+                        if let Some(before) = thrown.take() {
+                            crate::builtin_classes::set_previous(&e, before);
+                        }
+                        thrown = Some(e);
+                    }
+                    // Not an exception (exit, a fatal error): nothing more runs.
+                    Err(t) => {
+                        r = Err(t);
+                        self.ids.requeue(batch);
+                        break 'batches;
+                    }
                 }
             }
+        }
+        if r.is_ok()
+            && let Some(e) = thrown
+        {
+            r = Err(Throw::Object(e));
         }
         if let (Some(pc), Some(top)) = (saved, self.frames.last_mut()) {
             top.pc = pc;
