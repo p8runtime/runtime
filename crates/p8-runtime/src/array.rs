@@ -263,7 +263,7 @@ impl Hashed {
     #[inline(never)]
     fn find(&self, h: u64, key: &Key) -> Option<usize> {
         if self.slots == 0 {
-            return self.buckets.iter().enumerate().position(|(i, b)| b.is(h, key) && self.holes >> i & 1 == 0);
+            return self.scan(h, key);
         }
         let mut i = self.index[self.slot(h)];
         while i != NONE {
@@ -307,29 +307,44 @@ impl Hashed {
         }
     }
 
-    /// Set `key` to `value`: in place if present, else last in order.
+    /// A small table's position of `key`: one pass over the stored hashes,
+    /// the key compared only where the hash matches. An unset entry has no
+    /// string key, so only an int key needs the unset bits.
+    #[inline(always)]
+    fn scan(&self, h: u64, key: &Key) -> Option<usize> {
+        match key {
+            Key::Str(s) => self.buckets.iter().position(|b| b.h == h && b.key.as_ref().is_some_and(|k| PhpStr::ptr_eq(s, k) || s.as_bytes() == k.as_bytes())),
+            Key::Int(_) => {
+                let holes = self.holes;
+                self.buckets.iter().enumerate().position(|(i, b)| b.h == h && b.key.is_none() && holes >> i & 1 == 0)
+            }
+        }
+    }
+
+    /// Set `key` to `value`: in place if present, else last in order. One
+    /// pass (a small table's scan, or a large one's chain) with the hash
+    /// computed once.
     #[inline(never)]
     fn set(&mut self, key: Key, value: Value) {
-        let hash = hash_of(&key);
-        match self.find(hash, &key) {
+        let h = hash_of(&key);
+        let found = if self.slots == 0 { self.scan(h, &key) } else { self.find(h, &key) };
+        match found {
             Some(i) => self.buckets[i].value = value,
             None => {
                 let key = match key {
                     Key::Str(s) => Some(s),
                     Key::Int(_) => None,
                 };
-                self.insert_new(hash, key, value);
+                self.insert_new(h, key, value);
             }
         }
     }
 
     /// A new entry, last in order (`key` not present).
+    #[inline(always)]
     fn insert_new(&mut self, h: u64, key: Option<PhpStr>, value: Value) {
         if self.buckets.len() == self.buckets.capacity() {
-            let more = self.buckets.capacity().max(MIN_SIZE);
-            let unset = self.unset_positions();
-            self.buckets.reserve_exact(more);
-            self.reindex(&unset);
+            self.grow();
         }
         let i = self.buckets.len();
         self.buckets.push(Bucket { h, key, value });
@@ -337,6 +352,16 @@ impl Hashed {
             self.link(i);
         }
         self.live += 1;
+    }
+
+    /// Double the buckets (an index too, once past SMALL).
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self) {
+        let more = self.buckets.capacity().max(MIN_SIZE);
+        let unset = self.unset_positions();
+        self.buckets.reserve_exact(more);
+        self.reindex(&unset);
     }
 
     #[inline(never)]
