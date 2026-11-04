@@ -140,21 +140,29 @@ impl Packed {
 /// has no index: a lookup scans its buckets' hashes, and the table is one
 /// allocation of 128 or 256 bytes. A larger one has an index of chains
 /// (`u32`s: slot heads, then each bucket's next).
+///
+/// An unset entry stays in place (positions do not move) until the table
+/// is compacted. Which entries are unset is kept beside the buckets, not in
+/// them: any value, Undef included (an uninitialized typed static property
+/// in get_class_vars()), may be an entry's.
 #[derive(Debug, Default)]
 struct Hashed {
-    /// The entries in order (positions are indices), unset ones included
-    /// (their value Undef) until the table is compacted.
+    /// The entries in order (positions are indices), unset ones included.
     buckets: Vec<Bucket>,
     /// Empty for a small table; else `slots` chain heads, then one `next`
-    /// per bucket of capacity.
+    /// per bucket of capacity (UNSET for an unset entry).
     index: Vec<u32>,
     /// How many chain heads (a power of two; 0 for a small table).
     slots: usize,
+    /// A small table's unset entries, one bit per position.
+    holes: u64,
     live: usize,
 }
 
 /// No bucket (the end of a chain, an empty slot).
 const NONE: u32 = u32::MAX;
+/// An unset entry's `next` in a large table's index.
+const UNSET: u32 = u32::MAX - 1;
 /// The first table's size.
 const MIN_SIZE: usize = 4;
 /// Up to this many buckets a table has no index (scanned).
@@ -167,16 +175,10 @@ struct Bucket {
     h: u64,
     /// A string key; None for an int key (which `h` is).
     key: Option<PhpStr>,
-    /// Undef: an unset entry (as a packed array's hole).
     value: Value,
 }
 
 impl Bucket {
-    #[inline]
-    fn is_set(&self) -> bool {
-        !matches!(self.value, Value::Undef)
-    }
-
     fn key(&self) -> Key {
         match &self.key {
             Some(s) => Key::Str(s.clone()),
@@ -219,9 +221,9 @@ impl Clone for Hashed {
         let buckets = self
             .buckets
             .iter()
-            .map(|b| Bucket { h: b.h, key: b.key.clone(), value: if b.is_set() { dup(&b.value) } else { Value::Undef } })
+            .map(|b| Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value) })
             .collect();
-        Hashed { buckets, index: self.index.clone(), slots: self.slots, live: self.live }
+        Hashed { buckets, index: self.index.clone(), slots: self.slots, holes: self.holes, live: self.live }
     }
 }
 
@@ -229,8 +231,19 @@ impl Hashed {
     /// Empty, with room for `n` entries before it grows.
     fn with_capacity(n: usize) -> Hashed {
         let mut h = Hashed { buckets: Vec::with_capacity(n.max(MIN_SIZE)), ..Hashed::default() };
-        h.reindex();
+        h.reindex(&[]);
         h
+    }
+
+    /// Whether the entry at position `i` is set (not unset).
+    #[inline]
+    fn is_set(&self, i: usize) -> bool {
+        if self.slots == 0 { self.holes >> i & 1 == 0 } else { self.index[self.slots + i] != UNSET }
+    }
+
+    /// The positions of the unset entries.
+    fn unset_positions(&self) -> Vec<usize> {
+        (0..self.len()).filter(|&i| !self.is_set(i)).collect()
     }
 
     /// Room to the buckets' capacity. Positions are their indices.
@@ -250,7 +263,7 @@ impl Hashed {
     #[inline(never)]
     fn find(&self, h: u64, key: &Key) -> Option<usize> {
         if self.slots == 0 {
-            return self.buckets.iter().position(|b| b.h == h && b.is_set() && b.is(h, key));
+            return self.buckets.iter().enumerate().position(|(i, b)| b.is(h, key) && self.holes >> i & 1 == 0);
         }
         let mut i = self.index[self.slot(h)];
         while i != NONE {
@@ -270,20 +283,25 @@ impl Hashed {
     }
 
     /// Build the index for the buckets' capacity (none when small), from
-    /// the stored hashes.
-    fn reindex(&mut self) {
+    /// the stored hashes, with the entries at `unset` (ascending) unset.
+    fn reindex(&mut self, unset: &[usize]) {
         let capacity = self.buckets.capacity();
         if capacity <= SMALL {
             self.index = Vec::new();
             self.slots = 0;
+            self.holes = unset.iter().fold(0, |m, &i| m | 1 << i);
             return;
         }
-        assert!(capacity < NONE as usize, "array too large");
+        assert!(capacity < UNSET as usize, "array too large");
+        self.holes = 0;
         self.slots = capacity.next_power_of_two();
         self.index.clear();
         self.index.resize(self.slots + capacity, NONE);
+        let mut unset = unset.iter().peekable();
         for i in 0..self.buckets.len() {
-            if self.buckets[i].is_set() {
+            if unset.next_if_eq(&&i).is_some() {
+                self.index[self.slots + i] = UNSET;
+            } else {
                 self.link(i);
             }
         }
@@ -309,8 +327,9 @@ impl Hashed {
     fn insert_new(&mut self, h: u64, key: Option<PhpStr>, value: Value) {
         if self.buckets.len() == self.buckets.capacity() {
             let more = self.buckets.capacity().max(MIN_SIZE);
+            let unset = self.unset_positions();
             self.buckets.reserve_exact(more);
-            self.reindex();
+            self.reindex(&unset);
         }
         let i = self.buckets.len();
         self.buckets.push(Bucket { h, key, value });
@@ -340,11 +359,15 @@ impl Hashed {
                 NONE => self.index[slot] = next,
                 p => self.index[self.slots + p as usize] = next,
             }
+            self.index[self.slots + i as usize] = UNSET;
             i as usize
         };
+        if self.slots == 0 {
+            self.holes |= 1 << i;
+        }
         let b = &mut self.buckets[i];
         b.key = None;
-        let value = std::mem::replace(&mut b.value, Value::Undef);
+        let value = std::mem::replace(&mut b.value, Value::Null);
         self.live -= 1;
         // Compact when more than half the entries are unset.
         if self.len() > SMALL && self.live * 2 < self.len() {
@@ -355,8 +378,10 @@ impl Hashed {
 
     /// Close up the unset entries, keeping the order (positions change).
     fn compact(&mut self) {
-        self.buckets.retain(Bucket::is_set);
-        self.reindex();
+        let set: Vec<bool> = (0..self.len()).map(|i| self.is_set(i)).collect();
+        let mut keep = set.iter();
+        self.buckets.retain(|_| keep.next().copied().unwrap_or(false));
+        self.reindex(&[]);
     }
 
     fn get(&self, i: usize) -> Option<&Value> {
@@ -365,7 +390,7 @@ impl Hashed {
 
     /// The entries in order, with their positions.
     fn entries(&self) -> impl Iterator<Item = (usize, &Bucket)> {
-        self.buckets.iter().enumerate().filter(|(_, b)| b.is_set())
+        self.buckets.iter().enumerate().filter(|(i, _)| self.is_set(*i))
     }
 }
 
@@ -589,7 +614,7 @@ impl PhpArray {
                 (!matches!(x, Value::Undef)).then(|| (pos + i, Key::Int((pos + i) as i64), x))
             }),
             Storage::Hashed(h) => h.buckets.get(pos..)?.iter().enumerate().find_map(|(i, b)| {
-                b.is_set().then(|| (pos + i, b.key(), &b.value))
+                h.is_set(pos + i).then(|| (pos + i, b.key(), &b.value))
             }),
         }
     }
@@ -601,7 +626,7 @@ impl PhpArray {
                 (!matches!(x, Value::Undef)).then_some((i, Key::Int(i as i64), x))
             }),
             Storage::Hashed(h) => h.buckets.get(..pos.min(h.len()))?.iter().enumerate().rev().find_map(|(i, b)| {
-                b.is_set().then(|| (i, b.key(), &b.value))
+                h.is_set(i).then(|| (i, b.key(), &b.value))
             }),
         }
     }
@@ -814,6 +839,35 @@ mod tests {
         assert_eq!(a.clone().cursor(), 0);
         a.set_cursor(1);
         assert_eq!(a.clone().cursor(), 1);
+    }
+
+    #[test]
+    fn an_undef_value_is_an_entry_like_any_other() {
+        // get_class_vars() lists an uninitialized typed static as Undef:
+        // the entry must stay, in small and large tables, through growth,
+        // copies, unsets around it and compaction.
+        for n in [3, 8, 9, 40] {
+            let mut a = PhpArray::new();
+            for i in 0..n {
+                let v = if i % 3 == 0 { Value::Undef } else { int(i) };
+                a.insert(Key::Str(PhpStr::from(format!("p{i}"))), v);
+            }
+            let count = |a: &PhpArray| a.iter().count();
+            assert_eq!((a.len(), count(&a)), (n as usize, n as usize), "{n}");
+            assert!(matches!(a.get(&Key::Str(PhpStr::from("p0"))), Some(Value::Undef)), "{n}");
+            let b = a.clone();
+            assert_eq!(count(&b), n as usize);
+            for i in (1..n).filter(|i| i % 3 != 0) {
+                a.remove(&Key::Str(PhpStr::from(format!("p{i}"))));
+            }
+            let left: Vec<Key> = a.iter().map(|(k, _)| k).collect();
+            let undefs: Vec<Key> = (0..n).filter(|i| i % 3 == 0).map(|i| Key::Str(PhpStr::from(format!("p{i}")))).collect();
+            assert_eq!(left, undefs, "{n}");
+            assert_eq!(a.len(), undefs.len());
+            a.insert(Key::Str(PhpStr::from("after")), Value::Undef);
+            assert_eq!(a.iter().last().map(|(k, _)| k), Some(Key::Str(PhpStr::from("after"))));
+            assert_eq!(count(&b), n as usize, "the copy is untouched");
+        }
     }
 
     #[test]
