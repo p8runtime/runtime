@@ -5346,4 +5346,32 @@ mod tests {
         assert!(!closures.is_empty());
         assert!(closures.iter().all(|c| c.upgrade().is_none()), "a closure outlived its request");
     }
+
+    /// A property or class constant named in the code carries its name's
+    /// symbol (exact: `$o->Name` is not `$o->name`), so the member tables
+    /// are looked up by it; a name made at run time (`$o->$p`) has none.
+    #[test]
+    fn member_names_in_code_carry_their_symbols() {
+        let registry = Arc::new(Registry::default());
+        let program = compile("<?php class C { public $Name = 1; const K = 2; } $o = new C; $p = 'Name'; echo $o->Name, C::K, $o->$p; $o->Name = 3;", &registry);
+        let main = &program.main;
+        let symbols = registry.symbols();
+        let named: Vec<Vec<u8>> = main.member_syms.iter().flatten().map(|&s| symbols.name(s).to_vec()).collect();
+        assert!(named.contains(&b"Name".to_vec()), "{named:?}");
+        assert!(named.contains(&b"K".to_vec()), "{named:?}");
+        assert!(!named.contains(&b"name".to_vec()), "member names keep their case: {named:?}");
+        // One per constant, and only for those used as names.
+        assert_eq!(main.member_syms.len(), main.consts.len());
+        // The class's slot is found by that symbol.
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        let mut host = Sink;
+        let mut cx = isolate.new_context(&mut host);
+        cx.declare_classes(&program.classes);
+        assert_eq!(cx.run_main(Arc::clone(main)), 0);
+        let class = Rc::clone(cx.class_named(b"c").expect("C"));
+        let name = symbols.find(b"Name").expect("interned");
+        assert_eq!(class.slot_sym(name, None), class.slot(b"Name", None));
+        assert!(class.slot_sym(name, None).is_some());
+        assert!(class.constants.get_sym(symbols.find(b"K").expect("interned")).is_some());
+    }
 }
