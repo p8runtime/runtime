@@ -332,6 +332,9 @@ pub fn to_string_lossy(v: &Value, diags: &mut Diags) -> PhpStr {
 }
 
 fn concat(a: &Value, b: &Value, diags: &mut Diags) -> Value {
+    if let (Value::Str(x), Value::Str(y)) = (a, b) {
+        return Value::Str(PhpStr::concat(x.as_bytes(), y.as_bytes()));
+    }
     let mut bytes = Vec::with_capacity(string_len_hint(a) + string_len_hint(b));
     push_string(&mut bytes, a, diags);
     push_string(&mut bytes, b, diags);

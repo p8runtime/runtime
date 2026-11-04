@@ -141,11 +141,7 @@ impl Value {
         Some(match self {
             Value::Null | Value::Undef | Value::Bool(false) => PhpStr::empty(),
             Value::Bool(true) => PhpStr::from("1"),
-            Value::Int(i) => {
-                let mut digits = Vec::with_capacity(20);
-                crate::numeric::push_int(&mut digits, *i);
-                PhpStr::new(digits)
-            }
+            Value::Int(i) => PhpStr::from_int(*i),
             Value::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Value::Str(s) => s.clone(),
             Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
