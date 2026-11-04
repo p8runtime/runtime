@@ -1,0 +1,85 @@
+x!|x!
+abca!a
+array(4) {
+  [0]=>
+  string(2) "y!"
+  [1]=>
+  string(4) "y!y!"
+  [2]=>
+  string(1) "Y"
+  [3]=>
+  array(2) {
+    [0]=>
+    string(1) "y"
+    [1]=>
+    string(2) "y!"
+  }
+}
+string(2) "t!"
+string(2) "n!"
+string(2) "w!"
+string(8) "matched!"
+string(2) "p!"
+string(2) "q!"
+string(2) "r!"
+string(2) "k!"
+make holder
+make in property
+free in property
+after replace
+make in array prop
+free in array prop
+after array prop
+array(1) {
+  [0]=>
+  string(8) "chained!"
+}
+array(1) {
+  [0]=>
+  string(8) "chained!"
+}
+make elem 1
+built list
+free elem 1
+after list
+make keyed a
+make nested
+free keyed a
+after unset keyed
+free nested
+after keyed
+make ret var
+free ret var
+int(3)
+after ret var
+string(6) "rt!rt!"
+string(6) "static"
+array(2) {
+  [0]=>
+  string(6) "by ref"
+  [1]=>
+  string(4) "more"
+}
+array(2) {
+  [0]=>
+  string(4) "base"
+  [1]=>
+  string(5) "basex"
+}
+string(5) "base!"
+make same
+pair still holds
+free same
+after pair
+make loop 0
+make loop 1
+free loop 0
+make loop 2
+free loop 1
+after loop
+free loop 2
+make chain
+free chain
+chain
+end
+free holder
