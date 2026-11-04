@@ -68,7 +68,7 @@ impl Context<'_> {
         for (r, v) in code.bound.iter().zip(captured) {
             out.insert(Key::from_string(name(u32::from(*r))), v);
         }
-        let statics = self.statics.get(&(Arc::as_ptr(code) as usize));
+        let statics = self.statics.get(&(Arc::as_ptr(code) as usize)).map(|s| &s.cells);
         let consts = code.consts_at as usize..code.consts_at as usize + clo.consts.len();
         for (at, ins) in code.code.iter().enumerate() {
             if let p8_bytecode::Instr::StaticVar { var, index, .. } = ins {

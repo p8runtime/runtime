@@ -16,6 +16,21 @@ pub trait Host {
     }
 }
 
+/// A function's `static` variables, by index. The function is held: its
+/// address is the key, and an eval'd function dropped while its statics
+/// were kept would hand them to the next function allocated there. PHP
+/// keeps eval'd code until the request ends, too.
+pub(crate) struct FunctionStatics {
+    _func: Arc<p8_bytecode::Function>,
+    pub(crate) cells: HashMap<u16, Rc<RefCell<Value>>>,
+}
+
+impl FunctionStatics {
+    pub(crate) fn new(func: &Arc<p8_bytecode::Function>) -> FunctionStatics {
+        FunctionStatics { _func: Arc::clone(func), cells: HashMap::default() }
+    }
+}
+
 /// An output buffer (ob_start): its contents, and the handler (PHP code)
 /// that turns them into what is passed on.
 pub(crate) struct Buffer {
@@ -425,7 +440,7 @@ pub struct Context<'i> {
     /// The builtin running now, innermost (its name for its messages).
     pub(crate) running_builtin: Option<usize>,
     /// `static` variables, by function (its code's address) and index.
-    pub(crate) statics: HashMap<usize, HashMap<u16, Rc<RefCell<Value>>>>,
+    pub(crate) statics: HashMap<usize, FunctionStatics>,
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     pub(crate) magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
