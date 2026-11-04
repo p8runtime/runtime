@@ -162,8 +162,14 @@ impl Context<'_> {
         let slot = &mut self.closures[i as usize];
         if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
             let table = &mut self.isolate.code;
-            let closure = table.closures[i as usize].get_or_insert_with(|| Closure::new(Arc::clone(&table.codes[i as usize])));
-            closure.renew(self.isolate.requests);
+            let request = self.isolate.requests;
+            let closure = table.closures[i as usize].get_or_insert_with(|| {
+                // New: its caches are empty, so it is this request's already.
+                let closure = Closure::new(Arc::clone(&table.codes[i as usize]));
+                closure.request.set(request);
+                closure
+            });
+            closure.renew(request);
             *slot = Rc::clone(closure);
         }
         Rc::clone(slot)
@@ -403,7 +409,11 @@ pub(crate) enum Callee {
     /// freed).
     User(u32),
     Builtin(usize),
+    /// A builtin's constant (the same in every request): its value.
     Constant(Value),
+    /// A script's constant, by its key: the value is the request's own
+    /// (`Context::constants`), looked up by it on each fetch.
+    UserConstant(p8_runtime::symbol::Sym),
 }
 
 #[cfg(test)]

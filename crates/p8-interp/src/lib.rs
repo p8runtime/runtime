@@ -1737,7 +1737,7 @@ impl Context<'_> {
                     let by_ref = match self.resolve(clo, site)? {
                         Callee::User(f) => self.code(f).param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
-                        Callee::Constant(_) => false,
+                        Callee::Constant(_) | Callee::UserConstant(_) => false,
                     };
                     reg!(arg) = if by_ref {
                         Value::Ref(make_ref(w, var))
@@ -1776,7 +1776,7 @@ impl Context<'_> {
                     reg!(dst) = Value::Bool(match self.resolve(clo, site)? {
                         Callee::User(f) => self.code(f).param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
-                        Callee::Constant(_) => false,
+                        Callee::Constant(_) | Callee::UserConstant(_) => false,
                     });
                 }
                 Instr::StaticArgByRef { dst, class, method, n } => {
@@ -1812,6 +1812,17 @@ impl Context<'_> {
                     let s = &func.sites[site as usize];
                     let v = match clo.sites[site as usize].get() {
                         Some(Callee::Constant(v)) => v.clone(),
+                        // A script's constant this site found (in this
+                        // request or an earlier one): the request's own,
+                        // when it has defined it (and no constant was made
+                        // deprecated); else the full lookup (its fallback,
+                        // or the error).
+                        Some(&Callee::UserConstant(key))
+                            if self.deprecated_made.is_empty()
+                                && let Some((_, v)) = self.constants.get(&key) =>
+                        {
+                            v.clone()
+                        }
                         _ => match self.constant_by_key(s.sym).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1))) {
                             // Deprecated: said on every fetch, so never cached.
                             Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(str::to_string).or_else(|| self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes()))) => {
@@ -1826,6 +1837,12 @@ impl Context<'_> {
                             // be the script's in a later request.
                             Some(v) if s.fallback.is_none() && !self.constants.contains_key(&s.sym) => {
                                 let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
+                                v
+                            }
+                            // The script's own, by the site's own name: the
+                            // site keeps its key, not its value.
+                            Some(v) if self.constants.contains_key(&s.sym) => {
+                                let _ = clo.sites[site as usize].set(Callee::UserConstant(s.sym));
                                 v
                             }
                             Some(v) => v,
@@ -3010,7 +3027,7 @@ impl Context<'_> {
                             return Ok(Next::Switch);
                         }
                         Callee::Builtin(i) => self.call_builtin(regs, base, i, args, argc, dst)?,
-                        Callee::Constant(_) => unreachable!("a call site resolves to a function"),
+                        Callee::Constant(_) | Callee::UserConstant(_) => unreachable!("a call site resolves to a function"),
                     }
                 }
                 Instr::Return { src } => {
