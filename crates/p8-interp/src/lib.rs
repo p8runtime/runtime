@@ -164,6 +164,58 @@ impl Context<'_> {
         });
     }
 
+    /// The frame of a static-syntax call (`C::m()`, `self::m()`,
+    /// `parent::m()`, `static::m()`) the site's cache answers: the method
+    /// `static_frame` found for this target class from this scope, with
+    /// `$this` and the called class worked out as it does.
+    fn cached_static(&self, site: &RefCell<Option<MethodSite>>, target: &Rc<p8_runtime::object::Class>, func: &Function, class: u16) -> Option<crate::classes::MethodFrame> {
+        let site = site.borrow();
+        let s = site.as_ref()?;
+        if s.class != Rc::as_ptr(target) as usize || s.scope != self.scope_addr() {
+            return None;
+        }
+        let declaring = s.declaring.upgrade()?;
+        let code = match &s.code {
+            MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
+            MethodCode::Native(n, name) => crate::classes::Code::Native(*n, name.clone()),
+        };
+        let frame = self.frames.last();
+        if s.is_static {
+            let forward = matches!(func.classes[class as usize], p8_bytecode::ClassRef::Forward(..) | p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope);
+            let called = match frame.and_then(|f| f.called.as_ref()) {
+                Some(c) if forward && c.is_a(&target.lower) => Rc::clone(c),
+                _ => Rc::clone(target),
+            };
+            return Some(crate::classes::MethodFrame::method(code, None, declaring, called));
+        }
+        // An instance method: `$this` of the target's kind, or `static_frame`
+        // raises the error.
+        let this = frame.and_then(|f| f.this.clone()).filter(|t| t.class.is_a(&target.lower))?;
+        let called = Rc::clone(&this.class);
+        Some(crate::classes::MethodFrame::method(code, Some(this), declaring, called))
+    }
+
+    /// After `static_frame` resolved a static-syntax call: remember the
+    /// method for this target class and scope (not a __call/__callStatic
+    /// trampoline).
+    fn remember_static(&self, site: &RefCell<Option<MethodSite>>, target: &Rc<p8_runtime::object::Class>, m: &crate::classes::MethodFrame) {
+        if m.trampoline.is_some() || !m.captured.is_empty() {
+            return;
+        }
+        let Some(declaring) = &m.scope else { return };
+        let code = match &m.func {
+            crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone()),
+        };
+        *site.borrow_mut() = Some(MethodSite {
+            class: Rc::as_ptr(target) as usize,
+            scope: self.scope_addr(),
+            code,
+            declaring: Rc::downgrade(declaring),
+            is_static: m.this.is_none(),
+        });
+    }
+
     /// After a full property read: remember where a declared, visible,
     /// hookless property of this class is, for the next read here.
     fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, name: &Value) {
@@ -4178,7 +4230,18 @@ impl Context<'_> {
                             return Ok(Next::Go(pc));
                         }
                     }
-                    let m = self.static_frame(func, class, site.name.as_bytes(), site.display.as_bytes(), w)?;
+                    // The site's cache entry for this class and scope; else
+                    // the full resolution, remembered for the next call.
+                    let target = self.class_of(func, class, w)?;
+                    let cache = &clo.methods[method as usize];
+                    let m = match self.cached_static(cache, &target, func, class) {
+                        Some(m) => m,
+                        None => {
+                            let m = self.static_frame(func, class, site.name.as_bytes(), site.display.as_bytes(), w)?;
+                            self.remember_static(cache, &target, &m);
+                            m
+                        }
+                    };
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::ClassConst { dst, class, name } => {
