@@ -56,10 +56,22 @@ pub fn callable_error(ctx: &mut dyn crate::ext::Ctx, v: &Value) -> String {
 /// (A function PHP deprecates as a whole is reported by the caller, from
 /// `p8_stubs::deprecation`, looked up once.)
 pub fn check(sig: &Sig, args: &mut [Value], diags: &mut Diags) -> Result<(), Refused> {
+    check_counted(sig, counts(sig), args, diags)
+}
+
+/// The argument counts `sig` takes: the required ones, and at most
+/// (usize::MAX: variadic). The registry works them out once per builtin.
+pub fn counts(sig: &Sig) -> (usize, usize) {
     let params = sig.params;
     let variadic = params.last().is_some_and(|p| p.variadic);
     let required = params.iter().rposition(|p| !p.optional()).map_or(0, |i| i + 1);
-    let max = if variadic { usize::MAX } else { params.len() };
+    (required, if variadic { usize::MAX } else { params.len() })
+}
+
+/// [`check`], with `sig`'s [`counts`] already known.
+#[inline]
+pub fn check_counted(sig: &Sig, (required, max): (usize, usize), args: &mut [Value], diags: &mut Diags) -> Result<(), Refused> {
+    let params = sig.params;
     if args.len() < required || args.len() > max {
         let (word, n) = if required == max {
             ("exactly", required)
@@ -110,7 +122,10 @@ pub fn check(sig: &Sig, args: &mut [Value], diags: &mut Diags) -> Result<(), Ref
 }
 
 /// Whether `value` is of a kind `param` takes as it is: untyped or mixed,
-/// or its kind's bit set (objects, references: the full check).
+/// or its kind's bit set; a string or an array to a callable, and an
+/// object to `object` or a callable, which are checked when called
+/// (`accepts` says Yes and `convert` keeps them). A reference, and an
+/// object to a class type: the full check.
 #[inline]
 fn plainly(param: &Param, value: &Value) -> bool {
     let mask = param.mask;
@@ -123,9 +138,10 @@ fn plainly(param: &Param, value: &Value) -> bool {
         Value::Bool(false) => T_BOOL | T_FALSE,
         Value::Int(_) => T_INT,
         Value::Float(_) => T_FLOAT,
-        Value::Str(_) => T_STRING,
-        Value::Array(_) => T_ARRAY,
-        Value::Undef | Value::Ref(_) | Value::Object(_) => 0,
+        Value::Str(_) => T_STRING | T_CALLABLE,
+        Value::Array(_) => T_ARRAY | T_CALLABLE,
+        Value::Object(_) => T_OBJECT | T_CALLABLE,
+        Value::Undef | Value::Ref(_) => 0,
     } != 0
 }
 
