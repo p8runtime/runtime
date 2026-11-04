@@ -900,7 +900,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *src = f(*src);
         }
         Free { reg } => *reg = f(*reg),
-        LoadNull { dst } | NewArray { dst } => *dst = f(*dst),
+        LoadNull { dst } | NewArray { dst, .. } => *dst = f(*dst),
         Binary { dst, a, b, .. } | Add { dst, a, b } | Sub { dst, a, b } | Mul { dst, a, b } | Compare { dst, a, b, .. } => {
             *dst = f(*dst);
             *a = f(*a);
@@ -2356,7 +2356,7 @@ impl<'src> Compiler<'src> {
         let mut value = val;
         for dim in outer[..rest].iter() {
             let arr = f.temp();
-            f.emit(Instr::NewArray { dst: arr });
+            f.emit(Instr::NewArray { dst: arr, n: 0 });
             match dim {
                 Some(k) => {
                     let key = self.expr(f, k)?;
@@ -3036,7 +3036,7 @@ impl<'src> Compiler<'src> {
     /// reference goes in as one (asked when the call runs).
     fn spread_list(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg], callee: Option<Reg>) -> Result<Reg> {
         let list = f.temp();
-        f.emit(Instr::NewArray { dst: list });
+        f.emit(Instr::NewArray { dst: list, n: 0 });
         let mut named = false;
         for (n, arg) in args.iter().enumerate() {
             let line = self.line(arg.span);
@@ -3289,7 +3289,7 @@ impl<'src> Compiler<'src> {
     /// Call the callable [a, b] (a method named at run time).
     fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
         let callee = f.temp();
-        f.emit(Instr::NewArray { dst: callee });
+        f.emit(Instr::NewArray { dst: callee, n: 0 });
         f.emit(Instr::ArrayPush { arr: callee, val: a });
         f.emit(Instr::ArrayPush { arr: callee, val: b });
         if needs_spread(args) {
@@ -4191,7 +4191,10 @@ impl<'src> Compiler<'src> {
             }
             Expr::Array { items, .. } => {
                 let dst = f.temp();
-                f.emit(Instr::NewArray { dst });
+                // A list literal's elements are all pushed: room for them.
+                let list = items.iter().all(|i| i.key.is_none() && !i.unpack && !i.by_ref);
+                let n = if list { u16::try_from(items.len()).unwrap_or(0) } else { 0 };
+                f.emit(Instr::NewArray { dst, n });
                 for item in *items {
                     if item.unpack {
                         let src = self.expr(f, item.value)?;
@@ -4374,7 +4377,7 @@ impl<'src> Compiler<'src> {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
-                f.emit(Instr::NewArray { dst: pair });
+                f.emit(Instr::NewArray { dst: pair, n: 0 });
                 f.emit(Instr::ArrayPush { arr: pair, val: obj });
                 f.emit(Instr::ArrayPush { arr: pair, val: name });
                 self.spread_call(f, pair, args)?
@@ -4406,7 +4409,7 @@ impl<'src> Compiler<'src> {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
-                f.emit(Instr::NewArray { dst: pair });
+                f.emit(Instr::NewArray { dst: pair, n: 0 });
                 f.emit(Instr::ArrayPush { arr: pair, val: obj });
                 f.emit(Instr::ArrayPush { arr: pair, val: name });
                 let dst = f.temp();
@@ -4424,7 +4427,7 @@ impl<'src> Compiler<'src> {
                     let class = self.expr(f, class_expr)?;
                     let name = f.constant(Frozen::Str(Text::from(self.text(*method))));
                     let pair = f.temp();
-                    f.emit(Instr::NewArray { dst: pair });
+                    f.emit(Instr::NewArray { dst: pair, n: 0 });
                     f.emit(Instr::ArrayPush { arr: pair, val: class });
                     f.emit(Instr::ArrayPush { arr: pair, val: name });
                     pair

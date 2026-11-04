@@ -107,7 +107,9 @@ pub enum Instr {
     JumpIfNot { cond: Reg, target: u32 },
     /// `a ?? b`: if `src` is set and not null, dst = it and jump
     JumpIfSet { src: Reg, dst: Reg, target: u32 },
-    NewArray { dst: Reg },
+    /// An empty array; `n` elements are about to be pushed onto it (a
+    /// list literal's), so it is made with room for them.
+    NewArray { dst: Reg, n: u16 },
     /// arr[] = val (array literal building)
     ArrayPush { arr: Reg, val: Reg },
     /// arr[key] = val (array literal building)

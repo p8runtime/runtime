@@ -75,7 +75,7 @@ fn opt(args: &[Value], i: usize) -> Option<Value> {
 }
 
 fn chr(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    string(vec![arg(args, 0).to_int().rem_euclid(256) as u8])
+    Ok(Value::Str(PhpStr::byte(arg(args, 0).to_int().rem_euclid(256) as u8)))
 }
 
 fn ord(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -456,55 +456,87 @@ fn strncasecmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// Replace every `search` in `subject` (case-insensitively if `fold`),
-/// counting replacements.
-fn replace_one(subject: &[u8], search: &[u8], replace: &[u8], fold: bool, count: &mut i64) -> Vec<u8> {
+/// counting replacements; None when there is nothing to replace (the
+/// subject stays as it is, uncopied).
+fn replace_one(subject: &[u8], search: &[u8], replace: &[u8], fold: bool, count: &mut i64) -> Option<Vec<u8>> {
     if search.is_empty() {
-        return subject.to_vec();
+        return None;
     }
-    let hay = if fold { subject.to_ascii_lowercase() } else { subject.to_vec() };
-    let needle = if fold { search.to_ascii_lowercase() } else { search.to_vec() };
+    let lowered;
+    let (hay, needle): (&[u8], std::borrow::Cow<[u8]>) = if fold {
+        lowered = subject.to_ascii_lowercase();
+        (&lowered, std::borrow::Cow::Owned(search.to_ascii_lowercase()))
+    } else {
+        (subject, std::borrow::Cow::Borrowed(search))
+    };
+    let first = find(hay, &needle)?;
     let mut out = Vec::with_capacity(subject.len());
     let mut i = 0;
-    while let Some(at) = find(&hay[i..], &needle) {
-        out.extend_from_slice(&subject[i..i + at]);
+    let mut at = Some(first);
+    while let Some(found) = at {
+        out.extend_from_slice(&subject[i..i + found]);
         out.extend_from_slice(replace);
-        i += at + needle.len();
+        i += found + needle.len();
         *count += 1;
+        at = find(&hay[i..], &needle);
     }
     out.extend_from_slice(&subject[i..]);
-    out
+    Some(out)
 }
 
+/// A value's bytes as a string: a string's own, else converted into `buf`.
+fn text_of<'a>(v: &'a Value, buf: &'a mut Vec<u8>, diags: &mut Vec<p8_runtime::ops::Diag>) -> &'a [u8] {
+    match v {
+        Value::Str(s) => s.as_bytes(),
+        v => {
+            p8_runtime::ops::push_string(buf, v, diags);
+            buf
+        }
+    }
+}
+
+/// str_replace on one subject. Strings are read where they are; a
+/// subject nothing was replaced in is returned as it is (PHP hands back
+/// the same string too).
 fn replace_in(subject: &Value, search: &Value, replace: &Value, fold: bool, count: &mut i64, diags: &mut Vec<p8_runtime::ops::Diag>) -> Value {
-    let mut text = Vec::new();
-    p8_runtime::ops::push_string(&mut text, subject, diags);
+    let mut subject_buf = Vec::new();
+    let subject_bytes = text_of(subject, &mut subject_buf, diags);
+    // The text once something was replaced.
+    let mut text: Option<Vec<u8>> = None;
     match search {
         Value::Array(searches) => {
-            let replaces: Vec<Value> = match replace {
-                Value::Array(r) => r.values().cloned().collect(),
-                other => vec![other.clone(); searches.len()],
+            // An array of replacements pairs up with the searches (a
+            // missing one is ""); a single one goes with each.
+            let mut replaces = match replace {
+                Value::Array(r) => Some(r.values()),
+                _ => None,
             };
-            let scalar = !matches!(replace, Value::Array(_));
-            for (i, s) in searches.values().enumerate() {
-                let mut needle = Vec::new();
-                p8_runtime::ops::push_string(&mut needle, s, diags);
-                let mut with = Vec::new();
-                match replaces.get(i) {
-                    Some(r) => p8_runtime::ops::push_string(&mut with, r, diags),
-                    None if scalar => {}
-                    None => {}
+            for s in searches.values() {
+                let (mut needle_buf, mut with_buf) = (Vec::new(), Vec::new());
+                let needle = text_of(s, &mut needle_buf, diags);
+                let with: &[u8] = match &mut replaces {
+                    Some(it) => match it.next() {
+                        Some(r) => text_of(r, &mut with_buf, diags),
+                        None => b"",
+                    },
+                    None => text_of(replace, &mut with_buf, diags),
+                };
+                if let Some(out) = replace_one(text.as_deref().unwrap_or(subject_bytes), needle, with, fold, count) {
+                    text = Some(out);
                 }
-                text = replace_one(&text, &needle, &with, fold, count);
             }
-            Value::Str(PhpStr::new(text))
         }
         _ => {
-            let mut needle = Vec::new();
-            p8_runtime::ops::push_string(&mut needle, search, diags);
-            let mut with = Vec::new();
-            p8_runtime::ops::push_string(&mut with, replace, diags);
-            Value::Str(PhpStr::new(replace_one(&text, &needle, &with, fold, count)))
+            let (mut needle_buf, mut with_buf) = (Vec::new(), Vec::new());
+            let needle = text_of(search, &mut needle_buf, diags);
+            let with = text_of(replace, &mut with_buf, diags);
+            text = replace_one(subject_bytes, needle, with, fold, count);
         }
+    }
+    match (text, subject) {
+        (Some(t), _) => Value::Str(PhpStr::new(t)),
+        (None, Value::Str(s)) => Value::Str(s.clone()),
+        (None, _) => Value::Str(PhpStr::new(subject_buf)),
     }
 }
 
