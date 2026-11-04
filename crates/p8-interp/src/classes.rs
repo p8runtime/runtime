@@ -158,7 +158,7 @@ impl Context<'_> {
             };
             return Err(self.fatal_at(message, def.line));
         }
-        let class = self.link(def)?;
+        let class = self.linked_class(def)?;
         let file = self.binding_file.clone().unwrap_or_else(|| self.location().0);
         self.class_origins.insert(sym, (file, def.line));
         self.defs_by_name.insert(sym, Arc::clone(def));
@@ -187,6 +187,41 @@ impl Context<'_> {
 
     fn lookup_class(&mut self, name: &p8_runtime::frozen::Text) -> Result<Rc<Class>, Throw> {
         self.find_class(name.as_bytes())
+    }
+
+    /// The class `def` links to in this request: the one the isolate kept,
+    /// when a request linked `def` before against the same classes (its
+    /// parent, interfaces and traits, as this request has them); else
+    /// linked now, and kept when the isolate keeps classes and everything it
+    /// is built on is the isolate's too (so no address in its key can be
+    /// another class's later). The classes it is built on are looked up as
+    /// `link` looks them up (the same order, so the same autoloading).
+    fn linked_class(&mut self, def: &Arc<ClassDef>) -> Result<Rc<Class>, Throw> {
+        if !self.isolate.keep_classes {
+            return self.link(def);
+        }
+        let mut deps = Vec::with_capacity(1 + def.interfaces.len() + def.traits.len());
+        for name in def.parent.iter().chain(&def.interfaces).chain(&def.traits) {
+            deps.push(self.lookup_class(name)?);
+        }
+        let key: Vec<usize> = std::iter::once(Arc::as_ptr(def) as usize).chain(deps.iter().map(|c| Rc::as_ptr(c) as usize)).collect();
+        if let Some(kept) = self.isolate.linked.get(&key) {
+            return Ok(Rc::clone(&kept.class));
+        }
+        let class = self.link(def)?;
+        if deps.iter().all(|d| self.isolate.pinned.contains(&(Rc::as_ptr(d) as usize))) {
+            // Bounded: code compiled for one request only (eval'd) makes new
+            // declarations every time; past the limit the isolate starts over.
+            if self.isolate.linked.len() >= KEPT_CLASSES {
+                for kept in self.isolate.linked.values() {
+                    self.isolate.pinned.remove(&(Rc::as_ptr(&kept.class) as usize));
+                }
+                self.isolate.linked.clear();
+            }
+            self.isolate.pinned.insert(Rc::as_ptr(&class) as usize);
+            self.isolate.linked.insert(key, crate::isolate::Linked { class: Rc::clone(&class), _def: Arc::clone(def), _deps: deps });
+        }
+        Ok(class)
     }
 
     /// A new static property declaration (its own cell in every request).
@@ -1906,6 +1941,11 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
 fn text_of(t: &p8_runtime::frozen::Text) -> String {
     String::from_utf8_lossy(t.as_bytes()).into_owned()
 }
+
+/// How many linked classes an isolate keeps before it starts over (a
+/// large application declares a few thousand; only code compiled anew
+/// for each request, such as eval's, could reach it).
+const KEPT_CLASSES: usize = 1 << 15;
 
 /// Narrower is larger: public < protected < private.
 /// A magic property method.

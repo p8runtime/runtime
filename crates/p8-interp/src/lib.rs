@@ -5365,6 +5365,38 @@ mod tests {
         p8_compiler::Compiler::new(source.as_bytes(), "t.php", registry).compile(program.statements).expect("compiles")
     }
 
+    /// An isolate that keeps classes links a declaration once: the next
+    /// request declaring it (built on the same classes) gets the same class,
+    /// with its statics starting over from their defaults.
+    #[test]
+    fn a_kept_class_is_linked_once_per_isolate() {
+        let registry = Arc::new(Registry::default());
+        let program = compile("<?php class A { public static $n = 0; } class B extends A implements Countable { function count(): int { return A::$n; } } A::$n++;", &registry);
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        isolate.keep_classes();
+        let mut host = Sink;
+        let mut run = |isolate: &mut Isolate| -> (Rc<Class>, Value) {
+            let mut cx = isolate.new_context(&mut host);
+            cx.declare_classes(&program.classes);
+            assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
+            let b = Rc::clone(cx.class_named(b"b").expect("B"));
+            let a = Rc::clone(cx.class_named(b"a").expect("A"));
+            let n = a.statics.get(b"n".as_slice()).cloned().expect("A::$n");
+            let value = cx.cell_of(&n).borrow().clone();
+            (b, value)
+        };
+        let (first, n1) = run(&mut isolate);
+        let (second, n2) = run(&mut isolate);
+        assert!(Rc::ptr_eq(&first, &second), "the second request got the class the first linked");
+        assert!(matches!((n1, n2), (Value::Int(1), Value::Int(1))), "each request's A::$n starts at its default");
+        assert_eq!(isolate.linked.len(), 2, "A and B, each linked once");
+        // Without keeping classes, each request links its own.
+        let mut fresh = Isolate::new(Arc::clone(&registry));
+        let (a, _) = run(&mut fresh);
+        let (b, _) = run(&mut fresh);
+        assert!(!Rc::ptr_eq(&a, &b));
+    }
+
     /// Closures belong to the isolate, warm for its next requests: a
     /// request that runs the same code again makes no new ones and leaves
     /// nothing behind (a recursive function's call site names the function

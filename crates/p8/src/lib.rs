@@ -123,7 +123,14 @@ impl Platform {
 
     /// An engine for the calling thread.
     pub fn new_isolate(&self) -> Isolate {
-        Isolate { inner: p8_interp::Isolate::new(Arc::clone(&self.compiler.registry)), compiler: Arc::clone(&self.compiler) }
+        let mut inner = p8_interp::Isolate::new(Arc::clone(&self.compiler.registry));
+        // Compiled code kept in memory: a file's declarations stay the same
+        // objects while it is unchanged, so the classes linked from them can
+        // be kept for the isolate's next requests too.
+        if self.compiler.cache.is_some() {
+            inner.keep_classes();
+        }
+        Isolate { inner, compiler: Arc::clone(&self.compiler) }
     }
 
     /// Compile a file's source.

@@ -92,6 +92,12 @@ impl Context<'_> {
                 self.builtin_on_demand(dep)?;
             }
         }
+        // Made once per isolate: a builtin class is the same in every request.
+        if let Some(c) = self.isolate.on_demand_built.get(&key) {
+            let c = Rc::clone(c);
+            self.classes.insert(key, Rc::clone(&c));
+            return Some(c);
+        }
         let make_data = self.isolate.registry.data_maker(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData));
         let dtor = self.isolate.registry.native_dtor(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::destroy as p8_runtime::object::NativeMethod));
         let hooks = self.isolate.registry.class_hooks(spec.name);
@@ -107,7 +113,10 @@ impl Context<'_> {
             c.clone_data = h.clone_data;
             c.forward_calls = h.forward_calls;
         }
-        self.classes.get(&key).cloned()
+        let class = self.classes.get(&key).cloned()?;
+        self.isolate.pinned.insert(Rc::as_ptr(&class) as usize);
+        self.isolate.on_demand_built.insert(key, Rc::clone(&class));
+        Some(class)
     }
 
     /// The class `name` if declared, after the autoloaders had their go

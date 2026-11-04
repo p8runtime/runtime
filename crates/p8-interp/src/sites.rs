@@ -46,19 +46,37 @@ impl Closure {
         Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, request: Cell::new(0) })
     }
 
-    /// Ready for request `request`: on its first use there, the entries
-    /// keyed by a class's or scope's address are cleared (that request's
-    /// classes are new objects, and one may sit where an earlier request's
-    /// was). Entries held weakly need nothing: a dead class never comes back.
-    pub(crate) fn renew(&self, request: u64) {
+    /// Ready for request `request`, on its first use there.
+    /// - The classes named in the code (`class_refs`, `news`) are looked up
+    ///   again: a class the isolate keeps is still alive, but the request
+    ///   may not have declared it (yet).
+    /// - A property or method entry stays when its class and scope are
+    ///   the isolate's (`pinned`: alive, so their addresses are theirs):
+    ///   an object of the class exists only once the request declared it.
+    ///   Any other is cleared: a class of this request may sit where an
+    ///   earlier request's was.
+    pub(crate) fn renew(&self, request: u64, pinned: &p8_runtime::fast::HashSet<usize>) {
         if self.request.replace(request) == request {
             return;
         }
+        for c in self.class_refs.iter() {
+            *c.borrow_mut() = std::rc::Weak::new();
+        }
+        for n in self.news.iter() {
+            *n.borrow_mut() = crate::instances::NewSite::default();
+        }
+        let kept = |class: usize, scope: usize| pinned.contains(&class) && (scope == 0 || pinned.contains(&scope));
         for p in self.props.iter() {
-            p.set(PropSite::default());
+            let site = p.get();
+            if site.class != 0 && !kept(site.class, site.scope) {
+                p.set(PropSite::default());
+            }
         }
         for m in self.methods.iter() {
-            *m.borrow_mut() = None;
+            let mut m = m.borrow_mut();
+            if m.as_ref().is_some_and(|s| !kept(s.class, s.scope)) {
+                *m = None;
+            }
         }
     }
 
@@ -161,15 +179,15 @@ impl Context<'_> {
     pub(crate) fn closure_at(&mut self, i: u32) -> Rc<Closure> {
         let slot = &mut self.closures[i as usize];
         if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
-            let table = &mut self.isolate.code;
-            let request = self.isolate.requests;
+            let isolate = &mut *self.isolate;
+            let (table, pinned, request) = (&mut isolate.code, &isolate.pinned, isolate.requests);
             let closure = table.closures[i as usize].get_or_insert_with(|| {
                 // New: its caches are empty, so it is this request's already.
                 let closure = Closure::new(Arc::clone(&table.codes[i as usize]));
                 closure.request.set(request);
                 closure
             });
-            closure.renew(request);
+            closure.renew(request, pinned);
             *slot = Rc::clone(closure);
         }
         Rc::clone(slot)

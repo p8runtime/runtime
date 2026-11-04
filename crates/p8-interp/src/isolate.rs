@@ -191,6 +191,29 @@ pub struct Isolate {
     pub(crate) requests: u64,
     /// The next static property declaration's cell id (`Static::id`).
     pub(crate) next_static: p8_runtime::object::StaticId,
+    /// Whether classes its requests link are kept for its next requests
+    /// (the host keeps compiled code: a declaration stays the same object
+    /// while its file is unchanged). `Isolate::keep_classes`.
+    pub(crate) keep_classes: bool,
+    /// The classes kept: each by the compiled declaration it was linked
+    /// from and the classes it was built on (parent, interfaces, traits),
+    /// which the entry holds so their addresses stay theirs.
+    pub(crate) linked: HashMap<Vec<usize>, Linked>,
+    /// The builtin classes declared when first wanted, once made: the same
+    /// in every request.
+    pub(crate) on_demand_built: HashMap<Sym, Rc<Class>>,
+    /// The addresses of the classes it holds (builtin, kept, on-demand):
+    /// a cache entry keyed by one of them stays valid in the next request
+    /// (`Closure::renew`).
+    pub(crate) pinned: p8_runtime::fast::HashSet<usize>,
+}
+
+/// A class an isolate keeps (`Isolate::linked`).
+pub(crate) struct Linked {
+    pub(crate) class: Rc<Class>,
+    /// Held so their addresses (the entry's key) are never another's.
+    pub(crate) _def: Arc<ClassDef>,
+    pub(crate) _deps: Vec<Rc<Class>>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -206,10 +229,12 @@ pub(crate) struct Known {
 impl Isolate {
     pub fn new(registry: Arc<Registry>) -> Isolate {
         let names = Rc::new(p8_runtime::symbol::SymbolCache::new(registry.symbols()));
+        let builtin_classes = builtin_classes::build(&names);
+        let pinned = builtin_classes.values().map(|c| Rc::as_ptr(c) as usize).collect();
         Isolate {
             regs: Vec::with_capacity(1024),
             interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)),
-            builtin_classes: builtin_classes::build(&names),
+            builtin_classes,
             on_demand: builtin_classes::on_demand(&registry),
             known: {
                 let s = registry.symbols();
@@ -221,8 +246,22 @@ impl Isolate {
             code: Default::default(),
             requests: 0,
             next_static: 0,
+            keep_classes: false,
+            linked: HashMap::default(),
+            on_demand_built: HashMap::default(),
+            pinned,
             registry,
         }
+    }
+
+    /// Keep the classes requests link, for this isolate's next requests: a
+    /// request that declares the same compiled declaration, built on the
+    /// same classes, gets the class already linked (its statics, constants
+    /// and declared-or-not are still its own). Only for a host that keeps
+    /// compiled code: otherwise every request's declarations are new
+    /// objects, and keeping them would only grow.
+    pub fn keep_classes(&mut self) {
+        self.keep_classes = true;
     }
 
     /// An ini default (a registry's static text) as a string, shared.

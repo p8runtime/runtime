@@ -144,14 +144,15 @@ fn a_warm_isolate_starts_each_request_with_static_defaults() {
             class D extends C {}
             class U { use T; }
             class V { use T; }
+            class W extends ArrayIterator { public static $w = 0; }
             C::$n++; D::$n++; C::$list[] = $argv[1]; C::$at++;
-            U::$t .= 'u'; V::$t .= 'v';
-            echo C::$n, D::$n, ' ', implode(',', C::$list), ' ', C::$at, ' ', U::$t, V::$t;"#,
+            U::$t .= 'u'; V::$t .= 'v'; W::$w++;
+            echo C::$n, D::$n, ' ', implode(',', C::$list), ' ', C::$at, ' ', U::$t, V::$t, ' ', W::$w, count(new W([1, 2]));"#,
             "t.php",
         )
         .expect("compiles");
     for arg in ["a", "b", "c"] {
-        assert_eq!(run_with(&mut isolate, &script, arg), format!("22 {arg} 17 dudv"));
+        assert_eq!(run_with(&mut isolate, &script, arg), format!("22 {arg} 17 dudv 12"));
     }
 }
 
