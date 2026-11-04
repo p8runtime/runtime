@@ -73,86 +73,6 @@ impl Context<'_> {
                 }
                 go(pc + 1)
             }
-            Instr::AssignTake { var, src } => match std::mem::replace(&mut w[src as usize], Value::Undef) {
-                // Through a reference, or undefined: the handler's.
-                v @ (Value::Ref(_) | Value::Undef) => {
-                    w[src as usize] = v;
-                    None
-                }
-                v => {
-                    assign(w, var, v);
-                    go(pc + 1)
-                }
-            },
-            Instr::Free { reg } => {
-                clear(&mut w[reg as usize]);
-                go(pc + 1)
-            }
-            // $a[int] on an array (or a reference to one) holding a plain
-            // value at that key
-            Instr::FetchDim { dst, arr, key, .. } => {
-                let v = match w[key as usize] {
-                    Value::Int(k) => match &w[arr as usize] {
-                        Value::Array(a) => int_elem(a, k),
-                        Value::Ref(cell) => match &*cell.borrow() {
-                            Value::Array(a) => int_elem(a, k),
-                            _ => None,
-                        },
-                        _ => None,
-                    },
-                    Value::Str(_) => str_elem(w, arr, key),
-                    _ => None,
-                }?;
-                w[dst as usize] = v;
-                go(pc + 1)
-            }
-            // $a[int] = int|float|bool|null, $a an array (or a reference to one)
-            Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
-                if let Value::Str(_) = w[keys as usize] {
-                    if !set_str_elem(w, var, keys, val, dst) {
-                        return None;
-                    }
-                    return go(pc + 1);
-                }
-                let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { return None };
-                let k = *k;
-                let done = match &mut w[var as usize] {
-                    Value::Array(a) => set_int_elem(a, k, &v),
-                    Value::Ref(cell) => match &mut *cell.borrow_mut() {
-                        Value::Array(a) => set_int_elem(a, k, &v),
-                        _ => false,
-                    },
-                    _ => false,
-                };
-                if !done {
-                    return None;
-                }
-                w[dst as usize] = v;
-                go(pc + 1)
-            }
-            // $a[int] op= number, $a an array holding a number at that key
-            Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
-                if !dim_op(w, op, var, keys, val, dst) {
-                    return None;
-                }
-                go(pc + 1)
-            }
-            // An object (a generator, an Iterator) is the handler's.
-            Instr::IterNext { iter, val, key, has_key, end } => {
-                if !matches!(w[iter as usize], Value::Array(_)) {
-                    return None;
-                }
-                go(if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize })
-            }
-            // $i++ / ++$i (and --) whose value is used, on an int
-            Instr::IncDec { var, dst, inc, post } => {
-                let Value::Int(slot) = &mut w[var as usize] else { return None };
-                let i = *slot;
-                let n = if inc { i.checked_add(1) } else { i.checked_sub(1) }?;
-                *slot = n;
-                w[dst as usize] = Value::Int(if post { i } else { n });
-                go(pc + 1)
-            }
             // A user function the call site resolved, with its required
             // arguments, and no interrupt pending.
             Instr::Call { site, base: args, argc: n, dst } => {
@@ -358,6 +278,86 @@ pub(crate) fn hot(w: &mut [Value], pc: usize, instr: Instr, stop: &AtomicU64) ->
             None if op == BinOp::Concat && append_str(w, var, src) => Some(pc + 1),
             None => None,
         },
+        Instr::AssignTake { var, src } => match std::mem::replace(&mut w[src as usize], Value::Undef) {
+            // Through a reference, or undefined: the handler's.
+            v @ (Value::Ref(_) | Value::Undef) => {
+                w[src as usize] = v;
+                None
+            }
+            v => {
+                assign(w, var, v);
+                Some(pc + 1)
+            }
+        },
+        Instr::Free { reg } => {
+            clear(&mut w[reg as usize]);
+            Some(pc + 1)
+        }
+        // $a[int] on an array (or a reference to one) holding a plain
+        // value at that key
+        Instr::FetchDim { dst, arr, key, .. } => {
+            let v = match w[key as usize] {
+                Value::Int(k) => match &w[arr as usize] {
+                    Value::Array(a) => int_elem(a, k),
+                    Value::Ref(cell) => match &*cell.borrow() {
+                        Value::Array(a) => int_elem(a, k),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                Value::Str(_) => str_elem(w, arr, key),
+                _ => None,
+            }?;
+            w[dst as usize] = v;
+            Some(pc + 1)
+        }
+        // $a[int] = int|float|bool|null, $a an array (or a reference to one)
+        Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
+            if let Value::Str(_) = w[keys as usize] {
+                if !set_str_elem(w, var, keys, val, dst) {
+                    return None;
+                }
+                return Some(pc + 1);
+            }
+            let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { return None };
+            let k = *k;
+            let done = match &mut w[var as usize] {
+                Value::Array(a) => set_int_elem(a, k, &v),
+                Value::Ref(cell) => match &mut *cell.borrow_mut() {
+                    Value::Array(a) => set_int_elem(a, k, &v),
+                    _ => false,
+                },
+                _ => false,
+            };
+            if !done {
+                return None;
+            }
+            w[dst as usize] = v;
+            Some(pc + 1)
+        }
+        // $a[int] op= number, $a an array holding a number at that key
+        Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
+            if !dim_op(w, op, var, keys, val, dst) {
+                return None;
+            }
+            Some(pc + 1)
+        }
+        // An object (a generator, an Iterator) is the handler's.
+        Instr::IterNext { iter, val, key, has_key, end } => {
+            if !matches!(w[iter as usize], Value::Array(_)) {
+                return None;
+            }
+            Some(if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize })
+        }
+        // $i++ / ++$i (and --) whose value is used, on an int
+        Instr::IncDec { var, dst, inc, post } => {
+            let Value::Int(slot) = &mut w[var as usize] else { return None };
+            let i = *slot;
+            let n = if inc { i.checked_add(1) } else { i.checked_sub(1) }?;
+            *slot = n;
+            w[dst as usize] = Value::Int(if post { i } else { n });
+            Some(pc + 1)
+        }
         _ => None,
     }
 }
@@ -392,6 +392,13 @@ pub(crate) fn is_hot(instr: &Instr) -> bool {
             | Instr::Assign { .. }
             | Instr::Compare { .. }
             | Instr::AssignOp { .. }
+            | Instr::AssignTake { .. }
+            | Instr::Free { .. }
+            | Instr::FetchDim { .. }
+            | Instr::AssignDim { n: 1, append: false, .. }
+            | Instr::AssignDimOp { n: 1, .. }
+            | Instr::IterNext { .. }
+            | Instr::IncDec { .. }
     )
 }
 
@@ -407,7 +414,7 @@ pub(crate) fn hot_run(w: &mut [Value], code: &[Instr], mut pc: usize, stop: &Ato
             Some(next) => pc = next,
             None => return pc,
         }
-        if matches!(instr, Instr::Move { .. } | Instr::Assign { .. }) && ids.has_pending() {
+        if ids.has_pending() {
             return pc;
         }
     }
