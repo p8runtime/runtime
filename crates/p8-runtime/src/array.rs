@@ -458,6 +458,11 @@ impl PhpArray {
         PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0 }
     }
 
+    /// An empty list with room for `capacity` elements pushed onto it.
+    pub fn list_with_capacity(capacity: usize) -> Self {
+        PhpArray { storage: Storage::Packed(Packed { slots: Vec::with_capacity(capacity), holes: 0 }), next_free: None, cursor: 0 }
+    }
+
     /// An empty array sized for `capacity` keyed entries (array_init_size,
     /// as builtins returning a record make theirs): no growth while it fills.
     pub fn hashed(capacity: usize) -> Self {
@@ -468,6 +473,21 @@ impl PhpArray {
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
         PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free, cursor: 0 }
+    }
+
+    /// Room for `additional` more elements, made now (a builtin that
+    /// knows how many it adds grows the array once).
+    pub fn reserve(&mut self, additional: usize) {
+        match &mut self.storage {
+            Storage::Packed(p) => p.slots.reserve(additional),
+            // The buckets grown once, the index (sized by them) made again.
+            Storage::Hashed(h) if h.buckets.capacity() - h.buckets.len() < additional => {
+                let unset = h.unset_positions();
+                h.buckets.reserve_exact(additional);
+                h.reindex(&unset);
+            }
+            Storage::Hashed(_) => {}
+        }
     }
 
     pub fn len(&self) -> usize {

@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -736,7 +736,7 @@ impl Code for Instr {
             Instr::JumpIf { cond, target } => { w.byte(32); cond.put(w); target.put(w); }
             Instr::JumpIfNot { cond, target } => { w.byte(33); cond.put(w); target.put(w); }
             Instr::JumpIfSet { src, dst, target } => { w.byte(34); src.put(w); dst.put(w); target.put(w); }
-            Instr::NewArray { dst } => { w.byte(35); dst.put(w); }
+            Instr::NewArray { dst, n } => { w.byte(35); dst.put(w); n.put(w); }
             Instr::ArrayPush { arr, val } => { w.byte(36); arr.put(w); val.put(w); }
             Instr::ArraySet { arr, key, val } => { w.byte(37); arr.put(w); key.put(w); val.put(w); }
             Instr::FetchDim { dst, arr, key, quiet } => { w.byte(38); dst.put(w); arr.put(w); key.put(w); quiet.put(w); }
@@ -848,7 +848,7 @@ impl Code for Instr {
             32 => Instr::JumpIf { cond: Code::get(r)?, target: Code::get(r)? },
             33 => Instr::JumpIfNot { cond: Code::get(r)?, target: Code::get(r)? },
             34 => Instr::JumpIfSet { src: Code::get(r)?, dst: Code::get(r)?, target: Code::get(r)? },
-            35 => Instr::NewArray { dst: Code::get(r)? },
+            35 => Instr::NewArray { dst: Code::get(r)?, n: Code::get(r)? },
             36 => Instr::ArrayPush { arr: Code::get(r)?, val: Code::get(r)? },
             37 => Instr::ArraySet { arr: Code::get(r)?, key: Code::get(r)?, val: Code::get(r)? },
             38 => Instr::FetchDim { dst: Code::get(r)?, arr: Code::get(r)?, key: Code::get(r)?, quiet: Code::get(r)? },

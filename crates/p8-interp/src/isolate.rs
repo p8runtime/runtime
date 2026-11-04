@@ -175,6 +175,9 @@ pub struct Isolate {
     pub(crate) on_demand: HashMap<Sym, &'static p8_runtime::ext::ClassSpec>,
     /// The symbols of classes the engine makes objects of itself.
     pub(crate) known: Known,
+    /// The ini defaults as strings, made once (ini_get() of a setting
+    /// no request changed hands out the same string each time).
+    pub(crate) ini_texts: RefCell<HashMap<(usize, usize), PhpStr>>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -198,8 +201,14 @@ impl Isolate {
                 let s = registry.symbols();
                 Known { closure: s.intern(b"closure"), generator: s.intern(b"generator"), stdclass: s.intern(b"stdclass"), error: s.intern(b"error"), fiber: s.intern(b"fiber") }
             },
+            ini_texts: RefCell::new(HashMap::default()),
             registry,
         }
+    }
+
+    /// An ini default (a registry's static text) as a string, shared.
+    pub(crate) fn ini_text(&self, text: &'static [u8]) -> PhpStr {
+        self.ini_texts.borrow_mut().entry((text.as_ptr() as usize, text.len())).or_insert_with(|| PhpStr::from(text)).clone()
     }
 
     pub fn registry(&self) -> &Arc<Registry> {
@@ -278,6 +287,7 @@ impl Isolate {
             last_error: None,
             in_handler: false,
             arg_buf: Vec::new(),
+            key_path: Vec::new(),
             lambdas: HashMap::default(),
             natives: Vec::new(),
             native_args: Vec::new(),
@@ -367,6 +377,8 @@ pub struct Context<'i> {
     pub(crate) ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
     pub(crate) arg_buf: Vec<Value>,
+    /// A dimension write's keys while it runs (kept for its capacity).
+    pub(crate) key_path: Vec<Key>,
     /// Extensions' per-request state (Ctx::state).
     pub(crate) ext_state: HashMap<&'static str, Value>,
     /// The main frame's globals as the script left them, kept until the

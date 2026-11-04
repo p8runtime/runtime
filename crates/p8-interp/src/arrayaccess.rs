@@ -17,6 +17,7 @@ use std::rc::Rc;
 
 /// Whether the containers on the path `root[k0]...[kn-1]` reach an
 /// object (the root itself, or an array element on the way).
+/// (`keys` may be the key registers as they are: references are followed.)
 pub(crate) fn path_has_object(root: &Value, keys: &[Value], append: bool) -> bool {
     let mut cur = root.deref();
     // The containers written into: root, root[k0], ... (and the last
