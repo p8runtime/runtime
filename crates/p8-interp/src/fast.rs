@@ -14,62 +14,8 @@ impl Context<'_> {
     #[inline(always)]
     pub(crate) fn quick(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, pc: usize, instr: Instr) -> Option<Next> {
         let stop = &*self.stop;
-        // A loop's backward branch is where an interrupt is noticed: the
-        // handler then raises it.
-        let back = |target: u32| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
         let go = |next: usize| Some(Next::Go(next));
         let w = &mut regs[base..base + clo.code.nregs as usize];
-        // A compare-and-branch on two numbers.
-        macro_rules! jump_if {
-            ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {
-                match num_test($cmp, &w[$a as usize], &w[$b as usize])? {
-                    t if t == $when => {
-                        if back($target) {
-                            return None;
-                        }
-                        go($target as usize)
-                    }
-                    _ => go(pc + 1),
-                }
-            };
-        }
-        // `dst = a op b` on numbers (and `.` on strings).
-        macro_rules! arith {
-            ($op:expr, $dst:expr, $a:expr, $b:expr) => {
-                match num_op($op, &w[$a as usize], &w[$b as usize]) {
-                    // A variable holding a reference is written through it.
-                    Some(_) if matches!(w[$dst as usize], Value::Ref(_)) => None,
-                    Some(r) => {
-                        w[$dst as usize] = r;
-                        go(pc + 1)
-                    }
-                    None if $op == BinOp::Concat && concat(w, $dst, $a, $b) => go(pc + 1),
-                    None => None,
-                }
-            };
-        }
-        // A fused step and test (`IncJumpLt` and co.) on ints: step, then
-        // jump or go past the test. A non-int bound leaves the test to the
-        // next instruction; a non-int variable leaves both to the handler.
-        macro_rules! step_jump {
-            ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
-                // Written in place: no drop of the old value to compile.
-                let Value::Int(i) = &mut w[$var as usize] else { return None };
-                let n = $step(*i, 1)?;
-                *i = n;
-                match w[$b as usize] {
-                    Value::Int(b) if $holds(n, b) => {
-                        if back($target) {
-                            // The step is done: the test (next) sees the interrupt.
-                            return go(pc + 1);
-                        }
-                        go($target as usize)
-                    }
-                    Value::Int(_) => go(pc + 2),
-                    _ => go(pc + 1),
-                }
-            }};
-        }
         match instr {
             // `$this`, in a method that has one.
             Instr::This { dst } => {
@@ -119,63 +65,12 @@ impl Context<'_> {
                 w[arg as usize] = v;
                 go(pc + 1)
             }
-            Instr::Jump { target } => {
-                if back(target) {
-                    return None;
-                }
-                go(target as usize)
-            }
-            Instr::JumpLt { a, b, target } => jump_if!(Cmp::Lt, true, a, b, target),
-            Instr::JumpNotLt { a, b, target } => jump_if!(Cmp::Lt, false, a, b, target),
-            Instr::JumpLe { a, b, target } => jump_if!(Cmp::Le, true, a, b, target),
-            Instr::JumpNotLe { a, b, target } => jump_if!(Cmp::Le, false, a, b, target),
-            Instr::JumpEq { a, b, target } => jump_if!(Cmp::Eq, true, a, b, target),
-            Instr::JumpNotEq { a, b, target } => jump_if!(Cmp::Eq, false, a, b, target),
-            Instr::JumpIdentical { a, b, target } => jump_if!(Cmp::Identical, true, a, b, target),
-            Instr::JumpNotIdentical { a, b, target } => jump_if!(Cmp::Identical, false, a, b, target),
-            Instr::Compare { cmp, dst, a, b } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
-                Some(t) if cmp != Cmp::Spaceship && !matches!(w[dst as usize], Value::Ref(_)) => {
-                    w[dst as usize] = Value::Bool(t);
-                    go(pc + 1)
-                }
-                _ => None,
-            },
-            Instr::IncVar { var } => match &mut w[var as usize] {
-                Value::Int(i) if *i != i64::MAX => {
-                    *i += 1;
-                    go(pc + 1)
-                }
-                _ => None,
-            },
-            Instr::IncJumpLt { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n < b),
-            Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
-            Instr::DecJumpGt { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n > b),
-            Instr::DecJumpGe { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n >= b),
-            Instr::DecVar { var } => match &mut w[var as usize] {
-                Value::Int(i) if *i != i64::MIN => {
-                    *i -= 1;
-                    go(pc + 1)
-                }
-                _ => None,
-            },
-            Instr::Binary { op, dst, a, b } => arith!(op, dst, a, b),
-            Instr::Add { dst, a, b } => arith!(BinOp::Add, dst, a, b),
-            Instr::Sub { dst, a, b } => arith!(BinOp::Sub, dst, a, b),
-            Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b),
+            // The register-only cases the loop itself may run (`hot`).
+            i if is_hot(&i) => hot(w, pc, instr, stop).map(Next::Go),
             Instr::ConcatN { dst, start, n } => {
                 if !concat_n(w, dst, start, n) {
                     return None;
                 }
-                go(pc + 1)
-            }
-            Instr::Move { dst, src } => {
-                let v = copied(&w[src as usize])?;
-                w[dst as usize] = v;
-                go(pc + 1)
-            }
-            Instr::Assign { var, src } => {
-                let v = copied(&w[src as usize])?;
-                assign(w, var, v);
                 go(pc + 1)
             }
             Instr::AssignTake { var, src } => match std::mem::replace(&mut w[src as usize], Value::Undef) {
@@ -193,16 +88,6 @@ impl Context<'_> {
                 clear(&mut w[reg as usize]);
                 go(pc + 1)
             }
-            Instr::JumpIf { cond, target } => match w[cond as usize] {
-                Value::Bool(true) if back(target) => None,
-                Value::Bool(c) => go(if c { target as usize } else { pc + 1 }),
-                _ => None,
-            },
-            Instr::JumpIfNot { cond, target } => match w[cond as usize] {
-                Value::Bool(false) if back(target) => None,
-                Value::Bool(c) => go(if c { pc + 1 } else { target as usize }),
-                _ => None,
-            },
             // $a[int] on an array (or a reference to one) holding a plain
             // value at that key
             Instr::FetchDim { dst, arr, key, .. } => {
@@ -259,16 +144,6 @@ impl Context<'_> {
                 }
                 go(if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize })
             }
-            // $var op= number, $var holding a number
-            Instr::AssignOp { op, var, src } => match num_op(op, &w[var as usize], &w[src as usize]) {
-                Some(r) => {
-                    w[var as usize] = r;
-                    go(pc + 1)
-                }
-                // $str .= string
-                None if op == BinOp::Concat && append_str(w, var, src) => go(pc + 1),
-                None => None,
-            },
             // $i++ / ++$i (and --) whose value is used, on an int
             Instr::IncDec { var, dst, inc, post } => {
                 let Value::Int(slot) = &mut w[var as usize] else { return None };
@@ -344,6 +219,196 @@ impl Context<'_> {
                 Some(Next::Switch)
             }
             _ => None,
+        }
+    }
+}
+
+/// The common cases that need only the frame's registers `w`: jumps,
+/// compare-and-branch and arithmetic on numbers, increments, copies.
+/// The next pc, or None (the instruction's handler runs it). A loop's
+/// backward branch is where an interrupt is noticed: the handler then
+/// raises it. `quick` runs these, and the loop itself may too.
+#[inline(always)]
+pub(crate) fn hot(w: &mut [Value], pc: usize, instr: Instr, stop: &AtomicU64) -> Option<usize> {
+    let back = |target: u32| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
+    // A compare-and-branch on two numbers.
+    macro_rules! jump_if {
+        ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {
+            match num_test($cmp, &w[$a as usize], &w[$b as usize])? {
+                t if t == $when => {
+                    if back($target) {
+                        return None;
+                    }
+                    Some($target as usize)
+                }
+                _ => Some(pc + 1),
+            }
+        };
+    }
+    // `dst = a op b` on numbers (and `.` on strings).
+    macro_rules! arith {
+        ($op:expr, $dst:expr, $a:expr, $b:expr) => {
+            match num_op($op, &w[$a as usize], &w[$b as usize]) {
+                // A variable holding a reference is written through it.
+                Some(_) if matches!(w[$dst as usize], Value::Ref(_)) => None,
+                Some(r) => {
+                    w[$dst as usize] = r;
+                    Some(pc + 1)
+                }
+                None if $op == BinOp::Concat && concat(w, $dst, $a, $b) => Some(pc + 1),
+                None => None,
+            }
+        };
+    }
+    // A fused step and test (`IncJumpLt` and co.) on ints: step, then
+    // jump or go past the test. A non-int bound leaves the test to the
+    // next instruction; a non-int variable leaves both to the handler.
+    macro_rules! step_jump {
+        ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
+            // Written in place: no drop of the old value to compile.
+            let Value::Int(i) = &mut w[$var as usize] else { return None };
+            let n = $step(*i, 1)?;
+            *i = n;
+            match w[$b as usize] {
+                Value::Int(b) if $holds(n, b) => {
+                    if back($target) {
+                        // The step is done: the test (next) sees the interrupt.
+                        return Some(pc + 1);
+                    }
+                    Some($target as usize)
+                }
+                Value::Int(_) => Some(pc + 2),
+                _ => Some(pc + 1),
+            }
+        }};
+    }
+    match instr {
+        Instr::Jump { target } => {
+            if back(target) {
+                return None;
+            }
+            Some(target as usize)
+        }
+        Instr::JumpLt { a, b, target } => jump_if!(Cmp::Lt, true, a, b, target),
+        Instr::JumpNotLt { a, b, target } => jump_if!(Cmp::Lt, false, a, b, target),
+        Instr::JumpLe { a, b, target } => jump_if!(Cmp::Le, true, a, b, target),
+        Instr::JumpNotLe { a, b, target } => jump_if!(Cmp::Le, false, a, b, target),
+        Instr::JumpEq { a, b, target } => jump_if!(Cmp::Eq, true, a, b, target),
+        Instr::JumpNotEq { a, b, target } => jump_if!(Cmp::Eq, false, a, b, target),
+        Instr::JumpIdentical { a, b, target } => jump_if!(Cmp::Identical, true, a, b, target),
+        Instr::JumpNotIdentical { a, b, target } => jump_if!(Cmp::Identical, false, a, b, target),
+        Instr::JumpIf { cond, target } => match w[cond as usize] {
+            Value::Bool(true) if back(target) => None,
+            Value::Bool(c) => Some(if c { target as usize } else { pc + 1 }),
+            _ => None,
+        },
+        Instr::JumpIfNot { cond, target } => match w[cond as usize] {
+            Value::Bool(false) if back(target) => None,
+            Value::Bool(c) => Some(if c { pc + 1 } else { target as usize }),
+            _ => None,
+        },
+        Instr::IncVar { var } => match &mut w[var as usize] {
+            Value::Int(i) if *i != i64::MAX => {
+                *i += 1;
+                Some(pc + 1)
+            }
+            _ => None,
+        },
+        Instr::DecVar { var } => match &mut w[var as usize] {
+            Value::Int(i) if *i != i64::MIN => {
+                *i -= 1;
+                Some(pc + 1)
+            }
+            _ => None,
+        },
+        Instr::IncJumpLt { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n < b),
+        Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
+        Instr::DecJumpGt { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n > b),
+        Instr::DecJumpGe { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n >= b),
+        Instr::Binary { op, dst, a, b } => arith!(op, dst, a, b),
+        Instr::Add { dst, a, b } => arith!(BinOp::Add, dst, a, b),
+        Instr::Sub { dst, a, b } => arith!(BinOp::Sub, dst, a, b),
+        Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b),
+        // A write that frees an object with a destructor: the loop runs
+        // it before the next instruction.
+        Instr::Move { dst, src } => {
+            let v = copied(&w[src as usize])?;
+            w[dst as usize] = v;
+            Some(pc + 1)
+        }
+        Instr::Assign { var, src } => {
+            let v = copied(&w[src as usize])?;
+            assign(w, var, v);
+            Some(pc + 1)
+        }
+        Instr::Compare { cmp, dst, a, b } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
+            Some(t) if cmp != Cmp::Spaceship && !matches!(w[dst as usize], Value::Ref(_)) => {
+                w[dst as usize] = Value::Bool(t);
+                Some(pc + 1)
+            }
+            _ => None,
+        },
+        // $var op= number, $var holding a number
+        Instr::AssignOp { op, var, src } => match num_op(op, &w[var as usize], &w[src as usize]) {
+            Some(r) => {
+                w[var as usize] = r;
+                Some(pc + 1)
+            }
+            // $str .= string
+            None if op == BinOp::Concat && append_str(w, var, src) => Some(pc + 1),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `instr` is one of `hot`'s.
+#[inline(always)]
+pub(crate) fn is_hot(instr: &Instr) -> bool {
+    matches!(
+        instr,
+        Instr::Jump { .. }
+            | Instr::JumpLt { .. }
+            | Instr::JumpNotLt { .. }
+            | Instr::JumpLe { .. }
+            | Instr::JumpNotLe { .. }
+            | Instr::JumpEq { .. }
+            | Instr::JumpNotEq { .. }
+            | Instr::JumpIdentical { .. }
+            | Instr::JumpNotIdentical { .. }
+            | Instr::JumpIf { .. }
+            | Instr::JumpIfNot { .. }
+            | Instr::IncVar { .. }
+            | Instr::DecVar { .. }
+            | Instr::IncJumpLt { .. }
+            | Instr::IncJumpLe { .. }
+            | Instr::DecJumpGt { .. }
+            | Instr::DecJumpGe { .. }
+            | Instr::Binary { .. }
+            | Instr::Add { .. }
+            | Instr::Sub { .. }
+            | Instr::Mul { .. }
+            | Instr::Move { .. }
+            | Instr::Assign { .. }
+            | Instr::Compare { .. }
+            | Instr::AssignOp { .. }
+    )
+}
+
+/// Run `hot`'s cases from `pc` of a frame (`code`, its registers `w`) on,
+/// until an instruction it leaves to its handler, or a write that freed
+/// an object with a destructor (the loop runs it next): that pc. A small
+/// function of its own, so its state stays in machine registers.
+#[inline(never)]
+pub(crate) fn hot_run(w: &mut [Value], code: &[Instr], mut pc: usize, stop: &AtomicU64, ids: &Ids) -> usize {
+    loop {
+        let instr = code[pc];
+        match hot(w, pc, instr, stop) {
+            Some(next) => pc = next,
+            None => return pc,
+        }
+        if matches!(instr, Instr::Move { .. } | Instr::Assign { .. }) && ids.has_pending() {
+            return pc;
         }
     }
 }

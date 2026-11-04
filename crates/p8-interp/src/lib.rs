@@ -144,6 +144,10 @@ enum Next {
     Switch,
 }
 
+/// Prototype switch (#232): the loop runs the hottest register-only
+/// instructions itself (variant A+) or leaves every one to its handler (A).
+const HOT_LOOP: bool = false;
+
 /// What a handler leaves the loop to do: `Next`, or an exception (kept
 /// in `Context::thrown`), small enough to come back in registers.
 #[derive(Clone, Copy)]
@@ -1129,62 +1133,76 @@ impl Context<'_> {
     /// Run frames until the bottom one returns: one instruction at a time,
     /// each by its own handler (`step`).
     fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let top = self.frames.last().expect("a frame");
-        let mut pc = top.pc as usize;
-        // The frame the instructions run in (refreshed when it changes).
-        let mut func = Rc::clone(&top.func);
-        let mut base = top.base as usize;
+        let mut pc = self.frames.last().expect("a frame").pc as usize;
         // Fiber::throw(): the exception is raised where the fiber went on.
         if let Some(e) = self.fiber_throw.take() {
             pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
-            let top = self.frames.last().expect("a frame");
-            func = Rc::clone(&top.func);
-            base = top.base as usize;
+        }
+        // Destructors already due run before this run's first instruction.
+        if self.ids.has_pending() {
+            pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
         }
         loop {
-            let at = pc;
-            match self.step(regs, &func, base, at, func.code.code[at]) {
-                Flow::Go(next) => {
-                    pc = next;
-                    if self.pending_errors.is_empty() && !self.ids.has_pending() && self.fiber_suspended.is_none() {
-                        continue;
-                    }
-                    // Fiber::suspend(): leave the fiber's frames where they are.
-                    if self.fiber_suspended.is_some() {
-                        if let Some(top) = self.frames.last_mut() {
-                            top.pc = pc as u32;
-                        }
-                        return Ok(());
-                    }
-                }
-                Flow::Switch => {
-                    if self.frames.len() == self.frames.floor {
-                        if !self.pending_errors.is_empty() {
-                            self.dispatch_errors(regs)?;
-                        }
-                        if self.ids.has_pending() {
-                            self.run_destructors(regs)?;
-                        }
-                        return Ok(());
-                    }
-                    pc = self.frames.last().expect("a frame").pc as usize;
-                }
-                Flow::Throw => match self.take_thrown() {
-                    // A class an autoloader may declare: run them, then this
-                    // instruction again.
-                    Throw::Autoload(name) => pc = self.autoload_then(regs, name, at)?,
-                    t => pc = self.unwind(regs, t, at)?,
-                },
-            }
-            if !self.pending_errors.is_empty() || self.ids.has_pending() {
-                pc = self.after_errors(regs, pc, at)?;
-            }
-            // A call, a return or an exception may have changed the frame.
+            // One frame's run: its code and registers stay at hand until a
+            // call, a return or an exception changes the frame.
             let top = self.frames.last().expect("a frame");
-            if !Rc::ptr_eq(&func, &top.func) {
-                func = Rc::clone(&top.func);
+            let func = Rc::clone(&top.func);
+            let base = top.base as usize;
+            let code = &func.code.code[..];
+            let nregs = func.code.nregs as usize;
+            loop {
+                // The hottest register-only cases run in a loop of their own
+                // (`hot_run`); a write there that freed an object with a
+                // destructor stops it, and the destructor runs now.
+                if HOT_LOOP && fast::is_hot(&code[pc]) {
+                    pc = fast::hot_run(&mut regs[base..base + nregs], code, pc, &self.stop, &self.ids);
+                    if self.ids.has_pending() {
+                        pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                        break;
+                    }
+                }
+                let at = pc;
+                let instr = code[at];
+                // Everything else by its handler.
+                match self.step(regs, &func, base, at, instr) {
+                    Flow::Go(next) => {
+                        pc = next;
+                        if self.pending_errors.is_empty() && !self.ids.has_pending() && self.fiber_suspended.is_none() {
+                            continue;
+                        }
+                        // Fiber::suspend(): leave the fiber's frames where they are.
+                        if self.fiber_suspended.is_some() {
+                            if let Some(top) = self.frames.last_mut() {
+                                top.pc = pc as u32;
+                            }
+                            return Ok(());
+                        }
+                    }
+                    Flow::Switch => {
+                        if self.frames.len() == self.frames.floor {
+                            if !self.pending_errors.is_empty() {
+                                self.dispatch_errors(regs)?;
+                            }
+                            if self.ids.has_pending() {
+                                self.run_destructors(regs)?;
+                            }
+                            return Ok(());
+                        }
+                        pc = self.frames.last().expect("a frame").pc as usize;
+                    }
+                    Flow::Throw => match self.take_thrown() {
+                        // A class an autoloader may declare: run them, then
+                        // this instruction again.
+                        Throw::Autoload(name) => pc = self.autoload_then(regs, name, at)?,
+                        t => pc = self.unwind(regs, t, at)?,
+                    },
+                }
+                if !self.pending_errors.is_empty() || self.ids.has_pending() {
+                    pc = self.after_errors(regs, pc, at)?;
+                }
+                // The frame may have changed.
+                break;
             }
-            base = top.base as usize;
         }
     }
 
