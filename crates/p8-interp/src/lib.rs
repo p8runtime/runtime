@@ -4558,7 +4558,15 @@ impl Ctx for Context<'_> {
         self.bind(closure, new_this, scope)
     }
 
+    /// Closure::fromCallable(): checked as zend_create_closure_from_callable
+    /// does (zend_is_callable_ex) first. (`f(...)` and reflection make
+    /// their closures without that check.)
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw> {
+        if !matches!(callable.deref(), Value::Object(o) if callable::closure_data(&o).is_some())
+            && let Some(why) = self.why_not_callable(callable, true)?
+        {
+            return Err(self.throw("TypeError", format!("Failed to create closure from callable: {why}")));
+        }
         self.closure_from_callable(callable)
     }
 

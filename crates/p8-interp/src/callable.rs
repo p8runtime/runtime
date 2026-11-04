@@ -192,9 +192,6 @@ impl Context<'_> {
         {
             return Ok(Value::Object(o));
         }
-        if let Some(why) = self.why_not_callable(callable, true)? {
-            return Err(self.throw("TypeError", format!("Failed to create closure from callable: {why}")));
-        }
         let data = match self.resolve_callable(callable)? {
             Target::Builtin(i) => ClosureData {
                 func: ClosureFunc::Builtin(i),
@@ -780,8 +777,8 @@ impl Context<'_> {
             crate::classes::method_of(&class, key).cloned().map(|m| {
                 // Code of a class naming its own private method on one of
                 // its instances means that one (as `method_frame` does).
-                match self.scope().0 {
-                    Some(scope) if !strict && *m.declaring != *scope.lower && class.is_a(&scope.lower) => match crate::classes::method_of(&scope, key) {
+                match self.frames.last().and_then(|f| f.scope.as_deref()) {
+                    Some(scope) if !strict && *m.declaring != *scope.lower && class.is_a(&scope.lower) => match crate::classes::method_of(scope, key) {
                         Some(own) if own.visibility == p8_runtime::object::Visibility::Private && *own.declaring == *scope.lower => Rc::clone(own),
                         _ => m,
                     },
@@ -791,16 +788,17 @@ impl Context<'_> {
         };
         // __call / __callStatic answer what is not there, or not visible.
         let magic = |c: &Class, object: bool| c.method(if object { b"__call" } else { b"__callstatic" }).is_some();
-        let this_fits = self.frames.last().and_then(|f| f.this.as_ref()).is_some_and(|t| t.class.is_a(&class.lower));
         let Some(m) = found else {
-            let via = if object.is_some() { magic(&class, true) } else { magic(&class, false) || (magic(&class, true) && this_fits) };
+            let this_fits = || self.frames.last().and_then(|f| f.this.as_ref()).is_some_and(|t| t.class.is_a(&class.lower));
+            let via = if object.is_some() { magic(&class, true) } else { magic(&class, false) || (magic(&class, true) && this_fits()) };
             return Ok(if via { None } else { Some(format!("class {} does not have a method \"{}\"", text(class.name.as_bytes()), text(method))) });
         };
-        let declaring = self.declaring(&class, &m.declaring);
-        let scope = self.scope().0;
         let shown = || format!("{}::{}()", text(class.name.as_bytes()), text(m.name.as_bytes()));
-        let accessible = {
+        // A public method needs no visibility check (the common case).
+        let accessible = m.visibility == p8_runtime::object::Visibility::Public || {
+            let declaring = self.declaring(&class, &m.declaring);
             let root = self.access_class(&declaring, &m, key);
+            let scope = self.scope().0;
             p8_runtime::object::visible(m.visibility, &root, scope.as_deref())
         };
         if !accessible && magic(&class, object.is_some()) {
