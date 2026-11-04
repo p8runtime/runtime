@@ -30,8 +30,7 @@ impl Context<'_> {
     fn code_for(&self, callee: &Callee) -> Option<Arc<Function>> {
         match callee {
             Callee::Function(name) => {
-                let lower = name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase();
-                let &i = self.functions.get(&lower)?;
+                let &i = self.functions.get(&self.sym_of(name.as_bytes())?)?;
                 Some(Arc::clone(&self.closures[i as usize].code))
             }
             Callee::Method(class, name) => {
@@ -51,7 +50,7 @@ impl Context<'_> {
         match callee {
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?;
-                self.classes.get(&m.declaring).cloned().or_else(|| Some(Rc::clone(class)))
+                self.class_named(&m.declaring).cloned().or_else(|| Some(Rc::clone(class)))
             }
             Callee::Closure(o) => closure_data(o)?.scope.clone(),
             Callee::Function(_) => None,
@@ -62,7 +61,7 @@ impl Context<'_> {
     fn in_def<'a, T>(&'a self, def: &'a ClassDef, pick: &dyn Fn(&'a ClassDef) -> Option<T>) -> Option<T> {
         pick(def).or_else(|| {
             def.traits.iter().find_map(|t| {
-                let used = self.defs_by_name.get(&t.as_bytes().to_ascii_lowercase())?;
+                let used = self.def_named(t.as_bytes())?;
                 self.in_def(used, pick)
             })
         })
@@ -71,7 +70,7 @@ impl Context<'_> {
     fn find_meta<'a>(&'a self, subject: &Subject, code: Option<&'a Arc<Function>>) -> Option<Found<'a>> {
         match subject {
             Subject::Class(class) => {
-                let def = self.defs_by_name.get(&class.lower)?;
+                let def = self.def_named(&class.lower)?;
                 Some(Found { meta: &def.meta, attrs: &def.meta.attrs, scope: Some(Rc::clone(class)), def: Some(def) })
             }
             Subject::Function(callee) => {
@@ -89,14 +88,14 @@ impl Context<'_> {
                     Some(i) => class.properties[i].declaring.clone(),
                     None => class.statics.get(n)?.2.clone(),
                 };
-                let def = self.defs_by_name.get(&declaring)?;
+                let def = self.def_named(&declaring)?;
                 let meta = self.in_def(def, &|d| d.properties.iter().find(|p| p.name.as_bytes() == n).map(|p| &p.meta))?;
-                Some(Found { meta, attrs: &meta.attrs, scope: self.classes.get(&declaring).cloned(), def: None })
+                Some(Found { meta, attrs: &meta.attrs, scope: self.class_named(&declaring).cloned(), def: None })
             }
             Subject::Constant(class, name) => {
                 let n = name.as_bytes();
-                let declaring = class.constants.get(n)?.declaring_name.as_bytes().to_ascii_lowercase();
-                let def = self.defs_by_name.get(&declaring)?;
+                let declaring = class.constants.get(n)?.declaring_name.as_bytes();
+                let def = self.def_named(declaring)?;
                 let meta = self.in_def(def, &|d| {
                     d.constants
                         .iter()
@@ -104,7 +103,7 @@ impl Context<'_> {
                         .map(|c| &c.meta)
                         .or_else(|| d.cases.iter().position(|(c, _)| c.as_bytes() == n).and_then(|i| d.case_meta.get(i)))
                 })?;
-                Some(Found { meta, attrs: &meta.attrs, scope: self.classes.get(&declaring).cloned(), def: None })
+                Some(Found { meta, attrs: &meta.attrs, scope: self.class_named(&declaring).cloned(), def: None })
             }
         }
     }
@@ -144,7 +143,7 @@ impl Context<'_> {
         };
         if let (Some(def), Subject::Class(class)) = (found.def, subject) {
             facts.line = def.line;
-            facts.file = self.class_origins.get(&class.lower).map(|(file, _)| PhpStr::from(file.as_bytes()));
+            facts.file = self.sym_of(&class.lower).and_then(|key| self.class_origins.get(&key)).map(|(file, _)| PhpStr::from(file.as_bytes()));
         }
         facts
     }

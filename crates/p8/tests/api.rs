@@ -205,3 +205,15 @@ fn kept_compiled_files_run_as_new_and_follow_changes() {
     std::fs::write(&part, "<?php static $n = 10; echo ++$n;").expect("rewrite part");
     assert_eq!(request(&platform, &mut isolate, &main), (0, "1111\n".into()));
 }
+
+#[test]
+#[should_panic(expected = "Platform that compiled it")]
+fn a_script_runs_only_where_its_names_mean_the_same() {
+    // Names compile to the compiling Platform's symbols: another
+    // Platform's isolate would read them as other names.
+    let (one, two) = (platform(), platform());
+    let script = one.compile(b"<?php function f() {} f();", "t.php").expect("compiles");
+    let mut isolate = two.new_isolate();
+    let mut host = Capture::default();
+    isolate.new_context(&mut host).run(&script);
+}

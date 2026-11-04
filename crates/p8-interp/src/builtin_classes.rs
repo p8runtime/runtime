@@ -13,7 +13,38 @@ use p8_runtime::value::Value;
 use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 
-pub(crate) type Classes = HashMap<Vec<u8>, Rc<Class>>;
+use p8_runtime::symbol::{Sym, Symbols};
+
+/// Classes by (lowercase) name.
+pub(crate) type Table = HashMap<Sym, Rc<Class>>;
+
+/// A class table being filled, by lowercase name (each interned).
+pub(crate) struct Classes<'a> {
+    pub(crate) table: &'a mut Table,
+    pub(crate) symbols: &'a Symbols,
+}
+
+impl Classes<'_> {
+    pub(crate) fn get(&self, lower: &[u8]) -> Option<&Rc<Class>> {
+        self.table.get(&self.symbols.find_lower(lower)?)
+    }
+
+    pub(crate) fn get_mut(&mut self, lower: &[u8]) -> Option<&mut Rc<Class>> {
+        self.table.get_mut(&self.symbols.find_lower(lower)?)
+    }
+
+    pub(crate) fn insert(&mut self, lower: Vec<u8>, class: Rc<Class>) {
+        self.table.insert(self.symbols.intern_lower(&lower), class);
+    }
+}
+
+impl std::ops::Index<&[u8]> for Classes<'_> {
+    type Output = Rc<Class>;
+
+    fn index(&self, lower: &[u8]) -> &Rc<Class> {
+        self.get(lower).expect("a builtin class declared before")
+    }
+}
 
 /// A class: `parent` and `interfaces` already in `classes`.
 fn declare(
@@ -153,8 +184,9 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
     ("__toString", Some(to_string), false),
 ];
 
-pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
-    let mut c = Classes::default();
+pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Table {
+    let mut table = Table::default();
+    let mut c = Classes { table: &mut table, symbols: registry.symbols() };
     // #[AllowDynamicProperties], which its subclasses inherit.
     declare(&mut c, "stdClass", p8_runtime::object::CLASS_ALLOW_DYNAMIC, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
@@ -254,8 +286,17 @@ pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Classes {
     }
     // Reflection's and the extensions' classes are declared when first
     // wanted (Context::builtin_on_demand).
-    let _ = registry;
-    c
+    table
+}
+
+/// The classes declared when first wanted (Reflection, the extensions'),
+/// by name: the first of a name counts.
+pub(crate) fn on_demand(registry: &p8_runtime::ext::Registry) -> HashMap<Sym, &'static p8_runtime::ext::ClassSpec> {
+    let mut specs = HashMap::default();
+    for spec in crate::reflection::CLASSES.iter().chain(crate::fiber::CLASSES.iter()).chain(registry.classes().iter().copied()) {
+        specs.entry(registry.symbols().intern_lower(spec.name.as_bytes())).or_insert(spec);
+    }
+    specs
 }
 
 /// Declare a class an extension (or the engine's Reflection) specifies.

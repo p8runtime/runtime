@@ -12,6 +12,7 @@
 use p8_runtime::frozen::{Frozen, Text};
 use p8_runtime::object::Visibility;
 use p8_runtime::ops::BinOp;
+pub use p8_runtime::symbol::Sym;
 use std::sync::Arc;
 
 /// A register index within the current frame.
@@ -484,11 +485,10 @@ impl IncludeKind {
 /// code is compiled; `static` (late static binding) when it runs.
 #[derive(Debug, Clone)]
 pub enum ClassRef {
-    /// Lowercase name, and the name as written.
-    Named(Text, Text),
+    Named(ClassName),
     /// `self` or `parent`, resolved to this class: a static call through
     /// it keeps the caller's called class (late static binding forwards).
-    Forward(Text, Text),
+    Forward(ClassName),
     Static,
     /// `self` / `parent` in a trait: the class using it, or its parent,
     /// known when the code runs (forwarding, as `self::` does).
@@ -499,11 +499,20 @@ pub enum ClassRef {
     Dynamic(Reg),
 }
 
+/// A class named in code: its symbol (the lowercase name's), the
+/// lowercase name, and the name as written (for messages).
+#[derive(Debug, Clone)]
+pub struct ClassName {
+    pub sym: Sym,
+    pub lower: Text,
+    pub display: Text,
+}
+
 impl ClassRef {
-    /// The lowercase name, unless it is `static`.
-    pub fn lower(&self) -> Option<&Text> {
+    /// The class's name, unless it is only known when the code runs.
+    pub fn name(&self) -> Option<&ClassName> {
         match self {
-            ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => Some(lower),
+            ClassRef::Named(name) | ClassRef::Forward(name) => Some(name),
             ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope | ClassRef::Dynamic(_) => None,
         }
     }
@@ -515,6 +524,11 @@ impl ClassRef {
 pub struct ClassDef {
     /// As declared.
     pub name: Text,
+    /// The lowercase name's symbol.
+    pub sym: Sym,
+    /// The classes that must be declared before this one links: its
+    /// parent, interfaces and traits (their lowercase names' symbols).
+    pub deps: Vec<Sym>,
     pub parent: Option<Text>,
     pub interfaces: Vec<Text>,
     /// CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, … (p8_runtime::object)
@@ -631,8 +645,12 @@ pub struct MethodDef {
 pub struct Site {
     /// Lowercased for functions; as written for constants.
     pub name: Text,
-    /// The global name to try if `name` (namespaced) is not found.
-    pub fallback: Option<Text>,
+    /// `name`'s symbol (for a constant, of its key: the namespace
+    /// lowercased).
+    pub sym: Sym,
+    /// The global name to try if `name` (namespaced) is not found, and
+    /// its symbol.
+    pub fallback: Option<(Text, Sym)>,
     /// The name as written, for messages.
     pub display: Text,
 }
@@ -661,6 +679,8 @@ pub struct Param {
 #[derive(Debug)]
 pub struct Function {
     pub name: Text,
+    /// The lowercase name's symbol (a declared function's key).
+    pub sym: Sym,
     /// The declared return type (checked by Rare::VerifyReturn).
     pub ret_type: Option<p8_runtime::types::TypeDecl>,
     /// The file declares strict_types=1: no weak conversions for the

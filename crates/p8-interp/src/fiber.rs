@@ -115,7 +115,7 @@ impl Context<'_> {
                 // A suspended fiber destroyed: unwound by an exit no catch
                 // matches (a plain object, not Throwable), its finally blocks run.
                 state(fiber).borrow_mut().closing = true;
-                let marker = Ctx::new_object(self, &Rc::clone(&self.classes[b"stdclass".as_slice()]));
+                let marker = Ctx::new_object(self, &Rc::clone(&self.classes[&self.isolate.known.stdclass]));
                 self.fiber_exit = Some(Rc::clone(&marker));
                 let mut regs = std::mem::take(&mut self.isolate.regs);
                 let r = self.fiber_resume(&mut regs, fiber, Value::Object(Rc::clone(&marker)), true);
@@ -202,7 +202,8 @@ impl Context<'_> {
     /// a fiber of its own, as PHP's do: if it suspends, that fiber is left
     /// to whoever kept it (Fiber::getCurrent()) and the collector goes on.
     pub(crate) fn destruct_in_fiber(&mut self, m: MethodFrame) -> Result<(), Throw> {
-        let class = match self.classes.get(b"fiber".as_slice()).cloned().or_else(|| self.builtin_on_demand(b"fiber")) {
+        let fiber = self.isolate.known.fiber;
+        let class = match self.classes.get(&fiber).cloned().or_else(|| self.builtin_on_demand(fiber)) {
             Some(c) => c,
             None => return Ok(()),
         };

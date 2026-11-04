@@ -116,10 +116,8 @@ impl Context<'_> {
 
     fn early_bind_all(&mut self, defs: &[Arc<ClassDef>]) -> Result<(), Throw> {
         for def in defs {
-            let known = |n: &p8_runtime::frozen::Text| self.classes.contains_key(&n.as_bytes().to_ascii_lowercase());
-            if def.parent.as_ref().is_none_or(known) && def.interfaces.iter().all(known) && def.traits.iter().all(known) {
-                let lower = def.name.as_bytes().to_ascii_lowercase();
-                if self.classes.contains_key(&lower) {
+            if def.deps.iter().all(|d| self.classes.contains_key(d)) {
+                if self.classes.contains_key(&def.sym) {
                     continue;
                 }
                 self.declare_class(def)?;
@@ -134,8 +132,8 @@ impl Context<'_> {
         if self.declared.contains_key(&key) {
             return Ok(());
         }
-        let lower = def.name.as_bytes().to_ascii_lowercase();
-        if let Some(existing) = self.classes.get(&lower) {
+        let sym = def.sym;
+        if let Some(existing) = self.classes.get(&sym) {
             use p8_runtime::object::{CLASS_ENUM, CLASS_INTERFACE, CLASS_TRAIT};
             let kind = match existing.flags {
                 f if f & CLASS_INTERFACE != 0 => "interface",
@@ -144,7 +142,7 @@ impl Context<'_> {
                 _ => "class",
             };
             let name = String::from_utf8_lossy(existing.name.as_bytes()).into_owned();
-            let message = match self.class_origins.get(&lower) {
+            let message = match self.class_origins.get(&sym) {
                 Some((file, line)) => format!("Cannot redeclare {kind} {name} (previously declared in {file}:{line})"),
                 None => format!("Cannot redeclare {kind} {name}"),
             };
@@ -152,10 +150,10 @@ impl Context<'_> {
         }
         let class = self.link(def)?;
         let file = self.binding_file.clone().unwrap_or_else(|| self.location().0);
-        self.class_origins.insert(lower.clone(), (file, def.line));
-        self.defs_by_name.insert(lower.clone(), Arc::clone(def));
+        self.class_origins.insert(sym, (file, def.line));
+        self.defs_by_name.insert(sym, Arc::clone(def));
         self.declared_order.push((class.name.clone(), Rc::clone(&class)));
-        self.classes.insert(lower, class);
+        self.classes.insert(sym, class);
         self.declared.insert(key, Arc::clone(def));
         Ok(())
     }
@@ -620,15 +618,19 @@ impl Context<'_> {
         match &func.classes[i as usize] {
             ClassRef::Dynamic(r) => match w[*r as usize].deref() {
                 Value::Object(o) => Ok(Rc::clone(&o.class)),
-                Value::Str(name) => match self.classes.get(&name.as_bytes().to_ascii_lowercase()) {
+                Value::Str(name) => match self.sym_of(name.as_bytes()).and_then(|key| self.classes.get(&key)) {
                     Some(c) => Ok(Rc::clone(c)),
                     None => self.find_class(name.as_bytes()),
                 },
+                Value::Undef => {
+                    self.undefined(func, *r);
+                    Err(self.throw("Error", "Class name must be a valid object or a string"))
+                }
                 _ => Err(self.throw("Error", "Class name must be a valid object or a string")),
             },
-            ClassRef::Named(lower, display) | ClassRef::Forward(lower, display) => match self.classes.get(lower.as_bytes()) {
+            ClassRef::Named(name) | ClassRef::Forward(name) => match self.classes.get(&name.sym) {
                 Some(c) => Ok(Rc::clone(c)),
-                None => self.find_class(display.as_bytes()),
+                None => self.find_class(name.display.as_bytes()),
             },
             ClassRef::Scope => match self.scope().0 {
                 Some(c) => Ok(c),
@@ -763,7 +765,7 @@ impl Context<'_> {
             }
             c = k.parent.as_ref();
         }
-        self.classes.get(lower).cloned().unwrap_or_else(|| Rc::clone(class))
+        self.class_named(lower).cloned().unwrap_or_else(|| Rc::clone(class))
     }
 
     /// The class a method's protected access is checked against: the top
@@ -1314,7 +1316,7 @@ impl Context<'_> {
                     let declaring = if c.declaring_name == class.name {
                         Rc::clone(&class)
                     } else {
-                        self.classes.get(&c.declaring_name.as_bytes().to_ascii_lowercase()).cloned().unwrap_or_else(|| Rc::clone(&class))
+                        self.class_named(c.declaring_name.as_bytes()).cloned().unwrap_or_else(|| Rc::clone(&class))
                     };
                     if !visible(c.visibility, &declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
                         return Err(self.throw(
@@ -1348,7 +1350,7 @@ impl Context<'_> {
         if self.const_cache.contains_key(&key) {
             return Ok(None);
         }
-        let scope = self.classes.get(&key.0).cloned().unwrap_or_else(|| Rc::clone(&class));
+        let scope = self.class_named(&key.0).cloned().unwrap_or_else(|| Rc::clone(&class));
         Ok(Some((init.clone(), scope, key)))
     }
 
@@ -1467,7 +1469,7 @@ impl Context<'_> {
     pub(crate) fn hooked_property_seen<'c>(&self, o: &'c Rc<Object>, name: &[u8], check_visibility: bool) -> Option<&'c Property> {
         let slots = o.class.slots.get(name)?;
         let p = slots.iter().map(|&i| &o.class.properties[i]).find(|p| p.hooks != 0)?;
-        let declaring = self.classes.get(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(&o.class));
+        let declaring = self.class_named(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(&o.class));
         if check_visibility && !visible(p.visibility, &declaring, self.scope().0.as_deref()) {
             return None;
         }
@@ -1520,7 +1522,7 @@ impl Context<'_> {
         for (name, c) in pending {
             let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.clone());
             if !self.const_cache.contains_key(&key) {
-                let scope = self.classes.get(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
+                let scope = self.class_named(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
                 let thunk = c.init.clone().expect("filtered");
                 self.eval_constant(regs, &thunk, scope, key)?;
             }
@@ -1534,7 +1536,7 @@ impl Context<'_> {
         let mut defaults = Vec::new();
         for (i, p) in class.properties.iter().enumerate() {
             if let Some(thunk) = &p.init {
-                let scope = self.classes.get(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                let scope = self.class_named(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
                 defaults.push((i, self.run_thunk(regs, thunk, scope)?));
             }
         }
@@ -1671,7 +1673,7 @@ impl Context<'_> {
         if let Value::Object(_) = v {
             return v;
         }
-        let class = Rc::clone(&self.classes[b"stdclass".as_slice()]);
+        let class = Rc::clone(self.class_named(b"stdclass").expect("stdClass"));
         let o = Object::new(class, &self.ids);
         {
             let mut props = o.dynamic.borrow_mut();
@@ -1696,7 +1698,7 @@ impl Context<'_> {
         let class = self.class_of(func, class, w)?;
         let Some(name) = name.to_php_string() else { return Ok(false) };
         let Some((cell, visibility, declaring)) = class.statics.get(name.as_bytes()) else { return Ok(false) };
-        let declaring = self.classes.get(declaring).cloned().unwrap_or_else(|| Rc::clone(&class));
+        let declaring = self.class_named(declaring).cloned().unwrap_or_else(|| Rc::clone(&class));
         Ok(visible(*visibility, &declaring, self.scope().0.as_deref()) && !matches!(cell.borrow().deref(), Value::Null | Value::Undef))
     }
 
@@ -1728,7 +1730,7 @@ impl Context<'_> {
                 Value::Str(name) => self.is_a_named(&o.class, &name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase()),
                 _ => false,
             },
-            ClassRef::Named(lower, _) | ClassRef::Forward(lower, _) => self.is_a_named(&o.class, lower.as_bytes()),
+            ClassRef::Named(name) | ClassRef::Forward(name) => o.class.is_a(name.lower.as_bytes()) || self.classes.get(&name.sym).is_some_and(|c| c.lower != name.lower.as_bytes() && o.class.is_a(&c.lower)),
             ClassRef::Static => self.scope().1.is_some_and(|c| o.class.is_a(&c.lower)),
             ClassRef::Scope => self.scope().0.is_some_and(|c| o.class.is_a(&c.lower)),
             ClassRef::ParentScope => self.scope().0.and_then(|c| c.parent.clone()).is_some_and(|c| o.class.is_a(&c.lower)),
@@ -1739,7 +1741,7 @@ impl Context<'_> {
     /// or implementers: by name, or through an alias (class_alias) of a
     /// declared class; never autoloaded (instanceof and catch don't).
     fn is_a_named(&self, class: &Class, lower: &[u8]) -> bool {
-        class.is_a(lower) || self.classes.get(lower).is_some_and(|c| c.lower != lower && class.is_a(&c.lower))
+        class.is_a(lower) || self.class_named(lower).is_some_and(|c| c.lower != lower && class.is_a(&c.lower))
     }
 
     /// `clone $x`: the copy, and its `__clone`'s frame (if any).

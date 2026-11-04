@@ -108,7 +108,7 @@ impl Context<'_> {
             None => (None, None, None),
         };
         let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None };
-        let class = Rc::clone(&self.classes[b"closure".as_slice()]);
+        let class = Rc::clone(&self.classes[&self.isolate.known.closure]);
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
 
@@ -137,7 +137,7 @@ impl Context<'_> {
     }
 
     fn new_closure(&self, data: ClosureData) -> Value {
-        let class = Rc::clone(&self.classes[b"closure".as_slice()]);
+        let class = Rc::clone(&self.classes[&self.isolate.known.closure]);
         Value::Object(Object::with_data(class, &self.ids, Some(Rc::new(data))))
     }
 
@@ -162,7 +162,7 @@ impl Context<'_> {
                 if name.as_bytes() == b"static" {
                     data.scope.clone()
                 } else {
-                    match self.classes.get(&name.as_bytes().to_ascii_lowercase()) {
+                    match self.class_named(name.as_bytes()) {
                         Some(c) => Some(Rc::clone(c)),
                         None => {
                             self.warn(format!("Class \"{}\" not found", text(name.as_bytes())));
@@ -284,14 +284,13 @@ impl Context<'_> {
             let method = &name[at + 2..];
             return self.static_by_name(&name[..at], &method.to_ascii_lowercase(), method);
         }
-        let lower = name.to_ascii_lowercase();
-        if let Some(&f) = self.functions.get(&lower) {
-            let func = Rc::clone(&self.closures[f as usize]);
-            return Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None }));
-        }
-        match self.builtin(&lower) {
-            Some(i) => Ok(Target::Builtin(i)),
-            None => Err(self.throw("Error", format!("Call to undefined function {}()", text(name)))),
+        match self.function_named(name) {
+            Some(crate::sites::Callee::User(f)) => {
+                let func = Rc::clone(&self.closures[f as usize]);
+                Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None }))
+            }
+            Some(crate::sites::Callee::Builtin(i)) => Ok(Target::Builtin(i)),
+            _ => Err(self.throw("Error", format!("Call to undefined function {}()", text(name)))),
         }
     }
 
@@ -331,7 +330,7 @@ impl Context<'_> {
                 ),
             ));
         }
-        let scope = self.classes.get(&method.declaring).cloned().unwrap_or_else(|| Rc::clone(&target));
+        let scope = self.class_named(&method.declaring).cloned().unwrap_or_else(|| Rc::clone(&target));
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).or(forwarded).unwrap_or(target);
         let this = if method.is_static { None } else { this };
         Ok(Target::Frame(MethodFrame::method(self.code_of(&method), this, scope, called)))
