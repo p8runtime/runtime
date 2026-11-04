@@ -69,7 +69,7 @@ impl Symbols {
     /// The symbol of a function or class name: ASCII-lowercased (PHP's
     /// zend_str_tolower; other bytes are kept).
     pub fn intern_lower(&self, name: &[u8]) -> Sym {
-        with_lower(name, |lower| self.intern(lower))
+        with_lower(name, name.len(), |lower| self.intern(lower))
     }
 
     /// The symbol of `name` (exactly as given), if it was interned.
@@ -80,7 +80,15 @@ impl Symbols {
     /// The symbol of a function or class name in any case, if it was
     /// interned. Allocates nothing for a name up to 128 bytes.
     pub fn find_lower(&self, name: &[u8]) -> Option<Sym> {
-        with_lower(name, |lower| self.find(lower))
+        with_lower(name, name.len(), |lower| self.find(lower))
+    }
+
+    /// The symbol of a constant's key (see [`crate::ext::const_key`]: its
+    /// namespace in any case), if it was interned. Allocates nothing for a
+    /// name up to 128 bytes.
+    pub fn find_const(&self, name: &[u8]) -> Option<Sym> {
+        let namespace = name.iter().rposition(|&c| c == b'\\').unwrap_or(0);
+        with_lower(name, namespace, |key| self.find(key))
     }
 
     /// The name `s` was interned from.
@@ -98,20 +106,24 @@ impl Symbols {
     }
 }
 
-/// Run `f` on `name` ASCII-lowercased: the name itself when it has no
-/// uppercase letter, else a copy (on the stack when it is short).
-fn with_lower<R>(name: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
-    if !name.iter().any(u8::is_ascii_uppercase) {
+/// Run `f` on `name` with its first `upto` bytes ASCII-lowercased: the
+/// name itself when they have no uppercase letter, else a copy (on the
+/// stack when it is short).
+fn with_lower<R>(name: &[u8], upto: usize, f: impl FnOnce(&[u8]) -> R) -> R {
+    if !name[..upto].iter().any(u8::is_ascii_uppercase) {
         return f(name);
     }
-    if name.len() <= STACK_NAME {
-        let mut buf = [0u8; STACK_NAME];
-        let lower = &mut buf[..name.len()];
-        lower.copy_from_slice(name);
-        lower.make_ascii_lowercase();
-        return f(lower);
-    }
-    f(&name.to_ascii_lowercase())
+    let mut buf = [0u8; STACK_NAME];
+    let mut heap = Vec::new();
+    let folded = if name.len() <= STACK_NAME {
+        &mut buf[..name.len()]
+    } else {
+        heap.resize(name.len(), 0);
+        &mut heap[..]
+    };
+    folded.copy_from_slice(name);
+    folded[..upto].make_ascii_lowercase();
+    f(folded)
 }
 
 #[cfg(test)]
@@ -143,6 +155,17 @@ mod tests {
         assert_eq!(symbols.find_lower(&long), None);
         let s = symbols.intern_lower(&long);
         assert_eq!(symbols.find_lower(&vec![b'a'; 300]), Some(s));
+    }
+
+    #[test]
+    fn a_constant_is_found_with_its_namespace_in_any_case() {
+        let symbols = Symbols::default();
+        let c = symbols.intern(&crate::ext::const_key(b"App\\Util\\LIMIT"));
+        assert_eq!(symbols.find_const(b"APP\\util\\LIMIT"), Some(c));
+        assert_eq!(symbols.find_const(b"app\\util\\Limit"), None);
+        let g = symbols.intern(b"PHP_EOL");
+        assert_eq!(symbols.find_const(b"PHP_EOL"), Some(g));
+        assert_eq!(symbols.find_const(b"php_eol"), None);
     }
 
     #[test]

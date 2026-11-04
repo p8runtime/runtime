@@ -3923,7 +3923,7 @@ impl Context<'_> {
             .into_iter()
             .flatten()
             .map(|n| n.strip_prefix(b"\\").unwrap_or(n))
-            .find(|n| self.isolate.registry.symbols().find(&const_key(n)).is_some_and(|key| self.deprecated_made.contains(&key)))
+            .find(|n| self.isolate.registry.symbols().find_const(n).is_some_and(|key| self.deprecated_made.contains(&key)))
             .map(|n| String::from_utf8_lossy(n).into_owned())
     }
 
@@ -3947,7 +3947,7 @@ impl Context<'_> {
             n if n.eq_ignore_ascii_case(b"null") => return Some(Value::Null),
             _ => {}
         }
-        self.constant_by_key(self.isolate.registry.symbols().find(&const_key(name))?)
+        self.constant_by_key(self.isolate.registry.symbols().find_const(name)?)
     }
 
     /// The constant whose key (const_key) is `key`.

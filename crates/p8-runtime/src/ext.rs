@@ -694,7 +694,7 @@ impl Registry {
 
     /// The constant `name` (as written; a namespace in any case).
     pub fn constant(&self, name: &[u8]) -> Option<Constant> {
-        self.symbols.find(&const_key(name)).and_then(|s| self.constant_sym(s))
+        self.symbols.find_const(name).and_then(|s| self.constant_sym(s))
     }
 
     /// The constant whose key (see [`const_key`]) is `sym`.
