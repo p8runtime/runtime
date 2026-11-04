@@ -233,13 +233,13 @@ fn a_file_cache_serves_later_platforms() {
     let platform = platform();
     let mut isolate = platform.new_isolate();
     assert_eq!(request(&platform, &mut isolate, &main), expected.0);
-    // A changed file: compiled again (its old entry stays, unused).
+    // A changed file: compiled again, its entry written over (one per file).
     std::fs::write(&part, "<?php echo 'changed';").expect("rewrite part");
     assert_eq!(run(), ((0, "changed 42\n".to_string()), 1));
     assert_eq!(run(), ((0, "changed 42\n".to_string()), 0));
     // Damaged entries (cut short, one byte changed): compiled over.
     let entries: Vec<_> = std::fs::read_dir(&cache).expect("cache dir").map(|e| e.expect("entry").path()).collect();
-    assert_eq!(entries.len(), 4, "other.php, t.php and two part.php: {entries:?}");
+    assert_eq!(entries.len(), 3, "other.php, t.php and part.php: {entries:?}");
     for (i, entry) in entries.iter().enumerate() {
         let mut bytes = std::fs::read(entry).expect("entry");
         if i % 2 == 0 {
