@@ -671,44 +671,29 @@ impl Context<'_> {
         }
     }
 
-    /// `new C(args)`: the object, once its constructor (if any) may be
-    /// called from here (ZEND_NEW checks that before the arguments; the
-    /// Construct after them makes the call).
-    pub(crate) fn instantiate(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>) -> Result<Rc<Object>, Throw> {
-        Ok(self.make_object(regs, class, true, false)?.0)
-    }
-
-    /// `instantiate`, also giving the constructor's frame; with `construct`
+    /// A new object of `class`, once its constructor (if any) may be
+    /// called from here, and the constructor's frame; with `construct`
     /// false for an object made without its constructor
     /// (newInstanceWithoutConstructor): then the constructor's visibility
     /// does not matter.
     pub(crate) fn instantiate_as(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>, construct: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
-        self.make_object(regs, class, construct, true)
+        let (info, _) = self.new_info(&class);
+        self.make_from(regs, &info, construct, true)
     }
 
-    fn make_object(&mut self, regs: &dyn Fn(usize) -> Value, class: Rc<Class>, construct: bool, frame: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
-        if class.flags & CLASS_INTERFACE != 0 {
-            return Err(self.throw("Error", format!("Cannot instantiate interface {}", text(&class.name))));
+    /// `new C(args)` (and `instantiate_as`) with the class's NewInfo in hand:
+    /// the object, its slots copied from the prepared defaults, once its
+    /// constructor may be called from here (ZEND_NEW checks that before
+    /// the arguments; the Construct after them makes the call), and with
+    /// `frame` the constructor's frame.
+    pub(crate) fn make_from(&mut self, regs: &dyn Fn(usize) -> Value, info: &crate::instances::NewInfo, construct: bool, frame: bool) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
+        let class = &info.class;
+        if class.flags & (CLASS_INTERFACE | CLASS_ABSTRACT | CLASS_TRAIT | CLASS_ENUM) != 0 {
+            return Err(self.cannot_instantiate(class));
         }
-        if class.flags & CLASS_ABSTRACT != 0 {
-            return Err(self.throw("Error", format!("Cannot instantiate abstract class {}", text(&class.name))));
-        }
-        if class.flags & CLASS_TRAIT != 0 {
-            return Err(self.throw("Error", format!("Cannot instantiate trait {}", text(&class.name))));
-        }
-        if class.flags & CLASS_ENUM != 0 {
-            return Err(self.throw("Error", format!("Cannot instantiate enum {}", text(&class.name))));
-        }
-        let object = Object::new(Rc::clone(&class), &self.ids);
-        if class.flags & CLASS_LAZY != 0
-            && let Some(defaults) = self.class_defaults.get(&(Rc::as_ptr(&class) as usize))
-        {
-            let mut slots = object.slots.borrow_mut();
-            for (i, v) in defaults.iter() {
-                slots[*i] = v.clone();
-            }
-        }
-        if class.is_a(b"throwable") {
+        let data = class.make_data.map(|make| make());
+        let object = Object::with_slots(Rc::clone(class), &self.ids, data, info.defaults.to_vec());
+        if info.throwable {
             // Where it was made, and the calls that led there.
             let (file, line) = self.location();
             let root: &[u8] = if class.is_a(b"exception") { b"exception" } else { b"error" };
@@ -717,8 +702,7 @@ impl Context<'_> {
             let trace = self.trace(regs);
             class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
         }
-        // Borrowed from the class: a `new` must not copy the declaration.
-        let Some(ctor) = class.method(b"__construct") else { return Ok((object, None)) };
+        let Some(ctor) = &info.ctor else { return Ok((object, None)) };
         if !construct {
             return Ok((object, None));
         }
@@ -726,8 +710,7 @@ impl Context<'_> {
         if ctor.visibility == Visibility::Public && !frame {
             return Ok((object, None));
         }
-        let declaring = self.declaring(&class, &ctor.declaring);
-        if !visible(ctor.visibility, &declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
+        if !visible(ctor.visibility, &ctor.declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
             let t = self.throw("Error", format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()));
             // Made while the object still is (PHP numbers the Error after it).
             let e = self.exception(regs, t);
@@ -739,8 +722,21 @@ impl Context<'_> {
         if !frame {
             return Ok((object, None));
         }
-        let func = self.code_of(ctor);
-        Ok((Rc::clone(&object), Some(MethodFrame::method(func, Some(object), declaring, class))))
+        Ok((Rc::clone(&object), Some(ctor.frame(object, class))))
+    }
+
+    #[cold]
+    fn cannot_instantiate(&self, class: &Class) -> Throw {
+        let kind = if class.flags & CLASS_INTERFACE != 0 {
+            "interface"
+        } else if class.flags & CLASS_ABSTRACT != 0 {
+            "abstract class"
+        } else if class.flags & CLASS_TRAIT != 0 {
+            "trait"
+        } else {
+            "enum"
+        };
+        self.throw("Error", format!("Cannot instantiate {kind} {}", text(&class.name)))
     }
 
     /// The destructor call of an object (if its class has one).
@@ -753,11 +749,9 @@ impl Context<'_> {
 
     /// The constructor call of a new object (its visibility was checked
     /// when the object was made).
-    pub(crate) fn constructor(&self, object: &Rc<Object>) -> Option<MethodFrame> {
-        let class = Rc::clone(&object.class);
-        let ctor = class.method(b"__construct")?;
-        let declaring = self.declaring(&class, &ctor.declaring);
-        Some(MethodFrame::method(self.code_of(ctor), Some(Rc::clone(object)), declaring, class))
+    pub(crate) fn constructor(&mut self, object: &Rc<Object>) -> Option<MethodFrame> {
+        let (info, _) = self.new_info(&object.class);
+        info.ctor.as_ref().map(|c| c.frame(Rc::clone(object), &object.class))
     }
 
     /// An enum's case object (the same one each time in a request).
@@ -778,7 +772,7 @@ impl Context<'_> {
     }
 
     /// The class in `class`'s chain that declares a member (as linked).
-    fn declaring(&self, class: &Rc<Class>, lower: &[u8]) -> Rc<Class> {
+    pub(crate) fn declaring(&self, class: &Rc<Class>, lower: &[u8]) -> Rc<Class> {
         let mut c = Some(class);
         while let Some(k) = c {
             if k.lower == lower {

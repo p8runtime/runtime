@@ -181,7 +181,7 @@ impl Isolate {
         Isolate {
             regs: Vec::with_capacity(1024),
             interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)),
-            builtin_classes: builtin_classes::build(&registry, &names),
+            builtin_classes: builtin_classes::build(&names),
             on_demand: builtin_classes::on_demand(&registry),
             known: {
                 let s = registry.symbols();
@@ -251,6 +251,7 @@ impl Isolate {
             ref_wanted: Vec::new(),
             named_extra: None,
             class_defaults: HashMap::default(),
+            new_infos: HashMap::default(),
             const_cache: HashMap::default(),
             const_evaluating: Vec::new(),
             autoloaders: Vec::new(),
@@ -382,6 +383,9 @@ pub struct Context<'i> {
     pub(crate) resolved: std::collections::HashSet<usize>,
     /// A lazy class's computed instance defaults: (slot, value).
     pub(crate) class_defaults: HashMap<usize, Rc<Vec<(usize, Value)>>>,
+    /// How to make each class's objects, by the class's address
+    /// (instances.rs): worked out at its first `new`.
+    pub(crate) new_infos: HashMap<usize, Rc<instances::NewInfo>>,
     /// Class constants computed by code: (declaring class, name) → value.
     pub(crate) const_cache: HashMap<(Vec<u8>, Vec<u8>), Value>,
     /// The ones being computed (a constant that needs itself is an error).

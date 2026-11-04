@@ -188,8 +188,7 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
     ("__toString", Some(to_string), false),
 ];
 
-pub(crate) fn build(registry: &p8_runtime::ext::Registry, names: &Rc<SymbolCache>) -> Table {
-    let _ = registry;
+pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
     let mut table = Table::default();
     let mut c = Classes { table: &mut table, symbols: names };
     // #[AllowDynamicProperties], which its subclasses inherit.

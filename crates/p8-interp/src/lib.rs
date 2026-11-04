@@ -12,6 +12,7 @@ mod fiber;
 mod generators;
 mod lazy;
 mod include;
+mod instances;
 mod meta;
 mod reflect_info;
 mod reflection;
@@ -1642,15 +1643,21 @@ impl Context<'_> {
                 Instr::SendVarMethod { obj, method, n, arg, var } => {
                     let site = &func.sites[method as usize];
                     let by_ref = match reg!(obj).deref() {
-                        Value::Object(o) => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
+                        Value::Object(o) => match self.cached_takes_ref(&clo.methods[method as usize], &o.class, n as usize) {
+                            Some(by_ref) => by_ref,
+                            None => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
+                        },
                         _ => false,
                     };
                     reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
                 }
                 Instr::SendVarStatic { class, method, n, arg, var } => {
                     let site = &func.sites[method as usize];
-                    let target = self.class_of(func, class, w)?;
-                    let by_ref = self.method_takes_ref(&target, Some(site.sym), n as usize);
+                    let target = self.class_at(clo, class, w)?;
+                    let by_ref = match self.cached_takes_ref(&clo.methods[method as usize], &target, n as usize) {
+                        Some(by_ref) => by_ref,
+                        None => self.method_takes_ref(&target, Some(site.sym), n as usize),
+                    };
                     reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
                 }
                 Instr::MethodArgByRef { dst, obj, method, n } => {
@@ -2344,15 +2351,27 @@ impl Context<'_> {
                     };
                     self.unpack_into(w, arr, items)?;
                 }
-                Instr::New { dst, class } => {
-                    let class = self.class_of(func, class, w)?;
-                    if self.unresolved(&class) {
-                        self.resolve_class(regs, &class)?;
-                        return Ok(Next::Go(at));
-                    }
+                Instr::New { dst, class: i } => {
+                    // A named class: its site's cache has the class and how
+                    // to make its objects (instances.rs).
+                    let info = match Self::cached_new(clo, i) {
+                        Some(info) => info,
+                        None => {
+                            let class = self.class_at(clo, i, w)?;
+                            if self.unresolved(&class) {
+                                self.resolve_class(regs, &class)?;
+                                return Ok(Next::Go(at));
+                            }
+                            let (info, kept) = self.new_info(&class);
+                            if kept && matches!(func.classes[i as usize], p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..)) {
+                                Self::remember_new(clo, i, &info);
+                            }
+                            info
+                        }
+                    };
                     let object = {
                         let read = |i: usize| if i < base { below[i].clone() } else { w[i - base].clone() };
-                        self.instantiate(&read, class)?
+                        self.make_from(&read, &info, true, false)?.0
                     };
                     // Not destructed unless constructed (an argument may throw first).
                     object.destructed.set(true);
@@ -2713,7 +2732,7 @@ impl Context<'_> {
                         && let Some(at_sep) = rest.windows(2).position(|x| x == b"::")
                     {
                         let target = self.class_of(func, class, w)?;
-                        if target.method(site.name.as_bytes()).is_none() {
+                        if target.method_sym(site.sym).is_none() {
                             let this = self.frames.last().and_then(|f| f.this.clone());
                             let Some(this) = this else { return Err(self.throw("Error", "Using $this when not in object context")) };
                             let prop = Value::Str(PhpStr::from(&rest[..at_sep]));
@@ -2733,7 +2752,7 @@ impl Context<'_> {
                     }
                     // The site's cache entry for this class and scope; else
                     // the full resolution, remembered for the next call.
-                    let target = self.class_of(func, class, w)?;
+                    let target = self.class_at(clo, class, w)?;
                     let cache = &clo.methods[method as usize];
                     let m = match self.cached_static(cache, &target, func, class) {
                         Some(m) => m,
@@ -3197,7 +3216,7 @@ impl Context<'_> {
         ] {
             let r = Resource { kind: "stream", closed: std::cell::Cell::new(false), stream: RefCell::new(Stream::new(target, path, mode)) };
             let v = Value::Object(self.make_resource(r));
-            let key = self.isolate.registry.symbols().intern(name.as_bytes());
+            let key = self.isolate.names.intern(name.as_bytes());
             self.constants.insert(key, (key, v));
         }
         self.resource_ids.take();
@@ -3947,7 +3966,7 @@ impl Context<'_> {
     /// written (they differ when its namespace has capitals).
     fn constant_syms(&self, name: &[u8]) -> (Sym, Sym) {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
-        let symbols = self.isolate.registry.symbols();
+        let symbols = &self.isolate.names;
         let key = const_key(name);
         let spelled = symbols.intern(name);
         let key = if key.as_ref() == name { spelled } else { symbols.intern(&key) };
@@ -4560,7 +4579,7 @@ impl Ctx for Context<'_> {
         // takes the ones before as its previous.
         let mut thrown: Option<Rc<Object>> = None;
         for o in &garbage.objects {
-            if o.destructed.get() || o.class.method(b"__destruct").is_none() || o.lazy.get() != 0 {
+            if o.destructed.get() || o.class.method_sym(p8_runtime::symbol::known::DESTRUCT).is_none() || o.lazy.get() != 0 {
                 continue;
             }
             o.destructed.set(true);

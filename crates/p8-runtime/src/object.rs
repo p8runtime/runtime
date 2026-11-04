@@ -720,6 +720,13 @@ impl Object {
     /// A new object holding `data` (see [`Data`]).
     pub fn with_data(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
         let slots = class.properties.iter().map(|p| p.default.clone()).collect();
+        Object::with_slots(class, ids, data, slots)
+    }
+
+    /// A new object whose slots start as `slots` (one value per declared
+    /// property: the class's defaults, prepared once by whoever makes many).
+    pub fn with_slots(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: Vec<Value>) -> Rc<Object> {
+        debug_assert_eq!(slots.len(), class.properties.len());
         let o = Rc::new(Object {
             class,
             data: data.map(Data),
