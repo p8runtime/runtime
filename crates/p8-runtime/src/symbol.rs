@@ -188,6 +188,103 @@ impl Symbols {
     }
 }
 
+/// One isolate's view of the [`Symbols`]: the names it looked up, by the
+/// bytes it was given, so a name it has seen before is found with no lock
+/// and nothing shared touched (warm across its requests). Only names that
+/// were found are remembered: a name not interned yet may be interned
+/// later (another isolate compiling it). The shared table is reached for
+/// a name seen the first time, a missing one, and to intern.
+///
+/// `!Send`: one per isolate, on its thread.
+pub struct SymbolCache {
+    symbols: Arc<Symbols>,
+    /// Names as given → their symbol, exact (constants, properties).
+    exact: std::cell::RefCell<HashMap<Box<[u8]>, Sym>>,
+    /// Function, class and method names as given → the symbol of their
+    /// lowercase form.
+    folded: std::cell::RefCell<HashMap<Box<[u8]>, Sym>>,
+    /// Constant names as given → the symbol of their key (const_key).
+    consts: std::cell::RefCell<HashMap<Box<[u8]>, Sym>>,
+}
+
+/// Entries one map of a cache holds before it starts over: names a
+/// request makes up (every spelling of a name, in random case) cannot grow
+/// it without bound.
+const CACHE_LIMIT: usize = 1 << 16;
+
+impl SymbolCache {
+    pub fn new(symbols: &Arc<Symbols>) -> SymbolCache {
+        SymbolCache { symbols: Arc::clone(symbols), exact: Default::default(), folded: Default::default(), consts: Default::default() }
+    }
+
+    /// The shared table behind this cache.
+    pub fn symbols(&self) -> &Arc<Symbols> {
+        &self.symbols
+    }
+
+    #[inline]
+    fn cached(map: &std::cell::RefCell<HashMap<Box<[u8]>, Sym>>, name: &[u8], shared: impl FnOnce() -> Option<Sym>) -> Option<Sym> {
+        if let Some(&s) = map.borrow().get(name) {
+            return Some(s);
+        }
+        let s = shared()?;
+        let mut map = map.borrow_mut();
+        if map.len() >= CACHE_LIMIT {
+            map.clear();
+        }
+        map.insert(Box::from(name), s);
+        Some(s)
+    }
+
+    /// [`Symbols::find`], from this isolate's cache when it has it.
+    pub fn find(&self, name: &[u8]) -> Option<Sym> {
+        if let Some(s) = known_sym(name) {
+            return Some(s);
+        }
+        Self::cached(&self.exact, name, || self.symbols.find(name))
+    }
+
+    /// [`Symbols::find_lower`], from this isolate's cache when it has it.
+    pub fn find_lower(&self, name: &[u8]) -> Option<Sym> {
+        if let Some(s) = known_sym(name) {
+            return Some(s);
+        }
+        Self::cached(&self.folded, name, || self.symbols.find_lower(name))
+    }
+
+    /// [`Symbols::find_const`], from this isolate's cache when it has it.
+    pub fn find_const(&self, name: &[u8]) -> Option<Sym> {
+        Self::cached(&self.consts, name, || self.symbols.find_const(name))
+    }
+
+    /// [`Symbols::intern`]: found in the cache when the name is known.
+    pub fn intern(&self, name: &[u8]) -> Sym {
+        match self.find(name) {
+            Some(s) => s,
+            None => self.symbols.intern(name),
+        }
+    }
+
+    /// [`Symbols::intern_lower`]: found in the cache when the name is known.
+    pub fn intern_lower(&self, name: &[u8]) -> Sym {
+        match self.find_lower(name) {
+            Some(s) => s,
+            None => self.symbols.intern_lower(name),
+        }
+    }
+
+    /// The name a symbol stands for.
+    pub fn name(&self, s: Sym) -> Arc<[u8]> {
+        self.symbols.name(s)
+    }
+}
+
+impl std::fmt::Debug for SymbolCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SymbolCache({} exact, {} folded, {} constants)", self.exact.borrow().len(), self.folded.borrow().len(), self.consts.borrow().len())
+    }
+}
+
 /// Run `f` on `name` with its first `upto` bytes ASCII-lowercased: the
 /// name itself when they have no uppercase letter, else a copy (on the
 /// stack when it is short).
@@ -256,6 +353,40 @@ mod tests {
         let known = symbols.len();
         assert_eq!(symbols.find_lower(b"nothing"), None);
         assert_eq!(symbols.len(), known);
+    }
+
+    #[test]
+    fn a_cache_finds_what_the_table_has_and_learns_new_names() {
+        let symbols = Arc::new(Symbols::default());
+        let foo = symbols.intern_lower(b"Foo");
+        let cache = SymbolCache::new(&symbols);
+        assert_eq!(cache.find_lower(b"FOO"), Some(foo));
+        assert_eq!(cache.find_lower(b"FOO"), Some(foo), "from the cache");
+        assert_eq!(cache.find(b"FOO"), None, "exact is exact");
+        // A name missing now and interned later (by another isolate's
+        // compile) is found then: misses are not remembered.
+        assert_eq!(cache.find_lower(b"Bar"), None);
+        let bar = symbols.intern_lower(b"bar");
+        assert_eq!(cache.find_lower(b"Bar"), Some(bar));
+        let c = symbols.intern(&crate::ext::const_key(b"A\\B\\C"));
+        assert_eq!(cache.find_const(b"a\\b\\C"), Some(c));
+        assert_eq!(cache.intern(b"new name"), symbols.find(b"new name").expect("interned"));
+        assert_eq!(cache.find_lower(b"__CALL"), Some(known::CALL));
+    }
+
+    #[test]
+    fn a_cache_starts_over_past_its_limit() {
+        let symbols = Arc::new(Symbols::default());
+        symbols.intern(b"x");
+        let cache = SymbolCache::new(&symbols);
+        // Every spelling of a folded name is a cached entry.
+        let name = b"abcdefghijklmnopq";
+        for i in 0..(CACHE_LIMIT + 10) as u32 {
+            let spelled: Vec<u8> = name.iter().enumerate().map(|(b, &c)| if i >> b & 1 == 1 { c.to_ascii_uppercase() } else { c }).collect();
+            symbols.intern_lower(&spelled);
+            cache.find_lower(&spelled);
+        }
+        assert!(cache.folded.borrow().len() <= CACHE_LIMIT);
     }
 
     #[test]

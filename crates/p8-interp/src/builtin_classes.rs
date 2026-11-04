@@ -13,7 +13,7 @@ use p8_runtime::value::Value;
 use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 
-use p8_runtime::symbol::{Sym, Symbols};
+use p8_runtime::symbol::{Sym, SymbolCache};
 
 /// Classes by (lowercase) name.
 pub(crate) type Table = HashMap<Sym, Rc<Class>>;
@@ -21,7 +21,7 @@ pub(crate) type Table = HashMap<Sym, Rc<Class>>;
 /// A class table being filled, by lowercase name (each interned).
 pub(crate) struct Classes<'a> {
     pub(crate) table: &'a mut Table,
-    pub(crate) symbols: &'a std::sync::Arc<Symbols>,
+    pub(crate) symbols: &'a Rc<SymbolCache>,
 }
 
 impl Classes<'_> {
@@ -188,9 +188,10 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
     ("__toString", Some(to_string), false),
 ];
 
-pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Table {
+pub(crate) fn build(registry: &p8_runtime::ext::Registry, names: &Rc<SymbolCache>) -> Table {
+    let _ = registry;
     let mut table = Table::default();
-    let mut c = Classes { table: &mut table, symbols: registry.symbols() };
+    let mut c = Classes { table: &mut table, symbols: names };
     // #[AllowDynamicProperties], which its subclasses inherit.
     declare(&mut c, "stdClass", p8_runtime::object::CLASS_ALLOW_DYNAMIC, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);

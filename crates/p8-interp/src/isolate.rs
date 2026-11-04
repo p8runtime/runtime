@@ -160,6 +160,9 @@ pub struct Isolate {
     pub(crate) on_demand: HashMap<Sym, &'static p8_runtime::ext::ClassSpec>,
     /// The symbols of classes the engine makes objects of itself.
     pub(crate) known: Known,
+    /// The names this isolate looked up, by the bytes given (found with no
+    /// lock, warm across requests); in front of the registry's symbols.
+    pub(crate) names: Rc<p8_runtime::symbol::SymbolCache>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -174,15 +177,17 @@ pub(crate) struct Known {
 
 impl Isolate {
     pub fn new(registry: Arc<Registry>) -> Isolate {
+        let names = Rc::new(p8_runtime::symbol::SymbolCache::new(registry.symbols()));
         Isolate {
             regs: Vec::with_capacity(1024),
             interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)),
-            builtin_classes: builtin_classes::build(&registry),
+            builtin_classes: builtin_classes::build(&registry, &names),
             on_demand: builtin_classes::on_demand(&registry),
             known: {
                 let s = registry.symbols();
                 Known { closure: s.intern(b"closure"), generator: s.intern(b"generator"), stdclass: s.intern(b"stdclass"), error: s.intern(b"error"), fiber: s.intern(b"fiber") }
             },
+            names,
             registry,
         }
     }

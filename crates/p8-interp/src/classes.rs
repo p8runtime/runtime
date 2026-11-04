@@ -210,7 +210,7 @@ impl Context<'_> {
         // declares, overrides or takes from a trait is made new.
         let declaring: Rc<[u8]> = Rc::from(lower.as_slice());
         let mut interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
-        let symbols = Arc::clone(self.isolate.registry.symbols());
+        let symbols = Rc::clone(&self.isolate.names);
         let mut methods: p8_runtime::object::Methods = parent.as_ref().map_or_else(|| p8_runtime::object::Methods::new(&symbols), |p| p.methods.clone());
         let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
         for i in &def.interfaces {

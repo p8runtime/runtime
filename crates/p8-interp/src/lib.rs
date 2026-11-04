@@ -192,19 +192,19 @@ impl Context<'_> {
     /// an optional leading `\`: None when no code ever named it (so no
     /// function or class has that name). Allocates nothing.
     pub(crate) fn sym_of(&self, name: &[u8]) -> Option<Sym> {
-        self.isolate.registry.symbols().find_lower(name.strip_prefix(b"\\").unwrap_or(name))
+        self.isolate.names.find_lower(name.strip_prefix(b"\\").unwrap_or(name))
     }
 
     /// The symbol of a method name (any case): None when no code ever
     /// named it (so no class has such a method). Allocates nothing.
     pub(crate) fn method_key(&self, name: &[u8]) -> Option<Sym> {
-        self.isolate.registry.symbols().find_lower(name)
+        self.isolate.names.find_lower(name)
     }
 
     /// The symbol of a function or class name being declared (any case,
     /// optional leading `\`).
     pub(crate) fn intern(&self, name: &[u8]) -> Sym {
-        self.isolate.registry.symbols().intern_lower(name.strip_prefix(b"\\").unwrap_or(name))
+        self.isolate.names.intern_lower(name.strip_prefix(b"\\").unwrap_or(name))
     }
 
     /// The declared class named `name` (any case, optional leading `\`),
@@ -3162,7 +3162,7 @@ impl Context<'_> {
                     interfaces: Vec::new(),
                     properties: Vec::new(),
                     slots: p8_runtime::object::Slots::default(),
-                    methods: p8_runtime::object::Methods::new(self.isolate.registry.symbols()),
+                    methods: p8_runtime::object::Methods::new(&self.isolate.names),
                     constants: p8_runtime::object::Constants::default(),
                     statics: HashMap::default(),
                     debug_info: None,
@@ -3939,7 +3939,7 @@ impl Context<'_> {
             .into_iter()
             .flatten()
             .map(|n| n.strip_prefix(b"\\").unwrap_or(n))
-            .find(|n| self.isolate.registry.symbols().find_const(n).is_some_and(|key| self.deprecated_made.contains(&key)))
+            .find(|n| self.isolate.names.find_const(n).is_some_and(|key| self.deprecated_made.contains(&key)))
             .map(|n| String::from_utf8_lossy(n).into_owned())
     }
 
@@ -3963,7 +3963,7 @@ impl Context<'_> {
             n if n.eq_ignore_ascii_case(b"null") => return Some(Value::Null),
             _ => {}
         }
-        self.constant_by_key(self.isolate.registry.symbols().find_const(name)?)
+        self.constant_by_key(self.isolate.names.find_const(name)?)
     }
 
     /// The constant whose key (const_key) is `key`.

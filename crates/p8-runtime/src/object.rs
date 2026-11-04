@@ -17,7 +17,7 @@
 use crate::array::PhpArray;
 use crate::ext::{Ctx, Throw};
 use crate::string::PhpStr;
-use crate::symbol::{Sym, Symbols};
+use crate::symbol::{Sym, SymbolCache};
 use crate::value::Value;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -26,21 +26,22 @@ use std::sync::Arc;
 /// A class's members by name ([`Sym`]), in the order they were added:
 /// methods (`FOLD`: names in any case), constants and properties (names
 /// as written). Compiled code looks members up by symbol; a name given as
-/// bytes (a builtin's, a dynamic one) is found through the symbol table
-/// the table holds, without allocating.
+/// bytes (a builtin's, a dynamic one) is found through the isolate's
+/// symbol cache the table holds: no allocation, and no lock for a name
+/// the isolate has seen.
 #[derive(Debug, Clone)]
 pub struct Names<V, const FOLD: bool> {
     map: crate::fast::IndexMap<Sym, V>,
-    symbols: Arc<Symbols>,
+    symbols: Rc<SymbolCache>,
 }
 
 impl<V, const FOLD: bool> Names<V, FOLD> {
-    pub fn new(symbols: &Arc<Symbols>) -> Self {
+    pub fn new(symbols: &Rc<SymbolCache>) -> Self {
         Self::with_capacity(symbols, 0)
     }
 
-    pub fn with_capacity(symbols: &Arc<Symbols>, n: usize) -> Self {
-        Names { map: crate::fast::IndexMap::with_capacity_and_hasher(n, Default::default()), symbols: Arc::clone(symbols) }
+    pub fn with_capacity(symbols: &Rc<SymbolCache>, n: usize) -> Self {
+        Names { map: crate::fast::IndexMap::with_capacity_and_hasher(n, Default::default()), symbols: Rc::clone(symbols) }
     }
 
     /// An empty table on the same symbols.
@@ -48,7 +49,7 @@ impl<V, const FOLD: bool> Names<V, FOLD> {
         Self::new(&self.symbols)
     }
 
-    pub fn symbols(&self) -> &Arc<Symbols> {
+    pub fn symbols(&self) -> &Rc<SymbolCache> {
         &self.symbols
     }
 
@@ -408,7 +409,7 @@ impl Class {
     /// A plain class with nothing declared (for tests).
     #[cfg(test)]
     pub(crate) fn stub(name: &str) -> Class {
-        let symbols = Arc::new(Symbols::default());
+        let symbols = Rc::new(SymbolCache::new(&Arc::new(crate::symbol::Symbols::default())));
         Class {
             name: PhpStr::from(name),
             lower: name.to_ascii_lowercase().into_bytes(),
