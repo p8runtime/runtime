@@ -365,9 +365,18 @@ pub fn string_len_hint(v: &Value) -> usize {
 pub fn negate(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     match a {
         Value::Int(i) => Ok(i.checked_neg().map_or(Value::Float(-(*i as f64)), Value::Int)),
-        Value::Float(f) => Ok(Value::Float(-f)),
+        Value::Float(f) => Ok(Value::Float(negate_float(*f))),
         _ => binary(BinOp::Mul, a, &Value::Int(-1), diags),
     }
+}
+
+/// `-$f` as PHP computes it: `$f * -1` (zend_compile_unary_pm). The same
+/// as `-f` except for a NaN: a multiply passes a NaN operand through
+/// (quieted) with its sign, where `-f` flips the sign (visible to
+/// `pack()`). LLVM may turn `f * -1.0` into `-f`, so that case is written
+/// out.
+pub fn negate_float(f: f64) -> f64 {
+    if f.is_nan() { f64::from_bits(f.to_bits() | 0x0008_0000_0000_0000) } else { -f }
 }
 
 /// `~$a`

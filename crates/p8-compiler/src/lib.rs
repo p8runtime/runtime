@@ -2732,7 +2732,7 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::Unary { op: op @ (UnaryOp::Minus | UnaryOp::Plus), expr, .. } => match (op, self.const_value(expr)?) {
                 (UnaryOp::Minus, Frozen::Int(i)) => Ok(i.checked_neg().map_or(Frozen::Float(-(i as f64)), Frozen::Int)),
-                (UnaryOp::Minus, Frozen::Float(x)) => Ok(Frozen::Float(-x)),
+                (UnaryOp::Minus, Frozen::Float(x)) => Ok(Frozen::Float(p8_runtime::ops::negate_float(x))),
                 (UnaryOp::Plus, v @ (Frozen::Int(_) | Frozen::Float(_))) => Ok(v),
                 _ => Err(self.unsupported(e.span(), "this constant expression")),
             },
