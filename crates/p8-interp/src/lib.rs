@@ -975,6 +975,7 @@ impl Context<'_> {
     /// `operand` for an instruction that only looks at the value: the
     /// register's own value, borrowed (no copy, so no drop of one after);
     /// a copy only for an undefined register (it warns) or a reference.
+    #[inline]
     fn operand_ref<'a>(&mut self, w: &'a [Value], func: &Function, r: Reg) -> std::borrow::Cow<'a, Value> {
         match &w[r as usize] {
             Value::Undef | Value::Ref(_) => std::borrow::Cow::Owned(self.operand(w, func, r)),
@@ -1043,7 +1044,6 @@ impl Context<'_> {
     /// cases (cached calls and returns included), `step` the one
     /// instruction it stopped at.
     fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let stop = Arc::clone(&self.stop);
         let mut pc = self.frames.last().expect("a frame").pc as usize;
         // The function `step` last ran in (refreshed when `fast` switched).
         let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
@@ -1052,7 +1052,8 @@ impl Context<'_> {
             pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
         }
         loop {
-            pc = fast(regs, &mut self.frames, &self.closures, pc, &stop, &self.ids);
+            // (The interrupt flag is borrowed, not cloned: no atomic count per run.)
+            pc = fast(regs, &mut self.frames, &self.closures, pc, &self.stop, &self.ids);
             if self.ids.has_pending() {
                 pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
             }
@@ -3398,11 +3399,19 @@ impl Context<'_> {
     /// Objects passed to `string` parameters become their __toString(), as
     /// zend_parse_arg_str does (when the registers are lent, so PHP code
     /// can run).
+    /// (Only an object argument can need it: the common call looks no
+    /// further than the arguments' kinds.)
+    #[inline]
     fn stringify_args(&mut self, sig: &p8_runtime::stubs::Sig, args: &mut [Value]) -> Result<(), Throw> {
-        use p8_runtime::stubs::{T_CALLABLE, T_MIXED, T_OBJECT, T_STRING};
-        if self.isolate.regs.is_empty() {
+        if self.isolate.regs.is_empty() || !args.iter().any(|a| matches!(a, Value::Object(_))) {
             return Ok(());
         }
+        self.stringify_objects(sig, args)
+    }
+
+    #[inline(never)]
+    fn stringify_objects(&mut self, sig: &p8_runtime::stubs::Sig, args: &mut [Value]) -> Result<(), Throw> {
+        use p8_runtime::stubs::{T_CALLABLE, T_MIXED, T_OBJECT, T_STRING};
         for (i, arg) in args.iter_mut().enumerate() {
             let Some(param) = sig.params.get(i).or_else(|| sig.params.last().filter(|p| p.variadic)) else { break };
             if param.by_ref || param.mask & T_STRING == 0 || param.mask & (T_OBJECT | T_MIXED | T_CALLABLE) != 0 {
@@ -3563,15 +3572,18 @@ impl Context<'_> {
         }
     }
 
-    #[cold]
+    /// A comparison that is not of two numbers (strings, null, arrays…):
+    /// out of line, but not rare (`$s === ''`, `$x !== null`).
     #[inline(never)]
     fn test_slow(&mut self, w: &[Value], func: &Function, cmp: Cmp, a: Reg, b: Reg) -> bool {
+        let (x, y) = (&w[a as usize], &w[b as usize]);
+        // Two defined, non-reference registers: looked at in place.
+        if !matches!(x, Value::Undef | Value::Ref(_)) && !matches!(y, Value::Undef | Value::Ref(_)) {
+            return test_values(cmp, x, y);
+        }
         let x = self.operand_ref(w, func, a);
         let y = self.operand_ref(w, func, b);
-        match compare(cmp, &x, &y) {
-            Value::Bool(t) => t,
-            v => v.to_bool(),
-        }
+        test_values(cmp, &x, &y)
     }
 
     /// ArgumentCountError for a call passing fewer than `func.required`
@@ -5259,16 +5271,20 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
         Value::Int(p) => p as usize,
         _ => 0,
     };
-    let next = match &w[iter as usize] {
-        // By value: an element that is a reference (a by-reference foreach
-        // made it one) gives its value, not the reference.
-        Value::Array(a) => a.entry_at(pos).map(|(p, k, v)| (p, k, v.deref())),
-        _ => None,
+    let Value::Array(a) = &w[iter as usize] else { return false };
+    // By value: an element that is a reference (a by-reference foreach
+    // made it one) gives its value, not the reference. The key is made
+    // only when the loop names it.
+    let (p, v, k) = if has_key {
+        let Some((p, k, v)) = a.entry_at(pos) else { return false };
+        (p, v.deref(), Some(k))
+    } else {
+        let Some((p, v)) = a.value_at(pos) else { return false };
+        (p, v.deref(), None)
     };
-    let Some((p, k, v)) = next else { return false };
     w[iter as usize + 1] = Value::Int(p as i64 + 1);
     assign(w, val, v);
-    if has_key {
+    if let Some(k) = k {
         assign(w, key, k.into_value());
     }
     true
@@ -5313,6 +5329,23 @@ fn float_op(op: BinOp, x: f64, y: f64) -> Option<Value> {
         BinOp::Div if y != 0.0 => x / y,
         _ => return None,
     }))
+}
+
+/// Whether `x cmp y` holds (`<=>`: whether it is nonzero), as `compare`
+/// says, without making the result a value.
+#[inline]
+fn test_values(cmp: Cmp, x: &Value, y: &Value) -> bool {
+    match cmp {
+        Cmp::Eq => x.loose_eq(y),
+        Cmp::NotEq => !x.loose_eq(y),
+        Cmp::Identical => x.identical(y),
+        Cmp::NotIdentical => !x.identical(y),
+        Cmp::Lt => x.compare(y) == Some(Ordering::Less),
+        Cmp::Le => matches!(x.compare(y), Some(Ordering::Less | Ordering::Equal)),
+        Cmp::Gt => y.compare(x) == Some(Ordering::Less),
+        Cmp::Ge => matches!(y.compare(x), Some(Ordering::Less | Ordering::Equal)),
+        Cmp::Spaceship => x.compare(y) != Some(Ordering::Equal),
+    }
 }
 
 fn compare(cmp: Cmp, x: &Value, y: &Value) -> Value {
