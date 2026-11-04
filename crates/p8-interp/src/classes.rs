@@ -228,7 +228,9 @@ impl Context<'_> {
         // Properties: the parent's slots first; an own declaration
         // replaces a visible parent one, and sits beside a private one.
         let mut properties: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
-        let mut statics = parent.as_ref().map(|p| p.statics.clone()).unwrap_or_default();
+        // Statics in PHP's order: the class's own as declared, then the
+        // parent's it does not redeclare (added below), then its traits'.
+        let mut statics: p8_runtime::fast::IndexMap<Vec<u8>, p8_runtime::object::Static> = Default::default();
         let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
@@ -309,13 +311,23 @@ impl Context<'_> {
                 }
             }
         }
+        // The parent's statics after the class's own (sharing their cells).
+        if let Some(p) = &parent {
+            for (k, s) in &p.statics {
+                if !statics.contains_key(k) {
+                    statics.insert(k.clone(), s.clone());
+                }
+            }
+        }
         // Traits: their methods (the class's own win, then theirs over
         // the parent's), properties, statics and constants, as the class's.
         let own: Vec<Vec<u8>> = def.methods.iter().map(|m| m.func.name.as_bytes().to_ascii_lowercase()).collect();
         let mut from_trait: HashMap<Vec<u8>, PhpStr> = HashMap::default();
         let mut trait_order: Vec<Vec<u8>> = Vec::new();
+        let mut trait_properties: Vec<PhpStr> = Vec::new();
         for tname in &def.traits {
             let t = self.lookup_class(tname)?;
+            trait_properties.extend(t.property_order.iter().cloned());
             if t.flags & CLASS_TRAIT == 0 {
                 return Err(self.fatal_at(format!("{name} cannot use {} - it is not a trait", text(&t.name)), def.line));
             }
@@ -595,6 +607,16 @@ impl Context<'_> {
         let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
         let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
         let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
+        // An enum's `name` (and `value`) come first, as it declares them.
+        let enum_props = if def.flags & CLASS_ENUM == 0 {
+            &[][..]
+        } else if def.enum_backing.is_some() {
+            &["name", "value"][..]
+        } else {
+            &["name"][..]
+        };
+        let own = enum_props.iter().map(|n| PhpStr::from(*n)).chain(def.properties.iter().map(|p| PhpStr::from(p.name.as_bytes()))).collect();
+        let property_order = property_order(own, parent.as_deref(), trait_properties);
         Ok(Rc::new(Class {
             name: class_name,
             lower,
@@ -606,6 +628,7 @@ impl Context<'_> {
             methods,
             constants,
             statics,
+            property_order,
             debug_info: None,
             get_properties: inherited_props,
             cast_bool: inherited_bool,
@@ -1784,6 +1807,36 @@ impl Context<'_> {
 
 /// `(array) $object`: initialized properties under PHP's mangled names
 /// ("\0A\0p" private to A, "\0*\0p" protected), then dynamic ones.
+/// The order PHP keeps a class's properties in (its properties_info, as
+/// zend_do_inheritance and trait binding build it): its `own` as declared,
+/// then its parent's that it does not redeclare (not the parent's private
+/// ones), then what its traits add.
+pub(crate) fn property_order(mut own: Vec<PhpStr>, parent: Option<&Class>, traits: Vec<PhpStr>) -> Vec<PhpStr> {
+    if let Some(p) = parent {
+        for n in &p.property_order {
+            if !own.contains(n) && !declared_private(p, n.as_bytes()) {
+                own.push(n.clone());
+            }
+        }
+    }
+    for n in traits {
+        if !own.contains(&n) {
+            own.push(n);
+        }
+    }
+    own
+}
+
+/// Whether `class` itself declares property `name` private.
+fn declared_private(class: &Class, name: &[u8]) -> bool {
+    match class.statics.get(name) {
+        Some((_, visibility, declaring)) => *visibility == Visibility::Private && *declaring == class.lower,
+        None => class.slots.get(name).is_some_and(|slots| {
+            slots.iter().all(|&i| class.properties[i].visibility == Visibility::Private && class.properties[i].declaring == class.lower)
+        }),
+    }
+}
+
 pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     if let Some(props) = o.class.get_properties {
         return props(o);
