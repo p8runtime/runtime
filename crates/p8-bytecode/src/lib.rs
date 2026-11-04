@@ -702,6 +702,12 @@ pub struct Function {
     pub consts: Vec<Frozen>,
     /// First constant register (constants occupy consts_at..consts_at+consts.len()).
     pub consts_at: Reg,
+    /// How many constants (the first ones) are values the code reads from
+    /// registers: a call copies these into its frame. The rest are only
+    /// names (of properties, class constants, static properties) that
+    /// their instructions read from the constants directly (as PHP reads
+    /// a literal in place); their registers are never written or read.
+    pub value_consts: Reg,
     /// Registers the frame needs.
     pub nregs: Reg,
     /// Names of the compiled variables, by register (params first).

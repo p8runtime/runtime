@@ -343,6 +343,51 @@ impl FnBuilder<'_> {
         i
     }
 
+    /// Which constants some code reads as a value (any operand but the
+    /// name of an instruction that reads its name from the constants).
+    fn value_constants(&self) -> Vec<bool> {
+        let used = std::cell::RefCell::new(vec![false; self.consts.len()]);
+        let note = |r: Reg| {
+            if r >> KIND_SHIFT == CONST {
+                used.borrow_mut()[(r & ((1 << KIND_SHIFT) - 1)) as usize] = true;
+            }
+            r
+        };
+        for instr in &self.code {
+            let seen = std::cell::RefCell::new(Vec::new());
+            map_regs(&mut instr.clone(), |r| {
+                seen.borrow_mut().push(r);
+                r
+            });
+            let mut seen = seen.into_inner();
+            // The name operand once (the same constant may also be a value
+            // operand of the same instruction).
+            if let Some(name) = name_operand(instr)
+                && let Some(at) = seen.iter().position(|&r| r == name)
+            {
+                seen.remove(at);
+            }
+            for r in seen {
+                note(r);
+            }
+        }
+        for h in &self.handlers {
+            note(h.slot);
+        }
+        for s in &self.silences {
+            note(s.2);
+        }
+        for c in &self.classes {
+            if let ClassRef::Dynamic(r) = c {
+                note(*r);
+            }
+        }
+        for &r in &self.bound {
+            note(r);
+        }
+        used.into_inner()
+    }
+
     /// Lay the frame out and renumber every register.
     fn finish(mut self, file: Arc<str>) -> Function {
         if !self.returns_ref {
@@ -350,16 +395,34 @@ impl FnBuilder<'_> {
         }
         let ncv = self.cvs.len();
         let nconst = self.consts.len();
+        // The constants some code reads as a value come first: a call
+        // copies those into its registers. The others (property and class
+        // constant names, which their instructions read from the
+        // constants) come after, and are never copied.
+        let as_value = self.value_constants();
+        let mut order: Vec<usize> = (0..nconst).filter(|&i| as_value[i]).collect();
+        let value_consts = order.len();
+        order.extend((0..nconst).filter(|&i| !as_value[i]));
+        let mut position = vec![0; nconst];
+        for (new, &old) in order.iter().enumerate() {
+            position[old] = new;
+        }
+        let mut consts: Vec<Option<Frozen>> = std::mem::take(&mut self.consts).into_iter().map(Some).collect();
+        self.consts = order.iter().map(|&old| consts[old].take().expect("each constant once")).collect();
         let map = |r: Reg| -> Reg {
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
             (match r >> KIND_SHIFT {
                 CV => index,
-                CONST => ncv + index,
+                CONST => ncv + position[index],
                 _ => ncv + nconst + index,
             }) as Reg
         };
         for instr in &mut self.code {
             map_regs(instr, map);
+            // `global $x` names its variable by constant index.
+            if let Instr::BindGlobal { name, .. } = instr {
+                *name = position[*name as usize] as u16;
+            }
         }
         for h in &mut self.handlers {
             h.slot = map(h.slot);
@@ -388,6 +451,7 @@ impl FnBuilder<'_> {
             lines: self.lines,
             consts: self.consts,
             consts_at: ncv as Reg,
+            value_consts: value_consts as Reg,
             nregs: (ncv + nconst + self.max_temps) as Reg,
             cv_names: cv_names.into_iter().map(|(_, n)| n).collect(),
             required,
@@ -623,6 +687,26 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
 }
 
 /// Apply `f` to every register an instruction names.
+/// The operand of `instr` that only names something (a property, a class
+/// constant, a static property): read from the function's constants when
+/// it is one, never as a register (see `Function::value_consts`).
+fn name_operand(instr: &Instr) -> Option<Reg> {
+    use Instr::*;
+    match *instr {
+        FetchProp { name, .. }
+        | AssignProp { name, .. }
+        | AssignPropOp { name, .. }
+        | PropIncDec { name, .. }
+        | IssetProp { name, .. }
+        | UnsetProp { name, .. }
+        | ClassConst { name, .. }
+        | FetchStaticProp { name, .. }
+        | AssignStaticProp { name, .. }
+        | AssignStaticPropOp { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
 fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
