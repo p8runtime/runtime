@@ -150,7 +150,7 @@ impl Context<'_> {
         let key = func.sym;
         if let Some(&i) = self.functions.get(&key) {
             let name = String::from_utf8_lossy(func.name.as_bytes());
-            let first = &self.codes[i as usize];
+            let first = self.code(i);
             return Err(format!("Cannot redeclare function {name}() (previously declared in {}:{})", first.file, first.line));
         }
         if self.builtin(key).is_some() {
@@ -992,12 +992,18 @@ impl Context<'_> {
         }
     }
 
-    /// What call site `site` names (cached after the first time).
+    /// What call site `site` names (cached after the first time). The site
+    /// is the isolate's, kept from earlier requests: a cached function is
+    /// this request's only once this request resolved it (a request may
+    /// not declare it, or not yet), and a cached builtin only while none
+    /// is disabled (disable_functions is a request's setting).
     #[inline(always)]
     fn resolve(&mut self, clo: &Closure, site: u16) -> Result<Callee, Throw> {
         match clo.sites[site as usize].get() {
-            Some(c) => Ok(c.clone()),
-            None => self.resolve_slow(clo, site),
+            Some(&Callee::User(f)) if self.resolved_here(f) => Ok(Callee::User(f)),
+            Some(&Callee::Builtin(i)) if self.disabled.is_empty() => Ok(Callee::Builtin(i)),
+            Some(Callee::Constant(v)) => Ok(Callee::Constant(v.clone())),
+            _ => self.resolve_slow(clo, site),
         }
     }
 
@@ -1052,9 +1058,11 @@ impl Context<'_> {
             let (base, argc) = (frame.base as usize, frame.argc as usize);
             self.pc = pc + 1;
             // A builtin the call site already resolved is called from here,
-            // not through `step`.
+            // not through `step` (unless this request disables builtins:
+            // then `resolve` checks it).
             if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
                 && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
+                && self.disabled.is_empty()
             {
                 let at = pc;
                 match self.call_builtin(regs, base, i, args, n, dst) {
@@ -1726,7 +1734,7 @@ impl Context<'_> {
                 }
                 Instr::SendVar { site, n, arg, var } => {
                     let by_ref = match self.resolve(clo, site)? {
-                        Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
+                        Callee::User(f) => self.code(f).param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     };
@@ -1765,7 +1773,7 @@ impl Context<'_> {
                 }
                 Instr::FuncArgByRef { dst, site, n } => {
                     reg!(dst) = Value::Bool(match self.resolve(clo, site)? {
-                        Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
+                        Callee::User(f) => self.code(f).param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     });
@@ -1810,10 +1818,16 @@ impl Context<'_> {
                                 self.report_diags();
                                 v
                             }
-                            Some(v) => {
+                            // Cached (in the isolate's closure, for later
+                            // requests too) only when it is a builtin's,
+                            // fetched by its own name: a script's constant
+                            // is its request's, and a namespaced name may
+                            // be the script's in a later request.
+                            Some(v) if s.fallback.is_none() && !self.constants.contains_key(&s.sym) => {
                                 let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
                                 v
                             }
+                            Some(v) => v,
                             None => {
                                 let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
                                 return Err(self.throw("Error", format!("Undefined constant \"{name}\"")));
@@ -5325,26 +5339,37 @@ mod tests {
         p8_compiler::Compiler::new(source.as_bytes(), "t.php", registry).compile(program.statements).expect("compiles")
     }
 
-    /// A recursive function's call site resolves to the function itself.
-    /// When the request ends, every closure it made must be freed: a cycle
-    /// between a closure and its call sites would leak one per request.
+    /// Closures belong to the isolate, warm for its next requests: a
+    /// request that runs the same code again makes no new ones and leaves
+    /// nothing behind (a recursive function's call site names the function
+    /// by index, so no cycle keeps anything alive either).
     #[test]
-    fn a_request_frees_its_closures() {
+    fn closures_are_the_isolates_and_reused_by_its_requests() {
         let registry = Arc::new(Registry::default());
         let program = compile("<?php function f($n) { return $n < 1 ? 0 : f($n - 1); } f(5); f(3);", &registry);
         let mut isolate = Isolate::new(Arc::clone(&registry));
         let mut host = Sink;
-        let closures: Vec<std::rc::Weak<Closure>> = {
+        let mut run = |isolate: &mut Isolate| -> Vec<std::rc::Weak<Closure>> {
             let mut cx = isolate.new_context(&mut host);
             for f in &program.functions {
                 cx.declare(Arc::clone(f)).expect("declares");
             }
             assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
             assert!(cx.closures.iter().any(|c| c.sites.iter().any(|s| s.get().is_some())), "a call site was resolved");
-            cx.closures.iter().map(Rc::downgrade).collect()
+            cx.closures.iter().filter(|c| !Rc::ptr_eq(c, &cx.isolate.unbuilt)).map(Rc::downgrade).collect()
         };
-        assert!(!closures.is_empty());
-        assert!(closures.iter().all(|c| c.upgrade().is_none()), "a closure outlived its request");
+        let first = run(&mut isolate);
+        let functions = isolate.code.len();
+        let second = run(&mut isolate);
+        assert!(!first.is_empty());
+        assert_eq!(isolate.code.len(), functions, "the same code again: no new entries");
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(&second) {
+            let (a, b) = (a.upgrade().expect("kept by the isolate"), b.upgrade().expect("kept by the isolate"));
+            assert!(Rc::ptr_eq(&a, &b), "the second request ran the first one's closure");
+            // Only the isolate holds it between requests.
+            assert_eq!(Rc::strong_count(&a), 3, "the isolate's, and the two here");
+        }
     }
 
     /// A property or class constant named in the code carries its name's

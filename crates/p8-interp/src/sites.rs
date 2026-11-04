@@ -4,10 +4,16 @@
 
 use super::*;
 
-/// A function as one context runs it: the shared compiled code, plus what
-/// belongs to this context alone: its constants as values, and what each
-/// call site and constant fetch resolved to (a feedback vector, in V8's
-/// terms). Compiled code is shared by every context; this is not.
+/// A function as an isolate runs it: the shared compiled code, plus its
+/// constants as values and what each call site, property and constant
+/// fetch resolved to (a feedback vector, in V8's terms). Compiled code is
+/// shared by every isolate; a closure belongs to one, and is kept for its
+/// next requests (warm). What a request may make differently is checked
+/// before a cached entry is used: a cached function is the request's own
+/// only once the request resolved it (`Context::resolve`), and the
+/// entries keyed by a class's address are cleared when a request first
+/// uses the closure (`renew`: classes are the request's own, so a later
+/// one may reuse an address).
 pub struct Closure {
     pub(crate) code: Arc<Function>,
     pub(crate) consts: Box<[Value]>,
@@ -25,6 +31,8 @@ pub struct Closure {
     /// in a class's code) resolved to: a name, once declared, is always
     /// the same class. Held weakly.
     pub(crate) class_refs: Box<[RefCell<std::rc::Weak<Class>>]>,
+    /// The request (the isolate's count) that last used it: `renew`.
+    pub(crate) request: Cell<u64>,
 }
 
 impl Closure {
@@ -35,13 +43,31 @@ impl Closure {
         let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
         let news = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs })
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, request: Cell::new(0) })
     }
 
-    /// The stand-in for a declared function or method whose closure has not
-    /// been made yet (one per isolate, shared by every such slot): empty
-    /// code, never run. A slot holds it until the function is first
-    /// resolved (`Context::closure_at`).
+    /// Ready for request `request`: on its first use there, the entries
+    /// keyed by a class's or scope's address are cleared (that request's
+    /// classes are new objects, and one may sit where an earlier request's
+    /// was). Entries held weakly need nothing: a dead class never comes back.
+    pub(crate) fn renew(&self, request: u64) {
+        if self.request.replace(request) == request {
+            return;
+        }
+        for p in self.props.iter() {
+            p.set(PropSite::default());
+        }
+        for m in self.methods.iter() {
+            *m.borrow_mut() = None;
+        }
+    }
+
+    /// The stand-in for a function or method the request has not resolved
+    /// yet (one per isolate, shared by every such slot): empty code, never
+    /// run. A request's slot holds it until the request first resolves the
+    /// function (`Context::closure_at`). It takes more arguments than any
+    /// call passes, so `fast` leaves a call a cached site still names (from
+    /// an earlier request) to `step`, which resolves it for this request.
     pub(crate) fn unbuilt(registry: &Registry) -> Rc<Closure> {
         let code = Function {
             name: p8_runtime::frozen::Text::from(""),
@@ -63,7 +89,7 @@ impl Closure {
             cv_names: Vec::new(),
             sites: Vec::new(),
             file: Arc::from(""),
-            required: 0,
+            required: usize::MAX,
             line: 0,
             handlers: Vec::new(),
             decls: Vec::new(),
@@ -77,27 +103,77 @@ impl Closure {
     }
 }
 
-impl Context<'_> {
-    /// Register a declared function's or method's code: its closure is
-    /// made when it is first resolved, not now (most of a large
-    /// application's functions are never called in a request). Returns
-    /// its index in `closures` (and `codes`).
-    pub(crate) fn add_code(&mut self, func: Arc<Function>) -> u32 {
-        self.codes.push(func);
-        self.closures.push(Rc::clone(&self.isolate.unbuilt));
-        (self.closures.len() - 1) as u32
+/// The code of every function and method an isolate's requests declared,
+/// by index (methods and call sites refer to code so), and each one's
+/// closure once made: kept for the isolate's next requests, so an index
+/// means the same code in every request and a closure stays warm. Append
+/// only. An index is found by the compiled function's address, which
+/// stays its own: the table holds the function.
+#[derive(Default)]
+pub(crate) struct CodeTable {
+    pub(crate) codes: Vec<Arc<Function>>,
+    closures: Vec<Option<Rc<Closure>>>,
+    index: HashMap<usize, u32>,
+}
+
+impl CodeTable {
+    pub(crate) fn len(&self) -> usize {
+        self.codes.len()
     }
 
-    /// The closure at `i`, made now if this is its first use. Every way
-    /// code is reached for running (a call site's resolution, a method's
-    /// frame, a callable) goes through here, so `fast` only ever finds
-    /// made ones at the indices its call sites cached.
+    /// The index of `func`'s code, added if it is new.
+    fn index_of(&mut self, func: Arc<Function>) -> u32 {
+        let key = Arc::as_ptr(&func) as usize;
+        if let Some(&i) = self.index.get(&key) {
+            return i;
+        }
+        let i = u32::try_from(self.codes.len()).expect("fewer than 2^32 functions");
+        self.codes.push(func);
+        self.closures.push(None);
+        self.index.insert(key, i);
+        i
+    }
+}
+
+impl Context<'_> {
+    /// Register a declared function's or method's code: its index in the
+    /// isolate's code table (the same in every request), and a slot for
+    /// it in this request's `closures`. Its closure is made when it is
+    /// first resolved, not now (most of a large application's functions
+    /// are never called in a request).
+    pub(crate) fn add_code(&mut self, func: Arc<Function>) -> u32 {
+        let i = self.isolate.code.index_of(func);
+        if self.closures.len() <= i as usize {
+            self.closures.resize(i as usize + 1, Rc::clone(&self.isolate.unbuilt));
+        }
+        i
+    }
+
+    /// The code at index `i` of the isolate's code table.
+    pub(crate) fn code(&self, i: u32) -> &Arc<Function> {
+        &self.isolate.code.codes[i as usize]
+    }
+
+    /// The closure at `i`, for this request: the isolate's (made now if no
+    /// request made it yet), ready for this request (`Closure::renew`).
+    /// Every way code is reached for running (a call site's resolution, a
+    /// method's frame, a callable) goes through here, so `fast` only ever
+    /// finds this request's at the indices its call sites cached.
     pub(crate) fn closure_at(&mut self, i: u32) -> Rc<Closure> {
         let slot = &mut self.closures[i as usize];
         if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
-            *slot = Closure::new(Arc::clone(&self.codes[i as usize]));
+            let table = &mut self.isolate.code;
+            let closure = table.closures[i as usize].get_or_insert_with(|| Closure::new(Arc::clone(&table.codes[i as usize])));
+            closure.renew(self.isolate.requests);
+            *slot = Rc::clone(closure);
         }
         Rc::clone(slot)
+    }
+
+    /// Whether this request resolved the function at `i` (its closure is
+    /// this request's): a call site's cached function is used only then.
+    pub(crate) fn resolved_here(&self, i: u32) -> bool {
+        self.closures.get(i as usize).is_some_and(|c| !Rc::ptr_eq(c, &self.isolate.unbuilt))
     }
 }
 
@@ -377,7 +453,7 @@ mod tests {
         cx.declare_classes(&program.classes);
         assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
         let made = |name: &str| {
-            let i = cx.codes.iter().position(|c| c.name.as_bytes().eq_ignore_ascii_case(name.as_bytes())).unwrap_or_else(|| panic!("{name} declared"));
+            let i = cx.isolate.code.codes.iter().position(|c| c.name.as_bytes().eq_ignore_ascii_case(name.as_bytes())).unwrap_or_else(|| panic!("{name} declared"));
             !Rc::ptr_eq(&cx.closures[i], &cx.isolate.unbuilt)
         };
         for name in ["called", "by_name", "used", "as_callable"] {

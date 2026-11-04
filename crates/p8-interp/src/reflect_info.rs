@@ -46,12 +46,12 @@ impl Context<'_> {
         let (code, captured) = match callee {
             Callee::Function(name) => {
                 match self.sym_of(name.as_bytes()).and_then(|key| self.functions.get(&key)) {
-                    Some(&i) => (Arc::clone(&self.codes[i as usize]), Vec::new()),
+                    Some(&i) => (Arc::clone(self.code(i)), Vec::new()),
                     None => return out,
                 }
             }
             Callee::Method(class, name) => match class.method(&name.as_bytes().to_ascii_lowercase()) {
-                Some(m) if m.native.is_none() && m.func != u32::MAX => (Arc::clone(&self.codes[m.func as usize]), Vec::new()),
+                Some(m) if m.native.is_none() && m.func != u32::MAX => (Arc::clone(self.code(m.func)), Vec::new()),
                 _ => return out,
             },
             Callee::Closure(o) => match closure_data(o) {
@@ -169,7 +169,7 @@ impl Context<'_> {
             Callee::Function(name) => {
                 let key = self.sym_of(name.as_bytes())?;
                 if let Some(&i) = self.functions.get(&key) {
-                    return Some(self.user_info(&self.codes[i as usize], None));
+                    return Some(self.user_info(self.code(i), None));
                 }
                 let i = self.builtin(key)?;
                 let b = self.isolate.registry.function(i);
@@ -182,7 +182,7 @@ impl Context<'_> {
                 // Read from its code: describing a method makes no closure.
                 let user = m.native.is_none() && m.func != u32::MAX;
                 Some(match user {
-                    true => self.user_info(&self.codes[m.func as usize], Some(declaring)),
+                    true => self.user_info(self.code(m.func), Some(declaring)),
                     false => {
                         let stub = format!("{}::{}", String::from_utf8_lossy(m.declaring_name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes()));
                         let mut info = self.stub_info(&stub, m.name.clone(), Some(declaring));

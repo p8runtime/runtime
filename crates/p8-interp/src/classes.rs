@@ -78,7 +78,7 @@ impl Context<'_> {
     /// method, when its stub signature says so).
     pub(crate) fn method_takes_ref(&self, class: &Class, key: Option<Sym>, n: usize) -> bool {
         match method_of(class, key) {
-            Some(m) if m.native.is_none() && m.func != u32::MAX => self.codes[m.func as usize].param_by_ref(n),
+            Some(m) if m.native.is_none() && m.func != u32::MAX => self.code(m.func).param_by_ref(n),
             // A builtin's method, or a builtin interface's abstract one (no code).
             Some(m) => {
                 let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
