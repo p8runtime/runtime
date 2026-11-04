@@ -237,11 +237,22 @@ fn take_array(args: &[Value]) -> Option<(Rc<RefCell<Value>>, Rc<PhpArray>)> {
 /// array_walk(array|object &$array, callable $callback, mixed $arg = UNKNOWN):
 /// the callback gets each value by reference, its key, and `$arg`.
 fn array_walk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some((cell, a)) = take_array(args) else { return Ok(Value::Bool(true)) };
+    let Some((cell, _)) = take_array(args) else { return Ok(Value::Bool(true)) };
     let callback = arg(args, 1);
     let extra = (args.len() > 2).then(|| arg(args, 2));
-    for (k, v) in a.iter() {
-        let element = Rc::new(RefCell::new(v.deref()));
+    // The live array, walked by position as foreach walks it: an element a
+    // callback removed is not visited, one it changed is passed as it is
+    // now, one it added is visited too (PHP's array_walk iterates the
+    // array itself).
+    let mut pos = 0;
+    loop {
+        let next = match &*cell.borrow() {
+            Value::Array(current) => current.entry_at(pos).map(|(p, k, v)| (p, k, v.deref())),
+            _ => None,
+        };
+        let Some((at, k, live)) = next else { break };
+        pos = at + 1;
+        let element = Rc::new(RefCell::new(live));
         let mut call_args = vec![Value::Ref(Rc::clone(&element)), k.to_value()];
         call_args.extend(extra.clone());
         ctx.call(&callback, &mut call_args)?;
