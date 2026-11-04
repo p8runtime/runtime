@@ -756,6 +756,64 @@ mod tests {
     }
 
     #[test]
+    fn an_int_key_equal_to_a_string_keys_hash_is_another_key() {
+        // Buckets compare the stored hash first: an int key is its own
+        // hash, so it must not match a string whose hash is that int.
+        let s = PhpStr::from("collides");
+        let as_int = s.hash() as i64;
+        let mut a = PhpArray::hashed(0);
+        a.insert(Key::Str(s.clone()), int(1));
+        a.insert(Key::Int(as_int), int(2));
+        assert_eq!(a.len(), 2);
+        assert_eq!(a.get(&Key::Str(s.clone())).map(Value::to_int), Some(1));
+        assert_eq!(a.get_int(as_int).map(Value::to_int), Some(2));
+        a.remove(&Key::Int(as_int));
+        assert_eq!((a.len(), a.get(&Key::Str(s)).map(Value::to_int), a.get_int(as_int).is_none()), (1, Some(1), true));
+    }
+
+    #[test]
+    fn a_hash_grows_unsets_and_compacts_keeping_order_and_chains() {
+        let mut a = PhpArray::new();
+        for i in 0..1000 {
+            a.insert(Key::Str(PhpStr::from(format!("s{i}"))), int(i));
+            a.insert(Key::Int(i * 7919), int(-i));
+        }
+        assert_eq!(a.len(), 2000);
+        for i in (0..1000).step_by(3) {
+            assert_eq!(a.remove(&Key::Str(PhpStr::from(format!("s{i}")))).map(|v| v.to_int()), Some(i));
+            assert_eq!(a.remove(&Key::Int(i * 7919)).map(|v| v.to_int()), Some(-i));
+        }
+        for i in 0..1000 {
+            let kept = i % 3 != 0;
+            assert_eq!(a.get(&Key::Str(PhpStr::from(format!("s{i}")))).is_some(), kept, "s{i}");
+            assert_eq!(a.get_int(i * 7919).is_some(), kept, "{i}");
+        }
+        let order: Vec<i64> = a.values().map(Value::to_int).collect();
+        let expected: Vec<i64> = (0..1000).filter(|i| i % 3 != 0).flat_map(|i| [i, -i]).collect();
+        assert_eq!(order, expected);
+        // Unsetting nearly all compacts: positions close up, order stays.
+        let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
+        for k in &keys[..keys.len() - 3] {
+            a.remove(k);
+        }
+        let end = a.end_pos();
+        assert!(end <= 8, "{end} positions for 3 entries");
+        assert_eq!(a.iter().map(|(k, _)| k).collect::<Vec<_>>(), keys[keys.len() - 3..]);
+        a.insert(Key::Str(PhpStr::from("s0")), int(0));
+        assert_eq!(a.entry_at(end).map(|(p, k, _)| (p, k)), Some((end, Key::Str(PhpStr::from("s0")))));
+    }
+
+    #[test]
+    fn a_copy_restarts_a_pointer_past_the_end() {
+        // zend_array_dup: nInternalPointer past nNumUsed becomes 0.
+        let mut a = PhpArray::from_list(vec![int(1), int(2)]);
+        a.set_cursor(a.end_pos());
+        assert_eq!(a.clone().cursor(), 0);
+        a.set_cursor(1);
+        assert_eq!(a.clone().cursor(), 1);
+    }
+
+    #[test]
     fn copies_share_until_written() {
         let a = std::rc::Rc::new(PhpArray::from_list(vec![int(1)]));
         let mut b = a.clone();
