@@ -107,6 +107,10 @@ struct FnBuilder<'a> {
     lines: Vec<u32>,
     consts: Vec<Frozen>,
     const_index: HashMap<ConstKey, usize>,
+    /// Which constants the code reads as values (one bit each, noted as
+    /// it is emitted); the others are only names (see `name_operand`).
+    value_bits: u64,
+    more_value_bits: Vec<u64>,
     cvs: IndexMap<Vec<u8>, usize>,
     temps: usize,
     /// Temporaries below this stay live across statements (a foreach's iterator).
@@ -170,6 +174,8 @@ impl FnBuilder<'_> {
             lines: Vec::with_capacity(32),
             consts: Vec::new(),
             const_index: HashMap::default(),
+            value_bits: 0,
+            more_value_bits: Vec::new(),
             cvs: IndexMap::default(),
             temps: 0,
             floor: 0,
@@ -220,6 +226,7 @@ impl FnBuilder<'_> {
     }
 
     fn emit(&mut self, instr: Instr) -> usize {
+        self.note_values(instr);
         self.code.push(instr);
         self.lines.push(self.line);
         self.code.len() - 1
@@ -343,84 +350,116 @@ impl FnBuilder<'_> {
         i
     }
 
-    /// Which constants some code reads as a value (any operand but the
-    /// name of an instruction that reads its name from the constants).
-    fn value_constants(&self) -> Vec<bool> {
-        let used = std::cell::RefCell::new(vec![false; self.consts.len()]);
-        let note = |r: Reg| {
-            if r >> KIND_SHIFT == CONST {
-                used.borrow_mut()[(r & ((1 << KIND_SHIFT) - 1)) as usize] = true;
-            }
-            r
-        };
-        for instr in &self.code {
-            let seen = std::cell::RefCell::new(Vec::new());
-            map_regs(&mut instr.clone(), |r| {
-                seen.borrow_mut().push(r);
-                r
-            });
-            let mut seen = seen.into_inner();
-            // The name operand once (the same constant may also be a value
-            // operand of the same instruction).
-            if let Some(name) = name_operand(instr)
-                && let Some(at) = seen.iter().position(|&r| r == name)
-            {
-                seen.remove(at);
-            }
-            for r in seen {
-                note(r);
-            }
+    /// Register `r`, held outside the code, is read as a value.
+    fn note_reg(&mut self, r: Reg) {
+        if r >> KIND_SHIFT == CONST {
+            self.mark_value((r & ((1 << KIND_SHIFT) - 1)) as usize);
         }
-        for h in &self.handlers {
-            note(h.slot);
-        }
-        for s in &self.silences {
-            note(s.2);
-        }
-        for c in &self.classes {
-            if let ClassRef::Dynamic(r) = c {
-                note(*r);
-            }
-        }
-        for &r in &self.bound {
-            note(r);
-        }
-        used.into_inner()
     }
 
-    /// Lay the frame out and renumber every register.
-    fn finish(mut self, file: Arc<str>) -> Function {
+    /// Constant `i` is read as a value somewhere (not only as a name).
+    fn mark_value(&mut self, i: usize) {
+        if i < 64 {
+            self.value_bits |= 1 << i;
+        } else {
+            let word = (i - 64) / 64;
+            if self.more_value_bits.len() <= word {
+                self.more_value_bits.resize(word + 1, 0);
+            }
+            self.more_value_bits[word] |= 1 << ((i - 64) % 64);
+        }
+    }
+
+    fn is_value(&self, i: usize) -> bool {
+        if i < 64 { self.value_bits >> i & 1 != 0 } else { self.more_value_bits.get((i - 64) / 64).is_some_and(|w| w >> ((i - 64) % 64) & 1 != 0) }
+    }
+
+    /// Note the constants `instr` reads as values: every constant operand
+    /// but the name operand of an instruction that reads its name from the
+    /// constants (once: the same constant may also be a value operand).
+    fn note_values(&mut self, instr: Instr) {
+        let found: [std::cell::Cell<Reg>; 8] = Default::default();
+        let count = std::cell::Cell::new(0);
+        let mut copy = instr;
+        map_regs(&mut copy, |r| {
+            if r >> KIND_SHIFT == CONST && count.get() < found.len() {
+                found[count.get()].set(r);
+                count.set(count.get() + 1);
+            }
+            r
+        });
+        let mut name = name_operand(&instr);
+        for cell in &found[..count.get()] {
+            let r = cell.get();
+            if name == Some(r) {
+                name = None;
+                continue;
+            }
+            self.mark_value((r & ((1 << KIND_SHIFT) - 1)) as usize);
+        }
+    }
+
+    /// Lay the frame out and renumber every register. `order` is scratch
+    /// space the compiler keeps for every function's constant order.
+    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder) -> Function {
         if !self.returns_ref {
             thread_returns(&mut self.code);
         }
         let ncv = self.cvs.len();
         let nconst = self.consts.len();
+        // Registers held outside the code are values too.
+        for i in 0..self.handlers.len() {
+            self.note_reg(self.handlers[i].slot);
+        }
+        for i in 0..self.silences.len() {
+            self.note_reg(self.silences[i].2);
+        }
+        for i in 0..self.classes.len() {
+            if let ClassRef::Dynamic(r) = self.classes[i] {
+                self.note_reg(r);
+            }
+        }
         // The constants some code reads as a value come first: a call
         // copies those into its registers. The others (property and class
         // constant names, which their instructions read from the
-        // constants) come after, and are never copied.
-        let as_value = self.value_constants();
-        let mut order: Vec<usize> = (0..nconst).filter(|&i| as_value[i]).collect();
-        let value_consts = order.len();
-        order.extend((0..nconst).filter(|&i| !as_value[i]));
-        let mut position = vec![0; nconst];
-        for (new, &old) in order.iter().enumerate() {
-            position[old] = new;
+        // constants) come after, and are never copied. Most functions have
+        // none of the latter: nothing moves then.
+        let value_consts = (0..nconst).filter(|&i| self.is_value(i)).count();
+        let moved = value_consts < nconst;
+        if moved {
+            let (position, work) = (&mut order.position, &mut order.work);
+            position.clear();
+            let (mut next_value, mut next_name) = (0, value_consts as u32);
+            for i in 0..nconst {
+                let slot = if self.is_value(i) { &mut next_value } else { &mut next_name };
+                position.push(*slot);
+                *slot += 1;
+            }
+            // Move the constants to their places, in place (cycle by cycle).
+            work.clear();
+            work.extend_from_slice(position);
+            for i in 0..nconst {
+                while work[i] as usize != i {
+                    let j = work[i] as usize;
+                    self.consts.swap(i, j);
+                    work.swap(i, j);
+                }
+            }
         }
-        let mut consts: Vec<Option<Frozen>> = std::mem::take(&mut self.consts).into_iter().map(Some).collect();
-        self.consts = order.iter().map(|&old| consts[old].take().expect("each constant once")).collect();
+        let position = &order.position;
         let map = |r: Reg| -> Reg {
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
             (match r >> KIND_SHIFT {
                 CV => index,
-                CONST => ncv + position[index],
+                CONST if moved => ncv + position[index] as usize,
+                CONST => ncv + index,
                 _ => ncv + nconst + index,
             }) as Reg
         };
         for instr in &mut self.code {
             map_regs(instr, map);
             // `global $x` names its variable by constant index.
-            if let Instr::BindGlobal { name, .. } = instr {
+            if moved && let Instr::BindGlobal { name, .. } = instr {
                 *name = position[*name as usize] as u16;
             }
         }
@@ -687,6 +726,14 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
 }
 
 /// Apply `f` to every register an instruction names.
+/// Where each constant of the function being finished goes (`position`),
+/// and room to move them there: kept by the compiler for every function.
+#[derive(Default)]
+struct ConstOrder {
+    position: Vec<u32>,
+    work: Vec<u32>,
+}
+
 /// The operand of `instr` that only names something (a property, a class
 /// constant, a static property): read from the function's constants when
 /// it is one, never as a register (see `Function::value_consts`).
@@ -1023,6 +1070,8 @@ pub struct Compiler<'src> {
     /// The temporaries holding references a spread call's list was given
     /// (freed after the call).
     spread_refs: Vec<Reg>,
+    /// Scratch for laying out each function's constants.
+    const_order: ConstOrder,
     /// The assignment being compiled is a statement's: its value is not
     /// used, so the variable itself can stand for it.
     unused_result: bool,
@@ -1126,6 +1175,7 @@ impl<'src> Compiler<'src> {
             source,
             superglobals: None,
             spread_refs: Vec::new(),
+            const_order: ConstOrder::default(),
             unused_result: false,
             registry,
             file: Arc::from(file),
@@ -1288,7 +1338,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        let main = Arc::new(f.finish(self.file.clone()));
+        let main = Arc::new(f.finish(self.file.clone(), &mut self.const_order));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
 
@@ -2223,7 +2273,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        Ok((f.finish(self.file.clone()), captures))
+        Ok((f.finish(self.file.clone(), &mut self.const_order), captures))
     }
 
     /// Take apart the array in `src` into the targets of `items` (keyed,
