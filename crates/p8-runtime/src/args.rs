@@ -63,8 +63,8 @@ pub fn check_counted(sig: &Sig, (required, max): (usize, usize), args: &mut [Val
         let Some(param) = params.get(i).or_else(|| params.last().filter(|p| p.variadic)) else { break };
         // By reference, or plainly of a type the parameter takes: nothing
         // to check or convert (accepts would say Yes, convert would keep it).
-        // A callable is the engine's to check ([`callback_error`]).
-        if param.by_ref || param.mask & T_CALLABLE != 0 || plainly(param, arg) {
+        // A plain callable is the engine's to check ([`callback_error`]).
+        if param.by_ref || pure_callable(param) || plainly(param, arg) {
             continue;
         }
         match accepts(param, arg) {
@@ -127,7 +127,7 @@ fn plainly(param: &Param, value: &Value) -> bool {
 /// another kind the parameter takes as it is.
 pub fn wants_callable_check(param: &Param, value: &Value) -> bool {
     let mask = param.mask;
-    mask & T_CALLABLE != 0
+    pure_callable(param)
         && !param.by_ref
         && match value {
             Value::Null | Value::Undef => mask & T_NULL == 0,
@@ -137,6 +137,13 @@ pub fn wants_callable_check(param: &Param, value: &Value) -> bool {
             Value::Ref(cell) => wants_callable_check(param, &cell.borrow()),
             _ => true,
         }
+}
+
+/// Whether `param` is `callable` or `?callable` alone: ZPP's `f` (a
+/// "valid callback" error). A union with other types (`callable|string|null`)
+/// is parsed as a union, and its builtin checks the callable itself.
+fn pure_callable(param: &Param) -> bool {
+    param.mask & T_CALLABLE != 0 && param.mask & !(T_CALLABLE | T_NULL) == 0 && param.classes.is_empty()
 }
 
 /// The TypeError for argument `i` (0-based) of `sig`, a callback that is

@@ -3526,7 +3526,7 @@ impl Context<'_> {
             self.report_diags();
             // Callbacks: whether each can be called from here (a builtin
             // taking one is a builtin that may run PHP code).
-            if checked.is_ok() && call.reenters {
+            if checked.is_ok() && call.reenters && !call.own_callbacks {
                 checked = self.check_callbacks(sig, args)?;
             }
             if let Err((class, message)) = checked {

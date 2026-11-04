@@ -390,6 +390,10 @@ pub struct Call {
     pub counts: (usize, usize),
     pub deprecated: bool,
     pub reenters: bool,
+    /// Whether the builtin checks its callables itself, after work PHP
+    /// does first (session_set_save_handler's deprecation): the engine
+    /// does not check them before it runs.
+    pub own_callbacks: bool,
 }
 
 /// A constant's value as an extension declares it.
@@ -574,6 +578,7 @@ impl Registry {
                 reenters: sig.is_some_and(|s| {
                     s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
                 }),
+                own_callbacks: false,
             });
             self.deprecations.push(deprecation);
             let sym = self.symbols.intern(f.name.as_bytes());
@@ -711,6 +716,17 @@ impl Registry {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
                 self.calls[i].reenters = true;
+            }
+        }
+    }
+
+    /// Builtins that check their callables themselves (PHP's parse their
+    /// arguments by hand, after a deprecation or a choice of signature):
+    /// the engine leaves their `callable` arguments to them.
+    pub fn own_callbacks(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(i) = self.lookup(n.as_bytes()) {
+                self.calls[i].own_callbacks = true;
             }
         }
     }
