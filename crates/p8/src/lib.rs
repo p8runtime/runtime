@@ -31,8 +31,10 @@ use p8_runtime::value::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod file_cache;
 mod request;
 
 pub use p8_interp::{Host, InterruptHandle};
@@ -83,7 +85,7 @@ pub struct Platform {
 
 impl Platform {
     pub fn new(extensions: &[Extension]) -> Platform {
-        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None }) }
+        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, compiled: AtomicUsize::new(0) }) }
     }
 
     /// Keep every file compiled (the script and what it includes), for
@@ -91,8 +93,32 @@ impl Platform {
     /// changed: what opcache is to PHP. Nothing a script can see changes;
     /// the cost is memory: each kept file's source and code, never let go.
     pub fn keep_compiled(self) -> Platform {
+        let files = self.compiler.files.clone();
+        self.with(Some(Mutex::new(HashMap::new())), files)
+    }
+
+    /// Keep every compiled file on disk in `dir` (made if missing), and
+    /// read it back instead of compiling it again, in this process or any
+    /// later one: what `opcache.file_cache` is to PHP. A file is found by
+    /// its source and path with this build of p8, so a changed file or a
+    /// rebuilt engine compiles again; an entry that is damaged or not
+    /// p8's is compiled over. Without an executable to tell builds apart
+    /// by (WASI), nothing is kept.
+    pub fn file_cache(self, dir: impl Into<PathBuf>) -> Platform {
+        let files = file_cache::FileCache::new(dir.into(), self.compiler.registry.modules()).map(Arc::new);
+        let cache = self.compiler.cache.as_ref().map(|_| Mutex::new(HashMap::new()));
+        self.with(cache, files)
+    }
+
+    fn with(self, cache: Option<Mutex<Kept>>, files: Option<Arc<file_cache::FileCache>>) -> Platform {
         let registry = Arc::clone(&self.compiler.registry);
-        Platform { compiler: Arc::new(Compiler { registry, cache: Some(Mutex::new(HashMap::new())) }) }
+        Platform { compiler: Arc::new(Compiler { registry, cache, files, compiled: AtomicUsize::new(0) }) }
+    }
+
+    /// How many files this Platform has compiled from their source (not
+    /// taken from what it keeps in memory or on disk).
+    pub fn compiled_files(&self) -> usize {
+        self.compiler.compiled.load(Ordering::Relaxed)
     }
 
     /// An engine for the calling thread.
@@ -115,6 +141,10 @@ impl Platform {
 struct Compiler {
     registry: Arc<Registry>,
     cache: Option<Mutex<Kept>>,
+    /// Where compiled files are kept on disk, if anywhere.
+    files: Option<Arc<file_cache::FileCache>>,
+    /// Files compiled from source.
+    compiled: AtomicUsize,
 }
 
 /// The compiled files by path, each with the source it was compiled from
@@ -123,14 +153,30 @@ type Kept = HashMap<String, (Vec<u8>, Arc<p8_bytecode::Program>)>;
 
 impl Compiler {
     fn file(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
-        let Some(cache) = &self.cache else { return compile(&self.registry, source, file, false) };
+        let Some(cache) = &self.cache else { return self.load(source, file) };
         if let Some((kept, program)) = cache.lock().expect("code cache").get(file)
             && kept.as_slice() == source
         {
             return Ok(Arc::clone(program));
         }
-        let program = compile(&self.registry, source, file, false)?;
+        let program = self.load(source, file)?;
         cache.lock().expect("code cache").insert(file.to_string(), (source.to_vec(), Arc::clone(&program)));
+        Ok(program)
+    }
+
+    /// A file's program: from the file cache, else compiled (and kept there).
+    fn load(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
+        let symbols = self.registry.symbols();
+        if let Some(files) = &self.files
+            && let Some(program) = files.load(source, file, symbols)
+        {
+            return Ok(Arc::new(program));
+        }
+        self.compiled.fetch_add(1, Ordering::Relaxed);
+        let program = compile(&self.registry, source, file, false)?;
+        if let Some(files) = &self.files {
+            files.store(source, file, &program, symbols);
+        }
         Ok(program)
     }
 }
