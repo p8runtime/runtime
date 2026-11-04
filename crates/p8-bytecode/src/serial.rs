@@ -1,7 +1,9 @@
 //! A compiled [`Program`] as bytes, and back: what a file cache stores
-//! (PHP's `opcache.file_cache`). Symbols are numbers only within one
-//! symbol table, so a name is written as its bytes and interned again
-//! when read. Shared parts stay shared: a function or class referred to
+//! (PHP's `opcache.file_cache`). Every string (name, literal, path) is
+//! written once, in a table at the start; reading copies the table into
+//! one buffer that all the file's texts share, and interns each name once
+//! (symbols are numbers only within one symbol table). Shared parts stay
+//! shared: a function or class referred to
 //! from two places (a file's class list and its code's declarations) is
 //! written once and read back as one `Arc`, as the engine keys some
 //! declarations by identity.
@@ -22,23 +24,45 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
 const MAX_DEPTH: u32 = 2048;
 
-/// `program` as bytes, its names taken from `symbols`.
+/// `program` as bytes, its names taken from `symbols`: a table of the
+/// distinct strings (names, literals, the file's path), then the program,
+/// which refers to them by number. Reading makes each string once (and
+/// interns each name once) however often the code uses it.
 pub fn encode(program: &Program, symbols: &Symbols) -> Vec<u8> {
-    let mut w = Writer { out: Vec::new(), symbols, functions: HashMap::new(), classes: HashMap::new() };
+    let mut w = Writer { out: Vec::new(), symbols, functions: HashMap::new(), classes: HashMap::new(), strings: HashMap::new(), table: Vec::new() };
     program.put(&mut w);
-    w.out
+    let mut out = Vec::with_capacity(4 + w.table.iter().map(|s| 4 + s.len()).sum::<usize>() + w.out.len());
+    out.extend_from_slice(&len(w.table.len()).to_le_bytes());
+    for s in &w.table {
+        out.extend_from_slice(&len(s.len()).to_le_bytes());
+        out.extend_from_slice(s);
+    }
+    out.extend_from_slice(&w.out);
+    out
 }
 
 /// The program `bytes` hold, its names interned in `symbols`; None when
 /// they are not exactly what [`encode`] writes.
 pub fn decode(bytes: &[u8], symbols: &Symbols) -> Option<Program> {
-    let mut r = Reader { bytes, at: 0, symbols, functions: Vec::new(), classes: Vec::new(), files: Vec::new(), depth: 0 };
+    let mut r = Reader { bytes, at: 0, symbols, functions: Vec::new(), classes: Vec::new(), table: Arc::from(&[][..]), spans: Vec::new(), syms: Vec::new(), files: Vec::new(), depth: 0 };
+    let n = r.count().ok()?;
+    // The strings' bytes, copied once into one buffer every text of the
+    // file shares (a text is a range of it: no allocation per text).
+    r.spans.reserve(n);
+    for _ in 0..n {
+        let len = r.count().ok()?;
+        r.spans.push((r.at, len));
+        r.take(len).ok()?;
+    }
+    r.table = Arc::from(&bytes[..r.at]);
+    r.syms = vec![None; n];
+    r.files = vec![None; n];
     let program = Program::get(&mut r).ok()?;
     (r.at == bytes.len()).then_some(program)
 }
@@ -55,6 +79,9 @@ struct Writer<'a> {
     /// reference is written as its number.
     functions: HashMap<usize, u32>,
     classes: HashMap<usize, u32>,
+    /// The distinct strings, by content and in order of first use.
+    strings: HashMap<Vec<u8>, u32>,
+    table: Vec<Vec<u8>>,
 }
 
 impl Writer<'_> {
@@ -62,9 +89,18 @@ impl Writer<'_> {
         self.out.push(b);
     }
 
-    fn bytes(&mut self, b: &[u8]) {
-        len(b.len()).put(self);
-        self.out.extend_from_slice(b);
+    /// A string, as its number in the file's table.
+    fn string(&mut self, b: &[u8]) {
+        let n = match self.strings.get(b) {
+            Some(&n) => n,
+            None => {
+                let n = len(self.table.len());
+                self.strings.insert(b.to_vec(), n);
+                self.table.push(b.to_vec());
+                n
+            }
+        };
+        n.put(self);
     }
 }
 
@@ -75,8 +111,12 @@ struct Reader<'a> {
     /// The functions and classes read so far, in the order written.
     functions: Vec<Arc<Function>>,
     classes: Vec<Arc<ClassDef>>,
-    /// The file names read so far (every function of a file shares one).
-    files: Vec<Arc<str>>,
+    /// The bytes holding the file's strings, where each string is in them
+    /// (start, length), and what names and paths were read as (made once).
+    table: Arc<[u8]>,
+    spans: Vec<(usize, usize)>,
+    syms: Vec<Option<Sym>>,
+    files: Vec<Option<Arc<str>>>,
     depth: u32,
 }
 
@@ -102,9 +142,16 @@ impl<'a> Reader<'a> {
         Ok(n)
     }
 
-    fn bytes(&mut self) -> Got<&'a [u8]> {
-        let n = self.count()?;
-        self.take(n)
+    /// A string by its number in the file's table.
+    fn string(&mut self) -> Got<usize> {
+        let n = u32::get(self)? as usize;
+        if n < self.spans.len() { Ok(n) } else { Err(Bad) }
+    }
+
+    /// String `n`'s bytes.
+    fn string_bytes(&self, n: usize) -> &[u8] {
+        let (start, len) = self.spans[n];
+        &self.table[start..start + len]
     }
 
     fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Got<T>) -> Got<T> {
@@ -126,6 +173,14 @@ fn len(n: usize) -> u32 {
 trait Code: Sized {
     fn put(&self, w: &mut Writer);
     fn get(r: &mut Reader) -> Got<Self>;
+
+    /// For a number: its size, so a list of them is read in one piece.
+    const SIZE: usize = 0;
+
+    /// For a number: the value of `SIZE` bytes.
+    fn of(_bytes: &[u8]) -> Self {
+        unreachable!("only numbers are read in one piece")
+    }
 }
 
 macro_rules! number {
@@ -137,6 +192,13 @@ macro_rules! number {
             fn get(r: &mut Reader) -> Got<Self> {
                 let b = r.take(std::mem::size_of::<$t>())?;
                 Ok(<$t>::from_le_bytes(b.try_into().map_err(|_| Bad)?))
+            }
+            const SIZE: usize = std::mem::size_of::<$t>();
+            #[inline]
+            fn of(bytes: &[u8]) -> Self {
+                let mut a = [0; std::mem::size_of::<$t>()];
+                a.copy_from_slice(bytes);
+                <$t>::from_le_bytes(a)
             }
         }
     )*};
@@ -202,6 +264,11 @@ impl<T: Code> Code for Vec<T> {
     }
     fn get(r: &mut Reader) -> Got<Self> {
         let n = r.count()?;
+        if T::SIZE > 0 {
+            // Numbers (a function's lines, registers): one bounds check.
+            let all = r.take(n.checked_mul(T::SIZE).ok_or(Bad)?)?;
+            return Ok(all.chunks_exact(T::SIZE).map(T::of).collect());
+        }
         let mut v = Vec::with_capacity(n);
         for _ in 0..n {
             v.push(T::get(r)?);
@@ -231,38 +298,46 @@ impl<A: Code, B: Code, C: Code> Code for (A, B, C) {
     }
 }
 
+/// A text: made once per file, then shared.
 impl Code for Text {
     fn put(&self, w: &mut Writer) {
-        w.bytes(self.as_bytes());
+        w.string(self.as_bytes());
     }
     fn get(r: &mut Reader) -> Got<Self> {
-        Ok(Text::from(r.bytes()?))
+        let n = r.string()?;
+        let (start, len) = r.spans[n];
+        Text::in_buffer(&r.table, start, len).ok_or(Bad)
     }
 }
 
-/// A symbol as its name, interned again when read.
+/// A symbol as its name, interned again when read (once per file).
 impl Code for Sym {
     fn put(&self, w: &mut Writer) {
         let name = w.symbols.name(*self);
-        w.bytes(&name);
+        w.string(&name);
     }
     fn get(r: &mut Reader) -> Got<Self> {
-        let symbols = r.symbols;
-        Ok(symbols.intern(r.bytes()?))
+        let n = r.string()?;
+        if let Some(s) = r.syms[n] {
+            return Ok(s);
+        }
+        let s = r.symbols.intern(r.string_bytes(n));
+        r.syms[n] = Some(s);
+        Ok(s)
     }
 }
 
 impl Code for Arc<str> {
     fn put(&self, w: &mut Writer) {
-        w.bytes(self.as_bytes());
+        w.string(self.as_bytes());
     }
     fn get(r: &mut Reader) -> Got<Self> {
-        let s = std::str::from_utf8(r.bytes()?).map_err(|_| Bad)?;
-        if let Some(f) = r.files.iter().find(|f| &***f == s) {
+        let n = r.string()?;
+        if let Some(f) = &r.files[n] {
             return Ok(Arc::clone(f));
         }
-        let f: Arc<str> = Arc::from(s);
-        r.files.push(Arc::clone(&f));
+        let f: Arc<str> = Arc::from(std::str::from_utf8(r.string_bytes(n)).map_err(|_| Bad)?);
+        r.files[n] = Some(Arc::clone(&f));
         Ok(f)
     }
 }
