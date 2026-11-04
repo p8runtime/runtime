@@ -60,12 +60,41 @@ pub mod known {
     pub const CLONE: Sym = Sym(10);
 }
 
-/// The fixed symbol of a `KNOWN` name (as given: lowercase).
+/// The fixed symbol of a `KNOWN` name (as given: lowercase): one match,
+/// which compiles to a switch on the length and a compare.
 fn known_sym(name: &[u8]) -> Option<Sym> {
-    if name.len() < 3 || name.len() > 13 {
-        return None;
-    }
-    KNOWN.iter().position(|k| *k == name).map(|i| Sym(i as u32))
+    Some(Sym(match name {
+        b"__construct" => 0,
+        b"__destruct" => 1,
+        b"__call" => 2,
+        b"__callstatic" => 3,
+        b"__get" => 4,
+        b"__set" => 5,
+        b"__isset" => 6,
+        b"__unset" => 7,
+        b"__tostring" => 8,
+        b"__invoke" => 9,
+        b"__clone" => 10,
+        b"__serialize" => 11,
+        b"__unserialize" => 12,
+        b"__sleep" => 13,
+        b"__wakeup" => 14,
+        b"__set_state" => 15,
+        b"__debuginfo" => 16,
+        b"getiterator" => 17,
+        b"current" => 18,
+        b"key" => 19,
+        b"next" => 20,
+        b"valid" => 21,
+        b"rewind" => 22,
+        b"offsetget" => 23,
+        b"offsetset" => 24,
+        b"offsetexists" => 25,
+        b"offsetunset" => 26,
+        b"count" => 27,
+        b"jsonserialize" => 28,
+        _ => return None,
+    }))
 }
 
 impl std::fmt::Debug for Symbols {
@@ -239,7 +268,7 @@ mod tests {
         assert_eq!(symbols.find_lower(b"__CONSTRUCT"), Some(known::CONSTRUCT));
         assert_eq!(symbols.intern_lower(b"__toString"), known::TO_STRING);
         assert_eq!(symbols.find(b"__callStatic"), None, "find is exact");
-        assert!(KNOWN.iter().all(|k| (3..=13).contains(&k.len())));
+        assert!(KNOWN.iter().enumerate().all(|(i, k)| known_sym(k) == Some(Sym(i as u32))));
         for (s, name) in [(known::CONSTRUCT, "__construct"), (known::DESTRUCT, "__destruct"), (known::CALL, "__call"), (known::CALL_STATIC, "__callstatic"), (known::GET, "__get"), (known::SET, "__set"), (known::ISSET, "__isset"), (known::UNSET, "__unset"), (known::TO_STRING, "__tostring"), (known::INVOKE, "__invoke"), (known::CLONE, "__clone")] {
             assert_eq!(KNOWN[s.index()], name.as_bytes());
         }
