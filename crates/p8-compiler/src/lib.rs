@@ -160,8 +160,10 @@ impl FnBuilder<'_> {
             ret_type: None,
             strict: false,
             name,
-            code: Vec::new(),
-            lines: Vec::new(),
+            // Sized for a typical function body: the first several
+            // emits do not each grow the vectors.
+            code: Vec::with_capacity(32),
+            lines: Vec::with_capacity(32),
             consts: Vec::new(),
             const_index: HashMap::default(),
             cvs: IndexMap::default(),
