@@ -39,6 +39,12 @@ pub(crate) struct Buffer {
     pub(crate) chunk: usize,
     /// The handler was called (later calls lack the START phase).
     pub(crate) started: bool,
+    /// Something was written to it while a handler ran
+    /// (PHP_OUTPUT_HANDLER_PRODUCED_OUTPUT): deprecated since 8.5.
+    pub(crate) produced: bool,
+    /// Skipped by writes (PHP_OUTPUT_HANDLER_DISABLED): while the
+    /// deprecation about its handler's output is raised.
+    pub(crate) disabled: bool,
 }
 
 /// Output, with output buffers (ob_start) stacked on top of the host.
@@ -50,12 +56,34 @@ pub(crate) struct Output<'i> {
     /// The response head the script builds, and whether the host has it.
     pub(crate) response: p8_runtime::ext::Response,
     pub(crate) head_sent: bool,
+    /// The buffer whose handler is running (OG(running)).
+    pub(crate) running: Option<usize>,
 }
 
 impl Output<'_> {
     pub(crate) fn write(&mut self, bytes: &[u8]) {
+        if self.running.is_some() {
+            return self.write_while_handling(bytes);
+        }
         match self.buffers.last_mut() {
             Some(buffer) => buffer.data.extend_from_slice(bytes),
+            None => self.write_host(bytes),
+        }
+    }
+
+    /// Output while a handler runs (php_output_handler_op): what reaches
+    /// the running handler's own buffer is dropped, a buffer under it (its
+    /// own disabled) takes it; either way the buffer is marked as having
+    /// had output from a handler (deprecated, see Context::ob_handle).
+    #[cold]
+    fn write_while_handling(&mut self, bytes: &[u8]) {
+        match self.buffers.iter().rposition(|b| !b.disabled) {
+            Some(i) => {
+                self.buffers[i].produced = true;
+                if Some(i) != self.running {
+                    self.buffers[i].data.extend_from_slice(bytes);
+                }
+            }
             None => self.write_host(bytes),
         }
     }
@@ -106,7 +134,11 @@ pub(crate) fn handler_name(handler: &Option<Value>) -> String {
     match handler {
         None => "default output handler".into(),
         Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-        Some(Value::Object(o)) if o.class.lower == b"closure" => "Closure::__invoke".into(),
+        // A closure of user code by its function's name ({closure:file:line}, 8.5+).
+        Some(Value::Object(o)) if o.class.lower == b"closure" => match crate::callable::closure_data(o).and_then(|d| d.func.user()) {
+            Some(c) => String::from_utf8_lossy(c.code.name.as_bytes()).into_owned(),
+            None => "Closure::__invoke".into(),
+        },
         Some(Value::Array(a)) => {
             let parts: Vec<Value> = a.values().map(Value::deref).collect();
             let class = match parts.first() {
@@ -278,7 +310,7 @@ impl Isolate {
             constants: p8_runtime::fast::IndexMap::default(),
             globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
-            out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false },
+            out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false, running: None },
             request: None,
             main_return: None,
             carry: None,
@@ -326,6 +358,7 @@ impl Isolate {
             request_end: false,
             deprecated_made: Default::default(),
             pending_errors: Vec::new(),
+            fatal_trace: Default::default(),
             last_error: None,
             in_handler: false,
             arg_buf: Vec::new(),
@@ -490,6 +523,11 @@ pub struct Context<'i> {
     pub(crate) request_end: bool,
     /// Diagnostics for the error handler, raised by the running instruction.
     pub(crate) pending_errors: Vec<(i64, String, Rc<str>, u32)>,
+    /// The stack trace a fatal error was raised with (fatal_error_backtraces,
+    /// 8.5+: EG(last_fatal_error_backtrace)), shown with it when it ends
+    /// the request. Set where the Throw::Fatal is made, while its frames
+    /// are still there.
+    pub(crate) fatal_trace: std::cell::RefCell<Option<String>>,
     /// error_get_last(): the last error that reached the default handler.
     pub(crate) last_error: Option<(i64, String, String, u32)>,
     /// Where output first reached the host (headers_sent()).

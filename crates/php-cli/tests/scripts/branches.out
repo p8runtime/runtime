@@ -14,6 +14,14 @@ lL---n-N101 lL---n-N101 lL---n-N101 lL---n-N101 -----n-N001 lL---n-N101 lL---n-N
 --gG-n-N011 --gG-n-N011 --gG-n-N011 --gG-n-N011 -----n-N001 lL---n-N101 --gG-n-N011 --gG-n-N011 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 -L-Ge-i-000 --gG-n-N011 
 --gG-n-N011 --gG-n-N011 --gG-n-N011 --gG-n-N011 -----n-N001 lL---n-N101 --gG-n-N011 --gG-n-N011 lL---n-N101 --gG-n-N011 --gG-n-N011 -L-Ge--N001 --gG-n-N011 lL---n-N101 -L-Ge-i-000 
 01233210 0.25 0.5 0.75 4
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 25
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 25
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 25
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 25
 e
 int(9223372036854775807)
 float(9.223372036854776E+18)

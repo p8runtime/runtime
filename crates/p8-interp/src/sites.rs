@@ -77,6 +77,7 @@ impl Closure {
             bound: Vec::new(),
             silences: Vec::new(),
             meta: Default::default(),
+            compile_diags: Vec::new(),
         };
         Closure::with_consts(Arc::new(code), |c| c.to_value())
     }

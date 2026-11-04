@@ -1,9 +1,12 @@
 <?php
 // Generates `crates/p8-ext-standard/src/defaults.rs`: every constant and every ini
-// directive (with its built-in default) that PHP 8.4 defines in the
+// directive (with its built-in default) that PHP 8.6 defines in the
 // extensions this runtime ships.
 //
-//     docker run --rm -i php:8.4-cli php < examples/gen_defaults.php > crates/p8-ext-standard/src/defaults.rs
+//     docker run --rm -i php:8.6-cli php < examples/gen_defaults.php > crates/p8-ext-standard/src/defaults.rs
+//
+// (The official 8.6 images have no mbstring: add it first, as
+// tests/php-src/php-src.Dockerfile does, or use p8-lanes' verify/php.Dockerfile.)
 //
 // Values come from a real PHP with no php.ini (on Linux, like the reference
 // test run), so they match exactly. Constants that describe the build or the
@@ -20,7 +23,7 @@ const HOST = [
     'PHP_VERSION', 'PHP_VERSION_ID', 'PHP_EXTRA_VERSION', 'PHP_RELEASE_VERSION',
     'PHP_MAJOR_VERSION', 'PHP_MINOR_VERSION', 'PHP_ZTS', 'PHP_DEBUG',
     'ZEND_THREAD_SAFE', 'ZEND_DEBUG_BUILD', 'PHP_EOL', 'DIRECTORY_SEPARATOR',
-    'PATH_SEPARATOR',
+    'PATH_SEPARATOR', 'PHP_BUILD_DATE', 'PHP_BUILD_PROVIDER',
 ];
 
 function rust_bytes(string $s): string

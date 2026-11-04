@@ -570,8 +570,8 @@ impl Context<'_> {
                 let more = if n > 3 { ", ..." } else { "" };
                 return Err(self.fatal_at(
                     format!(
-                        "Class {name} contains {n} abstract method{} and must therefore be declared abstract or implement the remaining methods ({listed}{more})",
-                        if n == 1 { "" } else { "s" }
+                        "Class {name} contains {n} abstract method{s} and must therefore be declared abstract or implement the remaining method{s} ({listed}{more})",
+                        s = if n == 1 { "" } else { "s" }
                     ),
                     def.line,
                 ));
@@ -1711,6 +1711,9 @@ impl Context<'_> {
     pub(crate) fn object_cast(&mut self, v: Value) -> Value {
         if let Value::Object(_) = v {
             return v;
+        }
+        if v.is_nan() {
+            self.nan_coerced("object");
         }
         let class = Rc::clone(self.class_named(b"stdclass").expect("stdClass"));
         let o = Object::new(class, &self.ids);

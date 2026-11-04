@@ -13,7 +13,7 @@
 //! range) give `None`. The caller checks a digest of the bytes first, so
 //! a file that decodes is the program that was written.
 
-use crate::{AttrArg, AttrDef, CastKind, ClassDef, ClassName, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, Meta, MethodDef, Param, Program, PropDef, Rare, Site, Sym, TraitRule};
+use crate::{AttrArg, AttrDef, CastKind, ClassDef, ClassName, ClassRef, Cmp, CompileDiag, ConstDef, Function, Handler, IncludeKind, Instr, Meta, MethodDef, Param, Program, PropDef, Rare, Site, Sym, TraitRule};
 use p8_runtime::frozen::{Frozen, Text};
 use p8_runtime::object::Visibility;
 use p8_runtime::ops::BinOp;
@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 7;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -499,8 +499,9 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
-    handlers, decls, is_generator, lambdas, bound, silences, meta,
+    handlers, decls, is_generator, lambdas, bound, silences, meta, compile_diags,
 });
+record!(CompileDiag { level, message, line });
 record!(ClassDef {
     name, sym, deps, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line, meta, case_meta,
 });

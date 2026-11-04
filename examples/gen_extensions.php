@@ -42,6 +42,9 @@ const CURL_FEATURES = [
 
 const SOURCES = [
     'Core' => ['PHP Version' => 'const:PHP_VERSION'],
+    'random' => ['Version' => 'const:PHP_VERSION'],
+    // mysqlnd's version is PHP's
+    'pdo_mysql' => ['Client API version' => 'lit:mysqlnd {const:PHP_VERSION}'],
     'date' => [
         // p8's dates are its own code, not timelib.
         'timelib version' => 'omit',
@@ -288,7 +291,9 @@ foreach (EXTENSIONS as $ext) {
     [$info, $displays] = section($ext, $ini);
     echo "    ModuleSpec {\n";
     echo "        name: ", rust_str($r->getName()), ",\n";
-    echo "        version: ", $r->getVersion() === null ? 'None' : 'Some(' . rust_str($r->getVersion()) . ')', ",\n";
+    // A bundled extension's version is PHP's own: p8's PHP_VERSION, not a copy.
+    $version = $r->getVersion();
+    echo "        version: ", $version === null ? 'None' : ($version === PHP_VERSION ? 'Some(crate::PHP_VERSION)' : 'Some(' . rust_str($version) . ')'), ",\n";
     echo "        deps: &[", implode(', ', array_map(fn ($d, $rel) => '(' . rust_str($d) . ', ' . rust_str($rel) . ')', array_keys($r->getDependencies()), $r->getDependencies())), "],\n";
     echo "        functions: &[", implode(', ', array_map('rust_str', array_keys($r->getFunctions()))), "],\n";
     echo "        classes: &[", implode(', ', array_map('rust_str', $r->getClassNames())), "],\n";

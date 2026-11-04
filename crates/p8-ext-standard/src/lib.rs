@@ -90,8 +90,15 @@ static BUILTINS: &[Builtin] = &[
 /// table examples/gen_defaults.php generates from real PHP).
 pub const EXTENSION: Extension = Extension { name: "standard", register };
 
-/// The PHP release p8 reports (PHP_VERSION).
-pub const PHP_VERSION: &str = "8.4.27";
+/// The PHP release p8 reports (PHP_VERSION) and the numbers derived from
+/// it: defined once in p8-stubs, next to the extension table that reports
+/// the version too.
+pub use p8_runtime::stubs::{PHP_MAJOR_VERSION, PHP_MINOR_VERSION, PHP_RELEASE_VERSION, PHP_VERSION, PHP_VERSION_ID};
+
+/// The Zend Engine's version for this PHP: 4.<minor>.<release> (PHP 8.x).
+pub fn zend_engine_version() -> String {
+    format!("4.{PHP_MINOR_VERSION}.{PHP_RELEASE_VERSION}")
+}
 
 /// p8's own version (P8_VERSION, php2 -v, X-Powered-By, phpinfo()): the
 /// release p8 is built as, from Cargo.
@@ -113,10 +120,10 @@ pub const DEBUG_BUILD: bool = cfg!(debug_assertions);
 const HOST_CONSTANTS: &[(&str, Constant)] = &[
     ("PHP_VERSION", Constant::Str(PHP_VERSION.as_bytes())),
     ("P8_VERSION", Constant::Str(P8_VERSION.as_bytes())),
-    ("PHP_VERSION_ID", Constant::Int(80427)),
-    ("PHP_MAJOR_VERSION", Constant::Int(8)),
-    ("PHP_MINOR_VERSION", Constant::Int(4)),
-    ("PHP_RELEASE_VERSION", Constant::Int(27)),
+    ("PHP_VERSION_ID", Constant::Int(PHP_VERSION_ID)),
+    ("PHP_MAJOR_VERSION", Constant::Int(PHP_MAJOR_VERSION)),
+    ("PHP_MINOR_VERSION", Constant::Int(PHP_MINOR_VERSION)),
+    ("PHP_RELEASE_VERSION", Constant::Int(PHP_RELEASE_VERSION)),
     ("PHP_EXTRA_VERSION", Constant::Str(b"")),
     ("PHP_OS", Constant::Str(if cfg!(target_os = "macos") { b"Darwin" } else { b"Linux" })),
     ("PHP_OS_FAMILY", Constant::Str(if cfg!(target_os = "macos") { b"Darwin" } else { b"Linux" })),
@@ -206,6 +213,10 @@ fn register(registry: &mut Registry) {
     // The binary running this script (PHP_BINARY), for tests that run PHP again.
     let binary = std::env::current_exe().map(|p| p.into_os_string().into_encoded_bytes()).unwrap_or_default();
     registry.add_constant(b"PHP_BINARY", Constant::Str(Box::leak(binary.into_boxed_slice())));
+    // PHP_BUILD_DATE (8.5+): what phpinfo() shows as "Build Date". (PHP
+    // defines PHP_BUILD_PROVIDER only when the build names one; p8's doesn't.)
+    let built = phpinfo::build_date().into_bytes();
+    registry.add_constant(b"PHP_BUILD_DATE", Constant::Str(Box::leak(built.into_boxed_slice())));
     registry.add_functions(string::BUILTINS);
     registry.add_functions(var::BUILTINS);
     // These reach the caller's variables or run PHP code (__serialize,

@@ -27,7 +27,8 @@ pub const EXTENSION: Extension = Extension { name: "mysqli", register };
 type R = Result<Value, Throw>;
 
 const CLIENT_INFO: &str = p8_mysqlnd::CLIENT_INFO;
-const CLIENT_VERSION: i64 = 80427;
+/// mysqli_get_client_version(): MYSQLND_VERSION_ID, which is PHP_VERSION_ID.
+const CLIENT_VERSION: i64 = p8_runtime::stubs::PHP_VERSION_ID;
 
 const REPORT_ERROR: i64 = 1;
 const REPORT_STRICT: i64 = 2;

@@ -1,7 +1,7 @@
-//! p8 operators against real PHP 8.4: every binary operator on every
+//! p8 operators against real PHP 8.6: every binary operator on every
 //! pair of a value matrix must give PHP's result, exception, warnings and
 //! deprecations (tests/fixtures/ops.txt, written by
-//! crates/p8-runtime/tests/gen_ops.php under PHP 8.4).
+//! crates/p8-runtime/tests/gen_ops.php under PHP 8.6).
 
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ops::{BinOp, Diag, OpError, binary};
@@ -122,7 +122,7 @@ fn on_this_machine(want: &str) -> String {
 }
 
 #[test]
-fn binary_operators_match_php_8_4() {
+fn binary_operators_match_php_8_6() {
     let values = values();
     let mut failures = Vec::new();
     for line in include_str!("fixtures/ops.txt").lines() {

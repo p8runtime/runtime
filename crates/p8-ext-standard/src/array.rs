@@ -123,7 +123,10 @@ fn key_of(v: &Value) -> Option<Key> {
     }
 }
 
-fn array_key_exists(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn array_key_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    if matches!(arg(args, 0), Value::Null) {
+        ctx.deprecated("Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead");
+    }
     let found = key_of(&arg(args, 0)).is_some_and(|k| arr(args, 1).contains_key(&k));
     Ok(Value::Bool(found))
 }

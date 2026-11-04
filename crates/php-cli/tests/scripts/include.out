@@ -14,8 +14,8 @@ bool(false)
 
 Warning: include(missing.inc): Failed to open stream: No such file or directory in %s on line 16
 
-Warning: include(): Failed opening 'missing.inc' for inclusion (include_path='.:/usr/local/lib/php') in %s on line 16
+Warning: include(): Failed opening 'missing.inc' for inclusion (include_path='.:') in %s on line 16
 
 Warning: require(missing.inc): Failed to open stream: No such file or directory in %s on line 17
-Error: Failed opening required 'missing.inc' (include_path='.:/usr/local/lib/php')
+Error: Failed opening required 'missing.inc' (include_path='.:')
 bool(true)

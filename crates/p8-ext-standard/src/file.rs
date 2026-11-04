@@ -1580,8 +1580,7 @@ fn fn_match(pattern: &[u8], name: &[u8], flags: i64, start: bool) -> bool {
     }
 }
 
-const GLOB_MARK: i64 = 2;
-const GLOB_ONLYDIR: i64 = 1 << 13;
+use p8_runtime::glob::{MARK as GLOB_MARK, ONLYDIR as GLOB_ONLYDIR};
 
 /// glob(string $pattern, int $flags = 0): the paths matching, sorted.
 fn glob(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1621,7 +1620,7 @@ fn expand_braces(pattern: &str) -> Option<Vec<String>> {
 
 /// The paths `pattern` matches, sorted (glob(), GlobIterator).
 pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
-    const GLOB_BRACE: i64 = 1024;
+    use p8_runtime::glob::BRACE as GLOB_BRACE;
     if flags & GLOB_BRACE != 0
         && let Some(alternatives) = expand_braces(pattern)
     {

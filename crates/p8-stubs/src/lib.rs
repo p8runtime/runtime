@@ -12,6 +12,49 @@ mod table;
 
 pub use extensions::{CONSTANT_FLAGS, CREDITS};
 
+/// The PHP release p8 reports (PHP_VERSION, phpversion(), each bundled
+/// extension's version, mysqlnd's): the one whose php-src suite p8 is
+/// measured against. p8's target moved from 8.4 to 8.6 on 4 Nov 2026.
+/// A macro so other literals can be built from it with `concat!`.
+#[macro_export]
+macro_rules! php_version {
+    () => {
+        "8.6.0"
+    };
+}
+
+/// PHP_VERSION: `php_version!()`.
+pub const PHP_VERSION: &str = php_version!();
+
+/// Part `n` (0 major, 1 minor, 2 release) of PHP_VERSION.
+const fn version_part(n: usize) -> i64 {
+    let b = PHP_VERSION.as_bytes();
+    let (mut i, mut part, mut value) = (0, 0, 0i64);
+    while i < b.len() {
+        let c = b[i];
+        if c == b'.' {
+            if part == n {
+                return value;
+            }
+            part += 1;
+            value = 0;
+        } else if c.is_ascii_digit() {
+            value = value * 10 + (c - b'0') as i64;
+        } else {
+            break;
+        }
+        i += 1;
+    }
+    value
+}
+
+/// The numbers PHP derives from its version (PHP_MAJOR_VERSION and so on),
+/// read from PHP_VERSION so they can't disagree with it.
+pub const PHP_MAJOR_VERSION: i64 = version_part(0);
+pub const PHP_MINOR_VERSION: i64 = version_part(1);
+pub const PHP_RELEASE_VERSION: i64 = version_part(2);
+pub const PHP_VERSION_ID: i64 = PHP_MAJOR_VERSION * 10000 + PHP_MINOR_VERSION * 100 + PHP_RELEASE_VERSION;
+
 pub const T_MIXED: u32 = 1 << 0;
 pub const T_STATIC: u32 = 1 << 1;
 pub const T_CALLABLE: u32 = 1 << 2;

@@ -22,6 +22,48 @@ pub enum Diag {
 
 pub type Diags = Vec<Diag>;
 
+/// What zend_dval_to_lval reports for `f` (8.5+): NAN, the infinities and
+/// floats outside the int range are not representable (a warning; the int
+/// is then 0 or the value modulo 2^64, as `dval_to_lval` gives).
+pub fn float_to_int_cast_diag(f: f64) -> Option<Diag> {
+    let fits = (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f);
+    (!fits).then(|| {
+        Diag::Warning(format!(
+            "The float {} is not representable as an int, cast occurred",
+            float_to_string(f, Precision::Shortest, 'E')
+        ))
+    })
+}
+
+/// What zend_dval_to_lval_safe reports for `f` where PHP needs an int
+/// (array keys, string offsets, %, bitwise and shift operands): the
+/// warning above for a float that isn't representable, then, for one
+/// ZEND_DOUBLE_FITS_LONG lets through (a fraction, or NAN, which compares
+/// false both ways) the precision deprecation.
+pub fn float_to_int_diags(f: f64, diags: &mut Diags) {
+    diags.extend(float_to_int_cast_diag(f));
+    let fits_long = !(f >= 9.223_372_036_854_776e18 || f < -9.223_372_036_854_776e18);
+    if fits_long && dval_to_lval(f) as f64 != f {
+        diags.push(Diag::Deprecated(format!(
+            "Implicit conversion from float {} to int loses precision",
+            float_to_string(f, Precision::Shortest, 'E')
+        )));
+    }
+}
+
+/// Whether `float_to_int_diags` reports anything for `f`.
+pub fn float_is_int(f: f64) -> bool {
+    f.is_finite() && (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f) && f.fract() == 0.0
+}
+
+/// zend_nan_coerced_to_type_warning (8.5+): NAN used as a bool, a string,
+/// an array or an object (`type` as zend_get_type_by_const names it).
+pub fn nan_coerced(f: f64, type_name: &str, diags: &mut Diags) {
+    if f.is_nan() {
+        diags.push(Diag::Warning(format!("unexpected NAN value was coerced to {type_name}")));
+    }
+}
+
 /// An error an operator throws.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpError {
@@ -162,23 +204,26 @@ fn int_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags) ->
     let n = number_operand(op, a, b, v, diags)?;
     Ok(match n {
         Number::Int(i) => i,
-        Number::Float(f) => {
-            let i = dval_to_lval(f);
-            if !f.is_finite() || i as f64 != f {
-                let message = match v {
-                    Value::Str(s) => format!(
+        // zendi_try_get_long: a float string saturates and loses precision
+        // (deprecated) when it isn't an int; a float goes through
+        // zend_dval_to_lval_safe.
+        Number::Float(f) => match v {
+            Value::Str(s) => {
+                // zend_dval_to_lval_cap: not finite is 0, out of range saturates
+                let i = if f.is_finite() { f as i64 } else { 0 };
+                if i as f64 != f {
+                    diags.push(Diag::Deprecated(format!(
                         "Implicit conversion from float-string \"{}\" to int loses precision",
                         String::from_utf8_lossy(s.as_bytes())
-                    ),
-                    _ => format!(
-                        "Implicit conversion from float {} to int loses precision",
-                        float_to_string(f, Precision::Shortest, 'E')
-                    ),
-                };
-                diags.push(Diag::Deprecated(message));
+                    )));
+                }
+                i
             }
-            i
-        }
+            _ => {
+                float_to_int_diags(f, diags);
+                dval_to_lval(f)
+            }
+        },
     })
 }
 
@@ -322,6 +367,10 @@ pub fn object_string_error(v: &Value) -> Option<OpError> {
 }
 
 pub fn to_string_lossy(v: &Value, diags: &mut Diags) -> PhpStr {
+    // zend_double_to_str (8.5+)
+    if v.is_nan() {
+        nan_coerced(f64::NAN, "string", diags);
+    }
     match v.to_php_string() {
         Some(s) => s,
         None => {
@@ -382,16 +431,21 @@ pub fn negate_float(f: f64) -> f64 {
     if f.is_nan() { f64::from_bits(f.to_bits() | 0x0008_0000_0000_0000) } else { -f }
 }
 
-/// `~$a`
-pub fn bit_not(a: &Value) -> Result<Value, OpError> {
+/// `~$a` (bitwise_not_function: a float through zend_dval_to_lval_safe)
+pub fn bit_not(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     match a {
         Value::Int(i) => Ok(Value::Int(!i)),
-        Value::Float(f) => Ok(Value::Int(!dval_to_lval(*f))),
+        Value::Float(f) => {
+            float_to_int_diags(*f, diags);
+            Ok(Value::Int(!dval_to_lval(*f)))
+        }
         Value::Str(s) => Ok(Value::Str(PhpStr::new(s.as_bytes().iter().map(|b| !b).collect()))),
-        Value::Ref(cell) => bit_not(&cell.borrow()),
+        Value::Ref(cell) => bit_not(&cell.borrow(), diags),
         other => Err(OpError::Type(format!("Cannot perform bitwise not on {}", other.type_name()))),
     }
 }
+
+const INCREMENT_NON_NUMERIC: &str = "Increment on non-numeric string is deprecated, use str_increment() instead";
 
 /// `++$a` (increment_function).
 pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
@@ -405,17 +459,17 @@ pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
             ));
             a.clone()
         }
+        // increment_string(): every non-numeric string, the empty one included,
+        // is deprecated since 8.5 (8.3 only deprecated non-alphanumeric ones).
         Value::Str(s) if s.is_empty() => {
-            diags.push(Diag::Deprecated("Increment on non-alphanumeric string is deprecated".into()));
+            diags.push(Diag::Deprecated(INCREMENT_NON_NUMERIC.into()));
             Value::str("1")
         }
         Value::Str(s) => match numeric_string(s.as_bytes()) {
             Some(Number::Int(i)) => i.checked_add(1).map_or(Value::Float(i as f64 + 1.0), Value::Int),
             Some(Number::Float(f)) => Value::Float(f + 1.0),
             None => {
-                if !s.as_bytes().iter().all(u8::is_ascii_alphanumeric) {
-                    diags.push(Diag::Deprecated("Increment on non-alphanumeric string is deprecated".into()));
-                }
+                diags.push(Diag::Deprecated(INCREMENT_NON_NUMERIC.into()));
                 let mut bytes = s.as_bytes().to_vec();
                 increment_alphanumeric(&mut bytes);
                 Value::Str(PhpStr::new(bytes))

@@ -766,10 +766,9 @@ fn get_defined_functions(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Th
     Ok(Value::Array(Rc::new(out)))
 }
 
-/// zend_version(): the Zend Engine's version (4.4.x for PHP 8.4.x).
+/// zend_version(): the Zend Engine's version (4.6.x for PHP 8.6.x).
 fn zend_version(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let patch = crate::PHP_VERSION.rsplit('.').next().unwrap_or("0");
-    Ok(Value::Str(PhpStr::from(format!("4.4.{patch}"))))
+    Ok(Value::Str(PhpStr::from(crate::zend_engine_version())))
 }
 
 /// quoted_printable_encode() (php_quot_print_encode): RFC 2045 lines of
