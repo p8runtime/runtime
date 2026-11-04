@@ -12,6 +12,7 @@ mod fiber;
 mod generators;
 mod lazy;
 mod include;
+mod instances;
 mod meta;
 mod reflect_info;
 mod reflection;
@@ -1596,15 +1597,21 @@ impl Context<'_> {
                 Instr::SendVarMethod { obj, method, n, arg, var } => {
                     let site = &func.sites[method as usize];
                     let by_ref = match reg!(obj).deref() {
-                        Value::Object(o) => self.method_takes_ref(&o.class, site.name.as_bytes(), n as usize),
+                        Value::Object(o) => match self.cached_takes_ref(&clo.methods[method as usize], &o.class, n as usize) {
+                            Some(by_ref) => by_ref,
+                            None => self.method_takes_ref(&o.class, site.name.as_bytes(), n as usize),
+                        },
                         _ => false,
                     };
                     reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
                 }
                 Instr::SendVarStatic { class, method, n, arg, var } => {
                     let site = &func.sites[method as usize];
-                    let target = self.class_of(func, class, w)?;
-                    let by_ref = self.method_takes_ref(&target, site.name.as_bytes(), n as usize);
+                    let target = self.class_at(clo, class, w)?;
+                    let by_ref = match self.cached_takes_ref(&clo.methods[method as usize], &target, n as usize) {
+                        Some(by_ref) => by_ref,
+                        None => self.method_takes_ref(&target, site.name.as_bytes(), n as usize),
+                    };
                     reg!(arg) = if by_ref { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
                 }
                 Instr::MethodArgByRef { dst, obj, method, n } => {
@@ -2298,15 +2305,27 @@ impl Context<'_> {
                     };
                     self.unpack_into(w, arr, items)?;
                 }
-                Instr::New { dst, class } => {
-                    let class = self.class_of(func, class, w)?;
-                    if self.unresolved(&class) {
-                        self.resolve_class(regs, &class)?;
-                        return Ok(Next::Go(at));
-                    }
+                Instr::New { dst, class: i } => {
+                    // A named class: its site's cache has the class and how
+                    // to make its objects (instances.rs).
+                    let info = match Self::cached_new(clo, i) {
+                        Some(info) => info,
+                        None => {
+                            let class = self.class_at(clo, i, w)?;
+                            if self.unresolved(&class) {
+                                self.resolve_class(regs, &class)?;
+                                return Ok(Next::Go(at));
+                            }
+                            let (info, kept) = self.new_info(&class);
+                            if kept && matches!(func.classes[i as usize], p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..)) {
+                                Self::remember_new(clo, i, &info);
+                            }
+                            info
+                        }
+                    };
                     let object = {
                         let read = |i: usize| if i < base { below[i].clone() } else { w[i - base].clone() };
-                        self.instantiate(&read, class)?
+                        self.make_from(&read, &info, true, false)?.0
                     };
                     // Not destructed unless constructed (an argument may throw first).
                     object.destructed.set(true);
@@ -2687,7 +2706,7 @@ impl Context<'_> {
                     }
                     // The site's cache entry for this class and scope; else
                     // the full resolution, remembered for the next call.
-                    let target = self.class_of(func, class, w)?;
+                    let target = self.class_at(clo, class, w)?;
                     let cache = &clo.methods[method as usize];
                     let m = match self.cached_static(cache, &target, func, class) {
                         Some(m) => m,
