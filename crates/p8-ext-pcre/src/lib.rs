@@ -799,8 +799,8 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
     let mut out: Vec<u8> = Vec::new();
     let mut start = 0usize;
     let mut last_end = 0usize;
-    let mut spare = Spare::of(ctx, &c);
-    let mut result = exec(spare.2,c, subject, start, Flags::default(), true, &mut spare.0);
+    let mut spare = Spare::of(ctx, c);
+    let mut result = exec(spare.2, c, subject, start, Flags::default(), true, &mut spare.0);
     if matches!(result, Ok(Some(_))) {
         // About the subject's length: the room made once.
         out.reserve(s.len());
@@ -831,7 +831,7 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
                 spare.0 = m;
                 if m1 == m0 {
                     piece = start;
-                    let again = exec(spare.2,c, subject, start, Flags { not_empty_atstart: true, anchored: true }, false, &mut spare.0);
+                    let again = exec(spare.2, c,subject, start, Flags { not_empty_atstart: true, anchored: true }, false, &mut spare.0);
                     match again {
                         Ok(Some(m)) if limit > 0 => {
                             result = Ok(Some(m));
@@ -861,7 +861,7 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
                 return Ok(None);
             }
         }
-        result = exec(spare.2,c, subject, start, Flags::default(), false, &mut spare.0);
+        result = exec(spare.2, c,subject, start, Flags::default(), false, &mut spare.0);
     }
 }
 

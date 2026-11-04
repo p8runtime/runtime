@@ -34,7 +34,7 @@ pub(crate) enum Bt {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Barrier {
+pub(crate) enum Barrier {
     Commit,
     Prune,
     Skip(usize),
@@ -600,7 +600,7 @@ impl Vm<'_> {
                         match kind {
                             RepeatKind::Greedy | RepeatKind::Possessive => {
                                 let floor = at;
-                                (at, count) = self.take_greedy(atom, at, count, max);
+                                at = self.take_greedy(atom, at, count, max).0;
                                 if kind == RepeatKind::Greedy && at > floor {
                                     self.push_choice(Bt::GiveBack { next: pc + 1, min: floor, pos: at })?;
                                 }
