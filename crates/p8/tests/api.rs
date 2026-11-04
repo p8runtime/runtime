@@ -62,6 +62,72 @@ fn a_script_compiled_once_runs_in_many_requests() {
     }
 }
 
+/// `script` as one request on `isolate` with `$argv[1] = arg`: its output.
+fn run_with(isolate: &mut p8::Isolate, script: &p8::Script, arg: &str) -> String {
+    let mut host = Capture::default();
+    {
+        let mut context = isolate.new_context(&mut host);
+        context.set_args(vec!["t.php".into(), arg.into()]);
+        context.run(script);
+    }
+    String::from_utf8(host.0).expect("utf-8")
+}
+
+/// A warm isolate keeps its closures and call-site caches for its next
+/// requests, but each request declares its own functions and constants:
+/// a call site that found a function (or a constant) in one request does
+/// not find it in a request that has not declared it, and finds the
+/// request's own where it has.
+#[test]
+fn a_warm_isolate_runs_each_request_with_its_own_declarations() {
+    let platform = platform().keep_compiled();
+    let mut isolate = platform.new_isolate();
+    let script = platform
+        .compile(
+            br#"<?php
+            if ($argv[1] === 'one') { function f() { return 'f1'; } define('K', 'k1'); }
+            if ($argv[1] === 'two') { function f() { return 'f2'; } define('K', 'k2'); }
+            function call() { return f(); }
+            function konst() { return K; }
+            function counter() { static $n = 0; return ++$n; }
+            foreach (['call', 'konst'] as $what) {
+                try { echo $what(), ' '; } catch (Error $e) { echo $e->getMessage(), ' '; }
+            }
+            // Three calls: the first caches the site; a function's statics
+            // start over with each request.
+            for ($i = 0; $i < 3; $i++) { echo counter(); }"#,
+            "t.php",
+        )
+        .expect("compiles");
+    assert_eq!(run_with(&mut isolate, &script, "one"), "f1 k1 123");
+    assert_eq!(run_with(&mut isolate, &script, "none"), "Call to undefined function f() Undefined constant \"K\" 123");
+    assert_eq!(run_with(&mut isolate, &script, "two"), "f2 k2 123");
+    assert_eq!(run_with(&mut isolate, &script, "one"), "f1 k1 123");
+}
+
+/// The caches a closure keeps by a class's address are cleared for each
+/// request: a class of a later request, sitting where an earlier one's
+/// was, does not find the earlier one's property slots or methods.
+#[test]
+fn a_warm_isolate_does_not_mix_up_classes_of_different_requests() {
+    let platform = platform().keep_compiled();
+    let mut isolate = platform.new_isolate();
+    let script = platform
+        .compile(
+            br#"<?php
+            if ($argv[1] === 'a') { class C { public $x = 'ax'; public $y = 'ay'; function m() { return 'am'; } } }
+            else { class C { public $y = 'by'; public $x = 'bx'; function m() { return 'bm'; } } }
+            function read($o) { return $o->x . $o->y . $o->m(); }
+            echo read(new C), read(new C);"#,
+            "t.php",
+        )
+        .expect("compiles");
+    for _ in 0..3 {
+        assert_eq!(run_with(&mut isolate, &script, "a"), "axayamaxayam");
+        assert_eq!(run_with(&mut isolate, &script, "b"), "bxbybmbxbybm");
+    }
+}
+
 #[test]
 fn a_failed_request_leaves_the_isolate_usable() {
     let platform = platform();

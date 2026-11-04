@@ -184,6 +184,11 @@ pub struct Isolate {
     /// What a declared function's closure slot holds until the function
     /// is first resolved (sites.rs `Closure::unbuilt`).
     pub(crate) unbuilt: Rc<Closure>,
+    /// Every function's and method's code its requests declared, and their
+    /// closures (warm for the next request): sites.rs `CodeTable`.
+    pub(crate) code: crate::sites::CodeTable,
+    /// How many requests it has started (the current one's number).
+    pub(crate) requests: u64,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -211,6 +216,8 @@ impl Isolate {
             names,
             ini_texts: RefCell::new(HashMap::default()),
             unbuilt: Closure::unbuilt(&registry),
+            code: Default::default(),
+            requests: 0,
             registry,
         }
     }
@@ -233,6 +240,9 @@ impl Isolate {
     /// an earlier request is cleared.
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
+        self.requests += 1;
+        // The request's view of the isolate's code: nothing resolved yet.
+        let closures = vec![Rc::clone(&self.unbuilt); self.code.len()];
         let stop = Arc::clone(&self.interrupt);
         let classes = self.builtin_classes.clone();
         let ids = Rc::new(Ids::default());
@@ -242,8 +252,7 @@ impl Isolate {
             isolate: self,
             frames: Frames::default(),
             functions: HashMap::default(),
-            closures: Vec::new(),
-            codes: Vec::new(),
+            closures,
             constants: p8_runtime::fast::IndexMap::default(),
             globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
@@ -329,16 +338,14 @@ pub struct Context<'i> {
     /// The isolate's interrupt flag (kept here: read on every step).
     pub(crate) stop: Arc<AtomicU64>,
     pub(crate) frames: Frames,
-    /// Declared functions by (lowercase) name, as indices in `closures`
-    /// (only ever grows, so call sites
-    /// can cache what they resolve).
+    /// The functions this request declared, by (lowercase) name, as
+    /// indices in the isolate's code table.
     pub(crate) functions: HashMap<Sym, u32>,
-    /// The closure of every declared function and method, by index (call
-    /// sites refer to them so). A slot is the isolate's `unbuilt` stand-in
-    /// until the function is first resolved: `closure_at` makes it then.
+    /// This request's view of the isolate's code table, by index (call
+    /// sites refer to code so): the closure of each function or method the
+    /// request resolved, the isolate's `unbuilt` stand-in for the others
+    /// (`closure_at`). Request state: which code this request may run.
     pub(crate) closures: Vec<Rc<Closure>>,
-    /// The compiled code at each index of `closures`, made or not.
-    pub(crate) codes: Vec<Arc<Function>>,
     /// Constants the script defined (define(), const).
     /// The script's own constants, in the order defined, by key
     /// (p8_runtime::ext::const_key): each with its name as defined.
