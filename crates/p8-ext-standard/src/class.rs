@@ -391,11 +391,16 @@ fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
             out.insert(Key::from_string(p.name.clone()), v);
         }
     }
-    let mut statics: Vec<_> = class.statics.iter().collect();
-    statics.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, (cell, vis, decl)) in statics {
+    // In declaration order (the class's own, its parents', its traits').
+    for (name, (cell, vis, decl)) in &class.statics {
         if visible(*vis, declaring(&class, decl), scope.as_deref()) {
-            out.insert(Key::from_string(PhpStr::from(name.as_slice())), cell.borrow().deref());
+            // An uninitialized typed static is listed as null, as an
+            // instance property is above (add_class_vars: ZVAL_NULL).
+            let v = match cell.borrow().deref() {
+                Value::Undef => Value::Null,
+                v => v,
+            };
+            out.insert(Key::from_string(PhpStr::from(name.as_slice())), v);
         }
     }
     Ok(Value::Array(Rc::new(out)))

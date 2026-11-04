@@ -125,8 +125,7 @@ fn what_a_request_resolves_is_not_cached_for_the_next() {
 }
 
 /// Run `source` while another thread interrupts it after 50 ms.
-fn interrupted(source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, String, p8::Isolate) {
-    let platform = platform();
+fn interrupted(platform: &p8::Platform, source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, String, p8::Isolate) {
     let mut isolate = platform.new_isolate();
     let handle = isolate.interrupt_handle();
     let script = platform.compile(source.as_bytes(), "t.php").expect("compiles");
@@ -142,27 +141,27 @@ fn interrupted(source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, Strin
 
 #[test]
 fn a_watchdog_stops_a_loop_running_in_the_fast_path() {
-    let (status, out, _) = interrupted("<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
+    let (status, out, _) = interrupted(&platform(), "<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
     assert_eq!(status, 255);
     assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\n");
 }
 
 #[test]
 fn a_watchdog_stops_loops_and_recursion_outside_the_fast_path() {
-    let (status, out, _) = interrupted("<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
+    let (status, out, _) = interrupted(&platform(), "<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
     assert_eq!((status, out.as_str()), (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\n"));
 
     let source = "<?php\nfunction f($n) { return $n < 1 ? 0 : f($n - 1) + f($n - 1); }\nf(60);";
-    let (status, out, _) = interrupted(source, |h| h.terminate());
+    let (status, out, _) = interrupted(&platform(), source, |h| h.terminate());
     assert_eq!(status, 255);
     assert!(out.starts_with("\nFatal error: Execution was terminated by the host in t.php on line 2"), "{out:?}");
 }
 
 #[test]
 fn an_interrupted_isolate_runs_the_next_request() {
-    let (status, _, mut isolate) = interrupted("<?php while (true) {}", |h| h.terminate());
-    assert_eq!(status, 255);
     let platform = platform();
+    let (status, _, mut isolate) = interrupted(&platform, "<?php while (true) {}", |h| h.terminate());
+    assert_eq!(status, 255);
     assert_eq!(request(&platform, &mut isolate, "<?php for ($i = 0; $i < 3; $i++) echo $i;"), (0, "012".into()));
 }
 
@@ -204,4 +203,65 @@ fn kept_compiled_files_run_as_new_and_follow_changes() {
     assert_eq!(request(&platform, &mut isolate, &main), (0, "11\n".into()));
     std::fs::write(&part, "<?php static $n = 10; echo ++$n;").expect("rewrite part");
     assert_eq!(request(&platform, &mut isolate, &main), (0, "1111\n".into()));
+}
+
+/// opcache.file_cache: a second process (here: a second Platform, with
+/// its own symbols) compiles nothing and runs the same; a changed file is
+/// compiled again, and a damaged cache entry is compiled over.
+#[test]
+fn a_file_cache_serves_later_platforms() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("file_cache");
+    let cache = dir.join("cache");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("test dir");
+    let part = dir.join("part.php");
+    std::fs::write(&part, "<?php class P { const C = [1, 'two' => 2.5]; static function f(int $x): string { return __CLASS__ . $x . strtoupper('a'); } } echo P::f(1), P::C['two'], basename(__FILE__);").expect("write part");
+    let main = format!("<?php include {:?}; echo ' ', (fn($y) => $y * 2)(21), \"\\n\";", part.to_str().expect("utf-8 path"));
+    let run = || {
+        // Another Platform interns other names first, so its symbols differ.
+        let platform = p8::Platform::new(&[p8::extensions::STANDARD]).file_cache(&cache);
+        let _ = platform.compile(b"<?php class Other {} function other() {}", "other.php");
+        let before = platform.compiled_files();
+        let mut isolate = platform.new_isolate();
+        let out = request(&platform, &mut isolate, &main);
+        (out, platform.compiled_files() - before)
+    };
+    let expected = ((0, "P1A2.5part.php 42\n".to_string()), 2);
+    assert_eq!(run(), expected, "first run compiles both files");
+    assert_eq!(run(), ((0, "P1A2.5part.php 42\n".to_string()), 0), "second run compiles nothing");
+    // Without the cache, the same output.
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    assert_eq!(request(&platform, &mut isolate, &main), expected.0);
+    // A changed file: compiled again, its entry written over (one per file).
+    std::fs::write(&part, "<?php echo 'changed';").expect("rewrite part");
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 1));
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 0));
+    // Damaged entries (cut short, one byte changed): compiled over.
+    let entries: Vec<_> = std::fs::read_dir(&cache).expect("cache dir").map(|e| e.expect("entry").path()).collect();
+    assert_eq!(entries.len(), 3, "other.php, t.php and part.php: {entries:?}");
+    for (i, entry) in entries.iter().enumerate() {
+        let mut bytes = std::fs::read(entry).expect("entry");
+        if i % 2 == 0 {
+            bytes.truncate(bytes.len() / 2);
+        } else {
+            let at = bytes.len() - 3;
+            bytes[at] ^= 1;
+        }
+        std::fs::write(entry, bytes).expect("damage");
+    }
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 2));
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 0));
+}
+
+#[test]
+#[should_panic(expected = "Platform that compiled it")]
+fn a_script_runs_only_where_its_names_mean_the_same() {
+    // Names compile to the compiling Platform's symbols: another
+    // Platform's isolate would read them as other names.
+    let (one, two) = (platform(), platform());
+    let script = one.compile(b"<?php function f() {} f();", "t.php").expect("compiles");
+    let mut isolate = two.new_isolate();
+    let mut host = Capture::default();
+    isolate.new_context(&mut host).run(&script);
 }

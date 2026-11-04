@@ -10,7 +10,8 @@
 //! always the caller's topmost registers: the callee's frame starts there.
 
 use p8_bytecode::{
-    AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, TraitRule,
+    AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, Sym, TraitRule,
+    ClassName,
     CONST_EXPR, Rare,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
@@ -100,6 +101,8 @@ struct FnBuilder<'a> {
     /// The file declares strict_types=1.
     strict: bool,
     name: Text,
+    /// The lowercase name's symbol.
+    sym: Sym,
     code: Vec<Instr>,
     lines: Vec<u32>,
     consts: Vec<Frozen>,
@@ -155,11 +158,12 @@ struct Goto {
 }
 
 impl FnBuilder<'_> {
-    fn new(name: Text) -> Self {
+    fn new(name: Text, sym: Sym) -> Self {
         FnBuilder {
             ret_type: None,
             strict: false,
             name,
+            sym,
             // Sized for a typical function body: the first several
             // emits do not each grow the vectors.
             code: Vec::with_capacity(32),
@@ -200,8 +204,8 @@ impl FnBuilder<'_> {
     /// The index of a class the code names (one entry per class).
     fn class_ref(&mut self, class: ClassRef) -> u16 {
         let key = match &class {
-            ClassRef::Named(lower, _) => lower.as_bytes().to_vec(),
-            ClassRef::Forward(lower, _) => [b"forward:", lower.as_bytes()].concat(),
+            ClassRef::Named(name) => name.lower.as_bytes().to_vec(),
+            ClassRef::Forward(name) => [b"forward:", name.lower.as_bytes()].concat(),
             ClassRef::Static => b"static".to_vec(),
             ClassRef::Scope => b"scope".to_vec(),
             ClassRef::ParentScope => b"parent scope".to_vec(),
@@ -328,12 +332,12 @@ impl FnBuilder<'_> {
         r
     }
 
-    fn site(&mut self, constant: bool, name: Text, display: Text) -> u16 {
+    fn site(&mut self, constant: bool, name: Text, sym: Sym, display: Text) -> u16 {
         let key = (constant, name.as_bytes().to_vec());
         if let Some(&i) = self.site_index.get(&key) {
             return i;
         }
-        self.sites.push(Site { name, fallback: None, display });
+        self.sites.push(Site { name, sym, fallback: None, display });
         let i = (self.sites.len() - 1) as u16;
         self.site_index.insert(key, i);
         i
@@ -375,6 +379,7 @@ impl FnBuilder<'_> {
         let required = self.params.iter().rposition(|p| !p.has_default && !p.variadic).map_or(0, |i| i + 1);
         Function {
             name: self.name,
+            sym: self.sym,
             ret_type: self.ret_type,
             strict: self.strict,
             params: self.params,
@@ -1004,6 +1009,32 @@ struct ClassScope {
 type Result<T> = std::result::Result<T, CompileError>;
 
 impl<'src> Compiler<'src> {
+    /// The symbol of `name` as it is (a constant's key).
+    fn sym(&self, name: &[u8]) -> Sym {
+        self.registry.symbols().intern(name)
+    }
+
+    /// The symbol of a function or class name (any case).
+    fn sym_lower(&self, name: &[u8]) -> Sym {
+        self.registry.symbols().intern_lower(name)
+    }
+
+    /// The call site of a function or method named `display` (any case).
+    fn named_site(&self, f: &mut FnBuilder, display: &[u8]) -> u16 {
+        let lower = display.to_ascii_lowercase();
+        let sym = self.sym(&lower);
+        let display = Text::from(display);
+        let lower = if lower.as_slice() == display.as_bytes() { display.clone() } else { Text::from(lower) };
+        f.site(false, lower, sym, display)
+    }
+
+    /// A class named in code: its symbol, lowercase name and the name as written.
+    fn named(&self, display: Text) -> ClassName {
+        let lower = display.as_bytes().to_ascii_lowercase();
+        let lower = if lower.as_slice() == display.as_bytes() { display.clone() } else { Text::from(lower) };
+        ClassName { sym: self.sym(lower.as_bytes()), lower, display }
+    }
+
     pub fn new(source: &'src [u8], file: &str, registry: &'src Registry) -> Self {
         let mut line_starts = vec![0];
         line_starts.extend(memchr::memchr_iter(b'\n', source).map(|i| i + 1));
@@ -1157,7 +1188,7 @@ impl<'src> Compiler<'src> {
                 other => scan(&mut self, &ns, other),
             }
         }
-        let mut f = FnBuilder::new(Text::from("{main}"));
+        let mut f = FnBuilder::new(Text::from("{main}"), self.sym(b"{main}"));
         f.strict = self.strict;
         // A file's code runs in the scope that includes it, a function's
         // too: its superglobals are bound like a function's.
@@ -1615,7 +1646,7 @@ impl<'src> Compiler<'src> {
                     let full = join(&self.ns, self.text(c.name.span));
                     let name = f.constant(Frozen::Str(Text::from(full.as_slice())));
                     let value = self.expr(f, c.value)?;
-                    let site = f.site(false, Text::from("define"), Text::from("define"));
+                    let site = f.site(false, Text::from("define"), self.sym(b"define"), Text::from("define"));
                     let base = f.temp();
                     let second = f.temp();
                     f.emit(Instr::Move { dst: base, src: name });
@@ -1962,7 +1993,8 @@ impl<'src> Compiler<'src> {
         by_ref: bool,
         uses: &[p8_syntax::ast::ClosureUse],
     ) -> Result<(Function, Vec<Text>)> {
-        let mut f = FnBuilder::new(name);
+        let sym = self.sym_lower(name.as_bytes());
+        let mut f = FnBuilder::new(name, sym);
         f.meta = self.pending_meta.take().unwrap_or_default();
         f.returns_ref = by_ref;
         f.strict = self.strict;
@@ -2302,7 +2334,7 @@ impl<'src> Compiler<'src> {
         let def = declared?;
         // Declared when the expression runs, not before the file does.
         self.classes.retain(|c| !Arc::ptr_eq(c, &def));
-        let class = f.class_ref(ClassRef::Named(Text::from(name.to_ascii_lowercase().as_slice()), display));
+        let class = f.class_ref(ClassRef::Named(self.named(display)));
         let dst = match hint {
             Some(h) if h >> KIND_SHIFT == TEMP => h,
             _ => f.temp(),
@@ -2633,7 +2665,9 @@ impl<'src> Compiler<'src> {
             }
         }
         self.scope = saved;
-        let def = ClassDef { name: display, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line, meta: class_meta, case_meta };
+        let sym = self.sym_lower(display.as_bytes());
+        let deps = parent.iter().chain(&interfaces).chain(&traits).map(|n| self.sym_lower(n.as_bytes())).collect();
+        let def = ClassDef { name: display, sym, deps, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line, meta: class_meta, case_meta };
         let def = Arc::new(def);
         if top {
             self.classes.push(Arc::clone(&def));
@@ -2698,7 +2732,7 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::Unary { op: op @ (UnaryOp::Minus | UnaryOp::Plus), expr, .. } => match (op, self.const_value(expr)?) {
                 (UnaryOp::Minus, Frozen::Int(i)) => Ok(i.checked_neg().map_or(Frozen::Float(-(i as f64)), Frozen::Int)),
-                (UnaryOp::Minus, Frozen::Float(x)) => Ok(Frozen::Float(-x)),
+                (UnaryOp::Minus, Frozen::Float(x)) => Ok(Frozen::Float(p8_runtime::ops::negate_float(x))),
                 (UnaryOp::Plus, v @ (Frozen::Int(_) | Frozen::Float(_))) => Ok(v),
                 _ => Err(self.unsupported(e.span(), "this constant expression")),
             },
@@ -2806,14 +2840,14 @@ impl<'src> Compiler<'src> {
             b"static" if scope_unknown => ClassRef::Static,
             b"self" => {
                 let scope = self.scope.as_ref().map(|s| s.name.clone()).or_else(|| f.class.clone()).ok_or_else(|| no_scope("self"))?;
-                ClassRef::Forward(Text::from(scope.as_bytes().to_ascii_lowercase().as_slice()), scope)
+                ClassRef::Forward(self.named(scope))
             }
             b"parent" => {
                 let Some(scope) = &self.scope else { return Err(no_scope("parent")) };
                 let Some(parent) = scope.parent.clone() else {
                     return Err(CompileError { message: "Cannot use \"parent\" when current class scope has no parent".into(), line });
                 };
-                ClassRef::Forward(Text::from(parent.as_bytes().to_ascii_lowercase().as_slice()), parent)
+                ClassRef::Forward(self.named(parent))
             }
             b"static" => {
                 if self.scope.is_none() && f.class.is_none() {
@@ -2823,7 +2857,7 @@ impl<'src> Compiler<'src> {
             }
             _ => {
                 let full = self.class_name(self.text(*name));
-                ClassRef::Named(Text::from(full.to_ascii_lowercase().as_slice()), Text::from(full.as_slice()))
+                ClassRef::Named(self.named(Text::from(full.as_slice())))
             }
         };
         Ok(f.class_ref(class))
@@ -2832,7 +2866,7 @@ impl<'src> Compiler<'src> {
     /// A class a `catch` names.
     fn class_name_ref(&mut self, f: &mut FnBuilder, name: &p8_syntax::ast::Name) -> Result<u16> {
         let full = self.class_name(self.text(name.span));
-        Ok(f.class_ref(ClassRef::Named(Text::from(full.to_ascii_lowercase().as_slice()), Text::from(full.as_slice()))))
+        Ok(f.class_ref(ClassRef::Named(self.named(Text::from(full.as_slice())))))
     }
 
     /// A property name: a constant for `->name`, the value for `->$name`
@@ -4103,7 +4137,7 @@ impl<'src> Compiler<'src> {
                         f.emit(Instr::ConcatN { dst: base, start, n: n as u8 });
                     }
                 }
-                let site = f.site(false, Text::from("shell_exec"), Text::from("shell_exec"));
+                let site = self.named_site(f, b"shell_exec");
                 let dst = out(f, hint, mark);
                 f.emit(Instr::Call { site, base, argc: 1, dst });
                 dst
@@ -4287,7 +4321,7 @@ impl<'src> Compiler<'src> {
                     let m = self.expr(f, method)?;
                     return self.call_pair(f, obj, m, args);
                 }
-                let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
+                let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
                     f,
                     args,
@@ -4309,7 +4343,7 @@ impl<'src> Compiler<'src> {
                 }
                 let class = self.class_ref(f, parent)?;
                 let display = [self.text(*prop), b"::", self.text(*m).to_ascii_lowercase().as_slice()].concat();
-                let site = f.site(false, Text::from(display.to_ascii_lowercase().as_slice()), Text::from(display.as_slice()));
+                let site = self.named_site(f, &display);
                 let (base, argc) = self.args_by_value(f, args)?;
                 f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
                 base
@@ -4323,8 +4357,8 @@ impl<'src> Compiler<'src> {
                 if text.starts_with(b"$") {
                     // `C::$m()`: the callable [C::class, $m].
                     let name = match &f.classes[class as usize] {
-                        ClassRef::Named(_, display) | ClassRef::Forward(_, display) => {
-                            let display = display.clone();
+                        ClassRef::Named(name) | ClassRef::Forward(name) => {
+                            let display = name.display.clone();
                             f.constant(Frozen::Str(display))
                         }
                         _ => {
@@ -4337,7 +4371,7 @@ impl<'src> Compiler<'src> {
                     let m = self.expr(f, method)?;
                     return self.call_pair(f, name, m, args);
                 }
-                let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
+                let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
                     f,
                     args,
@@ -4366,7 +4400,7 @@ impl<'src> Compiler<'src> {
                     let name = f.constant(Frozen::Str(Text::from(prop)));
                     f.emit(Instr::FetchStaticProp { dst, class: class_index, name });
                 } else if text.eq_ignore_ascii_case(b"class")
-                    && let ClassRef::Named(_, display) | ClassRef::Forward(_, display) = &f.classes[class_index as usize]
+                    && let ClassRef::Named(ClassName { display, .. }) | ClassRef::Forward(ClassName { display, .. }) = &f.classes[class_index as usize]
                 {
                     // `C::class` is the name, resolved when compiled (but
                     // `static::class` when the code runs).
@@ -4567,7 +4601,7 @@ impl<'src> Compiler<'src> {
                     return Err(self.unsupported(method.span(), "a method name in an expression"));
                 };
                 let text = self.text(*name);
-                let site = f.site(false, Text::from(text.to_ascii_lowercase().as_slice()), Text::from(text));
+                let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
                     f,
                     args,
@@ -4652,13 +4686,10 @@ impl<'src> Compiler<'src> {
         }
         let (full, fallback) = self.ns_name(name, &self.use_consts, false);
         // A namespace's part is case-insensitive; the constant's own is not.
-        let key = match full.iter().rposition(|&c| c == b'\\') {
-            Some(at) => [full[..at].to_ascii_lowercase().as_slice(), &full[at..]].concat(),
-            None => full.clone(),
-        };
-        let site = f.site(true, Text::from(key.as_slice()), Text::from(full.as_slice()));
+        let key = p8_runtime::ext::const_key(&full).into_owned();
+        let site = f.site(true, Text::from(key.as_slice()), self.sym(&key), Text::from(full.as_slice()));
         if let Some(global) = fallback {
-            f.sites[site as usize].fallback = Some(Text::from(global.as_slice()));
+            f.sites[site as usize].fallback = Some((Text::from(global.as_slice()), self.sym(&p8_runtime::ext::const_key(&global))));
         }
         let dst = f.temp();
         f.emit(Instr::FetchConst { site, dst });
@@ -4865,9 +4896,9 @@ impl<'src> Compiler<'src> {
         // One text for both when the name is written in lowercase.
         let display = Text::from(text);
         let lower_text = if lower.as_slice() == text { display.clone() } else { Text::from(lower.as_slice()) };
-        let site = f.site(false, lower_text, display);
+        let site = f.site(false, lower_text, self.sym(&lower), display);
         if let Some(global) = &fallback {
-            f.sites[site as usize].fallback = Some(Text::from(global.as_slice()));
+            f.sites[site as usize].fallback = Some((Text::from(global.as_slice()), self.sym(global)));
         }
         // assert() gets its source as a hidden last argument (the message
         // of the AssertionError it throws).
