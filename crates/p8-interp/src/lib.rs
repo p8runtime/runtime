@@ -146,7 +146,7 @@ enum Next {
 
 /// Prototype switch (#232): the loop runs the hottest register-only
 /// instructions itself (variant A+) or leaves every one to its handler (A).
-const HOT_LOOP: bool = false;
+const HOT_LOOP: bool = true;
 
 /// What a handler leaves the loop to do: `Next`, or an exception (kept
 /// in `Context::thrown`), small enough to come back in registers.
