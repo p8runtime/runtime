@@ -183,6 +183,8 @@ impl Context<'_> {
     fn link(&mut self, def: &ClassDef) -> Result<Rc<Class>, Throw> {
         let name = text_of(&def.name);
         let lower = def.name.as_bytes().to_ascii_lowercase();
+        // One buffer for the name, shared by everything the class declares.
+        let class_name = PhpStr::from(def.name.as_bytes());
         let parent = match &def.parent {
             None => None,
             Some(p) => {
@@ -196,7 +198,10 @@ impl Context<'_> {
                 Some(parent)
             }
         };
-        let mut interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+        // The parent's entries are shared, not copied: only what this class
+        // declares, overrides or takes from a trait is made new.
+        let declaring: Rc<[u8]> = Rc::from(lower.as_slice());
+        let mut interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
         let mut methods: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
         let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
         for i in &def.interfaces {
@@ -205,16 +210,19 @@ impl Context<'_> {
                 let what = if def.flags & CLASS_INTERFACE != 0 { "extend" } else { "implement" };
                 return Err(self.fatal_at(format!("{name} cannot {what} {} - it is not an interface", text(&iface.name)), def.line));
             }
-            for x in std::iter::once(iface.lower.clone()).chain(iface.interfaces.iter().cloned()) {
-                if !interfaces.contains(&x) {
-                    interfaces.push(x);
+            if !interfaces.iter().any(|x| **x == *iface.lower) {
+                interfaces.push(Rc::from(iface.lower.as_slice()));
+            }
+            for x in &iface.interfaces {
+                if !interfaces.contains(x) {
+                    interfaces.push(Rc::clone(x));
                 }
             }
             for (k, m) in &iface.methods {
-                methods.entry(k.clone()).or_insert_with(|| m.clone());
+                methods.entry(k.clone()).or_insert_with(|| Rc::clone(m));
             }
             for (k, c) in &iface.constants {
-                constants.entry(k.clone()).or_insert_with(|| c.clone());
+                constants.entry(k.clone()).or_insert_with(|| Rc::clone(c));
             }
         }
         // Properties: the parent's slots first; an own declaration
@@ -239,7 +247,7 @@ impl Context<'_> {
                 visibility: p.visibility,
                 set_visibility: p.set_visibility,
                 declaring: lower.clone(),
-                declaring_name: PhpStr::from(def.name.as_bytes()),
+                declaring_name: class_name.clone(),
                 readonly: p.readonly,
                 is_final: p.is_final,
                 ty: p.ty.as_ref().map(|t| PhpStr::from(t.as_bytes())),
@@ -329,7 +337,7 @@ impl Context<'_> {
                     }
                     if methods.get(&key).is_some_and(|x| x.is_abstract) {
                         from_trait.insert(key.clone(), t.name.clone());
-                        methods.insert(key, m);
+                        methods.insert(key, Rc::new(m));
                         return Ok(());
                     }
                     return Err(c.fatal_at(
@@ -349,7 +357,7 @@ impl Context<'_> {
                 }
                 from_trait.insert(key.clone(), t.name.clone());
                 trait_order.push(key.clone());
-                methods.insert(key, m);
+                methods.insert(key, Rc::new(m));
                 Ok(())
             };
             for (key, m) in &t.methods {
@@ -358,11 +366,11 @@ impl Context<'_> {
                     .trait_rules
                     .iter()
                     .any(|r| same(&r.method, m.name.as_bytes()) && r.insteadof.iter().any(|x| same(x, t.name.as_bytes())));
-                let mut copy = m.clone();
-                copy.declaring = lower.clone();
-                copy.declaring_name = PhpStr::from(def.name.as_bytes());
+                // A trait's method becomes the class's own (declared by it):
+                // one new entry for it and one per alias, nothing more.
+                let copy = || Method { declaring: Rc::clone(&declaring), declaring_name: class_name.clone(), ..Method::clone(m) };
                 if !excluded {
-                    let mut plain = copy.clone();
+                    let mut plain = copy();
                     if let Some(v) = def.trait_rules.iter().filter(rule_for).find(|r| r.alias.is_none()).and_then(|r| r.visibility) {
                         plain.visibility = v;
                     }
@@ -370,7 +378,7 @@ impl Context<'_> {
                 }
                 for r in def.trait_rules.iter().filter(rule_for) {
                     if let Some(alias) = &r.alias {
-                        let mut aliased = copy.clone();
+                        let mut aliased = copy();
                         aliased.name = PhpStr::from(alias.as_bytes());
                         if let Some(v) = r.visibility {
                             aliased.visibility = v;
@@ -383,7 +391,7 @@ impl Context<'_> {
                 if !properties.iter().any(|q| q.name == p.name) {
                     let mut p = p.clone();
                     p.declaring = lower.clone();
-                    p.declaring_name = PhpStr::from(def.name.as_bytes());
+                    p.declaring_name = class_name.clone();
                     properties.push(p);
                 }
             }
@@ -400,22 +408,22 @@ impl Context<'_> {
             // it: its private ones are its to use, and reflection says so).
             for (k, c) in &t.constants {
                 constants.entry(k.clone()).or_insert_with(|| {
-                    let mut c = c.clone();
-                    c.declaring_name = PhpStr::from(def.name.as_bytes());
-                    c
+                    let mut c = p8_runtime::object::Constant::clone(c);
+                    c.declaring_name = class_name.clone();
+                    Rc::new(c)
                 });
             }
         }
         // A class (or interface) with __toString() implements Stringable.
-        if (methods.contains_key(b"__tostring".as_slice()) || own.iter().any(|m| m == b"__tostring")) && lower.as_slice() != b"stringable" && !interfaces.iter().any(|i| i == b"stringable") {
-            interfaces.push(b"stringable".to_vec());
+        if (methods.contains_key(b"__tostring".as_slice()) || own.iter().any(|m| m == b"__tostring")) && lower.as_slice() != b"stringable" && !interfaces.iter().any(|i| **i == *b"stringable") {
+            interfaces.push(Rc::from(&b"stringable"[..]));
         }
         // An enum: its cases are constants (objects made when first used),
         // `name` (and `value`) readonly properties, cases()/from()/tryFrom().
         if def.flags & CLASS_ENUM != 0 {
-            for x in std::iter::once(b"unitenum".to_vec()).chain(def.enum_backing.is_some().then(|| b"backedenum".to_vec())) {
-                if !interfaces.contains(&x) {
-                    interfaces.push(x);
+            for x in std::iter::once(&b"unitenum"[..]).chain(def.enum_backing.is_some().then_some(&b"backedenum"[..])) {
+                if !interfaces.iter().any(|i| **i == *x) {
+                    interfaces.push(Rc::from(x));
                 }
             }
             let prop = |n: &str, ty: Option<&str>| Property {
@@ -424,7 +432,7 @@ impl Context<'_> {
                 visibility: Visibility::Public,
                 set_visibility: Some(Visibility::Protected),
                 declaring: lower.clone(),
-                declaring_name: PhpStr::from(def.name.as_bytes()),
+                declaring_name: class_name.clone(),
                 readonly: true,
                 is_final: false,
                 ty: Some(PhpStr::from(ty.unwrap_or("string"))),
@@ -439,13 +447,13 @@ impl Context<'_> {
             for (case, value) in &def.cases {
                 constants.insert(
                     case.as_bytes().to_vec(),
-                    Constant {
+                    Rc::new(Constant {
                         value: value.as_ref().map_or(Value::Null, |v| v.to_value()),
                         visibility: Visibility::Public,
-                        declaring_name: PhpStr::from(def.name.as_bytes()),
+                        declaring_name: class_name.clone(),
                         is_case: true,
                         init: None,
-                    },
+                    }),
                 );
             }
             let natives: &[(&str, p8_runtime::object::NativeStatic)] = if def.enum_backing.is_some() {
@@ -456,7 +464,7 @@ impl Context<'_> {
             for (n, f) in natives {
                 methods.insert(
                     n.to_ascii_lowercase().into_bytes(),
-                    Method {
+                    Rc::new(Method {
                         name: PhpStr::from(*n),
                         func: u32::MAX,
                         native: Some(p8_runtime::object::Native::Static(*f)),
@@ -464,9 +472,9 @@ impl Context<'_> {
                         is_static: true,
                         is_abstract: false,
                         is_final: false,
-                        declaring: lower.clone(),
-                        declaring_name: PhpStr::from(def.name.as_bytes()),
-                    },
+                        declaring: Rc::clone(&declaring),
+                        declaring_name: class_name.clone(),
+                    }),
                 );
             }
         }
@@ -477,13 +485,13 @@ impl Context<'_> {
         for c in &def.constants {
             constants.insert(
                 c.name.as_bytes().to_vec(),
-                Constant {
+                Rc::new(Constant {
                     value: c.value.to_value(),
                     visibility: c.visibility,
-                    declaring_name: PhpStr::from(def.name.as_bytes()),
+                    declaring_name: class_name.clone(),
                     is_case: false,
                     init: c.code.as_ref().map(|code| Thunk(Rc::new(Arc::clone(code)))),
-                },
+                }),
             );
         }
         for m in &def.methods {
@@ -500,7 +508,7 @@ impl Context<'_> {
             let func = self.add_closure(Arc::clone(&m.func));
             methods.insert(
                 mlower,
-                Method {
+                Rc::new(Method {
                     name: PhpStr::from(m.func.name.as_bytes()),
                     func,
                     native: None,
@@ -508,9 +516,9 @@ impl Context<'_> {
                     is_static: m.is_static,
                     is_abstract: m.is_abstract,
                     is_final: m.is_final,
-                    declaring: lower.clone(),
-                    declaring_name: PhpStr::from(def.name.as_bytes()),
-                },
+                    declaring: Rc::clone(&declaring),
+                    declaring_name: class_name.clone(),
+                }),
             );
         }
         if def.flags & (CLASS_ABSTRACT | CLASS_INTERFACE | CLASS_TRAIT) == 0 {
@@ -588,7 +596,7 @@ impl Context<'_> {
         let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
         let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
         Ok(Rc::new(Class {
-            name: PhpStr::from(def.name.as_bytes()),
+            name: class_name,
             lower,
             flags: def.flags | destructor,
             parent,
@@ -798,7 +806,7 @@ impl Context<'_> {
             }
         };
         let class = Rc::clone(&object.class);
-        let Some(method) = class.method(lower).cloned() else {
+        let Some(method) = class.methods.get(lower).cloned() else {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
                 return Ok(m);
             }
@@ -820,8 +828,8 @@ impl Context<'_> {
         // of the same name (zend_std_get_method: the subclass's "changed"
         // the private one).
         let method = match self.scope().0 {
-            Some(scope) if method.declaring != scope.lower && class.is_a(&scope.lower) => match scope.methods.get(lower) {
-                Some(own) if own.visibility == Visibility::Private && own.declaring == scope.lower => own.clone(),
+            Some(scope) if *method.declaring != *scope.lower && class.is_a(&scope.lower) => match scope.methods.get(lower) {
+                Some(own) if own.visibility == Visibility::Private && *own.declaring == *scope.lower => Rc::clone(own),
                 _ => method,
             },
             _ => method,
@@ -1517,7 +1525,7 @@ impl Context<'_> {
             self.resolve_class(regs, parent)?;
         }
         // Its constants (PHP computes them all before the first use).
-        let mut pending: Vec<(&Vec<u8>, &p8_runtime::object::Constant)> = class.constants.iter().filter(|(_, c)| c.init.is_some()).collect();
+        let mut pending: Vec<(&Vec<u8>, &Rc<p8_runtime::object::Constant>)> = class.constants.iter().filter(|(_, c)| c.init.is_some()).collect();
         pending.sort_by(|a, b| a.0.cmp(b.0));
         for (name, c) in pending {
             let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.clone());
@@ -1767,7 +1775,7 @@ impl Context<'_> {
             return Ok((copy, hook));
         }
         let copy = o.copy();
-        let Some(method) = o.class.method(b"__clone").cloned() else { return Ok((copy, None)) };
+        let Some(method) = o.class.methods.get(b"__clone".as_slice()).cloned() else { return Ok((copy, None)) };
         let declaring = self.declaring(&o.class, &method.declaring);
         if !visible(method.visibility, &declaring, self.scope().0.as_deref()) {
             return Err(self.throw(

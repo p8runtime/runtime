@@ -61,7 +61,8 @@ fn declare(
     let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
     let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
     let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
-    let mut all_interfaces: Vec<Vec<u8>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+    let declaring: Rc<[u8]> = Rc::from(lower.as_slice());
+    let mut all_interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
     let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
     // Constants are inherited from the parent and the interfaces, as for
     // a user class (RecursiveRegexIterator::GET_MATCH is RegexIterator's).
@@ -69,15 +70,18 @@ fn declare(
     for i in interfaces {
         let iface = &classes[i.to_ascii_lowercase().as_bytes()];
         for (k, c) in &iface.constants {
-            constants.entry(k.clone()).or_insert_with(|| c.clone());
+            constants.entry(k.clone()).or_insert_with(|| Rc::clone(c));
         }
-        for x in std::iter::once(iface.lower.clone()).chain(iface.interfaces.iter().cloned()) {
-            if !all_interfaces.contains(&x) {
-                all_interfaces.push(x);
+        if !all_interfaces.iter().any(|x| **x == *iface.lower) {
+            all_interfaces.push(Rc::from(iface.lower.as_slice()));
+        }
+        for x in &iface.interfaces {
+            if !all_interfaces.contains(x) {
+                all_interfaces.push(Rc::clone(x));
             }
         }
         for (k, m) in &iface.methods {
-            table.entry(k.clone()).or_insert_with(|| m.clone());
+            table.entry(k.clone()).or_insert_with(|| Rc::clone(m));
         }
     }
     let mut props: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
@@ -94,7 +98,7 @@ fn declare(
     for (m, native, is_final) in methods {
         table.insert(
             m.to_ascii_lowercase().into_bytes(),
-            Method {
+            Rc::new(Method {
                 name: PhpStr::from(*m),
                 func: u32::MAX,
                 native: native.map(Native::Method),
@@ -102,9 +106,9 @@ fn declare(
                 is_static: false,
                 is_abstract: native.is_none(),
                 is_final: *is_final,
-                declaring: lower.clone(),
+                declaring: Rc::clone(&declaring),
                 declaring_name: PhpStr::from(name),
-            },
+            }),
         );
     }
     let class = Class {
@@ -207,11 +211,11 @@ pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Table {
     closure.debug_info = Some(crate::callable::debug_info);
     for (name, f) in [("bind", closure_bind as p8_runtime::object::NativeStatic), ("fromCallable", closure_from_callable)] {
         let lower = name.to_ascii_lowercase().into_bytes();
-        let mut m = closure.methods[b"bindto".as_slice()].clone();
+        let mut m = Method::clone(&closure.methods[b"bindto".as_slice()]);
         m.name = PhpStr::from(name);
         m.native = Some(Native::Static(f));
         m.is_static = true;
-        closure.methods.insert(lower, m);
+        closure.methods.insert(lower, Rc::new(m));
     }
     interface(&mut c, "Stringable", &[], &["__toString"]);
     interface(&mut c, "Traversable", &[], &[]);
@@ -346,14 +350,15 @@ pub(crate) fn declare_spec(
     for (n, value) in spec.constants {
         class.constants.insert(
             n.as_bytes().to_vec(),
-            p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None },
+            Rc::new(p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None }),
         );
     }
+    let declaring: Rc<[u8]> = Rc::from(class.lower.as_slice());
     for (n, m) in spec.methods {
         if let Some(Native::Static(f)) = m {
             class.methods.insert(
                 n.to_ascii_lowercase().into_bytes(),
-                Method {
+                Rc::new(Method {
                     name: PhpStr::from(*n),
                     func: u32::MAX,
                     native: Some(Native::Static(*f)),
@@ -361,9 +366,9 @@ pub(crate) fn declare_spec(
                     is_static: true,
                     is_abstract: false,
                     is_final: false,
-                    declaring: spec.name.to_ascii_lowercase().into_bytes(),
+                    declaring: Rc::clone(&declaring),
                     declaring_name: PhpStr::from(spec.name),
-                },
+                }),
             );
         }
     }

@@ -846,9 +846,9 @@ fn prototype_of(ctx: &mut dyn Ctx, declaring: &Rc<Class>, lower: &[u8]) -> Optio
     }
     for i in &declaring.interfaces {
         if let Some(iface) = ctx.class(i)
-            && let Some(m) = iface.method(lower).cloned()
+            && let Some(m) = iface.methods.get(lower).cloned()
         {
-            return Some((ctx.class(&m.declaring).unwrap_or(iface), m.name));
+            return Some((ctx.class(&m.declaring).unwrap_or(iface), m.name.clone()));
         }
     }
     None
