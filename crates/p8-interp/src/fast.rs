@@ -21,7 +21,7 @@ pub(crate) fn fast(cx: &mut Context<'_>, regs: &mut Vec<Value>, mut pc: usize) -
     // A loop's backward branch is where an interrupt is noticed: `step`
     // then raises it.
     let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
-    loop {
+    'frames: loop {
         let (frames, closures, ids) = (&mut cx.frames, &cx.closures[..], &*cx.ids);
         // An instruction for `step`: the inner loop stops there.
         macro_rules! bail {
@@ -414,18 +414,13 @@ pub(crate) fn fast(cx: &mut Context<'_>, regs: &mut Vec<Value>, mut pc: usize) -
                 Instr::ReturnNull => break Switch::ReturnNull,
             }
         };
-        // From here on, an instruction for `step` is run there (out of
-        // line), and the loop goes on where it says.
+        let at = 'bail: {
+        // From here on, an instruction for `step` leaves this block for
+        // the one call of `bail` below.
         macro_rules! bail {
-            ($pc:expr) => {{
-                match cx.bail(regs, $pc, &mut func)? {
-                    Some(next) => {
-                        pc = next;
-                        continue;
-                    }
-                    None => return Ok(()),
-                }
-            }};
+            ($pc:expr) => {
+                break 'bail $pc
+            };
         }
         match switch {
             Switch::Bail(at) => bail!(at),
@@ -500,6 +495,15 @@ pub(crate) fn fast(cx: &mut Context<'_>, regs: &mut Vec<Value>, mut pc: usize) -
                     bail!(pc);
                 }
             }
+        }
+        // A frame switch: on with the new top frame.
+        continue 'frames;
+        };
+        // `step` runs the instruction (out of line), and the loop goes on
+        // where it says.
+        match cx.bail(regs, at, &mut func)? {
+            Some(next) => pc = next,
+            None => return Ok(()),
         }
     }
 }
