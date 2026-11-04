@@ -766,10 +766,13 @@ impl Server<'_> {
         };
         self.dispatch(isolate, &incoming, &mut conn);
         conn.finish();
+        // Said before the connection closes, as PHP's server does: the
+        // client may connect again as soon as it is closed, and that
+        // connection's "Accepted" comes after this one's "Closing".
+        close(&peer);
         if let Some(stream) = &incoming.stream {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
-        close(&peer);
     }
 
     /// php_cli_server_log_response()
