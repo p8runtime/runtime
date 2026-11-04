@@ -955,7 +955,15 @@ impl Context<'_> {
     /// TMP operand, with no copy and no later drop of the register's).
     fn operand_take(&mut self, w: &mut [Value], func: &Function, r: Reg, take: bool) -> Value {
         match &w[r as usize] {
-            Value::Undef | Value::Ref(_) => self.operand(w, func, r),
+            Value::Undef => self.operand(w, func, r),
+            // A reference's value; a taken register lets go of it too.
+            Value::Ref(_) => {
+                let v = self.operand(w, func, r);
+                if take {
+                    clear(&mut w[r as usize]);
+                }
+                v
+            }
             _ if take => std::mem::take(&mut w[r as usize]),
             v => v.clone(),
         }
@@ -2577,12 +2585,18 @@ impl Context<'_> {
                     let name = self.member(name!(name).clone(), sym!(name));
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
+                        if take {
+                            clear(&mut regs[base + val as usize]);
+                        }
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
                     }
                     if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Set) {
                         let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
                         self.run_magic(regs, found, &mut [pname, v.clone()])?;
+                        if take {
+                            clear(&mut regs[base + val as usize]);
+                        }
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
                     }
@@ -2598,6 +2612,9 @@ impl Context<'_> {
                         && site.get().class != Rc::as_ptr(&o.class) as usize
                     {
                         self.remember_prop(site, o, &name);
+                    }
+                    if take {
+                        clear(&mut reg!(val));
                     }
                     reg!(dst) = v;
                 }

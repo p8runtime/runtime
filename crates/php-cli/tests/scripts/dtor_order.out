@@ -1,0 +1,13 @@
+array: d1#1 d2#2 d3#3 
+unset: d1#3 d2#2 d3#1 
+nested: d1#1 d2#2 d3#3 d4#4 
+deeper: da#4 db#3 | dc#2 
+props: h#2 dp1#3 dp2#4 dp3#1 
+plain props: da#1 db1#4 db2#3 dc#5 
+locals: dx#2 dy#5 dz#3 
+reassign: d1#3 d2#5 now#2
+splice: d2#3 d3#4 | d1#5 
+ids reused: 54
+inside: parent-start dk1#1 dk2#6 parent-end dafter#7 
+throws: dt1#7 thrower dt2#6 caught from dtor 
+end: dp1#11 dp2#12 dp3#13 de3#9 de2#3 de1#6 di2#4 di1#5 da1#1 d3#2 da2#8 
