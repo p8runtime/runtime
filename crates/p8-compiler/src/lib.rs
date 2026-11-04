@@ -2183,7 +2183,7 @@ impl<'src> Compiler<'src> {
                 // Fetched for writing, its references made below: no warning
                 // when it is not there yet.
                 Expr::Array { items, .. } if root.is_some() && items.iter().any(|i| i.by_ref) => {
-                    f.emit(Instr::FetchDim { dst: elem, arr: src, key, quiet: true });
+                    f.emit(Instr::FetchDim { dst: elem, arr: src, key, quiet: true, empty: false });
                 }
                 _ => {
                     f.emit(Instr::FetchList { dst: elem, arr: src, key });
@@ -4102,7 +4102,7 @@ impl<'src> Compiler<'src> {
                 let arr = self.expr(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = out(f, hint, mark);
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: false });
+                f.emit(Instr::FetchDim { dst, arr, key, quiet: false, empty: false });
                 dst
             }
             Expr::InterpolatedString { parts, .. } => {
@@ -4563,7 +4563,18 @@ impl<'src> Compiler<'src> {
             }
             // empty($x): not set, or false when converted.
             Expr::Empty { expr, .. } => {
-                let v = self.quiet(f, expr)?;
+                let v = match expr {
+                    // `empty($c[k])`: the container read quietly, its last
+                    // dimension with isset's key checks (FetchDim's `empty`).
+                    Expr::ArrayDimFetch { array, dim: Some(dim), .. } if self.globals_dim(expr).is_none() => {
+                        let arr = self.quiet(f, array)?;
+                        let key = self.expr(f, dim)?;
+                        let v = f.temp();
+                        f.emit(Instr::FetchDim { dst: v, arr, key, quiet: true, empty: true });
+                        v
+                    }
+                    _ => self.quiet(f, expr)?,
+                };
                 let t = f.temp();
                 f.emit(Instr::LoadNull { dst: t });
                 let set = f.emit(Instr::JumpIfSet { src: v, dst: t, target: 0 });
@@ -4791,7 +4802,7 @@ impl<'src> Compiler<'src> {
                 let arr = self.quiet(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = f.temp();
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: true });
+                f.emit(Instr::FetchDim { dst, arr, key, quiet: true, empty: false });
                 Ok(dst)
             }
             Expr::PropertyFetch { target, property, .. } => {

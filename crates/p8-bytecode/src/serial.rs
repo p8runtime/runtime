@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -739,7 +739,7 @@ impl Code for Instr {
             Instr::NewArray { dst, n } => { w.byte(35); dst.put(w); n.put(w); }
             Instr::ArrayPush { arr, val } => { w.byte(36); arr.put(w); val.put(w); }
             Instr::ArraySet { arr, key, val } => { w.byte(37); arr.put(w); key.put(w); val.put(w); }
-            Instr::FetchDim { dst, arr, key, quiet } => { w.byte(38); dst.put(w); arr.put(w); key.put(w); quiet.put(w); }
+            Instr::FetchDim { dst, arr, key, quiet, empty } => { w.byte(38); dst.put(w); arr.put(w); key.put(w); quiet.put(w); empty.put(w); }
             Instr::AssignDim { var, keys, n, append, val, dst } => { w.byte(39); var.put(w); keys.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
             Instr::AssignDimOp { op, var, keys, n, val, dst } => { w.byte(40); op.put(w); var.put(w); keys.put(w); n.put(w); val.put(w); dst.put(w); }
             Instr::IssetDim { dst, var, keys, n } => { w.byte(41); dst.put(w); var.put(w); keys.put(w); n.put(w); }
@@ -851,7 +851,7 @@ impl Code for Instr {
             35 => Instr::NewArray { dst: Code::get(r)?, n: Code::get(r)? },
             36 => Instr::ArrayPush { arr: Code::get(r)?, val: Code::get(r)? },
             37 => Instr::ArraySet { arr: Code::get(r)?, key: Code::get(r)?, val: Code::get(r)? },
-            38 => Instr::FetchDim { dst: Code::get(r)?, arr: Code::get(r)?, key: Code::get(r)?, quiet: Code::get(r)? },
+            38 => Instr::FetchDim { dst: Code::get(r)?, arr: Code::get(r)?, key: Code::get(r)?, quiet: Code::get(r)?, empty: Code::get(r)? },
             39 => Instr::AssignDim { var: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             40 => Instr::AssignDimOp { op: Code::get(r)?, var: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             41 => Instr::IssetDim { dst: Code::get(r)?, var: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)? },

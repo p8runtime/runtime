@@ -1460,7 +1460,7 @@ impl Context<'_> {
                         Rc::make_mut(a).insert(k, v);
                     }
                 }
-                Instr::FetchDim { dst, arr, key, quiet } => {
+                Instr::FetchDim { dst, arr, key, quiet, empty } => {
                     let container = if quiet {
                         match &reg!(arr) {
                             Value::Ref(cell) => cell.borrow().clone(),
@@ -1474,6 +1474,21 @@ impl Context<'_> {
                         let k = self.operand(w, func, key);
                         let v = self.aa_get(regs, o, k, quiet)?;
                         regs[base + dst as usize] = v;
+                        return Ok(Next::Go(pc));
+                    }
+                    // empty()'s last dimension: its key checked as isset
+                    // checks it (`fast` took an int or string key already).
+                    if empty {
+                        let k = self.operand(w, func, key);
+                        let v = match &container {
+                            Value::Array(a) => {
+                                let k = self.isset_key(&k, true)?;
+                                a.get(&k).map_or(Value::Null, Value::deref)
+                            }
+                            Value::Str(s) => self.isset_str_offset(s, &k, true)?.unwrap_or(Value::Null),
+                            _ => Value::Null,
+                        };
+                        reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
                     let v = self.fetch_dim(&container, w, func, key, quiet)?;
@@ -1522,13 +1537,26 @@ impl Context<'_> {
                     };
                     let mut set = true;
                     for i in 0..n {
+                        let last = i + 1 == n;
                         let next = match &cur {
                             // A string's offset: the character there.
-                            Value::Str(s) => isset_string_offset(s, &reg!(keys + i as Reg).deref()),
-                            Value::Array(a) => match Key::from_value(&reg!(keys + i as Reg)) {
-                                Ok((k, _)) => a.get(&k).map(|v| v.deref()),
-                                Err(_) => None,
-                            },
+                            Value::Str(s) => {
+                                let s = s.clone();
+                                self.isset_str_offset(&s, &reg!(keys + i as Reg), last)?
+                            }
+                            Value::Array(a) => {
+                                // An int or string key as it is; anything
+                                // else by isset's rules (isset_key).
+                                let k = match &reg!(keys + i as Reg) {
+                                    Value::Int(i) => Key::Int(*i),
+                                    Value::Str(s) => Key::from_string(s.clone()),
+                                    other => {
+                                        let other = other.clone();
+                                        self.isset_key(&other, last)?
+                                    }
+                                };
+                                a.get(&k).map(|v| v.deref())
+                            }
                             _ => None,
                         };
                         match next {
@@ -3712,6 +3740,63 @@ impl Context<'_> {
         }
     }
 
+    /// An array key as isset and empty take it (zend_execute.c
+    /// zend_isset_dim_slow / zend_fetch_dimension_address_inner with
+    /// BP_VAR_IS): a float that is not an int deprecated, a resource its
+    /// number (warned), an array or object a TypeError, "in isset or empty"
+    /// at the last dimension (`last`), "on array" on the way to it.
+    #[cold]
+    fn isset_key(&mut self, v: &Value, last: bool) -> Result<Key, Throw> {
+        match Key::from_value(v) {
+            Ok((k, Some(KeyIssue::LosesPrecision(f)))) => {
+                let shown = float_to_string(f, Precision::Shortest, 'E');
+                self.diags.push(Diag::Deprecated(format!("Implicit conversion from float {shown} to int loses precision")));
+                self.report_diags();
+                Ok(k)
+            }
+            Ok((k, _)) => Ok(k),
+            Err(KeyIssue::LosesPrecision(f)) => Ok(Key::Int(f as i64)),
+            Err(KeyIssue::Illegal(t)) => {
+                let shown = match v.deref() {
+                    Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => {
+                        self.warn(format!("Resource ID#{} used as offset, casting to integer ({})", o.id, o.id));
+                        return Ok(Key::Int(i64::from(o.id)));
+                    }
+                    Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    _ => t.to_string(),
+                };
+                let place = if last { "in isset or empty" } else { "on array" };
+                Err(self.throw("TypeError", format!("Cannot access offset of type {shown} {place}")))
+            }
+        }
+    }
+
+    /// A string's offset as isset and empty read it: at the last
+    /// dimension an int, a scalar or an integer string (a float that is
+    /// not an int deprecated), anything else not set; on the way to it,
+    /// as `??` reads it (an array, object or resource key is a TypeError).
+    fn isset_str_offset(&mut self, s: &PhpStr, k: &Value, last: bool) -> Result<Option<Value>, Throw> {
+        let k = k.deref();
+        match &k {
+            Value::Array(_) | Value::Object(_) if last => Ok(None),
+            Value::Array(_) | Value::Object(_) => {
+                let t = match &k {
+                    Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => "resource".to_string(),
+                    Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    v => v.type_name().to_string(),
+                };
+                Err(self.throw("TypeError", format!("Cannot access offset of type {t} on string")))
+            }
+            Value::Float(f) if last && (f.fract() != 0.0 || !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(f)) => {
+                let shown = float_to_string(*f, Precision::Shortest, 'E');
+                self.diags.push(Diag::Deprecated(format!("Implicit conversion from float {shown} to int loses precision")));
+                self.report_diags();
+                Ok(isset_string_offset(s, &k))
+            }
+            _ => Ok(isset_string_offset(s, &k)),
+        }
+    }
+
     fn fetch_dim(&mut self, container: &Value, w: &[Value], func: &Function, key: Reg, quiet: bool) -> Result<Value, Throw> {
         match container {
             Value::Array(a) => {
@@ -3754,6 +3839,7 @@ impl Context<'_> {
                     }
                     other => {
                         let t = match other {
+                            Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => "resource".to_string(),
                             Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
                             v => v.type_name().to_string(),
                         };
