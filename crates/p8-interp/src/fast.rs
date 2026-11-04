@@ -524,7 +524,7 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     }
     // Only the constants read as values (names stay in the constants).
     let values = code.value_consts as usize;
-    for (r, c) in regs[base + consts_at..base + consts_at + values].iter_mut().zip(&func.consts[..values]) {
+    for (r, c) in regs[base + consts_at..base + consts_at + values].iter_mut().zip(func.consts.iter()) {
         clear(r);
         // `r` is undefined now: nothing to drop.
         std::mem::forget(std::mem::replace(r, c.clone()));
