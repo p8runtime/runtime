@@ -1,0 +1,19 @@
+destruct 1
+destruct 2
+caught: from 2 <- from 1
+after splice of two
+destruct 3
+caught: from 3
+after splice of one
+destruct 4
+destruct 5
+caught: from 5 <- from 4
+after method
+destruct 6
+caught: from 6
+after assign
+destruct 7
+destruct 8
+destruct 9
+caught: from 9 <- from 8 <- from 7
+end

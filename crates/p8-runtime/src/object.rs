@@ -554,6 +554,15 @@ pub struct Ids {
     /// Where these objects' destructors are queued, when not here (a
     /// resource's: with the objects', which the interpreter runs).
     queue: Option<Rc<Ids>>,
+    /// Destructors queued and destructors run, ever: positions in the
+    /// queue's history.
+    queued: Cell<u64>,
+    ran: Cell<u64>,
+    /// Ids of objects freed while destructors were due: each goes back
+    /// once the destructors queued up to its position have run, as PHP
+    /// frees an object's handle after those (which run right where their
+    /// objects go, its properties' among them) freed theirs.
+    parked: RefCell<std::collections::VecDeque<(u64, u32)>>,
 }
 
 impl Ids {
@@ -583,17 +592,53 @@ impl Ids {
         }
     }
 
+    /// An object went while destructors are due: its id waits for them.
+    #[cold]
+    #[inline(never)]
+    fn park(&self, id: u32) {
+        self.parked.borrow_mut().push_back((self.queued.get(), id));
+    }
+
+    /// One queued destructor has run (the object it ran on let go): the
+    /// ids parked behind it go back.
+    pub fn destructor_ran(&self) {
+        self.ran.set(self.ran.get() + 1);
+        loop {
+            let next = self.parked.borrow().front().copied();
+            match next {
+                Some((after, id)) if after <= self.ran.get() => {
+                    self.parked.borrow_mut().pop_front();
+                    self.give_back(id);
+                }
+                _ => break,
+            }
+        }
+    }
+
     /// Whether a destructor is due.
     #[inline(always)]
     pub fn has_pending(&self) -> bool {
         self.due.get() != 0
     }
 
-    /// The next object whose destructor is due.
-    pub fn next_pending(&self) -> Option<Rc<Object>> {
-        let o = self.pending.borrow_mut().pop_front()?;
-        self.due.set(self.due.get() - 1);
-        Some(o)
+    /// Every object whose destructor is due now, in the order they went,
+    /// the queue left empty. The interpreter runs them as one batch, each
+    /// destructor to its end before the next: a destructor runs PHP code
+    /// (a nested run that also runs what is due), and so sees only what it
+    /// frees itself, which it destroys within, as PHP does.
+    pub fn take_pending(&self) -> std::collections::VecDeque<Rc<Object>> {
+        let batch = std::mem::take(&mut *self.pending.borrow_mut());
+        self.due.set(self.due.get() - batch.len() as u32);
+        batch
+    }
+
+    /// Objects a batch did not get to (a destructor threw): due again,
+    /// ahead of any queued since.
+    pub fn requeue(&self, mut rest: std::collections::VecDeque<Rc<Object>>) {
+        let mut pending = self.pending.borrow_mut();
+        rest.append(&mut pending);
+        *pending = rest;
+        self.due.set(pending.len() as u32);
     }
 
     /// The objects with a destructor still alive and not yet destructed,
@@ -794,8 +839,30 @@ impl Drop for Object {
             let queue = self.ids.queue.as_deref().unwrap_or(&self.ids);
             queue.pending.borrow_mut().push_back(revived);
             queue.due.set(queue.due.get() + 1);
+            queue.queued.set(queue.queued.get() + 1);
             return;
         }
-        self.ids.give_back(self.id);
+        if self.ids.monotonic {
+            return;
+        }
+        // Its properties go before its id does (PHP frees an object, and
+        // runs the destructors that brings, before its handle is free):
+        // emptied in place, their storage freed with the object after.
+        self.slots.get_mut().clear();
+        let dynamic = self.dynamic.get_mut();
+        if !dynamic.is_empty() {
+            drop(std::mem::take(dynamic));
+        }
+        if self.data.is_some() || self.lazy_info.get_mut().is_some() {
+            drop((self.data.take(), self.lazy_info.get_mut().take()));
+        }
+        // A destructor not yet run (one these properties queued, or one
+        // queued before) would in PHP have run, and freed its object's
+        // handle, before this one goes: the id waits for those.
+        if self.ids.due.get() == 0 {
+            self.ids.give_back(self.id);
+        } else {
+            self.ids.park(self.id);
+        }
     }
 }
