@@ -523,9 +523,26 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
         clear(r);
     }
     for (r, c) in regs[base + consts_at..base + consts_at + func.consts.len()].iter_mut().zip(&func.consts) {
+        // A constant's register still holding this very constant (the
+        // function called again from the same place: a loop) keeps it:
+        // no drop of the old one, no copy of the new.
+        if same_constant(r, c) {
+            continue;
+        }
         clear(r);
         // `r` is undefined now: nothing to drop.
         std::mem::forget(std::mem::replace(r, c.clone()));
+    }
+}
+
+/// Whether register `r` holds constant `c` itself (the same string or
+/// array, not only an equal one).
+#[inline(always)]
+fn same_constant(r: &Value, c: &Value) -> bool {
+    match (r, c) {
+        (Value::Str(a), Value::Str(b)) => PhpStr::ptr_eq(a, b),
+        (Value::Array(a), Value::Array(b)) => Rc::ptr_eq(a, b),
+        _ => false,
     }
 }
 
@@ -543,7 +560,10 @@ pub(crate) fn ini_on(v: &Value) -> bool {
 pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     give_back_shared(frames, regs);
     let frame = frames.pop();
-    frame.extra = None;
+    // Rarely any: no drop call unless there is.
+    if frame.extra.is_some() {
+        frame.extra = None;
+    }
     // Locals die with the frame (before the result lands: the result
     // register may be inside the window).
     let base = frame.base as usize;
