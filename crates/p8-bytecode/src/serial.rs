@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 5;
+pub const FORMAT: u32 = 6;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -737,8 +737,8 @@ impl Code for Instr {
             Instr::JumpIfNot { cond, target } => { w.byte(33); cond.put(w); target.put(w); }
             Instr::JumpIfSet { src, dst, target } => { w.byte(34); src.put(w); dst.put(w); target.put(w); }
             Instr::NewArray { dst, n } => { w.byte(35); dst.put(w); n.put(w); }
-            Instr::ArrayPush { arr, val } => { w.byte(36); arr.put(w); val.put(w); }
-            Instr::ArraySet { arr, key, val } => { w.byte(37); arr.put(w); key.put(w); val.put(w); }
+            Instr::ArrayPush { arr, val, take } => { w.byte(36); arr.put(w); val.put(w); take.put(w); }
+            Instr::ArraySet { arr, key, val, take } => { w.byte(37); arr.put(w); key.put(w); val.put(w); take.put(w); }
             Instr::FetchDim { dst, arr, key, quiet, empty } => { w.byte(38); dst.put(w); arr.put(w); key.put(w); quiet.put(w); empty.put(w); }
             Instr::AssignDim { var, keys, n, append, val, dst } => { w.byte(39); var.put(w); keys.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
             Instr::AssignDimOp { op, var, keys, n, val, dst } => { w.byte(40); op.put(w); var.put(w); keys.put(w); n.put(w); val.put(w); dst.put(w); }
@@ -794,7 +794,7 @@ impl Code for Instr {
             Instr::ConstructSpread { obj, args } => { w.byte(90); obj.put(w); args.put(w); }
             Instr::This { dst } => { w.byte(91); dst.put(w); }
             Instr::FetchProp { dst, obj, name, quiet } => { w.byte(92); dst.put(w); obj.put(w); name.put(w); quiet.put(w); }
-            Instr::AssignProp { obj, name, val, dst } => { w.byte(93); obj.put(w); name.put(w); val.put(w); dst.put(w); }
+            Instr::AssignProp { obj, name, val, dst, take } => { w.byte(93); obj.put(w); name.put(w); val.put(w); dst.put(w); take.put(w); }
             Instr::AssignPropOp { op, obj, name, val, dst } => { w.byte(94); op.put(w); obj.put(w); name.put(w); val.put(w); dst.put(w); }
             Instr::PropIncDec { obj, name, dst, inc, post } => { w.byte(95); obj.put(w); name.put(w); dst.put(w); inc.put(w); post.put(w); }
             Instr::AssignPropDim { op, base, n, append, val, dst } => { w.byte(96); op.put(w); base.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
@@ -849,8 +849,8 @@ impl Code for Instr {
             33 => Instr::JumpIfNot { cond: Code::get(r)?, target: Code::get(r)? },
             34 => Instr::JumpIfSet { src: Code::get(r)?, dst: Code::get(r)?, target: Code::get(r)? },
             35 => Instr::NewArray { dst: Code::get(r)?, n: Code::get(r)? },
-            36 => Instr::ArrayPush { arr: Code::get(r)?, val: Code::get(r)? },
-            37 => Instr::ArraySet { arr: Code::get(r)?, key: Code::get(r)?, val: Code::get(r)? },
+            36 => Instr::ArrayPush { arr: Code::get(r)?, val: Code::get(r)?, take: Code::get(r)? },
+            37 => Instr::ArraySet { arr: Code::get(r)?, key: Code::get(r)?, val: Code::get(r)?, take: Code::get(r)? },
             38 => Instr::FetchDim { dst: Code::get(r)?, arr: Code::get(r)?, key: Code::get(r)?, quiet: Code::get(r)?, empty: Code::get(r)? },
             39 => Instr::AssignDim { var: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             40 => Instr::AssignDimOp { op: Code::get(r)?, var: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
@@ -906,7 +906,7 @@ impl Code for Instr {
             90 => Instr::ConstructSpread { obj: Code::get(r)?, args: Code::get(r)? },
             91 => Instr::This { dst: Code::get(r)? },
             92 => Instr::FetchProp { dst: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)?, quiet: Code::get(r)? },
-            93 => Instr::AssignProp { obj: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
+            93 => Instr::AssignProp { obj: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)?, take: Code::get(r)? },
             94 => Instr::AssignPropOp { op: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             95 => Instr::PropIncDec { obj: Code::get(r)?, name: Code::get(r)?, dst: Code::get(r)?, inc: Code::get(r)?, post: Code::get(r)? },
             96 => Instr::AssignPropDim { op: Code::get(r)?, base: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },

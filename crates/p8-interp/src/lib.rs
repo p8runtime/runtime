@@ -944,6 +944,27 @@ impl Context<'_> {
         }
     }
 
+    /// `operand`, moved out of the register when `take` (the compiler marks
+    /// a temporary's only read: the value is consumed, as PHP consumes a
+    /// TMP operand, with no copy and no later drop of the register's).
+    fn operand_take(&mut self, w: &mut [Value], func: &Function, r: Reg, take: bool) -> Value {
+        match &w[r as usize] {
+            Value::Undef | Value::Ref(_) => self.operand(w, func, r),
+            _ if take => std::mem::take(&mut w[r as usize]),
+            v => v.clone(),
+        }
+    }
+
+    /// `operand` for an instruction that only looks at the value: the
+    /// register's own value, borrowed (no copy, so no drop of one after);
+    /// a copy only for an undefined register (it warns) or a reference.
+    fn operand_ref<'a>(&mut self, w: &'a [Value], func: &Function, r: Reg) -> std::borrow::Cow<'a, Value> {
+        match &w[r as usize] {
+            Value::Undef | Value::Ref(_) => std::borrow::Cow::Owned(self.operand(w, func, r)),
+            v => std::borrow::Cow::Borrowed(v),
+        }
+    }
+
     /// Reading an undefined register: a warning for a variable, then null.
     #[cold]
     #[inline(never)]
@@ -1311,8 +1332,8 @@ impl Context<'_> {
                 }
                 Instr::Compare { cmp, dst, a, b } => {
                     let v = if cmp == Cmp::Spaceship {
-                        let x = self.operand(w, func, a);
-                        let y = self.operand(w, func, b);
+                        let x = self.operand_ref(w, func, a);
+                        let y = self.operand_ref(w, func, b);
                         compare(cmp, &x, &y)
                     } else {
                         Value::Bool(self.test_regs(w, func, cmp, a, b))
@@ -1354,12 +1375,12 @@ impl Context<'_> {
                     assign(w, var, new);
                 }
                 Instr::Not { dst, src } => {
-                    let v = self.operand(w, func, src);
-                    reg!(dst) = Value::Bool(!v.to_bool());
+                    let t = self.operand_ref(w, func, src).to_bool();
+                    reg!(dst) = Value::Bool(!t);
                 }
                 Instr::ToBool { dst, src } => {
-                    let v = self.operand(w, func, src);
-                    reg!(dst) = Value::Bool(v.to_bool());
+                    let t = self.operand_ref(w, func, src).to_bool();
+                    reg!(dst) = Value::Bool(t);
                 }
                 Instr::Neg { dst, src } => {
                     let v = self.operand(w, func, src);
@@ -1429,7 +1450,7 @@ impl Context<'_> {
                 Instr::JumpIf { cond, target } => {
                     let c = match &reg!(cond) {
                         Value::Bool(b) => *b,
-                        _ => self.operand(w, func, cond).to_bool(),
+                        _ => self.operand_ref(w, func, cond).to_bool(),
                     };
                     if c {
                         pc = target as usize;
@@ -1438,7 +1459,7 @@ impl Context<'_> {
                 Instr::JumpIfNot { cond, target } => {
                     let c = match &reg!(cond) {
                         Value::Bool(b) => *b,
-                        _ => self.operand(w, func, cond).to_bool(),
+                        _ => self.operand_ref(w, func, cond).to_bool(),
                     };
                     if !c {
                         pc = target as usize;
@@ -1459,17 +1480,17 @@ impl Context<'_> {
                     }
                 }
                 Instr::NewArray { dst, n } => reg!(dst) = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize))),
-                Instr::ArrayPush { arr, val } => {
-                    let v = self.operand(w, func, val);
+                Instr::ArrayPush { arr, val, take } => {
+                    let v = self.operand_take(w, func, val, take);
                     if let Value::Array(a) = &mut reg!(arr)
                         && Rc::make_mut(a).push(v).is_err()
                     {
                         return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
                     }
                 }
-                Instr::ArraySet { arr, key, val } => {
+                Instr::ArraySet { arr, key, val, take } => {
                     let k = self.key(w, func, key)?;
-                    let v = self.operand(w, func, val);
+                    let v = self.operand_take(w, func, val, take);
                     if let Value::Array(a) = &mut reg!(arr) {
                         Rc::make_mut(a).insert(k, v);
                     }
@@ -2524,19 +2545,22 @@ impl Context<'_> {
                         self.remember_prop(site, o, &name);
                     }
                 }
-                Instr::AssignProp { obj, name, val, dst } => {
+                Instr::AssignProp { obj, name, val, dst, take } => {
                     let target = self.operand(w, func, obj);
-                    let v = self.operand(w, func, val);
                     // The name's constant: the same cache entry reads use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                     {
-                        let (o, pname) = (Rc::clone(o), pname.clone());
-                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, v.clone())?;
+                        let pname = pname.clone();
+                        let v = self.operand_take(w, func, val, take);
+                        self.write_slot(o, slot, &o.class.properties[slot], &pname, v.clone())?;
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
+                    // (A lazy object's initialization below runs this
+                    // instruction again: the value is only copied here.)
+                    let v = self.operand(w, func, val);
                     let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
@@ -2953,7 +2977,15 @@ impl Context<'_> {
                     }
                 }
                 Instr::Return { src } => {
-                    let v = self.operand(w, func, src);
+                    // The main frame's variables are the globals, which the
+                    // script's end still sees: copied. Elsewhere moved out
+                    // when nothing reads the register again (`returned`).
+                    let main = self.frames.len() == 1 && self.frames.floor == 0;
+                    let moved = if main { None } else { returned(w, self.frames.last().expect("the returning frame"), 0, src) };
+                    let v = match moved {
+                        Some(v) => v,
+                        None => self.operand(w, func, src),
+                    };
                     if self.frames.len() == 1 && self.frames.floor == 0 && self.fibers.is_empty() {
                         // The script ends (the main frame returns, not a
                         // fiber's first): shutdown functions and destructors,
@@ -3493,8 +3525,8 @@ impl Context<'_> {
     #[cold]
     #[inline(never)]
     fn test_slow(&mut self, w: &[Value], func: &Function, cmp: Cmp, a: Reg, b: Reg) -> bool {
-        let x = self.operand(w, func, a);
-        let y = self.operand(w, func, b);
+        let x = self.operand_ref(w, func, a);
+        let y = self.operand_ref(w, func, b);
         match compare(cmp, &x, &y) {
             Value::Bool(t) => t,
             v => v.to_bool(),

@@ -880,7 +880,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *obj = f(*obj);
             *name = f(*name);
         }
-        AssignProp { obj, name, val, dst } | AssignPropOp { obj, name, val, dst, .. } => {
+        AssignProp { obj, name, val, dst, .. } | AssignPropOp { obj, name, val, dst, .. } => {
             *obj = f(*obj);
             *name = f(*name);
             *val = f(*val);
@@ -958,11 +958,11 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *src = f(*src);
             *dst = f(*dst);
         }
-        ArrayPush { arr, val } => {
+        ArrayPush { arr, val, .. } => {
             *arr = f(*arr);
             *val = f(*val);
         }
-        ArraySet { arr, key, val } => {
+        ArraySet { arr, key, val, .. } => {
             *arr = f(*arr);
             *key = f(*key);
             *val = f(*val);
@@ -1071,6 +1071,12 @@ fn free_operand(f: &mut FnBuilder, e: &Expr, val: Reg, dst: Reg) {
     if val != dst {
         free_made(f, e, val);
     }
+}
+
+/// Whether register `r` is a temporary: an expression's value, which the
+/// instruction consuming it may take (move) when that is its only read.
+fn is_temp(r: Reg) -> bool {
+    r >> KIND_SHIFT == TEMP
 }
 
 /// After storing a value an expression made (an object, likely) from a
@@ -2241,7 +2247,7 @@ impl<'src> Compiler<'src> {
             f.emit(Instr::This { dst: obj });
             let key = f.name_constant(Frozen::Str(name));
             let dst = f.temp();
-            f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst });
+            f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst, take: false });
             f.reset_temps(f.floor);
         }
         // `use ($a, &$b)`: variables after the parameters, set from the
@@ -2276,7 +2282,7 @@ impl<'src> Compiler<'src> {
                 let key = f.name_constant(Frozen::Str(name));
                 let val = self.expr(&mut f, e)?;
                 let dst = f.temp();
-                f.emit(Instr::AssignProp { obj, name: key, val, dst });
+                f.emit(Instr::AssignProp { obj, name: key, val, dst, take: false });
                 f.emit(Instr::ReturnNull);
             }
             Body::Expr(e) => {
@@ -2385,10 +2391,10 @@ impl<'src> Compiler<'src> {
             match dim {
                 Some(k) => {
                     let key = self.expr(f, k)?;
-                    f.emit(Instr::ArraySet { arr, key, val: value });
+                    f.emit(Instr::ArraySet { arr, key, val: value, take: false });
                 }
                 None => {
-                    f.emit(Instr::ArrayPush { arr, val: value });
+                    f.emit(Instr::ArrayPush { arr, val: value, take: false });
                 }
             }
             value = arr;
@@ -2426,7 +2432,7 @@ impl<'src> Compiler<'src> {
                 let obj = self.expr(f, obj)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
-                f.emit(Instr::AssignProp { obj, name, val, dst });
+                f.emit(Instr::AssignProp { obj, name, val, dst, take: false });
             }
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
@@ -3115,9 +3121,9 @@ impl<'src> Compiler<'src> {
                 match key {
                     Some(key) => {
                         named = true;
-                        f.emit(Instr::ArraySet { arr: list, key, val: v })
+                        f.emit(Instr::ArraySet { arr: list, key, val: v, take: false })
                     }
-                    None => f.emit(Instr::ArrayPush { arr: list, val: v }),
+                    None => f.emit(Instr::ArrayPush { arr: list, val: v, take: false }),
                 };
                 f.patch(end, f.here());
                 continue;
@@ -3129,13 +3135,13 @@ impl<'src> Compiler<'src> {
                 Some(n) => {
                     named = true;
                     let key = f.constant(Frozen::Str(Text::from(self.text(n.span))));
-                    f.emit(Instr::ArraySet { arr: list, key, val: v });
+                    f.emit(Instr::ArraySet { arr: list, key, val: v, take: false });
                 }
                 None if arg.unpack => {
                     f.emit(Instr::ArrayUnpack { arr: list, src: v });
                 }
                 None => {
-                    f.emit(Instr::ArrayPush { arr: list, val: v });
+                    f.emit(Instr::ArrayPush { arr: list, val: v, take: false });
                 }
             }
         }
@@ -3326,8 +3332,8 @@ impl<'src> Compiler<'src> {
     fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
         let callee = f.temp();
         f.emit(Instr::NewArray { dst: callee, n: 0 });
-        f.emit(Instr::ArrayPush { arr: callee, val: a });
-        f.emit(Instr::ArrayPush { arr: callee, val: b });
+        f.emit(Instr::ArrayPush { arr: callee, val: a, take: false });
+        f.emit(Instr::ArrayPush { arr: callee, val: b, take: false });
         if needs_spread(args) {
             return self.spread_call(f, callee, args);
         }
@@ -3953,7 +3959,8 @@ impl<'src> Compiler<'src> {
                     let name = self.prop_name_operand(f, property)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
-                    f.emit(Instr::AssignProp { obj, name, val, dst });
+                    // The value's temporary is read only here.
+                    f.emit(Instr::AssignProp { obj, name, val, dst, take: is_temp(val) });
                     free_made(f, expr, val);
                     dst
                 }
@@ -4257,10 +4264,11 @@ impl<'src> Compiler<'src> {
                     match item.key {
                         Some(k) => {
                             let key = self.expr(f, k)?;
-                            f.emit(Instr::ArraySet { arr: dst, key, val });
+                            // The element's temporary is read only here.
+                            f.emit(Instr::ArraySet { arr: dst, key, val, take: is_temp(val) });
                         }
                         None => {
-                            f.emit(Instr::ArrayPush { arr: dst, val });
+                            f.emit(Instr::ArrayPush { arr: dst, val, take: is_temp(val) });
                         }
                     }
                     free_made(f, item.value, val);
@@ -4416,8 +4424,8 @@ impl<'src> Compiler<'src> {
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
                 f.emit(Instr::NewArray { dst: pair, n: 0 });
-                f.emit(Instr::ArrayPush { arr: pair, val: obj });
-                f.emit(Instr::ArrayPush { arr: pair, val: name });
+                f.emit(Instr::ArrayPush { arr: pair, val: obj, take: false });
+                f.emit(Instr::ArrayPush { arr: pair, val: name, take: false });
                 self.spread_call(f, pair, args)?
             }
             // `C::m(...$a)`, `parent::__construct(...$a)`: the callable
@@ -4448,8 +4456,8 @@ impl<'src> Compiler<'src> {
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
                 f.emit(Instr::NewArray { dst: pair, n: 0 });
-                f.emit(Instr::ArrayPush { arr: pair, val: obj });
-                f.emit(Instr::ArrayPush { arr: pair, val: name });
+                f.emit(Instr::ArrayPush { arr: pair, val: obj, take: false });
+                f.emit(Instr::ArrayPush { arr: pair, val: name, take: false });
                 let dst = f.temp();
                 f.emit(Instr::FromCallable { dst, src: pair });
                 dst
@@ -4466,8 +4474,8 @@ impl<'src> Compiler<'src> {
                     let name = f.constant(Frozen::Str(Text::from(self.text(*method))));
                     let pair = f.temp();
                     f.emit(Instr::NewArray { dst: pair, n: 0 });
-                    f.emit(Instr::ArrayPush { arr: pair, val: class });
-                    f.emit(Instr::ArrayPush { arr: pair, val: name });
+                    f.emit(Instr::ArrayPush { arr: pair, val: class, take: false });
+                    f.emit(Instr::ArrayPush { arr: pair, val: name, take: false });
                     pair
                 } else {
                     let class = if matches!(written.to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") {

@@ -458,11 +458,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
             // The bottom frame of this `execute` returns there: `step` does it.
             Switch::Return(_) | Switch::ReturnNull if frames.len() == frames.floor + 1 => return pc,
             Switch::Return(src) => {
-                let value = match &regs[base + src as usize] {
-                    Value::Undef => return pc,
-                    Value::Ref(cell) => cell.borrow().clone(),
-                    v => v.clone(),
-                };
+                let Some(value) = returned(regs, frames.last().expect("the returning frame"), base, src) else { return pc };
                 leave(frames, regs, value);
                 pc = frames.last().expect("the caller's frame").pc as usize;
                 if ids.has_pending() {
@@ -528,6 +524,29 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
         clear(r);
         // `r` is undefined now: nothing to drop.
         std::mem::forget(std::mem::replace(r, c.clone()));
+    }
+}
+
+/// The value `return` hands back from register `src` of `frame` (at
+/// `base`); None when it is undefined (`step` warns). The frame ends with
+/// the return, so the value is moved out of its register (no copy, and
+/// no drop of the register's copy at `leave`) unless something still
+/// reads the register: a constant (a name's stays for every call), a reference's
+/// target, or a variable of a frame whose variables are not its own (the
+/// global scope's, or a file's included in a function, given back at
+/// `leave`).
+#[inline(always)]
+pub(crate) fn returned(regs: &mut [Value], frame: &Frame, base: usize, src: Reg) -> Option<Value> {
+    let code = &frame.func.code;
+    let at = src as usize;
+    let temp = at >= code.consts_at as usize + frame.func.consts.len();
+    let own_var = at < code.consts_at as usize && !frame.global && frame.extra.is_none();
+    let r = &mut regs[base + at];
+    match r {
+        Value::Undef => None,
+        Value::Ref(cell) => Some(cell.borrow().clone()),
+        _ if temp || own_var => Some(std::mem::take(r)),
+        v => Some(v.clone()),
     }
 }
 
