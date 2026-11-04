@@ -51,7 +51,7 @@ impl Context<'_> {
         match callee {
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?;
-                self.classes.get(&m.declaring).cloned().or_else(|| Some(Rc::clone(class)))
+                self.classes.get(&*m.declaring).cloned().or_else(|| Some(Rc::clone(class)))
             }
             Callee::Closure(o) => closure_data(o)?.scope.clone(),
             Callee::Function(_) => None,

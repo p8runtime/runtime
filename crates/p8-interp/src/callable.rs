@@ -314,7 +314,7 @@ impl Context<'_> {
             None => self.find_class(class)?,
         };
         let forwarded = is_keyword.then_some(called_here).flatten().filter(|c| c.is_a(&target.lower));
-        let Some(method) = target.method(lower).cloned() else {
+        let Some(method) = target.methods.get(lower).cloned() else {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(Target::Frame(m));
             }
@@ -331,7 +331,7 @@ impl Context<'_> {
                 ),
             ));
         }
-        let scope = self.classes.get(&method.declaring).cloned().unwrap_or_else(|| Rc::clone(&target));
+        let scope = self.classes.get(&*method.declaring).cloned().unwrap_or_else(|| Rc::clone(&target));
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).or(forwarded).unwrap_or(target);
         let this = if method.is_static { None } else { this };
         Ok(Target::Frame(MethodFrame::method(self.code_of(&method), this, scope, called)))

@@ -180,7 +180,7 @@ impl Context<'_> {
             }
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?.clone();
-                let declaring = self.classes.get(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                let declaring = self.classes.get(&*m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
                 // A builtin interface's abstract method has no code: its stub describes it.
                 let code = if m.native.is_none() && m.func == u32::MAX { None } else { Some(self.code_of(&m)) };
                 Some(match code {
@@ -225,7 +225,7 @@ impl Context<'_> {
                 let Some(m) = class.method(&name.as_bytes().to_ascii_lowercase()).cloned() else {
                     return Err(self.throw("ReflectionException", format!("Method {}::{}() does not exist", String::from_utf8_lossy(class.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()))));
                 };
-                let declaring = self.classes.get(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                let declaring = self.classes.get(&*m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
                 let called = this.as_ref().map_or_else(|| Rc::clone(class), |o| Rc::clone(&o.class));
                 let this = if m.is_static { None } else { this };
                 let mut regs = std::mem::take(&mut self.isolate.regs);
