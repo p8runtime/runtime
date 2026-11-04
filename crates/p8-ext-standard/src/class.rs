@@ -391,9 +391,8 @@ fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
             out.insert(Key::from_string(p.name.clone()), v);
         }
     }
-    let mut statics: Vec<_> = class.statics.iter().collect();
-    statics.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, (cell, vis, decl)) in statics {
+    // In declaration order (the class's own, its parents', its traits').
+    for (name, (cell, vis, decl)) in &class.statics {
         if visible(*vis, declaring(&class, decl), scope.as_deref()) {
             out.insert(Key::from_string(PhpStr::from(name.as_slice())), cell.borrow().deref());
         }
