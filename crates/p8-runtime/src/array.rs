@@ -141,7 +141,7 @@ impl Packed {
 ///
 /// A small table (up to SMALL buckets: most arrays, records of a few keys)
 /// has no index: a lookup scans its buckets' hashes, and the table is one
-/// allocation of 128 or 256 bytes. A larger one has an index of chains
+/// allocation of 256 bytes. A larger one has an index of chains
 /// (`u32`s: slot heads, then each bucket's next).
 ///
 /// An unset entry stays in place (positions do not move) until the table
@@ -166,8 +166,12 @@ struct Hashed {
 const NONE: u32 = u32::MAX;
 /// An unset entry's `next` in a large table's index.
 const UNSET: u32 = u32::MAX - 1;
-/// The first table's size.
-const MIN_SIZE: usize = 4;
+/// The first table's size: eight buckets, as zend_hash's minimum (a table
+/// of a few keys never grows, so is one allocation).
+const MIN_SIZE: usize = 8;
+/// A packed array's first room once it is pushed to (PHP's minimum too):
+/// one allocation for a list of up to eight, not a second at five.
+const MIN_PACKED: usize = 8;
 /// Up to this many buckets a table has no index (scanned).
 const SMALL: usize = 8;
 
@@ -472,6 +476,17 @@ impl PhpArray {
         PhpArray { storage: Storage::Hashed(Hashed::with_capacity(capacity)), next_free: None, cursor: 0 }
     }
 
+    /// Whether it is stored packed (int keys by position: HT_IS_PACKED).
+    pub fn is_packed(&self) -> bool {
+        matches!(self.storage, Storage::Packed(_))
+    }
+
+    /// Packed without holes: keys 0..n-1, every one set
+    /// (HT_IS_PACKED && HT_IS_WITHOUT_HOLES).
+    pub fn is_dense_list(&self) -> bool {
+        matches!(&self.storage, Storage::Packed(p) if p.holes == 0)
+    }
+
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
@@ -588,6 +603,9 @@ impl PhpArray {
                 Key::Int(i) if p.get(i).is_some() => p.slots[i as usize] = value,
                 Key::Int(i) if p.fits(i) => {
                     let gap = i as usize - p.slots.len();
+                    if p.slots.capacity() == 0 {
+                        p.slots.reserve_exact(MIN_PACKED.max(i as usize + 1));
+                    }
                     p.slots.resize(i as usize, Value::Undef);
                     p.holes += gap;
                     p.slots.push(value);
