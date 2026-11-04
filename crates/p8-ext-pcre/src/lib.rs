@@ -10,7 +10,7 @@ use p8_runtime::ext::{Builtin, Constant, Ctx, Extension, Registry, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 
 pub const EXTENSION: Extension = Extension { name: "pcre", register };
@@ -65,16 +65,19 @@ fn register(registry: &mut Registry) {
     registry.add_ini("pcre.backtrack_limit", Some(b"1000000"));
     registry.add_ini("pcre.recursion_limit", Some(b"100000"));
     registry.add_ini("pcre.jit", Some(b"1"));
+    for name in ["pcre.backtrack_limit", "pcre.recursion_limit", "pcre.jit"] {
+        registry.add_ini_check(name, ini_changed);
+    }
+    registry.add_request_start(request_start);
     registry.add_module("pcre");
-    // These call PHP code: callbacks, and __toString() on subjects.
+    // These call PHP code: callbacks, and __toString() on subjects (an
+    // array's values; a string parameter's object is converted before the
+    // call, so preg_match(), preg_match_all() and preg_split() never do).
     registry.mark_reenters(&[
-        "preg_match",
-        "preg_match_all",
         "preg_replace",
         "preg_filter",
         "preg_replace_callback",
         "preg_replace_callback_array",
-        "preg_split",
         "preg_grep",
     ]);
 }
@@ -155,12 +158,63 @@ impl Pattern {
 
     /// Whether the pattern matches somewhere in `subject`.
     pub fn is_match(&self, ctx: &dyn Ctx, subject: &[u8]) -> bool {
-        matches!(exec(ctx, &self.0, &PhpStr::new(subject.to_vec()), 0, Flags::default(), true), Ok(Some(_)))
+        matches!(exec(Limits::get(ctx), &self.0, &PhpStr::new(subject.to_vec()), 0, Flags::default(), true, &mut Captures::default()), Ok(Some(_)))
     }
 }
 
-fn set_error(ctx: &mut dyn Ctx, code: i64) {
-    *ctx.state("preg_last_error") = Value::Int(code);
+thread_local! {
+    /// The pcre.* settings, read once (ini lookups are hash lookups and a
+    /// number parse, per match): None when they must be read again.
+    static LIMITS: std::cell::Cell<Option<Limits>> = const { std::cell::Cell::new(None) };
+    /// preg_last_error()'s code (a request's: reset when one starts).
+    static LAST_ERROR: std::cell::Cell<i64> = const { std::cell::Cell::new(NO_ERROR) };
+}
+
+/// The settings a match runs under, and the context they were read in.
+#[derive(Clone, Copy)]
+struct Limits {
+    ctx: usize,
+    backtrack: u64,
+    recursion: u64,
+    jit: bool,
+}
+
+impl Limits {
+    fn get(ctx: &dyn Ctx) -> Limits {
+        let at = ctx as *const dyn Ctx as *const () as usize;
+        if let Some(l) = LIMITS.get()
+            && l.ctx == at
+        {
+            return l;
+        }
+        let ini = |name: &[u8], default: u64| -> u64 {
+            ctx.ini_get(name).map(|v| v.to_int()).filter(|&n| n > 0).map_or(default, |n| n as u64)
+        };
+        let l = Limits {
+            ctx: at,
+            backtrack: ini(b"pcre.backtrack_limit", 1_000_000),
+            recursion: ini(b"pcre.recursion_limit", 100_000),
+            jit: ctx.ini_get(b"pcre.jit").is_none_or(|v| v.to_int() != 0),
+        };
+        LIMITS.set(Some(l));
+        l
+    }
+}
+
+/// ini_set() of a pcre.* setting: read them again at the next match.
+fn ini_changed(_: &mut dyn Ctx, _: &[u8], _: &PhpStr) -> bool {
+    LIMITS.set(None);
+    true
+}
+
+fn request_start(_: &mut dyn Ctx) -> Result<(), Throw> {
+    LIMITS.set(None);
+    LAST_ERROR.set(NO_ERROR);
+    Ok(())
+}
+
+fn set_error(_: &mut dyn Ctx, code: i64) {
+    LAST_ERROR.set(code);
 }
 
 fn error_code(e: MatchError) -> i64 {
@@ -174,13 +228,36 @@ fn error_code(e: MatchError) -> i64 {
 struct Compiled {
     re: Regex,
     utf: bool,
-    /// Each group's name, by group number.
-    names: Vec<Option<PhpStr>>,
+    /// Each group's name, by group number, as the key it is in a match array.
+    names: Vec<Option<Key>>,
+    /// Whether any group has a name.
+    named: bool,
+    /// Capture room kept between calls (see [`Spare`]).
+    spare: std::cell::Cell<Captures>,
 }
 
 thread_local! {
     /// PHP's per-request pattern cache, by the pattern string.
-    static CACHE: RefCell<HashMap<Vec<u8>, Rc<Compiled>>> = RefCell::new(HashMap::new());
+    static CACHE: RefCell<HashMap<Vec<u8>, Rc<Compiled>>> = RefCell::new(HashMap::default());
+    /// The pattern string last looked up, and what it compiled to: a
+    /// literal pattern is the same string at each call, found again by
+    /// its address without hashing it. (Holding the string keeps its
+    /// buffer, so the address can't be another string's meanwhile.)
+    static LAST: RefCell<Option<(PhpStr, Rc<Compiled>)>> = const { RefCell::new(None) };
+}
+
+/// [`compiled`] for a pattern string.
+fn compiled_str(ctx: &mut dyn Ctx, regex: &PhpStr) -> Option<Rc<Compiled>> {
+    let hit = LAST.with(|l| match &*l.borrow() {
+        Some((s, c)) if PhpStr::ptr_eq(s, regex) => Some(Rc::clone(c)),
+        _ => None,
+    });
+    if hit.is_some() {
+        return hit;
+    }
+    let c = compiled(ctx, regex.as_bytes())?;
+    LAST.with(|l| *l.borrow_mut() = Some((regex.clone(), Rc::clone(&c))));
+    Some(c)
 }
 
 /// The compiled pattern for a delimited regex, warning as PHP does when it
@@ -311,10 +388,11 @@ fn compile(ctx: &mut dyn Ctx, regex: &[u8]) -> Option<Compiled> {
     };
     let mut names = vec![None; re.groups() + 1];
     for (name, group) in re.names() {
-        names[*group] = Some(PhpStr::new(name.clone()));
+        names[*group] = Some(Key::from_string(PhpStr::new(name.clone())));
     }
     let utf = re.is_utf();
-    Some(Compiled { re, utf, names })
+    let named = names.iter().any(Option::is_some);
+    Some(Compiled { re, utf, names, named, spare: Default::default() })
 }
 
 fn contains_backslash_c(pattern: &[u8]) -> bool {
@@ -380,30 +458,47 @@ fn check_utf(c: &Compiled, subject: &PhpStr, start: usize) -> Result<(), i64> {
     Ok(())
 }
 
-/// One pcre2_match() call: Err holds the preg error code.
-fn exec(ctx: &dyn Ctx, c: &Compiled, subject: &PhpStr, start: usize, flags: Flags, utf_check: bool) -> Result<Option<Captures>, i64> {
+/// A call's spare capture room (see [`exec`]): the pattern's, handed back
+/// to it when the call is done; with the settings its matches run under.
+struct Spare<'a>(Captures, &'a Compiled, Limits);
+
+impl Spare<'_> {
+    fn of<'a>(ctx: &dyn Ctx, c: &'a Compiled) -> Spare<'a> {
+        Spare(c.spare.take(), c, Limits::get(ctx))
+    }
+}
+
+impl Drop for Spare<'_> {
+    fn drop(&mut self) {
+        self.1.spare.set(std::mem::take(&mut self.0));
+    }
+}
+
+/// One pcre2_match() call: Err holds the preg error code. The match is
+/// made in `spare`'s room (a loop hands each match back as the next one's
+/// spare, so it allocates nothing per match).
+fn exec(limits: Limits, c: &Compiled, subject: &PhpStr, start: usize, flags: Flags, utf_check: bool, spare: &mut Captures) -> Result<Option<Captures>, i64> {
     let s = subject.as_bytes();
     if c.utf && utf_check {
         check_utf(c, subject, start)?;
     }
-    let ini = |name: &[u8], default: u64| -> u64 {
-        ctx.ini_get(name).map(|v| v.to_int()).filter(|&n| n > 0).map_or(default, |n| n as u64)
-    };
-    let jit_run = !flags.not_empty_atstart && ctx.ini_get(b"pcre.jit").is_none_or(|v| v.to_int() != 0);
+    let jit_run = !flags.not_empty_atstart && limits.jit;
     let opts = MatchOptions {
         anchored: flags.anchored,
         not_empty: false,
         not_empty_atstart: flags.not_empty_atstart,
-        match_limit: ini(b"pcre.backtrack_limit", 1_000_000),
+        match_limit: limits.backtrack,
         // PHP's JIT has no depth limit, only its 192 KB stack (about 16k
         // backtracking points); its retries after an empty match run in
         // the interpreter, which has the depth limit.
-        depth_limit: if jit_run { JIT_STACK } else { ini(b"pcre.recursion_limit", 100_000) },
+        depth_limit: if jit_run { JIT_STACK } else { limits.recursion },
     };
-    c.re.exec(s, start, &opts).map_err(|e| match e {
-        MatchError::DepthLimit if jit_run => JIT_STACKLIMIT_ERROR,
-        e => error_code(e),
-    })
+    match c.re.exec_into(s, start, &opts, spare) {
+        Ok(true) => Ok(Some(std::mem::take(spare))),
+        Ok(false) => Ok(None),
+        Err(MatchError::DepthLimit) if jit_run => Err(JIT_STACKLIMIT_ERROR),
+        Err(e) => Err(error_code(e)),
+    }
 }
 
 /// The length of the character at `at` (calculate_unit_length).
@@ -417,9 +512,13 @@ fn unit_len(c: &Compiled, s: &[u8], at: usize) -> usize {
     n
 }
 
-fn group_value(s: &[u8], m: &Captures, i: usize, unmatched_as_null: bool) -> Value {
+fn group_value(subject: &PhpStr, m: &Captures, i: usize, unmatched_as_null: bool) -> Value {
+    let s = subject.as_bytes();
     match m.get(i) {
-        Some((a, b)) => Value::Str(PhpStr::new(s[a..b].to_vec())),
+        // The whole subject: the same string, no copy.
+        Some((0, b)) if b == s.len() => Value::Str(subject.clone()),
+        // (From a slice: a short one in the string's own allocation.)
+        Some((a, b)) => Value::Str(PhpStr::from(&s[a..b])),
         None if unmatched_as_null => Value::Null,
         None => Value::Str(PhpStr::empty()),
     }
@@ -427,7 +526,7 @@ fn group_value(s: &[u8], m: &Captures, i: usize, unmatched_as_null: bool) -> Val
 
 fn offset_pair(s: &[u8], m: Option<(usize, usize)>, unmatched_as_null: bool) -> Value {
     let pair = match m {
-        Some((a, b)) => vec![Value::Str(PhpStr::new(s[a..b].to_vec())), Value::Int(a as i64)],
+        Some((a, b)) => vec![Value::Str(PhpStr::from(&s[a..b])), Value::Int(a as i64)],
         None => vec![if unmatched_as_null { Value::Null } else { Value::Str(PhpStr::empty()) }, Value::Int(-1)],
     };
     Value::Array(Rc::new(PhpArray::from_list(pair)))
@@ -435,25 +534,26 @@ fn offset_pair(s: &[u8], m: Option<(usize, usize)>, unmatched_as_null: bool) -> 
 
 /// Inserts a named group's value: a set value replaces one already there
 /// (duplicate names), an unset one only fills a gap (add_named).
-fn add_named(arr: &mut PhpArray, name: &PhpStr, v: Value, unmatched: bool) {
-    let key = Key::from_string(name.clone());
-    if unmatched && arr.get(&key).is_some() {
+fn add_named(arr: &mut PhpArray, key: &Key, v: Value, unmatched: bool) {
+    if unmatched && arr.get(key).is_some() {
         return;
     }
-    arr.insert(key, v);
+    arr.insert(key.clone(), v);
 }
 
 /// One match's groups as an array (populate_subpat_array).
-fn subpat_array(c: &Compiled, s: &[u8], m: &Captures, flags: i64) -> PhpArray {
+fn subpat_array(c: &Compiled, subject: &PhpStr, m: &Captures, flags: i64) -> PhpArray {
+    let s = subject.as_bytes();
     let offset_capture = flags & OFFSET_CAPTURE != 0;
     let unmatched_as_null = flags & UNMATCHED_AS_NULL != 0;
     let num = c.re.groups() + 1;
     let count = m.len();
-    let mut arr = PhpArray::new();
     let end = if unmatched_as_null { num } else { count };
+    // A list when no group has a name: its room made once.
+    let mut arr = if c.named { PhpArray::new() } else { PhpArray::list_with_capacity(end) };
     for i in 0..end {
         let g = if i < count { m.get(i) } else { None };
-        let v = if offset_capture { offset_pair(s, g, unmatched_as_null) } else if i < count { group_value(s, m, i, unmatched_as_null) } else { Value::Null };
+        let v = if offset_capture { offset_pair(s, g, unmatched_as_null) } else if i < count { group_value(subject, m, i, unmatched_as_null) } else { Value::Null };
         if let Some(name) = &c.names[i] {
             add_named(&mut arr, name, v.clone(), g.is_none());
         }
@@ -480,21 +580,26 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
     let s = subject.as_bytes();
     let flags = int_arg(args, 3, 0);
     let offset = int_arg(args, 4, 0);
-    let Some(c) = compiled(ctx, regex.as_bytes()) else { return Ok(Value::Bool(false)) };
+    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::Bool(false)) };
     if offset == i64::MIN {
         return Err(ctx.throw("ValueError", format!("{name}(): Argument #5 ($offset) must be greater than {}", i64::MIN)));
     }
     let subpats = match args.get(2) {
-        Some(Value::Ref(cell)) => {
-            *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
-            Some(cell.clone())
-        }
+        Some(Value::Ref(cell)) => Some(cell.clone()),
         _ => None,
+    };
+    // The matches argument is an empty array when nothing else goes there
+    // (set where the call ends: nothing reads it before).
+    let emptied = || {
+        if let Some(cell) = &subpats {
+            *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
+        }
     };
     let mut order = if global { PATTERN_ORDER } else { 0 };
     if flags & 0xff != 0 {
         order = flags & 0xff;
         if (global && !(PATTERN_ORDER..=SET_ORDER).contains(&order)) || (!global && order != 0) {
+            emptied();
             return Err(ctx.throw("ValueError", format!("{name}(): Argument #4 ($flags) must be a PREG_* constant")));
         }
     }
@@ -506,10 +611,11 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
         offset as usize
     };
     if start > s.len() {
+        emptied();
         set_error(ctx, INTERNAL_ERROR);
         return Ok(Value::Bool(false));
     }
-    set_error(ctx, NO_ERROR);
+    // (preg_last_error() is set where the call ends: nothing between reads it.)
     let num = c.re.groups() + 1;
     let mut sets: Vec<PhpArray> = if global && order == PATTERN_ORDER { (0..num).map(|_| PhpArray::new()).collect() } else { Vec::new() };
     let mut marks: Option<PhpArray> = None;
@@ -517,7 +623,8 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
     let mut single: Option<PhpArray> = None;
     let mut matched = 0i64;
     let mut error = NO_ERROR;
-    let mut result = exec(ctx, &c, &subject, start, Flags::default(), true);
+    let mut spare = Spare::of(ctx, &c);
+    let mut result = exec(spare.2, &c, &subject, start, Flags::default(), true, &mut spare.0);
     loop {
         let m = match result {
             Ok(Some(m)) => m,
@@ -531,6 +638,8 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
         let (m0, m1) = m.get(0).unwrap();
         if subpats.is_some() {
             if m1 < m0 {
+                emptied();
+                set_error(ctx, NO_ERROR);
                 warn(ctx, "Get subpatterns list failed");
                 return Ok(Value::Bool(false));
             }
@@ -539,7 +648,7 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
                     let count = m.len();
                     for (i, set) in sets.iter_mut().enumerate() {
                         let v = if i < count {
-                            if offset_capture { offset_pair(s, m.get(i), unmatched_as_null) } else { group_value(s, &m, i, unmatched_as_null) }
+                            if offset_capture { offset_pair(s, m.get(i), unmatched_as_null) } else { group_value(&subject, &m, i, unmatched_as_null) }
                         } else if offset_capture {
                             offset_pair(s, None, unmatched_as_null)
                         } else if unmatched_as_null {
@@ -553,18 +662,20 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
                         marks.get_or_insert_with(PhpArray::new).insert(Key::Int(matched - 1), Value::Str(PhpStr::new(mark.clone())));
                     }
                 } else {
-                    let _ = list.push(Value::Array(Rc::new(subpat_array(&c, s, &m, flags))));
+                    let _ = list.push(Value::Array(Rc::new(subpat_array(&c, &subject, &m, flags))));
                 }
             } else {
-                single = Some(subpat_array(&c, s, &m, flags));
+                single = Some(subpat_array(&c, &subject, &m, flags));
+                spare.0 = m;
                 break;
             }
         }
         start = m1;
+        spare.0 = m;
         // An empty match: try again here for a non-empty one, then move on
         // a character (as Perl's /g does).
         if m1 == m0 {
-            match exec(ctx, &c, &subject, start, Flags { not_empty_atstart: true, anchored: true }, false) {
+            match exec(spare.2, &c, &subject, start, Flags { not_empty_atstart: true, anchored: true }, false, &mut spare.0) {
                 Ok(Some(m)) => {
                     if global {
                         result = Ok(Some(m));
@@ -588,7 +699,7 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
         if !global {
             break;
         }
-        result = exec(ctx, &c, &subject, start, Flags::default(), false);
+        result = exec(spare.2, &c, &subject, start, Flags::default(), false, &mut spare.0);
     }
     if let Some(cell) = subpats {
         let out = if global {
@@ -597,7 +708,7 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
                 for (i, set) in sets.into_iter().enumerate() {
                     let v = Value::Array(Rc::new(set));
                     if let Some(name) = &c.names[i] {
-                        out.insert(Key::from_string(name.clone()), v.clone());
+                        out.insert(name.clone(), v.clone());
                     }
                     let _ = out.push(v);
                 }
@@ -688,7 +799,12 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
     let mut out: Vec<u8> = Vec::new();
     let mut start = 0usize;
     let mut last_end = 0usize;
-    let mut result = exec(ctx, c, subject, start, Flags::default(), true);
+    let mut spare = Spare::of(ctx, &c);
+    let mut result = exec(spare.2,c, subject, start, Flags::default(), true, &mut spare.0);
+    if matches!(result, Ok(Some(_))) {
+        // About the subject's length: the room made once.
+        out.reserve(s.len());
+    }
     loop {
         let mut piece = last_end;
         match result {
@@ -703,7 +819,7 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
                 match with {
                     Replacement::Text(r) => expand(&mut out, r, s, &m),
                     Replacement::Callback(f, flags) => {
-                        let arr = Value::Array(Rc::new(subpat_array(c, s, &m, *flags)));
+                        let arr = Value::Array(Rc::new(subpat_array(c, subject, &m, *flags)));
                         let v = ctx.call(f, &mut [arr])?;
                         let v = to_str(ctx, &v)?;
                         out.extend_from_slice(v.as_bytes());
@@ -712,9 +828,10 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
                 limit -= 1;
                 start = m1;
                 last_end = m1;
+                spare.0 = m;
                 if m1 == m0 {
                     piece = start;
-                    let again = exec(ctx, c, subject, start, Flags { not_empty_atstart: true, anchored: true }, false);
+                    let again = exec(spare.2,c, subject, start, Flags { not_empty_atstart: true, anchored: true }, false, &mut spare.0);
                     match again {
                         Ok(Some(m)) if limit > 0 => {
                             result = Ok(Some(m));
@@ -744,14 +861,14 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
                 return Ok(None);
             }
         }
-        result = exec(ctx, c, subject, start, Flags::default(), false);
+        result = exec(spare.2,c, subject, start, Flags::default(), false, &mut spare.0);
     }
 }
 
 /// One subject through one pattern: None when the pattern is bad or the
 /// match failed.
 fn replace_with(ctx: &mut dyn Ctx, regex: &PhpStr, s: &PhpStr, with: &Replacement, limit: usize, count: &mut usize) -> Result<Option<PhpStr>, Throw> {
-    let Some(c) = compiled(ctx, regex.as_bytes()) else { return Ok(None) };
+    let Some(c) = compiled_str(ctx, regex) else { return Ok(None) };
     Ok(replace_one(ctx, &c, s, with, limit, count)?.map(PhpStr::new))
 }
 
@@ -908,13 +1025,13 @@ fn preg_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = subject.as_bytes();
     let mut limit = int_arg(args, 2, -1);
     let flags = int_arg(args, 3, 0);
-    let Some(c) = compiled(ctx, regex.as_bytes()) else { return Ok(Value::Bool(false)) };
+    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::Bool(false)) };
     let no_empty = flags & SPLIT_NO_EMPTY != 0;
     let delim_capture = flags & SPLIT_DELIM_CAPTURE != 0;
     let offset_capture = flags & SPLIT_OFFSET_CAPTURE != 0;
     let mut out = PhpArray::new();
     let piece = |out: &mut PhpArray, a: usize, b: usize| {
-        let v = if offset_capture { offset_pair(s, Some((a, b)), false) } else { Value::Str(PhpStr::new(s[a..b].to_vec())) };
+        let v = if offset_capture { offset_pair(s, Some((a, b)), false) } else { Value::Str(PhpStr::from(&s[a..b])) };
         let _ = out.push(v);
     };
     set_error(ctx, NO_ERROR);
@@ -924,7 +1041,8 @@ fn preg_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     if limit == -1 || limit > 1 {
         let mut start = 0usize;
-        let mut result = exec(ctx, &c, &subject, start, Flags::default(), true);
+        let mut spare = Spare::of(ctx, &c);
+        let mut result = exec(spare.2, &c, &subject, start, Flags::default(), true, &mut spare.0);
         let mut error = NO_ERROR;
         loop {
             let m = match result {
@@ -959,11 +1077,12 @@ fn preg_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             }
             start = m1;
             last = m1;
+            spare.0 = m;
             if m1 == m0 {
                 if limit != -1 && limit <= 1 {
                     break;
                 }
-                match exec(ctx, &c, &subject, start, Flags { not_empty_atstart: true, anchored: true }, false) {
+                match exec(spare.2, &c, &subject, start, Flags { not_empty_atstart: true, anchored: true }, false, &mut spare.0) {
                     Ok(Some(m)) => {
                         result = Ok(Some(m));
                         continue;
@@ -984,7 +1103,7 @@ fn preg_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             if limit != -1 && limit <= 1 {
                 break;
             }
-            result = exec(ctx, &c, &subject, start, Flags::default(), false);
+            result = exec(spare.2, &c, &subject, start, Flags::default(), false, &mut spare.0);
         }
         if error != NO_ERROR {
             set_error(ctx, error);
@@ -1026,15 +1145,19 @@ fn preg_grep(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let regex = str_arg(args, 0);
     let Value::Array(input) = arg(args, 1) else { return Ok(Value::Bool(false)) };
     let invert = int_arg(args, 2, 0) & GREP_INVERT != 0;
-    let Some(c) = compiled(ctx, regex.as_bytes()) else { return Ok(Value::Bool(false)) };
+    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::Bool(false)) };
     set_error(ctx, NO_ERROR);
     let mut out = PhpArray::new();
+    let mut spare = Spare::of(ctx, &c);
     for (k, v) in input.iter() {
         let s = to_str(ctx, v)?;
-        match exec(ctx, &c, &s, 0, Flags::default(), true) {
+        match exec(spare.2, &c, &s, 0, Flags::default(), true, &mut spare.0) {
             Ok(m) => {
                 if m.is_some() != invert {
                     out.insert(k, v.clone());
+                }
+                if let Some(m) = m {
+                    spare.0 = m;
                 }
             }
             Err(code) => {
@@ -1046,11 +1169,8 @@ fn preg_grep(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Array(Rc::new(out)))
 }
 
-fn last_error(ctx: &mut dyn Ctx) -> i64 {
-    match ctx.state("preg_last_error") {
-        Value::Int(i) => *i,
-        _ => NO_ERROR,
-    }
+fn last_error(_: &mut dyn Ctx) -> i64 {
+    LAST_ERROR.get()
 }
 
 fn preg_last_error(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
