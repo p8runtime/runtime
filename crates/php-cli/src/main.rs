@@ -155,13 +155,15 @@ fn main() {
         let argv: Vec<String> = std::iter::once(argv0).chain(args).collect();
         // --repeat N: the same script as N requests on this one isolate (a
         // warm server's view): the first one's output goes to stdout, the
-        // others' nowhere; each request's time to stderr.
+        // others' nowhere; each request's time, and its output's size and
+        // hash (the same page every time shows as the same hash), to stderr.
         let mut status = 0;
         for request in 1..=repeat {
             let started = std::time::Instant::now();
             let mut discard = Discard;
-            let host: &mut dyn p8::Host = if request == 1 { &mut stdout } else { &mut discard };
-            let mut context = isolate.new_context(host);
+            let inner: &mut dyn p8::Host = if request == 1 { &mut stdout } else { &mut discard };
+            let mut host = Measured { inner, bytes: 0, hash: FNV_OFFSET };
+            let mut context = isolate.new_context(&mut host);
             for (name, value) in &ini {
                 context.set_ini(name, value);
             }
@@ -172,7 +174,7 @@ fn main() {
             };
             drop(context);
             if repeat > 1 {
-                eprintln!("request {request}: {:.3} ms", started.elapsed().as_secs_f64() * 1e3);
+                eprintln!("request {request}: {:.3} ms, {} bytes, output {:016x}", started.elapsed().as_secs_f64() * 1e3, host.bytes, host.hash);
             }
         }
         status
@@ -272,6 +274,34 @@ struct Discard;
 
 impl p8::Host for Discard {
     fn write(&mut self, _: &[u8]) {}
+}
+
+/// A `--repeat` request's host: its output passed on, its size and FNV-1a
+/// hash kept (requests that print the same page show the same hash).
+struct Measured<'h> {
+    inner: &'h mut dyn p8::Host,
+    bytes: usize,
+    hash: u64,
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+impl p8::Host for Measured<'_> {
+    fn write(&mut self, bytes: &[u8]) {
+        self.bytes += bytes.len();
+        for &b in bytes {
+            self.hash = (self.hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        self.inner.write(bytes);
+    }
+
+    fn flush(&mut self) {
+        self.inner.flush();
+    }
+
+    fn head(&mut self, response: &p8::Response) {
+        self.inner.head(response);
+    }
 }
 
 /// The terminal: a request's output goes to stdout.
