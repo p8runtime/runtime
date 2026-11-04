@@ -21,6 +21,15 @@ impl Context<'_> {
                 w[$r as usize]
             };
         }
+        // A name operand: its constant read in place, else its register (as in `step`).
+        macro_rules! name {
+            ($r:expr) => {
+                match clo.consts.get(($r as usize).wrapping_sub(func.consts_at as usize)) {
+                    Some(c) => c,
+                    None => &w[$r as usize],
+                }
+            };
+        }
         match instr {
                 Instr::MatchError { src } => {
                     let v = self.operand(w, func, src);
@@ -71,7 +80,7 @@ impl Context<'_> {
                     Rare::PropRef => {
                             let (dst, obj, name) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
                             return Ok(Next::Go(insn_at));
@@ -83,7 +92,7 @@ impl Context<'_> {
                     Rare::AssignPropRef => {
                             let (obj, name, src) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = make_ref(w, src);
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
@@ -98,7 +107,7 @@ impl Context<'_> {
                             self.resolve_class(regs, &c)?;
                             return Ok(Next::Go(at));
                         }
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = self.static_cell(func, class, &name, w)?;
                         let inner = match &*cell.borrow() {
                             Value::Ref(r) => Some(Rc::clone(r)),
@@ -124,7 +133,7 @@ impl Context<'_> {
                             self.resolve_class(regs, &c)?;
                             return Ok(Next::Go(at));
                         }
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = self.static_cell(func, class, &name, w)?;
                         let r = make_ref(w, src);
                         *cell.borrow_mut() = Value::Ref(r);
@@ -557,7 +566,7 @@ impl Context<'_> {
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = Value::Bool(!matches!(v.deref(), Value::Null | Value::Undef));
@@ -578,7 +587,7 @@ impl Context<'_> {
                 }
                 Instr::UnsetProp { obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let (Value::Object(o), Some(n)) = (&target, name.to_php_string())
                         && let Some(p) = self.hooked_property(o, n.as_bytes())
                     {
@@ -602,7 +611,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = match cell.borrow().deref() {
                         Value::Undef => Value::Null,
@@ -615,7 +624,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = self.operand(w, func, val);
                     store(&cell, v.clone());
@@ -626,7 +635,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let y = self.operand(w, func, val);
                     let x = cell.borrow().deref();

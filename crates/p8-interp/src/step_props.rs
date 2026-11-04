@@ -19,6 +19,15 @@ impl Context<'_> {
                 w[$r as usize]
             };
         }
+        // A name operand: its constant read in place, else its register (as in `step`).
+        macro_rules! name {
+            ($r:expr) => {
+                match clo.consts.get(($r as usize).wrapping_sub(func.consts_at as usize)) {
+                    Some(c) => c,
+                    None => &w[$r as usize],
+                }
+            };
+        }
         match instr {
                 Instr::FetchProp { dst, obj, name, quiet } => {
                     let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
@@ -30,7 +39,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = v;
@@ -74,7 +83,7 @@ impl Context<'_> {
                     let v = self.operand(w, func, val);
                     // The name's constant: the same cache entry reads use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                     {
                         let (o, pname) = (Rc::clone(o), pname.clone());
@@ -82,7 +91,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
                         regs[base + dst as usize] = v;
@@ -114,7 +123,7 @@ impl Context<'_> {
                     let y = self.operand(w, func, val);
                     // The name's constant: the cache entry reads and writes use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
                     {
                         let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
@@ -125,7 +134,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = ops::binary(op, x, &y, &mut c.diags);
@@ -164,7 +173,7 @@ impl Context<'_> {
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
                     let target = self.operand(w, func, obj);
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
                     {
                         let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
@@ -175,7 +184,7 @@ impl Context<'_> {
                         reg!(dst) = if post { old } else { new };
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = if inc { ops::increment(x, &mut c.diags) } else { ops::decrement(x, &mut c.diags) };

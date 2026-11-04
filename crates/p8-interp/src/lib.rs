@@ -1344,7 +1344,7 @@ impl Context<'_> {
                         Value::Ref(cell) => Some(cell.borrow().clone()).filter(|v| !matches!(v, Value::Undef)),
                         v => Some(v.clone()),
                     };
-                    if let (Some(site), Value::Object(o), Value::Str(pname), Some(v)) = (site, &reg!(obj), &reg!(name), v)
+                    if let (Some(site), Value::Object(o), Value::Str(pname), Some(v)) = (site, &reg!(obj), name!(name), v)
                         && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                     {
                         let (o, pname) = (Rc::clone(o), pname.clone());
@@ -1426,6 +1426,15 @@ impl Context<'_> {
         macro_rules! reg {
             ($r:expr) => {
                 w[$r as usize]
+            };
+        }
+        // A name operand: its constant read in place, else its register (as in `step`).
+        macro_rules! name {
+            ($r:expr) => {
+                match clo.consts.get(($r as usize).wrapping_sub(func.consts_at as usize)) {
+                    Some(c) => c,
+                    None => &w[$r as usize],
+                }
             };
         }
         match instr {
