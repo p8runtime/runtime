@@ -3,12 +3,14 @@
 //! source, path and engine are the same.
 //!
 //! An entry is `MAGIC`, the engine it was written by, a checksum of the
-//! rest, the file's path and source, then the program
-//! ([`p8_bytecode::serial`]). It is found by a hash of the engine, path
-//! and source; it is used only when its path and source are byte for byte
-//! the ones being loaded (so a hash collision can never run other code),
-//! its engine is this one, and its checksum holds (so a damaged entry is
-//! never read). Anything else, a short, foreign or damaged file, is not
+//! program, the file's path and source, then the program
+//! ([`p8_bytecode::serial`]). It is found by a hash of the engine and the
+//! path (one entry per file, as PHP's file cache has: a changed file's
+//! entry is written over); it is used only when its path and source are
+//! byte for byte the ones being loaded (so it can never run other code,
+//! and the source needs no hashing: one comparison), its engine is this
+//! one, and the program's checksum holds (so a damaged entry is never
+//! read). Anything else, a short, foreign, stale or damaged file, is not
 //! used: the file is compiled instead, and the entry written again.
 //!
 //! The engine is everything else the compiled code depends on: the
@@ -62,29 +64,37 @@ impl FileCache {
         Some(FileCache { dir, engine: h.digest128().to_le_bytes() })
     }
 
-    /// Where the entry for this path and source is.
-    fn path(&self, source: &[u8], file: &str) -> PathBuf {
+    /// Where the entry for this path is.
+    fn path(&self, file: &str) -> PathBuf {
         let mut h = Xxh3::new();
         h.update(&self.engine);
         field(&mut h, file.as_bytes());
-        field(&mut h, source);
         self.dir.join(format!("{:032x}.p8c", h.digest128()))
     }
 
     /// The program cached for this source and path, if there is a sound one.
     pub(crate) fn load(&self, source: &[u8], file: &str, symbols: &Symbols) -> Option<Program> {
-        let bytes = std::fs::read(self.path(source, file)).ok()?;
+        let bytes = std::fs::read(self.path(file)).ok()?;
         read(&bytes, &self.engine, file, source, symbols)
     }
 
     /// Keep `program` for this source and path. Best effort: a cache that
     /// cannot be written is a cache that misses.
     pub(crate) fn store(&self, source: &[u8], file: &str, program: &Program, symbols: &Symbols) {
-        let bytes = write(program, &self.engine, file, source, symbols);
+        use std::io::Write;
+        let (head, table, body) = parts(program, &self.engine, file, source, symbols);
         let _ = std::fs::create_dir_all(&self.dir);
-        let target = self.path(source, file);
+        let target = self.path(file);
         let temp = temp_name(&self.dir);
-        if std::fs::write(&temp, &bytes).is_err() || std::fs::rename(&temp, &target).is_err() {
+        // Written piece by piece: the source and program are not copied
+        // into one buffer first.
+        let written = std::fs::File::create(&temp).and_then(|mut f| {
+            for piece in [&head[..], source, &table, &body] {
+                f.write_all(piece)?;
+            }
+            Ok(())
+        });
+        if written.is_err() || std::fs::rename(&temp, &target).is_err() {
             let _ = std::fs::remove_file(&temp);
         }
     }
@@ -96,34 +106,42 @@ fn field(h: &mut Xxh3, bytes: &[u8]) {
     h.update(bytes);
 }
 
-/// An entry's bytes: `program`, compiled by `engine` from `source` at `file`.
+/// An entry for `program`, compiled by `engine` from `source` at `file`,
+/// in the pieces it is written in: what comes before the source (MAGIC,
+/// the engine, the program's checksum, the path, the source's length),
+/// then (after the source) the program's string table and the program.
+fn parts(program: &Program, engine: &[u8; 16], file: &str, source: &[u8], symbols: &Symbols) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let (table, body) = p8_bytecode::serial::encode_parts(program, symbols);
+    let mut sum = Xxh3::new();
+    sum.update(&table);
+    sum.update(&body);
+    let mut head = Vec::with_capacity(HEADER + 16 + file.len());
+    head.extend_from_slice(MAGIC);
+    head.extend_from_slice(engine);
+    head.extend_from_slice(&sum.digest128().to_le_bytes());
+    head.extend_from_slice(&(file.len() as u64).to_le_bytes());
+    head.extend_from_slice(file.as_bytes());
+    head.extend_from_slice(&(source.len() as u64).to_le_bytes());
+    (head, table, body)
+}
+
+/// An entry's bytes, joined (for tests).
+#[cfg(test)]
 fn write(program: &Program, engine: &[u8; 16], file: &str, source: &[u8], symbols: &Symbols) -> Vec<u8> {
-    let body = p8_bytecode::serial::encode(program, symbols);
-    let mut rest = Vec::with_capacity(16 + file.len() + source.len() + body.len());
-    for part in [file.as_bytes(), source] {
-        rest.extend_from_slice(&(part.len() as u64).to_le_bytes());
-        rest.extend_from_slice(part);
-    }
-    rest.extend_from_slice(&body);
-    let mut out = Vec::with_capacity(HEADER + rest.len());
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(engine);
-    out.extend_from_slice(&xxh3_128(&rest).to_le_bytes());
-    out.extend_from_slice(&rest);
-    out
+    let (head, table, body) = parts(program, engine, file, source, symbols);
+    [&head[..], source, &table, &body].concat()
 }
 
 /// The program in an entry, if `engine` wrote it, from exactly this
-/// `file` and `source`, and it is intact.
+/// `file` and `source`, and it is intact. The path and source are
+/// compared byte for byte (which also proves them intact); the checksum
+/// covers the program.
 fn read(bytes: &[u8], engine: &[u8; 16], file: &str, source: &[u8], symbols: &Symbols) -> Option<Program> {
     let header = bytes.get(..HEADER)?;
     if &header[..MAGIC.len()] != MAGIC || &header[MAGIC.len()..MAGIC.len() + 16] != engine {
         return None;
     }
     let mut rest = &bytes[HEADER..];
-    if xxh3_128(rest).to_le_bytes() != header[MAGIC.len() + 16..] {
-        return None;
-    }
     for expected in [file.as_bytes(), source] {
         let len = usize::try_from(u64::from_le_bytes(rest.get(..8)?.try_into().ok()?)).ok()?;
         let part = rest.get(8..8usize.checked_add(len)?)?;
@@ -131,6 +149,9 @@ fn read(bytes: &[u8], engine: &[u8; 16], file: &str, source: &[u8], symbols: &Sy
             return None;
         }
         rest = &rest[8 + len..];
+    }
+    if xxh3_128(rest).to_le_bytes() != header[MAGIC.len() + 16..] {
+        return None;
     }
     p8_bytecode::serial::decode(rest, symbols)
 }
