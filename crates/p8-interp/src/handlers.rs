@@ -200,7 +200,6 @@ impl Context<'_> {
                 break;
             }
             while let Some(object) = batch.pop_front() {
-                self.ids.running_destructor(true);
                 if let Some(dtor) = object.class.native_dtor {
                     r = self.run_native_dtor(regs, dtor, &object).map(|_| ());
                 }
@@ -212,7 +211,6 @@ impl Context<'_> {
                 // Let go of it (its id goes back unless something kept it),
                 // then the ids that waited for this destructor.
                 drop(object);
-                self.ids.running_destructor(false);
                 self.ids.destructor_ran();
                 if r.is_err() {
                     self.ids.requeue(batch);

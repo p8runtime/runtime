@@ -369,13 +369,11 @@ pub struct Ids {
     /// queue's history.
     queued: Cell<u64>,
     ran: Cell<u64>,
-    /// Ids of freed objects whose properties queued destructors: each goes
-    /// back once the destructors queued up to its position have run, as
-    /// PHP frees an object's handle after its properties (and their
-    /// destructors, which run right there) are gone.
+    /// Ids of objects freed while destructors were due: each goes back
+    /// once the destructors queued up to its position have run, as PHP
+    /// frees an object's handle after those (which run right where their
+    /// objects go, its properties' among them) freed theirs.
     parked: RefCell<std::collections::VecDeque<(u64, u32)>>,
-    /// Queued destructors running now (see `running_destructor`).
-    running: Cell<u32>,
 }
 
 impl Ids {
@@ -405,11 +403,11 @@ impl Ids {
         }
     }
 
-    /// A queued destructor starts (`true`) or is done with its object let
-    /// go (`false`): what goes meanwhile was freed by it, so before the ids
-    /// waiting for it (in PHP it would be freed within that destructor).
-    pub fn running_destructor(&self, starts: bool) {
-        self.running.set(if starts { self.running.get() + 1 } else { self.running.get() - 1 });
+    /// An object went while destructors are due: its id waits for them.
+    #[cold]
+    #[inline(never)]
+    fn park(&self, id: u32) {
+        self.parked.borrow_mut().push_back((self.queued.get(), id));
     }
 
     /// One queued destructor has run (the object it ran on let go): the
@@ -659,17 +657,23 @@ impl Drop for Object {
             return;
         }
         // Its properties go before its id does (PHP frees an object, and
-        // runs the destructors that brings, before its handle is free).
-        // When they queued destructors the id waits for them; so does one
-        // freed beside ids already waiting (not by a destructor running):
-        // the next object takes ids in PHP's order.
-        let before = self.ids.queued.get();
-        drop((self.data.take(), std::mem::take(self.slots.get_mut()), std::mem::take(self.dynamic.get_mut()), self.lazy_info.get_mut().take()));
-        let queued = self.ids.queued.get();
-        if queued != before || (self.ids.running.get() == 0 && !self.ids.parked.borrow().is_empty()) {
-            self.ids.parked.borrow_mut().push_back((queued, self.id));
-        } else {
+        // runs the destructors that brings, before its handle is free):
+        // emptied in place, their storage freed with the object after.
+        self.slots.get_mut().clear();
+        let dynamic = self.dynamic.get_mut();
+        if !dynamic.is_empty() {
+            drop(std::mem::take(dynamic));
+        }
+        if self.data.is_some() || self.lazy_info.get_mut().is_some() {
+            drop((self.data.take(), self.lazy_info.get_mut().take()));
+        }
+        // A destructor not yet run (one these properties queued, or one
+        // queued before) would in PHP have run, and freed its object's
+        // handle, before this one goes: the id waits for those.
+        if self.ids.due.get() == 0 {
             self.ids.give_back(self.id);
+        } else {
+            self.ids.park(self.id);
         }
     }
 }

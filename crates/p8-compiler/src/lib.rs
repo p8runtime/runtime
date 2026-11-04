@@ -1082,13 +1082,21 @@ fn is_temp(r: Reg) -> bool {
 /// After storing a value an expression made (an object, likely) from a
 /// temporary: release the temporary's copy.
 fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
-    if val >> KIND_SHIFT == TEMP
-        // (An array literal too: one nested in another would otherwise
-        // stay held by its temporary, and the objects in it outlive the
-        // array they were put in.)
-        && matches!(e, Expr::New { .. } | Expr::Clone { .. } | Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } | Expr::Array { .. })
-    {
+    if val >> KIND_SHIFT == TEMP && made(e) {
         f.emit(Instr::Free { reg: val });
+    }
+}
+
+/// Whether `e` makes a value its temporary may be the only holder of: an
+/// object (new, clone, a call's result), or an array literal with one in
+/// it (else the temporary keeps the objects alive after the array they
+/// were put in goes). A literal of variables and constants needs no
+/// release: what is in it is held elsewhere too.
+fn made(e: &Expr) -> bool {
+    match e {
+        Expr::New { .. } | Expr::Clone { .. } | Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => true,
+        Expr::Array { items, .. } => items.iter().any(|i| made(i.value)),
+        _ => false,
     }
 }
 
@@ -3960,8 +3968,8 @@ impl<'src> Compiler<'src> {
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
                     // The value's temporary is read only here.
+                    // (A temporary is taken: released there, so no Free.)
                     f.emit(Instr::AssignProp { obj, name, val, dst, take: is_temp(val) });
-                    free_made(f, expr, val);
                     dst
                 }
                 Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
@@ -4271,7 +4279,7 @@ impl<'src> Compiler<'src> {
                             f.emit(Instr::ArrayPush { arr: dst, val, take: is_temp(val) });
                         }
                     }
-                    free_made(f, item.value, val);
+                    // (A temporary is taken, so released already: no Free.)
                 }
                 dst
             }
