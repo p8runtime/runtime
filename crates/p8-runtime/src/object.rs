@@ -772,7 +772,16 @@ impl Object {
 
     /// A new object holding `data` (see [`Data`]).
     pub fn with_data(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
-        let slots = class.properties.iter().map(|p| p.default.clone()).collect();
+        let mut slots = crate::array::values_buffer(class.properties.len());
+        slots.extend(class.properties.iter().map(|p| p.default.clone()));
+        Object::with_slots(class, ids, data, slots)
+    }
+
+    /// A new object whose slots start as copies of `defaults` (prepared
+    /// once by whoever makes many), in a kept buffer when there is one.
+    pub fn with_defaults(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, defaults: &[Value]) -> Rc<Object> {
+        let mut slots = crate::array::values_buffer(defaults.len());
+        slots.extend_from_slice(defaults);
         Object::with_slots(class, ids, data, slots)
     }
 
@@ -805,7 +814,12 @@ impl Object {
             },
             // A property once passed by reference (ksort($this->a)) is a
             // plain value again in the clone, not shared with it.
-            slots: RefCell::new(self.slots.borrow().iter().map(crate::array::dup).collect()),
+            slots: RefCell::new({
+                let from = self.slots.borrow();
+                let mut slots = crate::array::values_buffer(from.len());
+                slots.extend(from.iter().map(crate::array::dup));
+                slots
+            }),
             dynamic: RefCell::new(self.dynamic.borrow().clone()),
             id: self.ids.take(),
             ids: Rc::clone(&self.ids),
@@ -848,7 +862,8 @@ impl Drop for Object {
         // Its properties go before its id does (PHP frees an object, and
         // runs the destructors that brings, before its handle is free):
         // emptied in place, their storage freed with the object after.
-        self.slots.get_mut().clear();
+        // (The buffer kept for the next object or array: emptied first.)
+        crate::array::keep_values_buffer(std::mem::take(self.slots.get_mut()));
         let dynamic = self.dynamic.get_mut();
         if !dynamic.is_empty() {
             drop(std::mem::take(dynamic));

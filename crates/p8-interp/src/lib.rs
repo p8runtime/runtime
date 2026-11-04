@@ -2275,7 +2275,7 @@ impl Context<'_> {
                     // Its own argument (if passed), then those past it:
                     // the list made once, at its size.
                     let extra = self.frames.last().map_or(0, |f| f.args().len());
-                    let mut list = Vec::with_capacity(usize::from(argc > var as usize) + extra);
+                    let mut list = p8_runtime::array::values_buffer(usize::from(argc > var as usize) + extra);
                     if argc > var as usize {
                         list.push(std::mem::replace(&mut reg!(var), Value::Undef));
                     }
@@ -5097,7 +5097,9 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 /// variadic parameter's `CollectVariadic`).
 #[cold]
 fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
-    Some(Box::new(Extra { args: regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect(), vars: Vars::default(), shared: None }))
+    let mut args = p8_runtime::array::values_buffer(argc - nparams);
+    args.extend(regs[base + nparams..base + argc].iter_mut().map(std::mem::take));
+    Some(Box::new(Extra { args, vars: Vars::default(), shared: None }))
 }
 
 /// `$a[k] op= v` for an int or string `k`, `$a` an array holding a number
