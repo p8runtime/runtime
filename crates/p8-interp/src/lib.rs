@@ -1444,7 +1444,7 @@ impl Context<'_> {
                         pc = target as usize;
                     }
                 }
-                Instr::NewArray { dst } => reg!(dst) = Value::Array(Rc::new(PhpArray::new())),
+                Instr::NewArray { dst, n } => reg!(dst) = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize))),
                 Instr::ArrayPush { arr, val } => {
                     let v = self.operand(w, func, val);
                     if let Value::Array(a) = &mut reg!(arr)
@@ -1481,8 +1481,11 @@ impl Context<'_> {
                 }
                 Instr::AssignDim { var, keys, n, append, val, dst } => {
                     let v = self.operand(w, func, val);
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, append) {
+                    // The keys are looked at in place: a list of them is made
+                    // only for an ArrayAccess object on the path.
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, append) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, append, arrayaccess::DimOp::Set(v))?;
                         regs[base + dst as usize] = r;
@@ -1493,8 +1496,9 @@ impl Context<'_> {
                 }
                 Instr::AssignDimOp { op, var, keys, n, val, dst } => {
                     let v = self.operand(w, func, val);
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::Op(op, v))?;
                         regs[base + dst as usize] = r;
@@ -1504,8 +1508,9 @@ impl Context<'_> {
                     reg!(dst) = result;
                 }
                 Instr::IssetDim { dst, var, keys, n } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let set = self.aa_isset(regs, &root, &key_values)?;
                         regs[base + dst as usize] = Value::Bool(set);
@@ -1557,10 +1562,9 @@ impl Context<'_> {
                     reg!(var) = Value::Undef;
                 }
                 Instr::UnsetDim { var, keys, n } => {
-                    // The keys' values (a reference key is read now, so
-                    // the unset can't see the array it is changing).
-                    let derefed: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &derefed, false) {
+                    let key_range = keys as usize..keys as usize + n as usize;
+                    if arrayaccess::path_has_object(&reg!(var), &w[key_range.clone()], false) {
+                        let derefed: Vec<Value> = w[key_range].iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         self.aa_write(regs, &root, &derefed, false, arrayaccess::DimOp::Unset)?;
                         return Ok(Next::Go(pc));
@@ -1574,7 +1578,25 @@ impl Context<'_> {
                         return Ok(Next::Go(pc));
                     }
                     // In place: a copy of the variable's array would make
-                    // every unset copy the whole array (copy-on-write).
+                    // every unset copy the whole array (copy-on-write). The
+                    // array is taken out of the variable while the element
+                    // goes, so the keys are read where they are (unless one
+                    // is a reference, which might be to the variable itself:
+                    // then their values are read first).
+                    if !key_range.contains(&(var as usize)) && !w[key_range.clone()].iter().any(|k| matches!(k, Value::Ref(_))) {
+                        let mut held = match &mut reg!(var) {
+                            Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                            slot => std::mem::take(slot),
+                        };
+                        let r = self.unset_path(&mut held, &w[key_range]);
+                        match &mut reg!(var) {
+                            Value::Ref(cell) => *cell.borrow_mut() = held,
+                            slot => *slot = held,
+                        }
+                        r?;
+                        return Ok(Next::Go(pc));
+                    }
+                    let derefed: Vec<Value> = w[key_range].iter().map(Value::deref).collect();
                     self.unset_path(&mut reg!(var), &derefed)?;
                 }
                 Instr::IterInit { src, iter, end } => {
@@ -1753,14 +1775,16 @@ impl Context<'_> {
                     reg!(dst) = Value::Str(PhpStr::new(bytes));
                 }
                 Instr::BindGlobal { var, name } => {
+                    // The name's constant, shared (not copied).
                     let name = match &clo.consts[name as usize] {
-                        Value::Str(s) => s.as_bytes().to_vec(),
-                        _ => Vec::new(),
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("BindGlobal names a constant string"),
                     };
+                    let name = name.as_bytes();
                     // The main frame's window starts at 0: it is `w` when
                     // the main frame is running, else the start of `below`
                     // (or of the first task's registers, in a fiber).
-                    let cell = if in_main { self.global_cell(w, &name) } else { self.with_main(below, |cx, main| cx.global_cell(main, &name)) };
+                    let cell = if in_main { self.global_cell(w, name) } else { self.with_main(below, |cx, main| cx.global_cell(main, name)) };
                     reg!(var) = Value::Ref(cell);
                 }
                 Instr::MatchError { src } => {
@@ -2054,25 +2078,21 @@ impl Context<'_> {
                     reg!(var) = Value::Ref(cell);
                 }
                 Instr::RefDim { var, root, keys, n, append } => {
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let cell = make_ref(w, root);
                     let mut value = std::mem::take(&mut *cell.borrow_mut());
                     let r = self.dim_ref(&mut value, &path, append);
+                    self.key_path_done(path);
                     *cell.borrow_mut() = value;
                     reg!(var) = Value::Ref(r?);
                 }
                 Instr::DimSetRef { root, keys, n, append, src } => {
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let target = make_ref(w, src);
                     let cell = make_ref(w, root);
                     let mut value = std::mem::take(&mut *cell.borrow_mut());
                     let r = self.dim_set_ref(&mut value, &path, append, target);
+                    self.key_path_done(path);
                     *cell.borrow_mut() = value;
                     r?;
                 }
@@ -2165,8 +2185,10 @@ impl Context<'_> {
                     }
                 }
                 Instr::CollectVariadic { var } => {
-                    // Its own argument (if passed), then those past it.
-                    let mut list = Vec::new();
+                    // Its own argument (if passed), then those past it:
+                    // the list made once, at its size.
+                    let extra = self.frames.last().map_or(0, |f| f.args().len());
+                    let mut list = Vec::with_capacity(usize::from(argc > var as usize) + extra);
                     if argc > var as usize {
                         list.push(std::mem::replace(&mut reg!(var), Value::Undef));
                     }
@@ -2258,22 +2280,21 @@ impl Context<'_> {
                     return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
                 }
                 Instr::DimIncDec { var, keys, n, dst, inc, post } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::IncDec { inc, post })?;
                         regs[base + dst as usize] = r;
                         return Ok(Next::Go(pc));
                     }
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let mut root = match &mut reg!(var) {
                         Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
                         other => std::mem::take(other),
                     };
                     let r = self.incdec_path(&mut root, &path, inc);
+                    self.key_path_done(path);
                     match &mut reg!(var) {
                         Value::Ref(cell) => *cell.borrow_mut() = root,
                         other => *other = root,
@@ -2655,11 +2676,10 @@ impl Context<'_> {
                         regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
                         return Ok(Next::Go(pc));
                     }
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, at + 2 + i as Reg)?);
-                    }
-                    reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
+                    let path = self.key_path(w, func, at + 2, n)?;
+                    let r = self.update_prop_dim(&target, &name, &path, append, v, op);
+                    self.key_path_done(path);
+                    reg!(dst) = r?;
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
@@ -3625,7 +3645,18 @@ impl Context<'_> {
         if let Some(r) = self.main_cv(name) {
             return make_ref(main, r as Reg);
         }
-        self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Undef))).clone()
+        self.global_entry(name, Value::Undef)
+    }
+
+    /// The global `name`'s cell in `globals`, made (holding `made`) if
+    /// there is none: the name is copied only then.
+    fn global_entry(&mut self, name: &[u8], made: Value) -> Rc<RefCell<Value>> {
+        if let Some(cell) = self.globals.get(name) {
+            return Rc::clone(cell);
+        }
+        let cell = Rc::new(RefCell::new(made));
+        self.globals.insert(name.to_vec(), Rc::clone(&cell));
+        cell
     }
 
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
@@ -3638,11 +3669,29 @@ impl Context<'_> {
             }
             return make_ref(main, r as Reg);
         }
-        let cell = self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone();
+        let cell = self.global_entry(name, Value::Null);
         if matches!(*cell.borrow(), Value::Undef) {
             *cell.borrow_mut() = Value::Null;
         }
         cell
+    }
+
+    /// The keys of a dimension path (`$a[k1]..[kn]`) from the `n`
+    /// registers at `keys`, in the context's reusable buffer: a write
+    /// into an array allocates no list of its keys. Hand it back with
+    /// key_path_done (a nested one meanwhile gets a buffer of its own).
+    fn key_path(&mut self, w: &[Value], func: &Function, keys: Reg, n: u8) -> Result<Vec<Key>, Throw> {
+        let mut path = std::mem::take(&mut self.key_path);
+        path.clear();
+        for i in 0..n {
+            path.push(self.key(w, func, keys + i as Reg)?);
+        }
+        Ok(path)
+    }
+
+    fn key_path_done(&mut self, mut path: Vec<Key>) {
+        path.clear();
+        self.key_path = path;
     }
 
     /// An array key from register `r`, reporting what PHP reports.
@@ -3794,7 +3843,7 @@ impl Context<'_> {
                     }
                     return Ok(if quiet { Value::Null } else { Value::Str(PhpStr::empty()) });
                 }
-                Ok(Value::Str(PhpStr::new(vec![s.as_bytes()[at as usize]])))
+                Ok(Value::Str(PhpStr::byte(s.as_bytes()[at as usize])))
             }
             Value::Null | Value::Undef => {
                 if !quiet {
@@ -3858,16 +3907,14 @@ impl Context<'_> {
             }
             return r;
         }
-        let mut path = Vec::with_capacity(n as usize);
-        for i in 0..n {
-            path.push(self.key(w, func, keys + i as Reg)?);
-        }
+        let path = self.key_path(w, func, keys, n)?;
         // Take the variable's value out, update it, put it back.
         let mut root = match &mut w[slot] {
             Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
             other => std::mem::take(other),
         };
         let result = self.update_path(&mut root, &path, append, val, op);
+        self.key_path_done(path);
         match &mut w[slot] {
             Value::Ref(cell) => *cell.borrow_mut() = root,
             other => *other = root,
@@ -3922,7 +3969,7 @@ impl Context<'_> {
         }
         bytes[at as usize] = byte;
         *s = PhpStr::new(bytes);
-        Ok(Value::Str(PhpStr::new(vec![byte])))
+        Ok(Value::Str(PhpStr::byte(byte)))
     }
 
     fn update_path(&mut self, target: &mut Value, path: &[Key], append: bool, val: Value, op: Option<BinOp>) -> Result<Value, Throw> {
@@ -4127,7 +4174,7 @@ impl Ctx for Context<'_> {
         let default = self.isolate.registry.ini_default(name)?;
         Some(match self.ini.get(name) {
             Some(v) => v.clone(),
-            None => default.map_or(Value::Null, |d| Value::Str(PhpStr::from(d))),
+            None => default.map_or(Value::Null, |d| Value::Str(self.isolate.ini_text(d))),
         })
     }
 
@@ -4939,6 +4986,10 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Reg) -> bool {
         let Value::Str(mut s) = std::mem::take(&mut w[a as usize]) else { unreachable!("checked") };
         ops::push_string(s.make_mut(), &w[b as usize], &mut diags);
         w[dst as usize] = Value::Str(s);
+        return true;
+    }
+    if let (Value::Str(p), Value::Str(q)) = (x, y) {
+        w[dst as usize] = Value::Str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
         return true;
     }
     let mut bytes = Vec::with_capacity(ops::string_len_hint(x) + ops::string_len_hint(y));

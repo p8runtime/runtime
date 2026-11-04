@@ -79,7 +79,7 @@ impl Context<'_> {
                         (Some(p8_bytecode::Instr::Assign { var: v, src }), _) if v == var && consts.contains(&(*src as usize)) => {
                             clo.consts[*src as usize - consts.start].clone()
                         }
-                        (Some(p8_bytecode::Instr::NewArray { dst }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
+                        (Some(p8_bytecode::Instr::NewArray { dst, .. }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
                             Value::Array(Rc::new(PhpArray::new()))
                         }
                         _ => Value::Null,

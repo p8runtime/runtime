@@ -143,6 +143,12 @@ impl PhpStr {
         Self::copy_of(b"")
     }
 
+    /// The one-byte string `b` (`$s[$i]`, chr()): the thread's shared one
+    /// (SMALL), no allocation.
+    pub fn byte(b: u8) -> Self {
+        Self::copy_of(&[b])
+    }
+
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
         self.0.bytes.as_slice()
