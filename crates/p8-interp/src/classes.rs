@@ -245,7 +245,7 @@ impl Context<'_> {
         let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
-            let default = p.default.as_ref().map_or(Value::Undef, |d| d.to_value());
+            let default = p.default.as_ref().map_or(Value::Undef, |d| self.isolate.thaw(d));
             let init = p.code.as_ref().map(|c| Thunk(Rc::new(Arc::clone(c))));
             if p.is_static {
                 if let Some(t) = init {
@@ -475,7 +475,7 @@ impl Context<'_> {
                 constants.insert(
                     case.as_bytes().to_vec(),
                     Rc::new(Constant {
-                        value: value.as_ref().map_or(Value::Null, |v| v.to_value()),
+                        value: value.as_ref().map_or(Value::Null, |v| self.isolate.thaw(v)),
                         visibility: Visibility::Public,
                         declaring_name: class_name.clone(),
                         is_case: true,
@@ -513,7 +513,7 @@ impl Context<'_> {
             constants.insert(
                 c.name.as_bytes().to_vec(),
                 Rc::new(Constant {
-                    value: c.value.to_value(),
+                    value: self.isolate.thaw(&c.value),
                     visibility: c.visibility,
                     declaring_name: class_name.clone(),
                     is_case: false,
@@ -1409,7 +1409,7 @@ impl Context<'_> {
     /// Run a constant expression's code in `scope`.
     fn run_thunk(&mut self, regs: &mut Vec<Value>, thunk: &Thunk, scope: Rc<Class>) -> Result<Value, Throw> {
         let func = thunk.0.downcast_ref::<Arc<Function>>().expect("a constant expression's code");
-        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func))), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None };
+        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func), self.isolate)), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None };
         // The caller is at the instruction that needs the value (its line
         // is where an error in the code is reported).
         let (pc, saved) = (self.pc, self.frames.last().map(|f| f.pc));

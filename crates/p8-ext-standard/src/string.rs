@@ -364,7 +364,19 @@ fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             return Err(ctx.throw("TypeError", format!("implode(): Argument #2 ($array) must be of type ?array, {} given", other.type_name())));
         }
     };
-    let mut out = Vec::new();
+    // No pieces: the empty string; one string: itself (php_implode), no copy.
+    match list.len() {
+        0 => return Ok(Value::Str(PhpStr::empty())),
+        1 => {
+            if let Some((_, Value::Str(s))) = list.iter().next().map(|(k, v)| (k, v.deref())) {
+                return Ok(Value::Str(s));
+            }
+        }
+        _ => {}
+    }
+    // Sized once for the pieces' strings and the separators between them.
+    let len = list.iter().map(|(_, v)| p8_runtime::ops::string_len_hint(v)).sum::<usize>() + sep.len() * (list.len() - 1);
+    let mut out = Vec::with_capacity(len);
     let mut diags = Vec::new();
     for (i, (_, v)) in list.iter().enumerate() {
         if i > 0 {

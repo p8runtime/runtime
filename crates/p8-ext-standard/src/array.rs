@@ -87,8 +87,21 @@ fn array_values(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// array_merge: int keys are renumbered, string keys overwrite.
 fn array_merge(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut out = PhpArray::new();
-    out.reserve((0..args.len()).map(|i| arr(args, i).len()).sum());
+    // Two arrays, one empty: the other as it is when merging would give the
+    // same (a list without holes, or string keys only), as PHP does.
+    if args.len() == 2 {
+        let (a, b) = (arr(args, 0), arr(args, 1));
+        let other = if a.is_empty() { Some(b) } else if b.is_empty() { Some(a) } else { None };
+        if let Some(other) = other
+            && (other.is_dense_list() || (!other.is_packed() && other.iter().all(|(k, _)| matches!(k, Key::Str(_)))))
+        {
+            return Ok(Value::Array(other));
+        }
+    }
+    let count = (0..args.len()).map(|i| arr(args, i).len()).sum();
+    // Shaped as the first array is (zend_hash_real_init_packed or _mixed),
+    // sized for everything once.
+    let mut out = if args.is_empty() || arr(args, 0).is_packed() { PhpArray::list_with_capacity(count) } else { PhpArray::hashed(count) };
     for i in 0..args.len() {
         for (k, v) in arr(args, i).iter() {
             match k {

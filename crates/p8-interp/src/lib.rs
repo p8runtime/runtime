@@ -647,7 +647,7 @@ impl Context<'_> {
         let ncv = main.consts_at as usize;
         let here = 0u8;
         self.stack_base = std::ptr::addr_of!(here) as usize;
-        self.frames.push(&Closure::new(Arc::clone(&main)), 0, 0, NO_RET);
+        self.frames.push(&Closure::new(Arc::clone(&main), self.isolate), 0, 0, NO_RET);
         self.frames.last_mut().expect("the main frame").global = true;
         enter(&mut self.frames, &mut regs);
         for (name, value) in self.request_globals() {
@@ -2735,7 +2735,12 @@ impl Context<'_> {
                     }
                     // The keys as written: an ArrayAccess object takes any
                     // (SplObjectStorage's are objects); an array's are converted.
-                    let keys: Vec<Value> = (0..n).map(|i| self.operand(w, func, at + 2 + i as Reg)).collect();
+                    let mut keys = std::mem::take(&mut self.dim_keys);
+                    keys.clear();
+                    for i in 0..n {
+                        let k = self.operand(w, func, at + 2 + i as Reg);
+                        keys.push(k);
+                    }
                     let v = self.operand(w, func, val);
                     // An overloaded property: __get's value is written into
                     // only when it is an object; otherwise nothing changes.
@@ -2775,6 +2780,9 @@ impl Context<'_> {
                         regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
                         return Ok(Next::Go(pc));
                     }
+                    // (Its room kept for the next; what it holds goes now.)
+                    keys.clear();
+                    self.dim_keys = keys;
                     let path = self.key_path(w, func, at + 2, n)?;
                     let r = self.update_prop_dim(&target, &name, &path, append, v, op);
                     self.key_path_done(path);
@@ -3213,7 +3221,7 @@ impl Context<'_> {
         // A file's code has new `static` variables each time it runs (its
         // compiled code may be the last run's, kept by the loader).
         self.statics.remove(&(Arc::as_ptr(main) as usize));
-        self.frames.push(&Closure::new(Arc::clone(main)), at, 0, (base + dst as usize) as u32);
+        self.frames.push(&Closure::new(Arc::clone(main), self.isolate), at, 0, (base + dst as usize) as u32);
         enter(&mut self.frames, regs);
         for (i, cell) in cells.into_iter().enumerate() {
             regs[at + i] = Value::Ref(cell);
