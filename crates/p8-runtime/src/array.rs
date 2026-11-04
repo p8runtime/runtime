@@ -710,7 +710,7 @@ impl PhpArray {
     pub fn value_at(&self, pos: usize) -> Option<(usize, &Value)> {
         match &self.storage {
             Storage::Packed(p) => p.slots.get(pos..)?.iter().enumerate().find_map(|(i, x)| (!matches!(x, Value::Undef)).then_some((pos + i, x))),
-            Storage::Hashed(h) => h.buckets.get(pos..)?.iter().enumerate().find_map(|(i, b)| h.is_set(pos + i).then_some((pos + i, &b.value))),
+            Storage::Hashed(h) => h.buckets[..h.used].get(pos..)?.iter().enumerate().find_map(|(i, b)| (b.next != UNSET).then_some((pos + i, &b.value))),
         }
     }
 
