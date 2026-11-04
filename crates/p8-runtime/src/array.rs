@@ -167,8 +167,12 @@ struct Hashed {
 const NONE: u32 = u32::MAX;
 /// An unset entry's `next`.
 const UNSET: u32 = u32::MAX - 1;
-/// The first table's size: eight buckets, as zend_hash's minimum.
+/// The first table's size: eight buckets, as zend_hash's minimum (a table
+/// of a few keys never grows, so is one allocation).
 const MIN_SIZE: usize = 8;
+/// A packed array's first room once it is pushed to (PHP's minimum too):
+/// one allocation for a list of up to eight, not a second at five.
+const MIN_PACKED: usize = 8;
 /// Up to this many buckets a table has no chains (scanned).
 const SMALL: usize = 8;
 
@@ -493,6 +497,17 @@ impl PhpArray {
         PhpArray { storage: Storage::Hashed(Hashed::with_capacity(capacity)), next_free: None, cursor: 0 }
     }
 
+    /// Whether it is stored packed (int keys by position: HT_IS_PACKED).
+    pub fn is_packed(&self) -> bool {
+        matches!(self.storage, Storage::Packed(_))
+    }
+
+    /// Packed without holes: keys 0..n-1, every one set
+    /// (HT_IS_PACKED && HT_IS_WITHOUT_HOLES).
+    pub fn is_dense_list(&self) -> bool {
+        matches!(&self.storage, Storage::Packed(p) if p.holes == 0)
+    }
+
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
@@ -607,6 +622,9 @@ impl PhpArray {
                 Key::Int(i) if p.get(i).is_some() => p.slots[i as usize] = value,
                 Key::Int(i) if p.fits(i) => {
                     let gap = i as usize - p.slots.len();
+                    if p.slots.capacity() == 0 {
+                        p.slots.reserve_exact(MIN_PACKED.max(i as usize + 1));
+                    }
                     p.slots.resize(i as usize, Value::Undef);
                     p.holes += gap;
                     p.slots.push(value);
@@ -683,6 +701,16 @@ impl PhpArray {
             Storage::Hashed(h) => h.buckets[..h.used].get(pos..)?.iter().enumerate().find_map(|(i, b)| {
                 (b.next != UNSET).then(|| (pos + i, b.key(), &b.value))
             }),
+        }
+    }
+
+    /// `entry_at` without the key (no copy of a string key's handle): the
+    /// position and value of the first entry at or after `pos`.
+    #[inline]
+    pub fn value_at(&self, pos: usize) -> Option<(usize, &Value)> {
+        match &self.storage {
+            Storage::Packed(p) => p.slots.get(pos..)?.iter().enumerate().find_map(|(i, x)| (!matches!(x, Value::Undef)).then_some((pos + i, x))),
+            Storage::Hashed(h) => h.buckets.get(pos..)?.iter().enumerate().find_map(|(i, b)| h.is_set(pos + i).then_some((pos + i, &b.value))),
         }
     }
 

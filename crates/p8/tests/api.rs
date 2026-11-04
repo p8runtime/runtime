@@ -63,6 +63,26 @@ fn a_script_compiled_once_runs_in_many_requests() {
 }
 
 #[test]
+fn literals_written_in_one_request_are_as_written_in_the_next() {
+    // An isolate makes a script's literal strings and arrays once; every
+    // request's writes go to copies.
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    let source = b"<?php
+        class C { const L = ['a' => [1]]; public $p = ['x' => ['y' => 1]]; public static $s = ['n' => 0]; public $t = 'abc'; }
+        function f() { $a = ['k' => ['d' => 'v'], 'l' => [1, 2]]; $a['k']['d'] .= '!'; $a['l'][] = 3; $s = 'literal'; $s[0] = 'L'; return $a['k']['d'] . count($a['l']) . $s; }
+        $c = new C; $c->p['x']['y']++; $c->t[0] = 'X'; C::$s['n']++; $l = C::L; $l['a'][] = 2;
+        $g = fn() => ['v' => 'w']; $x = $g(); $x['v'] = 'changed';
+        echo f(), f(), ' ', $c->p['x']['y'], $c->t, (new C)->t, C::$s['n'], count($l['a']), count(C::L['a']), $g()['v'], $x['v'];";
+    let script = platform.compile(source, "t.php").expect("compiles");
+    for _ in 0..3 {
+        let mut host = Capture::default();
+        let status = isolate.new_context(&mut host).run(&script);
+        assert_eq!((status, String::from_utf8_lossy(&host.0).into_owned()), (0, "v!3Literalv!3Literal 2Xbcabc121wchanged".to_string()));
+    }
+}
+
+#[test]
 fn a_failed_request_leaves_the_isolate_usable() {
     let platform = platform();
     let mut isolate = platform.new_isolate();

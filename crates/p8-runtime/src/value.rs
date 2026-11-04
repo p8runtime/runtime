@@ -54,6 +54,7 @@ impl Value {
     }
 
     /// The value itself, looking through a reference.
+    #[inline]
     pub fn deref(&self) -> Value {
         match self {
             Value::Ref(cell) => cell.borrow().clone(),

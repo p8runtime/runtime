@@ -181,6 +181,13 @@ pub struct Isolate {
     /// The ini defaults as strings, made once (ini_get() of a setting
     /// no request changed hands out the same string each time).
     pub(crate) ini_texts: RefCell<HashMap<(usize, usize), PhpStr>>,
+    /// Compiled code's string and array constants as values, made once
+    /// for the isolate (every request's closures and classes share them,
+    /// as PHP's requests share opcache's interned literals): by the
+    /// address of the constant's shared bytes or entries, the constant
+    /// kept beside so the address stays its own. A value is never written
+    /// in place (one holder more than a register's: a write copies).
+    pub(crate) thawed: RefCell<HashMap<usize, (p8_runtime::frozen::Frozen, Value)>>,
     /// What a declared function's closure slot holds until the function
     /// is first resolved (sites.rs `Closure::unbuilt`).
     pub(crate) unbuilt: Rc<Closure>,
@@ -210,9 +217,33 @@ impl Isolate {
             },
             names,
             ini_texts: RefCell::new(HashMap::default()),
+            thawed: RefCell::new(HashMap::default()),
             unbuilt: Closure::unbuilt(&registry),
             registry,
         }
+    }
+
+    /// A constant of compiled code as a value: a string or an array made
+    /// once for the isolate (see `thawed`), anything else as it is.
+    pub(crate) fn thaw(&self, f: &p8_runtime::frozen::Frozen) -> Value {
+        use p8_runtime::frozen::Frozen;
+        let at = match f {
+            Frozen::Str(t) => t.as_bytes().as_ptr() as usize,
+            Frozen::Array(entries) => entries.as_ptr() as usize,
+            _ => return f.to_value(),
+        };
+        let mut thawed = self.thawed.borrow_mut();
+        if let Some((_, v)) = thawed.get(&at) {
+            return v.clone();
+        }
+        // (Code an isolate only evals, again and again, would grow this
+        // without end: past a bound it starts over.)
+        if thawed.len() >= 1 << 18 {
+            thawed.clear();
+        }
+        let v = f.to_value();
+        thawed.insert(at, (f.clone(), v.clone()));
+        v
     }
 
     /// An ini default (a registry's static text) as a string, shared.
@@ -299,6 +330,7 @@ impl Isolate {
             in_handler: false,
             arg_buf: Vec::new(),
             key_path: Vec::new(),
+            dim_keys: Vec::new(),
             lambdas: HashMap::default(),
             natives: Vec::new(),
             native_args: Vec::new(),
@@ -394,6 +426,9 @@ pub struct Context<'i> {
     pub(crate) arg_buf: Vec<Value>,
     /// A dimension write's keys while it runs (kept for its capacity).
     pub(crate) key_path: Vec<Key>,
+    /// A property dimension write's keys as written (AssignPropDim; kept
+    /// for its capacity).
+    pub(crate) dim_keys: Vec<Value>,
     /// Extensions' per-request state (Ctx::state).
     pub(crate) ext_state: HashMap<&'static str, Value>,
     /// Whether header_register_callback() was ever called here: until

@@ -98,7 +98,7 @@ impl Context<'_> {
         let closure = match self.lambdas.get(&key) {
             Some(c) => Rc::clone(c),
             None => {
-                let c = Closure::new(Arc::clone(func));
+                let c = Closure::new(Arc::clone(func), self.isolate);
                 self.lambdas.insert(key, Rc::clone(&c));
                 c
             }

@@ -28,8 +28,14 @@ pub struct Closure {
 }
 
 impl Closure {
-    pub(crate) fn new(code: Arc<Function>) -> Rc<Closure> {
-        let consts = code.consts.iter().map(|c| c.to_value()).collect();
+    /// A closure of `code` for this request, its constants the isolate's
+    /// (made once: `Isolate::thaw`).
+    pub(crate) fn new(code: Arc<Function>, isolate: &crate::Isolate) -> Rc<Closure> {
+        Closure::with_consts(code, |c| isolate.thaw(c))
+    }
+
+    fn with_consts(code: Arc<Function>, thaw: impl Fn(&p8_runtime::frozen::Frozen) -> Value) -> Rc<Closure> {
+        let consts = code.consts.iter().map(thaw).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
         let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
         let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
@@ -72,7 +78,7 @@ impl Closure {
             silences: Vec::new(),
             meta: Default::default(),
         };
-        Closure::new(Arc::new(code))
+        Closure::with_consts(Arc::new(code), |c| c.to_value())
     }
 }
 
@@ -94,7 +100,7 @@ impl Context<'_> {
     pub(crate) fn closure_at(&mut self, i: u32) -> Rc<Closure> {
         let slot = &mut self.closures[i as usize];
         if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
-            *slot = Closure::new(Arc::clone(&self.codes[i as usize]));
+            *slot = Closure::new(Arc::clone(&self.codes[i as usize]), self.isolate);
         }
         Rc::clone(slot)
     }
