@@ -70,9 +70,9 @@ fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 }
 
 fn main() {
-    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, quiet, version }) = Cli::parse(std::env::args().skip(1)) else {
+    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, repeat, quiet, version }) = Cli::parse(std::env::args().skip(1)) else {
         eprintln!(
-            "usage: php2 [--dump] [-l] [-d name=value]... [-f] <file> [--] [args...]\n       php2 -v   (p8's version)\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)"
+            "usage: php2 [--dump] [-l] [--repeat N] [-d name=value]... [-f] <file> [--] [args...]\n       php2 -v   (p8's version)\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)"
         );
         std::process::exit(64);
     };
@@ -150,17 +150,32 @@ fn main() {
             });
         }
         let mut stdout = Stdout(std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()));
-        let mut context = isolate.new_context(&mut stdout);
-        for (name, value) in &ini {
-            context.set_ini(name, value);
-        }
         // $argv[0]: the file, or php's name for stdin (-r's too).
         let argv0 = if named { STDIN_NAME.to_string() } else { path.clone() };
-        context.set_args(std::iter::once(argv0).chain(args).collect());
-        match platform.compile(&source, &file) {
-            Ok(script) => context.run(&script),
-            Err(error) => context.fail(&error),
+        let argv: Vec<String> = std::iter::once(argv0).chain(args).collect();
+        // --repeat N: the same script as N requests on this one isolate (a
+        // warm server's view): the first one's output goes to stdout, the
+        // others' nowhere; each request's time to stderr.
+        let mut status = 0;
+        for request in 1..=repeat {
+            let started = std::time::Instant::now();
+            let mut discard = Discard;
+            let host: &mut dyn p8::Host = if request == 1 { &mut stdout } else { &mut discard };
+            let mut context = isolate.new_context(host);
+            for (name, value) in &ini {
+                context.set_ini(name, value);
+            }
+            context.set_args(argv.clone());
+            status = match platform.compile(&source, &file) {
+                Ok(script) => context.run(&script),
+                Err(error) => context.fail(&error),
+            };
+            drop(context);
+            if repeat > 1 {
+                eprintln!("request {request}: {:.3} ms", started.elapsed().as_secs_f64() * 1e3);
+            }
         }
+        status
     });
     std::process::exit(status);
 }
@@ -187,6 +202,8 @@ struct Cli {
     stdio: Option<String>,
     /// -t: the document root of -S.
     docroot: Option<String>,
+    /// --repeat N: run the script as N requests on one isolate (1: once).
+    repeat: usize,
     /// -q: how many times (a quieter -S log).
     quiet: u8,
     /// -v / --version: say which p8 this is and run nothing.
@@ -206,6 +223,7 @@ impl Cli {
         let (mut serve, mut stdio, mut docroot, mut quiet) = (None, None, None, 0);
         let (mut path, mut code, mut dashes) = (None, None, false);
         let mut version = false;
+        let mut repeat = 1;
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 // The script's own arguments follow (its code is on stdin
@@ -224,6 +242,7 @@ impl Cli {
                 "--stdio" => stdio = Some(args.next()?),
                 "-t" => docroot = Some(args.next()?),
                 "-q" => quiet += 1,
+                "--repeat" => repeat = args.next()?.parse().ok().filter(|&n| n > 0)?,
                 // No php.ini is read anyway.
                 "-n" => {}
                 other if other.starts_with("-d") => setting(&other[2..]),
@@ -241,12 +260,19 @@ impl Cli {
         if stdio.is_some() && serve.is_none() {
             return None;
         }
-        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, quiet, version })
+        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, repeat, quiet, version })
     }
 }
 
 /// What php calls a script read from stdin (its __FILE__ and $argv[0]).
 const STDIN_NAME: &str = "Standard input code";
+
+/// Where the output of `--repeat`'s later requests goes: nowhere.
+struct Discard;
+
+impl p8::Host for Discard {
+    fn write(&mut self, _: &[u8]) {}
+}
 
 /// The terminal: a request's output goes to stdout.
 struct Stdout(std::io::BufWriter<std::io::Stdout>);
@@ -282,6 +308,12 @@ mod tests {
         let ini: Vec<(&str, &str)> = cli.ini.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
         assert_eq!(ini, [("error_reporting", "0"), ("precision", "14"), ("x", "1")]);
         assert_eq!(parse(&["--dump", "t.php"]), Some((true, t())));
+        // --repeat N: N requests on one isolate; N is a positive count.
+        let repeated = Cli::parse(["--repeat", "5", "t.php"].iter().map(|a| a.to_string())).expect("parsed");
+        assert_eq!((repeated.repeat, repeated.path.as_deref()), (5, Some("t.php")));
+        assert_eq!(Cli::parse(["t.php"].iter().map(|a| a.to_string())).map(|c| c.repeat), Some(1));
+        assert!(Cli::parse(["--repeat", "0", "t.php"].iter().map(|a| a.to_string())).is_none());
+        assert!(Cli::parse(["--repeat", "x", "t.php"].iter().map(|a| a.to_string())).is_none());
         let lint = Cli::parse(["-l", "t.php"].iter().map(|a| a.to_string())).expect("parsed");
         assert!(lint.lint && !lint.dump && lint.path == t());
         // An unknown option or a missing value is a usage error.
