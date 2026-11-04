@@ -378,13 +378,9 @@ impl Context<'_> {
                 // A trait's method becomes the class's own (declared by it):
                 // one new entry for it and one per alias, nothing more.
                 let copy = || Method { declaring: Rc::clone(&declaring), declaring_name: class_name.clone(), ..Method::clone(m) };
-                if !excluded {
-                    let mut plain = copy();
-                    if let Some(v) = def.trait_rules.iter().filter(rule_for).find(|r| r.alias.is_none()).and_then(|r| r.visibility) {
-                        plain.visibility = v;
-                    }
-                    adopt(self, *key, plain)?;
-                }
+                // Its aliases first, then the method itself, as
+                // zend_traits_copy_functions adds them (get_class_methods
+                // and reflection list them so).
                 for r in def.trait_rules.iter().filter(rule_for) {
                     if let Some(alias) = &r.alias {
                         let mut aliased = copy();
@@ -395,6 +391,13 @@ impl Context<'_> {
                         let key = self.intern(alias.as_bytes());
                         adopt(self, key, aliased)?;
                     }
+                }
+                if !excluded {
+                    let mut plain = copy();
+                    if let Some(v) = def.trait_rules.iter().filter(rule_for).find(|r| r.alias.is_none()).and_then(|r| r.visibility) {
+                        plain.visibility = v;
+                    }
+                    adopt(self, *key, plain)?;
                 }
             }
             for p in &t.properties {
@@ -456,7 +459,7 @@ impl Context<'_> {
             }
             for (case, value) in &def.cases {
                 constants.insert(
-                    case.as_bytes().to_vec(),
+                    case.as_bytes(),
                     Rc::new(Constant {
                         value: value.as_ref().map_or(Value::Null, |v| v.to_value()),
                         visibility: Visibility::Public,
@@ -495,7 +498,7 @@ impl Context<'_> {
         }
         for c in &def.constants {
             constants.insert(
-                c.name.as_bytes().to_vec(),
+                c.name.as_bytes(),
                 Rc::new(Constant {
                     value: c.value.to_value(),
                     visibility: c.visibility,
@@ -600,7 +603,7 @@ impl Context<'_> {
             || parent.as_ref().is_some_and(|p| p.flags & CLASS_LAZY != 0);
         let destructor = destructor | if lazy { CLASS_LAZY } else { 0 };
         let destructor = destructor | if properties.iter().any(|p| p.hooks != 0) { p8_runtime::object::CLASS_HOOKS } else { 0 };
-        let destructor = destructor | if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| methods.contains_key(*m)) { p8_runtime::object::CLASS_MAGIC_PROPS } else { 0 };
+        let destructor = destructor | if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| methods.contains_key(m)) { p8_runtime::object::CLASS_MAGIC_PROPS } else { 0 };
         let destructor = destructor | parent.as_ref().map_or(0, |p| p.flags & (p8_runtime::object::CLASS_UNCLONEABLE | p8_runtime::object::CLASS_ALLOW_DYNAMIC));
         let make_data = parent.as_ref().and_then(|p| p.make_data);
         let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
@@ -852,7 +855,7 @@ impl Context<'_> {
             }
             return Err(self.throw(
                 "Error",
-                format!("Call to {} method {}::{}() from {}", method.visibility.word(), text(&class.name), text(&method.name), self.scope_name()),
+                format!("Call to {} method {}::{}() from {}", method.visibility.word(), text(&class.name), String::from_utf8_lossy(display), self.scope_name()),
             ));
         }
         if method.is_abstract {
@@ -887,7 +890,7 @@ impl Context<'_> {
             }
             return Err(self.throw(
                 "Error",
-                format!("Call to {} method {}::{}() from {}", method.visibility.word(), text(&target.name), text(&method.name), self.scope_name()),
+                format!("Call to {} method {}::{}() from {}", method.visibility.word(), text(&target.name), String::from_utf8_lossy(display), self.scope_name()),
             ));
         }
         if method.is_abstract {

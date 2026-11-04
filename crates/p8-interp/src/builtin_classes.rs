@@ -340,7 +340,7 @@ pub(crate) fn declare_spec(
     if class.properties.iter().any(|p| p.hooks != 0) {
         class.flags |= CLASS_HOOKS;
     }
-    if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| class.methods.contains_key(*m)) {
+    if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| class.methods.contains_key(m)) {
         class.flags |= p8_runtime::object::CLASS_MAGIC_PROPS;
     }
     class.make_data = make_data.or_else(|| class.parent.as_ref().and_then(|p| p.make_data));
@@ -350,7 +350,7 @@ pub(crate) fn declare_spec(
     }
     for (n, value) in spec.constants {
         class.constants.insert(
-            n.as_bytes().to_vec(),
+            n.as_bytes(),
             Rc::new(p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None }),
         );
     }
