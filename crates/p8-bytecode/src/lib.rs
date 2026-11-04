@@ -114,8 +114,11 @@ pub enum Instr {
     ArrayPush { arr: Reg, val: Reg },
     /// arr[key] = val (array literal building)
     ArraySet { arr: Reg, key: Reg, val: Reg },
-    /// dst = arr[key]; `quiet` for isset/?? (no warning)
-    FetchDim { dst: Reg, arr: Reg, key: Reg, quiet: bool },
+    /// dst = arr[key]; `quiet` for isset/?? (no warning); `empty` for the
+    /// last dimension of `empty($c[k])`, whose key is checked as isset
+    /// checks it (ZEND_ISSET_ISEMPTY_DIM_OBJ: "in isset or empty" for an
+    /// illegal one on an array; a string's offset by isset's rules).
+    FetchDim { dst: Reg, arr: Reg, key: Reg, quiet: bool, empty: bool },
     /// var[k1]..[kn] = val with keys in `keys..keys+n`; when `append`, the
     /// last level is `[]`. dst gets the assigned value.
     AssignDim { var: Reg, keys: Reg, n: u8, append: bool, val: Reg, dst: Reg },
