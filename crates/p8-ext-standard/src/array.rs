@@ -88,6 +88,7 @@ fn array_values(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// array_merge: int keys are renumbered, string keys overwrite.
 fn array_merge(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut out = PhpArray::new();
+    out.reserve((0..args.len()).map(|i| arr(args, i).len()).sum());
     for i in 0..args.len() {
         for (k, v) in arr(args, i).iter() {
             match k {

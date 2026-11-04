@@ -150,22 +150,17 @@ impl Context<'_> {
         let key = func.sym;
         if let Some(&i) = self.functions.get(&key) {
             let name = String::from_utf8_lossy(func.name.as_bytes());
-            let first = &self.closures[i as usize].code;
+            let first = &self.codes[i as usize];
             return Err(format!("Cannot redeclare function {name}() (previously declared in {}:{})", first.file, first.line));
         }
         if self.builtin(key).is_some() {
             let name = String::from_utf8_lossy(func.name.as_bytes());
             return Err(format!("Cannot redeclare function {name}()"));
         }
-        self.closures.push(Closure::new(func));
-        self.functions.insert(key, (self.closures.len() - 1) as u32);
+        // Its closure is made when it is first called (sites.rs).
+        let i = self.add_code(func);
+        self.functions.insert(key, i);
         Ok(())
-    }
-
-    /// Make a closure of `func` (a method's code) and return its index.
-    fn add_closure(&mut self, func: Arc<Function>) -> u32 {
-        self.closures.push(Closure::new(func));
-        (self.closures.len() - 1) as u32
     }
 
     /// The script's class declarations: those whose parent and
@@ -1003,6 +998,11 @@ impl Context<'_> {
             let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
             return Err(self.throw("Error", format!("Call to undefined function {name}()")));
         };
+        // A user function's closure is made with the first site that calls
+        // it: `fast` then finds it at the index this site caches.
+        if let Callee::User(f) = callee {
+            self.closure_at(f);
+        }
         let _ = clo.sites[site as usize].set(callee.clone());
         Ok(callee)
     }
@@ -1208,6 +1208,20 @@ impl Context<'_> {
         macro_rules! reg {
             ($r:expr) => {
                 w[$r as usize]
+            };
+        }
+        // A name operand (a property's, a class constant's, a static
+        // property's): its constant, read in place (a constant only used
+        // as a name is never copied into a register: see
+        // `Function::value_consts`), else the register a run-time name is in.
+        macro_rules! name {
+            ($r:expr) => {
+                // A register below the constants wraps to a huge index: one
+                // bounds check covers both ends.
+                match clo.consts.get(($r as usize).wrapping_sub(func.consts_at as usize)) {
+                    Some(c) => c,
+                    None => &w[$r as usize],
+                }
             };
         }
         match instr {
@@ -1450,7 +1464,7 @@ impl Context<'_> {
                         pc = target as usize;
                     }
                 }
-                Instr::NewArray { dst } => reg!(dst) = Value::Array(Rc::new(PhpArray::new())),
+                Instr::NewArray { dst, n } => reg!(dst) = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize))),
                 Instr::ArrayPush { arr, val } => {
                     let v = self.operand(w, func, val);
                     if let Value::Array(a) = &mut reg!(arr)
@@ -1466,7 +1480,7 @@ impl Context<'_> {
                         Rc::make_mut(a).insert(k, v);
                     }
                 }
-                Instr::FetchDim { dst, arr, key, quiet } => {
+                Instr::FetchDim { dst, arr, key, quiet, empty } => {
                     let container = if quiet {
                         match &reg!(arr) {
                             Value::Ref(cell) => cell.borrow().clone(),
@@ -1482,13 +1496,31 @@ impl Context<'_> {
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
                     }
+                    // empty()'s last dimension: its key checked as isset
+                    // checks it (`fast` took an int or string key already).
+                    if empty {
+                        let k = self.operand(w, func, key);
+                        let v = match &container {
+                            Value::Array(a) => {
+                                let k = self.isset_key(&k, true)?;
+                                a.get(&k).map_or(Value::Null, Value::deref)
+                            }
+                            Value::Str(s) => self.isset_str_offset(s, &k, true)?.unwrap_or(Value::Null),
+                            _ => Value::Null,
+                        };
+                        reg!(dst) = v;
+                        return Ok(Next::Go(pc));
+                    }
                     let v = self.fetch_dim(&container, w, func, key, quiet)?;
                     reg!(dst) = v;
                 }
                 Instr::AssignDim { var, keys, n, append, val, dst } => {
                     let v = self.operand(w, func, val);
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, append) {
+                    // The keys are looked at in place: a list of them is made
+                    // only for an ArrayAccess object on the path.
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, append) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, append, arrayaccess::DimOp::Set(v))?;
                         regs[base + dst as usize] = r;
@@ -1499,8 +1531,9 @@ impl Context<'_> {
                 }
                 Instr::AssignDimOp { op, var, keys, n, val, dst } => {
                     let v = self.operand(w, func, val);
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::Op(op, v))?;
                         regs[base + dst as usize] = r;
@@ -1510,8 +1543,9 @@ impl Context<'_> {
                     reg!(dst) = result;
                 }
                 Instr::IssetDim { dst, var, keys, n } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let set = self.aa_isset(regs, &root, &key_values)?;
                         regs[base + dst as usize] = Value::Bool(set);
@@ -1523,13 +1557,26 @@ impl Context<'_> {
                     };
                     let mut set = true;
                     for i in 0..n {
+                        let last = i + 1 == n;
                         let next = match &cur {
                             // A string's offset: the character there.
-                            Value::Str(s) => isset_string_offset(s, &reg!(keys + i as Reg).deref()),
-                            Value::Array(a) => match Key::from_value(&reg!(keys + i as Reg)) {
-                                Ok((k, _)) => a.get(&k).map(|v| v.deref()),
-                                Err(_) => None,
-                            },
+                            Value::Str(s) => {
+                                let s = s.clone();
+                                self.isset_str_offset(&s, &reg!(keys + i as Reg), last)?
+                            }
+                            Value::Array(a) => {
+                                // An int or string key as it is; anything
+                                // else by isset's rules (isset_key).
+                                let k = match &reg!(keys + i as Reg) {
+                                    Value::Int(i) => Key::Int(*i),
+                                    Value::Str(s) => Key::from_string(s.clone()),
+                                    other => {
+                                        let other = other.clone();
+                                        self.isset_key(&other, last)?
+                                    }
+                                };
+                                a.get(&k).map(|v| v.deref())
+                            }
                             _ => None,
                         };
                         match next {
@@ -1563,21 +1610,42 @@ impl Context<'_> {
                     reg!(var) = Value::Undef;
                 }
                 Instr::UnsetDim { var, keys, n } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).clone()).collect();
-                    let derefed: Vec<Value> = key_values.iter().map(Value::deref).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &derefed, false) {
+                    let key_range = keys as usize..keys as usize + n as usize;
+                    if arrayaccess::path_has_object(&reg!(var), &w[key_range.clone()], false) {
+                        let derefed: Vec<Value> = w[key_range].iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         self.aa_write(regs, &root, &derefed, false, arrayaccess::DimOp::Unset)?;
                         return Ok(Next::Go(pc));
                     }
-                    let slot = &mut reg!(var);
-                    let mut holder = match slot {
-                        Value::Ref(cell) => cell.borrow().clone(),
-                        v => v.clone(),
-                    };
-                    if unset_path(&mut holder, &key_values) {
-                        assign(w, var, holder);
+                    // An undefined variable is warned (ZEND_UNSET_DIM's op1
+                    // is fetched for unset), then there is nothing to do.
+                    if matches!(reg!(var), Value::Undef) {
+                        if let Some(name) = func.cv_names.get(var as usize) {
+                            self.warn(format!("Undefined variable ${}", String::from_utf8_lossy(name.as_bytes())));
+                        }
+                        return Ok(Next::Go(pc));
                     }
+                    // In place: a copy of the variable's array would make
+                    // every unset copy the whole array (copy-on-write). The
+                    // array is taken out of the variable while the element
+                    // goes, so the keys are read where they are (unless one
+                    // is a reference, which might be to the variable itself:
+                    // then their values are read first).
+                    if !key_range.contains(&(var as usize)) && !w[key_range.clone()].iter().any(|k| matches!(k, Value::Ref(_))) {
+                        let mut held = match &mut reg!(var) {
+                            Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                            slot => std::mem::take(slot),
+                        };
+                        let r = self.unset_path(&mut held, &w[key_range]);
+                        match &mut reg!(var) {
+                            Value::Ref(cell) => *cell.borrow_mut() = held,
+                            slot => *slot = held,
+                        }
+                        r?;
+                        return Ok(Next::Go(pc));
+                    }
+                    let derefed: Vec<Value> = w[key_range].iter().map(Value::deref).collect();
+                    self.unset_path(&mut reg!(var), &derefed)?;
                 }
                 Instr::IterInit { src, iter, end } => {
                     let v = self.operand(w, func, src);
@@ -1630,7 +1698,7 @@ impl Context<'_> {
                 }
                 Instr::SendVar { site, n, arg, var } => {
                     let by_ref = match self.resolve(clo, site)? {
-                        Callee::User(f) => self.closures[f as usize].code.param_by_ref(n as usize),
+                        Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     };
@@ -1669,7 +1737,7 @@ impl Context<'_> {
                 }
                 Instr::FuncArgByRef { dst, site, n } => {
                     reg!(dst) = Value::Bool(match self.resolve(clo, site)? {
-                        Callee::User(f) => self.closures[f as usize].code.param_by_ref(n as usize),
+                        Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     });
@@ -1755,14 +1823,16 @@ impl Context<'_> {
                     reg!(dst) = Value::Str(PhpStr::new(bytes));
                 }
                 Instr::BindGlobal { var, name } => {
+                    // The name's constant, shared (not copied).
                     let name = match &clo.consts[name as usize] {
-                        Value::Str(s) => s.as_bytes().to_vec(),
-                        _ => Vec::new(),
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("BindGlobal names a constant string"),
                     };
+                    let name = name.as_bytes();
                     // The main frame's window starts at 0: it is `w` when
                     // the main frame is running, else the start of `below`
                     // (or of the first task's registers, in a fiber).
-                    let cell = if in_main { self.global_cell(w, &name) } else { self.with_main(below, |cx, main| cx.global_cell(main, &name)) };
+                    let cell = if in_main { self.global_cell(w, name) } else { self.with_main(below, |cx, main| cx.global_cell(main, name)) };
                     reg!(var) = Value::Ref(cell);
                 }
                 Instr::MatchError { src } => {
@@ -1814,7 +1884,7 @@ impl Context<'_> {
                     Rare::PropRef => {
                             let (dst, obj, name) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
                             return Ok(Next::Go(insn_at));
@@ -1826,7 +1896,7 @@ impl Context<'_> {
                     Rare::AssignPropRef => {
                             let (obj, name, src) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = make_ref(w, src);
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
@@ -1841,7 +1911,7 @@ impl Context<'_> {
                             self.resolve_class(regs, &c)?;
                             return Ok(Next::Go(at));
                         }
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = self.static_cell(func, class, &name, w)?;
                         let inner = match &*cell.borrow() {
                             Value::Ref(r) => Some(Rc::clone(r)),
@@ -1867,7 +1937,7 @@ impl Context<'_> {
                             self.resolve_class(regs, &c)?;
                             return Ok(Next::Go(at));
                         }
-                        let name = reg!(name).clone();
+                        let name = name!(name).clone();
                         let cell = self.static_cell(func, class, &name, w)?;
                         let r = make_ref(w, src);
                         *cell.borrow_mut() = Value::Ref(r);
@@ -2056,25 +2126,21 @@ impl Context<'_> {
                     reg!(var) = Value::Ref(cell);
                 }
                 Instr::RefDim { var, root, keys, n, append } => {
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let cell = make_ref(w, root);
                     let mut value = std::mem::take(&mut *cell.borrow_mut());
                     let r = self.dim_ref(&mut value, &path, append);
+                    self.key_path_done(path);
                     *cell.borrow_mut() = value;
                     reg!(var) = Value::Ref(r?);
                 }
                 Instr::DimSetRef { root, keys, n, append, src } => {
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let target = make_ref(w, src);
                     let cell = make_ref(w, root);
                     let mut value = std::mem::take(&mut *cell.borrow_mut());
                     let r = self.dim_set_ref(&mut value, &path, append, target);
+                    self.key_path_done(path);
                     *cell.borrow_mut() = value;
                     r?;
                 }
@@ -2167,8 +2233,10 @@ impl Context<'_> {
                     }
                 }
                 Instr::CollectVariadic { var } => {
-                    // Its own argument (if passed), then those past it.
-                    let mut list = Vec::new();
+                    // Its own argument (if passed), then those past it:
+                    // the list made once, at its size.
+                    let extra = self.frames.last().map_or(0, |f| f.args().len());
+                    let mut list = Vec::with_capacity(usize::from(argc > var as usize) + extra);
                     if argc > var as usize {
                         list.push(std::mem::replace(&mut reg!(var), Value::Undef));
                     }
@@ -2206,7 +2274,7 @@ impl Context<'_> {
                     };
                 }
                 Instr::StaticVar { var, index, skip } => {
-                    let (cell, new) = self.static_var(func, index);
+                    let (cell, new) = self.static_var(&clo.code, index);
                     reg!(var) = Value::Ref(cell);
                     if !new {
                         pc = skip as usize;
@@ -2260,22 +2328,21 @@ impl Context<'_> {
                     return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
                 }
                 Instr::DimIncDec { var, keys, n, dst, inc, post } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::IncDec { inc, post })?;
                         regs[base + dst as usize] = r;
                         return Ok(Next::Go(pc));
                     }
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let mut root = match &mut reg!(var) {
                         Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
                         other => std::mem::take(other),
                     };
                     let r = self.incdec_path(&mut root, &path, inc);
+                    self.key_path_done(path);
                     match &mut reg!(var) {
                         Value::Ref(cell) => *cell.borrow_mut() = root,
                         other => *other = root,
@@ -2424,7 +2491,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = v;
@@ -2468,7 +2535,7 @@ impl Context<'_> {
                     let v = self.operand(w, func, val);
                     // The name's constant: the same cache entry reads use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                     {
                         let (o, pname) = (Rc::clone(o), pname.clone());
@@ -2476,7 +2543,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
                         regs[base + dst as usize] = v;
@@ -2508,7 +2575,7 @@ impl Context<'_> {
                     let y = self.operand(w, func, val);
                     // The name's constant: the cache entry reads and writes use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
                     {
                         let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
@@ -2519,7 +2586,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = ops::binary(op, x, &y, &mut c.diags);
@@ -2558,7 +2625,7 @@ impl Context<'_> {
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
                     let target = self.operand(w, func, obj);
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &reg!(name))
+                    if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
                     {
                         let (o, pname, slot) = (Rc::clone(o), pname.clone(), site.get().slot as usize);
@@ -2569,7 +2636,7 @@ impl Context<'_> {
                         reg!(dst) = if post { old } else { new };
                         return Ok(Next::Go(pc));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = if inc { ops::increment(x, &mut c.diags) } else { ops::decrement(x, &mut c.diags) };
@@ -2657,15 +2724,14 @@ impl Context<'_> {
                         regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
                         return Ok(Next::Go(pc));
                     }
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, at + 2 + i as Reg)?);
-                    }
-                    reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
+                    let path = self.key_path(w, func, at + 2, n)?;
+                    let r = self.update_prop_dim(&target, &name, &path, append, v, op);
+                    self.key_path_done(path);
+                    reg!(dst) = r?;
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = Value::Bool(!matches!(v.deref(), Value::Null | Value::Undef));
@@ -2686,7 +2752,7 @@ impl Context<'_> {
                 }
                 Instr::UnsetProp { obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     if let (Value::Object(o), Some(n)) = (&target, name.to_php_string())
                         && let Some(p) = self.hooked_property(o, n.as_bytes())
                     {
@@ -2765,7 +2831,7 @@ impl Context<'_> {
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::ClassConst { dst, class, name } => {
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     // `self::class` with no class to name (zend_compile's
                     // ZEND_FETCH_CLASS_NAME): its own error.
                     let is_class = matches!(&name, Value::Str(n) if n.as_bytes().eq_ignore_ascii_case(b"class"));
@@ -2797,7 +2863,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = match cell.borrow().deref() {
                         Value::Undef => Value::Null,
@@ -2810,7 +2876,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let v = self.operand(w, func, val);
                     store(&cell, v.clone());
@@ -2821,7 +2887,7 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
-                    let name = reg!(name).clone();
+                    let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
                     let y = self.operand(w, func, val);
                     let x = cell.borrow().deref();
@@ -2869,7 +2935,7 @@ impl Context<'_> {
                 Instr::Call { site, base: args, argc, dst } => {
                     match self.resolve(clo, site)? {
                         Callee::User(target) => {
-                            let target = Rc::clone(&self.closures[target as usize]);
+                            let target = self.closure_at(target);
                             if (argc as usize) < target.code.required {
                                 let passed = &w[args as usize..args as usize + argc as usize];
                                 return Err(self.missing_args(&target.code, passed, None));
@@ -3183,7 +3249,8 @@ impl Context<'_> {
                     slots: p8_runtime::object::Slots::default(),
                     methods: p8_runtime::object::Methods::new(&self.isolate.names),
                     constants: p8_runtime::object::Constants::default(),
-                    statics: HashMap::default(),
+                    statics: Default::default(),
+                    property_order: Vec::new(),
                     debug_info: None,
                     get_properties: None,
                     cast_bool: None,
@@ -3626,7 +3693,18 @@ impl Context<'_> {
         if let Some(r) = self.main_cv(name) {
             return make_ref(main, r as Reg);
         }
-        self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Undef))).clone()
+        self.global_entry(name, Value::Undef)
+    }
+
+    /// The global `name`'s cell in `globals`, made (holding `made`) if
+    /// there is none: the name is copied only then.
+    fn global_entry(&mut self, name: &[u8], made: Value) -> Rc<RefCell<Value>> {
+        if let Some(cell) = self.globals.get(name) {
+            return Rc::clone(cell);
+        }
+        let cell = Rc::new(RefCell::new(made));
+        self.globals.insert(name.to_vec(), Rc::clone(&cell));
+        cell
     }
 
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
@@ -3639,17 +3717,59 @@ impl Context<'_> {
             }
             return make_ref(main, r as Reg);
         }
-        let cell = self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone();
+        let cell = self.global_entry(name, Value::Null);
         if matches!(*cell.borrow(), Value::Undef) {
             *cell.borrow_mut() = Value::Null;
         }
         cell
     }
 
+    /// The keys of a dimension path (`$a[k1]..[kn]`) from the `n`
+    /// registers at `keys`, in the context's reusable buffer: a write
+    /// into an array allocates no list of its keys. Hand it back with
+    /// key_path_done (a nested one meanwhile gets a buffer of its own).
+    fn key_path(&mut self, w: &[Value], func: &Function, keys: Reg, n: u8) -> Result<Vec<Key>, Throw> {
+        let mut path = std::mem::take(&mut self.key_path);
+        path.clear();
+        for i in 0..n {
+            path.push(self.key(w, func, keys + i as Reg)?);
+        }
+        Ok(path)
+    }
+
+    fn key_path_done(&mut self, mut path: Vec<Key>) {
+        path.clear();
+        self.key_path = path;
+    }
+
     /// An array key from register `r`, reporting what PHP reports.
     fn key(&mut self, w: &[Value], func: &Function, r: Reg) -> Result<Key, Throw> {
         let v = self.operand(w, func, r);
-        match Key::from_value(&v) {
+        self.key_of(&v, "access")
+    }
+
+    /// A resource used as an array key: its number, warned
+    /// (zend_use_resource_as_offset). None for anything else.
+    fn resource_key(&mut self, v: &Value) -> Option<Key> {
+        let id = match v {
+            Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => o.id,
+            Value::Ref(cell) => match &*cell.borrow() {
+                Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => o.id,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.warn(format!("Resource ID#{id} used as offset, casting to integer ({id})"));
+        Some(Key::Int(i64::from(id)))
+    }
+
+    /// The array key `v` names, reporting what PHP reports: a float that
+    /// is not an int loses precision (deprecated), a resource is its
+    /// number (warned), an array or object is a TypeError ("Cannot `what`
+    /// offset of type …": access, unset).
+    #[inline]
+    fn key_of(&mut self, v: &Value, what: &str) -> Result<Key, Throw> {
+        match Key::from_value(v) {
             Ok((k, None)) => Ok(k),
             Ok((k, Some(KeyIssue::LosesPrecision(f)))) => {
                 let shown = float_to_string(f, Precision::Shortest, 'E');
@@ -3660,14 +3780,138 @@ impl Context<'_> {
             // from_value reports illegal keys as errors only
             Ok((k, Some(KeyIssue::Illegal(_)))) => Ok(k),
             Err(KeyIssue::Illegal(t)) => {
+                // (Only here, off the common path: a resource is a key.)
+                if let Some(k) = self.resource_key(v) {
+                    return Ok(k);
+                }
                 // An object is named by its class (zend_illegal_container_offset).
-                let t = match &v {
+                let t = match v.deref() {
                     Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
                     _ => t.to_string(),
                 };
-                Err(self.throw("TypeError", format!("Cannot access offset of type {t} on array")))
+                Err(self.throw("TypeError", format!("Cannot {what} offset of type {t} on array")))
             }
             Err(KeyIssue::LosesPrecision(f)) => Ok(Key::Int(f as i64)),
+        }
+    }
+
+    /// An array key as isset and empty take it (zend_execute.c
+    /// zend_isset_dim_slow / zend_fetch_dimension_address_inner with
+    /// BP_VAR_IS): a float that is not an int deprecated, a resource its
+    /// number (warned), an array or object a TypeError, "in isset or empty"
+    /// at the last dimension (`last`), "on array" on the way to it.
+    #[cold]
+    fn isset_key(&mut self, v: &Value, last: bool) -> Result<Key, Throw> {
+        match Key::from_value(v) {
+            Ok((k, Some(KeyIssue::LosesPrecision(f)))) => {
+                let shown = float_to_string(f, Precision::Shortest, 'E');
+                self.diags.push(Diag::Deprecated(format!("Implicit conversion from float {shown} to int loses precision")));
+                self.report_diags();
+                Ok(k)
+            }
+            Ok((k, _)) => Ok(k),
+            Err(KeyIssue::LosesPrecision(f)) => Ok(Key::Int(f as i64)),
+            Err(KeyIssue::Illegal(t)) => {
+                if let Some(k) = self.resource_key(v) {
+                    return Ok(k);
+                }
+                let shown = match v.deref() {
+                    Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    _ => t.to_string(),
+                };
+                let place = if last { "in isset or empty" } else { "on array" };
+                Err(self.throw("TypeError", format!("Cannot access offset of type {shown} {place}")))
+            }
+        }
+    }
+
+    /// A string's offset as isset and empty read it: at the last
+    /// dimension an int, a scalar or an integer string (a float that is
+    /// not an int deprecated), anything else not set; on the way to it,
+    /// as `??` reads it (an array, object or resource key is a TypeError).
+    fn isset_str_offset(&mut self, s: &PhpStr, k: &Value, last: bool) -> Result<Option<Value>, Throw> {
+        let k = k.deref();
+        match &k {
+            Value::Array(_) | Value::Object(_) if last => Ok(None),
+            Value::Array(_) | Value::Object(_) => {
+                let t = match &k {
+                    Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => "resource".to_string(),
+                    Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    v => v.type_name().to_string(),
+                };
+                Err(self.throw("TypeError", format!("Cannot access offset of type {t} on string")))
+            }
+            Value::Float(f) if last && (f.fract() != 0.0 || !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(f)) => {
+                let shown = float_to_string(*f, Precision::Shortest, 'E');
+                self.diags.push(Diag::Deprecated(format!("Implicit conversion from float {shown} to int loses precision")));
+                self.report_diags();
+                Ok(isset_string_offset(s, &k))
+            }
+            _ => Ok(isset_string_offset(s, &k)),
+        }
+    }
+
+    /// `unset($c[k1]..[kn])` on `target`, in place (ZEND_UNSET_DIM, the
+    /// containers on the way fetched as FETCH_DIM_UNSET fetches them).
+    /// An element that is a reference is followed (`$r = &$a['k'];
+    /// unset($a['k'][0])` changes what both see). A missing element or a
+    /// null on the way ends it quietly, false with a deprecation; a key
+    /// is converted only when its level is reached. (An ArrayAccess object
+    /// on the path is the caller's: offsetUnset.)
+    fn unset_path(&mut self, target: &mut Value, keys: &[Value]) -> Result<(), Throw> {
+        let Some((first, rest)) = keys.split_first() else { return Ok(()) };
+        let last = rest.is_empty();
+        match target {
+            Value::Ref(cell) => {
+                // Out of the reference while it changes (no borrow held
+                // across the warnings a key may raise).
+                let mut held = std::mem::take(&mut *cell.borrow_mut());
+                let r = self.unset_path(&mut held, keys);
+                *cell.borrow_mut() = held;
+                r
+            }
+            Value::Array(a) => {
+                // An int or string key is the common case: taken as it is,
+                // nothing to report; anything else goes through key_of.
+                let k = match first {
+                    Value::Int(i) => Key::Int(*i),
+                    Value::Str(s) => Key::from_string(s.clone()),
+                    other => self.key_of(other, if last { "unset" } else { "access" })?,
+                };
+                // An array only this holds is changed with one lookup; a
+                // shared one is copied only when the element is there.
+                if last {
+                    match Rc::get_mut(a) {
+                        Some(a) => {
+                            a.remove(&k);
+                        }
+                        None => {
+                            if a.contains_key(&k) {
+                                Rc::make_mut(a).remove(&k);
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+                if Rc::strong_count(a) != 1 && !a.contains_key(&k) {
+                    return Ok(());
+                }
+                match Rc::make_mut(a).get_mut(&k) {
+                    Some(child) => self.unset_path(child, rest),
+                    None => Ok(()),
+                }
+            }
+            Value::Undef | Value::Null => Ok(()),
+            Value::Bool(false) => {
+                self.diags.push(Diag::Deprecated("Automatic conversion of false to array is deprecated".into()));
+                self.report_diags();
+                Ok(())
+            }
+            Value::Str(_) if last => Err(self.throw("Error", "Cannot unset string offsets")),
+            Value::Str(_) => Err(self.throw("Error", "Cannot use string offset as an array")),
+            // Reached through path_has_object's ArrayAccess path instead.
+            Value::Object(_) => Ok(()),
+            _ => Err(self.throw("Error", "Cannot unset offset in a non-array variable")),
         }
     }
 
@@ -3713,6 +3957,7 @@ impl Context<'_> {
                     }
                     other => {
                         let t = match other {
+                            Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => "resource".to_string(),
                             Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
                             v => v.type_name().to_string(),
                         };
@@ -3727,7 +3972,7 @@ impl Context<'_> {
                     }
                     return Ok(if quiet { Value::Null } else { Value::Str(PhpStr::empty()) });
                 }
-                Ok(Value::Str(PhpStr::new(vec![s.as_bytes()[at as usize]])))
+                Ok(Value::Str(PhpStr::byte(s.as_bytes()[at as usize])))
             }
             Value::Null | Value::Undef => {
                 if !quiet {
@@ -3791,16 +4036,14 @@ impl Context<'_> {
             }
             return r;
         }
-        let mut path = Vec::with_capacity(n as usize);
-        for i in 0..n {
-            path.push(self.key(w, func, keys + i as Reg)?);
-        }
+        let path = self.key_path(w, func, keys, n)?;
         // Take the variable's value out, update it, put it back.
         let mut root = match &mut w[slot] {
             Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
             other => std::mem::take(other),
         };
         let result = self.update_path(&mut root, &path, append, val, op);
+        self.key_path_done(path);
         match &mut w[slot] {
             Value::Ref(cell) => *cell.borrow_mut() = root,
             other => *other = root,
@@ -3855,7 +4098,7 @@ impl Context<'_> {
         }
         bytes[at as usize] = byte;
         *s = PhpStr::new(bytes);
-        Ok(Value::Str(PhpStr::new(vec![byte])))
+        Ok(Value::Str(PhpStr::byte(byte)))
     }
 
     fn update_path(&mut self, target: &mut Value, path: &[Key], append: bool, val: Value, op: Option<BinOp>) -> Result<Value, Throw> {
@@ -4060,7 +4303,7 @@ impl Ctx for Context<'_> {
         let default = self.isolate.registry.ini_default(name)?;
         Some(match self.ini.get(name) {
             Some(v) => v.clone(),
-            None => default.map_or(Value::Null, |d| Value::Str(PhpStr::from(d))),
+            None => default.map_or(Value::Null, |d| Value::Str(self.isolate.ini_text(d))),
         })
     }
 
@@ -4766,22 +5009,6 @@ fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize,
     Some(Box::new(Extra { args: regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect(), vars: Vars::default(), shared: None }))
 }
 
-/// unset(a[k1]..[kn]) on a value; whether anything changed.
-fn unset_path(target: &mut Value, keys: &[Value]) -> bool {
-    let Value::Array(a) = target else { return false };
-    let Some((first, rest)) = keys.split_first() else { return false };
-    let Ok((k, _)) = Key::from_value(first) else { return false };
-    if rest.is_empty() {
-        if !a.contains_key(&k) {
-            return false;
-        }
-        Rc::make_mut(a).remove(&k);
-        return true;
-    }
-    let Some(child) = Rc::make_mut(a).get_mut(&k) else { return false };
-    unset_path(child, rest)
-}
-
 /// `$a[k] op= v` for an int or string `k`, `$a` an array holding a number
 /// there and `v` a number; false (nothing done) for anything else. Out of
 /// line, so the fast loop's registers stay its own.
@@ -4888,6 +5115,10 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Reg) -> bool {
         let Value::Str(mut s) = std::mem::take(&mut w[a as usize]) else { unreachable!("checked") };
         ops::push_string(s.make_mut(), &w[b as usize], &mut diags);
         w[dst as usize] = Value::Str(s);
+        return true;
+    }
+    if let (Value::Str(p), Value::Str(q)) = (x, y) {
+        w[dst as usize] = Value::Str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
         return true;
     }
     let mut bytes = Vec::with_capacity(ops::string_len_hint(x) + ops::string_len_hint(y));

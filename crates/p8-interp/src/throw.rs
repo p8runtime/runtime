@@ -228,7 +228,7 @@ pub(crate) fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     {
         this.destructed.set(true);
     }
-    let consts = base + code.consts_at as usize..base + code.consts_at as usize + frame.func.consts.len();
+    let consts = base + code.consts_at as usize..base + code.consts_at as usize + code.value_consts as usize;
     for r in &mut regs[base..consts.start] {
         clear(r);
     }

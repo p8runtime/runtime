@@ -107,11 +107,19 @@ struct FnBuilder<'a> {
     lines: Vec<u32>,
     consts: Vec<Frozen>,
     const_index: HashMap<ConstKey, usize>,
+    /// Which constants the code reads as values (one bit each, noted as
+    /// it is emitted); the others are only names (see `name_operand`).
+    value_bits: u64,
+    more_value_bits: Vec<u64>,
     cvs: IndexMap<Vec<u8>, usize>,
     temps: usize,
     /// Temporaries below this stay live across statements (a foreach's iterator).
     floor: usize,
     max_temps: usize,
+    /// Temporaries holding a reference to a global (`$GLOBALS['x']…` as
+    /// a variable): emptied (Free) when they go out of use, so the
+    /// temporary's next value is not written into the global through it.
+    ref_temps: Vec<usize>,
     sites: Vec<Site>,
     site_index: HashMap<(bool, Vec<u8>), u16>,
     loops: Vec<Loop>,
@@ -170,10 +178,13 @@ impl FnBuilder<'_> {
             lines: Vec::with_capacity(32),
             consts: Vec::new(),
             const_index: HashMap::default(),
+            value_bits: 0,
+            more_value_bits: Vec::new(),
             cvs: IndexMap::default(),
             temps: 0,
             floor: 0,
             max_temps: 0,
+            ref_temps: Vec::new(),
             sites: Vec::new(),
             site_index: HashMap::default(),
             loops: Vec::new(),
@@ -304,7 +315,23 @@ impl FnBuilder<'_> {
         r
     }
 
+    /// A constant the code reads as a value (copied into a call's
+    /// registers).
     fn constant(&mut self, value: Frozen) -> Reg {
+        let index = self.constant_slot(value);
+        self.mark_value(index);
+        reg(CONST, index)
+    }
+
+    /// A constant only used as a name: the name operand of a property,
+    /// class constant or static property instruction (see
+    /// `name_operand`), or `global $x`'s. It is never copied into a
+    /// register, unless some code also asks for it as a value.
+    fn name_constant(&mut self, value: Frozen) -> Reg {
+        reg(CONST, self.constant_slot(value))
+    }
+
+    fn constant_slot(&mut self, value: Frozen) -> usize {
         let key = match &value {
             Frozen::Null => ConstKey::Null,
             Frozen::Bool(b) => ConstKey::Bool(*b),
@@ -314,7 +341,7 @@ impl FnBuilder<'_> {
             // Arrays are not shared between constant registers.
             Frozen::Array(_) => {
                 self.consts.push(value);
-                return reg(CONST, self.consts.len() - 1);
+                return self.consts.len() - 1;
             }
         };
         let next = self.consts.len();
@@ -322,7 +349,7 @@ impl FnBuilder<'_> {
         if index == next {
             self.consts.push(value);
         }
-        reg(CONST, index)
+        index
     }
 
     fn temp(&mut self) -> Reg {
@@ -330,6 +357,22 @@ impl FnBuilder<'_> {
         self.temps += 1;
         self.max_temps = self.max_temps.max(self.temps);
         r
+    }
+
+    /// The temporaries from `to` on are out of use: a reference one of
+    /// them holds is dropped now (Free), so whatever is written there next
+    /// lands in the register, not in the referenced variable.
+    fn reset_temps(&mut self, to: usize) {
+        let mut i = 0;
+        while i < self.ref_temps.len() {
+            if self.ref_temps[i] >= to {
+                let t = self.ref_temps.swap_remove(i);
+                self.emit(Instr::Free { reg: reg(TEMP, t) });
+            } else {
+                i += 1;
+            }
+        }
+        self.temps = to;
     }
 
     fn site(&mut self, constant: bool, name: Text, sym: Sym, display: Text) -> u16 {
@@ -345,23 +388,104 @@ impl FnBuilder<'_> {
         i
     }
 
-    /// Lay the frame out and renumber every register.
-    fn finish(mut self, file: Arc<str>) -> Function {
+    /// Constant `i` is read as a value somewhere (not only as a name).
+    fn mark_value(&mut self, i: usize) {
+        if i < 64 {
+            self.value_bits |= 1 << i;
+        } else {
+            let word = (i - 64) / 64;
+            if self.more_value_bits.len() <= word {
+                self.more_value_bits.resize(word + 1, 0);
+            }
+            self.more_value_bits[word] |= 1 << ((i - 64) % 64);
+        }
+    }
+
+    fn is_value(&self, i: usize) -> bool {
+        if i < 64 { self.value_bits >> i & 1 != 0 } else { self.more_value_bits.get((i - 64) / 64).is_some_and(|w| w >> ((i - 64) % 64) & 1 != 0) }
+    }
+
+    /// Debug builds: every constant operand an instruction reads as a value
+    /// (all but the name operand of an instruction that reads its name from
+    /// the constants) was asked for with `constant`, not `name_constant`.
+    #[cfg(debug_assertions)]
+    fn check_values(&self) {
+        for instr in &self.code {
+            let found: [std::cell::Cell<Reg>; 8] = Default::default();
+            let count = std::cell::Cell::new(0);
+            map_regs(&mut instr.clone(), |r| {
+                if r >> KIND_SHIFT == CONST && count.get() < found.len() {
+                    found[count.get()].set(r);
+                    count.set(count.get() + 1);
+                }
+                r
+            });
+            let mut name = name_operand(instr);
+            for cell in &found[..count.get()] {
+                let r = cell.get();
+                if name == Some(r) {
+                    name = None;
+                    continue;
+                }
+                let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
+                assert!(self.is_value(index), "constant {:?} is read as a value by {instr:?} but was made as a name", self.consts[index]);
+            }
+        }
+    }
+
+    /// Lay the frame out and renumber every register. `order` is scratch
+    /// space the compiler keeps for every function's constant order.
+    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder) -> Function {
         if !self.returns_ref {
             thread_returns(&mut self.code);
         }
         let ncv = self.cvs.len();
         let nconst = self.consts.len();
+        #[cfg(debug_assertions)]
+        self.check_values();
+        // The constants some code reads as a value come first: a call
+        // copies those into its registers. The others (property and class
+        // constant names, which their instructions read from the
+        // constants) come after, and are never copied. Most functions have
+        // none of the latter: nothing moves then.
+        let value_consts = (0..nconst).filter(|&i| self.is_value(i)).count();
+        let moved = value_consts < nconst;
+        if moved {
+            let (position, work) = (&mut order.position, &mut order.work);
+            position.clear();
+            let (mut next_value, mut next_name) = (0, value_consts as u32);
+            for i in 0..nconst {
+                let slot = if self.is_value(i) { &mut next_value } else { &mut next_name };
+                position.push(*slot);
+                *slot += 1;
+            }
+            // Move the constants to their places, in place (cycle by cycle).
+            work.clear();
+            work.extend_from_slice(position);
+            for i in 0..nconst {
+                while work[i] as usize != i {
+                    let j = work[i] as usize;
+                    self.consts.swap(i, j);
+                    work.swap(i, j);
+                }
+            }
+        }
+        let position = &order.position;
         let map = |r: Reg| -> Reg {
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
             (match r >> KIND_SHIFT {
                 CV => index,
+                CONST if moved => ncv + position[index] as usize,
                 CONST => ncv + index,
                 _ => ncv + nconst + index,
             }) as Reg
         };
         for instr in &mut self.code {
             map_regs(instr, map);
+            // `global $x` names its variable by constant index.
+            if moved && let Instr::BindGlobal { name, .. } = instr {
+                *name = position[*name as usize] as u16;
+            }
         }
         for h in &mut self.handlers {
             h.slot = map(h.slot);
@@ -390,6 +514,7 @@ impl FnBuilder<'_> {
             lines: self.lines,
             consts: self.consts,
             consts_at: ncv as Reg,
+            value_consts: value_consts as Reg,
             nregs: (ncv + nconst + self.max_temps) as Reg,
             cv_names: cv_names.into_iter().map(|(_, n)| n).collect(),
             required,
@@ -625,6 +750,34 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
 }
 
 /// Apply `f` to every register an instruction names.
+/// Where each constant of the function being finished goes (`position`),
+/// and room to move them there: kept by the compiler for every function.
+#[derive(Default)]
+struct ConstOrder {
+    position: Vec<u32>,
+    work: Vec<u32>,
+}
+
+/// The operand of `instr` that only names something (a property, a class
+/// constant, a static property): read from the function's constants when
+/// it is one, never as a register (see `Function::value_consts`).
+fn name_operand(instr: &Instr) -> Option<Reg> {
+    use Instr::*;
+    match *instr {
+        FetchProp { name, .. }
+        | AssignProp { name, .. }
+        | AssignPropOp { name, .. }
+        | PropIncDec { name, .. }
+        | IssetProp { name, .. }
+        | UnsetProp { name, .. }
+        | ClassConst { name, .. }
+        | FetchStaticProp { name, .. }
+        | AssignStaticProp { name, .. }
+        | AssignStaticPropOp { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
 fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
@@ -771,7 +924,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *src = f(*src);
         }
         Free { reg } => *reg = f(*reg),
-        LoadNull { dst } | NewArray { dst } => *dst = f(*dst),
+        LoadNull { dst } | NewArray { dst, .. } => *dst = f(*dst),
         Binary { dst, a, b, .. } | Add { dst, a, b } | Sub { dst, a, b } | Mul { dst, a, b } | Compare { dst, a, b, .. } => {
             *dst = f(*dst);
             *a = f(*a);
@@ -941,6 +1094,8 @@ pub struct Compiler<'src> {
     /// The temporaries holding references a spread call's list was given
     /// (freed after the call).
     spread_refs: Vec<Reg>,
+    /// Scratch for laying out each function's constants.
+    const_order: ConstOrder,
     /// The assignment being compiled is a statement's: its value is not
     /// used, so the variable itself can stand for it.
     unused_result: bool,
@@ -1044,6 +1199,7 @@ impl<'src> Compiler<'src> {
             source,
             superglobals: None,
             spread_refs: Vec::new(),
+            const_order: ConstOrder::default(),
             unused_result: false,
             registry,
             file: Arc::from(file),
@@ -1206,14 +1362,14 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        let main = Arc::new(f.finish(self.file.clone()));
+        let main = Arc::new(f.finish(self.file.clone(), &mut self.const_order));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
 
     fn stmts<'a>(&mut self, f: &mut FnBuilder<'a>, stmts: &'a [StmtId<'a>]) -> Result<()> {
         for stmt in stmts {
             self.stmt(f, stmt)?;
-            f.temps = f.floor;
+            f.reset_temps(f.floor);
         }
         Ok(())
     }
@@ -1289,7 +1445,7 @@ impl<'src> Compiler<'src> {
             },
             Stmt::If { condition, then_block, else_block, .. } => {
                 let skip = self.branch(f, condition, false)?;
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.stmts(f, then_block)?;
                 match else_block {
                     Some(else_block) => {
@@ -1310,7 +1466,7 @@ impl<'src> Compiler<'src> {
                 f.patch(to_cond, cond_at);
                 let back = self.branch(f, condition, true)?;
                 f.patch_all(back, body_start);
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.close_loop(f, cond_at);
             }
             Stmt::DoWhile { body, condition, .. } => {
@@ -1320,13 +1476,13 @@ impl<'src> Compiler<'src> {
                 let cont = f.here();
                 let back = self.branch(f, condition, true)?;
                 f.patch_all(back, start);
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.close_loop(f, cont);
             }
             Stmt::For { init, condition, loop_expr, body, .. } => {
                 for e in *init {
                     self.discard(f, e)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 // Body first, then the step and the condition at the bottom.
                 let to_cond = f.emit(Instr::Jump { target: 0 });
@@ -1336,7 +1492,7 @@ impl<'src> Compiler<'src> {
                 let cont = f.here();
                 for e in *loop_expr {
                     self.discard(f, e)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 f.patch(to_cond, f.here());
                 match condition.split_last() {
@@ -1351,7 +1507,7 @@ impl<'src> Compiler<'src> {
                         f.patch_all(back, body_start);
                     }
                 }
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 self.close_loop(f, cont);
             }
             Stmt::Foreach { expr, key_var, value_var, body, .. }
@@ -1410,7 +1566,7 @@ impl<'src> Compiler<'src> {
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, Some((r, &[])))?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
@@ -1466,15 +1622,15 @@ impl<'src> Compiler<'src> {
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 if let Some(t) = value_place {
                     self.assign_from(f, value_var, t)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 if let (Some(k), Some(t)) = (key_var, key_place) {
                     self.assign_from(f, k, t)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, None)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 self.stmts(f, body)?;
                 f.floor = outer_floor;
@@ -1599,13 +1755,13 @@ impl<'src> Compiler<'src> {
                         Some(c) => {
                             let value = self.expr(f, c)?;
                             to_body.push(Some(f.emit(Instr::jump_cmp(Cmp::Eq, subject, value, true, 0))));
-                            f.temps = keep;
+                            f.reset_temps(keep);
                         }
                         None => to_body.push(None),
                     }
                 }
                 let no_match = f.emit(Instr::Jump { target: 0 });
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 f.push_loop();
                 let mut default = None;
                 for (case, jump) in cases.iter().zip(to_body) {
@@ -1614,7 +1770,7 @@ impl<'src> Compiler<'src> {
                         None => default = Some(f.here()),
                     }
                     self.stmts(f, case.body)?;
-                    f.temps = f.floor;
+                    f.reset_temps(f.floor);
                 }
                 let end = f.here();
                 f.patch(no_match, default.unwrap_or(end));
@@ -1638,7 +1794,7 @@ impl<'src> Compiler<'src> {
                     };
                     let text = self.text(*name);
                     let var = f.cv(&text[1..]);
-                    let name_reg = f.constant(Frozen::Str(Text::from(&text[1..])));
+                    let name_reg = f.name_constant(Frozen::Str(Text::from(&text[1..])));
                     let name_index = name_reg & ((1 << KIND_SHIFT) - 1);
                     f.emit(Instr::BindGlobal { var, name: name_index });
                 }
@@ -1709,7 +1865,7 @@ impl<'src> Compiler<'src> {
                         }
                         Expr::PropertyFetch { target, property, .. } => {
                             let obj = self.expr(f, target)?;
-                            let name = self.prop_name(f, property)?;
+                            let name = self.prop_name_operand(f, property)?;
                             f.emit(Instr::UnsetProp { obj, name });
                         }
                         Expr::IndirectVariable { name, .. } => {
@@ -1793,7 +1949,7 @@ impl<'src> Compiler<'src> {
                 let cmp = comparison(*op).expect("a comparison");
                 let a = self.expr(f, left)?;
                 let b = self.expr(f, right)?;
-                f.temps = mark;
+                f.reset_temps(mark);
                 Ok(vec![f.emit(Instr::jump_cmp(cmp, a, b, when, 0))])
             }
             Expr::Binary { left, op, right, .. }
@@ -1817,7 +1973,7 @@ impl<'src> Compiler<'src> {
             Expr::Unary { op: UnaryOp::Not, expr, .. } => self.branch(f, expr, !when),
             _ => {
                 let c = self.expr(f, cond)?;
-                f.temps = mark;
+                f.reset_temps(mark);
                 Ok(vec![f.emit(if when { Instr::JumpIf { cond: c, target: 0 } } else { Instr::JumpIfNot { cond: c, target: 0 } })])
             }
         }
@@ -1954,7 +2110,7 @@ impl<'src> Compiler<'src> {
         for (i, name) in SUPERGLOBALS.iter().enumerate() {
             if named & (1 << i) != 0 {
                 let var = f.cv(name.as_bytes());
-                let name_reg = f.constant(Frozen::Str(Text::from(*name)));
+                let name_reg = f.name_constant(Frozen::Str(Text::from(*name)));
                 f.emit(Instr::BindGlobal { var, name: name_reg & ((1 << KIND_SHIFT) - 1) });
             }
         }
@@ -2048,7 +2204,7 @@ impl<'src> Compiler<'src> {
                 let var = reg(CV, i);
                 let value = self.expr(&mut f, default)?;
                 f.emit(Instr::Assign { var, src: value });
-                f.temps = f.floor;
+                f.reset_temps(f.floor);
                 f.patch(at, f.here());
             }
         }
@@ -2082,10 +2238,10 @@ impl<'src> Compiler<'src> {
             });
             let obj = f.temp();
             f.emit(Instr::This { dst: obj });
-            let key = f.constant(Frozen::Str(name));
+            let key = f.name_constant(Frozen::Str(name));
             let dst = f.temp();
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst });
-            f.temps = f.floor;
+            f.reset_temps(f.floor);
         }
         // `use ($a, &$b)`: variables after the parameters, set from the
         // closure's captured values on each call.
@@ -2116,7 +2272,7 @@ impl<'src> Compiler<'src> {
             Body::Set(name, e) => {
                 let obj = f.temp();
                 f.emit(Instr::This { dst: obj });
-                let key = f.constant(Frozen::Str(name));
+                let key = f.name_constant(Frozen::Str(name));
                 let val = self.expr(&mut f, e)?;
                 let dst = f.temp();
                 f.emit(Instr::AssignProp { obj, name: key, val, dst });
@@ -2141,7 +2297,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        Ok((f.finish(self.file.clone()), captures))
+        Ok((f.finish(self.file.clone(), &mut self.const_order), captures))
     }
 
     /// Take apart the array in `src` into the targets of `items` (keyed,
@@ -2185,7 +2341,7 @@ impl<'src> Compiler<'src> {
                 // Fetched for writing, its references made below: no warning
                 // when it is not there yet.
                 Expr::Array { items, .. } if root.is_some() && items.iter().any(|i| i.by_ref) => {
-                    f.emit(Instr::FetchDim { dst: elem, arr: src, key, quiet: true });
+                    f.emit(Instr::FetchDim { dst: elem, arr: src, key, quiet: true, empty: false });
                 }
                 _ => {
                     f.emit(Instr::FetchList { dst: elem, arr: src, key });
@@ -2224,7 +2380,7 @@ impl<'src> Compiler<'src> {
         let mut value = val;
         for dim in outer[..rest].iter() {
             let arr = f.temp();
-            f.emit(Instr::NewArray { dst: arr });
+            f.emit(Instr::NewArray { dst: arr, n: 0 });
             match dim {
                 Some(k) => {
                     let key = self.expr(f, k)?;
@@ -2267,13 +2423,13 @@ impl<'src> Compiler<'src> {
             }
             Expr::PropertyFetch { target: obj, property, .. } => {
                 let obj = self.expr(f, obj)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::AssignProp { obj, name, val, dst });
             }
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
-                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let dst = f.temp();
                 f.emit(Instr::AssignStaticProp { class, name, val, dst });
             }
@@ -2734,7 +2890,7 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::Unary { op: op @ (UnaryOp::Minus | UnaryOp::Plus), expr, .. } => match (op, self.const_value(expr)?) {
                 (UnaryOp::Minus, Frozen::Int(i)) => Ok(i.checked_neg().map_or(Frozen::Float(-(i as f64)), Frozen::Int)),
-                (UnaryOp::Minus, Frozen::Float(x)) => Ok(Frozen::Float(-x)),
+                (UnaryOp::Minus, Frozen::Float(x)) => Ok(Frozen::Float(p8_runtime::ops::negate_float(x))),
                 (UnaryOp::Plus, v @ (Frozen::Int(_) | Frozen::Float(_))) => Ok(v),
                 _ => Err(self.unsupported(e.span(), "this constant expression")),
             },
@@ -2882,6 +3038,17 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    /// `prop_name` for the name operand of a property instruction (see
+    /// `name_operand`): a literal name is a name-only constant.
+    fn prop_name_operand(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        match e {
+            Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
+                Ok(f.name_constant(Frozen::Str(Text::from(self.text(*name)))))
+            }
+            other => self.expr(f, other),
+        }
+    }
+
     /// Arguments by value into consecutive temporaries: (base, count).
     /// A call with `...$spread` arguments: the arguments as one list,
     /// and `callee` called on it.
@@ -2904,7 +3071,7 @@ impl<'src> Compiler<'src> {
     /// reference goes in as one (asked when the call runs).
     fn spread_list(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg], callee: Option<Reg>) -> Result<Reg> {
         let list = f.temp();
-        f.emit(Instr::NewArray { dst: list });
+        f.emit(Instr::NewArray { dst: list, n: 0 });
         let mut named = false;
         for (n, arg) in args.iter().enumerate() {
             let line = self.line(arg.span);
@@ -3157,7 +3324,7 @@ impl<'src> Compiler<'src> {
     /// Call the callable [a, b] (a method named at run time).
     fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
         let callee = f.temp();
-        f.emit(Instr::NewArray { dst: callee });
+        f.emit(Instr::NewArray { dst: callee, n: 0 });
         f.emit(Instr::ArrayPush { arr: callee, val: a });
         f.emit(Instr::ArrayPush { arr: callee, val: b });
         if needs_spread(args) {
@@ -3555,6 +3722,8 @@ impl<'src> Compiler<'src> {
         let n = self.expr(f, name)?;
         let dst = f.temp();
         f.emit(Instr::rare(Rare::VarRef, dst, n, 1, 0));
+        // Dropped when the temporary goes out of use (reset_temps).
+        f.ref_temps.push(usize::from(dst & ((1 << KIND_SHIFT) - 1)));
         Ok(dst)
     }
 
@@ -3733,7 +3902,7 @@ impl<'src> Compiler<'src> {
                     {
                         let mark = f.temps;
                         let src = self.expr_to(f, expr, Some(target))?;
-                        f.temps = mark;
+                        f.reset_temps(mark);
                         if src != target {
                             f.emit(Instr::Assign { var: target, src });
                         }
@@ -3780,7 +3949,7 @@ impl<'src> Compiler<'src> {
                 }
                 Expr::PropertyFetch { target, property, .. } => {
                     let obj = self.expr(f, target)?;
-                    let name = self.prop_name(f, property)?;
+                    let name = self.prop_name_operand(f, property)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignProp { obj, name, val, dst });
@@ -3789,7 +3958,7 @@ impl<'src> Compiler<'src> {
                 }
                 Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                     let class = self.class_ref(f, class)?;
-                    let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                    let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignStaticProp { class, name, val, dst });
@@ -3906,7 +4075,7 @@ impl<'src> Compiler<'src> {
                     }
                     Expr::PropertyFetch { target, property, .. } => {
                         let obj = self.expr(f, target)?;
-                        let name = self.prop_name(f, property)?;
+                        let name = self.prop_name_operand(f, property)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
                         f.emit(Instr::AssignPropOp { op: bin, obj, name, val, dst });
@@ -3914,7 +4083,7 @@ impl<'src> Compiler<'src> {
                     }
                     Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                         let class = self.class_ref(f, class)?;
-                        let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                        let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
                         f.emit(Instr::AssignStaticPropOp { op: bin, class, name, val, dst });
@@ -3926,7 +4095,7 @@ impl<'src> Compiler<'src> {
             Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::PropertyFetch { target, property, .. }, .. } => {
                 let obj = self.expr(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
                 dst
@@ -3934,7 +4103,7 @@ impl<'src> Compiler<'src> {
             Expr::PostInc { var: Expr::PropertyFetch { target, property, .. }, .. }
             | Expr::PostDec { var: Expr::PropertyFetch { target, property, .. }, .. } => {
                 let obj = self.expr(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
                 dst
@@ -3944,7 +4113,7 @@ impl<'src> Compiler<'src> {
                 if self.text(*name).starts_with(b"$") =>
             {
                 let class = self.class_ref(f, class)?;
-                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let one = f.constant(Frozen::Int(1));
                 let dst = f.temp();
                 let op = if matches!(op, UnaryOp::PreInc) { BinOp::Add } else { BinOp::Sub };
@@ -3956,7 +4125,7 @@ impl<'src> Compiler<'src> {
                 if self.text(*name).starts_with(b"$") =>
             {
                 let class = self.class_ref(f, class)?;
-                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let one = f.constant(Frozen::Int(1));
                 let dst = f.temp();
                 let scratch = f.temp();
@@ -4028,22 +4197,22 @@ impl<'src> Compiler<'src> {
                 match if_true {
                     Some(t) => {
                         let else_at = self.branch(f, condition, false)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         self.expr_into(f, t, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         let end = f.emit(Instr::Jump { target: 0 });
                         f.patch_all(else_at, f.here());
                         self.expr_into(f, if_false, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         f.patch(end, f.here());
                     }
                     None => {
                         // `a ?: b`
                         self.expr_into(f, condition, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         let end = f.emit(Instr::JumpIf { cond: dst, target: 0 });
                         self.expr_into(f, if_false, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                         f.patch(end, f.here());
                     }
                 }
@@ -4059,7 +4228,10 @@ impl<'src> Compiler<'src> {
             }
             Expr::Array { items, .. } => {
                 let dst = f.temp();
-                f.emit(Instr::NewArray { dst });
+                // A list literal's elements are all pushed: room for them.
+                let list = items.iter().all(|i| i.key.is_none() && !i.unpack && !i.by_ref);
+                let n = if list { u16::try_from(items.len()).unwrap_or(0) } else { 0 };
+                f.emit(Instr::NewArray { dst, n });
                 for item in *items {
                     if item.unpack {
                         let src = self.expr(f, item.value)?;
@@ -4101,7 +4273,7 @@ impl<'src> Compiler<'src> {
                 let arr = self.expr(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = out(f, hint, mark);
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: false });
+                f.emit(Instr::FetchDim { dst, arr, key, quiet: false, empty: false });
                 dst
             }
             Expr::InterpolatedString { parts, .. } => {
@@ -4156,7 +4328,7 @@ impl<'src> Compiler<'src> {
                     // In a trait: the class using it, when the code runs.
                     MagicConstKind::Class if self.scope.as_ref().is_some_and(|s| s.in_trait) => {
                         let class = f.class_ref(ClassRef::Scope);
-                        let name = f.constant(Frozen::Str(Text::from("class")));
+                        let name = f.name_constant(Frozen::Str(Text::from("class")));
                         let dst = f.temp();
                         f.emit(Instr::ClassConst { dst, class, name });
                         return Ok(dst);
@@ -4189,19 +4361,19 @@ impl<'src> Compiler<'src> {
                     for c in conditions {
                         let value = self.expr(f, c)?;
                         to_body.push(f.emit(Instr::jump_cmp(Cmp::Identical, subject, value, true, 0)));
-                        f.temps = keep;
+                        f.reset_temps(keep);
                     }
                     let skip = f.emit(Instr::Jump { target: 0 });
                     f.patch_all(to_body, f.here());
                     self.expr_into(f, arm.body, dst)?;
-                    f.temps = keep;
+                    f.reset_temps(keep);
                     ends.push(f.emit(Instr::Jump { target: 0 }));
                     f.patch(skip, f.here());
                 }
                 match default {
                     Some(body) => {
                         self.expr_into(f, body, dst)?;
-                        f.temps = keep;
+                        f.reset_temps(keep);
                     }
                     None => {
                         f.emit(Instr::MatchError { src: subject });
@@ -4233,7 +4405,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::PropertyFetch { target, property, .. } => {
                 let obj = self.expr(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = out(f, hint, mark);
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
                 dst
@@ -4242,7 +4414,7 @@ impl<'src> Compiler<'src> {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
-                f.emit(Instr::NewArray { dst: pair });
+                f.emit(Instr::NewArray { dst: pair, n: 0 });
                 f.emit(Instr::ArrayPush { arr: pair, val: obj });
                 f.emit(Instr::ArrayPush { arr: pair, val: name });
                 self.spread_call(f, pair, args)?
@@ -4274,7 +4446,7 @@ impl<'src> Compiler<'src> {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
-                f.emit(Instr::NewArray { dst: pair });
+                f.emit(Instr::NewArray { dst: pair, n: 0 });
                 f.emit(Instr::ArrayPush { arr: pair, val: obj });
                 f.emit(Instr::ArrayPush { arr: pair, val: name });
                 let dst = f.temp();
@@ -4292,7 +4464,7 @@ impl<'src> Compiler<'src> {
                     let class = self.expr(f, class_expr)?;
                     let name = f.constant(Frozen::Str(Text::from(self.text(*method))));
                     let pair = f.temp();
-                    f.emit(Instr::NewArray { dst: pair });
+                    f.emit(Instr::NewArray { dst: pair, n: 0 });
                     f.emit(Instr::ArrayPush { arr: pair, val: class });
                     f.emit(Instr::ArrayPush { arr: pair, val: name });
                     pair
@@ -4362,7 +4534,7 @@ impl<'src> Compiler<'src> {
                         }
                         _ => {
                             let dst = f.temp();
-                            let class_const = f.constant(Frozen::Str(Text::from("class")));
+                            let class_const = f.name_constant(Frozen::Str(Text::from("class")));
                             f.emit(Instr::ClassConst { dst, class, name: class_const });
                             dst
                         }
@@ -4396,7 +4568,7 @@ impl<'src> Compiler<'src> {
                 let class_index = self.class_ref(f, class)?;
                 let dst = out(f, hint, mark);
                 if let Some(prop) = text.strip_prefix(b"$") {
-                    let name = f.constant(Frozen::Str(Text::from(prop)));
+                    let name = f.name_constant(Frozen::Str(Text::from(prop)));
                     f.emit(Instr::FetchStaticProp { dst, class: class_index, name });
                 } else if text.eq_ignore_ascii_case(b"class")
                     && let ClassRef::Named(ClassName { display, .. }) | ClassRef::Forward(ClassName { display, .. }) = &f.classes[class_index as usize]
@@ -4406,7 +4578,7 @@ impl<'src> Compiler<'src> {
                     let display = display.clone();
                     return Ok(f.constant(Frozen::Str(display)));
                 } else {
-                    let name = f.constant(Frozen::Str(Text::from(text)));
+                    let name = f.name_constant(Frozen::Str(Text::from(text)));
                     f.emit(Instr::ClassConst { dst, class: class_index, name });
                 }
                 dst
@@ -4472,7 +4644,7 @@ impl<'src> Compiler<'src> {
                         // `?->` reads as `->` here: null has no property set.
                         Expr::PropertyFetch { target, property, .. } | Expr::NullsafePropertyFetch { target, property, .. } => {
                             let obj = self.quiet(f, target)?;
-                            let name = self.prop_name(f, property)?;
+                            let name = self.prop_name_operand(f, property)?;
                             f.emit(Instr::IssetProp { dst, obj, name });
                         }
                         Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
@@ -4562,7 +4734,18 @@ impl<'src> Compiler<'src> {
             }
             // empty($x): not set, or false when converted.
             Expr::Empty { expr, .. } => {
-                let v = self.quiet(f, expr)?;
+                let v = match expr {
+                    // `empty($c[k])`: the container read quietly, its last
+                    // dimension with isset's key checks (FetchDim's `empty`).
+                    Expr::ArrayDimFetch { array, dim: Some(dim), .. } if self.globals_dim(expr).is_none() => {
+                        let arr = self.quiet(f, array)?;
+                        let key = self.expr(f, dim)?;
+                        let v = f.temp();
+                        f.emit(Instr::FetchDim { dst: v, arr, key, quiet: true, empty: true });
+                        v
+                    }
+                    _ => self.quiet(f, expr)?,
+                };
                 let t = f.temp();
                 f.emit(Instr::LoadNull { dst: t });
                 let set = f.emit(Instr::JumpIfSet { src: v, dst: t, target: 0 });
@@ -4582,7 +4765,7 @@ impl<'src> Compiler<'src> {
                 let dst = f.temp();
                 let null = f.constant(Frozen::Null);
                 let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(is_null, f.here());
@@ -4790,12 +4973,12 @@ impl<'src> Compiler<'src> {
                 let arr = self.quiet(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = f.temp();
-                f.emit(Instr::FetchDim { dst, arr, key, quiet: true });
+                f.emit(Instr::FetchDim { dst, arr, key, quiet: true, empty: false });
                 Ok(dst)
             }
             Expr::PropertyFetch { target, property, .. } => {
                 let obj = self.quiet(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: true });
                 Ok(dst)
@@ -4974,7 +5157,7 @@ impl<'src> Compiler<'src> {
 /// those of its operands (`mark` is where they start; every instruction
 /// reads its operands before it writes its result).
 fn out(f: &mut FnBuilder, hint: Option<Reg>, mark: usize) -> Reg {
-    f.temps = mark;
+    f.reset_temps(mark);
     hint.unwrap_or_else(|| f.temp())
 }
 
