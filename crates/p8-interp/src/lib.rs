@@ -1525,9 +1525,10 @@ impl Context<'_> {
                         let next = match &cur {
                             // A string's offset: the character there.
                             Value::Str(s) => isset_string_offset(s, &reg!(keys + i as Reg).deref()),
-                            Value::Array(a) => match self.resource_key(&reg!(keys + i as Reg)).map_or_else(|| Key::from_value(&reg!(keys + i as Reg)).map(|(k, _)| k), Ok) {
-                                Ok(k) => a.get(&k).map(|v| v.deref()),
-                                Err(_) => None,
+                            Value::Array(a) => match Key::from_value(&reg!(keys + i as Reg)) {
+                                Ok((k, _)) => a.get(&k).map(|v| v.deref()),
+                                // A resource is a key (its number, warned).
+                                Err(_) => self.resource_key(&reg!(keys + i as Reg)).and_then(|k| a.get(&k).map(|v| v.deref())),
                             },
                             _ => None,
                         };
@@ -3703,22 +3704,24 @@ impl Context<'_> {
     /// A resource used as an array key: its number, warned
     /// (zend_use_resource_as_offset). None for anything else.
     fn resource_key(&mut self, v: &Value) -> Option<Key> {
-        let Value::Object(o) = v.deref() else { return None };
-        if o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0 {
-            return None;
-        }
-        self.warn(format!("Resource ID#{} used as offset, casting to integer ({})", o.id, o.id));
-        Some(Key::Int(i64::from(o.id)))
+        let id = match v {
+            Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => o.id,
+            Value::Ref(cell) => match &*cell.borrow() {
+                Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => o.id,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.warn(format!("Resource ID#{id} used as offset, casting to integer ({id})"));
+        Some(Key::Int(i64::from(id)))
     }
 
     /// The array key `v` names, reporting what PHP reports: a float that
     /// is not an int loses precision (deprecated), a resource is its
     /// number (warned), an array or object is a TypeError ("Cannot `what`
     /// offset of type …": access, unset).
+    #[inline]
     fn key_of(&mut self, v: &Value, what: &str) -> Result<Key, Throw> {
-        if let Some(k) = self.resource_key(v) {
-            return Ok(k);
-        }
         match Key::from_value(v) {
             Ok((k, None)) => Ok(k),
             Ok((k, Some(KeyIssue::LosesPrecision(f)))) => {
@@ -3730,6 +3733,10 @@ impl Context<'_> {
             // from_value reports illegal keys as errors only
             Ok((k, Some(KeyIssue::Illegal(_)))) => Ok(k),
             Err(KeyIssue::Illegal(t)) => {
+                // (Only here, off the common path: a resource is a key.)
+                if let Some(k) = self.resource_key(v) {
+                    return Ok(k);
+                }
                 // An object is named by its class (zend_illegal_container_offset).
                 let t = match v.deref() {
                     Value::Object(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
@@ -3761,17 +3768,35 @@ impl Context<'_> {
                 r
             }
             Value::Array(a) => {
-                let k = self.key_of(first, if last { "unset" } else { "access" })?;
-                if !a.contains_key(&k) {
-                    return Ok(());
-                }
-                let a = Rc::make_mut(a);
+                // An int or string key is the common case: taken as it is,
+                // nothing to report; anything else goes through key_of.
+                let k = match first {
+                    Value::Int(i) => Key::Int(*i),
+                    Value::Str(s) => Key::from_string(s.clone()),
+                    other => self.key_of(other, if last { "unset" } else { "access" })?,
+                };
+                // An array only this holds is changed with one lookup; a
+                // shared one is copied only when the element is there.
                 if last {
-                    a.remove(&k);
+                    match Rc::get_mut(a) {
+                        Some(a) => {
+                            a.remove(&k);
+                        }
+                        None => {
+                            if a.contains_key(&k) {
+                                Rc::make_mut(a).remove(&k);
+                            }
+                        }
+                    }
                     return Ok(());
                 }
-                let child = a.get_mut(&k).expect("checked");
-                self.unset_path(child, rest)
+                if Rc::strong_count(a) != 1 && !a.contains_key(&k) {
+                    return Ok(());
+                }
+                match Rc::make_mut(a).get_mut(&k) {
+                    Some(child) => self.unset_path(child, rest),
+                    None => Ok(()),
+                }
             }
             Value::Undef | Value::Null => Ok(()),
             Value::Bool(false) => {
