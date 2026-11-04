@@ -102,7 +102,7 @@ impl Platform {
 
     /// Compile a file's source.
     pub fn compile(&self, source: &[u8], file: &str) -> Result<Script, Error> {
-        self.compiler.file(source, file).map(|program| Script { program })
+        self.compiler.file(source, file).map(|program| Script { program, registry: Arc::clone(&self.compiler.registry) })
     }
 
     /// A script's bytecode, as text (for `--dump`).
@@ -190,9 +190,11 @@ fn disassemble(program: &p8_bytecode::Program) -> String {
 }
 
 /// A compiled file: immutable, and `Send + Sync`, so one compile serves
-/// every isolate on every thread.
+/// every isolate on every thread of the Platform that compiled it (its
+/// names are that Platform's symbols).
 pub struct Script {
     program: Arc<p8_bytecode::Program>,
+    registry: Arc<Registry>,
 }
 
 /// A file that does not compile.
@@ -384,8 +386,10 @@ impl Context<'_> {
         self.inner.response().status
     }
 
-    /// Run a script's top-level code; returns the exit status.
+    /// Run a script's top-level code; returns the exit status. The script
+    /// must come from this isolate's Platform.
     pub fn run(&mut self, script: &Script) -> i32 {
+        assert!(Arc::ptr_eq(&script.registry, self.inner.registry()), "a Script runs on an isolate of the Platform that compiled it");
         self.inner.startup_diagnostics();
         for warning in std::mem::take(&mut self.warnings) {
             self.inner.startup_warning(&warning);

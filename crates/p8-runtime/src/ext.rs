@@ -417,11 +417,13 @@ pub struct Registry {
     deprecations: Vec<Option<String>>,
     /// Whether each function takes a callable (and so may run PHP code).
     reenters: Vec<bool>,
-    index: HashMap<&'static str, usize>,
-    constants: HashMap<&'static [u8], Constant>,
+    /// The functions by name (lowercase).
+    index: crate::fast::HashMap<crate::symbol::Sym, usize>,
+    /// The constants by name (namespace lowercased, see `const_key`).
+    constants: crate::fast::HashMap<crate::symbol::Sym, Constant>,
     /// The constants in the order they were added, each with its module
     /// (get_defined_constants(true) groups by it: "Core", "pcre", ...).
-    constant_order: Vec<(&'static str, &'static [u8])>,
+    constant_order: Vec<(&'static str, &'static [u8], crate::symbol::Sym)>,
     /// The extension registering now (its constants' module, by default).
     module: &'static str,
     /// Classes extensions declare, in order (a parent before its children).
@@ -439,6 +441,8 @@ pub struct Registry {
     request_start: Vec<RequestHook>,
     request_end: Vec<RequestHook>,
     startup_checks: Vec<fn(&mut dyn Ctx)>,
+    /// Every name compiled code and the builtins use (see [`crate::symbol`]).
+    symbols: crate::symbol::Symbols,
 }
 
 /// A class an extension declares: its methods are Rust. The engine links
@@ -550,8 +554,14 @@ impl Registry {
             self.reenters.push(sig.is_some_and(|s| {
                 s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
             }));
-            self.index.insert(f.name, i);
+            let sym = self.symbols.intern(f.name.as_bytes());
+            self.index.insert(sym, i);
         }
+    }
+
+    /// The names' symbol table, shared by the compiler and every isolate.
+    pub fn symbols(&self) -> &crate::symbol::Symbols {
+        &self.symbols
     }
 
     /// An ini directive and its default (None: PHP has no value for it).
@@ -610,20 +620,25 @@ impl Registry {
 
     /// A constant that belongs to `module` (PHP's name for its extension).
     pub fn add_constant_in(&mut self, module: &'static str, name: &'static [u8], value: Constant) {
-        if self.constants.insert(name, value).is_none() {
-            self.constant_order.push((module, name));
+        let sym = self.symbols.intern(&const_key(name));
+        if self.constants.insert(sym, value).is_none() {
+            self.constant_order.push((module, name, sym));
         }
     }
 
     /// Every constant with its module, in the order they were added.
     pub fn constant_list(&self) -> impl Iterator<Item = (&'static str, &'static [u8], Constant)> + '_ {
-        self.constant_order.iter().filter_map(|&(module, name)| self.constants.get(name).map(|c| (module, name, *c)))
+        self.constant_order.iter().filter_map(|&(module, name, sym)| self.constants.get(&sym).map(|c| (module, name, *c)))
     }
 
     /// The builtin named `name` (lowercase).
     pub fn lookup(&self, name: &[u8]) -> Option<usize> {
-        let name = std::str::from_utf8(name).ok()?;
-        self.index.get(name).copied()
+        self.symbols.find(name).and_then(|s| self.builtin(s))
+    }
+
+    /// The builtin whose (lowercase) name is `sym`.
+    pub fn builtin(&self, sym: crate::symbol::Sym) -> Option<usize> {
+        self.index.get(&sym).copied()
     }
 
     /// Every builtin's name, in the order registered.
@@ -657,7 +672,7 @@ impl Registry {
     /// passes it the assertion's source as an extra argument).
     pub fn unchecked(&mut self, names: &[&str]) {
         for n in names {
-            if let Some(&i) = self.index.get(n) {
+            if let Some(i) = self.lookup(n.as_bytes()) {
                 self.sigs[i] = None;
             }
         }
@@ -667,7 +682,7 @@ impl Registry {
     /// they take no callable (serialize, compact): the registers are lent.
     pub fn mark_reenters(&mut self, names: &[&str]) {
         for n in names {
-            if let Some(&i) = self.index.get(n) {
+            if let Some(i) = self.lookup(n.as_bytes()) {
                 self.reenters[i] = true;
             }
         }
@@ -677,8 +692,23 @@ impl Registry {
         self.functions[i].by_ref.contains(&n)
     }
 
+    /// The constant `name` (as written; a namespace in any case).
     pub fn constant(&self, name: &[u8]) -> Option<Constant> {
-        self.constants.get(name).copied()
+        self.symbols.find_const(name).and_then(|s| self.constant_sym(s))
+    }
+
+    /// The constant whose key (see [`const_key`]) is `sym`.
+    pub fn constant_sym(&self, sym: crate::symbol::Sym) -> Option<Constant> {
+        self.constants.get(&sym).copied()
+    }
+}
+
+/// A constant's key in the name tables: its namespace is case-insensitive,
+/// its own name is not (`A\B\C` and `a\b\C` are one constant).
+pub fn const_key(name: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match name.iter().rposition(|&c| c == b'\\') {
+        Some(at) if name[..at].iter().any(u8::is_ascii_uppercase) => std::borrow::Cow::Owned([name[..at].to_ascii_lowercase().as_slice(), &name[at..]].concat()),
+        _ => std::borrow::Cow::Borrowed(name),
     }
 }
 
