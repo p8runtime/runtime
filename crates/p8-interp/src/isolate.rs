@@ -146,9 +146,10 @@ impl InterruptHandle {
 pub struct Isolate {
     /// The builtins and their constants (shared by every isolate).
     pub(crate) registry: Arc<Registry>,
-    /// All frames' registers. While code runs, the interpreter holds the
-    /// register file itself (taken out of here) so the hot loop works on a
-    /// plain local slice.
+    /// The running task's registers (task.rs; the request's first task's
+    /// stay allocated between requests). While code runs, the interpreter
+    /// holds the register file itself (taken out of here) so the hot loop
+    /// works on a plain local slice.
     pub(crate) regs: Vec<Value>,
     /// Set by an InterruptHandle; cleared when a request starts.
     pub(crate) interrupt: Arc<AtomicU64>,

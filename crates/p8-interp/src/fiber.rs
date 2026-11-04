@@ -1,12 +1,13 @@
 //! Fibers: a function run on its own call stack, which it can leave with
 //! Fiber::suspend() and come back to with resume().
 //!
-//! A fiber runs in a nested `execute` above the frames that started (or
-//! resumed) it. Fiber::suspend() sets a flag the loop stops at; the frames
-//! above the fiber's first one, and their registers, move into the Fiber.
-//! resume() puts them back above whatever frames are running then (their
-//! register windows moved by the difference) and runs them again, the
-//! value given becoming suspend()'s result.
+//! A fiber is a task of its own (task.rs): its frames over its own
+//! register file. start() and resume() switch to the fiber's task and run
+//! it in a nested `execute`; Fiber::suspend() sets a flag the loop stops
+//! at, and the task switches back, the fiber's frames and registers left
+//! where they are, in its Task. Nothing is copied either way: a switch is
+//! a swap of the task's fields. The value resume() gives becomes
+//! suspend()'s result.
 //!
 //! A fiber can't be suspended from PHP code a builtin called back (an
 //! array_map callback, a generator being resumed): that code runs in a
@@ -15,7 +16,8 @@
 //! Reference: $PHP_SRC_PATH/Zend/zend_fibers.c
 
 use crate::classes::{Code, MethodFrame};
-use crate::{Context, Frame, NO_RET, Next};
+use crate::task::{FIRST_REG, Task};
+use crate::{Context, Next};
 use p8_bytecode::Instr;
 use p8_runtime::ext::{ClassSpec, Ctx, Throw};
 use p8_runtime::object::{CLASS_FINAL, CLASS_NOT_SERIALIZABLE, CLASS_UNCLONEABLE, Native, Object};
@@ -36,11 +38,9 @@ enum Status {
 pub(crate) struct FiberState {
     status: Status,
     callable: Value,
-    /// While suspended: its frames (the first one is the fiber function's)
-    /// and the registers from `at` on.
-    frames: Vec<Frame>,
-    regs: Vec<Value>,
-    at: usize,
+    /// While suspended: its task (its frames, the first one the fiber
+    /// function's, and its registers).
+    task: Task,
     returned: Option<Value>,
     threw: bool,
     /// Being destroyed while suspended: unwinding (finally blocks run, no
@@ -58,10 +58,11 @@ fn state(o: &Object) -> &RefCell<FiberState> {
     &o.native::<FiberCell>().expect("a Fiber").0
 }
 
-/// A fiber running now: where its frames and registers start.
+/// A fiber running now, and the task that started or resumed it (waiting
+/// until the fiber returns, throws or suspends).
 pub(crate) struct FiberRun {
     fiber: Rc<Object>,
-    base_frame: usize,
+    pub(crate) resumer: Task,
 }
 
 /// What a Fiber method asks the engine for (Ctx::fiber_op).
@@ -77,14 +78,6 @@ impl Context<'_> {
     fn fiber_error(&mut self, message: &str) -> Throw {
         let t = self.throw("FiberError", message.to_owned());
         self.exception(&|_| Value::Undef, t)
-    }
-
-    /// Where a new nested run's registers start: past the top frame's window.
-    fn window_end(&self) -> usize {
-        match self.frames.last() {
-            Some(top) => top.base as usize + top.func.code.nregs as usize,
-            None => 0,
-        }
     }
 
     pub(crate) fn fiber_op(&mut self, fiber: Option<&Rc<Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
@@ -117,9 +110,7 @@ impl Context<'_> {
                 state(fiber).borrow_mut().closing = true;
                 let marker = Ctx::new_object(self, &Rc::clone(&self.classes[b"stdclass".as_slice()]));
                 self.fiber_exit = Some(Rc::clone(&marker));
-                let mut regs = std::mem::take(&mut self.isolate.regs);
-                let r = self.fiber_resume(&mut regs, fiber, Value::Object(Rc::clone(&marker)), true);
-                self.isolate.regs = regs;
+                let r = self.fiber_resume(fiber, Value::Object(Rc::clone(&marker)), true);
                 self.fiber_exit = None;
                 match r {
                     Err(Throw::Object(o)) if Rc::ptr_eq(&o, &marker) => Ok(Value::Null),
@@ -127,38 +118,28 @@ impl Context<'_> {
                 }
             }
             CURRENT => Ok(self.fibers.last().map_or(Value::Null, |r| Value::Object(Rc::clone(&r.fiber)))),
+            START => self.fiber_start(fiber.expect("a Fiber method"), args),
             _ => {
                 let fiber = fiber.expect("a Fiber method");
-                let mut regs = std::mem::take(&mut self.isolate.regs);
-                let r = match op {
-                    START => self.fiber_start(&mut regs, fiber, args),
-                    _ => {
-                        let v = args.first().map(Value::deref).unwrap_or(Value::Null);
-                        self.fiber_resume(&mut regs, fiber, v, op == THROW)
-                    }
-                };
-                self.isolate.regs = regs;
-                r
+                let v = args.first().map(Value::deref).unwrap_or(Value::Null);
+                self.fiber_resume(fiber, v, op == THROW)
             }
         }
     }
 
-    fn fiber_start(&mut self, regs: &mut Vec<Value>, fiber: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+    fn fiber_start(&mut self, fiber: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
         if state(fiber).borrow().status != Status::Init {
             return Err(self.fiber_error("Cannot start a fiber that has already been started"));
         }
         let callable = state(fiber).borrow().callable.clone();
-        // Lent while it is resolved: a class it names is autoloaded there.
-        std::mem::swap(&mut self.isolate.regs, regs);
-        let target = self.resolve_callable(&callable);
-        std::mem::swap(&mut self.isolate.regs, regs);
-        let target = target?;
-        let m = match target {
+        // Resolved where start() was called (the registers are lent): a
+        // class it names is autoloaded there.
+        let m = match self.resolve_callable(&callable)? {
             crate::callable::Target::Frame(m @ MethodFrame { func: Code::User(_), .. }) => m,
             _ => {
                 // A builtin: it runs to its end (nothing in it suspends).
                 state(fiber).borrow_mut().status = Status::Running;
-                let r = self.call_with_regs(regs, &callable, args);
+                let r = self.call_from_builtin(&callable, args);
                 let mut s = state(fiber).borrow_mut();
                 s.status = Status::Terminated;
                 return match r {
@@ -173,29 +154,29 @@ impl Context<'_> {
                 };
             }
         };
-        self.fiber_start_frame(regs, fiber, m, args)
+        self.fiber_start_frame(fiber, m, args)
     }
 
-    /// Starts `fiber` on a method's frame.
-    fn fiber_start_frame(&mut self, regs: &mut Vec<Value>, fiber: &Rc<Object>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
-        let at = self.window_end();
-        if regs.len() < at + args.len() + 1 {
-            regs.resize(at + args.len() + 1, Value::Undef);
-        }
+    /// Starts `fiber` on a method's frame: a new task, its arguments in
+    /// its own registers.
+    fn fiber_start_frame(&mut self, fiber: &Rc<Object>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
+        let at = FIRST_REG;
+        let mut task = Task::default();
+        task.regs.resize(at + args.len() + 1, Value::Undef);
         for (n, a) in args.iter().enumerate() {
-            regs[at + n] = a.deref();
+            task.regs[at + n] = a.deref();
         }
-        let base_frame = self.frames.len();
-        let caller_pc = self.frames.last().map_or(0, |f| f.pc);
         state(fiber).borrow_mut().status = Status::Running;
-        self.fibers.push(FiberRun { fiber: Rc::clone(fiber), base_frame });
-        let next = self.call_method(regs, m, at, args.len() as u8, at as u32, caller_pc as usize);
+        self.enter_fiber(fiber, task);
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let next = self.call_method(&mut regs, m, at, args.len() as u8, at as u32, 0);
         let r = match next {
             Err(t) => Err(t),
             Ok(Next::Go(_)) => Ok(()),
-            Ok(_) => self.fiber_execute(regs),
+            Ok(_) => self.fiber_execute(&mut regs),
         };
-        self.fiber_finish(regs, fiber, at, r)
+        self.isolate.regs = regs;
+        self.fiber_finish(fiber, r)
     }
 
     /// A destructor the cycle collector calls from inside a fiber runs in
@@ -207,106 +188,87 @@ impl Context<'_> {
             None => return Ok(()),
         };
         let fiber = Ctx::new_object(self, &class);
-        let mut regs = std::mem::take(&mut self.isolate.regs);
-        let r = self.fiber_start_frame(&mut regs, &fiber, m, &mut []);
-        self.isolate.regs = regs;
-        r.map(|_| ())
+        self.fiber_start_frame(&fiber, m, &mut []).map(|_| ())
     }
 
-    fn fiber_resume(&mut self, regs: &mut Vec<Value>, fiber: &Rc<Object>, value: Value, throw: bool) -> Result<Value, Throw> {
+    fn fiber_resume(&mut self, fiber: &Rc<Object>, value: Value, throw: bool) -> Result<Value, Throw> {
         if state(fiber).borrow().status != Status::Suspended {
             return Err(self.fiber_error("Cannot resume a fiber that is not suspended"));
         }
         let exception = if throw {
             match &value {
                 Value::Object(e) if e.class.is_a(b"throwable") || self.fiber_exit.as_ref().is_some_and(|m| Rc::ptr_eq(m, e)) => Some(Rc::clone(e)),
-                _ => return Err(self.throw("TypeError", "Fiber::throw(): Argument #1 ($exception) must be of type Throwable")),
+                _ => return Err(self.throw("TypeError", format!("Fiber::throw(): Argument #1 ($exception) must be of type Throwable, {} given", p8_runtime::args::value_name(&value)))),
             }
         } else {
             None
         };
-        let (frames, saved, from) = {
+        let task = {
             let mut s = state(fiber).borrow_mut();
             s.status = Status::Running;
-            (std::mem::take(&mut s.frames), std::mem::take(&mut s.regs), s.at)
+            std::mem::take(&mut s.task)
         };
-        let at = self.window_end();
-        if regs.len() < at + saved.len() + 1 {
-            regs.resize(at + saved.len() + 1, Value::Undef);
-        }
-        for (i, v) in saved.into_iter().enumerate() {
-            regs[at + i] = v;
-        }
-        let base_frame = self.frames.len();
-        let caller_pc = self.frames.last().map_or(0, |f| f.pc);
-        // The windows move with the registers.
-        let delta = at as i64 - from as i64;
-        for mut f in frames {
-            f.base = (f.base as i64 + delta) as u32;
-            if f.ret != NO_RET {
-                f.ret = (f.ret as i64 + delta) as u32;
-            }
-            self.frames.restore(f);
-        }
+        self.enter_fiber(fiber, task);
+        let mut regs = std::mem::take(&mut self.isolate.regs);
         // suspend()'s result: the value resume() gave (the call's dst).
         if exception.is_none()
             && let Some(top) = self.frames.last()
             && let Some(dst) = call_dst(&top.func.code.code, top.pc as usize)
         {
-            let slot = top.base as usize + dst as usize;
-            regs[slot] = value;
+            regs[top.base as usize + dst as usize] = value;
         }
         self.fiber_throw = exception;
-        self.fibers.push(FiberRun { fiber: Rc::clone(fiber), base_frame });
-        let r = self.fiber_execute(regs);
-        if self.frames.len() == base_frame
-            && let Some(caller) = self.frames.last_mut()
-        {
-            caller.pc = caller_pc;
-        }
-        self.fiber_finish(regs, fiber, at, r)
+        let r = self.fiber_execute(&mut regs);
+        self.isolate.regs = regs;
+        self.fiber_finish(fiber, r)
     }
 
-    /// Runs the fiber's frames (above `floor`) until they return, throw,
-    /// or suspend.
+    /// Switch to `fiber`'s task; the running one waits in its FiberRun.
+    fn enter_fiber(&mut self, fiber: &Rc<Object>, mut task: Task) {
+        self.switch_task(&mut task);
+        self.fibers.push(FiberRun { fiber: Rc::clone(fiber), resumer: task });
+    }
+
+    /// Runs the fiber's frames until they return, throw, or suspend.
     fn fiber_execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
-        let base = self.fibers.last().expect("running a fiber").base_frame;
-        self.frames.floor = base;
-        let r = self.execute(regs);
-        self.frames.floor = saved_floor;
-        self.pc = saved_pc;
-        r
+        self.frames.floor = 0;
+        self.execute(regs)
     }
 
-    /// After a fiber's run: suspended (its frames put aside, suspend()'s
-    /// value back to the resumer), returned, or thrown.
-    fn fiber_finish(&mut self, regs: &mut [Value], fiber: &Rc<Object>, at: usize, r: Result<(), Throw>) -> Result<Value, Throw> {
-        let run = self.fibers.pop().expect("running a fiber");
+    /// After a fiber's run: back to the task that started or resumed it.
+    /// Suspended (its task kept in the Fiber, suspend()'s value back to
+    /// the resumer), returned, or thrown.
+    fn fiber_finish(&mut self, fiber: &Rc<Object>, r: Result<(), Throw>) -> Result<Value, Throw> {
+        let mut task = self.fibers.pop().expect("running a fiber").resumer;
+        self.switch_task(&mut task);
         if let Some(v) = self.fiber_suspended.take() {
-            let frames = self.frames.take_above(run.base_frame);
-            let end = frames.iter().map(|f| f.base as usize + f.func.code.nregs as usize).max().unwrap_or(at).max(at);
-            let end = end.min(regs.len());
-            let saved: Vec<Value> = regs[at..end].iter_mut().map(std::mem::take).collect();
             let mut s = state(fiber).borrow_mut();
-            s.frames = frames;
-            s.regs = saved;
-            s.at = at;
+            s.task = task;
             s.status = Status::Suspended;
             return Ok(v);
         }
         let mut s = state(fiber).borrow_mut();
         s.status = Status::Terminated;
-        match r {
+        let r = match r {
             Ok(()) => {
-                s.returned = Some(std::mem::replace(&mut regs[at], Value::Undef).deref());
+                let v = task.regs.get_mut(FIRST_REG).map(std::mem::take).unwrap_or_default();
+                s.returned = Some(v.deref());
                 Ok(Value::Null)
             }
             Err(t) => {
                 s.threw = true;
                 Err(t)
             }
+        };
+        // The task goes after the state's borrow (what it releases may be
+        // the fiber itself). Frames an exit left are unwound first, top
+        // first, each one's variables in order, as PHP unwinds them.
+        drop(s);
+        while task.frames.len() > 0 {
+            crate::throw::drop_frame(&mut task.frames, &mut task.regs);
         }
+        drop(task);
+        r
     }
 
     fn fiber_suspend(&mut self, value: Value) -> Result<Value, Throw> {
@@ -316,10 +278,9 @@ impl Context<'_> {
         if state(&run.fiber).borrow().closing {
             return Err(self.fiber_error("Cannot suspend in a force-closed fiber"));
         }
-        let run = self.fibers.last().expect("checked");
-        // Code a builtin called back into runs in its own nested execute:
-        // its Rust frames can't be put aside.
-        if self.frames.floor != run.base_frame {
+        // Code a builtin called back into runs in its own nested execute
+        // (above the fiber's bottom one): its Rust frames can't be put aside.
+        if self.frames.floor != 0 {
             return Err(self.fiber_error("Cannot switch fibers in current execution context"));
         }
         self.fiber_suspended = Some(value);
@@ -445,3 +406,80 @@ pub(crate) const CLASSES: &[ClassSpec] = &[
         debug_info: None,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Isolate;
+    use crate::tests::{Sink, compile};
+    use p8_runtime::ext::{Builtin, Registry};
+    use std::sync::Arc;
+
+    /// A suspended fiber's task, as `probe($fiber)` saw it: where its
+    /// register file and frame stack are, how many registers, each
+    /// frame's base.
+    type Shape = (usize, usize, usize, Vec<u32>);
+
+    thread_local! {
+        static SHAPES: RefCell<Vec<Shape>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn probe(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+        let Value::Object(f) = args[0].deref() else { panic!("probe(a Fiber)") };
+        let s = state(&f).borrow();
+        assert_eq!(s.status, Status::Suspended);
+        let t = &s.task;
+        let bases = t.frames.slots[..t.frames.len()].iter().map(|fr| fr.base).collect();
+        SHAPES.with(|v| v.borrow_mut().push((t.regs.as_ptr() as usize, t.regs.len(), t.frames.slots.as_ptr() as usize, bases)));
+        Ok(Value::Null)
+    }
+
+    static PROBE: [Builtin; 1] = [Builtin { name: "probe", run: probe, by_ref: &[] }];
+
+    /// A fiber suspended deep in a large stack keeps its task: resuming
+    /// it (from callers at many depths) and suspending it again moves the
+    /// same frame stack and register file in and out (the same
+    /// allocations, the same frame bases), nothing copied or shifted.
+    #[test]
+    fn suspend_and_resume_switch_tasks_without_copying() {
+        let mut registry = Registry::default();
+        registry.add_functions(&PROBE);
+        let registry = Arc::new(registry);
+        let source = "<?php
+            function deep($n) {
+                $a = $n; $b = $n * 2; $c = [$a, $b]; $d = \"$a-$b\"; $e = $a + $b; $f = $e * 3;
+                if ($n === 0) {
+                    $x = 0;
+                    while (true) { $x = Fiber::suspend($x); }
+                }
+                return deep($n - 1) + $a + $b + $e + $f + $c[1] + (int) $d;
+            }
+            function at_depth($fiber, $n, $v) { return $n > 0 ? at_depth($fiber, $n - 1, $v) : $fiber->resume($v); }
+            $fiber = new Fiber(fn() => deep(200));
+            $fiber->start();
+            probe($fiber);
+            for ($i = 1; $i <= 1000; $i++) {
+                if (at_depth($fiber, $i % 50, $i) !== $i) { exit(3); }
+                probe($fiber);
+            }";
+        let program = compile(source, &registry);
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        let mut host = Sink;
+        let mut cx = isolate.new_context(&mut host);
+        for f in &program.functions {
+            cx.declare(Arc::clone(f)).expect("declares");
+        }
+        assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
+        let shapes = SHAPES.with(|v| std::mem::take(&mut *v.borrow_mut()));
+        assert_eq!(shapes.len(), 1001);
+        let first = &shapes[0];
+        // The fiber function's frame, then deep(200) .. deep(0): 202 frames
+        // over the fiber's own registers, the first at FIRST_REG.
+        assert_eq!(first.3.len(), 202);
+        assert_eq!(first.3[0] as usize, FIRST_REG);
+        assert!(first.1 > 202 * 6, "a large register file: {}", first.1);
+        for s in &shapes {
+            assert_eq!(s, first, "the task moved back as it was, not copied or shifted");
+        }
+    }
+}

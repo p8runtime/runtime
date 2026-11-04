@@ -1,4 +1,4 @@
-//! The call stack: frames over one register file.
+//! The call stack: a task's frames over its register file.
 
 use super::*;
 
@@ -213,38 +213,6 @@ impl Frames {
     pub(crate) fn pop(&mut self) -> &mut Frame {
         self.len -= 1;
         &mut self.slots[self.len]
-    }
-
-    /// The frames from `from` on, taken out (their slots left empty).
-    pub(crate) fn take_above(&mut self, from: usize) -> Vec<Frame> {
-        let mut out = Vec::with_capacity(self.len.saturating_sub(from));
-        for i in from..self.len {
-            let blank = Frame {
-                func: Rc::clone(&self.slots[i].func),
-                pc: 0,
-                base: 0,
-                ret: NO_RET,
-                argc: 0,
-                extra: None,
-                this: None,
-                scope: None,
-                called: None,
-                generator: None,
-                global: false,
-            };
-            out.push(std::mem::replace(&mut self.slots[i], blank));
-        }
-        self.len = from.min(self.len);
-        out
-    }
-
-    /// Put a frame taken out back on top.
-    pub(crate) fn restore(&mut self, frame: Frame) {
-        match self.slots.get_mut(self.len) {
-            Some(slot) => *slot = frame,
-            None => self.slots.push(frame),
-        }
-        self.len += 1;
     }
 
     /// Drop every frame and slot (and the closures they hold).
