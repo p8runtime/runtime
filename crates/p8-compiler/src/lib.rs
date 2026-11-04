@@ -435,7 +435,7 @@ impl FnBuilder<'_> {
 
     /// Lay the frame out and renumber every register. `order` is scratch
     /// space the compiler keeps for every function's constant order.
-    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder) -> Function {
+    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder, symbols: &p8_runtime::symbol::Symbols) -> Function {
         if !self.returns_ref {
             thread_returns(&mut self.code);
         }
@@ -499,6 +499,17 @@ impl FnBuilder<'_> {
             }
         }
         fuse_steps(&mut self.code);
+        // Each constant that names a member: its symbol (exact, as member
+        // names are case-sensitive), for the instructions to look it up by.
+        let mut member_syms = vec![None; nconst];
+        for instr in &self.code {
+            if let Some(r) = name_operand(instr)
+                && let Some(i) = (r as usize).checked_sub(ncv).filter(|&i| i < nconst)
+                && let Frozen::Str(name) = &self.consts[i]
+            {
+                member_syms[i] = Some(symbols.intern(name.as_bytes()));
+            }
+        }
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
         cv_names.sort_by_key(|(i, _)| *i);
@@ -515,6 +526,7 @@ impl FnBuilder<'_> {
             consts: self.consts,
             consts_at: ncv as Reg,
             value_consts: value_consts as Reg,
+            member_syms,
             nregs: (ncv + nconst + self.max_temps) as Reg,
             cv_names: cv_names.into_iter().map(|(_, n)| n).collect(),
             required,
@@ -1362,7 +1374,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        let main = Arc::new(f.finish(self.file.clone(), &mut self.const_order));
+        let main = Arc::new(f.finish(self.file.clone(), &mut self.const_order, self.registry.symbols()));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
 
@@ -2297,7 +2309,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        Ok((f.finish(self.file.clone(), &mut self.const_order), captures))
+        Ok((f.finish(self.file.clone(), &mut self.const_order, self.registry.symbols()), captures))
     }
 
     /// Take apart the array in `src` into the targets of `items` (keyed,

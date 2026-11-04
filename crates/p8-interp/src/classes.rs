@@ -963,9 +963,16 @@ impl Context<'_> {
 
     /// The declared slot (or None: dynamic) of property `name` on
     /// `object`, after the visibility check for code in the current scope.
-    pub(crate) fn prop_slot<'o>(&self, object: &'o Object, name: &[u8]) -> Result<Option<(usize, &'o Property)>, Throw> {
+    /// `key`: the name's symbol when the code carries it (a compiled
+    /// `$o->name`), else the name is looked up.
+    pub(crate) fn prop_slot<'o>(&self, object: &'o Object, name: &[u8], key: Option<Sym>) -> Result<Option<(usize, &'o Property)>, Throw> {
         let scope = self.scope().0;
-        let Some(slot) = object.class.slot(name, scope.as_ref().map(|s| s.lower.as_slice())) else { return Ok(None) };
+        let scope_lower = scope.as_ref().map(|s| s.lower.as_slice());
+        let found = match key {
+            Some(key) => object.class.slot_sym(key, scope_lower),
+            None => object.class.slot(name, scope_lower),
+        };
+        let Some(slot) = found else { return Ok(None) };
         // Borrowed from the class: a property read must not copy its
         // declaration (and the declaring name's allocation) each time.
         let prop = &object.class.properties[slot];
@@ -1043,10 +1050,15 @@ impl Context<'_> {
 
     /// `$obj->name`
     pub(crate) fn fetch_prop(&mut self, target: &Value, name: &Value, quiet: bool) -> Result<Value, Throw> {
+        self.fetch_prop_key(target, name, quiet, None)
+    }
+
+    /// `fetch_prop`, given the name's symbol when the code carries it.
+    pub(crate) fn fetch_prop_key(&mut self, target: &Value, name: &Value, quiet: bool, key: Option<Sym>) -> Result<Value, Throw> {
         let name = self.prop_name(name)?;
         let object = match target {
             Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.fetch_prop(&cell.borrow().clone(), &Value::Str(name), quiet),
+            Value::Ref(cell) => return self.fetch_prop_key(&cell.borrow().clone(), &Value::Str(name), quiet, key),
             other => {
                 if !quiet {
                     self.warn(format!("Attempt to read property \"{}\" on {}", text(&name), other.type_name()));
@@ -1054,7 +1066,7 @@ impl Context<'_> {
                 return Ok(Value::Null);
             }
         };
-        match self.prop_slot(&object, name.as_bytes())? {
+        match self.prop_slot(&object, name.as_bytes(), key)? {
             Some((slot, prop)) => {
                 let value = object.slots.borrow()[slot].clone();
                 match value {
@@ -1113,7 +1125,7 @@ impl Context<'_> {
         if let Some(p) = self.hooked_property(&object, name.as_bytes()) {
             return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&name))));
         }
-        match self.prop_slot(&object, name.as_bytes())? {
+        match self.prop_slot(&object, name.as_bytes(), None)? {
             Some((slot, prop)) => {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
@@ -1157,7 +1169,7 @@ impl Context<'_> {
         if let Some(p) = self.hooked_property(&object, pname.as_bytes()) {
             return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&pname))));
         }
-        match self.prop_slot(&object, pname.as_bytes())? {
+        match self.prop_slot(&object, pname.as_bytes(), None)? {
             Some((slot, prop)) if prop.set_visibility.is_some() && !self.may_set(&object, prop) => {
                 if matches!(object.slots.borrow()[slot].deref(), Value::Object(_)) {
                     return Err(self.throw("Error", "Cannot assign by reference to overloaded object"));
@@ -1174,9 +1186,14 @@ impl Context<'_> {
     }
 
     pub(crate) fn write_prop(&mut self, target: &Value, name: &Value, value: Value) -> Result<(), Throw> {
+        self.write_prop_key(target, name, value, None)
+    }
+
+    /// `write_prop`, given the name's symbol when the code carries it.
+    pub(crate) fn write_prop_key(&mut self, target: &Value, name: &Value, value: Value, key: Option<Sym>) -> Result<(), Throw> {
         let name = self.prop_name(name)?;
         let object = self.target_object(target, &name, "assign")?;
-        match self.prop_slot(&object, name.as_bytes())? {
+        match self.prop_slot(&object, name.as_bytes(), key)? {
             Some((slot, prop)) => self.write_slot(&object, slot, prop, &name, value)?,
             None => {
                 let key = Key::from_string(name.clone());
@@ -1261,7 +1278,7 @@ impl Context<'_> {
     ) -> Result<Value, Throw> {
         let pname = self.prop_name(name)?;
         let object = self.target_object(target, &pname, "assign")?;
-        let slot = self.prop_slot(&object, pname.as_bytes())?;
+        let slot = self.prop_slot(&object, pname.as_bytes(), None)?;
         if let Some((_, prop)) = &slot
             && prop.set_visibility.is_some()
             && !self.may_set(&object, prop)
@@ -1305,7 +1322,7 @@ impl Context<'_> {
             Value::Ref(cell) => return self.isset_prop(&cell.borrow().clone(), &Value::Str(name)),
             _ => return Ok(false),
         };
-        let slot = match self.prop_slot(&object, name.as_bytes()) {
+        let slot = match self.prop_slot(&object, name.as_bytes(), None) {
             Ok(s) => s,
             Err(_) => return Ok(false),
         };
@@ -1323,7 +1340,7 @@ impl Context<'_> {
             Value::Ref(cell) => return self.unset_prop(&cell.borrow().clone(), &Value::Str(name)),
             _ => return Ok(()),
         };
-        match self.prop_slot(&object, name.as_bytes())? {
+        match self.prop_slot(&object, name.as_bytes(), None)? {
             Some((i, prop)) => {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot unset readonly property {}::${}", text(&object.class.name), text(&name))));
@@ -1341,13 +1358,18 @@ impl Context<'_> {
     }
 
     /// `C::NAME`
-    pub(crate) fn class_constant(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Value, Throw> {
+    /// `C::name`; `sym`: the name's symbol when the code carries it.
+    pub(crate) fn class_constant(&mut self, func: &Function, class: u16, name: &Value, sym: Option<Sym>, w: &[Value]) -> Result<Value, Throw> {
         let class = self.class_of(func, class, w)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
             return Ok(Value::Str(class.name.clone()));
         }
-        match class.constants.get(name.as_bytes()) {
+        let found = match sym {
+            Some(sym) => class.constants.get_sym(sym),
+            None => class.constants.get(name.as_bytes()),
+        };
+        match found {
             Some(c) => {
                 // Only a private or protected constant needs its declaring
                 // class (zend_verify_const_access); the class itself when it
@@ -1381,10 +1403,14 @@ impl Context<'_> {
     /// A class constant whose value is code not yet run: the code, the
     /// class it runs in, and its cache key.
     #[allow(clippy::type_complexity)] // reason: one use, the ClassConst instruction
-    pub(crate) fn pending_constant(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Option<(Thunk, Rc<Class>, (Vec<u8>, Vec<u8>))>, Throw> {
+    pub(crate) fn pending_constant(&mut self, func: &Function, class: u16, name: &Value, sym: Option<Sym>, w: &[Value]) -> Result<Option<(Thunk, Rc<Class>, (Vec<u8>, Vec<u8>))>, Throw> {
         let class = self.class_of(func, class, w)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
-        let Some(c) = class.constants.get(name.as_bytes()) else { return Ok(None) };
+        let found = match sym {
+            Some(sym) => class.constants.get_sym(sym),
+            None => class.constants.get(name.as_bytes()),
+        };
+        let Some(c) = found else { return Ok(None) };
         let Some(init) = &c.init else { return Ok(None) };
         let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.as_bytes().to_vec());
         if self.const_cache.contains_key(&key) {

@@ -713,6 +713,11 @@ pub struct Function {
     /// their instructions read from the constants directly (as PHP reads
     /// a literal in place); their registers are never written or read.
     pub value_consts: Reg,
+    /// The symbol of each constant that names a property, a class constant
+    /// or a static property (exact: those names are case-sensitive), by
+    /// constant index; None for the others. The member tables are looked up
+    /// by it, with no name hashed.
+    pub member_syms: Vec<Option<Sym>>,
     /// Registers the frame needs.
     pub nregs: Reg,
     /// Names of the compiled variables, by register (params first).

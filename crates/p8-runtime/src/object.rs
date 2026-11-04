@@ -465,7 +465,13 @@ impl Class {
     /// None outside any class) sees it: the scope's own private
     /// property first, then the visible declaration.
     pub fn slot(&self, name: &[u8], scope: Option<&[u8]>) -> Option<usize> {
-        let slots = self.slots.get(name)?;
+        self.slot_sym(self.slots.find(name)?, scope)
+    }
+
+    /// `slot`, for the property whose name's symbol is `sym`.
+    #[inline]
+    pub fn slot_sym(&self, sym: Sym, scope: Option<&[u8]>) -> Option<usize> {
+        let slots = self.slots.get_sym(sym)?;
         if let Some(scope) = scope
             && let Some(&i) = slots.iter().find(|&&i| {
                 let p = &self.properties[i];

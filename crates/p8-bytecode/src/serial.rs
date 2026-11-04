@@ -498,7 +498,7 @@ macro_rules! record {
 }
 record!(Program { main, functions, classes });
 record!(Function {
-    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
+    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, member_syms, nregs, cv_names, sites, file, required, line,
     handlers, decls, is_generator, lambdas, bound, silences, meta,
 });
 record!(ClassDef {
