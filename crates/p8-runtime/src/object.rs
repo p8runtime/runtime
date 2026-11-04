@@ -319,13 +319,10 @@ pub struct Method {
 
 /// A class's constants by name, in the order they were declared; shared
 /// with the parent and interfaces as methods are.
-/// (By name as bytes: a constant fetch's name is an operand, not a
-/// symbol, so a symbol key would cost a symbol lookup per fetch.)
-pub type Constants = crate::fast::IndexMap<Vec<u8>, Rc<Constant>>;
+pub type Constants = Names<Rc<Constant>, false>;
 
-/// Each property name's slots (see [`Class::slots`]); by name as bytes,
-/// as constants are.
-pub type Slots = crate::fast::HashMap<Vec<u8>, Vec<usize>>;
+/// Each property name's slots (see [`Class::slots`]).
+pub type Slots = Names<Vec<usize>, false>;
 
 /// A class constant.
 #[derive(Debug, Clone)]
@@ -417,9 +414,9 @@ impl Class {
             parent: None,
             interfaces: Vec::new(),
             properties: Vec::new(),
-            slots: Slots::default(),
+            slots: Slots::new(&symbols),
             methods: Methods::new(&symbols),
-            constants: Constants::default(),
+            constants: Constants::new(&symbols),
             statics: crate::fast::HashMap::default(),
             debug_info: None,
             get_properties: None,
