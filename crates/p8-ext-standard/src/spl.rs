@@ -1408,7 +1408,7 @@ fn class_implements(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
     let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_implements")? else { return Ok(Value::Bool(false)) };
     let mut out = PhpArray::new();
     for i in &class.interfaces {
-        let name = ctx.class(i).map_or_else(|| PhpStr::from(i.as_slice()), |c| c.name.clone());
+        let name = ctx.class(i).map_or_else(|| PhpStr::from(&**i), |c| c.name.clone());
         out.insert(Key::from_string(name.clone()), Value::Str(name));
     }
     Ok(Value::Array(Rc::new(out)))

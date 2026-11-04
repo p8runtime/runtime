@@ -140,8 +140,11 @@ pub enum Native {
 }
 
 /// A class's methods by lowercase name, in declaration order (inherited
-/// ones first): PHP reports and lists them in that order.
-pub type Methods = crate::fast::IndexMap<Vec<u8>, Method>;
+/// ones first): PHP reports and lists them in that order. A subclass's
+/// table shares its parent's entries (zend_duplicate_function: the same
+/// op_array, its refcount bumped); only a method the subclass declares,
+/// overrides or takes from a trait is a new one.
+pub type Methods = crate::fast::IndexMap<Vec<u8>, Rc<Method>>;
 
 /// A method in a class's table.
 #[derive(Debug, Clone)]
@@ -156,13 +159,15 @@ pub struct Method {
     pub is_static: bool,
     pub is_abstract: bool,
     pub is_final: bool,
-    /// The class that declares it (lowercase / as declared).
-    pub declaring: Vec<u8>,
+    /// The class that declares it (lowercase / as declared), shared by
+    /// all the methods it declares.
+    pub declaring: Rc<[u8]>,
     pub declaring_name: PhpStr,
 }
 
-/// A class's constants by name, in the order they were declared.
-pub type Constants = crate::fast::IndexMap<Vec<u8>, Constant>;
+/// A class's constants by name, in the order they were declared; shared
+/// with the parent and interfaces as methods are.
+pub type Constants = crate::fast::IndexMap<Vec<u8>, Rc<Constant>>;
 
 /// A class constant.
 #[derive(Debug, Clone)]
@@ -190,8 +195,8 @@ pub struct Class {
     pub flags: u32,
     pub parent: Option<Rc<Class>>,
     /// Every interface this class implements, its parent's included
-    /// (lowercase), for instanceof.
-    pub interfaces: Vec<Vec<u8>>,
+    /// (lowercase), for instanceof; the names are shared with the parent's.
+    pub interfaces: Vec<Rc<[u8]>>,
     /// Instance property slots, the parent's first.
     pub properties: Vec<Property>,
     /// Each property name's slots; more than one when a parent's private
@@ -266,7 +271,7 @@ impl Class {
             }
             class = c.parent.as_deref();
         }
-        self.interfaces.iter().any(|i| i == other)
+        self.interfaces.iter().any(|i| **i == *other)
     }
 
     /// The slot of property `name` as code in class `scope` (lowercase,
@@ -286,7 +291,7 @@ impl Class {
     }
 
     pub fn method(&self, lower: &[u8]) -> Option<&Method> {
-        self.methods.get(lower)
+        self.methods.get(lower).map(|m| &**m)
     }
 
     /// The value of the property `name` as code in class `scope` sees it
