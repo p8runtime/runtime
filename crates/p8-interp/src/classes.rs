@@ -368,12 +368,11 @@ impl Context<'_> {
                     .trait_rules
                     .iter()
                     .any(|r| same(&r.method, m.name.as_bytes()) && r.insteadof.iter().any(|x| same(x, t.name.as_bytes())));
-                // A trait's method becomes the class's own (declared by it).
-                let mut copy = Method::clone(m);
-                copy.declaring = Rc::clone(&declaring);
-                copy.declaring_name = class_name.clone();
+                // A trait's method becomes the class's own (declared by it):
+                // one new entry for it and one per alias, nothing more.
+                let copy = || Method { declaring: Rc::clone(&declaring), declaring_name: class_name.clone(), ..Method::clone(m) };
                 if !excluded {
-                    let mut plain = copy.clone();
+                    let mut plain = copy();
                     if let Some(v) = def.trait_rules.iter().filter(rule_for).find(|r| r.alias.is_none()).and_then(|r| r.visibility) {
                         plain.visibility = v;
                     }
@@ -381,7 +380,7 @@ impl Context<'_> {
                 }
                 for r in def.trait_rules.iter().filter(rule_for) {
                     if let Some(alias) = &r.alias {
-                        let mut aliased = copy.clone();
+                        let mut aliased = copy();
                         aliased.name = PhpStr::from(alias.as_bytes());
                         if let Some(v) = r.visibility {
                             aliased.visibility = v;
