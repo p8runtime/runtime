@@ -549,21 +549,23 @@ fn replace(ctx: &mut dyn Ctx, args: &mut [Value], fold: bool) -> Result<Value, T
     let mut count = 0;
     let mut diags = Vec::new();
     let result = match &subject {
+        // Every element is a subject, made a string as any is (a nested
+        // array is "Array", warned): php_str_replace_common.
         Value::Array(items) => {
             let mut out = PhpArray::new();
             for (k, v) in items.iter() {
-                let replaced = match v {
-                    Value::Array(_) => v.clone(),
-                    v => replace_in(v, &search, &with, fold, &mut count, &mut diags),
-                };
-                out.insert(k, replaced);
+                out.insert(k, replace_in(&v.deref(), &search, &with, fold, &mut count, &mut diags));
             }
             Value::Array(Rc::new(out))
         }
         s => replace_in(s, &search, &with, fold, &mut count, &mut diags),
     };
-    if !diags.is_empty() {
-        ctx.warn("Array to string conversion");
+    // One report per conversion, in order, as zval_get_string makes them.
+    for d in diags {
+        match d {
+            p8_runtime::ops::Diag::Warning(m) => ctx.warn(&m),
+            p8_runtime::ops::Diag::Deprecated(m) => ctx.deprecated(&m),
+        }
     }
     if let Some(Value::Ref(cell)) = args.get(3) {
         *cell.borrow_mut() = Value::Int(count);
