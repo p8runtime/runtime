@@ -9,6 +9,7 @@ use crate::Context;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_ENUM, CLASS_INTERFACE, CLASS_TRAIT, Class, LAZY_PROXY, LAZY_UNINIT, Lazy, Object};
+use p8_runtime::symbol::known;
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
@@ -24,34 +25,32 @@ impl Context<'_> {
     /// Whether an access to property `name` of lazy `o` reaches its
     /// backing store: a lazy declared property, or one not declared and not
     /// set dynamically.
-    pub(crate) fn lazy_affects(&self, o: &Object, name: &[u8]) -> bool {
+    pub(crate) fn lazy_affects(&self, o: &Object, name: &crate::classes::PropName) -> bool {
         let scope = self.scope().0;
-        match o.class.slot(name, scope.as_ref().map(|s| s.lower.as_slice())) {
+        match name.key.and_then(|key| o.class.slot_sym(key, scope.as_ref().map(|s| s.lower.as_slice()))) {
             Some(i) => o.lazy_slot(i),
-            None => !o.dynamic.borrow().contains_key(&Key::from_string(p8_runtime::string::PhpStr::new(name.to_vec()))),
+            None => name.to_php_string().is_some_and(|n| !o.dynamic.borrow().contains_key(&Key::from_string(n))),
         }
     }
 
     /// The uninitialized lazy object an access to `name` on `target` must
     /// initialize first.
-    pub(crate) fn lazy_pending(&self, target: &Value, name: &Value) -> Option<Rc<Object>> {
+    pub(crate) fn lazy_pending(&self, target: &Value, name: &crate::classes::PropName) -> Option<Rc<Object>> {
         let Value::Object(o) = target else { return None };
         if !o.is_uninit_lazy() {
             return None;
         }
-        let name = name.to_php_string()?;
-        self.lazy_affects(o, name.as_bytes()).then(|| Rc::clone(o))
+        self.lazy_affects(o, name).then(|| Rc::clone(o))
     }
 
     /// Where an access to `name` on an initialized proxy goes: its real
     /// instance (followed through proxies of proxies).
-    pub(crate) fn lazy_forward(&self, target: &Value, name: &Value) -> Option<Value> {
+    pub(crate) fn lazy_forward(&self, target: &Value, name: &crate::classes::PropName) -> Option<Value> {
         let Value::Object(o) = target else { return None };
         if o.lazy.get() != LAZY_PROXY {
             return None;
         }
-        let name = name.to_php_string()?;
-        if !self.lazy_affects(o, name.as_bytes()) {
+        if !self.lazy_affects(o, name) {
             return None;
         }
         let mut inst = o.proxy_instance()?;
@@ -101,7 +100,7 @@ impl Context<'_> {
                     if o.lazy_info.borrow().is_some() {
                         return Err(self.throw("Error", "Can not reset an object while it is being initialized"));
                     }
-                    if options & SKIP_DESTRUCTOR == 0 && !o.destructed.get() && o.class.method(b"__destruct").is_some() {
+                    if options & SKIP_DESTRUCTOR == 0 && !o.destructed.get() && o.class.method_sym(known::DESTRUCT).is_some() {
                         o.destructed.set(true);
                         let m = self.method_frame(&Value::Object(Rc::clone(&o)), Some(p8_runtime::symbol::known::DESTRUCT), b"__destruct")?;
                         let mut regs = std::mem::take(&mut self.isolate.regs);
@@ -260,8 +259,8 @@ impl Context<'_> {
         let compatible = Rc::ptr_eq(&inst.class, &o.class)
             || (o.class.is_a(&inst.class.lower)
                 && o.class.properties.len() == inst.class.properties.len()
-                && o.class.method(b"__destruct").map(|m| m.declaring.clone()) == inst.class.method(b"__destruct").map(|m| m.declaring.clone())
-                && o.class.method(b"__clone").map(|m| m.declaring.clone()) == inst.class.method(b"__clone").map(|m| m.declaring.clone()));
+                && o.class.method_sym(known::DESTRUCT).map(|m| m.declaring.clone()) == inst.class.method_sym(known::DESTRUCT).map(|m| m.declaring.clone())
+                && o.class.method_sym(known::CLONE).map(|m| m.declaring.clone()) == inst.class.method_sym(known::CLONE).map(|m| m.declaring.clone()));
         if !compatible {
             restore(o);
             return Err(self.throw(

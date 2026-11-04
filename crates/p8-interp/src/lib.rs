@@ -1153,7 +1153,7 @@ impl Context<'_> {
         &mut self,
         regs: &mut Vec<Value>,
         target: &Value,
-        name: &Value,
+        name: &crate::classes::PropName,
         compute: impl FnOnce(&mut Self, &Value) -> Result<(Value, Value), Throw>,
     ) -> Result<Option<Value>, Throw> {
         use crate::classes::Magic;
@@ -1184,7 +1184,7 @@ impl Context<'_> {
         &mut self,
         regs: &mut Vec<Value>,
         target: &Value,
-        name: &Value,
+        name: &crate::classes::PropName,
         compute: impl FnOnce(&mut Self, &Value) -> Result<(Value, Value), Throw>,
     ) -> Result<Option<Value>, Throw> {
         let get = self.prop_hook(target, name, HOOK_GET);
@@ -1912,7 +1912,7 @@ impl Context<'_> {
                     Rare::PropRef => {
                             let (dst, obj, name) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = name!(name).clone();
+                        let name = self.member(name!(name).clone(), sym!(name));
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
                             return Ok(Next::Go(insn_at));
@@ -1924,7 +1924,7 @@ impl Context<'_> {
                     Rare::AssignPropRef => {
                             let (obj, name, src) = (a, b, c);
                         let target = self.operand(w, func, obj);
-                        let name = name!(name).clone();
+                        let name = self.member(name!(name).clone(), sym!(name));
                         let cell = make_ref(w, src);
                         if let Some(lo) = self.lazy_pending(&target, &name) {
                             self.lazy_init(regs, &lo)?;
@@ -2519,8 +2519,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let key = sym!(name);
-                    let name = name!(name).clone();
+                    let name = self.member(name!(name).clone(), sym!(name));
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = v;
@@ -2544,7 +2543,7 @@ impl Context<'_> {
                         let v = match self.prop_magic(&target, &name, Magic::Get) {
                             Some(found) if set => self.run_magic(regs, found, &mut [pname])?.deref(),
                             Some(_) => Value::Null,
-                            None => self.fetch_prop_key(&target, &name, quiet, key)?,
+                            None => self.fetch_prop(&target, &name, quiet)?,
                         };
                         regs[base + dst as usize] = v;
                         return Ok(Next::Go(pc));
@@ -2554,9 +2553,9 @@ impl Context<'_> {
                         return Ok(Next::Go(insn_at));
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                    reg!(dst) = self.fetch_prop_key(&target, &name, quiet, key)?;
+                    reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
                     if let (Some(site), Value::Object(o)) = (site, &target) {
-                        self.remember_prop(site, o, &name, key);
+                        self.remember_prop(site, o, &name);
                     }
                 }
                 Instr::AssignProp { obj, name, val, dst, take } => {
@@ -2575,8 +2574,7 @@ impl Context<'_> {
                     // (A lazy object's initialization below runs this
                     // instruction again: the value is only copied here.)
                     let v = self.operand(w, func, val);
-                    let key = sym!(name);
-                    let name = name!(name).clone();
+                    let name = self.member(name!(name).clone(), sym!(name));
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
                         self.run_nested(regs, hook?, &mut [v.clone()])?;
                         regs[base + dst as usize] = v;
@@ -2593,13 +2591,13 @@ impl Context<'_> {
                         return Ok(Next::Go(insn_at));
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                    self.write_prop_key(&target, &name, v.clone(), key)?;
+                    self.write_prop(&target, &name, v.clone())?;
                     // A site already holding this class missed for another
                     // reason (an unset slot with __set): looking again finds the same.
                     if let (Some(site), Value::Object(o)) = (site, &target)
                         && site.get().class != Rc::as_ptr(&o.class) as usize
                     {
-                        self.remember_prop(site, o, &name, key);
+                        self.remember_prop(site, o, &name);
                     }
                     reg!(dst) = v;
                 }
@@ -2619,8 +2617,7 @@ impl Context<'_> {
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
-                    let key = sym!(name);
-                    let name = name!(name).clone();
+                    let name = self.member(name!(name).clone(), sym!(name));
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = ops::binary(op, x, &y, &mut c.diags);
@@ -2648,11 +2645,11 @@ impl Context<'_> {
                     let r = ops::binary(op, &x, &y, &mut self.diags);
                     self.report_diags();
                     let v = r.map_err(|e| self.op_error(e))?;
-                    self.write_prop_key(&target, &name, v.clone(), key)?;
+                    self.write_prop(&target, &name, v.clone())?;
                     if let (Some(site), Value::Object(o)) = (site, &target)
                         && site.get().class != Rc::as_ptr(&o.class) as usize
                     {
-                        self.remember_prop(site, o, &name, key);
+                        self.remember_prop(site, o, &name);
                     }
                     reg!(dst) = v;
                 }
@@ -2670,8 +2667,7 @@ impl Context<'_> {
                         reg!(dst) = if post { old } else { new };
                         return Ok(Next::Go(pc));
                     }
-                    let key = sym!(name);
-                    let name = name!(name).clone();
+                    let name = self.member(name!(name).clone(), sym!(name));
                     if self.prop_hook(&target, &name, HOOK_GET).is_some() || self.prop_hook(&target, &name, HOOK_SET).is_some() {
                         let v = self.hooked_update(regs, &target, &name, |c, x| {
                         let r = if inc { ops::increment(x, &mut c.diags) } else { ops::decrement(x, &mut c.diags) };
@@ -2699,20 +2695,20 @@ impl Context<'_> {
                     let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
                     self.report_diags();
                     let new = r.map_err(|e| self.op_error(e))?;
-                    self.write_prop_key(&target, &name, new.clone(), key)?;
+                    self.write_prop(&target, &name, new.clone())?;
                     if let (Some(site), Value::Object(o)) = (site, &target)
                         && site.get().class != Rc::as_ptr(&o.class) as usize
                     {
-                        self.remember_prop(site, o, &name, key);
+                        self.remember_prop(site, o, &name);
                     }
                     reg!(dst) = if post { old } else { new };
                 }
                 Instr::AssignPropDim { op, base: at, n, append, val, dst } => {
                     let target = self.operand(w, func, at);
-                    let name = reg!(at + 1).clone();
+                    let name = self.member(reg!(at + 1).clone(), None);
                     // A hooked property's value is not modified in place.
                     if let (Value::Object(o), Some(pn)) = (&target, name.to_php_string())
-                        && let Some(p) = self.hooked_property(o, pn.as_bytes())
+                        && let Some(p) = self.hooked_property(o, &name)
                     {
                         let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
                         return Err(self.throw("Error", format!("Indirect modification of {class}::${} is not allowed", String::from_utf8_lossy(pn.as_bytes()))));
@@ -2766,7 +2762,7 @@ impl Context<'_> {
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = name!(name).clone();
+                    let name = self.member(name!(name).clone(), sym!(name));
                     if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
                         let v = self.run_nested(regs, hook?, &mut [])?;
                         regs[base + dst as usize] = Value::Bool(!matches!(v.deref(), Value::Null | Value::Undef));
@@ -2787,9 +2783,9 @@ impl Context<'_> {
                 }
                 Instr::UnsetProp { obj, name } => {
                     let target = reg!(obj).deref();
-                    let name = name!(name).clone();
+                    let name = self.member(name!(name).clone(), sym!(name));
                     if let (Value::Object(o), Some(n)) = (&target, name.to_php_string())
-                        && let Some(p) = self.hooked_property(o, n.as_bytes())
+                        && let Some(p) = self.hooked_property(o, &name)
                     {
                         let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
                         return Err(self.throw("Error", format!("Cannot unset hooked property {class}::${}", String::from_utf8_lossy(n.as_bytes()))));
@@ -2836,7 +2832,7 @@ impl Context<'_> {
                         if target.method_sym(site.sym).is_none() {
                             let this = self.frames.last().and_then(|f| f.this.clone());
                             let Some(this) = this else { return Err(self.throw("Error", "Using $this when not in object context")) };
-                            let prop = Value::Str(PhpStr::from(&rest[..at_sep]));
+                            let prop = self.member(Value::Str(PhpStr::from(&rest[..at_sep])), None);
                             let v = if rest.ends_with(b"::set") {
                                 let v = reg!(args).deref();
                                 self.write_prop(&Value::Object(this), &prop, v.clone())?;
@@ -3392,7 +3388,7 @@ impl Context<'_> {
                 continue;
             }
             let Value::Object(o) = &*arg else { continue };
-            if param.classes.iter().any(|c| o.class.is_a(c.to_ascii_lowercase().as_bytes())) || o.class.method(b"__tostring").is_none() {
+            if param.classes.iter().any(|c| o.class.is_a(c.to_ascii_lowercase().as_bytes())) || o.class.method_sym(p8_runtime::symbol::known::TO_STRING).is_none() {
                 continue;
             }
             let method = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(o)), Value::Str(PhpStr::from("__toString"))])));
@@ -3416,7 +3412,7 @@ impl Context<'_> {
         if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 || o.class.cast_string.is_some() {
             return Ok(v);
         }
-        match o.class.method(b"__tostring") {
+        match o.class.method_sym(p8_runtime::symbol::known::TO_STRING) {
             Some(m) if m.native.is_some() => self.object_to_string(v),
             Some(_) => {
                 let callable = Value::Array(Rc::new(PhpArray::from_list(vec![v.clone(), Value::Str(PhpStr::from("__toString"))])));
@@ -3428,7 +3424,7 @@ impl Context<'_> {
 
     fn object_to_string(&mut self, v: Value) -> Result<Value, Throw> {
         let Value::Object(o) = &v else { return Ok(v) };
-        let Some(p8_runtime::object::Native::Method(native)) = o.class.method(b"__tostring").and_then(|m| m.native) else {
+        let Some(p8_runtime::object::Native::Method(native)) = o.class.method_sym(p8_runtime::symbol::known::TO_STRING).and_then(|m| m.native) else {
             return Ok(v);
         };
         let o = Rc::clone(o);
@@ -4511,7 +4507,7 @@ impl Ctx for Context<'_> {
         if p.hooks == 0 || self.isolate.regs.is_empty() {
             return Ok(raw());
         }
-        let name = Value::Str(p.name.clone());
+        let name = self.member(Value::Str(p.name.clone()), None);
         match self.prop_hook_seen(&Value::Object(Rc::clone(o)), &name, HOOK_GET, false) {
             Some(Ok(m)) => {
                 let mut regs = std::mem::take(&mut self.isolate.regs);

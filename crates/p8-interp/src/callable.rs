@@ -255,7 +255,7 @@ impl Context<'_> {
                 if let Some(target) = self.closure_target(&o) {
                     return Ok(target);
                 }
-                if o.class.method(b"__invoke").is_some() {
+                if o.class.method_sym(p8_runtime::symbol::known::INVOKE).is_some() {
                     return self.method_frame(&Value::Object(Rc::clone(&o)), Some(p8_runtime::symbol::known::INVOKE), b"__invoke").map(Target::Frame);
                 }
                 Err(self.throw("Error", "Object of type ".to_string() + &o.class.name.to_string_lossy() + " is not callable"))

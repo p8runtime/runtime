@@ -66,7 +66,15 @@ impl Context<'_> {
             }
             return Err(self.throw("Error", format!("Cannot use object of type {} as array", String::from_utf8_lossy(o.class.name.as_bytes()))));
         }
-        let m = self.method_frame(&Value::Object(Rc::clone(o)), self.method_key(name.as_bytes()), name.as_bytes())?;
+        use p8_runtime::symbol::known;
+        let key = match name {
+            "offsetGet" => Some(known::OFFSET_GET),
+            "offsetSet" => Some(known::OFFSET_SET),
+            "offsetExists" => Some(known::OFFSET_EXISTS),
+            "offsetUnset" => Some(known::OFFSET_UNSET),
+            _ => self.method_key(name.as_bytes()),
+        };
+        let m = self.method_frame(&Value::Object(Rc::clone(o)), key, name.as_bytes())?;
         match m.func {
             Code::Native(native, _) => {
                 let this = m.this.clone();
@@ -264,7 +272,7 @@ impl Context<'_> {
 /// ArrayIterator, unless a subclass's own offsetGet() answers (then it is
 /// the usual copy). WeakMap's unset reads plainly: nothing changes there.
 fn writes_in_place(o: &Object, op: &DimOp) -> bool {
-    let native_get = o.class.method(b"offsetget").is_some_and(|m| m.native.is_some());
+    let native_get = o.class.method_sym(p8_runtime::symbol::known::OFFSET_GET).is_some_and(|m| m.native.is_some());
     if o.class.is_a(b"weakmap") {
         return !matches!(op, DimOp::Unset);
     }

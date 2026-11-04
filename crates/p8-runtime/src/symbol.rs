@@ -42,9 +42,11 @@ const KNOWN: &[&[u8]] = &[
     b"__tostring", b"__invoke", b"__clone", b"__serialize", b"__unserialize", b"__sleep", b"__wakeup",
     b"__set_state", b"__debuginfo", b"getiterator", b"current", b"key", b"next", b"valid", b"rewind",
     b"offsetget", b"offsetset", b"offsetexists", b"offsetunset", b"count", b"jsonserialize",
+    b"$*::get", b"$*::set", b"$*::isset", b"$*::unset",
 ];
 
-/// The fixed symbols of the names in `KNOWN`.
+/// The fixed symbols of the names in `KNOWN`: the engine uses these
+/// directly (`class.method_sym(known::GET)`), with no name looked up.
 pub mod known {
     use super::Sym;
     pub const CONSTRUCT: Sym = Sym(0);
@@ -58,6 +60,29 @@ pub mod known {
     pub const TO_STRING: Sym = Sym(8);
     pub const INVOKE: Sym = Sym(9);
     pub const CLONE: Sym = Sym(10);
+    pub const SERIALIZE: Sym = Sym(11);
+    pub const UNSERIALIZE: Sym = Sym(12);
+    pub const SLEEP: Sym = Sym(13);
+    pub const WAKEUP: Sym = Sym(14);
+    pub const SET_STATE: Sym = Sym(15);
+    pub const DEBUG_INFO: Sym = Sym(16);
+    pub const GET_ITERATOR: Sym = Sym(17);
+    pub const CURRENT: Sym = Sym(18);
+    pub const KEY: Sym = Sym(19);
+    pub const NEXT: Sym = Sym(20);
+    pub const VALID: Sym = Sym(21);
+    pub const REWIND: Sym = Sym(22);
+    pub const OFFSET_GET: Sym = Sym(23);
+    pub const OFFSET_SET: Sym = Sym(24);
+    pub const OFFSET_EXISTS: Sym = Sym(25);
+    pub const OFFSET_UNSET: Sym = Sym(26);
+    pub const COUNT: Sym = Sym(27);
+    pub const JSON_SERIALIZE: Sym = Sym(28);
+    /// A native class's property handlers (`$*::get`, …: hidden methods).
+    pub const NATIVE_GET: Sym = Sym(29);
+    pub const NATIVE_SET: Sym = Sym(30);
+    pub const NATIVE_ISSET: Sym = Sym(31);
+    pub const NATIVE_UNSET: Sym = Sym(32);
 }
 
 /// The fixed symbol of a `KNOWN` name (as given: lowercase): one match,
@@ -93,6 +118,10 @@ fn known_sym(name: &[u8]) -> Option<Sym> {
         b"offsetunset" => 26,
         b"count" => 27,
         b"jsonserialize" => 28,
+        b"$*::get" => 29,
+        b"$*::set" => 30,
+        b"$*::isset" => 31,
+        b"$*::unset" => 32,
         _ => return None,
     }))
 }
@@ -236,19 +265,15 @@ impl SymbolCache {
         Some(s)
     }
 
-    /// [`Symbols::find`], from this isolate's cache when it has it.
+    /// [`Symbols::find`], from this isolate's cache when it has it. (The
+    /// known names need no check here: the engine uses their fixed
+    /// symbols directly, and the cache finds them like any other.)
     pub fn find(&self, name: &[u8]) -> Option<Sym> {
-        if let Some(s) = known_sym(name) {
-            return Some(s);
-        }
         Self::cached(&self.exact, name, || self.symbols.find(name))
     }
 
     /// [`Symbols::find_lower`], from this isolate's cache when it has it.
     pub fn find_lower(&self, name: &[u8]) -> Option<Sym> {
-        if let Some(s) = known_sym(name) {
-            return Some(s);
-        }
         Self::cached(&self.folded, name, || self.symbols.find_lower(name))
     }
 
@@ -400,7 +425,17 @@ mod tests {
         assert_eq!(symbols.intern_lower(b"__toString"), known::TO_STRING);
         assert_eq!(symbols.find(b"__callStatic"), None, "find is exact");
         assert!(KNOWN.iter().enumerate().all(|(i, k)| known_sym(k) == Some(Sym(i as u32))));
-        for (s, name) in [(known::CONSTRUCT, "__construct"), (known::DESTRUCT, "__destruct"), (known::CALL, "__call"), (known::CALL_STATIC, "__callstatic"), (known::GET, "__get"), (known::SET, "__set"), (known::ISSET, "__isset"), (known::UNSET, "__unset"), (known::TO_STRING, "__tostring"), (known::INVOKE, "__invoke"), (known::CLONE, "__clone")] {
+        use known::*;
+        let named = [
+            (CONSTRUCT, "__construct"), (DESTRUCT, "__destruct"), (CALL, "__call"), (CALL_STATIC, "__callstatic"), (GET, "__get"), (SET, "__set"),
+            (ISSET, "__isset"), (UNSET, "__unset"), (TO_STRING, "__tostring"), (INVOKE, "__invoke"), (CLONE, "__clone"), (SERIALIZE, "__serialize"),
+            (UNSERIALIZE, "__unserialize"), (SLEEP, "__sleep"), (WAKEUP, "__wakeup"), (SET_STATE, "__set_state"), (DEBUG_INFO, "__debuginfo"),
+            (GET_ITERATOR, "getiterator"), (CURRENT, "current"), (KEY, "key"), (NEXT, "next"), (VALID, "valid"), (REWIND, "rewind"),
+            (OFFSET_GET, "offsetget"), (OFFSET_SET, "offsetset"), (OFFSET_EXISTS, "offsetexists"), (OFFSET_UNSET, "offsetunset"), (COUNT, "count"),
+            (JSON_SERIALIZE, "jsonserialize"), (NATIVE_GET, "$*::get"), (NATIVE_SET, "$*::set"), (NATIVE_ISSET, "$*::isset"), (NATIVE_UNSET, "$*::unset"),
+        ];
+        assert_eq!(named.len(), KNOWN.len(), "every known name has its constant");
+        for (s, name) in named {
             assert_eq!(KNOWN[s.index()], name.as_bytes());
         }
     }

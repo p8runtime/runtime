@@ -290,20 +290,16 @@ impl Context<'_> {
 
     /// After a full property read: remember where a declared, visible,
     /// hookless property of this class is, for the next read here.
-    pub(crate) fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, name: &Value, key: Option<p8_runtime::symbol::Sym>) {
-        let Value::Str(name) = name else { return };
-        let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes(), key) else { return };
+    pub(crate) fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, member: &crate::classes::PropName) {
+        let (Value::Str(name), Some(key)) = (&member.value, member.key) else { return };
+        let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes(), Some(key)) else { return };
         if prop.hooks != 0 {
             return;
         }
         // Any scope may use a public property's entry, unless a parent's
         // private one of the same name is there too (which one a scope
         // sees then depends on it).
-        let slots = match key {
-            Some(key) => o.class.slots.get_sym(key),
-            None => o.class.slots.get(name.as_bytes()),
-        };
-        let shared = slots.is_some_and(|slots| slots.len() == 1);
+        let shared = o.class.slots.get_sym(key).is_some_and(|slots| slots.len() == 1);
         let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { self.scope_addr() };
         site.set(PropSite { class: Rc::as_ptr(&o.class) as usize, scope, slot: slot as u32 });
     }

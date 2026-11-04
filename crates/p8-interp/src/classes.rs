@@ -768,7 +768,7 @@ impl Context<'_> {
     /// The destructor call of an object (if its class has one).
     pub(crate) fn destructor(&mut self, object: &Rc<Object>) -> Option<MethodFrame> {
         let class = Rc::clone(&object.class);
-        let dtor = class.method(b"__destruct")?;
+        let dtor = class.method_sym(known::DESTRUCT)?;
         let declaring = self.declaring(&class, &dtor.declaring);
         Some(MethodFrame::method(self.code_of(dtor), Some(Rc::clone(object)), declaring, class))
     }
@@ -963,16 +963,12 @@ impl Context<'_> {
 
     /// The declared slot (or None: dynamic) of property `name` on
     /// `object`, after the visibility check for code in the current scope.
-    /// `key`: the name's symbol when the code carries it (a compiled
-    /// `$o->name`), else the name is looked up.
+    /// `key`: the name's symbol (`PropName::key`); None: no class declares
+    /// a property of that name, so there is none to find.
     pub(crate) fn prop_slot<'o>(&self, object: &'o Object, name: &[u8], key: Option<Sym>) -> Result<Option<(usize, &'o Property)>, Throw> {
+        let Some(key) = key else { return Ok(None) };
         let scope = self.scope().0;
-        let scope_lower = scope.as_ref().map(|s| s.lower.as_slice());
-        let found = match key {
-            Some(key) => object.class.slot_sym(key, scope_lower),
-            None => object.class.slot(name, scope_lower),
-        };
-        let Some(slot) = found else { return Ok(None) };
+        let Some(slot) = object.class.slot_sym(key, scope.as_ref().map(|s| s.lower.as_slice())) else { return Ok(None) };
         // Borrowed from the class: a property read must not copy its
         // declaration (and the declaring name's allocation) each time.
         let prop = &object.class.properties[slot];
@@ -1030,11 +1026,12 @@ impl Context<'_> {
 
     /// What `$obj->name` holds, read without hooks, magic or diagnostics:
     /// None unless it is a property visible here.
-    pub(crate) fn peek_prop(&self, target: &Value, name: &Value) -> Option<Value> {
+    pub(crate) fn peek_prop(&self, target: &Value, name: &PropName) -> Option<Value> {
         let Value::Object(object) = target.deref() else { return None };
+        let key = name.key;
         let name = name.to_php_string()?;
         let scope = self.scope().0;
-        match object.class.slot(name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) {
+        match key.and_then(|key| object.class.slot_sym(key, scope.as_ref().map(|s| s.lower.as_slice()))) {
             Some(slot) => {
                 let prop = &object.class.properties[slot];
                 let declaring = self.declaring(&object.class, &prop.declaring);
@@ -1049,16 +1046,11 @@ impl Context<'_> {
     }
 
     /// `$obj->name`
-    pub(crate) fn fetch_prop(&mut self, target: &Value, name: &Value, quiet: bool) -> Result<Value, Throw> {
-        self.fetch_prop_key(target, name, quiet, None)
-    }
-
-    /// `fetch_prop`, given the name's symbol when the code carries it.
-    pub(crate) fn fetch_prop_key(&mut self, target: &Value, name: &Value, quiet: bool, key: Option<Sym>) -> Result<Value, Throw> {
-        let name = self.prop_name(name)?;
+    pub(crate) fn fetch_prop(&mut self, target: &Value, member: &PropName, quiet: bool) -> Result<Value, Throw> {
+        let (name, key) = (self.prop_name(member)?, member.key);
         let object = match target {
             Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.fetch_prop_key(&cell.borrow().clone(), &Value::Str(name), quiet, key),
+            Value::Ref(cell) => return self.fetch_prop(&cell.borrow().clone(), member, quiet),
             other => {
                 if !quiet {
                     self.warn(format!("Attempt to read property \"{}\" on {}", text(&name), other.type_name()));
@@ -1119,13 +1111,13 @@ impl Context<'_> {
     /// `&$obj->name`: the property made a reference (a dynamic one made).
     /// `for_unset`: for `unset($obj->name[k])`, which leaves an
     /// uninitialized property alone.
-    pub(crate) fn prop_ref(&mut self, target: &Value, name: &Value, for_unset: bool) -> Result<Rc<RefCell<Value>>, Throw> {
-        let name = self.prop_name(name)?;
+    pub(crate) fn prop_ref(&mut self, target: &Value, member: &PropName, for_unset: bool) -> Result<Rc<RefCell<Value>>, Throw> {
+        let (name, key) = (self.prop_name(member)?, member.key);
         let object = self.target_object(target, &name, "modify")?;
-        if let Some(p) = self.hooked_property(&object, name.as_bytes()) {
+        if let Some(p) = self.hooked_property(&object, member) {
             return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&name))));
         }
-        match self.prop_slot(&object, name.as_bytes(), None)? {
+        match self.prop_slot(&object, name.as_bytes(), key)? {
             Some((slot, prop)) => {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
@@ -1163,13 +1155,13 @@ impl Context<'_> {
     }
 
     /// `$obj->name = &…`: the property becomes the reference `cell`.
-    pub(crate) fn prop_bind(&mut self, target: &Value, name: &Value, cell: Rc<RefCell<Value>>) -> Result<(), Throw> {
+    pub(crate) fn prop_bind(&mut self, target: &Value, name: &PropName, cell: Rc<RefCell<Value>>) -> Result<(), Throw> {
         let pname = self.prop_name(name)?;
         let object = self.target_object(target, &pname, "assign")?;
-        if let Some(p) = self.hooked_property(&object, pname.as_bytes()) {
+        if let Some(p) = self.hooked_property(&object, name) {
             return Err(self.throw("Error", format!("Indirect modification of {}::${} is not allowed", text(&p.declaring_name), text(&pname))));
         }
-        match self.prop_slot(&object, pname.as_bytes(), None)? {
+        match self.prop_slot(&object, pname.as_bytes(), name.key)? {
             Some((slot, prop)) if prop.set_visibility.is_some() && !self.may_set(&object, prop) => {
                 if matches!(object.slots.borrow()[slot].deref(), Value::Object(_)) {
                     return Err(self.throw("Error", "Cannot assign by reference to overloaded object"));
@@ -1185,15 +1177,10 @@ impl Context<'_> {
         Ok(())
     }
 
-    pub(crate) fn write_prop(&mut self, target: &Value, name: &Value, value: Value) -> Result<(), Throw> {
-        self.write_prop_key(target, name, value, None)
-    }
-
-    /// `write_prop`, given the name's symbol when the code carries it.
-    pub(crate) fn write_prop_key(&mut self, target: &Value, name: &Value, value: Value, key: Option<Sym>) -> Result<(), Throw> {
-        let name = self.prop_name(name)?;
+    pub(crate) fn write_prop(&mut self, target: &Value, member: &PropName, value: Value) -> Result<(), Throw> {
+        let name = self.prop_name(member)?;
         let object = self.target_object(target, &name, "assign")?;
-        match self.prop_slot(&object, name.as_bytes(), key)? {
+        match self.prop_slot(&object, name.as_bytes(), member.key)? {
             Some((slot, prop)) => self.write_slot(&object, slot, prop, &name, value)?,
             None => {
                 let key = Key::from_string(name.clone());
@@ -1260,7 +1247,7 @@ impl Context<'_> {
     /// The value a property holds right now, for a read-modify-write
     /// (`$o->p += 1`): what fetch_prop gives, without its warnings for a
     /// missing property becoming errors.
-    pub(crate) fn read_for_update(&mut self, target: &Value, name: &Value) -> Result<Value, Throw> {
+    pub(crate) fn read_for_update(&mut self, target: &Value, name: &PropName) -> Result<Value, Throw> {
         self.fetch_prop(target, name, false)
     }
 
@@ -1270,7 +1257,7 @@ impl Context<'_> {
     pub(crate) fn update_prop_dim(
         &mut self,
         target: &Value,
-        name: &Value,
+        name: &PropName,
         path: &[Key],
         append: bool,
         val: Value,
@@ -1278,7 +1265,7 @@ impl Context<'_> {
     ) -> Result<Value, Throw> {
         let pname = self.prop_name(name)?;
         let object = self.target_object(target, &pname, "assign")?;
-        let slot = self.prop_slot(&object, pname.as_bytes(), None)?;
+        let slot = self.prop_slot(&object, pname.as_bytes(), name.key)?;
         if let Some((_, prop)) = &slot
             && prop.set_visibility.is_some()
             && !self.may_set(&object, prop)
@@ -1315,14 +1302,14 @@ impl Context<'_> {
     }
 
     /// `isset($obj->name)`
-    pub(crate) fn isset_prop(&mut self, target: &Value, name: &Value) -> Result<bool, Throw> {
-        let Ok(name) = self.prop_name(name) else { return Ok(false) };
+    pub(crate) fn isset_prop(&mut self, target: &Value, member: &PropName) -> Result<bool, Throw> {
+        let Ok(name) = self.prop_name(member) else { return Ok(false) };
         let object = match target {
             Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.isset_prop(&cell.borrow().clone(), &Value::Str(name)),
+            Value::Ref(cell) => return self.isset_prop(&cell.borrow().clone(), member),
             _ => return Ok(false),
         };
-        let slot = match self.prop_slot(&object, name.as_bytes(), None) {
+        let slot = match self.prop_slot(&object, name.as_bytes(), member.key) {
             Ok(s) => s,
             Err(_) => return Ok(false),
         };
@@ -1333,14 +1320,14 @@ impl Context<'_> {
     }
 
     /// `unset($obj->name)`
-    pub(crate) fn unset_prop(&mut self, target: &Value, name: &Value) -> Result<(), Throw> {
-        let name = self.prop_name(name)?;
+    pub(crate) fn unset_prop(&mut self, target: &Value, member: &PropName) -> Result<(), Throw> {
+        let name = self.prop_name(member)?;
         let object = match target {
             Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.unset_prop(&cell.borrow().clone(), &Value::Str(name)),
+            Value::Ref(cell) => return self.unset_prop(&cell.borrow().clone(), member),
             _ => return Ok(()),
         };
-        match self.prop_slot(&object, name.as_bytes(), None)? {
+        match self.prop_slot(&object, name.as_bytes(), member.key)? {
             Some((i, prop)) => {
                 if prop.readonly {
                     return Err(self.throw("Error", format!("Cannot unset readonly property {}::${}", text(&object.class.name), text(&name))));
@@ -1454,17 +1441,17 @@ impl Context<'_> {
     /// `get` (bit HOOK_GET) or `set` hook; an Error for a virtual
     /// property without that hook; None for a plain access (no hook, the
     /// stored value of a backed one, or the hook's own `$this->name`).
-    pub(crate) fn prop_hook(&mut self, target: &Value, name: &Value, bit: u8) -> Option<Result<MethodFrame, Throw>> {
+    pub(crate) fn prop_hook(&mut self, target: &Value, name: &PropName, bit: u8) -> Option<Result<MethodFrame, Throw>> {
         self.prop_hook_seen(target, name, bit, true)
     }
 
-    pub(crate) fn prop_hook_seen(&mut self, target: &Value, name: &Value, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
+    pub(crate) fn prop_hook_seen(&mut self, target: &Value, member: &PropName, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
         let Value::Object(o) = target else { return None };
         if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
             return None;
         }
-        let name = name.to_php_string()?;
-        let p = self.hooked_property_seen(o, name.as_bytes(), check_visibility)?;
+        let p = self.hooked_property_seen(o, member, check_visibility)?;
+        let name = member.to_php_string()?;
         let kind: &[u8] = if bit == p8_runtime::object::HOOK_GET { b"get" } else { b"set" };
         if p.hooks & bit == 0 {
             if p.hooks & p8_runtime::object::HOOK_VIRTUAL == 0 {
@@ -1487,21 +1474,21 @@ impl Context<'_> {
     /// property is missing (not even dynamic), not visible here, or an
     /// untyped one that was unset; and the method is not already running
     /// for this object and property. With the guard key to hold while it runs.
-    pub(crate) fn prop_magic(&mut self, target: &Value, name: &Value, kind: Magic) -> Option<(MethodFrame, (usize, PhpStr, Magic))> {
+    pub(crate) fn prop_magic(&mut self, target: &Value, member: &PropName, kind: Magic) -> Option<(MethodFrame, (usize, PhpStr, Magic))> {
         let Value::Object(o) = target else { return None };
         if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 {
             return None;
         }
         // A native class's handler (`$*::get`: hidden, as PHP's internal
         // read_property is no method), else the class's __get.
-        let m = o.class.method(kind.native()).or_else(|| o.class.method(kind.method()))?;
-        let name = name.to_php_string()?;
+        let m = o.class.method_sym(kind.native()).or_else(|| o.class.method_sym(kind.method()))?;
+        let name = member.to_php_string()?;
         let key = (Rc::as_ptr(o) as usize, name.clone(), kind);
         if self.magic_guard.contains(&key) {
             return None;
         }
         let scope = self.scope().0;
-        match o.class.slot(name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) {
+        match member.key.and_then(|k| o.class.slot_sym(k, scope.as_ref().map(|s| s.lower.as_slice()))) {
             Some(slot) => {
                 // A lazy property is uninitialized, not unset: initialization
                 // comes before any magic method.
@@ -1526,14 +1513,20 @@ impl Context<'_> {
 
     /// The hooked property `name` of `o` as the running code sees it (None
     /// when not hooked, not visible here, or inside its own hook on `o`).
-    pub(crate) fn hooked_property<'c>(&self, o: &'c Rc<Object>, name: &[u8]) -> Option<&'c Property> {
+    pub(crate) fn hooked_property<'c>(&self, o: &'c Rc<Object>, name: &PropName) -> Option<&'c Property> {
         self.hooked_property_seen(o, name, true)
     }
 
     /// As hooked_property; `check_visibility` false: as the dump
     /// functions see it (any visibility).
-    pub(crate) fn hooked_property_seen<'c>(&self, o: &'c Rc<Object>, name: &[u8], check_visibility: bool) -> Option<&'c Property> {
-        let slots = o.class.slots.get(name)?;
+    pub(crate) fn hooked_property_seen<'c>(&self, o: &'c Rc<Object>, member: &PropName, check_visibility: bool) -> Option<&'c Property> {
+        // A class with no hooked property (the flag) has nothing to look up.
+        if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
+            return None;
+        }
+        let slots = o.class.slots.get_sym(member.key?)?;
+        let name = member.to_php_string()?;
+        let name = name.as_bytes();
         let p = slots.iter().map(|&i| &o.class.properties[i]).find(|p| p.hooks != 0)?;
         let declaring = self.class_named(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(&o.class));
         if check_visibility && !visible(p.visibility, &declaring, self.scope().0.as_deref()) {
@@ -1716,7 +1709,7 @@ impl Context<'_> {
     /// type that takes a string, as the string (None: not so).
     pub(crate) fn stringable(&mut self, regs: &mut Vec<Value>, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, Throw> {
         let Value::Object(o) = v else { return Ok(None) };
-        if strict || ty.mask & p8_runtime::types::T_STRING == 0 || o.class.method(b"__tostring").is_none() {
+        if strict || ty.mask & p8_runtime::types::T_STRING == 0 || o.class.method_sym(known::TO_STRING).is_none() {
             return Ok(None);
         }
         Ok(match self.string_of(regs, v.clone())? {
@@ -1834,7 +1827,7 @@ impl Context<'_> {
             return Ok((copy, hook));
         }
         let copy = o.copy();
-        let Some(method) = o.class.methods.get(b"__clone".as_slice()).cloned() else { return Ok((copy, None)) };
+        let Some(method) = o.class.methods.get_sym(known::CLONE).cloned() else { return Ok((copy, None)) };
         let declaring = self.declaring(&o.class, &method.declaring);
         if !visible(method.visibility, &declaring, self.scope().0.as_deref()) {
             return Err(self.throw(
@@ -1912,6 +1905,37 @@ fn text_of(t: &p8_runtime::frozen::Text) -> String {
     String::from_utf8_lossy(t.as_bytes()).into_owned()
 }
 
+/// A property name as one access uses it: the name (as the code gives
+/// it), and its symbol, found once for the whole access: the instruction's
+/// (a compiled `$o->name`), else looked up (`Context::member`). None: no
+/// class declares a property of that name (every declared name is
+/// interned when its class links), so the declared-property lookups that
+/// make up the access (hooks, magic, lazy, the slot) have nothing to find.
+pub(crate) struct PropName {
+    pub(crate) value: Value,
+    pub(crate) key: Option<Sym>,
+}
+
+impl std::ops::Deref for PropName {
+    type Target = Value;
+
+    fn deref(&self) -> &Value {
+        &self.value
+    }
+}
+
+impl Context<'_> {
+    /// `value` as a property name, with its symbol: `sym` when the code
+    /// carries it, else looked up (once) by the name's bytes.
+    pub(crate) fn member(&self, value: Value, sym: Option<Sym>) -> PropName {
+        let key = sym.or_else(|| match value.deref() {
+            Value::Str(s) => self.isolate.names.find(s.as_bytes()),
+            other => self.isolate.names.find(other.to_php_string()?.as_bytes()),
+        });
+        PropName { value, key }
+    }
+}
+
 /// Narrower is larger: public < protected < private.
 /// A magic property method.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1923,22 +1947,23 @@ pub(crate) enum Magic {
 }
 
 impl Magic {
-    fn method(self) -> &'static [u8] {
+    /// Its method (`__get`, …): a fixed symbol.
+    fn method(self) -> Sym {
         match self {
-            Magic::Get => b"__get",
-            Magic::Set => b"__set",
-            Magic::Isset => b"__isset",
-            Magic::Unset => b"__unset",
+            Magic::Get => known::GET,
+            Magic::Set => known::SET,
+            Magic::Isset => known::ISSET,
+            Magic::Unset => known::UNSET,
         }
     }
 
-    /// A native class's handler method for it.
-    pub(crate) fn native(self) -> &'static [u8] {
+    /// A native class's handler method for it (`$*::get`, …).
+    pub(crate) fn native(self) -> Sym {
         match self {
-            Magic::Get => b"$*::get",
-            Magic::Set => b"$*::set",
-            Magic::Isset => b"$*::isset",
-            Magic::Unset => b"$*::unset",
+            Magic::Get => known::NATIVE_GET,
+            Magic::Set => known::NATIVE_SET,
+            Magic::Isset => known::NATIVE_ISSET,
+            Magic::Unset => known::NATIVE_UNSET,
         }
     }
 }
