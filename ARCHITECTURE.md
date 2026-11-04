@@ -1,6 +1,6 @@
 # p8 architecture
 
-p8 is a PHP 8.4 runtime in safe Rust. This page is the map: how the parts fit,
+p8 is a PHP 8.6 runtime in safe Rust. This page is the map: how the parts fit,
 the one rule about memory every change has to keep, and where things live.
 The decisions behind it are the p8 APS (`p8runtime/aps`): APS 3 (engine and
 hosts), APS 4 (values and memory), APS 5 (bytecode and execution) and APS 13
@@ -76,7 +76,8 @@ and measure either way.
 
 ## Changing p8
 
-- **Correctness** is checked against real PHP 8.4. The gates are php-src's own
+- **Correctness** is checked against real PHP 8.6 (the target moved from 8.4
+  on 4 Nov 2026: 8.6.0RC5 until 8.6.0 GA; #279). The gates are php-src's own
   test suite (`php-test`, against `p8-test-suite`; a change may not lose a
   test), the app suites, `php-cli`'s script tests, and edge-case scripts whose
   output is diffed against PHP.
@@ -85,5 +86,5 @@ and measure either way.
   back to back. A change that doesn't win is reverted.
 - `#![forbid(unsafe_code)]` everywhere, and no C dependencies. Memory safety is
   the point of p8 (SECURITY.md).
-- Follow what PHP's source does (php-src 8.4) rather than patching around a
+- Follow what PHP's source does (php-src 8.6) rather than patching around a
   test.
