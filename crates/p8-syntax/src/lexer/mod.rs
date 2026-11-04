@@ -193,13 +193,8 @@ impl<'src> Lexer<'src> {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.cursor < self.input.len() {
-            if self.input[self.cursor].is_ascii_whitespace() {
-                self.cursor += 1;
-            } else {
-                break;
-            }
-        }
+        let rest = &self.input[self.cursor..];
+        self.cursor += rest.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(rest.len());
     }
 
     fn read_identifier(&mut self) {
