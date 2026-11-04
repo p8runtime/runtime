@@ -114,8 +114,11 @@ pub enum Instr {
     ArrayPush { arr: Reg, val: Reg },
     /// arr[key] = val (array literal building)
     ArraySet { arr: Reg, key: Reg, val: Reg },
-    /// dst = arr[key]; `quiet` for isset/?? (no warning)
-    FetchDim { dst: Reg, arr: Reg, key: Reg, quiet: bool },
+    /// dst = arr[key]; `quiet` for isset/?? (no warning); `empty` for the
+    /// last dimension of `empty($c[k])`, whose key is checked as isset
+    /// checks it (ZEND_ISSET_ISEMPTY_DIM_OBJ: "in isset or empty" for an
+    /// illegal one on an array; a string's offset by isset's rules).
+    FetchDim { dst: Reg, arr: Reg, key: Reg, quiet: bool, empty: bool },
     /// var[k1]..[kn] = val with keys in `keys..keys+n`; when `append`, the
     /// last level is `[]`. dst gets the assigned value.
     AssignDim { var: Reg, keys: Reg, n: u8, append: bool, val: Reg, dst: Reg },
@@ -704,6 +707,12 @@ pub struct Function {
     pub consts: Vec<Frozen>,
     /// First constant register (constants occupy consts_at..consts_at+consts.len()).
     pub consts_at: Reg,
+    /// How many constants (the first ones) are values the code reads from
+    /// registers: a call copies these into its frame. The rest are only
+    /// names (of properties, class constants, static properties) that
+    /// their instructions read from the constants directly (as PHP reads
+    /// a literal in place); their registers are never written or read.
+    pub value_consts: Reg,
     /// Registers the frame needs.
     pub nregs: Reg,
     /// Names of the compiled variables, by register (params first).

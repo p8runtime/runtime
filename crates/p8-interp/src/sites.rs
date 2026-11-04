@@ -57,6 +57,7 @@ impl Closure {
             lines: Vec::new(),
             consts: Vec::new(),
             consts_at: 0,
+            value_consts: 0,
             nregs: 0,
             cv_names: Vec::new(),
             sites: Vec::new(),
