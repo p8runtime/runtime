@@ -144,6 +144,95 @@ enum Next {
     Switch,
 }
 
+/// One handler function per instruction, made from `step`'s arms: the
+/// compiler allocates registers for each on its own, and dispatch is a
+/// `match` whose every arm is a call. A handler (`run`) tries its
+/// instruction's common cases (`quick`), then runs the arm (`slow`, a
+/// function of its own) with what the arms use: `func`, `pc` (the next
+/// instruction, unless the arm jumps), `w` (the frame's registers),
+/// `below` (the frames under it), `in_main`, `insn_at` (this
+/// instruction: a lazy object's initialization runs it again) and the
+/// `reg!`/`name!` operands. Those names come from the caller, so the arms
+/// see them; `$d` is a `$` for the operand macros' own parameters.
+macro_rules! handlers {
+    ($d:tt $reg:ident $name:ident; $self:ident, $regs:ident, $clo:ident, $base:ident, $argc:ident, $at:ident, $instr:ident;
+     $insn_at:ident, $func:ident, $pc:ident, $in_main:ident, $below:ident, $w:ident;
+     $( $p:pat => $b:block $(,)? )*) => {
+        // Out of the patterns' reach (a field may be called `argc` or `at`).
+        let (h_base, h_argc, h_at, h_instr) = ($base, $argc, $at, $instr);
+        match $instr {
+            $(
+                // The fields are the handler's to bind.
+                #[allow(unused_variables)]
+                $p => {
+                    trait Handler {
+                        fn run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw>;
+                        fn slow(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw>;
+                    }
+                    impl Handler for Context<'_> {
+                        #[inline(never)]
+                        // The pattern's fields are only matched here.
+                        #[allow(unused_variables)]
+                        fn run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw> {
+                            // Which instruction this is: `quick` keeps only its case.
+                            if !matches!(instr, $p) {
+                                unreachable!("dispatched by its pattern");
+                            }
+                            if let Some(next) = self.quick(regs, clo, base, at, instr) {
+                                return Ok(next);
+                            }
+                            self.slow(regs, clo, base, argc, at, instr)
+                        }
+                        #[inline(never)]
+                        // Not every arm uses every binding, and some end in a return.
+                        #[allow(unused_variables, unused_mut, unused_assignments, unreachable_code)]
+                        fn slow(&mut $self, $regs: &mut Vec<Value>, $clo: &Closure, $base: usize, $argc: usize, $at: usize, $instr: Instr) -> Result<Next, Throw> {
+                            let $insn_at = $at;
+                            let $func = &*$clo.code;
+                            $self.pc = $at + 1;
+                            if $self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                                return Err($self.interrupted());
+                            }
+                            let mut $pc = $at + 1;
+                            let $in_main = $base == 0;
+                            let ($below, $w) = $regs.split_at_mut($base);
+                            let $w = &mut $w[..$func.nregs as usize];
+                            #[allow(unused_macros)]
+                            macro_rules! $reg {
+                                ($d r:expr) => {
+                                    $w[$d r as usize]
+                                };
+                            }
+                            // A name operand (a property's, a class constant's, a
+                            // static property's): its constant, read in place (a
+                            // constant only used as a name is never copied into a
+                            // register: see `Function::value_consts`), else the
+                            // register a run-time name is in. A register below the
+                            // constants wraps to a huge index: one bounds check
+                            // covers both ends.
+                            #[allow(unused_macros)]
+                            macro_rules! $name {
+                                ($d r:expr) => {
+                                    match $clo.consts.get(($d r as usize).wrapping_sub($func.consts_at as usize)) {
+                                        Some(c) => c,
+                                        None => &$w[$d r as usize],
+                                    }
+                                };
+                            }
+                            // An arm's pattern may be several (`A | B`).
+                            #[allow(unused_parens)]
+                            let ($p) = $instr else { unreachable!("dispatched by its pattern") };
+                            $b
+                            Ok(Next::Go($pc))
+                        }
+                    }
+                    <Context<'_> as Handler>::run($self, $regs, $clo, h_base, h_argc, h_at, h_instr)
+                }
+            )*
+        }
+    };
+}
+
 
 impl Context<'_> {
     pub fn declare(&mut self, func: Arc<Function>) -> Result<(), String> {
@@ -1001,48 +1090,29 @@ impl Context<'_> {
         Ok(callee)
     }
 
-    /// Run frames until the bottom one returns: `fast` runs the common
-    /// cases (cached calls and returns included), `step` the one
-    /// instruction it stopped at.
+    /// Run frames until the bottom one returns: one instruction at a time,
+    /// each by its own handler (`step`).
     fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let stop = Arc::clone(&self.stop);
-        let mut pc = self.frames.last().expect("a frame").pc as usize;
-        // The function `step` last ran in (refreshed when `fast` switched).
-        let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
+        let top = self.frames.last().expect("a frame");
+        let mut pc = top.pc as usize;
+        // The frame the instructions run in (refreshed when it changes).
+        let mut func = Rc::clone(&top.func);
+        let (mut base, mut argc) = (top.base as usize, top.argc as usize);
         // Fiber::throw(): the exception is raised where the fiber went on.
         if let Some(e) = self.fiber_throw.take() {
             pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
+            let top = self.frames.last().expect("a frame");
+            func = Rc::clone(&top.func);
+            (base, argc) = (top.base as usize, top.argc as usize);
         }
         loop {
-            pc = fast(regs, &mut self.frames, &self.closures, pc, &stop, &self.ids);
-            if self.ids.has_pending() {
-                pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
-            }
-            let frame = self.frames.last().expect("a frame");
-            if !Rc::ptr_eq(&func, &frame.func) {
-                func = Rc::clone(&frame.func);
-            }
-            let (base, argc) = (frame.base as usize, frame.argc as usize);
-            self.pc = pc + 1;
-            // A builtin the call site already resolved is called from here,
-            // not through `step`.
-            if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
-                && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
-            {
-                let at = pc;
-                match self.call_builtin(regs, base, i, args, n, dst) {
-                    Ok(()) => pc += 1,
-                    Err(t) => pc = self.unwind(regs, t, pc)?,
-                }
-                if !self.pending_errors.is_empty() || self.ids.has_pending() {
-                    pc = self.after_errors(regs, pc, at)?;
-                }
-                continue;
-            }
             let at = pc;
-            match self.step(regs, &func, base, argc, pc) {
+            match self.step(regs, &func, base, argc, at, func.code.code[at]) {
                 Ok(Next::Go(next)) => {
                     pc = next;
+                    if self.pending_errors.is_empty() && !self.ids.has_pending() && self.fiber_suspended.is_none() {
+                        continue;
+                    }
                     // Fiber::suspend(): leave the fiber's frames where they are.
                     if self.fiber_suspended.is_some() {
                         if let Some(top) = self.frames.last_mut() {
@@ -1066,11 +1136,17 @@ impl Context<'_> {
                 // A class an autoloader may declare: run them, then this
                 // instruction again.
                 Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
-                Err(t) => pc = self.unwind(regs, t, pc)?,
+                Err(t) => pc = self.unwind(regs, t, at)?,
             }
             if !self.pending_errors.is_empty() || self.ids.has_pending() {
                 pc = self.after_errors(regs, pc, at)?;
             }
+            // A call, a return or an exception may have changed the frame.
+            let top = self.frames.last().expect("a frame");
+            if !Rc::ptr_eq(&func, &top.func) {
+                func = Rc::clone(&top.func);
+            }
+            (base, argc) = (top.base as usize, top.argc as usize);
         }
     }
 
@@ -1179,46 +1255,12 @@ impl Context<'_> {
         Ok(Some(result))
     }
 
-    /// Execute the instruction at `pc` of `func`'s frame (at `base`).
-    #[inline(never)]
-    fn step(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
-        // This instruction's index (a lazy object's initialization runs it again).
-        let insn_at = at;
-        let func = &*clo.code;
-        if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-            return Err(self.interrupted());
-        }
-        // The one-operator arithmetic opcodes run here as `Binary`.
-        let instr = match func.code[at].as_binary() {
-            Some((op, dst, a, b)) => Instr::Binary { op, dst, a, b },
-            None => func.code[at],
-        };
-        let mut pc = at + 1;
-        // `w` is this frame's window (registers are frame-relative); `below`
-        // holds the frames under it, the main frame's globals first.
-        let in_main = base == 0;
-        let (below, w) = regs.split_at_mut(base);
-        let w = &mut w[..func.nregs as usize];
-        macro_rules! reg {
-            ($r:expr) => {
-                w[$r as usize]
-            };
-        }
-        // A name operand (a property's, a class constant's, a static
-        // property's): its constant, read in place (a constant only used
-        // as a name is never copied into a register: see
-        // `Function::value_consts`), else the register a run-time name is in.
-        macro_rules! name {
-            ($r:expr) => {
-                // A register below the constants wraps to a huge index: one
-                // bounds check covers both ends.
-                match clo.consts.get(($r as usize).wrapping_sub(func.consts_at as usize)) {
-                    Some(c) => c,
-                    None => &w[$r as usize],
-                }
-            };
-        }
-        match instr {
+    /// Execute `instr`, the instruction at `at` of `clo`'s frame (at
+    /// `base`): each arm below is its own handler function (`handlers!`),
+    /// its common cases first (`quick`).
+    #[inline(always)]
+    fn step(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw> {
+        handlers! { $ reg name; self, regs, clo, base, argc, at, instr; insn_at, func, pc, in_main, below, w;
                 Instr::Move { dst, src } => {
                     let v = self.operand(w, func, src);
                     reg!(dst) = v;
@@ -1232,9 +1274,17 @@ impl Context<'_> {
                     clear(&mut reg!(src));
                     assign(w, var, v);
                 }
-                Instr::Free { reg } => clear(&mut reg!(reg)),
-                Instr::LoadNull { dst } => reg!(dst) = Value::Null,
-                Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => unreachable!("normalized to Binary above"),
+                Instr::Free { reg } => {
+                    clear(&mut reg!(reg));
+                }
+                Instr::LoadNull { dst } => {
+                    reg!(dst) = Value::Null;
+                }
+                // The one-operator arithmetic opcodes' other cases run as `Binary`.
+                Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => {
+                    let Some((op, dst, a, b)) = instr.as_binary() else { unreachable!("an arithmetic opcode") };
+                    return self.step(regs, clo, base, argc, at, Instr::Binary { op, dst, a, b });
+                }
                 Instr::Binary { op, dst, a, b } => {
                     // Fast paths for the common int cases.
                     let fast = match (&reg!(a), &reg!(b), op) {
@@ -1425,7 +1475,9 @@ impl Context<'_> {
                     assign(w, var, new.clone());
                     reg!(dst) = if post { old } else { new };
                 }
-                Instr::Jump { target } => pc = target as usize,
+                Instr::Jump { target } => {
+                    pc = target as usize;
+                }
                 Instr::JumpIf { cond, target } => {
                     let c = match &reg!(cond) {
                         Value::Bool(b) => *b,
@@ -1458,7 +1510,9 @@ impl Context<'_> {
                         pc = target as usize;
                     }
                 }
-                Instr::NewArray { dst, n } => reg!(dst) = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize))),
+                Instr::NewArray { dst, n } => {
+                    reg!(dst) = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize)));
+                }
                 Instr::ArrayPush { arr, val } => {
                     let v = self.operand(w, func, val);
                     if let Value::Array(a) = &mut reg!(arr)
@@ -1669,24 +1723,23 @@ impl Context<'_> {
                         }
                     }
                 }
-                Instr::IterNext { iter, val, key, has_key, end } if matches!(reg!(iter), Value::Object(_)) => {
-                    let Value::Object(object) = reg!(iter).clone() else { unreachable!("an object") };
-                    let first = matches!(reg!(iter + 1), Value::Int(0));
-                    let next = self.iter_object_next(regs, &object, first)?;
-                    let w = &mut regs[base..base + func.nregs as usize];
-                    w[iter as usize + 1] = Value::Int(1);
-                    match next {
-                        Some((v, k)) => {
-                            assign(w, val, v);
-                            if has_key {
-                                assign(w, key, k);
-                            }
-                        }
-                        None => pc = end as usize,
-                    }
-                }
                 Instr::IterNext { iter, val, key, has_key, end } => {
-                    if !iter_next(w, iter, val, key, has_key) {
+                    if matches!(reg!(iter), Value::Object(_)) {
+                        let Value::Object(object) = reg!(iter).clone() else { unreachable!("an object") };
+                        let first = matches!(reg!(iter + 1), Value::Int(0));
+                        let next = self.iter_object_next(regs, &object, first)?;
+                        let w = &mut regs[base..base + func.nregs as usize];
+                        w[iter as usize + 1] = Value::Int(1);
+                        match next {
+                            Some((v, k)) => {
+                                assign(w, val, v);
+                                if has_key {
+                                    assign(w, key, k);
+                                }
+                            }
+                            None => pc = end as usize,
+                        }
+                    } else if !iter_next(w, iter, val, key, has_key) {
                         pc = end as usize;
                     }
                 }
@@ -1788,21 +1841,22 @@ impl Context<'_> {
                     };
                     reg!(dst) = v;
                 }
-                Instr::ConcatN { dst, start, n } if w[start as usize..start as usize + n as usize].iter().any(|v| matches!(v.deref(), Value::Object(_))) => {
-                    // An object part: its __toString() may run PHP code.
-                    let values: Vec<Value> = (0..n).map(|i| self.operand(w, func, start + i as Reg)).collect();
-                    let mut bytes = Vec::new();
-                    for v in values {
-                        let v = self.string_of(regs, v)?;
-                        if let Some(e) = ops::object_string_error(&v) {
-                            return Err(self.op_error(e));
-                        }
-                        ops::push_string(&mut bytes, &v, &mut self.diags);
-                    }
-                    self.report_diags();
-                    regs[base + dst as usize] = Value::Str(PhpStr::new(bytes));
-                }
                 Instr::ConcatN { dst, start, n } => {
+                    // An object part: its __toString() may run PHP code.
+                    if w[start as usize..start as usize + n as usize].iter().any(|v| matches!(v.deref(), Value::Object(_))) {
+                        let values: Vec<Value> = (0..n).map(|i| self.operand(w, func, start + i as Reg)).collect();
+                        let mut bytes = Vec::new();
+                        for v in values {
+                            let v = self.string_of(regs, v)?;
+                            if let Some(e) = ops::object_string_error(&v) {
+                                return Err(self.op_error(e));
+                            }
+                            ops::push_string(&mut bytes, &v, &mut self.diags);
+                        }
+                        self.report_diags();
+                        regs[base + dst as usize] = Value::Str(PhpStr::new(bytes));
+                        return Ok(Next::Go(pc));
+                    }
                     let parts = start as usize..start as usize + n as usize;
                     let mut bytes = Vec::with_capacity(w[parts].iter().map(ops::string_len_hint).sum());
                     for i in 0..n {
@@ -1874,7 +1928,7 @@ impl Context<'_> {
                         data.captured.borrow_mut().push(v);
                     }
                 }
-                Instr::Rare { op, a, b, c, class } => match op {
+                Instr::Rare { op, a, b, c, class } => { match op {
                     Rare::PropRef => {
                             let (dst, obj, name) = (a, b, c);
                         let target = self.operand(w, func, obj);
@@ -2106,7 +2160,7 @@ impl Context<'_> {
                         leave(&mut self.frames, regs, v);
                         return Ok(Next::Switch);
                     }
-                },
+                } }
                 Instr::BindRef { var, src } => {
                     if var != src {
                         let cell = make_ref(w, src);
@@ -2471,10 +2525,12 @@ impl Context<'_> {
                         }
                     }
                 }
-                Instr::This { dst } => match self.frames.last().and_then(|f| f.this.clone()) {
-                    Some(this) => reg!(dst) = Value::Object(this),
-                    None => return Err(self.throw("Error", "Using $this when not in object context")),
-                },
+                Instr::This { dst } => {
+                    match self.frames.last().and_then(|f| f.this.clone()) {
+                        Some(this) => reg!(dst) = Value::Object(this),
+                        None => return Err(self.throw("Error", "Using $this when not in object context")),
+                    }
+                }
                 Instr::FetchProp { dst, obj, name, quiet } => {
                     let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
                     // The name's constant: its cache entry.
@@ -2997,7 +3053,6 @@ impl Context<'_> {
                     }
                 }
         }
-        Ok(Next::Go(pc))
     }
 
     /// Push the frame of a method call: its arguments at `args`
