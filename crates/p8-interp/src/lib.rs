@@ -2198,7 +2198,7 @@ impl Context<'_> {
                     };
                 }
                 Instr::StaticVar { var, index, skip } => {
-                    let (cell, new) = self.static_var(func, index);
+                    let (cell, new) = self.static_var(&clo.code, index);
                     reg!(var) = Value::Ref(cell);
                     if !new {
                         pc = skip as usize;
