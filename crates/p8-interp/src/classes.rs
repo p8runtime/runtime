@@ -811,7 +811,7 @@ impl Context<'_> {
     /// The class a method's protected access is checked against: the top
     /// of the classes declaring it (zend_get_function_root_class), so two
     /// subclasses of the class that first declared it may call each other's.
-    fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, key: Option<Sym>) -> Rc<Class> {
+    pub(crate) fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, key: Option<Sym>) -> Rc<Class> {
         let mut root = Rc::clone(declaring);
         if method.visibility != Visibility::Protected {
             return root;
@@ -1212,7 +1212,7 @@ impl Context<'_> {
         let value = match &prop.ty_decl {
             Some(ty) => {
                 let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
-                match self.check_type(ty, &value, strict) {
+                match self.check_type(ty, &value, strict)? {
                     Ok(Some(converted)) => converted,
                     Ok(None) => value,
                     Err(()) => {
@@ -1586,10 +1586,15 @@ impl Context<'_> {
     /// Check `v` against a declared type in the running code: Ok(Some)
     /// the converted value, Ok(None) as it is, Err a TypeError's case.
     /// (A deprecation it brings is reported here.)
-    pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, ()> {
+    /// (Outer Err: what looking up a class a callable names threw.)
+    pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Result<Option<Value>, ()>, Throw> {
         if ty.quick(v) {
-            return Ok(None);
+            return Ok(Ok(None));
         }
+        // `callable`: whether the code checking can call it (zend_is_callable).
+        let callable = ty.mask & p8_runtime::types::T_CALLABLE != 0
+            && matches!(v.deref(), Value::Str(_) | Value::Array(_) | Value::Object(_))
+            && self.why_not_callable(v, true)?.is_none();
         let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
         let is_a = |o: &Object, name: &[u8]| match name {
             b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
@@ -1597,8 +1602,8 @@ impl Context<'_> {
             n => o.class.is_a(n),
         };
         let static_ok = |o: &Object| called.is_some_and(|c| o.class.is_a(&c.lower));
-        let verdict = ty.verify(v, strict, &is_a, &static_ok);
-        match verdict {
+        let verdict = ty.verify(v, strict, &is_a, &static_ok, callable);
+        Ok(match verdict {
             p8_runtime::types::Verdict::Accepted(c) => Ok(c),
             p8_runtime::types::Verdict::Deprecated(m, c) => {
                 self.diags.push(p8_runtime::ops::Diag::Deprecated(m));
@@ -1606,7 +1611,7 @@ impl Context<'_> {
                 Ok(c)
             }
             p8_runtime::types::Verdict::Refused => Err(()),
-        }
+        })
     }
 
     /// How messages name the running function: `f`, `A::m`, `{closure}`.
@@ -1644,7 +1649,7 @@ impl Context<'_> {
                 let Value::Array(list) = regs[base + i].clone() else { continue };
                 let mut checked = (*list).clone();
                 for (k, v) in list.iter() {
-                    let coerced = match self.check_type(ty, &v.deref(), strict) {
+                    let coerced = match self.check_type(ty, &v.deref(), strict)? {
                         Err(()) => self.stringable(regs, ty, &v.deref(), strict)?.map(Some).ok_or(()),
                         other => other,
                     };
@@ -1667,7 +1672,7 @@ impl Context<'_> {
                 continue;
             }
             let v = regs[base + i].deref();
-            let converted = match self.check_type(ty, &v, strict) {
+            let converted = match self.check_type(ty, &v, strict)? {
                 Ok(converted) => converted,
                 Err(()) => match self.stringable(regs, ty, &v, strict)? {
                     Some(s) => Some(s),

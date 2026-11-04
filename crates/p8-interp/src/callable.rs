@@ -192,6 +192,9 @@ impl Context<'_> {
         {
             return Ok(Value::Object(o));
         }
+        if let Some(why) = self.why_not_callable(callable, true)? {
+            return Err(self.throw("TypeError", format!("Failed to create closure from callable: {why}")));
+        }
         let data = match self.resolve_callable(callable)? {
             Target::Builtin(i) => ClosureData {
                 func: ClosureFunc::Builtin(i),
@@ -637,14 +640,182 @@ impl Context<'_> {
     /// autoloaded where the registers are lent.
     pub(crate) fn callable(&mut self, v: &Value) -> bool {
         let saved = std::mem::take(&mut self.failed_call);
-        let r = self.resolve_callable(v);
+        let r = self.why_not_callable(v, true);
         self.failed_call = saved;
         // Not lent: the class stays unloaded, and a later lookup asks the
         // autoloaders again.
         if let Err(Throw::Autoload(name)) = &r {
             self.autoload_tried.remove(&name.as_bytes().to_ascii_lowercase());
         }
-        r.is_ok()
+        matches!(r, Ok(None))
+    }
+
+    /// Whether `v` can be called from the running code, as
+    /// zend_is_callable_at_frame decides: None if so, else its reason
+    /// (`function "f" not found or invalid function name`, `class "C"
+    /// not found`, `class C does not have a method "m"`, `non-static
+    /// method C::m() cannot be called statically`, `cannot access private
+    /// method C::m()`, …), which TypeErrors quote. A class it names is
+    /// looked up as `find_class` does (an autoloader's exception, or
+    /// Throw::Autoload where the registers are not lent, comes back as Err).
+    /// `warn`: report the deprecations of `self`/`parent`/`static` and of
+    /// `["C", "P::m"]` callables (as is_callable() and the checks of
+    /// arguments do; a call itself does not).
+    pub(crate) fn why_not_callable(&mut self, v: &Value, warn: bool) -> Result<Option<String>, Throw> {
+        match v.deref() {
+            Value::Str(name) => self.callable_func(name.as_bytes(), None, warn),
+            Value::Array(a) => {
+                if a.len() != 2 {
+                    return Ok(Some("array callback must have exactly two members".into()));
+                }
+                let (Some(holder), Some(method)) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) else {
+                    return Ok(Some("array callback has to contain indices 0 and 1".into()));
+                };
+                let holder = match holder {
+                    Value::Str(class) => match self.callable_class(class.as_bytes(), None, warn)? {
+                        Ok(holder) => holder,
+                        Err(why) => return Ok(Some(why)),
+                    },
+                    Value::Object(o) => (Rc::clone(&o.class), Some(o)),
+                    _ => return Ok(Some("first array member is not a valid class name or object".into())),
+                };
+                let Value::Str(method) = method else {
+                    return Ok(Some("second array member is not a valid method".into()));
+                };
+                self.callable_func(method.as_bytes(), Some(holder), warn)
+            }
+            // A Closure, or an object with __invoke (zend_std_get_closure).
+            Value::Object(o) if closure_data(&o).is_some() || o.class.method(b"__invoke").is_some() => Ok(None),
+            _ => Ok(Some("no array or string given".into())),
+        }
+    }
+
+    /// The class a callable names (zend_is_callable_check_class): `self`,
+    /// `parent`, `static` from the running code, or a class by name; with
+    /// the object the call would have (the running `$this`, when it is of
+    /// that class from code of that class). Err: why not.
+    #[allow(clippy::type_complexity)] // (class, object) or the reason; used here only
+    fn callable_class(&mut self, name: &[u8], within: Option<&Rc<Class>>, warn: bool) -> Result<Result<(Rc<Class>, Option<Rc<Object>>), String>, Throw> {
+        // `self` and `parent` are of the array's class in `["C", "parent::m"]`.
+        let (scope, called) = match (within, self.scope()) {
+            (Some(c), (_, called)) => (Some(Rc::clone(c)), called),
+            (None, found) => found,
+        };
+        let this = self.frames.last().and_then(|f| f.this.clone());
+        let lower = name.to_ascii_lowercase();
+        let keyword = matches!(lower.as_slice(), b"self" | b"parent" | b"static");
+        let found = match lower.as_slice() {
+            b"self" => match scope {
+                Some(s) => Ok((s, this)),
+                None => Err("cannot access \"self\" when no class scope is active".into()),
+            },
+            b"parent" => match scope {
+                None => Err("cannot access \"parent\" when no class scope is active".into()),
+                Some(s) => match s.parent.clone() {
+                    Some(p) => Ok((p, this)),
+                    None => Err("cannot access \"parent\" when current class scope has no parent".into()),
+                },
+            },
+            b"static" => match called {
+                Some(c) => Ok((c, this)),
+                None => Err("cannot access \"static\" when no class scope is active".into()),
+            },
+            _ => match self.load_class(name)? {
+                Some(class) => {
+                    // `$this` goes with it from code of a class that is (or
+                    // extends) the one named, on an instance of that code's class.
+                    let object = match &scope {
+                        Some(s) if s.is_a(&class.lower) => this.filter(|t| t.class.is_a(&s.lower)),
+                        _ => None,
+                    };
+                    Ok((class, object))
+                }
+                None => Err(format!("class \"{}\" not found", text(name))),
+            },
+        };
+        if warn && keyword && found.is_ok() {
+            self.diags.push(p8_runtime::ops::Diag::Deprecated(format!("Use of \"{}\" in callables is deprecated", text(&lower))));
+            self.report_diags();
+        }
+        Ok(found)
+    }
+
+    /// A callable's function or method (zend_is_callable_check_func):
+    /// `name` alone (a function, or "Class::method"), or the method `name`
+    /// of the class (and object) an array callable holds.
+    fn callable_func(&mut self, name: &[u8], holder: Option<(Rc<Class>, Option<Rc<Object>>)>, warn: bool) -> Result<Option<String>, Throw> {
+        if holder.is_none() && self.function_named(name.strip_prefix(b"\\").unwrap_or(name)).is_some() {
+            return Ok(None);
+        }
+        // "Class::method" (the last `::`), else the holder's method.
+        let split = name.windows(2).rposition(|w| w == b"::");
+        let (class, object, method, strict) = match (split, holder) {
+            (Some(0), _) => return Ok(Some("invalid function name".into())),
+            (Some(at), holder) => {
+                // (Under an array's class, `self` and kin are not reported.)
+                let within = holder.as_ref().map(|(c, _)| Rc::clone(c));
+                let (class, object) = match self.callable_class(&name[..at], within.as_ref(), warn && holder.is_none())? {
+                    Ok(found) => found,
+                    Err(why) => return Ok(Some(why)),
+                };
+                if let Some((org, _)) = &holder {
+                    if !org.is_a(&class.lower) {
+                        return Ok(Some(format!("class {} is not a subclass of {}", text(org.name.as_bytes()), text(class.name.as_bytes()))));
+                    }
+                    if warn {
+                        self.diags.push(p8_runtime::ops::Diag::Deprecated(format!("Callables of the form [\"{}\", \"{}\"] are deprecated", text(org.name.as_bytes()), text(name))));
+                        self.report_diags();
+                    }
+                }
+                let object = holder.and_then(|(_, o)| o).or(object);
+                (class, object, &name[at + 2..], true)
+            }
+            (None, Some((class, object))) => (class, object, name, false),
+            (None, None) => return Ok(Some(format!("function \"{}\" not found or invalid function name", text(name)))),
+        };
+        let key = self.method_key(method);
+        let found = if strict && method.eq_ignore_ascii_case(b"__construct") {
+            crate::classes::method_of(&class, key).cloned()
+        } else {
+            crate::classes::method_of(&class, key).cloned().map(|m| {
+                // Code of a class naming its own private method on one of
+                // its instances means that one (as `method_frame` does).
+                match self.scope().0 {
+                    Some(scope) if !strict && *m.declaring != *scope.lower && class.is_a(&scope.lower) => match crate::classes::method_of(&scope, key) {
+                        Some(own) if own.visibility == p8_runtime::object::Visibility::Private && *own.declaring == *scope.lower => Rc::clone(own),
+                        _ => m,
+                    },
+                    _ => m,
+                }
+            })
+        };
+        // __call / __callStatic answer what is not there, or not visible.
+        let magic = |c: &Class, object: bool| c.method(if object { b"__call" } else { b"__callstatic" }).is_some();
+        let this_fits = self.frames.last().and_then(|f| f.this.as_ref()).is_some_and(|t| t.class.is_a(&class.lower));
+        let Some(m) = found else {
+            let via = if object.is_some() { magic(&class, true) } else { magic(&class, false) || (magic(&class, true) && this_fits) };
+            return Ok(if via { None } else { Some(format!("class {} does not have a method \"{}\"", text(class.name.as_bytes()), text(method))) });
+        };
+        let declaring = self.declaring(&class, &m.declaring);
+        let scope = self.scope().0;
+        let shown = || format!("{}::{}()", text(class.name.as_bytes()), text(m.name.as_bytes()));
+        let accessible = {
+            let root = self.access_class(&declaring, &m, key);
+            p8_runtime::object::visible(m.visibility, &root, scope.as_deref())
+        };
+        if !accessible && magic(&class, object.is_some()) {
+            return Ok(None);
+        }
+        if m.is_abstract {
+            return Ok(Some(format!("cannot call abstract method {}", shown())));
+        }
+        if object.is_none() && !m.is_static {
+            return Ok(Some(format!("non-static method {} cannot be called statically", shown())));
+        }
+        if !accessible {
+            return Ok(Some(format!("cannot access {} method {}", m.visibility.word(), shown())));
+        }
+        Ok(None)
     }
 }
 

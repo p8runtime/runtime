@@ -20,34 +20,10 @@ use p8_stubs::{
 /// An error a builtin call raises before it runs: the class and message.
 pub type Refused = (&'static str, String);
 
-/// zend_is_callable_ex()'s error for a value that is not callable.
+/// zend_is_callable_ex()'s error for a value that is not callable (the
+/// engine's answer, [`crate::ext::Ctx::why_not_callable`]).
 pub fn callable_error(ctx: &mut dyn crate::ext::Ctx, v: &Value) -> String {
-    match v {
-        Value::Str(s) => {
-            let name = String::from_utf8_lossy(s.as_bytes()).into_owned();
-            match name.split_once("::") {
-                Some((class, _)) if ctx.class(class.as_bytes()).is_none() => format!("class \"{class}\" not found"),
-                Some((class, method)) => format!("class {class} does not have a method \"{method}\""),
-                None => format!("function \"{name}\" not found or invalid function name"),
-            }
-        }
-        Value::Array(a) if a.len() == 2 => match (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) {
-            (Some(Value::Str(class)), Some(Value::Str(method))) => {
-                let class = String::from_utf8_lossy(class.as_bytes()).into_owned();
-                if ctx.class(class.as_bytes()).is_none() {
-                    format!("class \"{class}\" not found")
-                } else {
-                    format!("class {class} does not have a method \"{}\"", String::from_utf8_lossy(method.as_bytes()))
-                }
-            }
-            (Some(Value::Object(o)), Some(Value::Str(method))) => {
-                format!("class {} does not have a method \"{}\"", String::from_utf8_lossy(o.class.shown()), String::from_utf8_lossy(method.as_bytes()))
-            }
-            _ => "array callback must have exactly two members".into(),
-        },
-        Value::Array(_) => "array callback must have exactly two members".into(),
-        _ => "no array or string given".into(),
-    }
+    ctx.why_not_callable(v).unwrap_or_default()
 }
 
 /// Check `args` (as passed) against `sig`, converting each accepted
@@ -75,7 +51,8 @@ pub fn check(sig: &Sig, args: &mut [Value], diags: &mut Diags) -> Result<(), Ref
         let Some(param) = params.get(i).or_else(|| params.last().filter(|p| p.variadic)) else { break };
         // By reference, or plainly of a type the parameter takes: nothing
         // to check or convert (accepts would say Yes, convert would keep it).
-        if param.by_ref || plainly(param, arg) {
+        // A callable is the engine's to check ([`callback_error`]).
+        if param.by_ref || param.mask & T_CALLABLE != 0 || plainly(param, arg) {
             continue;
         }
         match accepts(param, arg) {
@@ -127,6 +104,32 @@ fn plainly(param: &Param, value: &Value) -> bool {
         Value::Array(_) => T_ARRAY,
         Value::Undef | Value::Ref(_) | Value::Object(_) => 0,
     } != 0
+}
+
+/// Whether argument `value` to `param` (a `callable` one) is for the
+/// engine to check as a callable: not null where null is taken, nor of
+/// another kind the parameter takes as it is.
+pub fn wants_callable_check(param: &Param, value: &Value) -> bool {
+    let mask = param.mask;
+    mask & T_CALLABLE != 0
+        && !param.by_ref
+        && match value {
+            Value::Null | Value::Undef => mask & T_NULL == 0,
+            Value::Str(_) => mask & T_STRING == 0,
+            Value::Array(_) => mask & T_ARRAY == 0,
+            Value::Object(_) => mask & T_OBJECT == 0,
+            Value::Ref(cell) => wants_callable_check(param, &cell.borrow()),
+            _ => true,
+        }
+}
+
+/// The TypeError for argument `i` (0-based) of `sig`, a callback that is
+/// not callable for `why` (zend_is_callable's reason): "f(): Argument #1
+/// ($callback) must be a valid callback[ or null], why".
+pub fn callback_error(sig: &Sig, i: usize, why: &str) -> Refused {
+    let param = sig.params.get(i).or_else(|| sig.params.last().filter(|p| p.variadic)).expect("a callable parameter");
+    let or_null = if param.mask & T_NULL != 0 { " or null" } else { "" };
+    ("TypeError", format!("{}(): Argument #{}{} must be a valid callback{or_null}, {why}", sig.name, i + 1, label(param)))
 }
 
 /// " ($name)" after "Argument #N"; PHP names no variadic argument.
