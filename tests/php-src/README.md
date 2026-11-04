@@ -1,13 +1,19 @@
 # php-src: the compatibility target
 
 p8's correctness gate (APS 7) is php-src's own test suite, at the version p8
-targets (PHP 8.4.27). The target and p8's recorded results live in
+targets: PHP 8.6 (Sami, 4 Nov 2026: "p8's compatibility target moves from
+PHP 8.4 to PHP 8.6"), at 8.6.0RC5 until 8.6.0 is released on 19 Nov 2026. The
+target and p8's recorded results live in
 [addiscorp/p8-test-suite](https://github.com/addiscorp/p8-test-suite):
 
-- `target.txt`: the **16,077 tests that real PHP 8.4.27 passes**. "100%" for
-  p8 means passing every one. `make-target.sh` here regenerates it (php-src's
-  `run-tests.php` in the official `php:8.4-cli` image; a test counts when its
-  JUnit entry has no failure, error or skip).
+- `target.txt`: the **18,121 tests that real PHP 8.6.0RC5 passes**. "100%" for
+  p8 means passing every one. `make-target.sh` here regenerates it: it builds
+  that PHP from the suite's `php-src.json` archive with `php-src.Dockerfile`
+  (the official `php:<version>-cli` recipe plus mbstring, which the official
+  8.6 images no longer include), runs php-src's `run-tests.php` with it, runs
+  the failures again one at a time, and counts a test when a JUnit entry has
+  no failure, error or skip. Moving to a new PHP release is: update
+  `php-src.json` in the suite, run `make-target.sh`, record a run.
 - `results.txt` and `run.json`: p8's state for each target test at a `main`
   commit. **A change may not lose a test that passes there.**
 - `php-src.json`: the php-src release, which the checkout must be at.

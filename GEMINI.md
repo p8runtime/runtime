@@ -1,6 +1,6 @@
 # p8
 
-A PHP 8.4 engine in safe Rust. Hosts use the `p8` crate only. The command-line host is `php2` (`crates/php-cli`), including `php2 -S`.
+A PHP 8.6 engine in safe Rust. Hosts use the `p8` crate only. The command-line host is `php2` (`crates/php-cli`), including `php2 -S`.
 
 Not released yet. It is graded on php-src's own tests: https://p8-test-suite.addis.gg
 
