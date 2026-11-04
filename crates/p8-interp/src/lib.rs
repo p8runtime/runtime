@@ -1080,7 +1080,7 @@ impl Context<'_> {
             return Ok(Some(pc));
         }
         let at = pc;
-        match self.step(regs, &**func, base, argc, pc) {
+        match self.step(regs, func, base, argc, pc) {
             Ok(Next::Go(next)) => {
                 pc = next;
                 // Fiber::suspend(): leave the fiber's frames where they are.
