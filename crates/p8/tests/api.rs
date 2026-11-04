@@ -205,6 +205,55 @@ fn kept_compiled_files_run_as_new_and_follow_changes() {
     assert_eq!(request(&platform, &mut isolate, &main), (0, "1111\n".into()));
 }
 
+/// opcache.file_cache: a second process (here: a second Platform, with
+/// its own symbols) compiles nothing and runs the same; a changed file is
+/// compiled again, and a damaged cache entry is compiled over.
+#[test]
+fn a_file_cache_serves_later_platforms() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("file_cache");
+    let cache = dir.join("cache");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("test dir");
+    let part = dir.join("part.php");
+    std::fs::write(&part, "<?php class P { const C = [1, 'two' => 2.5]; static function f(int $x): string { return __CLASS__ . $x . strtoupper('a'); } } echo P::f(1), P::C['two'], basename(__FILE__);").expect("write part");
+    let main = format!("<?php include {:?}; echo ' ', (fn($y) => $y * 2)(21), \"\\n\";", part.to_str().expect("utf-8 path"));
+    let run = || {
+        // Another Platform interns other names first, so its symbols differ.
+        let platform = p8::Platform::new(&[p8::extensions::STANDARD]).file_cache(&cache);
+        let _ = platform.compile(b"<?php class Other {} function other() {}", "other.php");
+        let before = platform.compiled_files();
+        let mut isolate = platform.new_isolate();
+        let out = request(&platform, &mut isolate, &main);
+        (out, platform.compiled_files() - before)
+    };
+    let expected = ((0, "P1A2.5part.php 42\n".to_string()), 2);
+    assert_eq!(run(), expected, "first run compiles both files");
+    assert_eq!(run(), ((0, "P1A2.5part.php 42\n".to_string()), 0), "second run compiles nothing");
+    // Without the cache, the same output.
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    assert_eq!(request(&platform, &mut isolate, &main), expected.0);
+    // A changed file: compiled again (its old entry stays, unused).
+    std::fs::write(&part, "<?php echo 'changed';").expect("rewrite part");
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 1));
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 0));
+    // Damaged entries (cut short, one byte changed): compiled over.
+    let entries: Vec<_> = std::fs::read_dir(&cache).expect("cache dir").map(|e| e.expect("entry").path()).collect();
+    assert_eq!(entries.len(), 4, "other.php, t.php and two part.php: {entries:?}");
+    for (i, entry) in entries.iter().enumerate() {
+        let mut bytes = std::fs::read(entry).expect("entry");
+        if i % 2 == 0 {
+            bytes.truncate(bytes.len() / 2);
+        } else {
+            let at = bytes.len() - 3;
+            bytes[at] ^= 1;
+        }
+        std::fs::write(entry, bytes).expect("damage");
+    }
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 2));
+    assert_eq!(run(), ((0, "changed 42\n".to_string()), 0));
+}
+
 #[test]
 #[should_panic(expected = "Platform that compiled it")]
 fn a_script_runs_only_where_its_names_mean_the_same() {

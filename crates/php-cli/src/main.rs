@@ -45,6 +45,15 @@ fn extensions(server: bool) -> Vec<p8::Extension> {
     all
 }
 
+/// `opcache.file_cache=<dir>`: keep compiled files in that directory, for
+/// the runs after this one (off unless set, as in PHP).
+fn file_cache(platform: p8::Platform, ini: &[(String, String)]) -> p8::Platform {
+    match ini.iter().rev().find(|(n, _)| n == "opcache.file_cache").map(|(_, v)| v.trim()) {
+        Some(dir) if !dir.is_empty() => platform.file_cache(dir),
+        _ => platform,
+    }
+}
+
 /// Run `f` with a native stack deep enough for deep PHP recursion: on a
 /// thread with a 64 MiB stack. WASI has no threads; there the binary's
 /// own stack is that size (see build.rs).
@@ -100,6 +109,7 @@ fn main() {
     let platform = p8::Platform::new(&extensions(false))
         // A file included again (a template part per post) is not compiled again.
         .keep_compiled();
+    let platform = file_cache(platform, &ini);
     let file = if named { path.clone() } else { p8::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };
     // -l: compile only, as `php -l` checks a file's syntax.
     if lint {

@@ -15,6 +15,8 @@ use p8_runtime::ops::BinOp;
 pub use p8_runtime::symbol::Sym;
 use std::sync::Arc;
 
+pub mod serial;
+
 /// A register index within the current frame.
 pub type Reg = u16;
 
