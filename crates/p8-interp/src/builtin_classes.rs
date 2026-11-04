@@ -66,11 +66,11 @@ fn declare(
     let mut table: p8_runtime::object::Methods = parent.as_ref().map_or_else(|| p8_runtime::object::Methods::new(classes.symbols), |p| p.methods.clone());
     // Constants are inherited from the parent and the interfaces, as for
     // a user class (RecursiveRegexIterator::GET_MATCH is RegexIterator's).
-    let mut constants: p8_runtime::object::Constants = parent.as_ref().map_or_else(|| p8_runtime::object::Constants::new(classes.symbols), |p| p.constants.clone());
+    let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
     for i in interfaces {
         let iface = &classes[i.to_ascii_lowercase().as_bytes()];
         for (k, c) in &iface.constants {
-            constants.entry(*k).or_insert_with(|| Rc::clone(c));
+            constants.entry(k.clone()).or_insert_with(|| Rc::clone(c));
         }
         if !all_interfaces.iter().any(|x| **x == *iface.lower) {
             all_interfaces.push(Rc::from(iface.lower.as_slice()));
@@ -91,10 +91,9 @@ fn declare(
             None => props.push(p),
         }
     }
-    let mut slots = p8_runtime::object::Slots::new(classes.symbols);
+    let mut slots = p8_runtime::object::Slots::default();
     for (i, p) in props.iter().enumerate() {
-        let s = slots.intern(p.name.as_bytes());
-        slots.entry(s).or_default().push(i);
+        slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
     }
     for (m, native, is_final) in methods {
         table.insert(
@@ -350,7 +349,7 @@ pub(crate) fn declare_spec(
     }
     for (n, value) in spec.constants {
         class.constants.insert(
-            n.as_bytes(),
+            n.as_bytes().to_vec(),
             Rc::new(p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None }),
         );
     }

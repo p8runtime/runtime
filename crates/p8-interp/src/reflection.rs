@@ -445,8 +445,8 @@ class_method!(rc_get_constant, |ctx, class, this, args| {
 });
 class_method!(rc_get_constants, |ctx, class, this, args| {
     // The class's own, then inherited ones, each in declaration order.
-    let own = class.constants.iter().filter(|(_, c)| c.declaring_name == class.name).map(|(&k, _)| class.constants.name(k).to_vec());
-    let inherited = class.constants.iter().filter(|(_, c)| c.declaring_name != class.name).map(|(&k, _)| class.constants.name(k).to_vec());
+    let own = class.constants.iter().filter(|(_, c)| c.declaring_name == class.name).map(|(k, _)| k.clone());
+    let inherited = class.constants.iter().filter(|(_, c)| c.declaring_name != class.name).map(|(k, _)| k.clone());
     let names: Vec<Vec<u8>> = own.chain(inherited).collect();
     let mut out = PhpArray::new();
     for n in names {
@@ -474,7 +474,7 @@ class_method!(rc_get_reflection_constants, |ctx, class, this, args| {
     };
     let own = class.constants.iter().filter(|(_, c)| c.declaring_name == class.name);
     let inherited = class.constants.iter().filter(|(_, c)| c.declaring_name != class.name);
-    let names: Vec<Vec<u8>> = own.chain(inherited).filter(|(_, c)| filter.is_none_or(|f| vis_bits(c.visibility) & f != 0)).map(|(&k, _)| class.constants.name(k).to_vec()).collect();
+    let names: Vec<Vec<u8>> = own.chain(inherited).filter(|(_, c)| filter.is_none_or(|f| vis_bits(c.visibility) & f != 0)).map(|(k, _)| k.clone()).collect();
     Ok(list(names.iter().map(|n| new_constant(ctx, &class, n)).collect()))
 });
 class_method!(rc_new_instance, |ctx, class, this, args| {
@@ -2058,7 +2058,7 @@ class_method!(re_get_case, |ctx, class, this, args| {
     }
 });
 class_method!(re_get_cases, |ctx, class, this, args| {
-    let names: Vec<Vec<u8>> = class.constants.iter().filter(|(_, c)| c.is_case).map(|(&k, _)| class.constants.name(k).to_vec()).collect();
+    let names: Vec<Vec<u8>> = class.constants.iter().filter(|(_, c)| c.is_case).map(|(k, _)| k.clone()).collect();
     Ok(list(names.iter().map(|n| new_case(ctx, &class, &String::from_utf8_lossy(n))).collect()))
 });
 class_method!(re_is_backed, |ctx, class, this, args| Ok(Value::Bool(class.enum_backing.is_some())));

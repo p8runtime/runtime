@@ -212,7 +212,7 @@ impl Context<'_> {
         let mut interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
         let symbols = Arc::clone(self.isolate.registry.symbols());
         let mut methods: p8_runtime::object::Methods = parent.as_ref().map_or_else(|| p8_runtime::object::Methods::new(&symbols), |p| p.methods.clone());
-        let mut constants: p8_runtime::object::Constants = parent.as_ref().map_or_else(|| p8_runtime::object::Constants::new(&symbols), |p| p.constants.clone());
+        let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
         for i in &def.interfaces {
             let iface = self.lookup_class(i)?;
             if iface.flags & CLASS_INTERFACE == 0 {
@@ -231,7 +231,7 @@ impl Context<'_> {
                 methods.entry(*k).or_insert_with(|| Rc::clone(m));
             }
             for (k, c) in &iface.constants {
-                constants.entry(*k).or_insert_with(|| Rc::clone(c));
+                constants.entry(k.clone()).or_insert_with(|| Rc::clone(c));
             }
         }
         // Properties: the parent's slots first; an own declaration
@@ -420,7 +420,7 @@ impl Context<'_> {
             // A trait's constants are the using class's own (declared by
             // it: its private ones are its to use, and reflection says so).
             for (k, c) in &t.constants {
-                constants.entry(*k).or_insert_with(|| {
+                constants.entry(k.clone()).or_insert_with(|| {
                     let mut c = p8_runtime::object::Constant::clone(c);
                     c.declaring_name = class_name.clone();
                     Rc::new(c)
@@ -459,7 +459,7 @@ impl Context<'_> {
             }
             for (case, value) in &def.cases {
                 constants.insert(
-                    case.as_bytes(),
+                    case.as_bytes().to_vec(),
                     Rc::new(Constant {
                         value: value.as_ref().map_or(Value::Null, |v| v.to_value()),
                         visibility: Visibility::Public,
@@ -491,14 +491,13 @@ impl Context<'_> {
                 );
             }
         }
-        let mut slots = p8_runtime::object::Slots::new(&symbols);
+        let mut slots = p8_runtime::object::Slots::default();
         for (i, p) in properties.iter().enumerate() {
-            let s = slots.intern(p.name.as_bytes());
-            slots.entry(s).or_default().push(i);
+            slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
         }
         for c in &def.constants {
             constants.insert(
-                c.name.as_bytes(),
+                c.name.as_bytes().to_vec(),
                 Rc::new(Constant {
                     value: c.value.to_value(),
                     visibility: c.visibility,
@@ -1538,11 +1537,10 @@ impl Context<'_> {
             self.resolve_class(regs, parent)?;
         }
         // Its constants (PHP computes them all before the first use).
-        let mut pending: Vec<(Vec<u8>, &Rc<p8_runtime::object::Constant>)> =
-            class.constants.iter().filter(|(_, c)| c.init.is_some()).map(|(&k, c)| (class.constants.name(k).to_vec(), c)).collect();
-        pending.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut pending: Vec<(&Vec<u8>, &Rc<p8_runtime::object::Constant>)> = class.constants.iter().filter(|(_, c)| c.init.is_some()).collect();
+        pending.sort_by(|a, b| a.0.cmp(b.0));
         for (name, c) in pending {
-            let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name);
+            let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.clone());
             if !self.const_cache.contains_key(&key) {
                 let scope = self.class_named(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
                 let thunk = c.init.clone().expect("filtered");
