@@ -144,6 +144,36 @@ enum Next {
     Switch,
 }
 
+/// What a handler leaves the loop to do: `Next`, or an exception (kept
+/// in `Context::thrown`), small enough to come back in registers.
+#[derive(Clone, Copy)]
+enum Flow {
+    Go(usize),
+    Switch,
+    Throw,
+}
+
+impl Context<'_> {
+    /// A handler's result as the loop takes it.
+    #[inline(always)]
+    fn flow(&mut self, r: Result<Next, Throw>) -> Flow {
+        match r {
+            Ok(Next::Go(pc)) => Flow::Go(pc),
+            Ok(Next::Switch) => Flow::Switch,
+            Err(t) => {
+                self.thrown = Some(t);
+                Flow::Throw
+            }
+        }
+    }
+
+    /// The exception a handler's `Flow::Throw` stands for.
+    #[cold]
+    fn take_thrown(&mut self) -> Throw {
+        self.thrown.take().expect("a handler's exception")
+    }
+}
+
 /// One handler function per instruction, made from `step`'s arms: the
 /// compiler allocates registers for each on its own, and dispatch is a
 /// `match` whose every arm is a call. A handler (`run`) tries its
@@ -155,38 +185,44 @@ enum Next {
 /// `reg!`/`name!` operands. Those names come from the caller, so the arms
 /// see them; `$d` is a `$` for the operand macros' own parameters.
 macro_rules! handlers {
-    ($d:tt $reg:ident $name:ident; $self:ident, $regs:ident, $clo:ident, $base:ident, $argc:ident, $at:ident, $instr:ident;
-     $insn_at:ident, $func:ident, $pc:ident, $in_main:ident, $below:ident, $w:ident;
+    ($d:tt $reg:ident $name:ident; $self:ident, $regs:ident, $clo:ident, $base:ident, $at:ident, $instr:ident;
+     $argc:ident, $insn_at:ident, $func:ident, $pc:ident, $in_main:ident, $below:ident, $w:ident;
      $( $p:pat => $b:block $(,)? )*) => {
-        // Out of the patterns' reach (a field may be called `argc` or `at`).
-        let (h_base, h_argc, h_at, h_instr) = ($base, $argc, $at, $instr);
+        // Out of the patterns' reach (a field may be called `at`).
+        let (h_base, h_at, h_instr) = ($base, $at, $instr);
         match $instr {
             $(
                 // The fields are the handler's to bind.
                 #[allow(unused_variables)]
                 $p => {
                     trait Handler {
-                        fn run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw>;
-                        fn slow(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw>;
+                        fn run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, instr: Instr) -> Flow;
+                        fn slow(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, instr: Instr) -> Result<Next, Throw>;
                     }
                     impl Handler for Context<'_> {
                         #[inline(never)]
                         // The pattern's fields are only matched here.
                         #[allow(unused_variables)]
-                        fn run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw> {
+                        fn run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, instr: Instr) -> Flow {
                             // Which instruction this is: `quick` keeps only its case.
                             if !matches!(instr, $p) {
                                 unreachable!("dispatched by its pattern");
                             }
-                            if let Some(next) = self.quick(regs, clo, base, at, instr) {
-                                return Ok(next);
+                            match self.quick(regs, clo, base, at, instr) {
+                                Some(Next::Go(pc)) => Flow::Go(pc),
+                                Some(Next::Switch) => Flow::Switch,
+                                None => {
+                                    let r = self.slow(regs, clo, base, at, instr);
+                                    self.flow(r)
+                                }
                             }
-                            self.slow(regs, clo, base, argc, at, instr)
                         }
                         #[inline(never)]
                         // Not every arm uses every binding, and some end in a return.
                         #[allow(unused_variables, unused_mut, unused_assignments, unreachable_code)]
-                        fn slow(&mut $self, $regs: &mut Vec<Value>, $clo: &Closure, $base: usize, $argc: usize, $at: usize, $instr: Instr) -> Result<Next, Throw> {
+                        fn slow(&mut $self, $regs: &mut Vec<Value>, $clo: &Closure, $base: usize, $at: usize, $instr: Instr) -> Result<Next, Throw> {
+                            // The frame's argument count.
+                            let $argc = $self.frames.last().map_or(0, |f| f.argc as usize);
                             let $insn_at = $at;
                             let $func = &*$clo.code;
                             $self.pc = $at + 1;
@@ -226,7 +262,7 @@ macro_rules! handlers {
                             Ok(Next::Go($pc))
                         }
                     }
-                    <Context<'_> as Handler>::run($self, $regs, $clo, h_base, h_argc, h_at, h_instr)
+                    <Context<'_> as Handler>::run($self, $regs, $clo, h_base, h_at, h_instr)
                 }
             )*
         }
@@ -1097,18 +1133,18 @@ impl Context<'_> {
         let mut pc = top.pc as usize;
         // The frame the instructions run in (refreshed when it changes).
         let mut func = Rc::clone(&top.func);
-        let (mut base, mut argc) = (top.base as usize, top.argc as usize);
+        let mut base = top.base as usize;
         // Fiber::throw(): the exception is raised where the fiber went on.
         if let Some(e) = self.fiber_throw.take() {
             pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
             let top = self.frames.last().expect("a frame");
             func = Rc::clone(&top.func);
-            (base, argc) = (top.base as usize, top.argc as usize);
+            base = top.base as usize;
         }
         loop {
             let at = pc;
-            match self.step(regs, &func, base, argc, at, func.code.code[at]) {
-                Ok(Next::Go(next)) => {
+            match self.step(regs, &func, base, at, func.code.code[at]) {
+                Flow::Go(next) => {
                     pc = next;
                     if self.pending_errors.is_empty() && !self.ids.has_pending() && self.fiber_suspended.is_none() {
                         continue;
@@ -1121,7 +1157,7 @@ impl Context<'_> {
                         return Ok(());
                     }
                 }
-                Ok(Next::Switch) => {
+                Flow::Switch => {
                     if self.frames.len() == self.frames.floor {
                         if !self.pending_errors.is_empty() {
                             self.dispatch_errors(regs)?;
@@ -1133,10 +1169,12 @@ impl Context<'_> {
                     }
                     pc = self.frames.last().expect("a frame").pc as usize;
                 }
-                // A class an autoloader may declare: run them, then this
-                // instruction again.
-                Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
-                Err(t) => pc = self.unwind(regs, t, at)?,
+                Flow::Throw => match self.take_thrown() {
+                    // A class an autoloader may declare: run them, then this
+                    // instruction again.
+                    Throw::Autoload(name) => pc = self.autoload_then(regs, name, at)?,
+                    t => pc = self.unwind(regs, t, at)?,
+                },
             }
             if !self.pending_errors.is_empty() || self.ids.has_pending() {
                 pc = self.after_errors(regs, pc, at)?;
@@ -1146,7 +1184,7 @@ impl Context<'_> {
             if !Rc::ptr_eq(&func, &top.func) {
                 func = Rc::clone(&top.func);
             }
-            (base, argc) = (top.base as usize, top.argc as usize);
+            base = top.base as usize;
         }
     }
 
@@ -1259,8 +1297,8 @@ impl Context<'_> {
     /// `base`): each arm below is its own handler function (`handlers!`),
     /// its common cases first (`quick`).
     #[inline(always)]
-    fn step(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize, instr: Instr) -> Result<Next, Throw> {
-        handlers! { $ reg name; self, regs, clo, base, argc, at, instr; insn_at, func, pc, in_main, below, w;
+    fn step(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, instr: Instr) -> Flow {
+        handlers! { $ reg name; self, regs, clo, base, at, instr; argc, insn_at, func, pc, in_main, below, w;
                 Instr::Move { dst, src } => {
                     let v = self.operand(w, func, src);
                     reg!(dst) = v;
@@ -1283,7 +1321,11 @@ impl Context<'_> {
                 // The one-operator arithmetic opcodes' other cases run as `Binary`.
                 Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => {
                     let Some((op, dst, a, b)) = instr.as_binary() else { unreachable!("an arithmetic opcode") };
-                    return self.step(regs, clo, base, argc, at, Instr::Binary { op, dst, a, b });
+                    return match self.step(regs, clo, base, at, Instr::Binary { op, dst, a, b }) {
+                        Flow::Go(next) => Ok(Next::Go(next)),
+                        Flow::Switch => Ok(Next::Switch),
+                        Flow::Throw => Err(self.take_thrown()),
+                    };
                 }
                 Instr::Binary { op, dst, a, b } => {
                     // Fast paths for the common int cases.

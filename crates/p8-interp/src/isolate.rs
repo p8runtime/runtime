@@ -305,6 +305,7 @@ impl Isolate {
             fibers: Vec::new(),
             fiber_suspended: None,
             fiber_throw: None,
+            thrown: None,
             fiber_exit: None,
             gc_runs: 0,
             gc_collected: 0,
@@ -479,6 +480,8 @@ pub struct Context<'i> {
     pub(crate) fiber_suspended: Option<Value>,
     /// Fiber::throw()'s exception, raised where the fiber goes on.
     pub(crate) fiber_throw: Option<Rc<Object>>,
+    /// What the instruction a handler ran threw (`Flow::Throw`).
+    pub(crate) thrown: Option<crate::Throw>,
     /// The exit unwinding a fiber being destroyed (no catch matches it).
     pub(crate) fiber_exit: Option<Rc<Object>>,
     /// gc_status(): collections run, values they freed.
