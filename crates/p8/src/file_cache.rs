@@ -81,11 +81,20 @@ impl FileCache {
     /// Keep `program` for this source and path. Best effort: a cache that
     /// cannot be written is a cache that misses.
     pub(crate) fn store(&self, source: &[u8], file: &str, program: &Program, symbols: &Symbols) {
-        let bytes = write(program, &self.engine, file, source, symbols);
+        use std::io::Write;
+        let (head, table, body) = parts(program, &self.engine, file, source, symbols);
         let _ = std::fs::create_dir_all(&self.dir);
         let target = self.path(file);
         let temp = temp_name(&self.dir);
-        if std::fs::write(&temp, &bytes).is_err() || std::fs::rename(&temp, &target).is_err() {
+        // Written piece by piece: the source and program are not copied
+        // into one buffer first.
+        let written = std::fs::File::create(&temp).and_then(|mut f| {
+            for piece in [&head[..], source, &table, &body] {
+                f.write_all(piece)?;
+            }
+            Ok(())
+        });
+        if written.is_err() || std::fs::rename(&temp, &target).is_err() {
             let _ = std::fs::remove_file(&temp);
         }
     }
@@ -97,19 +106,30 @@ fn field(h: &mut Xxh3, bytes: &[u8]) {
     h.update(bytes);
 }
 
-/// An entry's bytes: `program`, compiled by `engine` from `source` at `file`.
+/// An entry for `program`, compiled by `engine` from `source` at `file`,
+/// in the pieces it is written in: what comes before the source (MAGIC,
+/// the engine, the program's checksum, the path, the source's length),
+/// then (after the source) the program's string table and the program.
+fn parts(program: &Program, engine: &[u8; 16], file: &str, source: &[u8], symbols: &Symbols) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let (table, body) = p8_bytecode::serial::encode_parts(program, symbols);
+    let mut sum = Xxh3::new();
+    sum.update(&table);
+    sum.update(&body);
+    let mut head = Vec::with_capacity(HEADER + 16 + file.len());
+    head.extend_from_slice(MAGIC);
+    head.extend_from_slice(engine);
+    head.extend_from_slice(&sum.digest128().to_le_bytes());
+    head.extend_from_slice(&(file.len() as u64).to_le_bytes());
+    head.extend_from_slice(file.as_bytes());
+    head.extend_from_slice(&(source.len() as u64).to_le_bytes());
+    (head, table, body)
+}
+
+/// An entry's bytes, joined (for tests).
+#[cfg(test)]
 fn write(program: &Program, engine: &[u8; 16], file: &str, source: &[u8], symbols: &Symbols) -> Vec<u8> {
-    let body = p8_bytecode::serial::encode(program, symbols);
-    let mut out = Vec::with_capacity(HEADER + 16 + file.len() + source.len() + body.len());
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(engine);
-    out.extend_from_slice(&xxh3_128(&body).to_le_bytes());
-    for part in [file.as_bytes(), source] {
-        out.extend_from_slice(&(part.len() as u64).to_le_bytes());
-        out.extend_from_slice(part);
-    }
-    out.extend_from_slice(&body);
-    out
+    let (head, table, body) = parts(program, engine, file, source, symbols);
+    [&head[..], source, &table, &body].concat()
 }
 
 /// The program in an entry, if `engine` wrote it, from exactly this

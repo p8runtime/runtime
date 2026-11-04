@@ -1,7 +1,7 @@
 //! A compiled [`Program`] as bytes, and back: what a file cache stores
-//! (PHP's `opcache.file_cache`). Every string (name, literal, path) is
-//! written once, in a table at the start; reading copies the table into
-//! one buffer that all the file's texts share, and interns each name once
+//! (PHP's `opcache.file_cache`). Every distinct string (name, literal,
+//! path) is written once, in a table at the start; reading makes each one
+//! once (one text, one interned name) however often the code uses it
 //! (symbols are numbers only within one symbol table). Shared parts stay
 //! shared: a function or class referred to
 //! from two places (a file's class list and its code's declarations) is
@@ -18,8 +18,8 @@ use p8_runtime::frozen::{Frozen, Text};
 use p8_runtime::object::Visibility;
 use p8_runtime::ops::BinOp;
 use p8_runtime::symbol::Symbols;
+use p8_runtime::fast::HashMap;
 use p8_runtime::types::TypeDecl;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
@@ -35,32 +35,43 @@ const MAX_DEPTH: u32 = 2048;
 /// which refers to them by number. Reading makes each string once (and
 /// interns each name once) however often the code uses it.
 pub fn encode(program: &Program, symbols: &Symbols) -> Vec<u8> {
-    let mut w = Writer { out: Vec::new(), symbols, functions: HashMap::new(), classes: HashMap::new(), strings: HashMap::new(), table: Vec::new() };
+    let (table, body) = encode_parts(program, symbols);
+    [table, body].concat()
+}
+
+/// [`encode`]'s bytes in two parts (the string table, then the program),
+/// for a writer that writes them out without joining them first.
+pub fn encode_parts(program: &Program, symbols: &Symbols) -> (Vec<u8>, Vec<u8>) {
+    let mut w = Writer {
+        out: Vec::new(),
+        symbols,
+        functions: HashMap::default(),
+        classes: HashMap::default(),
+        strings: HashMap::default(),
+        names: HashMap::default(),
+        table: Vec::new(),
+        count: 0,
+    };
+    // The table's count goes first: room for it before the strings.
+    w.table.extend_from_slice(&[0; 4]);
     program.put(&mut w);
-    let mut out = Vec::with_capacity(4 + w.table.iter().map(|s| 4 + s.len()).sum::<usize>() + w.out.len());
-    out.extend_from_slice(&len(w.table.len()).to_le_bytes());
-    for s in &w.table {
-        out.extend_from_slice(&len(s.len()).to_le_bytes());
-        out.extend_from_slice(s);
-    }
-    out.extend_from_slice(&w.out);
-    out
+    let count = w.count.to_le_bytes();
+    w.table[..4].copy_from_slice(&count);
+    (w.table, w.out)
 }
 
 /// The program `bytes` hold, its names interned in `symbols`; None when
 /// they are not exactly what [`encode`] writes.
 pub fn decode(bytes: &[u8], symbols: &Symbols) -> Option<Program> {
-    let mut r = Reader { bytes, at: 0, symbols, functions: Vec::new(), classes: Vec::new(), table: Arc::from(&[][..]), spans: Vec::new(), syms: Vec::new(), files: Vec::new(), depth: 0 };
+    let mut r = Reader { bytes, at: 0, symbols, functions: Vec::new(), classes: Vec::new(), spans: Vec::new(), texts: Vec::new(), syms: Vec::new(), files: Vec::new(), depth: 0 };
     let n = r.count().ok()?;
-    // The strings' bytes, copied once into one buffer every text of the
-    // file shares (a text is a range of it: no allocation per text).
     r.spans.reserve(n);
     for _ in 0..n {
         let len = r.count().ok()?;
         r.spans.push((r.at, len));
         r.take(len).ok()?;
     }
-    r.table = Arc::from(&bytes[..r.at]);
+    r.texts = vec![None; n];
     r.syms = vec![None; n];
     r.files = vec![None; n];
     let program = Program::get(&mut r).ok()?;
@@ -79,9 +90,14 @@ struct Writer<'a> {
     /// reference is written as its number.
     functions: HashMap<usize, u32>,
     classes: HashMap<usize, u32>,
-    /// The distinct strings, by content and in order of first use.
+    /// The distinct strings' numbers, by content; and each symbol's (so a
+    /// name is looked up in the symbol table once).
     strings: HashMap<Vec<u8>, u32>,
-    table: Vec<Vec<u8>>,
+    names: HashMap<Sym, u32>,
+    /// The strings as written (each its length, then its bytes), in order
+    /// of first use, and how many.
+    table: Vec<u8>,
+    count: u32,
 }
 
 impl Writer<'_> {
@@ -91,16 +107,20 @@ impl Writer<'_> {
 
     /// A string, as its number in the file's table.
     fn string(&mut self, b: &[u8]) {
-        let n = match self.strings.get(b) {
-            Some(&n) => n,
-            None => {
-                let n = len(self.table.len());
-                self.strings.insert(b.to_vec(), n);
-                self.table.push(b.to_vec());
-                n
-            }
-        };
+        let n = self.string_number(b);
         n.put(self);
+    }
+
+    fn string_number(&mut self, b: &[u8]) -> u32 {
+        if let Some(&n) = self.strings.get(b) {
+            return n;
+        }
+        let n = self.count;
+        self.count += 1;
+        self.table.extend_from_slice(&len(b.len()).to_le_bytes());
+        self.table.extend_from_slice(b);
+        self.strings.insert(b.to_vec(), n);
+        n
     }
 }
 
@@ -111,10 +131,10 @@ struct Reader<'a> {
     /// The functions and classes read so far, in the order written.
     functions: Vec<Arc<Function>>,
     classes: Vec<Arc<ClassDef>>,
-    /// The bytes holding the file's strings, where each string is in them
-    /// (start, length), and what names and paths were read as (made once).
-    table: Arc<[u8]>,
+    /// Where each of the file's strings is (start, length), and what it
+    /// was read as so far (each made once).
     spans: Vec<(usize, usize)>,
+    texts: Vec<Option<Text>>,
     syms: Vec<Option<Sym>>,
     files: Vec<Option<Arc<str>>>,
     depth: u32,
@@ -149,9 +169,9 @@ impl<'a> Reader<'a> {
     }
 
     /// String `n`'s bytes.
-    fn string_bytes(&self, n: usize) -> &[u8] {
+    fn string_bytes(&self, n: usize) -> &'a [u8] {
         let (start, len) = self.spans[n];
-        &self.table[start..start + len]
+        &self.bytes[start..start + len]
     }
 
     fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Got<T>) -> Got<T> {
@@ -299,22 +319,31 @@ impl<A: Code, B: Code, C: Code> Code for (A, B, C) {
 }
 
 /// A text: made once per file, then shared.
+/// A text: made once per file, then shared.
 impl Code for Text {
     fn put(&self, w: &mut Writer) {
         w.string(self.as_bytes());
     }
     fn get(r: &mut Reader) -> Got<Self> {
         let n = r.string()?;
-        let (start, len) = r.spans[n];
-        Text::in_buffer(&r.table, start, len).ok_or(Bad)
+        let bytes = r.string_bytes(n);
+        Ok(r.texts[n].get_or_insert_with(|| Text::from(bytes)).clone())
     }
 }
 
 /// A symbol as its name, interned again when read (once per file).
 impl Code for Sym {
     fn put(&self, w: &mut Writer) {
-        let name = w.symbols.name(*self);
-        w.string(&name);
+        let n = match w.names.get(self) {
+            Some(&n) => n,
+            None => {
+                let name = w.symbols.name(*self);
+                let n = w.string_number(&name);
+                w.names.insert(*self, n);
+                n
+            }
+        };
+        n.put(w);
     }
     fn get(r: &mut Reader) -> Got<Self> {
         let n = r.string()?;
