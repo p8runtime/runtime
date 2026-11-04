@@ -100,7 +100,8 @@ impl<'src, 'ast> Parser<'src, 'ast> {
 
     pub(super) fn parse_name(&mut self) -> Name<'ast> {
         let start = self.current_token.span.start;
-        let mut parts = std::vec::Vec::new();
+        // Built in the arena the name lives in: no heap vector to copy and free.
+        let mut parts = bumpalo::collections::Vec::new_in(self.arena);
 
         if self.current_token.kind == TokenKind::NsSeparator {
             parts.push(self.current_token);
@@ -139,7 +140,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         };
 
         Name {
-            parts: self.arena.alloc_slice_copy(&parts),
+            parts: parts.into_bump_slice(),
             span: Span::new(start, end),
         }
     }
