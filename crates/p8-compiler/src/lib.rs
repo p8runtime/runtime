@@ -3339,7 +3339,9 @@ impl<'src> Compiler<'src> {
     }
 
     /// Call the callable [a, b] (a method named at run time).
-    fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
+    /// The result goes to `hint` when there is one (see `out`; `mark` is
+    /// where the call's temporaries start).
+    fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg], hint: Option<Reg>, mark: usize) -> Result<Reg> {
         let callee = f.temp();
         f.emit(Instr::NewArray { dst: callee, n: 0 });
         f.emit(Instr::ArrayPush { arr: callee, val: a, take: false });
@@ -3348,8 +3350,9 @@ impl<'src> Compiler<'src> {
             return self.spread_call(f, callee, args);
         }
         let (base, argc) = self.value_args(f, args, callee)?;
-        f.emit(Instr::CallValue { dst: base, callee, base, argc });
-        Ok(base)
+        let dst = out(f, hint, mark);
+        f.emit(Instr::CallValue { dst, callee, base, argc });
+        Ok(dst)
     }
 
     /// A method call's arguments. The method is known only when the call
@@ -4458,7 +4461,7 @@ impl<'src> Compiler<'src> {
                     f.constant(Frozen::Str(Text::from(self.class_name(written).as_slice())))
                 };
                 let m = f.constant(Frozen::Str(Text::from(self.text(*method))));
-                self.call_pair(f, name, m, args)?
+                self.call_pair(f, name, m, args, hint, mark)?
             }
             Expr::MethodCall { target, method, args, .. } if is_placeholder(args) => {
                 // `$o->m(...)`: a Closure of [$o, 'm'].
@@ -4509,7 +4512,7 @@ impl<'src> Compiler<'src> {
                 if text.starts_with(b"$") {
                     // `$o->$m()`: the callable [$o, $m].
                     let m = self.expr(f, method)?;
-                    return self.call_pair(f, obj, m, args);
+                    return self.call_pair(f, obj, m, args, hint, mark);
                 }
                 let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
@@ -4518,8 +4521,11 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
                     |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
                 )?;
-                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
-                base
+                // Straight into where the value goes (as a function call's
+                // is): no copy left behind in the arguments' registers.
+                let dst = out(f, hint, mark);
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
+                dst
             }
             // `parent::$prop::get()` / `::set($v)`: the parent's hook (or
             // its stored value when the parent's property has none).
@@ -4535,8 +4541,9 @@ impl<'src> Compiler<'src> {
                 let display = [self.text(*prop), b"::", self.text(*m).to_ascii_lowercase().as_slice()].concat();
                 let site = self.named_site(f, &display);
                 let (base, argc) = self.args_by_value(f, args)?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
-                base
+                let dst = out(f, hint, mark);
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc });
+                dst
             }
             Expr::StaticCall { class: class_expr, method, args, .. } => {
                 let class = self.class_ref(f, class_expr)?;
@@ -4559,7 +4566,7 @@ impl<'src> Compiler<'src> {
                         }
                     };
                     let m = self.expr(f, method)?;
-                    return self.call_pair(f, name, m, args);
+                    return self.call_pair(f, name, m, args, hint, mark);
                 }
                 let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
@@ -4568,8 +4575,11 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
                     |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
                 )?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
-                base
+                // Straight into where the value goes (as a function call's
+                // is): no copy left behind in the arguments' registers.
+                let dst = out(f, hint, mark);
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc });
+                dst
             }
             // `C::${expr}`, `C::$$v`: a static property named when it runs.
             Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
@@ -4793,9 +4803,10 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::NullsafeMethodCall { target, method, args, .. } => {
-                // Null: no call, and its arguments are not evaluated.
+                // Null: no call, and its arguments are not evaluated. The
+                // result straight into where it goes (no copy left behind).
                 let obj = self.expr(f, target)?;
-                let dst = f.temp();
+                let dst = hint.unwrap_or_else(|| f.temp());
                 let null = f.constant(Frozen::Null);
                 let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
                 let Expr::Variable { name, .. } = method else {
@@ -4809,8 +4820,7 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
                     |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
                 )?;
-                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
-                f.emit(Instr::Move { dst, src: base });
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(is_null, f.here());
                 f.emit(Instr::LoadNull { dst });
@@ -5062,9 +5072,12 @@ impl<'src> Compiler<'src> {
         if dynamic {
             let callee = self.expr(f, func)?;
             let (base, argc) = self.value_args(f, args, callee)?;
-            f.emit(Instr::CallValue { dst: base, callee, base, argc });
-            let _ = (span, hint, mark);
-            return Ok(base);
+            // Straight into where the value goes (as a named call's is): no
+            // copy left behind in the arguments' registers.
+            let dst = out(f, hint, mark);
+            f.emit(Instr::CallValue { dst, callee, base, argc });
+            let _ = span;
+            return Ok(dst);
         }
         let Expr::Variable { name, .. } = func else { unreachable!("a name") };
         let text = self.text(*name);
