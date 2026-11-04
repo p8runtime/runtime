@@ -2149,7 +2149,7 @@ impl<'src> Emitter<'src> {
             Expr::Integer { value, .. } => Some(integer_literal(value)),
             Expr::String { value, .. } => {
                 let s = string_literal(value);
-                Some(Val::String(s.into()))
+                Some(Val::String(s.into_owned().into()))
             }
             Expr::Boolean { value, .. } => Some(Val::Bool(*value)),
             Expr::Null { .. } => Some(Val::Null),
@@ -2565,7 +2565,7 @@ impl<'src> Emitter<'src> {
             }
             Expr::String { value, .. } => {
                 let s = string_literal(value);
-                let idx = self.add_constant(Val::String(s.into()));
+                let idx = self.add_constant(Val::String(s.into_owned().into()));
                 self.chunk.code.push(OpCode::Const(idx as u16));
             }
             Expr::InterpolatedString { parts, .. } => {
@@ -4986,7 +4986,7 @@ impl<'src> Emitter<'src> {
             },
             Expr::Integer { value, .. } => integer_literal(value),
             Expr::Float { value, .. } => Val::Float(float_literal(value)),
-            Expr::String { value, .. } => Val::String(string_literal(value).into()),
+            Expr::String { value, .. } => Val::String(string_literal(value).into_owned().into()),
             Expr::Boolean { value, .. } => Val::Bool(*value),
             Expr::Null { .. } => Val::Null,
             Expr::Array { items, .. } => {

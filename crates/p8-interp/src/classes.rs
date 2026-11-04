@@ -847,7 +847,8 @@ impl Context<'_> {
     /// `parent::` keep the caller's called class.
     pub(crate) fn static_frame(&mut self, func: &Function, class: u16, lower: &[u8], display: &[u8], w: &[Value]) -> Result<MethodFrame, Throw> {
         let target = self.class_of(func, class, w)?;
-        let Some(method) = target.method(lower).cloned() else {
+        // Borrowed from the class: a call must not copy the declaration.
+        let Some(method) = target.method(lower) else {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(m);
             }
@@ -857,8 +858,9 @@ impl Context<'_> {
             ));
         };
         let declaring = self.declaring(&target, &method.declaring);
-        let (scope, called) = self.scope();
-        if !visible(method.visibility, &self.access_class(&declaring, &method, lower), scope.as_deref()) {
+        let access = self.access_class(&declaring, method, lower);
+        let scope = self.frames.last().and_then(|f| f.scope.as_deref());
+        if !visible(method.visibility, &access, scope) {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(m);
             }
@@ -872,11 +874,11 @@ impl Context<'_> {
         }
         let this = self.frames.last().and_then(|f| f.this.clone());
         let forward = matches!(func.classes[class as usize], ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope);
-        let fframe = self.code_of(&method);
+        let fframe = self.code_of(method);
         if method.is_static {
-            let called = match called {
-                Some(c) if forward && c.is_a(&target.lower) => c,
-                _ => target,
+            let called = match self.frames.last().and_then(|f| f.called.as_ref()) {
+                Some(c) if forward && c.is_a(&target.lower) => Rc::clone(c),
+                _ => Rc::clone(&target),
             };
             return Ok(MethodFrame::method(fframe, None, declaring, called));
         }
@@ -1305,12 +1307,21 @@ impl Context<'_> {
         }
         match class.constants.get(name.as_bytes()) {
             Some(c) => {
-                let declaring = self.classes.get(&c.declaring_name.as_bytes().to_ascii_lowercase()).cloned().unwrap_or_else(|| Rc::clone(&class));
-                if !visible(c.visibility, &declaring, self.scope().0.as_deref()) {
-                    return Err(self.throw(
-                        "Error",
-                        format!("Cannot access {} constant {}::{}", c.visibility.word(), text(&class.name), text(&name)),
-                    ));
+                // Only a private or protected constant needs its declaring
+                // class (zend_verify_const_access); the class itself when it
+                // declared it, else looked up by name.
+                if c.visibility != Visibility::Public {
+                    let declaring = if c.declaring_name == class.name {
+                        Rc::clone(&class)
+                    } else {
+                        self.classes.get(&c.declaring_name.as_bytes().to_ascii_lowercase()).cloned().unwrap_or_else(|| Rc::clone(&class))
+                    };
+                    if !visible(c.visibility, &declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
+                        return Err(self.throw(
+                            "Error",
+                            format!("Cannot access {} constant {}::{}", c.visibility.word(), text(&class.name), text(&name)),
+                        ));
+                    }
                 }
                 if c.is_case {
                     return Ok(Value::Object(self.enum_case(&class, name.as_bytes())));

@@ -111,10 +111,16 @@ pub fn float(value: &[u8]) -> f64 {
 
 /// The value of a string literal token: '...' (only \\ and \' are escapes),
 /// "..." (full escapes) or an unquoted interpolation/heredoc part.
-pub fn string(value: &[u8]) -> Vec<u8> {
+pub fn string(value: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    use std::borrow::Cow;
     let quoted = |q: u8| value.len() >= 2 && value[0] == q && value[value.len() - 1] == q;
+    // Without a backslash the value is its own bytes: nothing to copy.
+    let plain = |inner: &[u8]| !inner.contains(&b'\\');
     if quoted(b'\'') {
         let inner = &value[1..value.len() - 1];
+        if plain(inner) {
+            return Cow::Borrowed(inner);
+        }
         let mut out = Vec::with_capacity(inner.len());
         let mut i = 0;
         while i < inner.len() {
@@ -126,10 +132,13 @@ pub fn string(value: &[u8]) -> Vec<u8> {
                 i += 1;
             }
         }
-        out
+        Cow::Owned(out)
     } else if quoted(b'"') {
-        unescape(&value[1..value.len() - 1])
+        let inner = &value[1..value.len() - 1];
+        if plain(inner) { Cow::Borrowed(inner) } else { Cow::Owned(unescape(inner)) }
+    } else if plain(value) {
+        Cow::Borrowed(value)
     } else {
-        unescape(value)
+        Cow::Owned(unescape(value))
     }
 }

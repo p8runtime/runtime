@@ -48,7 +48,7 @@ enum ConstKey {
     Bool(bool),
     Int(i64),
     Float(u64),
-    Str(Vec<u8>),
+    Str(Text),
 }
 
 /// A function's body: statements, or an arrow function's expression.
@@ -160,8 +160,10 @@ impl FnBuilder<'_> {
             ret_type: None,
             strict: false,
             name,
-            code: Vec::new(),
-            lines: Vec::new(),
+            // Sized for a typical function body: the first several
+            // emits do not each grow the vectors.
+            code: Vec::with_capacity(32),
+            lines: Vec::with_capacity(32),
             consts: Vec::new(),
             const_index: HashMap::default(),
             cvs: IndexMap::default(),
@@ -278,13 +280,20 @@ impl FnBuilder<'_> {
     }
 
     fn cv(&mut self, name: &[u8]) -> Reg {
-        let next = self.cvs.len();
-        let index = *self.cvs.entry(name.to_vec()).or_insert(next);
+        // The name is copied only for a variable not seen before.
+        let index = match self.cvs.get(name) {
+            Some(&i) => i,
+            None => {
+                let next = self.cvs.len();
+                self.cvs.insert(name.to_vec(), next);
+                next
+            }
+        };
         let r = reg(CV, index);
         // In a function, a superglobal is the global table's variable at
         // each use (`unset($GLOBALS['_GET'])` then `$_GET = …` makes it
         // again, where a binding made once would keep the old one).
-        if self.auto_globals && SUPERGLOBALS.iter().any(|g| g.as_bytes() == name) {
+        if self.auto_globals && name.first() == Some(&b'_') && SUPERGLOBALS.iter().any(|g| g.as_bytes() == name) {
             let n = self.constant(Frozen::Str(Text::from(name)));
             self.emit(Instr::rare(Rare::AutoGlobal, r, n, 0, 0));
         }
@@ -297,7 +306,7 @@ impl FnBuilder<'_> {
             Frozen::Bool(b) => ConstKey::Bool(*b),
             Frozen::Int(i) => ConstKey::Int(*i),
             Frozen::Float(f) => ConstKey::Float(f.to_bits()),
-            Frozen::Str(s) => ConstKey::Str(s.as_bytes().to_vec()),
+            Frozen::Str(s) => ConstKey::Str(s.clone()),
             // Arrays are not shared between constant registers.
             Frozen::Array(_) => {
                 self.consts.push(value);
@@ -1061,8 +1070,16 @@ impl<'src> Compiler<'src> {
         if text.contains(&b'\\') {
             return (self.class_name(text), None);
         }
-        let alias = if lower_alias { text.to_ascii_lowercase() } else { text.to_vec() };
-        if let Some(full) = imports.get(&alias) {
+        // The import named so, if any (lowercased for function aliases;
+        // copied only when there are imports and the name has capitals).
+        let imported = if imports.is_empty() {
+            None
+        } else if lower_alias && text.iter().any(u8::is_ascii_uppercase) {
+            imports.get(&text.to_ascii_lowercase())
+        } else {
+            imports.get(text)
+        };
+        if let Some(full) = imported {
             return (full.clone(), None);
         }
         if self.ns.is_empty() {
@@ -2659,11 +2676,11 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::MagicConst { kind: MagicConstKind::File | MagicConstKind::Dir | MagicConstKind::Line | MagicConstKind::Namespace, .. } => true,
             Expr::Binary { left, op: BinaryOp::Concat, right, .. } => self.foldable(left) && self.foldable(right),
-            Expr::Unary { op: UnaryOp::Minus | UnaryOp::Plus, expr, .. } => self.literal(expr).is_some(),
+            Expr::Unary { op: UnaryOp::Minus | UnaryOp::Plus, expr, .. } => is_literal(expr),
             Expr::Array { items, .. } => items.iter().all(|i| {
-                !i.unpack && !i.by_ref && i.key.is_none_or(|k| matches!(self.literal(k), Some(v) if !matches!(v, Frozen::Float(_)))) && self.foldable(i.value)
+                !i.unpack && !i.by_ref && i.key.is_none_or(|k| is_literal(k) && !float_key(k)) && self.foldable(i.value)
             }),
-            other => self.literal(other).is_some(),
+            other => is_literal(other),
         }
     }
 
@@ -3291,7 +3308,7 @@ impl<'src> Compiler<'src> {
                 Number::Float(x) => Frozen::Float(x),
             },
             Expr::Float { value, .. } => Frozen::Float(literal::float(value)),
-            Expr::String { value, .. } => Frozen::Str(Text::from(literal::string(value))),
+            Expr::String { value, .. } => Frozen::Str(Text::from(&*literal::string(value))),
             Expr::Boolean { value, .. } => Frozen::Bool(*value),
             Expr::Null { .. } => Frozen::Null,
             _ => return None,
@@ -4842,7 +4859,10 @@ impl<'src> Compiler<'src> {
             self.registry.lookup(global).map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
-        let site = f.site(false, Text::from(lower.as_slice()), Text::from(text));
+        // One text for both when the name is written in lowercase.
+        let display = Text::from(text);
+        let lower_text = if lower.as_slice() == text { display.clone() } else { Text::from(lower.as_slice()) };
+        let site = f.site(false, lower_text, display);
         if let Some(global) = &fallback {
             f.sites[site as usize].fallback = Some(Text::from(global.as_slice()));
         }
@@ -4854,8 +4874,7 @@ impl<'src> Compiler<'src> {
             None => 0,
         };
         let all: Vec<Reg> = (0..args.len() + extra).map(|_| f.temp()).collect();
-        let regs: Vec<Reg> = all[..args.len()].to_vec();
-        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+        for (n, (arg, r)) in args.iter().zip(&all[..args.len()]).enumerate() {
             if arg.unpack || arg.name.is_some() {
                 return Err(self.unsupported(arg.span, "spread or named arguments"));
             }
@@ -4956,4 +4975,19 @@ fn assign_binop(op: AssignOp) -> Option<BinOp> {
         AssignOp::Pow => BinOp::Pow,
         AssignOp::Coalesce => return None,
     })
+}
+
+/// Whether `e` is a literal (what Compiler::literal makes a constant of),
+/// without making it: a string literal's value is a copy.
+fn is_literal(e: &Expr) -> bool {
+    matches!(e, Expr::Integer { .. } | Expr::Float { .. } | Expr::String { .. } | Expr::Boolean { .. } | Expr::Null { .. })
+}
+
+/// Whether literal `e` is a float (an integer literal can overflow to one).
+fn float_key(e: &Expr) -> bool {
+    match e {
+        Expr::Float { .. } => true,
+        Expr::Integer { value, .. } => matches!(literal::integer(value), Number::Float(_)),
+        _ => false,
+    }
 }

@@ -27,6 +27,22 @@ enum LexerState {
     LookingForVarName,
 }
 
+/// The bytes a name continues with: ASCII letters, digits, `_`, and any
+/// byte from 0x80 (PHP's LABEL is [a-zA-Z0-9_\x80-\xff]).
+const IDENT: [bool; 256] = {
+    let mut t = [false; 256];
+    let mut c = 0;
+    while c < 256 {
+        let b = c as u8;
+        t[c] = b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+        c += 1;
+    }
+    t
+};
+
+/// The longest keyword keyword_lookup knows (`__halt_compiler`).
+const KEYWORD_MAX: usize = 15;
+
 fn keyword_lookup(text: &[u8]) -> TokenKind {
     match text {
         b"or" => TokenKind::LogicalOr,
@@ -177,24 +193,13 @@ impl<'src> Lexer<'src> {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.cursor < self.input.len() {
-            if self.input[self.cursor].is_ascii_whitespace() {
-                self.cursor += 1;
-            } else {
-                break;
-            }
-        }
+        let rest = &self.input[self.cursor..];
+        self.cursor += rest.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(rest.len());
     }
 
     fn read_identifier(&mut self) {
-        while self.cursor < self.input.len() {
-            let c = self.input[self.cursor];
-            if c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80 {
-                self.cursor += 1;
-            } else {
-                break;
-            }
-        }
+        let rest = &self.input[self.cursor..];
+        self.cursor += rest.iter().position(|&c| !IDENT[c as usize]).unwrap_or(rest.len());
     }
 
     fn read_number(&mut self) -> TokenKind {
@@ -1652,10 +1657,19 @@ impl<'src> Iterator for Lexer<'src> {
                 } else {
                     let is_all_lowercase = text.iter().all(|c| !c.is_ascii_uppercase());
 
+                    // No keyword is longer than KEYWORD_MAX (__halt_compiler):
+                    // a longer name is an identifier, and a shorter one is
+                    // lowercased on the stack, not into a new allocation.
                     let mut kind = if is_all_lowercase {
                         keyword_lookup(text)
+                    } else if text.len() <= KEYWORD_MAX {
+                        let mut lower = [0u8; KEYWORD_MAX];
+                        for (l, c) in lower.iter_mut().zip(text) {
+                            *l = c.to_ascii_lowercase();
+                        }
+                        keyword_lookup(&lower[..text.len()])
                     } else {
-                        keyword_lookup(&text.to_ascii_lowercase())
+                        TokenKind::Identifier
                     };
 
                     match kind {
