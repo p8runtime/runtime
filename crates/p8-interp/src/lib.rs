@@ -1524,14 +1524,12 @@ impl Context<'_> {
                         self.aa_write(regs, &root, &derefed, false, arrayaccess::DimOp::Unset)?;
                         return Ok(Next::Go(pc));
                     }
-                    let slot = &mut reg!(var);
-                    let mut holder = match slot {
-                        Value::Ref(cell) => cell.borrow().clone(),
-                        v => v.clone(),
+                    // In place: a copy of the variable's array would make
+                    // every unset copy the whole array (copy-on-write).
+                    match &mut reg!(var) {
+                        Value::Ref(cell) => unset_path(&mut cell.borrow_mut(), &key_values),
+                        v => unset_path(v, &key_values),
                     };
-                    if unset_path(&mut holder, &key_values) {
-                        assign(w, var, holder);
-                    }
                 }
                 Instr::IterInit { src, iter, end } => {
                     let v = self.operand(w, func, src);
