@@ -385,6 +385,9 @@ impl Context<'_> {
 
     /// Per-request state for an extension (see [`Ctx::state`]).
     pub fn set_state(&mut self, key: &'static str, value: Value) {
+        if key == "header_callback" {
+            self.header_callback_set = true;
+        }
         self.ext_state.insert(key, value);
     }
 
@@ -1760,7 +1763,10 @@ impl Context<'_> {
                 Instr::MethodArgByRef { dst, obj, method, n } => {
                     let site = &func.sites[method as usize];
                     reg!(dst) = Value::Bool(match reg!(obj).deref() {
-                        Value::Object(o) => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
+                        Value::Object(o) => match self.cached_takes_ref(&clo.methods[method as usize], &o.class, n as usize) {
+                            Some(by_ref) => by_ref,
+                            None => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
+                        },
                         _ => false,
                     });
                 }
@@ -1773,8 +1779,11 @@ impl Context<'_> {
                 }
                 Instr::StaticArgByRef { dst, class, method, n } => {
                     let site = &func.sites[method as usize];
-                    let target = self.class_of(func, class, w)?;
-                    reg!(dst) = Value::Bool(self.method_takes_ref(&target, Some(site.sym), n as usize));
+                    let target = self.class_at(clo, class, w)?;
+                    reg!(dst) = Value::Bool(match self.cached_takes_ref(&clo.methods[method as usize], &target, n as usize) {
+                        Some(by_ref) => by_ref,
+                        None => self.method_takes_ref(&target, Some(site.sym), n as usize),
+                    });
                 }
                 // Passed (and not a hole a named argument skipped): no default.
                 Instr::ArgDefault { n, target } => {
@@ -3075,8 +3084,10 @@ impl Context<'_> {
         let func = match m.func {
             classes::Code::User(func) => func,
             classes::Code::Native(native, name) => {
-                let mut buf: Vec<Value> = regs[args..args + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)).collect();
-                let saved = std::mem::replace(&mut self.native_class, m.called.clone());
+                // (The arguments' buffer is the context's, kept for its capacity.)
+                let mut buf = std::mem::take(&mut self.arg_buf);
+                buf.extend(regs[args..args + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::Undef)));
+                let saved = std::mem::replace(&mut self.native_class, m.called.take());
                 // Lent, as to a builtin: Closure::call runs PHP code, and
                 // a class it looks up is autoloaded with it running.
                 self.isolate.regs = std::mem::take(regs);
@@ -3093,7 +3104,8 @@ impl Context<'_> {
                 {
                     self.failed_call(name.as_bytes(), Some((&scope.name, m.this.is_some())), &buf);
                 }
-                drop(buf);
+                buf.clear();
+                self.arg_buf = buf;
                 let v = r?;
                 if ret != NO_RET {
                     regs[ret as usize] = v;
@@ -3452,7 +3464,7 @@ impl Context<'_> {
         // a string parameter: that takes the path that can call back.
         let objects = regs[start..start + argc as usize].iter().any(|v| matches!(v, Value::Object(_)));
         // Before the headers go out, output may run header_register_callback's callback.
-        let header_due = !self.out.started && self.ext_state.contains_key("header_callback");
+        let header_due = !self.out.started && self.header_callback_set && self.ext_state.contains_key("header_callback");
         if !self.isolate.registry.reenters(i) && !objects && !header_due {
             // The common case: the builtin works on the registers directly.
             let args = &mut regs[start..start + argc as usize];
@@ -3502,16 +3514,19 @@ impl Context<'_> {
     }
 
     fn run_builtin(&mut self, i: usize, args: &mut [Value]) -> Result<Value, Throw> {
-        if let Some(message) = self.isolate.registry.deprecation(i) {
+        let call = *self.isolate.registry.call(i);
+        if call.deprecated
+            && let Some(message) = self.isolate.registry.deprecation(i)
+        {
             self.diags.push(Diag::Deprecated(message.to_string()));
         }
-        if let Some(sig) = self.isolate.registry.sig(i) {
+        if let Some(sig) = call.sig {
             self.stringify_args(sig, args)?;
-            let mut checked = p8_runtime::args::check(sig, args, &mut self.diags);
+            let mut checked = p8_runtime::args::check_counted(sig, call.counts, args, &mut self.diags);
             self.report_diags();
             // Callbacks: whether each can be called from here (a builtin
             // taking one is a builtin that may run PHP code).
-            if checked.is_ok() && self.isolate.registry.reenters(i) {
+            if checked.is_ok() && call.reenters {
                 checked = self.check_callbacks(sig, args)?;
             }
             if let Err((class, message)) = checked {
@@ -3523,9 +3538,12 @@ impl Context<'_> {
             }
         }
         let outer = self.running_builtin.replace(i);
-        let mut r = (self.isolate.registry.function(i).run)(self, args);
+        let mut r = (call.run)(self, args);
         self.running_builtin = outer;
-        if let Some(t) = self.header_throw.take() {
+        // (Checked before it is taken: taking moves the whole slot.)
+        if self.header_throw.is_some()
+            && let Some(t) = self.header_throw.take()
+        {
             r = Err(t);
         }
         match r {
@@ -4750,6 +4768,10 @@ impl Ctx for Context<'_> {
     }
 
     fn state(&mut self, key: &'static str) -> &mut Value {
+        // (A builtin call checks the flag before looking the callback up.)
+        if key == "header_callback" {
+            self.header_callback_set = true;
+        }
         self.ext_state.entry(key).or_insert(Value::Null)
     }
 

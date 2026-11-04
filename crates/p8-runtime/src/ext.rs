@@ -378,6 +378,20 @@ pub struct Builtin {
     pub by_ref: &'static [usize],
 }
 
+/// What calling a builtin needs, read from one place on every call: the
+/// function, its stub signature (None: its arguments are not checked) with
+/// the argument counts it takes ([`crate::args::counts`], worked out once),
+/// whether PHP deprecates it (the message: [`Registry::deprecation`]) and
+/// whether it may run PHP code (the registers are lent to it).
+#[derive(Clone, Copy)]
+pub struct Call {
+    pub run: Run,
+    pub sig: Option<&'static p8_stubs::Sig>,
+    pub counts: (usize, usize),
+    pub deprecated: bool,
+    pub reenters: bool,
+}
+
 /// A constant's value as an extension declares it.
 #[derive(Debug, Clone, Copy)]
 pub enum Constant {
@@ -415,12 +429,10 @@ pub struct Registry {
     /// file, dated, or the SAPI's log), as the standard extension does it.
     error_logger: Option<fn(&mut dyn Ctx, &[u8])>,
     functions: Vec<&'static Builtin>,
-    /// Each function's stub signature (its argument checks), by index.
-    sigs: Vec<Option<&'static p8_stubs::Sig>>,
+    /// What a call of each function reads, by index (see [`Call`]).
+    calls: Vec<Call>,
     /// "Function f() is deprecated…" for the functions PHP deprecates.
     deprecations: Vec<Option<String>>,
-    /// Whether each function takes a callable (and so may run PHP code).
-    reenters: Vec<bool>,
     /// The functions by name (lowercase).
     index: crate::fast::HashMap<crate::symbol::Sym, usize>,
     /// The constants by name (namespace lowercased, see `const_key`).
@@ -552,12 +564,18 @@ impl Registry {
             let i = self.functions.len();
             self.functions.push(f);
             let sig = p8_stubs::lookup(f.name.as_bytes());
-            self.sigs.push(sig);
-            self.deprecations.push(sig.and_then(p8_stubs::deprecation));
-            // A callable, or a Traversable (gone through by running its code).
-            self.reenters.push(sig.is_some_and(|s| {
-                s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
-            }));
+            let deprecation = sig.and_then(p8_stubs::deprecation);
+            self.calls.push(Call {
+                run: f.run,
+                sig,
+                counts: sig.map_or((0, 0), crate::args::counts),
+                deprecated: deprecation.is_some(),
+                // A callable, or a Traversable (gone through by running its code).
+                reenters: sig.is_some_and(|s| {
+                    s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
+                }),
+            });
+            self.deprecations.push(deprecation);
             let sym = self.symbols.intern(f.name.as_bytes());
             self.index.insert(sym, i);
         }
@@ -657,7 +675,13 @@ impl Registry {
     /// Builtin `i`'s signature from PHP's stubs, which its arguments are
     /// checked against before it runs.
     pub fn sig(&self, i: usize) -> Option<&'static p8_stubs::Sig> {
-        self.sigs[i]
+        self.calls[i].sig
+    }
+
+    /// What a call of builtin `i` reads (one entry, for the call path).
+    #[inline]
+    pub fn call(&self, i: usize) -> &Call {
+        &self.calls[i]
     }
 
     /// The deprecation PHP reports on every call of builtin `i`, if any.
@@ -665,11 +689,10 @@ impl Registry {
         self.deprecations[i].as_deref()
     }
 
-    /// Whether parameter `n` of builtin `i` is passed by reference.
     /// Whether builtin `i` may call back into PHP code (it takes a
     /// callable): the engine lends it the registers.
     pub fn reenters(&self, i: usize) -> bool {
-        self.reenters[i]
+        self.calls[i].reenters
     }
 
     /// Builtins whose stub signature is not checked (assert: the compiler
@@ -677,7 +700,7 @@ impl Registry {
     pub fn unchecked(&mut self, names: &[&str]) {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
-                self.sigs[i] = None;
+                self.calls[i].sig = None;
             }
         }
     }
@@ -687,7 +710,7 @@ impl Registry {
     pub fn mark_reenters(&mut self, names: &[&str]) {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
-                self.reenters[i] = true;
+                self.calls[i].reenters = true;
             }
         }
     }
