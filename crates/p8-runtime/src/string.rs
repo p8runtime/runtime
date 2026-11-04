@@ -235,12 +235,10 @@ fn grown(len: usize, more: usize) -> usize {
 fn hash_bytes(bytes: &[u8]) -> u64 {
     const K: u64 = 0x9e37_79b9_7f4a_7c15;
     let mut h = (bytes.len() as u64).wrapping_mul(K);
-    let mut words = bytes.chunks_exact(8);
-    for w in &mut words {
-        let w = u64::from_le_bytes(w.try_into().expect("eight bytes"));
-        h = (h ^ w).wrapping_mul(K).rotate_left(29);
+    let (words, rest) = bytes.as_chunks::<8>();
+    for w in words {
+        h = (h ^ u64::from_le_bytes(*w)).wrapping_mul(K).rotate_left(29);
     }
-    let rest = words.remainder();
     if !rest.is_empty() {
         let mut last = [0u8; 8];
         last[..rest.len()].copy_from_slice(rest);
