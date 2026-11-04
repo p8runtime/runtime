@@ -271,6 +271,7 @@ impl Isolate {
             ids,
             native_class: None,
             ext_state: HashMap::default(),
+            header_callback_set: false,
             ended_globals: Vec::new(),
             resource_classes: HashMap::default(),
             resource_ids,
@@ -395,6 +396,9 @@ pub struct Context<'i> {
     pub(crate) key_path: Vec<Key>,
     /// Extensions' per-request state (Ctx::state).
     pub(crate) ext_state: HashMap<&'static str, Value>,
+    /// Whether header_register_callback() was ever called here: until
+    /// then a builtin call skips looking its callback up in `ext_state`.
+    pub(crate) header_callback_set: bool,
     /// The main frame's globals as the script left them, kept until the
     /// request's end hooks have run.
     pub(crate) ended_globals: Vec<Value>,

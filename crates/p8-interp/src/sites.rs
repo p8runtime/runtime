@@ -125,7 +125,18 @@ pub(crate) struct MethodSite {
 
 pub(crate) enum MethodCode {
     User(std::rc::Weak<Closure>),
-    Native(p8_runtime::object::Native, PhpStr),
+    /// A builtin class's method, its name, and which of its first 64
+    /// parameters its stub signature takes by reference (bit n: parameter
+    /// n; looked up once, when the site remembers it).
+    Native(p8_runtime::object::Native, PhpStr, u64),
+}
+
+/// The parameters (bit n: parameter n, the first 64) that builtin method
+/// `name` declared by `declaring` takes by reference, from its stub
+/// signature (as `method_takes_ref` finds it).
+fn native_refs(declaring: &Class, name: &PhpStr) -> u64 {
+    let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
+    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| s.params.iter().take(64).enumerate().filter(|(_, p)| p.by_ref).fold(0, |m, (i, _)| m | 1 << i))
 }
 
 /// A property read the cache answers: the same class, a scope that may
@@ -184,6 +195,7 @@ impl Context<'_> {
         }
         match &s.code {
             MethodCode::User(c) => Some(c.upgrade()?.code.param_by_ref(n)),
+            MethodCode::Native(_, _, refs) if n < 64 => Some(refs & 1 << n != 0),
             MethodCode::Native(..) => None,
         }
     }
@@ -207,7 +219,7 @@ impl Context<'_> {
         let declaring = s.declaring.upgrade()?;
         let func = match &s.code {
             MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
-            MethodCode::Native(n, name) => crate::classes::Code::Native(*n, name.clone()),
+            MethodCode::Native(n, name, _) => crate::classes::Code::Native(*n, name.clone()),
         };
         let this = (!s.is_static).then(|| Rc::clone(o));
         Some(crate::classes::MethodFrame::method(func, this, declaring, Rc::clone(&o.class)))
@@ -224,7 +236,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone()),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(&o.class) as usize,
@@ -248,7 +260,7 @@ impl Context<'_> {
         let declaring = s.declaring.upgrade()?;
         let code = match &s.code {
             MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
-            MethodCode::Native(n, name) => crate::classes::Code::Native(*n, name.clone()),
+            MethodCode::Native(n, name, _) => crate::classes::Code::Native(*n, name.clone()),
         };
         let frame = self.frames.last();
         if s.is_static {
@@ -276,7 +288,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone()),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(target) as usize,
