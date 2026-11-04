@@ -110,10 +110,13 @@ pub enum Instr {
     /// An empty array; `n` elements are about to be pushed onto it (a
     /// list literal's), so it is made with room for them.
     NewArray { dst: Reg, n: u16 },
-    /// arr[] = val (array literal building)
-    ArrayPush { arr: Reg, val: Reg },
-    /// arr[key] = val (array literal building)
-    ArraySet { arr: Reg, key: Reg, val: Reg },
+    /// arr[] = val (array literal building). `take`: `val` is a temporary
+    /// read here for the last time, so its value is moved into the array
+    /// (no copy, and no drop of the temporary's copy later), as PHP
+    /// consumes a TMP operand.
+    ArrayPush { arr: Reg, val: Reg, take: bool },
+    /// arr[key] = val (array literal building); `take` as for ArrayPush.
+    ArraySet { arr: Reg, key: Reg, val: Reg, take: bool },
     /// dst = arr[key]; `quiet` for isset/?? (no warning); `empty` for the
     /// last dimension of `empty($c[k])`, whose key is checked as isset
     /// checks it (ZEND_ISSET_ISEMPTY_DIM_OBJ: "in isset or empty" for an
@@ -256,8 +259,9 @@ pub enum Instr {
     This { dst: Reg },
     /// `$obj->name` (`quiet`: for isset/??, no warning when missing)
     FetchProp { dst: Reg, obj: Reg, name: Reg, quiet: bool },
-    /// `$obj->name = val`
-    AssignProp { obj: Reg, name: Reg, val: Reg, dst: Reg },
+    /// `$obj->name = val`; `take`: `val` is a temporary read here for the
+    /// last time (its value is moved, as for ArrayPush).
+    AssignProp { obj: Reg, name: Reg, val: Reg, dst: Reg, take: bool },
     /// `$obj->name op= val`
     AssignPropOp { op: BinOp, obj: Reg, name: Reg, val: Reg, dst: Reg },
     /// `++$obj->name` and the like
