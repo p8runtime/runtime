@@ -37,6 +37,66 @@ impl Closure {
         let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         Rc::new(Closure { code, consts, sites, props, methods, news, class_refs })
     }
+
+    /// The stand-in for a declared function or method whose closure has not
+    /// been made yet (one per isolate, shared by every such slot): empty
+    /// code, never run. A slot holds it until the function is first
+    /// resolved (`Context::closure_at`).
+    pub(crate) fn unbuilt(registry: &Registry) -> Rc<Closure> {
+        let code = Function {
+            name: p8_runtime::frozen::Text::from(""),
+            sym: registry.symbols().intern(b""),
+            ret_type: None,
+            strict: false,
+            classes: Vec::new(),
+            class: None,
+            is_static: false,
+            params: Vec::new(),
+            returns_ref: false,
+            code: Vec::new(),
+            lines: Vec::new(),
+            consts: Vec::new(),
+            consts_at: 0,
+            nregs: 0,
+            cv_names: Vec::new(),
+            sites: Vec::new(),
+            file: Arc::from(""),
+            required: 0,
+            line: 0,
+            handlers: Vec::new(),
+            decls: Vec::new(),
+            is_generator: false,
+            lambdas: Vec::new(),
+            bound: Vec::new(),
+            silences: Vec::new(),
+            meta: Default::default(),
+        };
+        Closure::new(Arc::new(code))
+    }
+}
+
+impl Context<'_> {
+    /// Register a declared function's or method's code: its closure is
+    /// made when it is first resolved, not now (most of a large
+    /// application's functions are never called in a request). Returns
+    /// its index in `closures` (and `codes`).
+    pub(crate) fn add_code(&mut self, func: Arc<Function>) -> u32 {
+        self.codes.push(func);
+        self.closures.push(Rc::clone(&self.isolate.unbuilt));
+        (self.closures.len() - 1) as u32
+    }
+
+    /// The closure at `i`, made now if this is its first use. Every way
+    /// code is reached for running (a call site's resolution, a method's
+    /// frame, a callable) goes through here, so `fast` only ever finds
+    /// made ones at the indices its call sites cached.
+    pub(crate) fn closure_at(&mut self, i: u32) -> Rc<Closure> {
+        let slot = &mut self.closures[i as usize];
+        if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
+            *slot = Closure::new(Arc::clone(&self.codes[i as usize]));
+        }
+        Rc::clone(slot)
+    }
 }
 
 /// A property read's cache entry: objects of `class` (its address), read
@@ -267,4 +327,58 @@ pub(crate) enum Callee {
     User(u32),
     Builtin(usize),
     Constant(Value),
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::{Sink, compile};
+    use crate::{Isolate, Registry};
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    /// A declared function or method gets its closure when something first
+    /// runs it (a call site, a method call, a callable, recursion), never
+    /// when it is declared: what is only declared keeps the shared
+    /// stand-in. (function_exists, method_exists and reflection read the
+    /// code, not the closure: the kit's lazy-calls covers them.)
+    #[test]
+    fn closures_are_made_on_first_use() {
+        let registry = Arc::new(Registry::default());
+        let source = "<?php
+            function called($n) { return $n < 1 ? 0 : called($n - 1) + 1; }
+            function never_called() { return [1, 2, 3]; }
+            function by_name() { return 'by name'; }
+            class A {
+                public function used() { return 'used'; }
+                public function unused() { return 'unused'; }
+                public static function as_callable() { return 'callable'; }
+            }
+            $r = called(3);
+            $o = new A;
+            $u = $o->used();
+            $f = 'by_name';
+            $b = $f();
+            $c = ['A', 'as_callable'];
+            $s = $c();
+            if ($r !== 3 || $u !== 'used' || $b !== 'by name' || $s !== 'callable') { exit(3); }";
+        let program = compile(source, &registry);
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        let mut host = Sink;
+        let mut cx = isolate.new_context(&mut host);
+        for f in &program.functions {
+            cx.declare(Arc::clone(f)).expect("declares");
+        }
+        cx.declare_classes(&program.classes);
+        assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
+        let made = |name: &str| {
+            let i = cx.codes.iter().position(|c| c.name.as_bytes().eq_ignore_ascii_case(name.as_bytes())).unwrap_or_else(|| panic!("{name} declared"));
+            !Rc::ptr_eq(&cx.closures[i], &cx.isolate.unbuilt)
+        };
+        for name in ["called", "by_name", "used", "as_callable"] {
+            assert!(made(name), "{name} ran, so it has its closure");
+        }
+        for name in ["never_called", "unused"] {
+            assert!(!made(name), "{name} never ran: no closure made");
+        }
+    }
 }

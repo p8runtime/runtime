@@ -3,7 +3,7 @@
 
 use crate::callable::{ClosureFunc, closure_data};
 use crate::classes::{Code, MethodFrame};
-use crate::{Closure, Context};
+use crate::Context;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{Class, Object};
@@ -41,35 +41,34 @@ impl Context<'_> {
 
     pub(crate) fn static_variables_of(&self, callee: &Callee) -> PhpArray {
         let mut out = PhpArray::new();
-        let (clo, captured) = match callee {
+        // The code (whether or not its closure has been made: reading it
+        // makes none), and a Closure object's captured values.
+        let (code, captured) = match callee {
             Callee::Function(name) => {
                 match self.sym_of(name.as_bytes()).and_then(|key| self.functions.get(&key)) {
-                    Some(&i) => (Rc::clone(&self.closures[i as usize]), Vec::new()),
+                    Some(&i) => (Arc::clone(&self.codes[i as usize]), Vec::new()),
                     None => return out,
                 }
             }
             Callee::Method(class, name) => match class.method(&name.as_bytes().to_ascii_lowercase()) {
-                Some(m) if m.native.is_none() && m.func != u32::MAX => match self.code_of(m) {
-                    Code::User(clo) => (clo, Vec::new()),
-                    Code::Native(..) => return out,
-                },
+                Some(m) if m.native.is_none() && m.func != u32::MAX => (Arc::clone(&self.codes[m.func as usize]), Vec::new()),
                 _ => return out,
             },
             Callee::Closure(o) => match closure_data(o) {
                 Some(data) => match data.func.user() {
-                    Some(clo) => (Rc::clone(clo), data.captured.borrow().clone()),
+                    Some(clo) => (Arc::clone(&clo.code), data.captured.borrow().clone()),
                     None => return out,
                 },
                 None => return out,
             },
         };
-        let code = &clo.code;
+        let code = &code;
         let name = |r: u32| PhpStr::from(code.cv_names[r as usize].as_bytes());
         for (r, v) in code.bound.iter().zip(captured) {
             out.insert(Key::from_string(name(u32::from(*r))), v);
         }
         let statics = self.statics.get(&(Arc::as_ptr(code) as usize)).map(|s| &s.cells);
-        let consts = code.consts_at as usize..code.consts_at as usize + clo.consts.len();
+        let consts = code.consts_at as usize..code.consts_at as usize + code.consts.len();
         for (at, ins) in code.code.iter().enumerate() {
             if let p8_bytecode::Instr::StaticVar { var, index, .. } = ins {
                 let v = match statics.and_then(|s| s.get(index)) {
@@ -77,7 +76,7 @@ impl Context<'_> {
                     // Not run yet: a constant initializer's value, as PHP shows it.
                     None => match (code.code.get(at + 1), code.code.get(at + 2)) {
                         (Some(p8_bytecode::Instr::Assign { var: v, src }), _) if v == var && consts.contains(&(*src as usize)) => {
-                            clo.consts[*src as usize - consts.start].clone()
+                            code.consts[*src as usize - consts.start].to_value()
                         }
                         (Some(p8_bytecode::Instr::NewArray { dst, .. }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
                             Value::Array(Rc::new(PhpArray::new()))
@@ -92,8 +91,7 @@ impl Context<'_> {
     }
 
     /// A user function's declaration.
-    fn user_info(&self, clo: &Closure, class: Option<Rc<Class>>) -> FnInfo {
-        let code = &clo.code;
+    fn user_info(&self, code: &p8_bytecode::Function, class: Option<Rc<Class>>) -> FnInfo {
         FnInfo {
             name: PhpStr::from(code.name.as_bytes()),
             class,
@@ -171,7 +169,7 @@ impl Context<'_> {
             Callee::Function(name) => {
                 let key = self.sym_of(name.as_bytes())?;
                 if let Some(&i) = self.functions.get(&key) {
-                    return Some(self.user_info(&Rc::clone(&self.closures[i as usize]), None));
+                    return Some(self.user_info(&self.codes[i as usize], None));
                 }
                 let i = self.builtin(key)?;
                 let b = self.isolate.registry.function(i);
@@ -181,10 +179,11 @@ impl Context<'_> {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?.clone();
                 let declaring = self.class_named(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
                 // A builtin interface's abstract method has no code: its stub describes it.
-                let code = if m.native.is_none() && m.func == u32::MAX { None } else { Some(self.code_of(&m)) };
-                Some(match code {
-                    Some(Code::User(clo)) => self.user_info(&clo, Some(declaring)),
-                    Some(Code::Native(..)) | None => {
+                // Read from its code: describing a method makes no closure.
+                let user = m.native.is_none() && m.func != u32::MAX;
+                Some(match user {
+                    true => self.user_info(&self.codes[m.func as usize], Some(declaring)),
+                    false => {
                         let stub = format!("{}::{}", String::from_utf8_lossy(m.declaring_name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes()));
                         let mut info = self.stub_info(&stub, m.name.clone(), Some(declaring));
                         info.is_static = m.is_static;
@@ -195,7 +194,7 @@ impl Context<'_> {
             Callee::Closure(o) => {
                 let data = closure_data(o)?;
                 let mut info = match &data.func {
-                    ClosureFunc::User(clo) => self.user_info(clo, None),
+                    ClosureFunc::User(clo) => self.user_info(&clo.code, None),
                     ClosureFunc::Builtin(i) => {
                         let b = self.isolate.registry.function(*i);
                         self.stub_info(b.name, PhpStr::from(b.name), None)

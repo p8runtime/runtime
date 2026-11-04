@@ -150,22 +150,17 @@ impl Context<'_> {
         let key = func.sym;
         if let Some(&i) = self.functions.get(&key) {
             let name = String::from_utf8_lossy(func.name.as_bytes());
-            let first = &self.closures[i as usize].code;
+            let first = &self.codes[i as usize];
             return Err(format!("Cannot redeclare function {name}() (previously declared in {}:{})", first.file, first.line));
         }
         if self.builtin(key).is_some() {
             let name = String::from_utf8_lossy(func.name.as_bytes());
             return Err(format!("Cannot redeclare function {name}()"));
         }
-        self.closures.push(Closure::new(func));
-        self.functions.insert(key, (self.closures.len() - 1) as u32);
+        // Its closure is made when it is first called (sites.rs).
+        let i = self.add_code(func);
+        self.functions.insert(key, i);
         Ok(())
-    }
-
-    /// Make a closure of `func` (a method's code) and return its index.
-    fn add_closure(&mut self, func: Arc<Function>) -> u32 {
-        self.closures.push(Closure::new(func));
-        (self.closures.len() - 1) as u32
     }
 
     /// The script's class declarations: those whose parent and
@@ -997,6 +992,11 @@ impl Context<'_> {
             let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
             return Err(self.throw("Error", format!("Call to undefined function {name}()")));
         };
+        // A user function's closure is made with the first site that calls
+        // it: `fast` then finds it at the index this site caches.
+        if let Callee::User(f) = callee {
+            self.closure_at(f);
+        }
         let _ = clo.sites[site as usize].set(callee.clone());
         Ok(callee)
     }
@@ -1651,7 +1651,7 @@ impl Context<'_> {
                 }
                 Instr::SendVar { site, n, arg, var } => {
                     let by_ref = match self.resolve(clo, site)? {
-                        Callee::User(f) => self.closures[f as usize].code.param_by_ref(n as usize),
+                        Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     };
@@ -1690,7 +1690,7 @@ impl Context<'_> {
                 }
                 Instr::FuncArgByRef { dst, site, n } => {
                     reg!(dst) = Value::Bool(match self.resolve(clo, site)? {
-                        Callee::User(f) => self.closures[f as usize].code.param_by_ref(n as usize),
+                        Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
                         Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
                         Callee::Constant(_) => false,
                     });
@@ -2888,7 +2888,7 @@ impl Context<'_> {
                 Instr::Call { site, base: args, argc, dst } => {
                     match self.resolve(clo, site)? {
                         Callee::User(target) => {
-                            let target = Rc::clone(&self.closures[target as usize]);
+                            let target = self.closure_at(target);
                             if (argc as usize) < target.code.required {
                                 let passed = &w[args as usize..args as usize + argc as usize];
                                 return Err(self.missing_args(&target.code, passed, None));

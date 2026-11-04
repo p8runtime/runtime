@@ -70,7 +70,7 @@ impl Context<'_> {
     /// method, when its stub signature says so).
     pub(crate) fn method_takes_ref(&self, class: &Class, lower: &[u8], n: usize) -> bool {
         match class.method(lower) {
-            Some(m) if m.native.is_none() && m.func != u32::MAX => self.closures[m.func as usize].code.param_by_ref(n),
+            Some(m) if m.native.is_none() && m.func != u32::MAX => self.codes[m.func as usize].param_by_ref(n),
             // A builtin's method, or a builtin interface's abstract one (no code).
             Some(m) => {
                 let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
@@ -80,10 +80,12 @@ impl Context<'_> {
         }
     }
 
-    pub(crate) fn code_of(&self, m: &Method) -> Code {
+    /// What a method runs: its closure (made now if this is its first
+    /// use), or its Rust function.
+    pub(crate) fn code_of(&mut self, m: &Method) -> Code {
         match m.native {
             Some(n) => Code::Native(n, m.name.clone()),
-            None => Code::User(Rc::clone(&self.closures[m.func as usize])),
+            None => Code::User(self.closure_at(m.func)),
         }
     }
 
@@ -517,7 +519,7 @@ impl Context<'_> {
                     m.func.line,
                 ));
             }
-            let func = self.add_closure(Arc::clone(&m.func));
+            let func = self.add_code(Arc::clone(&m.func));
             methods.insert(
                 mlower,
                 Rc::new(Method {
@@ -750,7 +752,7 @@ impl Context<'_> {
     }
 
     /// The destructor call of an object (if its class has one).
-    pub(crate) fn destructor(&self, object: &Rc<Object>) -> Option<MethodFrame> {
+    pub(crate) fn destructor(&mut self, object: &Rc<Object>) -> Option<MethodFrame> {
         let class = Rc::clone(&object.class);
         let dtor = class.method(b"__destruct")?;
         let declaring = self.declaring(&class, &dtor.declaring);
@@ -923,7 +925,7 @@ impl Context<'_> {
 
     /// `C::name()` with no such method callable: __call when the caller's
     /// `$this` is a C and C has it, else __callStatic.
-    pub(crate) fn static_magic_call(&self, target: &Rc<Class>, display: &[u8]) -> Option<MethodFrame> {
+    pub(crate) fn static_magic_call(&mut self, target: &Rc<Class>, display: &[u8]) -> Option<MethodFrame> {
         let this = self.frames.last().and_then(|f| f.this.clone()).filter(|t| t.class.is_a(&target.lower));
         if let Some(this) = this
             && let Some(m) = self.magic_call(target, Some(this), display, false)
@@ -935,7 +937,7 @@ impl Context<'_> {
 
     /// The __call (or, `is_static`, __callStatic) frame for a call of
     /// `display` on `class`, if it has one.
-    pub(crate) fn magic_call(&self, class: &Rc<Class>, this: Option<Rc<Object>>, display: &[u8], is_static: bool) -> Option<MethodFrame> {
+    pub(crate) fn magic_call(&mut self, class: &Rc<Class>, this: Option<Rc<Object>>, display: &[u8], is_static: bool) -> Option<MethodFrame> {
         let name: &[u8] = if is_static { b"__callstatic" } else { b"__call" };
         let method = class.method(name)?.clone();
         let declaring = self.declaring(class, &method.declaring);
@@ -1413,11 +1415,11 @@ impl Context<'_> {
     /// `get` (bit HOOK_GET) or `set` hook; an Error for a virtual
     /// property without that hook; None for a plain access (no hook, the
     /// stored value of a backed one, or the hook's own `$this->name`).
-    pub(crate) fn prop_hook(&self, target: &Value, name: &Value, bit: u8) -> Option<Result<MethodFrame, Throw>> {
+    pub(crate) fn prop_hook(&mut self, target: &Value, name: &Value, bit: u8) -> Option<Result<MethodFrame, Throw>> {
         self.prop_hook_seen(target, name, bit, true)
     }
 
-    pub(crate) fn prop_hook_seen(&self, target: &Value, name: &Value, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
+    pub(crate) fn prop_hook_seen(&mut self, target: &Value, name: &Value, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
         let Value::Object(o) = target else { return None };
         if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
             return None;
@@ -1446,7 +1448,7 @@ impl Context<'_> {
     /// property is missing (not even dynamic), not visible here, or an
     /// untyped one that was unset; and the method is not already running
     /// for this object and property. With the guard key to hold while it runs.
-    pub(crate) fn prop_magic(&self, target: &Value, name: &Value, kind: Magic) -> Option<(MethodFrame, (usize, PhpStr, Magic))> {
+    pub(crate) fn prop_magic(&mut self, target: &Value, name: &Value, kind: Magic) -> Option<(MethodFrame, (usize, PhpStr, Magic))> {
         let Value::Object(o) = target else { return None };
         if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 {
             return None;
