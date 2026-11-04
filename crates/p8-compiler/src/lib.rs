@@ -107,6 +107,10 @@ struct FnBuilder<'a> {
     lines: Vec<u32>,
     consts: Vec<Frozen>,
     const_index: HashMap<ConstKey, usize>,
+    /// Which constants the code reads as values (one bit each, noted as
+    /// it is emitted); the others are only names (see `name_operand`).
+    value_bits: u64,
+    more_value_bits: Vec<u64>,
     cvs: IndexMap<Vec<u8>, usize>,
     temps: usize,
     /// Temporaries below this stay live across statements (a foreach's iterator).
@@ -174,6 +178,8 @@ impl FnBuilder<'_> {
             lines: Vec::with_capacity(32),
             consts: Vec::new(),
             const_index: HashMap::default(),
+            value_bits: 0,
+            more_value_bits: Vec::new(),
             cvs: IndexMap::default(),
             temps: 0,
             floor: 0,
@@ -309,7 +315,23 @@ impl FnBuilder<'_> {
         r
     }
 
+    /// A constant the code reads as a value (copied into a call's
+    /// registers).
     fn constant(&mut self, value: Frozen) -> Reg {
+        let index = self.constant_slot(value);
+        self.mark_value(index);
+        reg(CONST, index)
+    }
+
+    /// A constant only used as a name: the name operand of a property,
+    /// class constant or static property instruction (see
+    /// `name_operand`), or `global $x`'s. It is never copied into a
+    /// register, unless some code also asks for it as a value.
+    fn name_constant(&mut self, value: Frozen) -> Reg {
+        reg(CONST, self.constant_slot(value))
+    }
+
+    fn constant_slot(&mut self, value: Frozen) -> usize {
         let key = match &value {
             Frozen::Null => ConstKey::Null,
             Frozen::Bool(b) => ConstKey::Bool(*b),
@@ -319,7 +341,7 @@ impl FnBuilder<'_> {
             // Arrays are not shared between constant registers.
             Frozen::Array(_) => {
                 self.consts.push(value);
-                return reg(CONST, self.consts.len() - 1);
+                return self.consts.len() - 1;
             }
         };
         let next = self.consts.len();
@@ -327,7 +349,7 @@ impl FnBuilder<'_> {
         if index == next {
             self.consts.push(value);
         }
-        reg(CONST, index)
+        index
     }
 
     fn temp(&mut self) -> Reg {
@@ -364,23 +386,104 @@ impl FnBuilder<'_> {
         i
     }
 
-    /// Lay the frame out and renumber every register.
-    fn finish(mut self, file: Arc<str>) -> Function {
+    /// Constant `i` is read as a value somewhere (not only as a name).
+    fn mark_value(&mut self, i: usize) {
+        if i < 64 {
+            self.value_bits |= 1 << i;
+        } else {
+            let word = (i - 64) / 64;
+            if self.more_value_bits.len() <= word {
+                self.more_value_bits.resize(word + 1, 0);
+            }
+            self.more_value_bits[word] |= 1 << ((i - 64) % 64);
+        }
+    }
+
+    fn is_value(&self, i: usize) -> bool {
+        if i < 64 { self.value_bits >> i & 1 != 0 } else { self.more_value_bits.get((i - 64) / 64).is_some_and(|w| w >> ((i - 64) % 64) & 1 != 0) }
+    }
+
+    /// Debug builds: every constant operand an instruction reads as a value
+    /// (all but the name operand of an instruction that reads its name from
+    /// the constants) was asked for with `constant`, not `name_constant`.
+    #[cfg(debug_assertions)]
+    fn check_values(&self) {
+        for instr in &self.code {
+            let found: [std::cell::Cell<Reg>; 8] = Default::default();
+            let count = std::cell::Cell::new(0);
+            map_regs(&mut instr.clone(), |r| {
+                if r >> KIND_SHIFT == CONST && count.get() < found.len() {
+                    found[count.get()].set(r);
+                    count.set(count.get() + 1);
+                }
+                r
+            });
+            let mut name = name_operand(instr);
+            for cell in &found[..count.get()] {
+                let r = cell.get();
+                if name == Some(r) {
+                    name = None;
+                    continue;
+                }
+                let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
+                assert!(self.is_value(index), "constant {:?} is read as a value by {instr:?} but was made as a name", self.consts[index]);
+            }
+        }
+    }
+
+    /// Lay the frame out and renumber every register. `order` is scratch
+    /// space the compiler keeps for every function's constant order.
+    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder) -> Function {
         if !self.returns_ref {
             thread_returns(&mut self.code);
         }
         let ncv = self.cvs.len();
         let nconst = self.consts.len();
+        #[cfg(debug_assertions)]
+        self.check_values();
+        // The constants some code reads as a value come first: a call
+        // copies those into its registers. The others (property and class
+        // constant names, which their instructions read from the
+        // constants) come after, and are never copied. Most functions have
+        // none of the latter: nothing moves then.
+        let value_consts = (0..nconst).filter(|&i| self.is_value(i)).count();
+        let moved = value_consts < nconst;
+        if moved {
+            let (position, work) = (&mut order.position, &mut order.work);
+            position.clear();
+            let (mut next_value, mut next_name) = (0, value_consts as u32);
+            for i in 0..nconst {
+                let slot = if self.is_value(i) { &mut next_value } else { &mut next_name };
+                position.push(*slot);
+                *slot += 1;
+            }
+            // Move the constants to their places, in place (cycle by cycle).
+            work.clear();
+            work.extend_from_slice(position);
+            for i in 0..nconst {
+                while work[i] as usize != i {
+                    let j = work[i] as usize;
+                    self.consts.swap(i, j);
+                    work.swap(i, j);
+                }
+            }
+        }
+        let position = &order.position;
         let map = |r: Reg| -> Reg {
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
             (match r >> KIND_SHIFT {
                 CV => index,
+                CONST if moved => ncv + position[index] as usize,
                 CONST => ncv + index,
                 _ => ncv + nconst + index,
             }) as Reg
         };
         for instr in &mut self.code {
             map_regs(instr, map);
+            // `global $x` names its variable by constant index.
+            if moved && let Instr::BindGlobal { name, .. } = instr {
+                *name = position[*name as usize] as u16;
+            }
         }
         for h in &mut self.handlers {
             h.slot = map(h.slot);
@@ -409,6 +512,7 @@ impl FnBuilder<'_> {
             lines: self.lines,
             consts: self.consts,
             consts_at: ncv as Reg,
+            value_consts: value_consts as Reg,
             nregs: (ncv + nconst + self.max_temps) as Reg,
             cv_names: cv_names.into_iter().map(|(_, n)| n).collect(),
             required,
@@ -644,6 +748,34 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
 }
 
 /// Apply `f` to every register an instruction names.
+/// Where each constant of the function being finished goes (`position`),
+/// and room to move them there: kept by the compiler for every function.
+#[derive(Default)]
+struct ConstOrder {
+    position: Vec<u32>,
+    work: Vec<u32>,
+}
+
+/// The operand of `instr` that only names something (a property, a class
+/// constant, a static property): read from the function's constants when
+/// it is one, never as a register (see `Function::value_consts`).
+fn name_operand(instr: &Instr) -> Option<Reg> {
+    use Instr::*;
+    match *instr {
+        FetchProp { name, .. }
+        | AssignProp { name, .. }
+        | AssignPropOp { name, .. }
+        | PropIncDec { name, .. }
+        | IssetProp { name, .. }
+        | UnsetProp { name, .. }
+        | ClassConst { name, .. }
+        | FetchStaticProp { name, .. }
+        | AssignStaticProp { name, .. }
+        | AssignStaticPropOp { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
 fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
     use Instr::*;
     match instr {
@@ -960,6 +1092,8 @@ pub struct Compiler<'src> {
     /// The temporaries holding references a spread call's list was given
     /// (freed after the call).
     spread_refs: Vec<Reg>,
+    /// Scratch for laying out each function's constants.
+    const_order: ConstOrder,
     /// The assignment being compiled is a statement's: its value is not
     /// used, so the variable itself can stand for it.
     unused_result: bool,
@@ -1063,6 +1197,7 @@ impl<'src> Compiler<'src> {
             source,
             superglobals: None,
             spread_refs: Vec::new(),
+            const_order: ConstOrder::default(),
             unused_result: false,
             registry,
             file: Arc::from(file),
@@ -1225,7 +1360,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        let main = Arc::new(f.finish(self.file.clone()));
+        let main = Arc::new(f.finish(self.file.clone(), &mut self.const_order));
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
 
@@ -1657,7 +1792,7 @@ impl<'src> Compiler<'src> {
                     };
                     let text = self.text(*name);
                     let var = f.cv(&text[1..]);
-                    let name_reg = f.constant(Frozen::Str(Text::from(&text[1..])));
+                    let name_reg = f.name_constant(Frozen::Str(Text::from(&text[1..])));
                     let name_index = name_reg & ((1 << KIND_SHIFT) - 1);
                     f.emit(Instr::BindGlobal { var, name: name_index });
                 }
@@ -1728,7 +1863,7 @@ impl<'src> Compiler<'src> {
                         }
                         Expr::PropertyFetch { target, property, .. } => {
                             let obj = self.expr(f, target)?;
-                            let name = self.prop_name(f, property)?;
+                            let name = self.prop_name_operand(f, property)?;
                             f.emit(Instr::UnsetProp { obj, name });
                         }
                         Expr::IndirectVariable { name, .. } => {
@@ -1973,7 +2108,7 @@ impl<'src> Compiler<'src> {
         for (i, name) in SUPERGLOBALS.iter().enumerate() {
             if named & (1 << i) != 0 {
                 let var = f.cv(name.as_bytes());
-                let name_reg = f.constant(Frozen::Str(Text::from(*name)));
+                let name_reg = f.name_constant(Frozen::Str(Text::from(*name)));
                 f.emit(Instr::BindGlobal { var, name: name_reg & ((1 << KIND_SHIFT) - 1) });
             }
         }
@@ -2101,7 +2236,7 @@ impl<'src> Compiler<'src> {
             });
             let obj = f.temp();
             f.emit(Instr::This { dst: obj });
-            let key = f.constant(Frozen::Str(name));
+            let key = f.name_constant(Frozen::Str(name));
             let dst = f.temp();
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst });
             f.reset_temps(f.floor);
@@ -2135,7 +2270,7 @@ impl<'src> Compiler<'src> {
             Body::Set(name, e) => {
                 let obj = f.temp();
                 f.emit(Instr::This { dst: obj });
-                let key = f.constant(Frozen::Str(name));
+                let key = f.name_constant(Frozen::Str(name));
                 let val = self.expr(&mut f, e)?;
                 let dst = f.temp();
                 f.emit(Instr::AssignProp { obj, name: key, val, dst });
@@ -2160,7 +2295,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        Ok((f.finish(self.file.clone()), captures))
+        Ok((f.finish(self.file.clone(), &mut self.const_order), captures))
     }
 
     /// Take apart the array in `src` into the targets of `items` (keyed,
@@ -2286,13 +2421,13 @@ impl<'src> Compiler<'src> {
             }
             Expr::PropertyFetch { target: obj, property, .. } => {
                 let obj = self.expr(f, obj)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::AssignProp { obj, name, val, dst });
             }
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
-                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let dst = f.temp();
                 f.emit(Instr::AssignStaticProp { class, name, val, dst });
             }
@@ -2896,6 +3031,17 @@ impl<'src> Compiler<'src> {
         match e {
             Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
                 Ok(f.constant(Frozen::Str(Text::from(self.text(*name)))))
+            }
+            other => self.expr(f, other),
+        }
+    }
+
+    /// `prop_name` for the name operand of a property instruction (see
+    /// `name_operand`): a literal name is a name-only constant.
+    fn prop_name_operand(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        match e {
+            Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
+                Ok(f.name_constant(Frozen::Str(Text::from(self.text(*name)))))
             }
             other => self.expr(f, other),
         }
@@ -3801,7 +3947,7 @@ impl<'src> Compiler<'src> {
                 }
                 Expr::PropertyFetch { target, property, .. } => {
                     let obj = self.expr(f, target)?;
-                    let name = self.prop_name(f, property)?;
+                    let name = self.prop_name_operand(f, property)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignProp { obj, name, val, dst });
@@ -3810,7 +3956,7 @@ impl<'src> Compiler<'src> {
                 }
                 Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                     let class = self.class_ref(f, class)?;
-                    let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                    let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignStaticProp { class, name, val, dst });
@@ -3927,7 +4073,7 @@ impl<'src> Compiler<'src> {
                     }
                     Expr::PropertyFetch { target, property, .. } => {
                         let obj = self.expr(f, target)?;
-                        let name = self.prop_name(f, property)?;
+                        let name = self.prop_name_operand(f, property)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
                         f.emit(Instr::AssignPropOp { op: bin, obj, name, val, dst });
@@ -3935,7 +4081,7 @@ impl<'src> Compiler<'src> {
                     }
                     Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                         let class = self.class_ref(f, class)?;
-                        let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                        let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
                         f.emit(Instr::AssignStaticPropOp { op: bin, class, name, val, dst });
@@ -3947,7 +4093,7 @@ impl<'src> Compiler<'src> {
             Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::PropertyFetch { target, property, .. }, .. } => {
                 let obj = self.expr(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
                 dst
@@ -3955,7 +4101,7 @@ impl<'src> Compiler<'src> {
             Expr::PostInc { var: Expr::PropertyFetch { target, property, .. }, .. }
             | Expr::PostDec { var: Expr::PropertyFetch { target, property, .. }, .. } => {
                 let obj = self.expr(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
                 dst
@@ -3965,7 +4111,7 @@ impl<'src> Compiler<'src> {
                 if self.text(*name).starts_with(b"$") =>
             {
                 let class = self.class_ref(f, class)?;
-                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let one = f.constant(Frozen::Int(1));
                 let dst = f.temp();
                 let op = if matches!(op, UnaryOp::PreInc) { BinOp::Add } else { BinOp::Sub };
@@ -3977,7 +4123,7 @@ impl<'src> Compiler<'src> {
                 if self.text(*name).starts_with(b"$") =>
             {
                 let class = self.class_ref(f, class)?;
-                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let one = f.constant(Frozen::Int(1));
                 let dst = f.temp();
                 let scratch = f.temp();
@@ -4180,7 +4326,7 @@ impl<'src> Compiler<'src> {
                     // In a trait: the class using it, when the code runs.
                     MagicConstKind::Class if self.scope.as_ref().is_some_and(|s| s.in_trait) => {
                         let class = f.class_ref(ClassRef::Scope);
-                        let name = f.constant(Frozen::Str(Text::from("class")));
+                        let name = f.name_constant(Frozen::Str(Text::from("class")));
                         let dst = f.temp();
                         f.emit(Instr::ClassConst { dst, class, name });
                         return Ok(dst);
@@ -4257,7 +4403,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::PropertyFetch { target, property, .. } => {
                 let obj = self.expr(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = out(f, hint, mark);
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
                 dst
@@ -4386,7 +4532,7 @@ impl<'src> Compiler<'src> {
                         }
                         _ => {
                             let dst = f.temp();
-                            let class_const = f.constant(Frozen::Str(Text::from("class")));
+                            let class_const = f.name_constant(Frozen::Str(Text::from("class")));
                             f.emit(Instr::ClassConst { dst, class, name: class_const });
                             dst
                         }
@@ -4420,7 +4566,7 @@ impl<'src> Compiler<'src> {
                 let class_index = self.class_ref(f, class)?;
                 let dst = out(f, hint, mark);
                 if let Some(prop) = text.strip_prefix(b"$") {
-                    let name = f.constant(Frozen::Str(Text::from(prop)));
+                    let name = f.name_constant(Frozen::Str(Text::from(prop)));
                     f.emit(Instr::FetchStaticProp { dst, class: class_index, name });
                 } else if text.eq_ignore_ascii_case(b"class")
                     && let ClassRef::Named(ClassName { display, .. }) | ClassRef::Forward(ClassName { display, .. }) = &f.classes[class_index as usize]
@@ -4430,7 +4576,7 @@ impl<'src> Compiler<'src> {
                     let display = display.clone();
                     return Ok(f.constant(Frozen::Str(display)));
                 } else {
-                    let name = f.constant(Frozen::Str(Text::from(text)));
+                    let name = f.name_constant(Frozen::Str(Text::from(text)));
                     f.emit(Instr::ClassConst { dst, class: class_index, name });
                 }
                 dst
@@ -4496,7 +4642,7 @@ impl<'src> Compiler<'src> {
                         // `?->` reads as `->` here: null has no property set.
                         Expr::PropertyFetch { target, property, .. } | Expr::NullsafePropertyFetch { target, property, .. } => {
                             let obj = self.quiet(f, target)?;
-                            let name = self.prop_name(f, property)?;
+                            let name = self.prop_name_operand(f, property)?;
                             f.emit(Instr::IssetProp { dst, obj, name });
                         }
                         Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
@@ -4617,7 +4763,7 @@ impl<'src> Compiler<'src> {
                 let dst = f.temp();
                 let null = f.constant(Frozen::Null);
                 let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(is_null, f.here());
@@ -4830,7 +4976,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::PropertyFetch { target, property, .. } => {
                 let obj = self.quiet(f, target)?;
-                let name = self.prop_name(f, property)?;
+                let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: true });
                 Ok(dst)

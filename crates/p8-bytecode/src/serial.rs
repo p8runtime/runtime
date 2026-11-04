@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 4;
+pub const FORMAT: u32 = 5;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -498,7 +498,7 @@ macro_rules! record {
 }
 record!(Program { main, functions, classes });
 record!(Function {
-    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, nregs, cv_names, sites, file, required, line,
+    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
     handlers, decls, is_generator, lambdas, bound, silences, meta,
 });
 record!(ClassDef {

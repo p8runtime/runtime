@@ -522,7 +522,9 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     for r in &mut regs[base + argc.min(nparams)..base + consts_at] {
         clear(r);
     }
-    for (r, c) in regs[base + consts_at..base + consts_at + func.consts.len()].iter_mut().zip(&func.consts) {
+    // Only the constants read as values (names stay in the constants).
+    let values = code.value_consts as usize;
+    for (r, c) in regs[base + consts_at..base + consts_at + values].iter_mut().zip(func.consts.iter()) {
         // A constant's register still holding this very constant (the
         // function called again from the same place: a loop) keeps it:
         // no drop of the old one, no copy of the new.
@@ -570,7 +572,7 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     let code = &frame.func.code;
     // Variables and temporaries; the constants' registers are left as
     // they are (the next frame there overwrites them).
-    let consts = base + code.consts_at as usize..base + code.consts_at as usize + frame.func.consts.len();
+    let consts = base + code.consts_at as usize..base + code.consts_at as usize + code.value_consts as usize;
     for r in &mut regs[base..consts.start] {
         clear(r);
     }
