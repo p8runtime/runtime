@@ -256,7 +256,7 @@ impl Context<'_> {
                     return Ok(target);
                 }
                 if o.class.method(b"__invoke").is_some() {
-                    return self.method_frame(&Value::Object(Rc::clone(&o)), b"__invoke", b"__invoke").map(Target::Frame);
+                    return self.method_frame(&Value::Object(Rc::clone(&o)), Some(p8_runtime::symbol::known::INVOKE), b"__invoke").map(Target::Frame);
                 }
                 Err(self.throw("Error", "Object of type ".to_string() + &o.class.name.to_string_lossy() + " is not callable"))
             }
@@ -265,10 +265,9 @@ impl Context<'_> {
                 let (Some(target), Some(Value::Str(method))) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) else {
                     return Err(self.throw("Error", "Array callback must have exactly two elements"));
                 };
-                let lower = method.as_bytes().to_ascii_lowercase();
                 match target {
-                    Value::Object(_) => self.method_frame(&target, &lower, method.as_bytes()).map(Target::Frame),
-                    Value::Str(class) => self.static_by_name(class.as_bytes(), &lower, method.as_bytes()),
+                    Value::Object(_) => self.method_frame(&target, self.method_key(method.as_bytes()), method.as_bytes()).map(Target::Frame),
+                    Value::Str(class) => self.static_by_name(class.as_bytes(), method.as_bytes()),
                     _ => Err(self.throw("Error", "Array callback must have exactly two elements")),
                 }
             }
@@ -282,7 +281,7 @@ impl Context<'_> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
         if let Some(at) = name.windows(2).position(|w| w == b"::") {
             let method = &name[at + 2..];
-            return self.static_by_name(&name[..at], &method.to_ascii_lowercase(), method);
+            return self.static_by_name(&name[..at], method);
         }
         match self.function_named(name) {
             Some(crate::sites::Callee::User(f)) => {
@@ -295,7 +294,7 @@ impl Context<'_> {
     }
 
     /// `"Class::method"` or `['Class', 'method']`.
-    fn static_by_name(&mut self, class: &[u8], lower: &[u8], display: &[u8]) -> Result<Target, Throw> {
+    fn static_by_name(&mut self, class: &[u8], display: &[u8]) -> Result<Target, Throw> {
         let class = class.strip_prefix(b"\\").unwrap_or(class);
         // `self`, `parent` and `static` name classes from where the call is
         // made, and pass its called class on (late static binding).
@@ -313,7 +312,10 @@ impl Context<'_> {
             None => self.find_class(class)?,
         };
         let forwarded = is_keyword.then_some(called_here).flatten().filter(|c| c.is_a(&target.lower));
-        let Some(method) = target.methods.get(lower).cloned() else {
+        // Looked up once the class is there: declaring it (on demand, by
+        // an autoloader) is what interns its members' names.
+        let key = self.method_key(display);
+        let Some(method) = crate::classes::method_of(&target, key).cloned() else {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(Target::Frame(m));
             }

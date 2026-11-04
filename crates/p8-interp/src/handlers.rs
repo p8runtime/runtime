@@ -95,7 +95,7 @@ impl Context<'_> {
         let make_data = self.isolate.registry.data_maker(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData));
         let dtor = self.isolate.registry.native_dtor(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::destroy as p8_runtime::object::NativeMethod));
         let hooks = self.isolate.registry.class_hooks(spec.name);
-        crate::builtin_classes::declare_spec(&mut crate::builtin_classes::Classes { table: &mut self.classes, symbols: self.isolate.registry.symbols() }, spec, make_data, dtor);
+        crate::builtin_classes::declare_spec(&mut crate::builtin_classes::Classes { table: &mut self.classes, symbols: &self.isolate.names }, spec, make_data, dtor);
         if let Some(h) = hooks
             && let Some(c) = self.classes.get_mut(&key)
             && let Some(c) = Rc::get_mut(c)

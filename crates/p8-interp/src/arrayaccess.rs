@@ -66,7 +66,7 @@ impl Context<'_> {
             }
             return Err(self.throw("Error", format!("Cannot use object of type {} as array", String::from_utf8_lossy(o.class.name.as_bytes()))));
         }
-        let m = self.method_frame(&Value::Object(Rc::clone(o)), name.to_ascii_lowercase().as_bytes(), name.as_bytes())?;
+        let m = self.method_frame(&Value::Object(Rc::clone(o)), self.method_key(name.as_bytes()), name.as_bytes())?;
         match m.func {
             Code::Native(native, _) => {
                 let this = m.this.clone();

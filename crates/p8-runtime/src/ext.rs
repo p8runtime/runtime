@@ -442,7 +442,7 @@ pub struct Registry {
     request_end: Vec<RequestHook>,
     startup_checks: Vec<fn(&mut dyn Ctx)>,
     /// Every name compiled code and the builtins use (see [`crate::symbol`]).
-    symbols: crate::symbol::Symbols,
+    symbols: std::sync::Arc<crate::symbol::Symbols>,
 }
 
 /// A class an extension declares: its methods are Rust. The engine links
@@ -560,7 +560,7 @@ impl Registry {
     }
 
     /// The names' symbol table, shared by the compiler and every isolate.
-    pub fn symbols(&self) -> &crate::symbol::Symbols {
+    pub fn symbols(&self) -> &std::sync::Arc<crate::symbol::Symbols> {
         &self.symbols
     }
 

@@ -13,7 +13,7 @@ use p8_runtime::value::Value;
 use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 
-use p8_runtime::symbol::{Sym, Symbols};
+use p8_runtime::symbol::{Sym, SymbolCache};
 
 /// Classes by (lowercase) name.
 pub(crate) type Table = HashMap<Sym, Rc<Class>>;
@@ -21,7 +21,7 @@ pub(crate) type Table = HashMap<Sym, Rc<Class>>;
 /// A class table being filled, by lowercase name (each interned).
 pub(crate) struct Classes<'a> {
     pub(crate) table: &'a mut Table,
-    pub(crate) symbols: &'a Symbols,
+    pub(crate) symbols: &'a Rc<SymbolCache>,
 }
 
 impl Classes<'_> {
@@ -63,7 +63,7 @@ fn declare(
     let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
     let declaring: Rc<[u8]> = Rc::from(lower.as_slice());
     let mut all_interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
-    let mut table: p8_runtime::object::Methods = parent.as_ref().map(|p| p.methods.clone()).unwrap_or_default();
+    let mut table: p8_runtime::object::Methods = parent.as_ref().map_or_else(|| p8_runtime::object::Methods::new(classes.symbols), |p| p.methods.clone());
     // Constants are inherited from the parent and the interfaces, as for
     // a user class (RecursiveRegexIterator::GET_MATCH is RegexIterator's).
     let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
@@ -81,7 +81,7 @@ fn declare(
             }
         }
         for (k, m) in &iface.methods {
-            table.entry(k.clone()).or_insert_with(|| Rc::clone(m));
+            table.entry(*k).or_insert_with(|| Rc::clone(m));
         }
     }
     let own: Vec<PhpStr> = properties.iter().map(|p| p.name.clone()).collect();
@@ -93,7 +93,7 @@ fn declare(
             None => props.push(p),
         }
     }
-    let mut slots: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
+    let mut slots = p8_runtime::object::Slots::default();
     for (i, p) in props.iter().enumerate() {
         slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
     }
@@ -191,9 +191,9 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
     ("__toString", Some(to_string), false),
 ];
 
-pub(crate) fn build(registry: &p8_runtime::ext::Registry) -> Table {
+pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
     let mut table = Table::default();
-    let mut c = Classes { table: &mut table, symbols: registry.symbols() };
+    let mut c = Classes { table: &mut table, symbols: names };
     // #[AllowDynamicProperties], which its subclasses inherit.
     declare(&mut c, "stdClass", p8_runtime::object::CLASS_ALLOW_DYNAMIC, None, &[], Vec::new(), &[]);
     declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
@@ -342,7 +342,7 @@ pub(crate) fn declare_spec(
     if class.properties.iter().any(|p| p.hooks != 0) {
         class.flags |= CLASS_HOOKS;
     }
-    if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| class.methods.contains_key(*m)) {
+    if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| class.methods.contains_key(m)) {
         class.flags |= p8_runtime::object::CLASS_MAGIC_PROPS;
     }
     class.make_data = make_data.or_else(|| class.parent.as_ref().and_then(|p| p.make_data));

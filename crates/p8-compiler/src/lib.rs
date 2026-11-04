@@ -376,7 +376,9 @@ impl FnBuilder<'_> {
     }
 
     fn site(&mut self, constant: bool, name: Text, sym: Sym, display: Text) -> u16 {
-        let key = (constant, name.as_bytes().to_vec());
+        // One site per spelling: a call's messages name it as written
+        // (`$o->foobar()` after `$o->FooBar()` says "foobar").
+        let key = (constant, display.as_bytes().to_vec());
         if let Some(&i) = self.site_index.get(&key) {
             return i;
         }
