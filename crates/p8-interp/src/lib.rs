@@ -637,6 +637,21 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     w[dst as usize] = v;
                     pc += 1;
                 }
+                // Function entry, when every passed argument is plainly of
+                // its declared type (`verify_args` would accept each as it
+                // is); a conversion, a class check or a variadic: `step`.
+                Instr::Rare { op: Rare::VerifyArgs, .. } => {
+                    if !args_plain(&clo.code.params, w, top.argc as usize) {
+                        return pc;
+                    }
+                    pc += 1;
+                }
+                // A return value plainly of the declared type (anything
+                // else, a generator's included: `step`).
+                Instr::Rare { op: Rare::VerifyReturn, a, .. } => match &clo.code.ret_type {
+                    Some(ty) if clo.code.is_generator || !ty.quick(&w[a as usize]) => return pc,
+                    _ => pc += 1,
+                },
                 Instr::Jump { target } => {
                     if back(target, pc) {
                         return pc;
@@ -993,6 +1008,19 @@ enum Switch {
     Method(Reg, Reg, u16, Reg, u8),
     Return(Reg),
     ReturnNull,
+}
+
+/// Whether the first `argc` registers of `w` are each plainly of their
+/// parameter's declared type (`TypeDecl::quick`), so `verify_args` has
+/// nothing to check or convert. A typed variadic is left to it.
+#[inline]
+fn args_plain(params: &[p8_bytecode::Param], w: &[Value], argc: usize) -> bool {
+    params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
+        None => true,
+        Some(_) if p.variadic => false,
+        Some(_) if i >= argc || matches!(v, Value::Undef) => true,
+        Some(ty) => ty.quick(v),
+    })
 }
 
 /// Set up the registers of the frame just pushed: its window starts at
