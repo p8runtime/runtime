@@ -115,6 +115,7 @@ clock() { sed -E -e 's/"time":"[0-9]+"/"time":"T"/g' -e 's/"initialServerTimesta
     -e 's/(name="(hidden_|cur_)?(hh|mn|ss)" value=")[0-9]{2}"/\1T"/g' -e 's/(id="active_post_lock" value=")[0-9]+:/\1T:/' \
     -e 's#(random strings you could use: )<kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>, <kbd>[^<]*</kbd>#\1R#' \
     -e 's#(<span class="date-time-text format-i18n">)[^<]*:[^<]*(</span>)#\1T\2#g' \
+    -e 's#(<strong>Preview:</strong> <span class="example">)[^<]*:[^<]*(</span>)#\1T\2#g' \
     -e 's/(install_timestamp%22%3A%22)[0-9]+/\1T/g' -e "s/${today}T[0-9]{2}%3A[0-9]{2}%3A[0-9]{2}/${today}TT/g" \
     -e 's/(woocommerce_share_key%22%3A%22)[A-Za-z0-9]+/\1S/g' "$1"; }
 
