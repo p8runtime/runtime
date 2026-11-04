@@ -125,8 +125,7 @@ fn what_a_request_resolves_is_not_cached_for_the_next() {
 }
 
 /// Run `source` while another thread interrupts it after 50 ms.
-fn interrupted(source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, String, p8::Isolate) {
-    let platform = platform();
+fn interrupted(platform: &p8::Platform, source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, String, p8::Isolate) {
     let mut isolate = platform.new_isolate();
     let handle = isolate.interrupt_handle();
     let script = platform.compile(source.as_bytes(), "t.php").expect("compiles");
@@ -142,27 +141,27 @@ fn interrupted(source: &str, interrupt: fn(&p8::InterruptHandle)) -> (i32, Strin
 
 #[test]
 fn a_watchdog_stops_a_loop_running_in_the_fast_path() {
-    let (status, out, _) = interrupted("<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
+    let (status, out, _) = interrupted(&platform(), "<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
     assert_eq!(status, 255);
     assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\n");
 }
 
 #[test]
 fn a_watchdog_stops_loops_and_recursion_outside_the_fast_path() {
-    let (status, out, _) = interrupted("<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
+    let (status, out, _) = interrupted(&platform(), "<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
     assert_eq!((status, out.as_str()), (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\n"));
 
     let source = "<?php\nfunction f($n) { return $n < 1 ? 0 : f($n - 1) + f($n - 1); }\nf(60);";
-    let (status, out, _) = interrupted(source, |h| h.terminate());
+    let (status, out, _) = interrupted(&platform(), source, |h| h.terminate());
     assert_eq!(status, 255);
     assert!(out.starts_with("\nFatal error: Execution was terminated by the host in t.php on line 2"), "{out:?}");
 }
 
 #[test]
 fn an_interrupted_isolate_runs_the_next_request() {
-    let (status, _, mut isolate) = interrupted("<?php while (true) {}", |h| h.terminate());
-    assert_eq!(status, 255);
     let platform = platform();
+    let (status, _, mut isolate) = interrupted(&platform, "<?php while (true) {}", |h| h.terminate());
+    assert_eq!(status, 255);
     assert_eq!(request(&platform, &mut isolate, "<?php for ($i = 0; $i < 3; $i++) echo $i;"), (0, "012".into()));
 }
 
@@ -204,4 +203,16 @@ fn kept_compiled_files_run_as_new_and_follow_changes() {
     assert_eq!(request(&platform, &mut isolate, &main), (0, "11\n".into()));
     std::fs::write(&part, "<?php static $n = 10; echo ++$n;").expect("rewrite part");
     assert_eq!(request(&platform, &mut isolate, &main), (0, "1111\n".into()));
+}
+
+#[test]
+#[should_panic(expected = "Platform that compiled it")]
+fn a_script_runs_only_where_its_names_mean_the_same() {
+    // Names compile to the compiling Platform's symbols: another
+    // Platform's isolate would read them as other names.
+    let (one, two) = (platform(), platform());
+    let script = one.compile(b"<?php function f() {} f();", "t.php").expect("compiles");
+    let mut isolate = two.new_isolate();
+    let mut host = Capture::default();
+    isolate.new_context(&mut host).run(&script);
 }
