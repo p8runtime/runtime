@@ -72,7 +72,7 @@ impl Context<'_> {
                 defaults[*i] = v.clone();
             }
         }
-        let ctor = class.method(b"__construct").map(|m| Ctor { func: self.code_of(m), declaring: self.declaring(class, &m.declaring), visibility: m.visibility });
+        let ctor = class.method_sym(p8_runtime::symbol::known::CONSTRUCT).map(|m| Ctor { func: self.code_of(m), declaring: self.declaring(class, &m.declaring), visibility: m.visibility });
         let info = Rc::new(NewInfo { class: Rc::clone(class), defaults: defaults.into_boxed_slice(), throwable: class.is_a(b"throwable"), ctor });
         let keep = !matches!(lazy, Some(None));
         if keep {

@@ -103,7 +103,7 @@ impl Context<'_> {
                     }
                     if options & SKIP_DESTRUCTOR == 0 && !o.destructed.get() && o.class.method(b"__destruct").is_some() {
                         o.destructed.set(true);
-                        let m = self.method_frame(&Value::Object(Rc::clone(&o)), b"__destruct", b"__destruct")?;
+                        let m = self.method_frame(&Value::Object(Rc::clone(&o)), Some(p8_runtime::symbol::known::DESTRUCT), b"__destruct")?;
                         let mut regs = std::mem::take(&mut self.isolate.regs);
                         let r = self.run_nested(&mut regs, m, &mut []);
                         self.isolate.regs = regs;
