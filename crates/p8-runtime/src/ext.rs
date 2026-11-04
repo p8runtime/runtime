@@ -160,6 +160,9 @@ pub trait Ctx {
     fn throw(&self, class: &'static str, message: String) -> Throw;
     /// The class `name` (any case, optional leading `\`), if declared.
     fn class(&mut self, name: &[u8]) -> Option<Rc<Class>>;
+    /// This request's cell of static property `s` (made from its default
+    /// when the request first uses it).
+    fn static_cell(&mut self, s: &crate::object::Static) -> Rc<std::cell::RefCell<Value>>;
     /// The class the running code is in (None outside any class).
     fn scope(&self) -> Option<Rc<Class>>;
     /// Call a PHP callable (only from a builtin that takes a callable:

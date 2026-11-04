@@ -189,6 +189,19 @@ impl Context<'_> {
         self.find_class(name.as_bytes())
     }
 
+    /// A new static property declaration (its own cell in every request).
+    fn new_static(&mut self, visibility: Visibility, declaring: Vec<u8>, default: Value) -> p8_runtime::object::Static {
+        let id = self.isolate.next_static;
+        self.isolate.next_static += 1;
+        p8_runtime::object::Static { id, visibility, declaring, default }
+    }
+
+    /// This request's cell of static property `s`: made from its default
+    /// the first time the request uses it.
+    pub(crate) fn cell_of(&mut self, s: &p8_runtime::object::Static) -> Rc<RefCell<Value>> {
+        Rc::clone(self.static_cells.entry(s.id).or_insert_with(|| Rc::new(RefCell::new(s.default.clone()))))
+    }
+
     /// Build this request's class from its compiled declaration.
     fn link(&mut self, def: &ClassDef) -> Result<Rc<Class>, Throw> {
         let name = text_of(&def.name);
@@ -251,7 +264,8 @@ impl Context<'_> {
                 if let Some(t) = init {
                     static_inits.push((pname.clone(), t));
                 }
-                statics.insert(pname, (Rc::new(RefCell::new(default)), p.visibility, lower.clone()));
+                let s = self.new_static(p.visibility, lower.clone(), default);
+                statics.insert(pname, s);
                 continue;
             }
             let prop = Property {
@@ -422,14 +436,18 @@ impl Context<'_> {
                     properties.push(p);
                 }
             }
-            for (k, (cell, visibility, _)) in &t.statics {
-                let fresh = Rc::new(RefCell::new(cell.borrow().clone()));
-                if !statics.contains_key(k)
-                    && let Some((_, init)) = t.static_inits.iter().find(|(n, _)| n == k)
-                {
+            // Each using class gets its own copy of a trait's static, from
+            // its default (zend_do_traits_property_binding copies the
+            // default, not a value the trait's own copy holds now).
+            for (k, s) in &t.statics {
+                if statics.contains_key(k) {
+                    continue;
+                }
+                if let Some((_, init)) = t.static_inits.iter().find(|(n, _)| n == k) {
                     static_inits.push((k.clone(), init.clone()));
                 }
-                statics.entry(k.clone()).or_insert((fresh, *visibility, lower.clone()));
+                let own = self.new_static(s.visibility, lower.clone(), s.default.clone());
+                statics.insert(k.clone(), own);
             }
             // A trait's constants are the using class's own (declared by
             // it: its private ones are its to use, and reflection says so).
@@ -1568,8 +1586,8 @@ impl Context<'_> {
         }
         for (name, thunk) in &class.static_inits {
             let v = self.run_thunk(regs, thunk, Rc::clone(class))?;
-            if let Some((cell, _, _)) = class.statics.get(name) {
-                *cell.borrow_mut() = v;
+            if let Some(s) = class.statics.get(name) {
+                *self.cell_of(s).borrow_mut() = v;
             }
         }
         let mut defaults = Vec::new();
@@ -1736,9 +1754,14 @@ impl Context<'_> {
     pub(crate) fn isset_static(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<bool, Throw> {
         let class = self.class_of(func, class, w)?;
         let Some(name) = name.to_php_string() else { return Ok(false) };
-        let Some((cell, visibility, declaring)) = class.statics.get(name.as_bytes()) else { return Ok(false) };
-        let declaring = self.class_named(declaring).cloned().unwrap_or_else(|| Rc::clone(&class));
-        Ok(visible(*visibility, &declaring, self.scope().0.as_deref()) && !matches!(cell.borrow().deref(), Value::Null | Value::Undef))
+        let Some(s) = class.statics.get(name.as_bytes()) else { return Ok(false) };
+        let declaring = self.class_named(&s.declaring).cloned().unwrap_or_else(|| Rc::clone(&class));
+        if !visible(s.visibility, &declaring, self.scope().0.as_deref()) {
+            return Ok(false);
+        }
+        let cell = self.cell_of(s);
+        let set = !matches!(cell.borrow().deref(), Value::Null | Value::Undef);
+        Ok(set)
     }
 
     /// The cell of static property `C::$name`.
@@ -1746,15 +1769,15 @@ impl Context<'_> {
         let class = self.class_of(func, class, w)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         match class.statics.get(name.as_bytes()) {
-            Some((cell, visibility, declaring)) => {
-                let declaring = self.declaring(&class, declaring);
-                if !visible(*visibility, &declaring, self.scope().0.as_deref()) {
+            Some(s) => {
+                let declaring = self.declaring(&class, &s.declaring);
+                if !visible(s.visibility, &declaring, self.scope().0.as_deref()) {
                     return Err(self.throw(
                         "Error",
-                        format!("Cannot access {} property {}::${}", visibility.word(), text(&class.name), text(&name)),
+                        format!("Cannot access {} property {}::${}", s.visibility.word(), text(&class.name), text(&name)),
                     ));
                 }
-                Ok(Rc::clone(cell))
+                Ok(self.cell_of(s))
             }
             None => Err(self.throw("Error", format!("Access to undeclared static property {}::${}", text(&class.name), text(&name)))),
         }
@@ -1844,7 +1867,7 @@ pub(crate) fn property_order(mut own: Vec<PhpStr>, parent: Option<&Class>, trait
 /// Whether `class` itself declares property `name` private.
 fn declared_private(class: &Class, name: &[u8]) -> bool {
     match class.statics.get(name) {
-        Some((_, visibility, declaring)) => *visibility == Visibility::Private && *declaring == class.lower,
+        Some(s) => s.visibility == Visibility::Private && s.declaring == class.lower,
         None => class.slots.get(name).is_some_and(|slots| {
             slots.iter().all(|&i| class.properties[i].visibility == Visibility::Private && class.properties[i].declaring == class.lower)
         }),

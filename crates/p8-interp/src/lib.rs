@@ -4499,6 +4499,10 @@ impl Ctx for Context<'_> {
         Context::throw(self, class, message)
     }
 
+    fn static_cell(&mut self, s: &p8_runtime::object::Static) -> Rc<RefCell<Value>> {
+        self.cell_of(s)
+    }
+
     fn class(&mut self, name: &[u8]) -> Option<Rc<Class>> {
         let key = self.sym_of(name)?;
         match self.classes.get(&key) {

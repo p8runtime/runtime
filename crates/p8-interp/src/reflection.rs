@@ -411,7 +411,7 @@ class_method!(rc_get_properties, |ctx, class, this, args| {
     let mut out = Vec::new();
     for n in &class.property_order {
         let modifiers = match (class.statics.get(n.as_bytes()), instance_property(&class, n.as_bytes())) {
-            (Some((_, vis, _)), _) => vis_bits(*vis) | 16,
+            (Some(s), _) => vis_bits(s.visibility) | 16,
             (None, Some(p)) => vis_bits(p.visibility) | set_bits(p.set_visibility) | if p.readonly { 128 } else { 0 } | if p.is_final { 32 } else { 0 },
             (None, None) => continue,
         };
@@ -486,7 +486,7 @@ class_method!(rc_new_instance_without_constructor, |ctx, class, this, args| {
 class_method!(rc_get_static_property_value, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
     match class.statics.get(name.as_bytes()) {
-        Some((cell, _, _)) => Ok(cell.borrow().deref()),
+        Some(s) => Ok(ctx.static_cell(s).borrow().deref()),
         None if args.len() > 1 => Ok(arg(args, 1)),
         None => Err(fail(ctx, format!("Property {}::${} does not exist", String::from_utf8_lossy(class.name.as_bytes()), name))),
     }
@@ -494,7 +494,8 @@ class_method!(rc_get_static_property_value, |ctx, class, this, args| {
 class_method!(rc_set_static_property_value, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
     match class.statics.get(name.as_bytes()) {
-        Some((cell, _, _)) => {
+        Some(s) => {
+            let cell = ctx.static_cell(s);
             let v = arg(args, 1);
             let inner = cell.borrow().clone();
             match inner {
@@ -508,16 +509,16 @@ class_method!(rc_set_static_property_value, |ctx, class, this, args| {
 });
 class_method!(rc_get_static_properties, |ctx, class, this, args| {
     let mut out = PhpArray::new();
-    for (n, (cell, _, _)) in listed_statics(&class) {
-        out.insert(Key::from_string(PhpStr::from(n.as_slice())), cell.borrow().deref());
+    for (n, s) in listed_statics(&class) {
+        out.insert(Key::from_string(PhpStr::from(n.as_slice())), ctx.static_cell(s).borrow().deref());
     }
     Ok(Value::Array(Rc::new(out)))
 });
 class_method!(rc_get_default_properties, |ctx, class, this, args| {
     // The statics, then the instance properties, each in declaration order.
     let mut out = PhpArray::new();
-    for (n, (cell, _, _)) in listed_statics(&class) {
-        out.insert(Key::from_string(PhpStr::from(n.as_slice())), cell.borrow().deref());
+    for (n, s) in listed_statics(&class) {
+        out.insert(Key::from_string(PhpStr::from(n.as_slice())), ctx.static_cell(s).borrow().deref());
     }
     for n in &class.property_order {
         if let Some(p) = instance_property(&class, n.as_bytes())
@@ -532,7 +533,7 @@ class_method!(rc_get_default_properties, |ctx, class, this, args| {
 /// The static properties reflection lists, in declaration order: all but
 /// a parent's private ones.
 fn listed_statics(class: &Class) -> impl Iterator<Item = (&Vec<u8>, &p8_runtime::object::Static)> {
-    class.statics.iter().filter(|(_, (_, vis, declaring))| *vis != Visibility::Private || *declaring == class.lower)
+    class.statics.iter().filter(|(_, s)| s.visibility != Visibility::Private || s.declaring == class.lower)
 }
 
 /// The instance property `name` as the class itself sees it (None for a
@@ -1284,7 +1285,7 @@ fn fill_property(o: &Object, class: &Rc<Class>, name: &[u8]) {
         .map(|i| class.properties[i].declaring_name.clone())
         .or_else(|| {
             // A static's declaring class (lowercase): its name as declared.
-            let (_, _, lower) = class.statics.get(name)?;
+            let lower = &class.statics.get(name)?.declaring;
             let mut c = Some(Rc::clone(class));
             while let Some(k) = c {
                 if &k.lower == lower {
@@ -1329,8 +1330,8 @@ fn rpr_get_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 
 fn rpr_get_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (class, name, slot) = held_property(ctx, this)?;
-    if let Some((cell, _, _)) = class.statics.get(name.as_bytes()) {
-        return Ok(cell.borrow().deref());
+    if let Some(s) = class.statics.get(name.as_bytes()) {
+        return Ok(ctx.static_cell(s).borrow().deref());
     }
     let Value::Object(o) = arg(args, 0) else {
         return Err(ctx.throw("TypeError", "ReflectionProperty::getValue(): Argument #1 ($object) must be provided for instance properties".into()));
@@ -1353,7 +1354,8 @@ fn rpr_get_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
 
 fn rpr_set_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (class, name, slot) = held_property(ctx, this)?;
-    if let Some((cell, _, _)) = class.statics.get(name.as_bytes()) {
+    if let Some(s) = class.statics.get(name.as_bytes()) {
+        let cell = ctx.static_cell(s);
         let v = if args.len() > 1 { arg(args, 1) } else { arg(args, 0) };
         let inner = cell.borrow().clone();
         match inner {
@@ -1507,7 +1509,7 @@ fn lazy_property_target(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], me
     while let Some(inst) = o.proxy_instance() {
         o = inst;
     }
-    if let Some((_, _, _)) = class.statics.get(name.as_bytes()) {
+    if class.statics.contains_key(name.as_bytes()) {
         return Err(fail(ctx, format!("Can not use {method} on static property {}::${name}", String::from_utf8_lossy(class.name.as_bytes()))));
     }
     let Some(slot) = o.class.slot(name.as_bytes(), Some(&class.lower)) else {
@@ -1570,8 +1572,9 @@ type PropFacts = (Visibility, bool, bool, Option<Value>, Option<TypeDecl>, bool)
 
 fn prop_facts(ctx: &mut dyn Ctx, this: &Object) -> Result<PropFacts, Throw> {
     let (class, name, slot) = held_property(ctx, this)?;
-    if let Some((cell, vis, _)) = class.statics.get(name.as_bytes()) {
-        return Ok((*vis, true, false, Some(cell.borrow().deref()), None, true));
+    if let Some(s) = class.statics.get(name.as_bytes()) {
+        let value = ctx.static_cell(s).borrow().deref();
+        return Ok((s.visibility, true, false, Some(value), None, true));
     }
     Ok(match slot {
         Some(i) => {

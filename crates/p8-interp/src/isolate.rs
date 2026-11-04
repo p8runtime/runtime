@@ -189,6 +189,8 @@ pub struct Isolate {
     pub(crate) code: crate::sites::CodeTable,
     /// How many requests it has started (the current one's number).
     pub(crate) requests: u64,
+    /// The next static property declaration's cell id (`Static::id`).
+    pub(crate) next_static: p8_runtime::object::StaticId,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -218,6 +220,7 @@ impl Isolate {
             unbuilt: Closure::unbuilt(&registry),
             code: Default::default(),
             requests: 0,
+            next_static: 0,
             registry,
         }
     }
@@ -317,6 +320,7 @@ impl Isolate {
             header_throw: None,
             deferred_write: None,
             fibers: Vec::new(),
+            static_cells: HashMap::default(),
             fiber_suspended: None,
             fiber_throw: None,
             fiber_exit: None,
@@ -487,6 +491,10 @@ pub struct Context<'i> {
     pub(crate) deferred_write: Option<(usize, Value)>,
     /// The fibers running, innermost last.
     pub(crate) fibers: Vec<fiber::FiberRun>,
+    /// This request's static property values, by declaration
+    /// (`Static::id`): made from the default on first use, so every request
+    /// starts with a class's defaults whatever an earlier one stored.
+    pub(crate) static_cells: HashMap<p8_runtime::object::StaticId, Rc<RefCell<Value>>>,
     /// Fiber::suspend()'s value, while the running fiber is being left.
     pub(crate) fiber_suspended: Option<Value>,
     /// Fiber::throw()'s exception, raised where the fiber goes on.

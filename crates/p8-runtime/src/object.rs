@@ -340,9 +340,26 @@ pub struct Constant {
     pub init: Option<Thunk>,
 }
 
-/// A static property: its cell (shared with subclasses that don't
-/// redeclare it), its visibility, and the declaring class (lowercase).
-pub type Static = (Rc<RefCell<Value>>, Visibility, Vec<u8>);
+/// A static property's declaration. Its value is request state, not the
+/// class's: each request keeps its own cell for it, made from `default`
+/// when the request first uses it (`Ctx::static_cell`), so a class can be
+/// shared by requests that never see each other's values.
+#[derive(Debug, Clone)]
+pub struct Static {
+    /// The cell its value is kept under, in each request: shared with the
+    /// subclasses that don't redeclare it (one value for them all).
+    pub id: StaticId,
+    pub visibility: Visibility,
+    /// The class that declares it (lowercase).
+    pub declaring: Vec<u8>,
+    /// Its value at the start of each request (one computed by code is
+    /// set when the class's defaults first run in the request).
+    pub default: Value,
+}
+
+/// Which static property's cell (see [`Static::id`]): unique in its
+/// isolate, never reused.
+pub type StaticId = u64;
 
 /// A class as linked for one request.
 #[derive(Debug)]
@@ -364,8 +381,9 @@ pub struct Class {
     pub methods: Methods,
     /// In declaration order (reflection lists them so).
     pub constants: Constants,
-    /// Static properties: a subclass shares its parent's cell unless it
-    /// redeclares the property. In PHP's order (as `property_order`): the
+    /// Static properties (declarations; their values are each request's):
+    /// a subclass shares its parent's cell unless it redeclares the
+    /// property. In PHP's order (as `property_order`): the
     /// class's own as declared, then its parent's, then its traits'.
     pub statics: crate::fast::IndexMap<Vec<u8>, Static>,
     /// Every property name, static or not, in the order PHP keeps them

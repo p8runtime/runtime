@@ -86,7 +86,7 @@ impl Context<'_> {
                 let n = name.as_bytes();
                 let declaring = match class.slot(n, None) {
                     Some(i) => class.properties[i].declaring.clone(),
-                    None => class.statics.get(n)?.2.clone(),
+                    None => class.statics.get(n)?.declaring.clone(),
                 };
                 let def = self.def_named(&declaring)?;
                 let meta = self.in_def(def, &|d| d.properties.iter().find(|p| p.name.as_bytes() == n).map(|p| &p.meta))?;

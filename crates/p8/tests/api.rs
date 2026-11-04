@@ -128,6 +128,33 @@ fn a_warm_isolate_does_not_mix_up_classes_of_different_requests() {
     }
 }
 
+/// Static properties are request state: a value one request stores is
+/// gone in the next, which starts from the class's defaults (a subclass
+/// sharing its parent's static, a trait's static copied into each class
+/// that uses it, a default computed by code).
+#[test]
+fn a_warm_isolate_starts_each_request_with_static_defaults() {
+    let platform = platform().keep_compiled();
+    let mut isolate = platform.new_isolate();
+    let script = platform
+        .compile(
+            br#"<?php
+            trait T { public static $t = 'd'; }
+            class C { public static $n = 0; public static $list = []; public static $at = PHP_INT_SIZE * 2; }
+            class D extends C {}
+            class U { use T; }
+            class V { use T; }
+            C::$n++; D::$n++; C::$list[] = $argv[1]; C::$at++;
+            U::$t .= 'u'; V::$t .= 'v';
+            echo C::$n, D::$n, ' ', implode(',', C::$list), ' ', C::$at, ' ', U::$t, V::$t;"#,
+            "t.php",
+        )
+        .expect("compiles");
+    for arg in ["a", "b", "c"] {
+        assert_eq!(run_with(&mut isolate, &script, arg), format!("22 {arg} 17 dudv"));
+    }
+}
+
 #[test]
 fn a_failed_request_leaves_the_isolate_usable() {
     let platform = platform();

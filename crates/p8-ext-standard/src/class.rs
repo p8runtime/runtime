@@ -392,10 +392,11 @@ fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         }
     }
     // In declaration order (the class's own, its parents', its traits').
-    for (name, (cell, vis, decl)) in &class.statics {
-        if visible(*vis, declaring(&class, decl), scope.as_deref()) {
+    for (name, s) in &class.statics {
+        if visible(s.visibility, declaring(&class, &s.declaring), scope.as_deref()) {
             // An uninitialized typed static is listed as null, as an
             // instance property is above (add_class_vars: ZVAL_NULL).
+            let cell = ctx.static_cell(s);
             let v = match cell.borrow().deref() {
                 Value::Undef => Value::Null,
                 v => v,
