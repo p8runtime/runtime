@@ -395,7 +395,13 @@ fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     statics.sort_by(|a, b| a.0.cmp(b.0));
     for (name, (cell, vis, decl)) in statics {
         if visible(*vis, declaring(&class, decl), scope.as_deref()) {
-            out.insert(Key::from_string(PhpStr::from(name.as_slice())), cell.borrow().deref());
+            // An uninitialized typed static is listed as null, as an
+            // instance property is above (add_class_vars: ZVAL_NULL).
+            let v = match cell.borrow().deref() {
+                Value::Undef => Value::Null,
+                v => v,
+            };
+            out.insert(Key::from_string(PhpStr::from(name.as_slice())), v);
         }
     }
     Ok(Value::Array(Rc::new(out)))
