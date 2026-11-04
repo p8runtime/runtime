@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
-//! The p8 interpreter: one loop over register instructions, all frames in
-//! one register file, calls resolved once per call site.
+//! The p8 interpreter: one loop over register instructions, a task's
+//! frames over its one register file (task.rs), calls resolved once per
+//! call site.
 
 mod arrayaccess;
 mod builtin_classes;
@@ -20,6 +21,7 @@ mod fast;
 mod frames;
 mod isolate;
 mod sites;
+mod task;
 use fast::*;
 use frames::*;
 pub use isolate::*;
@@ -823,7 +825,12 @@ impl Context<'_> {
                 }
             }
             Some(f) => (Rc::from(&*f.func.code.file), f.func.code.lines.get(self.pc.saturating_sub(1)).copied().unwrap_or(0)),
-            None => (Rc::from(""), 0),
+            // A fiber's task before its first frame: where the task that
+            // started it is.
+            None => match self.waiting_tasks().filter_map(|t| Some((t.frames.last()?, t.pc))).last() {
+                Some((f, pc)) => (Rc::from(&*f.func.code.file), f.func.code.lines.get(pc.saturating_sub(1)).copied().unwrap_or(0)),
+                None => (Rc::from(""), 0),
+            },
         }
     }
 
@@ -1544,7 +1551,7 @@ impl Context<'_> {
                         && let Some(name) = func.cv_names.get(var as usize)
                     {
                         let name = name.as_bytes().to_vec();
-                        self.global_clear(below, &name);
+                        self.with_main(below, |cx, main| cx.global_clear(main, &name));
                     }
                     reg!(var) = Value::Undef;
                 }
@@ -1740,8 +1747,9 @@ impl Context<'_> {
                         _ => Vec::new(),
                     };
                     // The main frame's window starts at 0: it is `w` when
-                    // the main frame is running, else the start of `below`.
-                    let cell = if in_main { self.global_cell(w, &name) } else { self.global_cell(below, &name) };
+                    // the main frame is running, else the start of `below`
+                    // (or of the first task's registers, in a fiber).
+                    let cell = if in_main { self.global_cell(w, &name) } else { self.with_main(below, |cx, main| cx.global_cell(main, &name)) };
                     reg!(var) = Value::Ref(cell);
                 }
                 Instr::MatchError { src } => {
@@ -1904,14 +1912,14 @@ impl Context<'_> {
                     Rare::VarRef => {
                         let name = self.var_name(w, func, b);
                         let global = c == 1 || self.frames.last().is_some_and(|f| f.global);
-                        let cell = if global && !in_main { self.global_cell(below, &name) } else { self.var_cell(w, in_main, &name) };
+                        let cell = if global && !in_main { self.with_main(below, |cx, main| cx.global_cell(main, &name)) } else { self.var_cell(w, in_main, &name) };
                         reg!(a) = Value::Ref(cell);
                     }
                     Rare::VarGet => {
                         let name = self.var_name(w, func, b);
                         let global = c & 2 != 0;
                         let scope = global || self.frames.last().is_some_and(|f| f.global);
-                        let v = if scope && !in_main { self.global_value(below, &name) } else { self.var_value(w, in_main, &name) };
+                        let v = if scope && !in_main { self.with_main(below, |cx, main| cx.global_value(main, &name)) } else { self.var_value(w, in_main, &name) };
                         match v {
                             Some(v) => reg!(a) = v,
                             None => {
@@ -1929,12 +1937,12 @@ impl Context<'_> {
                         if at_global && !in_main {
                             // A file included at global scope: the global is
                             // emptied, and this file's binding to it goes.
-                            self.global_clear(below, &name);
+                            self.with_main(below, |cx, main| cx.global_clear(main, &name));
                             if let Some(r) = func.cv_names.iter().position(|n| n.as_bytes() == name.as_slice()) {
                                 w[r] = Value::Undef;
                             }
                         } else if b == 1 && !in_main {
-                            self.global_unset(below, &name);
+                            self.with_main(below, |cx, main| cx.global_unset(main, &name));
                         } else {
                             self.var_unset(w, in_main, &name);
                         }
@@ -1943,13 +1951,13 @@ impl Context<'_> {
                         // The name is a constant string: read, not converted.
                         let Value::Str(name) = self.operand(w, func, b) else { unreachable!("AutoGlobal names a constant string") };
                         let main: &mut [Value] = if in_main { w } else { below };
-                        reg!(a) = Value::Ref(self.global_slot(main, name.as_bytes()));
+                        reg!(a) = Value::Ref(self.with_main(main, |cx, main| cx.global_slot(main, name.as_bytes())));
                     }
                     Rare::GlobalBind => {
                         let name = self.var_name(w, func, a);
                         let cell = make_ref(w, b);
                         let main: &mut [Value] = if in_main { w } else { below };
-                        self.global_bind(main, &name, cell);
+                        self.with_main(main, |cx, main| cx.global_bind(main, &name, cell));
                     }
                     Rare::VarBind => {
                         let name = self.var_name(w, func, a);
@@ -1957,22 +1965,23 @@ impl Context<'_> {
                         if c == 1 {
                             // `global $$name` at global scope changes nothing.
                             if !at_global {
-                                let cell = self.global_cell(below, &name);
+                                let cell = self.with_main(below, |cx, main| cx.global_cell(main, &name));
                                 self.bind_local(w, &name, cell);
                             }
                         } else {
                             let cell = make_ref(w, b);
                             if at_global {
                                 let main: &mut [Value] = if in_main { w } else { below };
-                                self.global_bind(main, &name, cell);
+                                self.with_main(main, |cx, main| cx.global_bind(main, &name, cell));
                             } else {
                                 self.bind_local(w, &name, cell);
                             }
                         }
                     }
                     Rare::Globals => {
-                        let main: &[Value] = if in_main { w } else { below };
-                        reg!(a) = Value::Array(Rc::new(self.globals_array(main)));
+                        let main: &mut [Value] = if in_main { w } else { below };
+                        let globals = self.with_main(main, |cx, main| cx.globals_array(main));
+                        reg!(a) = Value::Array(Rc::new(globals));
                     }
                     Rare::IssetStatic => {
                         let set = self.isset_static(func, class, &reg!(b).clone(), w)?;
@@ -2860,8 +2869,9 @@ impl Context<'_> {
                 }
                 Instr::Return { src } => {
                     let v = self.operand(w, func, src);
-                    if self.frames.len() == 1 && self.frames.floor == 0 {
-                        // The script ends: shutdown functions and destructors,
+                    if self.frames.len() == 1 && self.frames.floor == 0 && self.fibers.is_empty() {
+                        // The script ends (the main frame returns, not a
+                        // fiber's first): shutdown functions and destructors,
                         // with its globals still there.
                         self.script_end(regs)?;
                         if matches!(v, Value::Bool(false)) {
@@ -2881,7 +2891,7 @@ impl Context<'_> {
                 }
 
                 Instr::ReturnNull => {
-                    if self.frames.len() == 1 && self.frames.floor == 0 {
+                    if self.frames.len() == 1 && self.frames.floor == 0 && self.fibers.is_empty() {
                         self.script_end(regs)?;
                     }
                     if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
@@ -3491,7 +3501,7 @@ impl Context<'_> {
 
     /// The global variable `name`'s value, if set (`main`: the main frame's window).
     fn global_value(&self, main: &[Value], name: &[u8]) -> Option<Value> {
-        let code = &self.frames.first()?.func.code;
+        let code = &self.main_frame()?.func.code;
         match code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => match main[r].deref() {
                 Value::Undef => None,
@@ -3503,7 +3513,7 @@ impl Context<'_> {
 
     /// The global variable `name` becomes `cell` (a reference binding).
     fn global_bind(&mut self, main: &mut [Value], name: &[u8], cell: Rc<RefCell<Value>>) {
-        let Some(frame) = self.frames.first() else { return };
+        let Some(frame) = self.main_frame() else { return };
         match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => main[r] = Value::Ref(cell),
             None => {
@@ -3513,7 +3523,7 @@ impl Context<'_> {
     }
 
     fn global_unset(&mut self, main: &mut [Value], name: &[u8]) {
-        let Some(frame) = self.frames.first() else { return };
+        let Some(frame) = self.main_frame() else { return };
         match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => main[r] = Value::Undef,
             None => {
@@ -3527,7 +3537,7 @@ impl Context<'_> {
     /// assignment through any of them) still shares it, as PHP's files share
     /// symbol-table slots.
     fn global_clear(&mut self, main: &mut [Value], name: &[u8]) {
-        let Some(frame) = self.frames.first() else { return };
+        let Some(frame) = self.main_frame() else { return };
         match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => match &main[r] {
                 Value::Ref(cell) => *cell.borrow_mut() = Value::Undef,
@@ -3554,7 +3564,7 @@ impl Context<'_> {
                 }
             }
         }
-        if let Some(frame) = self.frames.first() {
+        if let Some(frame) = self.main_frame() {
             for (r, n) in frame.func.code.cv_names.iter().enumerate() {
                 if n.as_bytes() == b"GLOBALS" {
                     continue;
@@ -3576,7 +3586,7 @@ impl Context<'_> {
 
     /// The main script's variable `name`, by its register.
     fn main_cv(&mut self, name: &[u8]) -> Option<usize> {
-        let code = &self.frames.first().expect("the main frame").func.code;
+        let code = &self.main_frame().expect("the main frame").func.code;
         let key = Arc::as_ptr(code) as usize;
         if self.main_cvs.as_ref().is_none_or(|(k, _)| *k != key) {
             let index = code.cv_names.iter().enumerate().map(|(i, n)| (n.as_bytes().to_vec(), i)).collect();
@@ -4483,12 +4493,11 @@ impl Ctx for Context<'_> {
     }
 
     fn global_cell(&mut self, name: &[u8]) -> Rc<RefCell<Value>> {
+        if self.main_frame().is_none() {
+            return self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone();
+        }
         let mut regs = std::mem::take(&mut self.isolate.regs);
-        let cell = if self.frames.first().is_none() {
-            self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone()
-        } else {
-            Context::global_cell(self, &mut regs, name)
-        };
+        let cell = self.with_main(&mut regs, |cx, main| Context::global_cell(cx, main, name));
         self.isolate.regs = regs;
         cell
     }
@@ -4618,9 +4627,12 @@ impl Ctx for Context<'_> {
     }
 
     fn global_value(&self, name: &[u8]) -> Option<Value> {
-        let main = self.frames.first()?;
+        let main = self.main_frame()?;
+        // The main frame's registers: the running task's, or the first
+        // task's while a fiber runs.
+        let regs = self.waiting_tasks().next().map_or(&self.isolate.regs, |t| &t.regs);
         match main.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
-            Some(r) => self.isolate.regs.get(r).map(Value::deref).filter(|v| !matches!(v, Value::Undef)),
+            Some(r) => regs.get(r).map(Value::deref).filter(|v| !matches!(v, Value::Undef)),
             None => self.globals.get(name).map(|c| c.borrow().deref()).filter(|v| !matches!(v, Value::Undef)),
         }
     }
@@ -5000,12 +5012,12 @@ fn compare(cmp: Cmp, x: &Value, y: &Value) -> Value {
 mod tests {
     use super::*;
 
-    struct Sink;
+    pub(crate) struct Sink;
     impl Host for Sink {
         fn write(&mut self, _: &[u8]) {}
     }
 
-    fn compile(source: &str, registry: &Registry) -> p8_compiler::Program {
+    pub(crate) fn compile(source: &str, registry: &Registry) -> p8_compiler::Program {
         let arena = bumpalo::Bump::new();
         let mut parser = p8_syntax::parser::Parser::new(p8_syntax::lexer::Lexer::new(source.as_bytes()), &arena);
         let program = parser.parse_program();

@@ -6,7 +6,7 @@
 //! $PHP_SRC_PATH/Zend/zend_builtin_functions.c (zend_fetch_debug_backtrace),
 //! $PHP_SRC_PATH/Zend/zend_execute.c (ZEND_HANDLE_EXCEPTION)
 
-use crate::{Context, Frames, clear};
+use crate::{Context, Frame, Frames, NativeCall, clear};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::Object;
@@ -30,9 +30,23 @@ impl Context<'_> {
     /// (DEBUG_BACKTRACE_PROVIDE_OBJECT).
     pub(crate) fn trace_with(&self, regs: &dyn Fn(usize) -> Value, objects: bool) -> PhpArray {
         let mut trace = PhpArray::new();
-        let frames = &self.frames.slots[..self.frames.len()];
+        // The running task's frames over those of the tasks waiting under
+        // it (a fiber's above whoever started or resumed it), as one
+        // stack, as PHP shows it; each frame with its task's registers
+        // (None: the running task's, read through `regs`), each builtin
+        // at its depth in that stack.
+        let mut frames: Vec<(&Frame, Option<&[Value]>)> = Vec::new();
+        let mut natives: Vec<(usize, &NativeCall)> = Vec::new();
+        for task in self.waiting_tasks() {
+            let below = frames.len();
+            natives.extend(task.natives.iter().map(|n| (below + n.depth, n)));
+            frames.extend(task.frames.slots[..task.frames.len()].iter().map(|f| (f, Some(task.regs.as_slice()))));
+        }
+        let below = frames.len();
+        natives.extend(self.natives.iter().map(|n| (below + n.depth, n)));
+        frames.extend(self.frames.slots[..self.frames.len()].iter().map(|f| (f, None)));
         // An internal method the error was raised in, called from the top frame.
-        if let Some(n) = self.natives.last().filter(|n| n.top && n.depth == frames.len()) {
+        if let Some(&(_, n)) = natives.last().filter(|(depth, n)| n.top && *depth == frames.len()) {
             let (file, line) = self.location();
             let mut entry = PhpArray::new();
             entry.insert(key("file"), Value::Str(PhpStr::from(&*file)));
@@ -42,7 +56,7 @@ impl Context<'_> {
             let _ = trace.push(Value::Array(Rc::new(entry)));
         }
         for k in (1..frames.len()).rev() {
-            let (frame, caller) = (&frames[k], &frames[k - 1]);
+            let ((frame, frame_regs), (caller, _)) = (frames[k], frames[k - 1]);
             // A constant expression's code runs in place: no frame of its own.
             if frame.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() {
                 continue;
@@ -51,7 +65,7 @@ impl Context<'_> {
             let code = &caller.func.code;
             let line = code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
             // A frame a builtin called (a callback): from no file.
-            let native = self.natives.iter().find(|n| n.depth == k);
+            let native = natives.iter().find(|(depth, _)| *depth == k).map(|&(_, n)| n);
             if native.is_none() {
                 entry.insert(key("file"), Value::Str(PhpStr::from(&*code.file)));
                 entry.insert(key("line"), Value::Int(i64::from(line)));
@@ -70,7 +84,7 @@ impl Context<'_> {
             let mut args = PhpArray::new();
             let base = frame.base as usize;
             for i in 0..(frame.argc as usize).min(code.params.len()) {
-                let v = match regs(base + i) {
+                let v = match frame_regs.map_or_else(|| regs(base + i), |r| r.get(base + i).cloned().unwrap_or_default()) {
                     Value::Undef => continue,
                     v => v.deref(),
                 };
@@ -185,9 +199,11 @@ impl Context<'_> {
                 return Ok(h.target as usize);
             }
             // The bottom frame of this `execute`: the exception goes to
-            // whoever started it (the host, or a builtin calling back).
+            // whoever started it (the host, a builtin calling back, or
+            // the task that started or resumed a fiber). Only the main
+            // frame stays (its globals, for what runs after).
             if self.frames.len() == self.frames.floor + 1 {
-                if self.frames.floor > 0 {
+                if self.frames.floor > 0 || !self.fibers.is_empty() {
                     drop_frame(&mut self.frames, regs);
                 }
                 return Err(Throw::Object(object));
@@ -200,7 +216,7 @@ impl Context<'_> {
 }
 
 /// Pop the top frame without a result (an exception left it).
-fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
+pub(crate) fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     crate::give_back_shared(frames, regs);
     let frame = frames.pop();
     frame.extra = None;
