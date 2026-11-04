@@ -6,7 +6,7 @@ license = "MIT"
 description = "p8: an embeddable PHP 8.4 engine"
 
 [dependencies]
-sha2 = "0.10"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 bumpalo = { version = "3.12", features = ["collections"] }
 p8-bytecode = { path = "../p8-bytecode" }
 p8-compiler = { path = "../p8-compiler" }

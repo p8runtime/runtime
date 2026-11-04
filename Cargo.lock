@@ -3886,7 +3886,7 @@ dependencies = [
  "p8-interp",
  "p8-runtime",
  "p8-syntax",
- "sha2 0.10.9",
+ "xxhash-rust",
 ]
 
 [[package]]
