@@ -652,6 +652,28 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                     Some(ty) if clo.code.is_generator || !ty.quick(&w[a as usize]) => return pc,
                     _ => pc += 1,
                 },
+                // `$o->m($v)`: an argument the method the call site's cache
+                // names for this class and scope takes by value is copied
+                // (by reference, a miss, or an undefined or reference
+                // variable: `step`, which looks the method up by name).
+                Instr::SendVarMethod { obj, method, n, arg, var } => {
+                    let Value::Object(o) = &w[obj as usize] else { return pc };
+                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                    let by_value = clo.methods[method as usize].borrow().as_ref().is_some_and(|s| {
+                        s.class == Rc::as_ptr(&o.class) as usize
+                            && s.scope == scope
+                            && matches!(&s.code, MethodCode::User(code) if code.upgrade().is_some_and(|c| !c.code.param_by_ref(n as usize)))
+                    });
+                    if !by_value {
+                        return pc;
+                    }
+                    let Some(v) = copied(&w[var as usize]) else { return pc };
+                    w[arg as usize] = v;
+                    pc += 1;
+                    if ids.has_pending() {
+                        return pc;
+                    }
+                }
                 Instr::Jump { target } => {
                     if back(target, pc) {
                         return pc;
@@ -861,7 +883,6 @@ fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mu
                 | Instr::UnsetDim { .. }
                 | Instr::IterInit { .. }
                 | Instr::SendVar { .. }
-                | Instr::SendVarMethod { .. }
                 | Instr::SendVarStatic { .. }
                 | Instr::MethodArgByRef { .. }
                 | Instr::StaticArgByRef { .. }
