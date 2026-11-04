@@ -480,10 +480,9 @@ fn with_server(config: &Config, host: String, port: u16, docroot: String, serve:
     let platform = p8::Platform::new(&crate::extensions(true))
         // Each file is compiled once, and again only when its source changes.
         .keep_compiled();
+    let mut isolate = platform.new_isolate();
     let mut ini: Vec<(String, String)> = SERVER_INI.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
     ini.extend(config.ini.iter().cloned());
-    let platform = crate::file_cache(platform, &ini);
-    let mut isolate = platform.new_isolate();
     let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u32>().ok()).unwrap_or(0);
     LIMIT_SECONDS.store(limit, Ordering::Relaxed);
     let watchdog = Watchdog::start(isolate.interrupt_handle());

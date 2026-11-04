@@ -16,21 +16,6 @@ pub trait Host {
     }
 }
 
-/// A function's `static` variables, by index. The function is held: its
-/// address is the key, and an eval'd function dropped while its statics
-/// were kept would hand them to the next function allocated there. PHP
-/// keeps eval'd code until the request ends, too.
-pub(crate) struct FunctionStatics {
-    _func: Arc<p8_bytecode::Function>,
-    pub(crate) cells: HashMap<u16, Rc<RefCell<Value>>>,
-}
-
-impl FunctionStatics {
-    pub(crate) fn new(func: &Arc<p8_bytecode::Function>) -> FunctionStatics {
-        FunctionStatics { _func: Arc::clone(func), cells: HashMap::default() }
-    }
-}
-
 /// An output buffer (ob_start): its contents, and the handler (PHP code)
 /// that turns them into what is passed on.
 pub(crate) struct Buffer {
@@ -169,22 +154,10 @@ pub struct Isolate {
     /// Set by an InterruptHandle; cleared when a request starts.
     pub(crate) interrupt: Arc<AtomicU64>,
     /// The classes every request starts with.
-    pub(crate) builtin_classes: builtin_classes::Table,
-    /// The builtin classes declared when first wanted (reflection's, the
-    /// extensions'), by name.
-    pub(crate) on_demand: HashMap<Sym, &'static p8_runtime::ext::ClassSpec>,
-    /// The symbols of classes the engine makes objects of itself.
-    pub(crate) known: Known,
-}
-
-/// The names of classes the engine makes objects of itself (a closure, a
-/// generator), looked up without going through the symbol table.
-pub(crate) struct Known {
-    pub(crate) closure: Sym,
-    pub(crate) generator: Sym,
-    pub(crate) stdclass: Sym,
-    pub(crate) error: Sym,
-    pub(crate) fiber: Sym,
+    pub(crate) builtin_classes: builtin_classes::Classes,
+    /// The ini defaults as strings, made once (ini_get() of a setting
+    /// no request changed hands out the same string each time).
+    pub(crate) ini_texts: RefCell<HashMap<(usize, usize), PhpStr>>,
 }
 
 impl Isolate {
@@ -193,13 +166,14 @@ impl Isolate {
             regs: Vec::with_capacity(1024),
             interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)),
             builtin_classes: builtin_classes::build(&registry),
-            on_demand: builtin_classes::on_demand(&registry),
-            known: {
-                let s = registry.symbols();
-                Known { closure: s.intern(b"closure"), generator: s.intern(b"generator"), stdclass: s.intern(b"stdclass"), error: s.intern(b"error"), fiber: s.intern(b"fiber") }
-            },
+            ini_texts: RefCell::new(HashMap::default()),
             registry,
         }
+    }
+
+    /// An ini default (a registry's static text) as a string, shared.
+    pub(crate) fn ini_text(&self, text: &'static [u8]) -> PhpStr {
+        self.ini_texts.borrow_mut().entry((text.as_ptr() as usize, text.len())).or_insert_with(|| PhpStr::from(text)).clone()
     }
 
     pub fn registry(&self) -> &Arc<Registry> {
@@ -225,7 +199,7 @@ impl Isolate {
             frames: Frames::default(),
             functions: HashMap::default(),
             closures: Vec::new(),
-            constants: p8_runtime::fast::IndexMap::default(),
+            constants: indexmap::IndexMap::new(),
             globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
             out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false },
@@ -278,6 +252,7 @@ impl Isolate {
             last_error: None,
             in_handler: false,
             arg_buf: Vec::new(),
+            key_path: Vec::new(),
             lambdas: HashMap::default(),
             natives: Vec::new(),
             native_args: Vec::new(),
@@ -309,16 +284,15 @@ pub struct Context<'i> {
     /// The isolate's interrupt flag (kept here: read on every step).
     pub(crate) stop: Arc<AtomicU64>,
     pub(crate) frames: Frames,
-    /// Declared functions by (lowercase) name, as indices in `closures`
+    /// Declared functions by lowercase name, as indices in `closures`
     /// (only ever grows, so call sites
     /// can cache what they resolve).
-    pub(crate) functions: HashMap<Sym, u32>,
+    pub(crate) functions: HashMap<Vec<u8>, u32>,
     /// Every closure this context made. Call sites refer to them by index.
     pub(crate) closures: Vec<Rc<Closure>>,
     /// Constants the script defined (define(), const).
-    /// The script's own constants, in the order defined, by key
-    /// (p8_runtime::ext::const_key): each with its name as defined.
-    pub(crate) constants: p8_runtime::fast::IndexMap<Sym, (Sym, Value)>,
+    /// The script's own constants, in the order defined.
+    pub(crate) constants: indexmap::IndexMap<Vec<u8>, Value>,
     /// Globals not held in the main frame's registers.
     /// In the order made, as PHP's symbol table ($GLOBALS, get_defined_vars).
     pub(crate) globals: p8_runtime::fast::IndexMap<Vec<u8>, Rc<RefCell<Value>>>,
@@ -336,8 +310,8 @@ pub struct Context<'i> {
     pub(crate) display_errors: bool,
     /// The running frame's pc (Frame.pc is written when it calls out).
     pub(crate) pc: usize,
-    /// Linked classes by (lowercase) name.
-    pub(crate) classes: HashMap<Sym, Rc<Class>>,
+    /// Linked classes by lowercase name.
+    pub(crate) classes: HashMap<Vec<u8>, Rc<Class>>,
     /// The frame of a call that failed before it ran, for the trace of
     /// the error it raised (see `failed_call`).
     pub(crate) failed_call: Option<PhpArray>,
@@ -350,9 +324,9 @@ pub struct Context<'i> {
     /// Where each class this request declared was declared (file, line),
     /// for "previously declared in"; and the file whose classes are being
     /// bound before it runs.
-    pub(crate) class_origins: HashMap<Sym, (Rc<str>, u32)>,
+    pub(crate) class_origins: HashMap<Vec<u8>, (Rc<str>, u32)>,
     /// Each declared class's compiled declaration (reflection reads its metadata).
-    pub(crate) defs_by_name: HashMap<Sym, Arc<ClassDef>>,
+    pub(crate) defs_by_name: HashMap<Vec<u8>, Arc<ClassDef>>,
     /// The classes the script declared, in order, each by the name it is
     /// listed by (an alias by its lowercase name): get_declared_classes().
     pub(crate) declared_order: Vec<(PhpStr, Rc<Class>)>,
@@ -367,6 +341,8 @@ pub struct Context<'i> {
     pub(crate) ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
     pub(crate) arg_buf: Vec<Value>,
+    /// A dimension write's keys while it runs (kept for its capacity).
+    pub(crate) key_path: Vec<Key>,
     /// Extensions' per-request state (Ctx::state).
     pub(crate) ext_state: HashMap<&'static str, Value>,
     /// The main frame's globals as the script left them, kept until the
@@ -419,7 +395,7 @@ pub struct Context<'i> {
     pub(crate) ext_data: HashMap<&'static str, Option<Box<dyn std::any::Any>>>,
     /// The constants an extension made while the request ran that are
     /// deprecated (SID), by constant key.
-    pub(crate) deprecated_made: p8_runtime::fast::HashSet<Sym>,
+    pub(crate) deprecated_made: std::collections::HashSet<Vec<u8>>,
     /// The request-end hooks of the extensions are running: what they
     /// report is located "Unknown" on line 0, as PHP words RSHUTDOWN's.
     pub(crate) request_end: bool,
@@ -440,7 +416,7 @@ pub struct Context<'i> {
     /// The builtin running now, innermost (its name for its messages).
     pub(crate) running_builtin: Option<usize>,
     /// `static` variables, by function (its code's address) and index.
-    pub(crate) statics: HashMap<usize, FunctionStatics>,
+    pub(crate) statics: HashMap<usize, HashMap<u16, Rc<RefCell<Value>>>>,
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     pub(crate) magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,

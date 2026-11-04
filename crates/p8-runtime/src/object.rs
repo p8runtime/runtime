@@ -207,15 +207,8 @@ pub struct Class {
     /// In declaration order (reflection lists them so).
     pub constants: Constants,
     /// Static properties: a subclass shares its parent's cell unless it
-    /// redeclares the property. In PHP's order (as `property_order`): the
-    /// class's own as declared, then its parent's, then its traits'.
-    pub statics: crate::fast::IndexMap<Vec<u8>, Static>,
-    /// Every property name, static or not, in the order PHP keeps them
-    /// (zend_do_inheritance's properties_info): the class's own as
-    /// declared, then its parent's that it does not redeclare (not the
-    /// parent's private ones), then those its traits add. Reflection and
-    /// get_class_vars() list properties in this order.
-    pub property_order: Vec<PhpStr>,
+    /// redeclares the property.
+    pub statics: crate::fast::HashMap<Vec<u8>, Static>,
     /// What var_dump and print_r show of an object instead of its
     /// properties (a Closure's name, file, bindings).
     pub debug_info: Option<fn(&Object) -> PhpArray>,

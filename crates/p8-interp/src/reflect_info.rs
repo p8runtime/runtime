@@ -43,7 +43,8 @@ impl Context<'_> {
         let mut out = PhpArray::new();
         let (clo, captured) = match callee {
             Callee::Function(name) => {
-                match self.sym_of(name.as_bytes()).and_then(|key| self.functions.get(&key)) {
+                let lower = name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase();
+                match self.functions.get(&lower) {
                     Some(&i) => (Rc::clone(&self.closures[i as usize]), Vec::new()),
                     None => return out,
                 }
@@ -68,7 +69,7 @@ impl Context<'_> {
         for (r, v) in code.bound.iter().zip(captured) {
             out.insert(Key::from_string(name(u32::from(*r))), v);
         }
-        let statics = self.statics.get(&(Arc::as_ptr(code) as usize)).map(|s| &s.cells);
+        let statics = self.statics.get(&(Arc::as_ptr(code) as usize));
         let consts = code.consts_at as usize..code.consts_at as usize + clo.consts.len();
         for (at, ins) in code.code.iter().enumerate() {
             if let p8_bytecode::Instr::StaticVar { var, index, .. } = ins {
@@ -79,7 +80,7 @@ impl Context<'_> {
                         (Some(p8_bytecode::Instr::Assign { var: v, src }), _) if v == var && consts.contains(&(*src as usize)) => {
                             clo.consts[*src as usize - consts.start].clone()
                         }
-                        (Some(p8_bytecode::Instr::NewArray { dst }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
+                        (Some(p8_bytecode::Instr::NewArray { dst, .. }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
                             Value::Array(Rc::new(PhpArray::new()))
                         }
                         _ => Value::Null,
@@ -169,17 +170,17 @@ impl Context<'_> {
     pub(crate) fn info_of(&self, callee: &Callee) -> Option<FnInfo> {
         match callee {
             Callee::Function(name) => {
-                let key = self.sym_of(name.as_bytes())?;
-                if let Some(&i) = self.functions.get(&key) {
+                let lower = name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase();
+                if let Some(&i) = self.functions.get(&lower) {
                     return Some(self.user_info(&Rc::clone(&self.closures[i as usize]), None));
                 }
-                let i = self.builtin(key)?;
+                let i = self.builtin(&lower)?;
                 let b = self.isolate.registry.function(i);
                 Some(self.stub_info(b.name, PhpStr::from(b.name), None))
             }
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?.clone();
-                let declaring = self.class_named(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                let declaring = self.classes.get(&*m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
                 // A builtin interface's abstract method has no code: its stub describes it.
                 let code = if m.native.is_none() && m.func == u32::MAX { None } else { Some(self.code_of(&m)) };
                 Some(match code {
@@ -224,7 +225,7 @@ impl Context<'_> {
                 let Some(m) = class.method(&name.as_bytes().to_ascii_lowercase()).cloned() else {
                     return Err(self.throw("ReflectionException", format!("Method {}::{}() does not exist", String::from_utf8_lossy(class.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()))));
                 };
-                let declaring = self.class_named(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                let declaring = self.classes.get(&*m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
                 let called = this.as_ref().map_or_else(|| Rc::clone(class), |o| Rc::clone(&o.class));
                 let this = if m.is_static { None } else { this };
                 let mut regs = std::mem::take(&mut self.isolate.regs);

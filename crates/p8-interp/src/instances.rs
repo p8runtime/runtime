@@ -126,8 +126,8 @@ mod tests {
         }
         cx.declare_classes(&program.classes);
         assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
-        let a = Rc::clone(cx.class_named(b"a").expect("A"));
-        let b = Rc::clone(cx.class_named(b"b").expect("B"));
+        let a = Rc::clone(&cx.classes[b"a".as_slice()]);
+        let b = Rc::clone(&cx.classes[b"b".as_slice()]);
         let info = |c: &Rc<p8_runtime::object::Class>| Rc::clone(&cx.new_infos[&(Rc::as_ptr(c) as usize)]);
         let (ia, ib) = (info(&a), info(&b));
         assert_eq!(cx.new_infos.len(), 2, "one NewInfo per class");

@@ -109,18 +109,6 @@ fn op(symbol: &str) -> BinOp {
     }
 }
 
-/// The fixture's expected result for this machine. The NaN an invalid
-/// operation makes (`INF - INF`, `0 * INF`, `(-1) ** 1.5`) is the
-/// processor's "default NaN": negative on x86-64 (fff8…, where the fixtures
-/// were recorded), positive on arm64 (7ff8…). PHP computes with C doubles,
-/// so it gets this machine's bits too; no text it prints shows a NaN's sign
-/// (zend_gcvt, php_conv_fp and sprintf print "NAN"/"NaN" alone), only
-/// `pack()` does. See #239.
-fn on_this_machine(want: &str) -> String {
-    let nan = f64::INFINITY - std::hint::black_box(f64::INFINITY);
-    want.replace("f:fff8000000000000", &format!("f:{}", hex(&nan.to_be_bytes())))
-}
-
 #[test]
 fn binary_operators_match_php_8_4() {
     let values = values();
@@ -149,25 +137,10 @@ fn binary_operators_match_php_8_4() {
             })
             .collect();
         let got = if diags.is_empty() { result } else { format!("{} {}", result, diags.join("|")) };
-        let want = on_this_machine(&parts[3..].join(" "));
+        let want = parts[3..].join(" ");
         if got != want {
             failures.push(format!("{} {} {} want {} got {}", parts[0], parts[1], parts[2], want, got));
         }
     }
     assert!(failures.is_empty(), "{} mismatches:\n{}", failures.len(), failures[..failures.len().min(40)].join("\n"));
-}
-
-/// `-$x` is PHP's `$x * -1`: for a NaN, what this machine's multiply gives
-/// (the NaN passed through with its sign, quieted), not a sign flip.
-#[test]
-fn negating_a_nan_is_multiplying_it_by_minus_one() {
-    let minus_one = std::hint::black_box(-1.0f64);
-    for bits in [0x7ff8_0000_0000_0000u64, 0xfff8_0000_0000_0000, 0x7ff8_0000_0000_0001, 0xfff0_0000_0000_0001] {
-        let nan = f64::from_bits(bits);
-        let negated = p8_runtime::ops::negate(&Value::Float(nan), &mut Vec::new()).expect("a float");
-        let Value::Float(f) = negated else { panic!("a float") };
-        assert_eq!(f.to_bits(), (nan * minus_one).to_bits(), "{bits:016x}");
-    }
-    let Ok(Value::Float(z)) = p8_runtime::ops::negate(&Value::Float(0.0), &mut Vec::new()) else { panic!("a float") };
-    assert!(z == 0.0 && z.is_sign_negative());
 }

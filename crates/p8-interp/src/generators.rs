@@ -108,7 +108,7 @@ impl Context<'_> {
             resume_dst: None,
             delegate: None,
         };
-        let class = Rc::clone(&self.classes[&self.isolate.known.generator]);
+        let class = Rc::clone(&self.classes[b"generator".as_slice()]);
         Object::with_data(class, &self.ids, Some(Rc::new(Gen(RefCell::new(state)))))
     }
 
@@ -565,7 +565,7 @@ impl Context<'_> {
             if o.class.slot(p.name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) != Some(i) {
                 continue;
             }
-            let declaring = self.class_named(&p.declaring).cloned();
+            let declaring = self.classes.get(&p.declaring).cloned();
             let visible = match &declaring {
                 Some(d) => p8_runtime::object::visible(p.visibility, d, scope.as_deref()),
                 None => true,

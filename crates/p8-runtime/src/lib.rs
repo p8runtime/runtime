@@ -17,7 +17,6 @@ pub mod object;
 pub mod ops;
 pub mod os;
 pub mod reflect;
-pub mod symbol;
 /// The builtins' declared signatures (for reflection).
 pub use p8_stubs as stubs;
 pub mod stream;

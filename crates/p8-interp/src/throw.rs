@@ -139,10 +139,10 @@ impl Context<'_> {
     /// The object an engine error (`Throw::Error`) becomes.
     pub(crate) fn exception(&mut self, regs: &dyn Fn(usize) -> Value, t: Throw) -> Throw {
         let Throw::Error { class, message, file, line, props } = t else { return t };
-        let found = self.sym_of(class.as_bytes()).and_then(|key| self.classes.get(&key).cloned().or_else(|| self.builtin_on_demand(key)));
-        let class = match found {
+        let lower = class.to_ascii_lowercase();
+        let class = match self.classes.get(lower.as_bytes()).cloned().or_else(|| self.builtin_on_demand(lower.as_bytes())) {
             Some(c) => c,
-            None => Rc::clone(&self.classes[&self.isolate.known.error]),
+            None => Rc::clone(&self.classes[b"error".as_slice()]),
         };
         let object = Object::new(Rc::clone(&class), &self.ids);
         let root: &[u8] = if class.is_a(b"exception") { b"exception" } else { b"error" };

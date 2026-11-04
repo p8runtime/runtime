@@ -31,13 +31,12 @@ use sites::*;
 use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg, Rare};
 pub use include::{LoadError, Loader};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
-use p8_runtime::ext::{Ctx, Registry, const_key};
+use p8_runtime::ext::{Ctx, Registry};
 pub use p8_runtime::ext::Throw;
 use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
-use p8_runtime::symbol::Sym;
 use p8_runtime::value::Value;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Ordering;
@@ -147,14 +146,13 @@ enum Next {
 
 impl Context<'_> {
     pub fn declare(&mut self, func: Arc<Function>) -> Result<(), String> {
-        let key = func.sym;
+        let key = func.name.as_bytes().to_ascii_lowercase();
+        let name = String::from_utf8_lossy(func.name.as_bytes());
         if let Some(&i) = self.functions.get(&key) {
-            let name = String::from_utf8_lossy(func.name.as_bytes());
             let first = &self.closures[i as usize].code;
             return Err(format!("Cannot redeclare function {name}() (previously declared in {}:{})", first.file, first.line));
         }
-        if self.builtin(key).is_some() {
-            let name = String::from_utf8_lossy(func.name.as_bytes());
+        if self.builtin(&key).is_some() {
             return Err(format!("Cannot redeclare function {name}()"));
         }
         self.closures.push(Closure::new(func));
@@ -175,57 +173,19 @@ impl Context<'_> {
         self.class_defs.extend(classes.iter().cloned());
     }
 
-    /// The builtins and the symbol table this request's code is compiled against.
-    pub fn registry(&self) -> &Arc<Registry> {
-        &self.isolate.registry
-    }
-
     /// What compiles the files the script includes.
     pub fn set_loader(&mut self, loader: Rc<dyn Loader>) {
         self.loader = Some(loader);
     }
 
     pub fn function_exists(&self, name: &[u8]) -> bool {
-        self.sym_of(name).is_some_and(|key| self.functions.contains_key(&key) || self.builtin(key).is_some())
+        let key = name.strip_prefix(b"\\").unwrap_or(name).to_ascii_lowercase();
+        self.functions.contains_key(&key) || self.builtin(&key).is_some()
     }
 
-    /// The symbol of a function or class name written in any case, with
-    /// an optional leading `\`: None when no code ever named it (so no
-    /// function or class has that name). Allocates nothing.
-    pub(crate) fn sym_of(&self, name: &[u8]) -> Option<Sym> {
-        self.isolate.registry.symbols().find_lower(name.strip_prefix(b"\\").unwrap_or(name))
-    }
-
-    /// The symbol of a function or class name being declared (any case,
-    /// optional leading `\`).
-    pub(crate) fn intern(&self, name: &[u8]) -> Sym {
-        self.isolate.registry.symbols().intern_lower(name.strip_prefix(b"\\").unwrap_or(name))
-    }
-
-    /// The declared class named `name` (any case, optional leading `\`),
-    /// without declaring a builtin one or autoloading.
-    pub(crate) fn class_named(&self, name: &[u8]) -> Option<&Rc<Class>> {
-        self.classes.get(&self.sym_of(name)?)
-    }
-
-    /// The compiled declaration of the class named `name` (any case).
-    pub(crate) fn def_named(&self, name: &[u8]) -> Option<&Arc<ClassDef>> {
-        self.defs_by_name.get(&self.sym_of(name)?)
-    }
-
-    /// The function `name` (any case, optional leading `\`): a declared
-    /// one, else a builtin.
-    pub(crate) fn function_named(&self, name: &[u8]) -> Option<Callee> {
-        let key = self.sym_of(name)?;
-        match self.functions.get(&key) {
-            Some(&f) => Some(Callee::User(f)),
-            None => self.builtin(key).map(Callee::Builtin),
-        }
-    }
-
-    /// The builtin named `sym`, unless disable_functions took it away.
-    pub(crate) fn builtin(&self, sym: Sym) -> Option<usize> {
-        self.isolate.registry.builtin(sym).filter(|&i| self.disabled.is_empty() || !self.disabled.contains(self.isolate.registry.function(i).name.as_bytes()))
+    /// The builtin named `lower`, unless disable_functions took it away.
+    pub(crate) fn builtin(&self, lower: &[u8]) -> Option<usize> {
+        self.isolate.registry.lookup(lower).filter(|&i| self.disabled.is_empty() || !self.disabled.contains(self.isolate.registry.function(i).name.as_bytes()))
     }
 
     /// An ini value that may be an expression (`E_ALL & ~E_NOTICE`):
@@ -983,13 +943,13 @@ impl Context<'_> {
     #[inline(never)]
     fn resolve_slow(&mut self, clo: &Closure, site: u16) -> Result<Callee, Throw> {
         let s = &clo.code.sites[site as usize];
-        let key = s.sym;
-        let global = s.fallback.as_ref().map(|g| g.1);
-        let callee = if let Some(f) = self.functions.get(&key) {
+        let key = s.name.as_bytes();
+        let global = s.fallback.as_ref().map(|g| g.as_bytes());
+        let callee = if let Some(f) = self.functions.get(key) {
             Callee::User(*f)
         } else if let Some(i) = self.builtin(key) {
             Callee::Builtin(i)
-        } else if let Some(f) = global.and_then(|g| self.functions.get(&g)) {
+        } else if let Some(f) = global.and_then(|g| self.functions.get(g)) {
             Callee::User(*f)
         } else if let Some(i) = global.and_then(|g| self.builtin(g)) {
             Callee::Builtin(i)
@@ -1444,7 +1404,7 @@ impl Context<'_> {
                         pc = target as usize;
                     }
                 }
-                Instr::NewArray { dst } => reg!(dst) = Value::Array(Rc::new(PhpArray::new())),
+                Instr::NewArray { dst, n } => reg!(dst) = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize))),
                 Instr::ArrayPush { arr, val } => {
                     let v = self.operand(w, func, val);
                     if let Value::Array(a) = &mut reg!(arr)
@@ -1481,8 +1441,11 @@ impl Context<'_> {
                 }
                 Instr::AssignDim { var, keys, n, append, val, dst } => {
                     let v = self.operand(w, func, val);
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, append) {
+                    // The keys are looked at in place: a list of them is made
+                    // only for an ArrayAccess object on the path.
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, append) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, append, arrayaccess::DimOp::Set(v))?;
                         regs[base + dst as usize] = r;
@@ -1493,8 +1456,9 @@ impl Context<'_> {
                 }
                 Instr::AssignDimOp { op, var, keys, n, val, dst } => {
                     let v = self.operand(w, func, val);
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::Op(op, v))?;
                         regs[base + dst as usize] = r;
@@ -1504,8 +1468,9 @@ impl Context<'_> {
                     reg!(dst) = result;
                 }
                 Instr::IssetDim { dst, var, keys, n } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let set = self.aa_isset(regs, &root, &key_values)?;
                         regs[base + dst as usize] = Value::Bool(set);
@@ -1557,19 +1522,38 @@ impl Context<'_> {
                     reg!(var) = Value::Undef;
                 }
                 Instr::UnsetDim { var, keys, n } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).clone()).collect();
-                    let derefed: Vec<Value> = key_values.iter().map(Value::deref).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &derefed, false) {
+                    let key_range = keys as usize..keys as usize + n as usize;
+                    if arrayaccess::path_has_object(&reg!(var), &w[key_range.clone()], false) {
+                        let derefed: Vec<Value> = w[key_range].iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         self.aa_write(regs, &root, &derefed, false, arrayaccess::DimOp::Unset)?;
                         return Ok(Next::Go(pc));
                     }
-                    // In place: a copy of the variable's array would make
-                    // every unset copy the whole array (copy-on-write).
-                    match &mut reg!(var) {
-                        Value::Ref(cell) => unset_path(&mut cell.borrow_mut(), &key_values),
-                        v => unset_path(v, &key_values),
+                    // The array is taken out of the variable while the element
+                    // goes, so an array only the variable holds is changed in
+                    // place, not copied first (unless a key is a reference,
+                    // which might be to the variable itself).
+                    if !key_range.contains(&(var as usize)) && !w[key_range.clone()].iter().any(|k| matches!(k, Value::Ref(_))) {
+                        let mut held = match &mut reg!(var) {
+                            Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                            slot => std::mem::take(slot),
+                        };
+                        unset_path(&mut held, &w[key_range]);
+                        match &mut reg!(var) {
+                            Value::Ref(cell) => *cell.borrow_mut() = held,
+                            slot => *slot = held,
+                        }
+                        return Ok(Next::Go(pc));
+                    }
+                    let key_values: Vec<Value> = w[key_range].to_vec();
+                    let slot = &mut reg!(var);
+                    let mut holder = match slot {
+                        Value::Ref(cell) => cell.borrow().clone(),
+                        v => v.clone(),
                     };
+                    if unset_path(&mut holder, &key_values) {
+                        assign(w, var, holder);
+                    }
                 }
                 Instr::IterInit { src, iter, end } => {
                     let v = self.operand(w, func, src);
@@ -1699,9 +1683,9 @@ impl Context<'_> {
                     let s = &func.sites[site as usize];
                     let v = match clo.sites[site as usize].get() {
                         Some(Callee::Constant(v)) => v.clone(),
-                        _ => match self.constant_by_key(s.sym).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1))) {
+                        _ => match self.constant_value(s.name.as_bytes()).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_value(g.as_bytes()))) {
                             // Deprecated: said on every fetch, so never cached.
-                            Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(str::to_string).or_else(|| self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes()))) => {
+                            Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.as_bytes())).map(str::to_string).or_else(|| self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.as_bytes()))) => {
                                 self.diags.push(Diag::Deprecated(format!("Constant {name} is deprecated")));
                                 self.report_diags();
                                 v
@@ -1747,14 +1731,16 @@ impl Context<'_> {
                     reg!(dst) = Value::Str(PhpStr::new(bytes));
                 }
                 Instr::BindGlobal { var, name } => {
+                    // The name's constant, shared (not copied).
                     let name = match &clo.consts[name as usize] {
-                        Value::Str(s) => s.as_bytes().to_vec(),
-                        _ => Vec::new(),
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("BindGlobal names a constant string"),
                     };
+                    let name = name.as_bytes();
                     // The main frame's window starts at 0: it is `w` when
                     // the main frame is running, else the start of `below`
                     // (or of the first task's registers, in a fiber).
-                    let cell = if in_main { self.global_cell(w, &name) } else { self.with_main(below, |cx, main| cx.global_cell(main, &name)) };
+                    let cell = if in_main { self.global_cell(w, name) } else { self.with_main(below, |cx, main| cx.global_cell(main, name)) };
                     reg!(var) = Value::Ref(cell);
                 }
                 Instr::MatchError { src } => {
@@ -2048,25 +2034,21 @@ impl Context<'_> {
                     reg!(var) = Value::Ref(cell);
                 }
                 Instr::RefDim { var, root, keys, n, append } => {
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let cell = make_ref(w, root);
                     let mut value = std::mem::take(&mut *cell.borrow_mut());
                     let r = self.dim_ref(&mut value, &path, append);
+                    self.key_path_done(path);
                     *cell.borrow_mut() = value;
                     reg!(var) = Value::Ref(r?);
                 }
                 Instr::DimSetRef { root, keys, n, append, src } => {
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let target = make_ref(w, src);
                     let cell = make_ref(w, root);
                     let mut value = std::mem::take(&mut *cell.borrow_mut());
                     let r = self.dim_set_ref(&mut value, &path, append, target);
+                    self.key_path_done(path);
                     *cell.borrow_mut() = value;
                     r?;
                 }
@@ -2159,8 +2141,10 @@ impl Context<'_> {
                     }
                 }
                 Instr::CollectVariadic { var } => {
-                    // Its own argument (if passed), then those past it.
-                    let mut list = Vec::new();
+                    // Its own argument (if passed), then those past it:
+                    // the list made once, at its size.
+                    let extra = self.frames.last().map_or(0, |f| f.args().len());
+                    let mut list = Vec::with_capacity(usize::from(argc > var as usize) + extra);
                     if argc > var as usize {
                         list.push(std::mem::replace(&mut reg!(var), Value::Undef));
                     }
@@ -2198,7 +2182,7 @@ impl Context<'_> {
                     };
                 }
                 Instr::StaticVar { var, index, skip } => {
-                    let (cell, new) = self.static_var(&clo.code, index);
+                    let (cell, new) = self.static_var(func, index);
                     reg!(var) = Value::Ref(cell);
                     if !new {
                         pc = skip as usize;
@@ -2252,22 +2236,21 @@ impl Context<'_> {
                     return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
                 }
                 Instr::DimIncDec { var, keys, n, dst, inc, post } => {
-                    let key_values: Vec<Value> = (0..n).map(|i| reg!(keys + i as Reg).deref()).collect();
-                    if arrayaccess::path_has_object(&reg!(var), &key_values, false) {
+                    let key_regs = &w[keys as usize..keys as usize + n as usize];
+                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
                         let root = reg!(var).deref();
                         let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::IncDec { inc, post })?;
                         regs[base + dst as usize] = r;
                         return Ok(Next::Go(pc));
                     }
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, keys + i as Reg)?);
-                    }
+                    let path = self.key_path(w, func, keys, n)?;
                     let mut root = match &mut reg!(var) {
                         Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
                         other => std::mem::take(other),
                     };
                     let r = self.incdec_path(&mut root, &path, inc);
+                    self.key_path_done(path);
                     match &mut reg!(var) {
                         Value::Ref(cell) => *cell.borrow_mut() = root,
                         other => *other = root,
@@ -2649,11 +2632,10 @@ impl Context<'_> {
                         regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
                         return Ok(Next::Go(pc));
                     }
-                    let mut path = Vec::with_capacity(n as usize);
-                    for i in 0..n {
-                        path.push(self.key(w, func, at + 2 + i as Reg)?);
-                    }
-                    reg!(dst) = self.update_prop_dim(&target, &name, &path, append, v, op)?;
+                    let path = self.key_path(w, func, at + 2, n)?;
+                    let r = self.update_prop_dim(&target, &name, &path, append, v, op);
+                    self.key_path_done(path);
+                    reg!(dst) = r?;
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
@@ -3175,8 +3157,7 @@ impl Context<'_> {
                     slots: HashMap::default(),
                     methods: Default::default(),
                     constants: p8_runtime::object::Constants::default(),
-                    statics: Default::default(),
-                    property_order: Vec::new(),
+                    statics: HashMap::default(),
                     debug_info: None,
                     get_properties: None,
                     cast_bool: None,
@@ -3209,8 +3190,7 @@ impl Context<'_> {
         ] {
             let r = Resource { kind: "stream", closed: std::cell::Cell::new(false), stream: RefCell::new(Stream::new(target, path, mode)) };
             let v = Value::Object(self.make_resource(r));
-            let key = self.isolate.registry.symbols().intern(name.as_bytes());
-            self.constants.insert(key, (key, v));
+            self.constants.insert(name.as_bytes().to_vec(), v);
         }
         self.resource_ids.take();
     }
@@ -3619,7 +3599,18 @@ impl Context<'_> {
         if let Some(r) = self.main_cv(name) {
             return make_ref(main, r as Reg);
         }
-        self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Undef))).clone()
+        self.global_entry(name, Value::Undef)
+    }
+
+    /// The global `name`'s cell in `globals`, made (holding `made`) if
+    /// there is none: the name is copied only then.
+    fn global_entry(&mut self, name: &[u8], made: Value) -> Rc<RefCell<Value>> {
+        if let Some(cell) = self.globals.get(name) {
+            return Rc::clone(cell);
+        }
+        let cell = Rc::new(RefCell::new(made));
+        self.globals.insert(name.to_vec(), Rc::clone(&cell));
+        cell
     }
 
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
@@ -3632,11 +3623,29 @@ impl Context<'_> {
             }
             return make_ref(main, r as Reg);
         }
-        let cell = self.globals.entry(name.to_vec()).or_insert_with(|| Rc::new(RefCell::new(Value::Null))).clone();
+        let cell = self.global_entry(name, Value::Null);
         if matches!(*cell.borrow(), Value::Undef) {
             *cell.borrow_mut() = Value::Null;
         }
         cell
+    }
+
+    /// The keys of a dimension path (`$a[k1]..[kn]`) from the `n`
+    /// registers at `keys`, in the context's reusable buffer: a write
+    /// into an array allocates no list of its keys. Hand it back with
+    /// key_path_done (a nested one meanwhile gets a buffer of its own).
+    fn key_path(&mut self, w: &[Value], func: &Function, keys: Reg, n: u8) -> Result<Vec<Key>, Throw> {
+        let mut path = std::mem::take(&mut self.key_path);
+        path.clear();
+        for i in 0..n {
+            path.push(self.key(w, func, keys + i as Reg)?);
+        }
+        Ok(path)
+    }
+
+    fn key_path_done(&mut self, mut path: Vec<Key>) {
+        path.clear();
+        self.key_path = path;
     }
 
     /// An array key from register `r`, reporting what PHP reports.
@@ -3720,7 +3729,7 @@ impl Context<'_> {
                     }
                     return Ok(if quiet { Value::Null } else { Value::Str(PhpStr::empty()) });
                 }
-                Ok(Value::Str(PhpStr::new(vec![s.as_bytes()[at as usize]])))
+                Ok(Value::Str(PhpStr::byte(s.as_bytes()[at as usize])))
             }
             Value::Null | Value::Undef => {
                 if !quiet {
@@ -3784,16 +3793,14 @@ impl Context<'_> {
             }
             return r;
         }
-        let mut path = Vec::with_capacity(n as usize);
-        for i in 0..n {
-            path.push(self.key(w, func, keys + i as Reg)?);
-        }
+        let path = self.key_path(w, func, keys, n)?;
         // Take the variable's value out, update it, put it back.
         let mut root = match &mut w[slot] {
             Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
             other => std::mem::take(other),
         };
         let result = self.update_path(&mut root, &path, append, val, op);
+        self.key_path_done(path);
         match &mut w[slot] {
             Value::Ref(cell) => *cell.borrow_mut() = root,
             other => *other = root,
@@ -3848,7 +3855,7 @@ impl Context<'_> {
         }
         bytes[at as usize] = byte;
         *s = PhpStr::new(bytes);
-        Ok(Value::Str(PhpStr::new(vec![byte])))
+        Ok(Value::Str(PhpStr::byte(byte)))
     }
 
     fn update_path(&mut self, target: &mut Value, path: &[Key], append: bool, val: Value, op: Option<BinOp>) -> Result<Value, Throw> {
@@ -3951,38 +3958,16 @@ impl Context<'_> {
             .into_iter()
             .flatten()
             .map(|n| n.strip_prefix(b"\\").unwrap_or(n))
-            .find(|n| self.isolate.registry.symbols().find_const(n).is_some_and(|key| self.deprecated_made.contains(&key)))
+            .find(|n| self.deprecated_made.contains(const_key(n).as_ref()))
             .map(|n| String::from_utf8_lossy(n).into_owned())
-    }
-
-    /// A constant being defined: its key's symbol, and its name's as
-    /// written (they differ when its namespace has capitals).
-    fn constant_syms(&self, name: &[u8]) -> (Sym, Sym) {
-        let name = name.strip_prefix(b"\\").unwrap_or(name);
-        let symbols = self.isolate.registry.symbols();
-        let key = const_key(name);
-        let spelled = symbols.intern(name);
-        let key = if key.as_ref() == name { spelled } else { symbols.intern(&key) };
-        (key, spelled)
     }
 
     fn constant_value(&self, name: &[u8]) -> Option<Value> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
-        // true, false and null in any case (they are keywords).
-        match name {
-            n if n.eq_ignore_ascii_case(b"true") => return Some(Value::Bool(true)),
-            n if n.eq_ignore_ascii_case(b"false") => return Some(Value::Bool(false)),
-            n if n.eq_ignore_ascii_case(b"null") => return Some(Value::Null),
-            _ => {}
-        }
-        self.constant_by_key(self.isolate.registry.symbols().find_const(name)?)
-    }
-
-    /// The constant whose key (const_key) is `key`.
-    fn constant_by_key(&self, key: Sym) -> Option<Value> {
-        match self.constants.get(&key) {
-            Some((_, v)) => Some(v.clone()),
-            None => self.isolate.registry.constant_sym(key).map(|c| c.to_value()),
+        let key = const_key(name);
+        match self.constants.get(key.as_ref()) {
+            Some(v) => Some(v.clone()),
+            None => self.isolate.registry.constant(name).map(|c| c.to_value()),
         }
     }
 }
@@ -4053,7 +4038,7 @@ impl Ctx for Context<'_> {
         let default = self.isolate.registry.ini_default(name)?;
         Some(match self.ini.get(name) {
             Some(v) => v.clone(),
-            None => default.map_or(Value::Null, |d| Value::Str(PhpStr::from(d))),
+            None => default.map_or(Value::Null, |d| Value::Str(self.isolate.ini_text(d))),
         })
     }
 
@@ -4100,21 +4085,22 @@ impl Ctx for Context<'_> {
     }
 
     fn set_constant(&mut self, name: &[u8], value: Value) {
-        let (key, spelled) = self.constant_syms(name);
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        let key = const_key(name).into_owned();
         // One made here is deprecated (CONST_DEPRECATED); the script's own
         // define() of the name is replaced, as it was made.
         if !self.constants.contains_key(&key) {
-            self.deprecated_made.insert(key);
+            self.deprecated_made.insert(key.clone());
         }
-        self.constants.insert(key, (spelled, value));
+        self.constants.insert(key, value);
     }
 
     fn define(&mut self, name: &[u8], value: Value) -> bool {
         if self.constant_value(name).is_some() {
             return false;
         }
-        let (key, spelled) = self.constant_syms(name);
-        self.constants.insert(key, (spelled, value));
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        self.constants.insert(const_key(name).into_owned(), value);
         true
     }
 
@@ -4134,11 +4120,9 @@ impl Ctx for Context<'_> {
         // The CLI's stream constants are made at startup like the script's,
         // but PHP counts them as Core's.
         let streams = |n: &[u8]| matches!(n, b"STDIN" | b"STDOUT" | b"STDERR");
-        let symbols = self.isolate.registry.symbols();
-        out.extend(self.constants.values().map(|&(spelled, ref v)| {
-            let name = symbols.name(spelled);
-            let m = if streams(&name) { "Core" } else { "user" };
-            (m.to_string(), PhpStr::from(&*name), v.clone())
+        out.extend(self.constants.iter().map(|(name, v)| {
+            let m = if streams(name) { "Core" } else { "user" };
+            (m.to_string(), PhpStr::from(name.as_slice()), v.clone())
         }));
         // Core's first, as PHP registers it before every extension.
         out.sort_by_key(|(m, _, _)| m != "Core");
@@ -4146,11 +4130,10 @@ impl Ctx for Context<'_> {
     }
 
     fn defined_functions(&self) -> (Vec<&'static str>, Vec<Vec<u8>>) {
-        let mut user: Vec<(u32, Sym)> = self.functions.iter().map(|(&k, &i)| (i, k)).collect();
+        let mut user: Vec<(&u32, &Vec<u8>)> = self.functions.iter().map(|(k, i)| (i, k)).collect();
         user.sort();
         let builtins = self.isolate.registry.function_names().filter(|n| !self.disabled.contains(n.as_bytes())).collect();
-        let symbols = self.isolate.registry.symbols();
-        (builtins, user.into_iter().map(|(_, k)| symbols.name(k).to_vec()).collect())
+        (builtins, user.into_iter().map(|(_, k)| k.clone()).collect())
     }
 
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf> {
@@ -4170,10 +4153,11 @@ impl Ctx for Context<'_> {
     }
 
     fn class(&mut self, name: &[u8]) -> Option<Rc<Class>> {
-        let key = self.sym_of(name)?;
-        match self.classes.get(&key) {
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        let lower = name.to_ascii_lowercase();
+        match self.classes.get(&lower) {
             Some(c) => Some(Rc::clone(c)),
-            None => self.builtin_on_demand(key),
+            None => self.builtin_on_demand(&lower),
         }
     }
 
@@ -4240,7 +4224,7 @@ impl Ctx for Context<'_> {
         let Some(init) = c.init.clone() else { return Ok(Some(c.value.clone())) };
         let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.to_vec());
         if !self.const_cache.contains_key(&key) {
-            let scope = self.class_named(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
+            let scope = self.classes.get(&key.0).cloned().unwrap_or_else(|| Rc::clone(class));
             let mut regs = std::mem::take(&mut self.isolate.regs);
             if regs.is_empty() {
                 self.isolate.regs = regs;
@@ -4528,7 +4512,7 @@ impl Ctx for Context<'_> {
         let mut internal: Vec<(PhpStr, Rc<Class>)> = self
             .classes
             .iter()
-            .filter(|&(&k, c)| c.flags & p8_runtime::object::CLASS_INTERNAL != 0 && self.sym_of(c.name.as_bytes()) == Some(k))
+            .filter(|(k, c)| c.flags & p8_runtime::object::CLASS_INTERNAL != 0 && k.as_slice() == c.name.as_bytes().to_ascii_lowercase())
             .map(|(_, c)| (c.name.clone(), Rc::clone(c)))
             .collect();
         internal.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
@@ -4536,13 +4520,12 @@ impl Ctx for Context<'_> {
     }
 
     fn class_alias(&mut self, class: Rc<Class>, alias: &[u8]) -> bool {
-        let key = self.intern(alias);
-        if self.classes.contains_key(&key) {
+        let lower = alias.strip_prefix(b"\\").unwrap_or(alias).to_ascii_lowercase();
+        if self.classes.contains_key(&lower) {
             return false;
         }
-        let lower = alias.strip_prefix(b"\\").unwrap_or(alias).to_ascii_lowercase();
         self.declared_order.push((PhpStr::from(lower.as_slice()), Rc::clone(&class)));
-        self.classes.insert(key, class);
+        self.classes.insert(lower, class);
         true
     }
 
@@ -4723,6 +4706,15 @@ fn opcode_function(name: &str, argc: usize) -> bool {
     matches!((name, argc), ("strlen" | "count" | "sizeof", 1) | ("array_key_exists", 2))
 }
 
+/// A constant's key: its namespace's part is case-insensitive (lowered),
+/// its own name is not.
+fn const_key(name: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match name.iter().rposition(|&c| c == b'\\') {
+        Some(at) => std::borrow::Cow::Owned([name[..at].to_ascii_lowercase().as_slice(), &name[at..]].concat()),
+        None => std::borrow::Cow::Borrowed(name),
+    }
+}
+
 /// Whether register `r` holds a temporary (not a variable or constant).
 fn is_temp(func: &Function, r: Reg) -> bool {
     r as usize >= func.consts_at as usize + func.consts.len()
@@ -4881,6 +4873,10 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Reg) -> bool {
         let Value::Str(mut s) = std::mem::take(&mut w[a as usize]) else { unreachable!("checked") };
         ops::push_string(s.make_mut(), &w[b as usize], &mut diags);
         w[dst as usize] = Value::Str(s);
+        return true;
+    }
+    if let (Value::Str(p), Value::Str(q)) = (x, y) {
+        w[dst as usize] = Value::Str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
         return true;
     }
     let mut bytes = Vec::with_capacity(ops::string_len_hint(x) + ops::string_len_hint(y));

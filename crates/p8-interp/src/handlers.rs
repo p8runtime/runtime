@@ -15,7 +15,6 @@ use crate::Context;
 use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::object::Class;
 use p8_runtime::string::PhpStr;
-use p8_runtime::symbol::Sym;
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
@@ -29,8 +28,10 @@ impl Context<'_> {
     pub(crate) fn find_class(&mut self, name: &[u8]) -> Result<Rc<Class>, Throw> {
         match self.load_class(name)? {
             Some(c) => Ok(c),
-            // Named as written: a dynamic name keeps its leading `\`.
-            None => Err(self.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name)))),
+            None => {
+                let name = name.strip_prefix(b"\\").unwrap_or(name);
+                Err(self.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name))))
+            }
         }
     }
 
@@ -38,15 +39,12 @@ impl Context<'_> {
     /// autoloaders ran.
     fn load_class(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
-        // A name no code ever named is no class's (only the autoloaders
-        // may declare it).
-        if let Some(key) = self.sym_of(name) {
-            if let Some(c) = self.classes.get(&key) {
-                return Ok(Some(Rc::clone(c)));
-            }
-            if let Some(c) = self.builtin_on_demand(key) {
-                return Ok(Some(c));
-            }
+        let lower = name.to_ascii_lowercase();
+        if let Some(c) = self.classes.get(&lower) {
+            return Ok(Some(Rc::clone(c)));
+        }
+        if let Some(c) = self.builtin_on_demand(&lower) {
+            return Ok(Some(c));
         }
         // Each lookup asks the autoloaders, as PHP's do, except while they
         // are running for this class (no recursion) and in the retry of
@@ -55,7 +53,6 @@ impl Context<'_> {
         // never "" or "a-b".
         let valid = !name.is_empty() && name.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80);
         if valid && !self.autoloaders.is_empty() {
-            let lower = name.to_ascii_lowercase();
             if self.autoload_retry.as_ref() == Some(&lower) {
                 self.autoload_retry = None;
             } else if !self.isolate.regs.is_empty() {
@@ -78,26 +75,30 @@ impl Context<'_> {
         self.isolate.regs = regs;
         self.autoload_tried.remove(&lower);
         r?;
-        Ok(self.class_named(&lower).cloned())
+        Ok(self.classes.get(&lower).cloned())
     }
 
     /// A builtin class declared when first wanted (Reflection, the
     /// extensions' classes): its parent and interfaces first. Building
     /// them all at startup cost every run ~0.8M instructions.
-    pub(crate) fn builtin_on_demand(&mut self, key: Sym) -> Option<Rc<Class>> {
-        let spec: &'static p8_runtime::ext::ClassSpec = self.isolate.on_demand.get(&key)?;
+    pub(crate) fn builtin_on_demand(&mut self, lower: &[u8]) -> Option<Rc<Class>> {
+        let spec: &'static p8_runtime::ext::ClassSpec = crate::reflection::CLASSES
+            .iter()
+            .chain(crate::fiber::CLASSES.iter())
+            .chain(self.isolate.registry.classes().iter().copied())
+            .find(|s| s.name.as_bytes().eq_ignore_ascii_case(lower))?;
         for dep in spec.parent.iter().chain(spec.interfaces.iter()) {
-            let dep = self.sym_of(dep.as_bytes())?;
+            let dep = dep.to_ascii_lowercase().into_bytes();
             if !self.classes.contains_key(&dep) {
-                self.builtin_on_demand(dep)?;
+                self.builtin_on_demand(&dep)?;
             }
         }
         let make_data = self.isolate.registry.data_maker(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData));
         let dtor = self.isolate.registry.native_dtor(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::destroy as p8_runtime::object::NativeMethod));
         let hooks = self.isolate.registry.class_hooks(spec.name);
-        crate::builtin_classes::declare_spec(&mut crate::builtin_classes::Classes { table: &mut self.classes, symbols: self.isolate.registry.symbols() }, spec, make_data, dtor);
+        crate::builtin_classes::declare_spec(&mut self.classes, spec, make_data, dtor);
         if let Some(h) = hooks
-            && let Some(c) = self.classes.get_mut(&key)
+            && let Some(c) = self.classes.get_mut(spec.name.to_ascii_lowercase().as_bytes())
             && let Some(c) = Rc::get_mut(c)
         {
             c.get_properties = h.get_properties;
@@ -107,7 +108,7 @@ impl Context<'_> {
             c.clone_data = h.clone_data;
             c.forward_calls = h.forward_calls;
         }
-        self.classes.get(&key).cloned()
+        self.classes.get(lower).cloned()
     }
 
     /// The class `name` if declared, after the autoloaders had their go
@@ -132,7 +133,7 @@ impl Context<'_> {
     fn run_loaders(&mut self, regs: &mut Vec<Value>, name: PhpStr, lower: &[u8]) -> Result<(), Throw> {
         for loader in self.autoloaders.clone() {
             self.call_with_regs(regs, &loader, &mut [Value::Str(name.clone())])?;
-            if self.class_named(lower).is_some() {
+            if self.classes.contains_key(lower) {
                 break;
             }
         }
@@ -145,7 +146,7 @@ impl Context<'_> {
         let lower = name.as_bytes().to_ascii_lowercase();
         let result = self.run_loaders(regs, name, &lower);
         self.autoload_tried.remove(&lower);
-        if result.is_ok() && self.class_named(&lower).is_none() {
+        if result.is_ok() && !self.classes.contains_key(&lower) {
             self.autoload_retry = Some(lower);
         }
         result

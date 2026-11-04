@@ -268,7 +268,7 @@ pub(crate) fn convert(mask: u32, value: &Value) -> Option<Value> {
             } else if accepts(T_FLOAT) {
                 Value::Float(if b { 1.0 } else { 0.0 })
             } else if accepts(T_STRING) {
-                Value::Str(PhpStr::from(if b { "1" } else { "" }))
+                Value::Str(PhpStr::new(if b { b"1".to_vec() } else { Vec::new() }))
             } else if accepts(T_BOOL | T_TRUE | T_FALSE) {
                 Value::Bool(b)
             } else {
