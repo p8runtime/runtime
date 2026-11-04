@@ -1077,7 +1077,10 @@ fn free_operand(f: &mut FnBuilder, e: &Expr, val: Reg, dst: Reg) {
 /// temporary: release the temporary's copy.
 fn free_made(f: &mut FnBuilder, e: &Expr, val: Reg) {
     if val >> KIND_SHIFT == TEMP
-        && matches!(e, Expr::New { .. } | Expr::Clone { .. } | Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. })
+        // (An array literal too: one nested in another would otherwise
+        // stay held by its temporary, and the objects in it outlive the
+        // array they were put in.)
+        && matches!(e, Expr::New { .. } | Expr::Clone { .. } | Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } | Expr::Array { .. })
     {
         f.emit(Instr::Free { reg: val });
     }

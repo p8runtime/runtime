@@ -190,17 +190,33 @@ impl Context<'_> {
             top.pc = pc as u32;
         }
         let mut r = Ok(());
-        while let Some(object) = self.ids.next_pending() {
-            if let Some(dtor) = object.class.native_dtor {
-                r = self.run_native_dtor(regs, dtor, &object).map(|_| ());
-                if r.is_err() {
-                    break;
-                }
+        // What is due now, as one batch, in the order it went: each
+        // destructor runs to its end before the next starts (the nested run
+        // a destructor is sees only what it frees itself), as PHP calls
+        // them one by one where each object goes.
+        'batches: loop {
+            let mut batch = self.ids.take_pending();
+            if batch.is_empty() {
+                break;
             }
-            if let Some(m) = self.destructor(&object) {
-                r = self.run_nested(regs, m, &mut []).map(|_| ());
+            while let Some(object) = batch.pop_front() {
+                self.ids.running_destructor(true);
+                if let Some(dtor) = object.class.native_dtor {
+                    r = self.run_native_dtor(regs, dtor, &object).map(|_| ());
+                }
+                if r.is_ok()
+                    && let Some(m) = self.destructor(&object)
+                {
+                    r = self.run_nested(regs, m, &mut []).map(|_| ());
+                }
+                // Let go of it (its id goes back unless something kept it),
+                // then the ids that waited for this destructor.
+                drop(object);
+                self.ids.running_destructor(false);
+                self.ids.destructor_ran();
                 if r.is_err() {
-                    break;
+                    self.ids.requeue(batch);
+                    break 'batches;
                 }
             }
         }
