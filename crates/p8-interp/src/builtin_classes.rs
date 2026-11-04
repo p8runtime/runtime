@@ -84,6 +84,8 @@ fn declare(
             table.entry(*k).or_insert_with(|| Rc::clone(m));
         }
     }
+    let own: Vec<PhpStr> = properties.iter().map(|p| p.name.clone()).collect();
+    let property_order = crate::classes::property_order(own, parent.as_deref(), Vec::new());
     let mut props: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
     for p in properties {
         match props.iter().position(|q| q.name == p.name && q.visibility != Visibility::Private) {
@@ -122,7 +124,8 @@ fn declare(
         slots,
         methods: table,
         constants,
-        statics: HashMap::default(),
+        statics: Default::default(),
+        property_order,
         debug_info: None,
         get_properties: inherited_props,
         cast_bool: inherited_bool,

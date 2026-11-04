@@ -16,6 +16,21 @@ pub trait Host {
     }
 }
 
+/// A function's `static` variables, by index. The function is held: its
+/// address is the key, and an eval'd function dropped while its statics
+/// were kept would hand them to the next function allocated there. PHP
+/// keeps eval'd code until the request ends, too.
+pub(crate) struct FunctionStatics {
+    _func: Arc<p8_bytecode::Function>,
+    pub(crate) cells: HashMap<u16, Rc<RefCell<Value>>>,
+}
+
+impl FunctionStatics {
+    pub(crate) fn new(func: &Arc<p8_bytecode::Function>) -> FunctionStatics {
+        FunctionStatics { _func: Arc::clone(func), cells: HashMap::default() }
+    }
+}
+
 /// An output buffer (ob_start): its contents, and the handler (PHP code)
 /// that turns them into what is passed on.
 pub(crate) struct Buffer {
@@ -163,6 +178,12 @@ pub struct Isolate {
     /// The names this isolate looked up, by the bytes given (found with no
     /// lock, warm across requests); in front of the registry's symbols.
     pub(crate) names: Rc<p8_runtime::symbol::SymbolCache>,
+    /// The ini defaults as strings, made once (ini_get() of a setting
+    /// no request changed hands out the same string each time).
+    pub(crate) ini_texts: RefCell<HashMap<(usize, usize), PhpStr>>,
+    /// What a declared function's closure slot holds until the function
+    /// is first resolved (sites.rs `Closure::unbuilt`).
+    pub(crate) unbuilt: Rc<Closure>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -188,8 +209,15 @@ impl Isolate {
                 Known { closure: s.intern(b"closure"), generator: s.intern(b"generator"), stdclass: s.intern(b"stdclass"), error: s.intern(b"error"), fiber: s.intern(b"fiber") }
             },
             names,
+            ini_texts: RefCell::new(HashMap::default()),
+            unbuilt: Closure::unbuilt(&registry),
             registry,
         }
+    }
+
+    /// An ini default (a registry's static text) as a string, shared.
+    pub(crate) fn ini_text(&self, text: &'static [u8]) -> PhpStr {
+        self.ini_texts.borrow_mut().entry((text.as_ptr() as usize, text.len())).or_insert_with(|| PhpStr::from(text)).clone()
     }
 
     pub fn registry(&self) -> &Arc<Registry> {
@@ -215,6 +243,7 @@ impl Isolate {
             frames: Frames::default(),
             functions: HashMap::default(),
             closures: Vec::new(),
+            codes: Vec::new(),
             constants: p8_runtime::fast::IndexMap::default(),
             globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
@@ -268,6 +297,7 @@ impl Isolate {
             last_error: None,
             in_handler: false,
             arg_buf: Vec::new(),
+            key_path: Vec::new(),
             lambdas: HashMap::default(),
             natives: Vec::new(),
             native_args: Vec::new(),
@@ -303,8 +333,12 @@ pub struct Context<'i> {
     /// (only ever grows, so call sites
     /// can cache what they resolve).
     pub(crate) functions: HashMap<Sym, u32>,
-    /// Every closure this context made. Call sites refer to them by index.
+    /// The closure of every declared function and method, by index (call
+    /// sites refer to them so). A slot is the isolate's `unbuilt` stand-in
+    /// until the function is first resolved: `closure_at` makes it then.
     pub(crate) closures: Vec<Rc<Closure>>,
+    /// The compiled code at each index of `closures`, made or not.
+    pub(crate) codes: Vec<Arc<Function>>,
     /// Constants the script defined (define(), const).
     /// The script's own constants, in the order defined, by key
     /// (p8_runtime::ext::const_key): each with its name as defined.
@@ -357,6 +391,8 @@ pub struct Context<'i> {
     pub(crate) ids: Rc<Ids>,
     /// A builtin's arguments while it runs (kept for its capacity).
     pub(crate) arg_buf: Vec<Value>,
+    /// A dimension write's keys while it runs (kept for its capacity).
+    pub(crate) key_path: Vec<Key>,
     /// Extensions' per-request state (Ctx::state).
     pub(crate) ext_state: HashMap<&'static str, Value>,
     /// The main frame's globals as the script left them, kept until the
@@ -430,7 +466,7 @@ pub struct Context<'i> {
     /// The builtin running now, innermost (its name for its messages).
     pub(crate) running_builtin: Option<usize>,
     /// `static` variables, by function (its code's address) and index.
-    pub(crate) statics: HashMap<usize, HashMap<u16, Rc<RefCell<Value>>>>,
+    pub(crate) statics: HashMap<usize, FunctionStatics>,
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     pub(crate) magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,

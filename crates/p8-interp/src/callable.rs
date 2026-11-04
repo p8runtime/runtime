@@ -285,7 +285,7 @@ impl Context<'_> {
         }
         match self.function_named(name) {
             Some(crate::sites::Callee::User(f)) => {
-                let func = Rc::clone(&self.closures[f as usize]);
+                let func = self.closure_at(f);
                 Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None }))
             }
             Some(crate::sites::Callee::Builtin(i)) => Ok(Target::Builtin(i)),

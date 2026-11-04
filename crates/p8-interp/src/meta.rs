@@ -31,14 +31,14 @@ impl Context<'_> {
         match callee {
             Callee::Function(name) => {
                 let &i = self.functions.get(&self.sym_of(name.as_bytes())?)?;
-                Some(Arc::clone(&self.closures[i as usize].code))
+                Some(Arc::clone(&self.codes[i as usize]))
             }
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?;
-                if m.native.is_some() || m.func as usize >= self.closures.len() {
+                if m.native.is_some() || m.func as usize >= self.codes.len() {
                     return None;
                 }
-                Some(Arc::clone(&self.closures[m.func as usize].code))
+                Some(Arc::clone(&self.codes[m.func as usize]))
             }
             Callee::Closure(o) => closure_data(o)?.func.user().map(|c| Arc::clone(&c.code)),
         }

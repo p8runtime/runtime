@@ -405,32 +405,19 @@ class_method!(rc_get_property, |ctx, class, this, args| {
 class_method!(rc_get_properties, |ctx, class, this, args| {
     // `null` (PHPUnit passes it) means no filter, like no argument.
     let filter = args.first().map(Value::deref).filter(|v| !matches!(v, Value::Null | Value::Undef)).map(|v| v.to_int());
+    // In declaration order, static and instance properties together (the
+    // class's own, then its parents', then its traits'; no parent's
+    // private one).
     let mut out = Vec::new();
-    let mut names: Vec<PhpStr> = Vec::new();
-    // Class by class (the class itself, then its parents): its static
-    // properties, then its instance ones (private ones only its own).
-    let mut chain = vec![Rc::clone(&class)];
-    while let Some(p) = chain.last().and_then(|c| c.parent.clone()) {
-        chain.push(p);
-    }
-    for (depth, c) in chain.iter().enumerate() {
-        let mut statics: Vec<(&Vec<u8>, &p8_runtime::object::Static)> = class.statics.iter().filter(|(_, (_, vis, d))| *d == c.lower && (depth == 0 || *vis != Visibility::Private)).collect();
-        statics.sort_by(|a, b| a.0.cmp(b.0));
-        for (n, (_, vis, _)) in statics {
-            if filter.is_some_and(|f| (vis_bits(*vis) | 16) & f == 0) || names.iter().any(|x| x.as_bytes() == n.as_slice()) {
-                continue;
-            }
-            names.push(PhpStr::from(n.as_slice()));
+    for n in &class.property_order {
+        let modifiers = match (class.statics.get(n.as_bytes()), instance_property(&class, n.as_bytes())) {
+            (Some((_, vis, _)), _) => vis_bits(*vis) | 16,
+            (None, Some(p)) => vis_bits(p.visibility) | set_bits(p.set_visibility) | if p.readonly { 128 } else { 0 } | if p.is_final { 32 } else { 0 },
+            (None, None) => continue,
+        };
+        if filter.is_some_and(|f| modifiers & f == 0) {
+            continue;
         }
-        for p in class.properties.iter().filter(|p| p.declaring == c.lower && !p.is_internal() && (depth == 0 || p.visibility != Visibility::Private)) {
-            let modifiers = vis_bits(p.visibility) | set_bits(p.set_visibility) | if p.readonly { 128 } else { 0 } | if p.is_final { 32 } else { 0 };
-            if filter.is_some_and(|f| modifiers & f == 0) || names.contains(&p.name) {
-                continue;
-            }
-            names.push(p.name.clone());
-        }
-    }
-    for n in names {
         out.push(new_property(ctx, &class, n.as_bytes()));
     }
     Ok(list(out))
@@ -520,28 +507,42 @@ class_method!(rc_set_static_property_value, |ctx, class, this, args| {
     }
 });
 class_method!(rc_get_static_properties, |ctx, class, this, args| {
-    let mut names: Vec<&Vec<u8>> = class.statics.keys().collect();
-    names.sort();
     let mut out = PhpArray::new();
-    for n in names {
-        out.insert(Key::from_string(PhpStr::from(n.as_slice())), class.statics[n].0.borrow().deref());
+    for (n, (cell, _, _)) in listed_statics(&class) {
+        out.insert(Key::from_string(PhpStr::from(n.as_slice())), cell.borrow().deref());
     }
     Ok(Value::Array(Rc::new(out)))
 });
 class_method!(rc_get_default_properties, |ctx, class, this, args| {
+    // The statics, then the instance properties, each in declaration order.
     let mut out = PhpArray::new();
-    let mut names: Vec<&Vec<u8>> = class.statics.keys().collect();
-    names.sort();
-    for n in names {
-        out.insert(Key::from_string(PhpStr::from(n.as_slice())), class.statics[n].0.borrow().deref());
+    for (n, (cell, _, _)) in listed_statics(&class) {
+        out.insert(Key::from_string(PhpStr::from(n.as_slice())), cell.borrow().deref());
     }
-    for p in &class.properties {
-        if !matches!(p.default, Value::Undef) {
+    for n in &class.property_order {
+        if let Some(p) = instance_property(&class, n.as_bytes())
+            && !matches!(p.default, Value::Undef)
+        {
             out.insert(Key::from_string(p.name.clone()), p.default.clone());
         }
     }
     Ok(Value::Array(Rc::new(out)))
 });
+
+/// The static properties reflection lists, in declaration order: all but
+/// a parent's private ones.
+fn listed_statics(class: &Class) -> impl Iterator<Item = (&Vec<u8>, &p8_runtime::object::Static)> {
+    class.statics.iter().filter(|(_, (_, vis, declaring))| *vis != Visibility::Private || *declaring == class.lower)
+}
+
+/// The instance property `name` as the class itself sees it (None for a
+/// static one, or a hidden internal one).
+fn instance_property<'c>(class: &'c Class, name: &[u8]) -> Option<&'c p8_runtime::object::Property> {
+    if class.statics.contains_key(name) {
+        return None;
+    }
+    class.slot(name, Some(&class.lower)).map(|i| &class.properties[i]).filter(|p| !p.is_internal())
+}
 class_method!(rc_get_file_name, |ctx, class, this, args| Ok(ctx.reflect_meta(&Subject::Class(class)).file.map_or(Value::Bool(false), Value::Str)));
 class_method!(rc_get_start_line, |ctx, class, this, args| {
     let m = ctx.reflect_meta(&Subject::Class(class));

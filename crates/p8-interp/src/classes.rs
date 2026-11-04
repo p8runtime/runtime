@@ -78,7 +78,7 @@ impl Context<'_> {
     /// method, when its stub signature says so).
     pub(crate) fn method_takes_ref(&self, class: &Class, key: Option<Sym>, n: usize) -> bool {
         match method_of(class, key) {
-            Some(m) if m.native.is_none() && m.func != u32::MAX => self.closures[m.func as usize].code.param_by_ref(n),
+            Some(m) if m.native.is_none() && m.func != u32::MAX => self.codes[m.func as usize].param_by_ref(n),
             // A builtin's method, or a builtin interface's abstract one (no code).
             Some(m) => {
                 let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
@@ -88,10 +88,12 @@ impl Context<'_> {
         }
     }
 
-    pub(crate) fn code_of(&self, m: &Method) -> Code {
+    /// What a method runs: its closure (made now if this is its first
+    /// use), or its Rust function.
+    pub(crate) fn code_of(&mut self, m: &Method) -> Code {
         match m.native {
             Some(n) => Code::Native(n, m.name.clone()),
-            None => Code::User(Rc::clone(&self.closures[m.func as usize])),
+            None => Code::User(self.closure_at(m.func)),
         }
     }
 
@@ -237,7 +239,9 @@ impl Context<'_> {
         // Properties: the parent's slots first; an own declaration
         // replaces a visible parent one, and sits beside a private one.
         let mut properties: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
-        let mut statics = parent.as_ref().map(|p| p.statics.clone()).unwrap_or_default();
+        // Statics in PHP's order: the class's own as declared, then the
+        // parent's it does not redeclare (added below), then its traits'.
+        let mut statics: p8_runtime::fast::IndexMap<Vec<u8>, p8_runtime::object::Static> = Default::default();
         let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
@@ -318,13 +322,23 @@ impl Context<'_> {
                 }
             }
         }
+        // The parent's statics after the class's own (sharing their cells).
+        if let Some(p) = &parent {
+            for (k, s) in &p.statics {
+                if !statics.contains_key(k) {
+                    statics.insert(k.clone(), s.clone());
+                }
+            }
+        }
         // Traits: their methods (the class's own win, then theirs over
         // the parent's), properties, statics and constants, as the class's.
         let own: Vec<Sym> = def.methods.iter().map(|m| m.func.sym).collect();
         let mut from_trait: HashMap<Sym, PhpStr> = HashMap::default();
         let mut trait_order: Vec<Sym> = Vec::new();
+        let mut trait_properties: Vec<PhpStr> = Vec::new();
         for tname in &def.traits {
             let t = self.lookup_class(tname)?;
+            trait_properties.extend(t.property_order.iter().cloned());
             if t.flags & CLASS_TRAIT == 0 {
                 return Err(self.fatal_at(format!("{name} cannot use {} - it is not a trait", text(&t.name)), def.line));
             }
@@ -519,7 +533,7 @@ impl Context<'_> {
                     m.func.line,
                 ));
             }
-            let func = self.add_closure(Arc::clone(&m.func));
+            let func = self.add_code(Arc::clone(&m.func));
             methods.insert_sym(
                 mlower,
                 Rc::new(Method {
@@ -609,6 +623,16 @@ impl Context<'_> {
         let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
         let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
         let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
+        // An enum's `name` (and `value`) come first, as it declares them.
+        let enum_props = if def.flags & CLASS_ENUM == 0 {
+            &[][..]
+        } else if def.enum_backing.is_some() {
+            &["name", "value"][..]
+        } else {
+            &["name"][..]
+        };
+        let own = enum_props.iter().map(|n| PhpStr::from(*n)).chain(def.properties.iter().map(|p| PhpStr::from(p.name.as_bytes()))).collect();
+        let property_order = property_order(own, parent.as_deref(), trait_properties);
         Ok(Rc::new(Class {
             name: class_name,
             lower,
@@ -620,6 +644,7 @@ impl Context<'_> {
             methods,
             constants,
             statics,
+            property_order,
             debug_info: None,
             get_properties: inherited_props,
             cast_bool: inherited_bool,
@@ -741,7 +766,7 @@ impl Context<'_> {
     }
 
     /// The destructor call of an object (if its class has one).
-    pub(crate) fn destructor(&self, object: &Rc<Object>) -> Option<MethodFrame> {
+    pub(crate) fn destructor(&mut self, object: &Rc<Object>) -> Option<MethodFrame> {
         let class = Rc::clone(&object.class);
         let dtor = class.method(b"__destruct")?;
         let declaring = self.declaring(&class, &dtor.declaring);
@@ -914,7 +939,7 @@ impl Context<'_> {
 
     /// `C::name()` with no such method callable: __call when the caller's
     /// `$this` is a C and C has it, else __callStatic.
-    pub(crate) fn static_magic_call(&self, target: &Rc<Class>, display: &[u8]) -> Option<MethodFrame> {
+    pub(crate) fn static_magic_call(&mut self, target: &Rc<Class>, display: &[u8]) -> Option<MethodFrame> {
         let this = self.frames.last().and_then(|f| f.this.clone()).filter(|t| t.class.is_a(&target.lower));
         if let Some(this) = this
             && let Some(m) = self.magic_call(target, Some(this), display, false)
@@ -926,7 +951,7 @@ impl Context<'_> {
 
     /// The __call (or, `is_static`, __callStatic) frame for a call of
     /// `display` on `class`, if it has one.
-    pub(crate) fn magic_call(&self, class: &Rc<Class>, this: Option<Rc<Object>>, display: &[u8], is_static: bool) -> Option<MethodFrame> {
+    pub(crate) fn magic_call(&mut self, class: &Rc<Class>, this: Option<Rc<Object>>, display: &[u8], is_static: bool) -> Option<MethodFrame> {
         let method = class.method_sym(if is_static { known::CALL_STATIC } else { known::CALL })?.clone();
         let declaring = self.declaring(class, &method.declaring);
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).unwrap_or_else(|| Rc::clone(class));
@@ -1403,11 +1428,11 @@ impl Context<'_> {
     /// `get` (bit HOOK_GET) or `set` hook; an Error for a virtual
     /// property without that hook; None for a plain access (no hook, the
     /// stored value of a backed one, or the hook's own `$this->name`).
-    pub(crate) fn prop_hook(&self, target: &Value, name: &Value, bit: u8) -> Option<Result<MethodFrame, Throw>> {
+    pub(crate) fn prop_hook(&mut self, target: &Value, name: &Value, bit: u8) -> Option<Result<MethodFrame, Throw>> {
         self.prop_hook_seen(target, name, bit, true)
     }
 
-    pub(crate) fn prop_hook_seen(&self, target: &Value, name: &Value, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
+    pub(crate) fn prop_hook_seen(&mut self, target: &Value, name: &Value, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
         let Value::Object(o) = target else { return None };
         if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
             return None;
@@ -1436,7 +1461,7 @@ impl Context<'_> {
     /// property is missing (not even dynamic), not visible here, or an
     /// untyped one that was unset; and the method is not already running
     /// for this object and property. With the guard key to hold while it runs.
-    pub(crate) fn prop_magic(&self, target: &Value, name: &Value, kind: Magic) -> Option<(MethodFrame, (usize, PhpStr, Magic))> {
+    pub(crate) fn prop_magic(&mut self, target: &Value, name: &Value, kind: Magic) -> Option<(MethodFrame, (usize, PhpStr, Magic))> {
         let Value::Object(o) = target else { return None };
         if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 {
             return None;
@@ -1798,6 +1823,36 @@ impl Context<'_> {
 
 /// `(array) $object`: initialized properties under PHP's mangled names
 /// ("\0A\0p" private to A, "\0*\0p" protected), then dynamic ones.
+/// The order PHP keeps a class's properties in (its properties_info, as
+/// zend_do_inheritance and trait binding build it): its `own` as declared,
+/// then its parent's that it does not redeclare (not the parent's private
+/// ones), then what its traits add.
+pub(crate) fn property_order(mut own: Vec<PhpStr>, parent: Option<&Class>, traits: Vec<PhpStr>) -> Vec<PhpStr> {
+    if let Some(p) = parent {
+        for n in &p.property_order {
+            if !own.contains(n) && !declared_private(p, n.as_bytes()) {
+                own.push(n.clone());
+            }
+        }
+    }
+    for n in traits {
+        if !own.contains(&n) {
+            own.push(n);
+        }
+    }
+    own
+}
+
+/// Whether `class` itself declares property `name` private.
+fn declared_private(class: &Class, name: &[u8]) -> bool {
+    match class.statics.get(name) {
+        Some((_, visibility, declaring)) => *visibility == Visibility::Private && *declaring == class.lower,
+        None => class.slots.get(name).is_some_and(|slots| {
+            slots.iter().all(|&i| class.properties[i].visibility == Visibility::Private && class.properties[i].declaring == class.lower)
+        }),
+    }
+}
+
 pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     if let Some(props) = o.class.get_properties {
         return props(o);

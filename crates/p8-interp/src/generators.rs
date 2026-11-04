@@ -83,7 +83,7 @@ impl Context<'_> {
                 window[i] = v;
             }
         }
-        for (i, c) in func.consts.iter().enumerate() {
+        for (i, c) in func.consts[..code.value_consts as usize].iter().enumerate() {
             window[code.consts_at as usize + i] = c.clone();
         }
         for (r, v) in code.bound.iter().zip(m.captured) {

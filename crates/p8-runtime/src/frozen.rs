@@ -86,4 +86,12 @@ mod tests {
         shared::<super::Frozen>();
         shared::<super::Text>();
     }
+
+    #[test]
+    fn texts_stay_small() {
+        // Compiled programs and call sites hold texts everywhere: a bigger
+        // one costs every run (#251 measured +0.5% at 24 bytes).
+        assert_eq!(std::mem::size_of::<super::Text>(), 16);
+        assert_eq!(std::mem::size_of::<Option<super::Text>>(), 16);
+    }
 }
