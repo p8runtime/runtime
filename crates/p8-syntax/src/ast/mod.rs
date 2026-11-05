@@ -481,6 +481,16 @@ pub enum Expr<'ast> {
     Error {
         span: Span,
     },
+    /// A value a compiler has already computed (its register `reg`), put in
+    /// an expression it builds (PHP's ZEND_AST_ZNODE: the pipe operator's
+    /// argument). Never made by the parser.
+    Znode {
+        reg: u32,
+        /// Read once (the value moves to where it is used), else as often
+        /// as the expression it stands in is compiled (a memoized operand).
+        once: bool,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -577,6 +587,7 @@ impl<'ast> Expr<'ast> {
             Expr::NullsafeMethodCall { span, .. } => *span,
             Expr::VariadicPlaceholder { span } => *span,
             Expr::Error { span } => *span,
+            Expr::Znode { span, .. } => *span,
             Expr::IndirectVariable { span, .. } => *span,
         }
     }
@@ -652,6 +663,9 @@ pub enum BinaryOp {
     LogicalOr,
     LogicalXor,
     Instanceof,
+    /// `$value |> $callable` (PHP 8.5's pipe: the callable called with
+    /// the value as its one argument).
+    Pipe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

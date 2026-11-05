@@ -1576,6 +1576,9 @@ impl<'src> Iterator for Lexer<'src> {
                 } else if self.peek() == Some(b'=') {
                     self.advance();
                     TokenKind::OrEq
+                } else if self.peek() == Some(b'>') {
+                    self.advance();
+                    TokenKind::PipeGt
                 } else {
                     TokenKind::Pipe
                 }

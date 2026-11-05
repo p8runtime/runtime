@@ -2069,6 +2069,59 @@ impl Context<'_> {
                             self.var_unset(w, in_main, &name);
                         }
                     }
+                    Rare::PipeArgByRef => {
+                        // The callee as the call finds it (an error finding
+                        // it is the call's own, reported there).
+                        let found: Option<(bool, String, String)> = match c {
+                            0 => match self.resolve(clo, b)? {
+                                Callee::User(fi) => {
+                                    let code = &self.codes[fi as usize];
+                                    let param = code.params.first().map(|p| String::from_utf8_lossy(p.name.as_bytes()).into_owned()).unwrap_or_default();
+                                    Some((code.param_by_ref(0), String::from_utf8_lossy(code.name.as_bytes()).into_owned(), param))
+                                }
+                                Callee::Builtin(i) => {
+                                    let registry = &self.isolate.registry;
+                                    let param = registry.sig(i).and_then(|s| s.params.first()).map(|p| p.name.to_string()).unwrap_or_default();
+                                    Some((registry.must_be_ref(i, 0), registry.function(i).name.to_string(), param))
+                                }
+                                _ => None,
+                            },
+                            _ => {
+                                let callable = match c {
+                                    1 => {
+                                        let name = Value::Str(PhpStr::from(func.sites[b as usize].display.as_bytes()));
+                                        Value::Array(Rc::new(PhpArray::from_list(vec![reg!(a).deref(), name])))
+                                    }
+                                    2 => {
+                                        let target = self.class_at(clo, class, w)?;
+                                        let name = Value::Str(PhpStr::from(func.sites[b as usize].display.as_bytes()));
+                                        Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(target.name.clone()), name])))
+                                    }
+                                    _ => reg!(a).clone(),
+                                };
+                                let retry = self.autoload_retry.clone();
+                                match self.resolve_callable(&callable) {
+                                    Ok(t) => {
+                                        let (name, params) = self.callable_params(&t);
+                                        let by_ref = match &t {
+                                            callable::Target::Builtin(i) => self.isolate.registry.must_be_ref(*i, 0),
+                                            t => self.takes_ref(t, 0),
+                                        };
+                                        Some((by_ref, name, params.into_iter().next().unwrap_or_default()))
+                                    }
+                                    Err(t @ Throw::Autoload(_)) => return Err(t),
+                                    Err(_) => {
+                                        self.autoload_retry = retry;
+                                        None
+                                    }
+                                }
+                            }
+                        };
+                        if let Some((true, name, param)) = found {
+                            let param = if param.is_empty() { String::new() } else { format!(" (${param})") };
+                            return Err(self.throw("Error", format!("{name}(): Argument #1{param} could not be passed by reference")));
+                        }
+                    }
                     Rare::AutoGlobal => {
                         // The name is a constant string: read, not converted.
                         let Value::Str(name) = self.operand(w, func, b) else { unreachable!("AutoGlobal names a constant string") };
@@ -5214,10 +5267,11 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Reg) -> bool {
         w[dst as usize] = Value::Str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
         return true;
     }
-    let mut bytes = Vec::with_capacity(ops::string_len_hint(x) + ops::string_len_hint(y));
+    // Built in the thread's buffer: a short result is one allocation.
+    let mut bytes = PhpStr::scratch(ops::string_len_hint(x) + ops::string_len_hint(y));
     ops::push_string(&mut bytes, x, &mut diags);
     ops::push_string(&mut bytes, y, &mut diags);
-    w[dst as usize] = Value::Str(PhpStr::new(bytes));
+    w[dst as usize] = Value::Str(PhpStr::from_scratch(bytes));
     true
 }
 
@@ -5229,11 +5283,13 @@ fn concat_n(w: &mut [Value], dst: Reg, start: Reg, n: u8) -> bool {
         return false;
     }
     let mut diags = Vec::new();
-    let mut bytes = Vec::with_capacity(parts.iter().map(ops::string_len_hint).sum());
+    // ZEND_ROPE_END: the parts measured, then written into one buffer (the
+    // thread's: a short result is one allocation, a long one its buffer).
+    let mut bytes = PhpStr::scratch(parts.iter().map(ops::string_len_hint).sum());
     for v in parts {
         ops::push_string(&mut bytes, v, &mut diags);
     }
-    w[dst as usize] = Value::Str(PhpStr::new(bytes));
+    w[dst as usize] = Value::Str(PhpStr::from_scratch(bytes));
     true
 }
 
