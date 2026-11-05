@@ -149,7 +149,7 @@ fn main() {
                 handle.timeout(limit);
             });
         }
-        let mut stdout = Stdout(std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout()));
+        let mut stdout = Stdout(std::io::stdout());
         // $argv[0]: the file, or php's name for stdin (-r's too).
         let argv0 = if named { STDIN_NAME.to_string() } else { path.clone() };
         let argv: Vec<String> = std::iter::once(argv0).chain(args).collect();
@@ -274,12 +274,18 @@ impl p8::Host for Discard {
     fn write(&mut self, _: &[u8]) {}
 }
 
-/// The terminal: a request's output goes to stdout.
-struct Stdout(std::io::BufWriter<std::io::Stdout>);
+/// The terminal: a request's output goes to stdout, written through on
+/// every write as PHP's CLI does (sapi_cli_ub_write writes each piece to
+/// fd 1; implicit_flush is on). Nothing waits in a buffer, so output stays
+/// in order with STDERR, a prompt shows before reading STDIN, and
+/// fwrite(STDOUT)/fflush(STDOUT) reach the reader at once.
+struct Stdout(std::io::Stdout);
 
 impl p8::Host for Stdout {
     fn write(&mut self, bytes: &[u8]) {
-        let _ = self.0.write_all(bytes);
+        let mut out = self.0.lock();
+        let _ = out.write_all(bytes);
+        let _ = out.flush();
     }
 
     fn flush(&mut self) {

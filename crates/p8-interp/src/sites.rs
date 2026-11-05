@@ -98,6 +98,7 @@ impl Closure {
             lambdas: Vec::new(),
             bound: Vec::new(),
             silences: Vec::new(),
+            arg_vars: Vec::new(),
             meta: Default::default(),
             partials: Vec::new(),
             compile_diags: Vec::new(),

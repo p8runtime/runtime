@@ -986,6 +986,19 @@ impl Context<'_> {
         self.show(E_NOTICE, message);
     }
 
+    /// A property instruction's object: THIS is the running method's own
+    /// `$this` (from its frame), else the register's value.
+    #[inline]
+    fn prop_target(&mut self, w: &[Value], func: &Function, obj: Reg) -> Result<Value, Throw> {
+        if obj == p8_bytecode::THIS {
+            return match self.frames.last().and_then(|f| f.this.clone()) {
+                Some(this) => Ok(Value::Object(this)),
+                None => Err(self.throw("Error", "Using $this when not in object context")),
+            };
+        }
+        Ok(self.operand(w, func, obj))
+    }
+
     /// The value in register `r` of the frame window `w`, as an operand:
     /// looks through references; an undefined variable warns and reads as null.
     #[inline(always)]
@@ -2506,8 +2519,42 @@ impl Context<'_> {
                     let v = self.operand(w, func, src);
                     reg!(dst) = self.closure_from_callable(&v)?;
                 }
-                Instr::CallValue { dst, callee, base: args, argc } => {
+                Instr::CallValue { dst, callee, base: args, argc, vars } => {
                     let target = self.operand(w, func, callee);
+                    // An undefined callee: its warning reaches the error
+                    // handler, then the call fails before any argument is
+                    // read (INIT_DYNAMIC_CALL).
+                    if !self.pending_errors.is_empty() && matches!(target, Value::Null) {
+                        self.dispatch_errors(regs)?;
+                        return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                    }
+                    if vars != p8_bytecode::NO_VARS {
+                        // By reference where the callable takes one: a
+                        // closure answers itself; anything else resolved (a
+                        // callable that is not one fails at the call).
+                        let resolved = match Self::closure_takes_ref(&target, 0) {
+                            Some(_) => None,
+                            None => {
+                                let retry = self.autoload_retry.clone();
+                                match self.resolve_callable(&target) {
+                                    Ok(t) => Some(t),
+                                    // A class not loaded yet: the autoloaders run
+                                    // and this instruction again.
+                                    Err(t @ Throw::Autoload(_)) => return Err(t),
+                                    // Not callable: the call says so before any
+                                    // argument is read (INIT_DYNAMIC_CALL fails first).
+                                    Err(_) => {
+                                        self.autoload_retry = retry;
+                                        return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                                    }
+                                }
+                            }
+                        };
+                        self.send_vars(w, func, vars, args, |cx, n| match &resolved {
+                            Some(t) => cx.takes_ref(t, n),
+                            None => Self::closure_takes_ref(&target, n).unwrap_or(false),
+                        });
+                    }
                     return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::Silence { saved } => {
@@ -2741,7 +2788,7 @@ impl Context<'_> {
                     None => return Err(self.throw("Error", "Using $this when not in object context")),
                 },
                 Instr::FetchProp { dst, obj, name, quiet } => {
-                    let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
+                    let target = if quiet { reg!(obj).deref() } else { self.prop_target(w, func, obj)? };
                     // The name's constant: its cache entry.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     if let (Some(site), Value::Object(o)) = (site, &target)
@@ -2790,7 +2837,7 @@ impl Context<'_> {
                     }
                 }
                 Instr::AssignProp { obj, name, val, dst, take } => {
-                    let target = self.operand(w, func, obj);
+                    let target = self.prop_target(w, func, obj)?;
                     // The name's constant: the same cache entry reads use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
@@ -2842,7 +2889,7 @@ impl Context<'_> {
                     reg!(dst) = v;
                 }
                 Instr::AssignPropOp { op, obj, name, val, dst } => {
-                    let target = self.operand(w, func, obj);
+                    let target = self.prop_target(w, func, obj)?;
                     let y = self.operand(w, func, val);
                     // The name's constant: the cache entry reads and writes use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
@@ -2894,7 +2941,7 @@ impl Context<'_> {
                     reg!(dst) = v;
                 }
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
-                    let target = self.operand(w, func, obj);
+                    let target = self.prop_target(w, func, obj)?;
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
@@ -2944,7 +2991,9 @@ impl Context<'_> {
                     reg!(dst) = if post { old } else { new };
                 }
                 Instr::AssignPropDim { op, base: at, name: name_reg, n, append, val, dst } => {
-                    let target = self.operand(w, func, at);
+                    // DIM_THIS: on the method's own `$this`, from the frame.
+                    let (this, n) = (n & p8_bytecode::DIM_THIS != 0, n & !p8_bytecode::DIM_THIS);
+                    let target = if this { self.prop_target(w, func, p8_bytecode::THIS)? } else { self.operand(w, func, at) };
                     let name = name!(name_reg).clone();
                     // A name constant's cache entry: the one property reads
                     // and writes of that name use.
@@ -3086,7 +3135,7 @@ impl Context<'_> {
                     }
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
-                Instr::StaticCall { dst, class, method, base: args, argc } => {
+                Instr::StaticCall { dst, class, method, base: args, argc, vars } => {
                     let site = &func.sites[method as usize];
                     // `parent::$prop::get()` on a parent whose property has
                     // no such hook: the stored value of `$this->prop`.
@@ -3124,6 +3173,21 @@ impl Context<'_> {
                             m
                         }
                     };
+                    // The variables passed as they are: sent now the method
+                    // is known (by reference where it takes one; __callStatic
+                    // takes them by value).
+                    if vars != p8_bytecode::NO_VARS {
+                        let user = match (&m.func, &m.trampoline) {
+                            (classes::Code::User(f), None) => Some(Rc::clone(f)),
+                            _ => None,
+                        };
+                        let native = matches!(m.func, classes::Code::Native(..)) && m.trampoline.is_none();
+                        let sym = site.sym;
+                        self.send_vars(w, func, vars, args, |cx, n| match &user {
+                            Some(f) => f.code.param_by_ref(n),
+                            None => native && cx.method_takes_ref(&target, Some(sym), n),
+                        });
+                    }
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::ClassConst { dst, class, name } => {
@@ -3858,6 +3922,18 @@ impl Context<'_> {
         let x = self.operand_ref(w, func, a);
         let y = self.operand_ref(w, func, b);
         test_values(cmp, &x, &y)
+    }
+
+    /// A call's variables passed as they are (`Function::arg_vars[vars]`)
+    /// into its argument registers from `args`: by reference where
+    /// `by_ref(n)` says the parameter takes one (an undefined variable
+    /// becomes null, no warning), else the value (an undefined one warns,
+    /// as reading it does): SEND_VAR_EX.
+    fn send_vars(&mut self, w: &mut [Value], func: &Function, vars: u16, args: Reg, by_ref: impl Fn(&Self, usize) -> bool) {
+        for &(n, var) in &func.arg_vars[vars as usize] {
+            let v = if by_ref(self, n as usize) { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
+            w[args as usize + n as usize] = v;
+        }
     }
 
     /// ArgumentCountError for a call passing fewer than `func.required`
@@ -5475,10 +5551,16 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 /// Arguments past the parameters, moved out for func_get_args() (and a
 /// variadic parameter's `CollectVariadic`).
 #[cold]
-fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
-    let mut args = p8_runtime::array::values_buffer(argc - nparams);
-    args.extend(regs[base + nparams..base + argc].iter_mut().map(std::mem::take));
-    Some(Box::new(Extra { args, vars: Vars::default(), shared: None }))
+#[allow(clippy::vec_box)] // see `Frames::spare`
+fn take_extra(spare: &mut Vec<Box<Extra>>, regs: &mut [Value], base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
+    // A spare one (emptied) if there is one: no allocation.
+    let mut extra = spare.pop().unwrap_or_default();
+    // A new one's list from the kept buffers.
+    if extra.args.capacity() == 0 {
+        extra.args = p8_runtime::array::values_buffer(argc - nparams);
+    }
+    extra.args.extend(regs[base + nparams..base + argc].iter_mut().map(std::mem::take));
+    Some(extra)
 }
 
 /// `$a[k] op= v` for an int or string `k`, `$a` an array holding a number
