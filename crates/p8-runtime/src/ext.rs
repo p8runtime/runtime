@@ -268,6 +268,10 @@ pub trait Ctx {
     fn error_handler(&mut self, handler: Option<(Value, i64)>) -> Value;
     /// set_exception_handler / restore_exception_handler (None).
     fn exception_handler(&mut self, handler: Option<Value>) -> Value;
+    /// get_error_handler (PHP 8.5): the handler in effect, or null.
+    fn current_error_handler(&self) -> Value;
+    /// get_exception_handler (PHP 8.5): the handler in effect, or null.
+    fn current_exception_handler(&self) -> Value;
     /// spl_autoload_register (`Some(prepend)`) or unregister (None):
     /// whether it was done.
     fn autoloader(&mut self, callable: Value, register: Option<bool>) -> bool;
