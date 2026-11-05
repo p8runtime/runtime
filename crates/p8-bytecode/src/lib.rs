@@ -26,6 +26,11 @@ pub type Reg = u16;
 /// `$this` is known to exist).
 pub const THIS: Reg = Reg::MAX;
 
+/// AssignPropDim's `n` with this bit set: the object is the running
+/// method's `$this` (as THIS), and `base` holds nothing (only its place
+/// in the block of name and keys).
+pub const DIM_THIS: u8 = 0x80;
+
 /// Comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmp {

@@ -2892,7 +2892,9 @@ impl Context<'_> {
                     reg!(dst) = if post { old } else { new };
                 }
                 Instr::AssignPropDim { op, base: at, name: name_reg, n, append, val, dst } => {
-                    let target = self.operand(w, func, at);
+                    // DIM_THIS: on the method's own `$this`, from the frame.
+                    let (this, n) = (n & p8_bytecode::DIM_THIS != 0, n & !p8_bytecode::DIM_THIS);
+                    let target = if this { self.prop_target(w, func, p8_bytecode::THIS)? } else { self.operand(w, func, at) };
                     let name = name!(name_reg).clone();
                     // A name constant's cache entry: the one property reads
                     // and writes of that name use.

@@ -3260,13 +3260,15 @@ impl<'src> Compiler<'src> {
     /// instance method is the frame's own (THIS), not a copy made in a
     /// temporary first.
     fn prop_obj(&mut self, f: &mut FnBuilder, target: &Expr) -> Result<Reg> {
-        if f.this_known
-            && let Expr::Variable { name, .. } = target
-            && self.text(*name) == b"$this"
-        {
+        if self.frame_this(f, target) {
             return Ok(p8_bytecode::THIS);
         }
         self.expr(f, target)
+    }
+
+    /// Whether `target` is `$this` in an instance method (`prop_obj`).
+    fn frame_this(&self, f: &FnBuilder, target: &Expr) -> bool {
+        f.this_known && matches!(target, Expr::Variable { name, .. } if self.text(*name) == b"$this")
     }
 
     /// `prop_name` for the name operand of a property instruction (see
@@ -3769,7 +3771,12 @@ impl<'src> Compiler<'src> {
         // (`base + 1` stays the name's place: a run-time name lands there.)
         let name = f.temp();
         let keys: Vec<Reg> = keyed.iter().map(|_| f.temp()).collect();
-        self.expr_into(f, target, base)?;
+        // `$this` in an instance method: the frame's, flagged in the count
+        // (DIM_THIS), with nothing put in `base`.
+        let this = keys.len() < usize::from(p8_bytecode::DIM_THIS) && self.frame_this(f, target);
+        if !this {
+            self.expr_into(f, target, base)?;
+        }
         let n = self.prop_name_operand(f, property)?;
         // A constant name is used where it is; a run-time one is kept in its
         // place while the keys are worked out.
@@ -3782,7 +3789,8 @@ impl<'src> Compiler<'src> {
         for (r, d) in keys.iter().zip(&keyed) {
             self.expr_into(f, d, *r)?;
         }
-        Ok((base, name, keys.len() as u8, append))
+        let n = keys.len() as u8 | if this { p8_bytecode::DIM_THIS } else { 0 };
+        Ok((base, name, n, append))
     }
 
     fn literal(&self, e: &Expr) -> Option<Frozen> {
