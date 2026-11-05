@@ -1066,11 +1066,20 @@ impl Context<'_> {
     #[inline]
     fn truthy(&mut self, w: &[Value], func: &Function, r: Reg) -> bool {
         let v = self.operand_ref(w, func, r);
-        let t = v.to_bool();
-        if v.is_nan() {
-            self.nan_coerced("bool");
+        // One look at the value: bools (most conditions) answer at once, and
+        // only a float or a reference can be NAN (#312).
+        match &*v {
+            Value::Bool(b) => *b,
+            Value::Float(f) if f.is_nan() => {
+                self.nan_coerced("bool");
+                true
+            }
+            Value::Ref(_) if v.is_nan() => {
+                self.nan_coerced("bool");
+                true
+            }
+            _ => v.to_bool(),
         }
-        t
     }
 
     #[cold]
