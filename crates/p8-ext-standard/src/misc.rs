@@ -119,7 +119,13 @@ fn ini_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Value::Bool(b) => Value::Str(PhpStr::from(if b { "1" } else { "" })),
         v => v,
     };
-    Ok(match ctx.ini_set(str_arg(args, 0).as_bytes(), value) {
+    let name = str_arg(args, 0);
+    // zend_alter_ini_entry_ex: a script may change only what PHP_INI_USER
+    // (1) allows; a PHP_INI_SYSTEM or PERDIR directive is fixed by then.
+    if crate::defaults::INI_ACCESS.iter().any(|(n, access)| n.as_bytes() == name.as_bytes() && access & 1 == 0) {
+        return Ok(Value::Bool(false));
+    }
+    Ok(match ctx.ini_set(name.as_bytes(), value) {
         Some(Value::Null) => Value::Str(PhpStr::empty()),
         Some(old) => old,
         None => Value::Bool(false),
