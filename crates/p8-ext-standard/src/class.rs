@@ -40,6 +40,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "set_error_handler", run: set_error_handler, by_ref: &[] },
     Builtin { name: "restore_error_handler", run: restore_error_handler, by_ref: &[] },
     Builtin { name: "set_exception_handler", run: set_exception_handler, by_ref: &[] },
+    Builtin { name: "get_error_handler", run: get_error_handler, by_ref: &[] },
+    Builtin { name: "get_exception_handler", run: get_exception_handler, by_ref: &[] },
     Builtin { name: "restore_exception_handler", run: restore_exception_handler, by_ref: &[] },
     Builtin { name: "spl_autoload_register", run: spl_autoload_register, by_ref: &[] },
     Builtin { name: "spl_autoload_unregister", run: spl_autoload_unregister, by_ref: &[] },
@@ -234,6 +236,17 @@ fn set_exception_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 fn restore_exception_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     ctx.exception_handler(None);
     Ok(Value::Bool(true))
+}
+
+/// get_error_handler(): ?callable (PHP 8.5): the handler set_error_handler
+/// installed last, or null (also after set_error_handler(null)).
+fn get_error_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(ctx.current_error_handler())
+}
+
+/// get_exception_handler(): ?callable (PHP 8.5), as get_error_handler.
+fn get_exception_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(ctx.current_exception_handler())
 }
 
 /// spl_autoload_register(?callable $callback = null, bool $throw = true, bool $prepend = false)
