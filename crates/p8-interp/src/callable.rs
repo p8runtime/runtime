@@ -242,6 +242,17 @@ impl Context<'_> {
     /// Whether the parameter of `target` named `name` takes a reference.
     /// An unknown name answers yes, so the variable is not read (and
     /// warned about) before the call reports the name, as in PHP.
+    /// Whether a Closure of PHP code takes its argument `n` by reference,
+    /// read from the closure itself (no frame made); None for any other
+    /// callable.
+    pub(crate) fn closure_takes_ref(callee: &Value, n: usize) -> Option<bool> {
+        let Value::Object(o) = callee.deref() else { return None };
+        match &closure_data(&o)?.func {
+            ClosureFunc::User(clo) => Some(clo.code.param_by_ref(n)),
+            _ => None,
+        }
+    }
+
     pub(crate) fn named_takes_ref(&self, target: &Target, name: &[u8]) -> bool {
         self.named_position(target, name).is_none_or(|i| self.takes_ref(target, i))
     }
@@ -353,7 +364,13 @@ impl Context<'_> {
     /// CallValue: call `callee` with the `argc` arguments at `args`
     /// (absolute registers), its result to `ret`.
     pub(crate) fn call_value(&mut self, regs: &mut Vec<Value>, callee: &Value, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
-        match self.resolve_callable(callee)? {
+        let target = self.resolve_callable(callee)?;
+        self.call_target(regs, target, args, argc, ret, pc)
+    }
+
+    /// `call_value` of a callable already resolved.
+    pub(crate) fn call_target(&mut self, regs: &mut Vec<Value>, target: Target, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+        match target {
             Target::Frame(m) => {
                 // Arguments arrive by value: a reference is read through,
                 // unless its parameter takes one (a spread call's).
@@ -552,6 +569,26 @@ impl Context<'_> {
             }
             return Ok(out);
         }
+        // A user function's: a constant default put in place (it has no code
+        // to run it), another left to its code; looked at in its parameters.
+        if let Target::Frame(MethodFrame { func: Code::User(clo), .. }) = target {
+            for i in 0..out.len() {
+                let p = &clo.code.params[i];
+                if set[i] || !(p.has_default || p.variadic) {
+                    continue;
+                }
+                if let Some(Some(d)) = clo.defaults.get(i) {
+                    out[i] = d.clone();
+                }
+                set[i] = true;
+            }
+            if set.iter().all(|&s| s) {
+                if !extra.is_empty() {
+                    self.named_extra = Some((self.frames.len() + 1, extra));
+                }
+                return Ok(out);
+            }
+        }
         let (fname, params) = self.named_params(target);
         for i in 0..out.len() {
             if set[i] {
@@ -560,13 +597,6 @@ impl Context<'_> {
             let p = &params[i];
             if !p.optional {
                 return Err(self.throw("ArgumentCountError", format!("{fname}(): Argument #{} (${}) not passed", i + 1, p.name)));
-            }
-            // A user function's constant default (it has no code to run it).
-            if let Target::Frame(MethodFrame { func: Code::User(clo), .. }) = target
-                && let Some(Some(d)) = clo.defaults.get(i)
-            {
-                out[i] = d.clone();
-                continue;
             }
             if let Some(text) = p.default {
                 out[i] = match self.stub_default(text) {
