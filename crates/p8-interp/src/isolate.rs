@@ -313,6 +313,7 @@ impl Isolate {
             named_extra: None,
             class_defaults: HashMap::default(),
             new_infos: HashMap::default(),
+            last_new: None,
             const_cache: HashMap::default(),
             const_evaluating: Vec::new(),
             autoloaders: Vec::new(),
@@ -461,6 +462,9 @@ pub struct Context<'i> {
     /// How to make each class's objects, by the class's address
     /// (instances.rs): worked out at its first `new`.
     pub(crate) new_infos: HashMap<usize, Rc<instances::NewInfo>>,
+    /// The NewInfo the last `new` used: the Construct that follows finds
+    /// its constructor there (unless a `new` in the arguments came between).
+    pub(crate) last_new: Option<Rc<instances::NewInfo>>,
     /// Class constants computed by code: (declaring class, name) → value.
     pub(crate) const_cache: HashMap<(Vec<u8>, Vec<u8>), Value>,
     /// The ones being computed (a constant that needs itself is an error).

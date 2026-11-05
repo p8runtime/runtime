@@ -2535,6 +2535,8 @@ impl Context<'_> {
                     // Not destructed unless constructed (an argument may throw first).
                     object.destructed.set(true);
                     reg!(dst) = Value::Object(object);
+                    // For the Construct after the arguments.
+                    self.last_new = Some(info);
                 }
                 Instr::ConstructSpread { obj, args } => {
                     let Value::Object(object) = reg!(obj).clone() else { unreachable!("ConstructSpread follows New") };
@@ -2560,8 +2562,31 @@ impl Context<'_> {
                 Instr::Construct { obj, base: args, argc } => {
                     let Value::Object(object) = reg!(obj).clone() else { unreachable!("Construct follows New") };
                     object.destructed.set(false);
-                    match self.constructor(&object) {
-                        Some(m) => return self.call_method(regs, m, base + args as usize, argc, NO_RET, pc),
+                    // The class's NewInfo: the one its `new` left, else looked up.
+                    let info = match self.last_new.take() {
+                        Some(info) if Rc::ptr_eq(&info.class, &object.class) => info,
+                        _ => self.new_info(&object.class).0,
+                    };
+                    match &info.ctor {
+                        // A PHP constructor: its frame pushed here, on the
+                        // arguments where they are (as ZEND_NEW's call
+                        // frame), with no MethodFrame made and taken apart.
+                        Some(instances::Ctor { func: classes::Code::User(f), declaring, .. }) if !f.code.is_generator && argc as usize >= f.code.required => {
+                            if let Some(caller) = self.frames.last_mut() {
+                                caller.pc = pc as u32;
+                            }
+                            self.frames.push(f, base + args as usize, argc as usize, NO_RET);
+                            let frame = self.frames.last_mut().expect("the frame just pushed");
+                            frame.this = Some(object);
+                            frame.scope = Some(Rc::clone(declaring));
+                            frame.called = Some(Rc::clone(&info.class));
+                            enter(&mut self.frames, regs);
+                            return Ok(Next::Switch);
+                        }
+                        Some(ctor) => {
+                            let m = ctor.frame(object, &info.class);
+                            return self.call_method(regs, m, base + args as usize, argc, NO_RET, pc);
+                        }
                         None => {
                             for r in &mut w[args as usize..args as usize + argc as usize] {
                                 clear(r);
@@ -2631,7 +2656,7 @@ impl Context<'_> {
                     {
                         let pname = pname.clone();
                         let v = self.operand_take(w, func, val, take);
-                        self.write_slot(o, slot, &o.class.properties[slot], &pname, v.clone())?;
+                        self.write_cached(o, slot, &pname, v.clone())?;
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
@@ -2686,7 +2711,7 @@ impl Context<'_> {
                         let r = ops::binary(op, &x, &y, &mut self.diags);
                         self.report_diags();
                         let v = r.map_err(|e| self.op_error(e))?;
-                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, v.clone())?;
+                        self.write_cached(&o, slot, &pname, v.clone())?;
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
                     }
@@ -2736,7 +2761,7 @@ impl Context<'_> {
                         let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
                         self.report_diags();
                         let new = r.map_err(|e| self.op_error(e))?;
-                        self.write_slot(&o, slot, &o.class.properties[slot], &pname, new.clone())?;
+                        self.write_cached(&o, slot, &pname, new.clone())?;
                         reg!(dst) = if post { old } else { new };
                         return Ok(Next::Go(pc));
                     }
