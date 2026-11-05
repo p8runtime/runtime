@@ -161,13 +161,16 @@ pub(crate) struct Frames {
     /// back into PHP runs its own `execute` above the frames below.
     pub(crate) floor: usize,
     /// Extras of finished frames, emptied, for the next frames that need
-    /// one (a variadic call's): no allocation per call.
+    /// one (a variadic call's): no allocation per call. (Boxes: a frame
+    /// holds its Extra boxed, and these are those boxes, moved back.)
+    #[allow(clippy::vec_box)] // the frames' own boxes, kept to be handed back
     pub(crate) spare: Vec<Box<Extra>>,
 }
 
 /// A finished frame's Extra: what it holds goes now, the box is kept (up
 /// to a few).
 #[inline(never)]
+#[allow(clippy::vec_box)] // see `Frames::spare`
 pub(crate) fn recycle_extra(spare: &mut Vec<Box<Extra>>, mut extra: Box<Extra>) {
     extra.args.clear();
     extra.vars.0.clear();

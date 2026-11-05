@@ -5169,6 +5169,7 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 /// Arguments past the parameters, moved out for func_get_args() (and a
 /// variadic parameter's `CollectVariadic`).
 #[cold]
+#[allow(clippy::vec_box)] // see `Frames::spare`
 fn take_extra(spare: &mut Vec<Box<Extra>>, regs: &mut [Value], base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
     // A spare one (emptied) if there is one: no allocation.
     let mut extra = spare.pop().unwrap_or_default();
