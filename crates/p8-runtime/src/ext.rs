@@ -170,6 +170,10 @@ pub trait Ctx {
     fn call(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw>;
     /// is_callable(): whether `v` names something that can be called.
     fn is_callable(&mut self, v: &Value) -> bool;
+    /// Why `v` cannot be called from the running code, as PHP words it
+    /// (zend_is_callable's error: `function "f" not found or invalid
+    /// function name`, …); None when it can.
+    fn why_not_callable(&mut self, v: &Value) -> Option<String>;
     /// A copy of a Closure bound to `new_this` (null: unbound) and the
     /// class scope `scope` names (None: its own).
     fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
@@ -337,6 +341,14 @@ pub trait Ctx {
         Err(self.throw("Error", "Lazy objects are not supported here".into()))
     }
 
+    /// clone($object, $withProperties) (ZEND_FUNCTION(clone)): a clone of
+    /// `object`, its __clone run, then each of `with`'s properties
+    /// assigned to it as the calling code would assign it.
+    fn clone_with(&mut self, object: &Rc<crate::object::Object>, with: &crate::array::PhpArray) -> Result<Value, Throw> {
+        let _ = (object, with);
+        Err(self.throw("Error", "clone() is not supported here".into()))
+    }
+
     /// A lazy object initialized: the object its accesses go to.
     fn lazy_initialize(&mut self, o: &Rc<crate::object::Object>) -> Result<Rc<crate::object::Object>, Throw> {
         Ok(Rc::clone(o))
@@ -377,6 +389,27 @@ pub struct Builtin {
     pub by_ref: &'static [usize],
 }
 
+/// What calling a builtin needs, read from one place on every call: the
+/// function, its stub signature (None: its arguments are not checked) with
+/// the argument counts it takes ([`crate::args::counts`], worked out once),
+/// whether PHP deprecates it (the message: [`Registry::deprecation`]) and
+/// whether it may run PHP code (the registers are lent to it).
+#[derive(Clone, Copy)]
+pub struct Call {
+    pub run: Run,
+    pub sig: Option<&'static p8_stubs::Sig>,
+    pub counts: (usize, usize),
+    pub deprecated: bool,
+    pub reenters: bool,
+    /// Whether the builtin checks its callables itself, after work PHP
+    /// does first (session_set_save_handler's deprecation): the engine
+    /// does not check them before it runs.
+    pub own_callbacks: bool,
+    /// Its by-reference parameters take a value too (the stub's
+    /// `@prefer-ref`: ZEND_SEND_PREFER_REF).
+    pub prefer_ref: bool,
+}
+
 /// A constant's value as an extension declares it.
 #[derive(Debug, Clone, Copy)]
 pub enum Constant {
@@ -414,12 +447,10 @@ pub struct Registry {
     /// file, dated, or the SAPI's log), as the standard extension does it.
     error_logger: Option<fn(&mut dyn Ctx, &[u8])>,
     functions: Vec<&'static Builtin>,
-    /// Each function's stub signature (its argument checks), by index.
-    sigs: Vec<Option<&'static p8_stubs::Sig>>,
+    /// What a call of each function reads, by index (see [`Call`]).
+    calls: Vec<Call>,
     /// "Function f() is deprecated…" for the functions PHP deprecates.
     deprecations: Vec<Option<String>>,
-    /// Whether each function takes a callable (and so may run PHP code).
-    reenters: Vec<bool>,
     /// The functions by name (lowercase).
     index: crate::fast::HashMap<crate::symbol::Sym, usize>,
     /// The constants by name (namespace lowercased, see `const_key`).
@@ -551,12 +582,20 @@ impl Registry {
             let i = self.functions.len();
             self.functions.push(f);
             let sig = p8_stubs::lookup(f.name.as_bytes());
-            self.sigs.push(sig);
-            self.deprecations.push(sig.and_then(p8_stubs::deprecation));
-            // A callable, or a Traversable (gone through by running its code).
-            self.reenters.push(sig.is_some_and(|s| {
-                s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
-            }));
+            let deprecation = sig.and_then(p8_stubs::deprecation);
+            self.calls.push(Call {
+                run: f.run,
+                sig,
+                counts: sig.map_or((0, 0), crate::args::counts),
+                deprecated: deprecation.is_some(),
+                // A callable, or a Traversable (gone through by running its code).
+                reenters: sig.is_some_and(|s| {
+                    s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
+                }),
+                own_callbacks: false,
+                prefer_ref: false,
+            });
+            self.deprecations.push(deprecation);
             let sym = self.symbols.intern(f.name.as_bytes());
             self.index.insert(sym, i);
         }
@@ -656,7 +695,13 @@ impl Registry {
     /// Builtin `i`'s signature from PHP's stubs, which its arguments are
     /// checked against before it runs.
     pub fn sig(&self, i: usize) -> Option<&'static p8_stubs::Sig> {
-        self.sigs[i]
+        self.calls[i].sig
+    }
+
+    /// What a call of builtin `i` reads (one entry, for the call path).
+    #[inline]
+    pub fn call(&self, i: usize) -> &Call {
+        &self.calls[i]
     }
 
     /// The deprecation PHP reports on every call of builtin `i`, if any.
@@ -664,11 +709,10 @@ impl Registry {
         self.deprecations[i].as_deref()
     }
 
-    /// Whether parameter `n` of builtin `i` is passed by reference.
     /// Whether builtin `i` may call back into PHP code (it takes a
     /// callable): the engine lends it the registers.
     pub fn reenters(&self, i: usize) -> bool {
-        self.reenters[i]
+        self.calls[i].reenters
     }
 
     /// Builtins whose stub signature is not checked (assert: the compiler
@@ -676,7 +720,7 @@ impl Registry {
     pub fn unchecked(&mut self, names: &[&str]) {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
-                self.sigs[i] = None;
+                self.calls[i].sig = None;
             }
         }
     }
@@ -686,9 +730,36 @@ impl Registry {
     pub fn mark_reenters(&mut self, names: &[&str]) {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
-                self.reenters[i] = true;
+                self.calls[i].reenters = true;
             }
         }
+    }
+
+    /// Builtins that check their callables themselves (PHP's parse their
+    /// arguments by hand, after a deprecation or a choice of signature):
+    /// the engine leaves their `callable` arguments to them.
+    pub fn own_callbacks(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(i) = self.lookup(n.as_bytes()) {
+                self.calls[i].own_callbacks = true;
+            }
+        }
+    }
+
+    /// Builtins whose by-reference parameters also take a value (the
+    /// stubs' `@prefer-ref`: array_multisort's).
+    pub fn mark_prefer_ref(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(i) = self.lookup(n.as_bytes()) {
+                self.calls[i].prefer_ref = true;
+            }
+        }
+    }
+
+    /// Whether builtin `i`'s by-reference parameter `n` must get a
+    /// reference (not `@prefer-ref`).
+    pub fn must_be_ref(&self, i: usize, n: usize) -> bool {
+        self.by_ref(i, n) && !self.calls[i].prefer_ref
     }
 
     pub fn by_ref(&self, i: usize, n: usize) -> bool {

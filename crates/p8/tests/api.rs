@@ -157,6 +157,52 @@ fn a_warm_isolate_starts_each_request_with_static_defaults() {
 }
 
 #[test]
+fn a_partial_application_is_compiled_once_per_function_it_applies() {
+    // Program memory (APS 13): the closure a partial application makes is
+    // compiled the first time its site applies a function, and shared by
+    // every later call of the site, in this request and the next ones;
+    // only the values bound are made each time.
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    let source = b"<?php
+        function add($a, $b) { return $a + $b; }
+        function mul($a, $b) { return $a * $b; }
+        $sum = 0;
+        for ($i = 0; $i < 100; $i++) {
+            $f = ($i % 2 ? 'add' : 'mul')($i, ?);
+            $sum += $f(2);
+        }
+        echo $sum;";
+    let script = platform.compile(source, "t.php").expect("compiles");
+    for _ in 0..3 {
+        let mut host = Capture::default();
+        let status = isolate.new_context(&mut host).run(&script);
+        assert_eq!((status, host.0.as_slice()), (0, b"7500".as_slice()));
+    }
+    assert_eq!(platform.compiled_partials(), 2, "one closure per function applied, not per call or request");
+}
+
+#[test]
+fn literals_written_in_one_request_are_as_written_in_the_next() {
+    // An isolate makes a script's literal strings and arrays once; every
+    // request's writes go to copies.
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    let source = b"<?php
+        class C { const L = ['a' => [1]]; public $p = ['x' => ['y' => 1]]; public static $s = ['n' => 0]; public $t = 'abc'; }
+        function f() { $a = ['k' => ['d' => 'v'], 'l' => [1, 2]]; $a['k']['d'] .= '!'; $a['l'][] = 3; $s = 'literal'; $s[0] = 'L'; return $a['k']['d'] . count($a['l']) . $s; }
+        $c = new C; $c->p['x']['y']++; $c->t[0] = 'X'; C::$s['n']++; $l = C::L; $l['a'][] = 2;
+        $g = fn() => ['v' => 'w']; $x = $g(); $x['v'] = 'changed';
+        echo f(), f(), ' ', $c->p['x']['y'], $c->t, (new C)->t, C::$s['n'], count($l['a']), count(C::L['a']), $g()['v'], $x['v'];";
+    let script = platform.compile(source, "t.php").expect("compiles");
+    for _ in 0..3 {
+        let mut host = Capture::default();
+        let status = isolate.new_context(&mut host).run(&script);
+        assert_eq!((status, String::from_utf8_lossy(&host.0).into_owned()), (0, "v!3Literalv!3Literal 2Xbcabc121wchanged".to_string()));
+    }
+}
+
+#[test]
 fn a_failed_request_leaves_the_isolate_usable() {
     let platform = platform();
     let mut isolate = platform.new_isolate();

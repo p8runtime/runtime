@@ -33,17 +33,45 @@ pub struct Closure {
     pub(crate) class_refs: Box<[RefCell<std::rc::Weak<Class>>]>,
     /// The request (the isolate's count) that last used it: `renew`.
     pub(crate) request: Cell<u64>,
+    /// Each parameter's default when it is a constant value, as a value
+    /// (empty when none has one): put in place for an argument not passed
+    /// as the frame is entered (`fill_defaults`), as PHP's RECV_INIT does
+    /// for a constant default. The compiler leaves no code for a literal.
+    pub(crate) defaults: Box<[Option<Value>]>,
 }
 
 impl Closure {
-    pub(crate) fn new(code: Arc<Function>) -> Rc<Closure> {
-        let consts = code.consts.iter().map(|c| c.to_value()).collect();
+    /// A closure of `code` for this request, its constants the isolate's
+    /// (made once: `Isolate::thaw`).
+    pub(crate) fn new(code: Arc<Function>, isolate: &crate::Isolate) -> Rc<Closure> {
+        Closure::with_consts(code, |c| isolate.thaw(c))
+    }
+
+    fn with_consts(code: Arc<Function>, thaw: impl Fn(&p8_runtime::frozen::Frozen) -> Value) -> Rc<Closure> {
+        let consts = code.consts.iter().map(&thaw).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
         let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
         let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
         let news = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, request: Cell::new(0) })
+        let defaults = if code.params.iter().any(|p| p.default.is_some()) {
+            code.params
+                .iter()
+                .map(|p| {
+                    let v = p.default.as_ref().map(&thaw)?;
+                    // An int default of a `float` parameter is a float (the
+                    // one conversion PHP makes of a default).
+                    let float = p.ty.as_ref().is_some_and(|t| t.mask & p8_runtime::types::T_FLOAT != 0 && t.mask & p8_runtime::types::T_INT == 0);
+                    Some(match v {
+                        Value::Int(i) if float => Value::Float(i as f64),
+                        v => v,
+                    })
+                })
+                .collect()
+        } else {
+            Box::default()
+        };
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, request: Cell::new(0), defaults })
     }
 
     /// Ready for request `request`, on its first use there.
@@ -114,9 +142,11 @@ impl Closure {
             lambdas: Vec::new(),
             bound: Vec::new(),
             silences: Vec::new(),
+            arg_vars: Vec::new(),
             meta: Default::default(),
+            partials: Vec::new(),
         };
-        Closure::new(Arc::new(code))
+        Closure::with_consts(Arc::new(code), |c| c.to_value())
     }
 }
 
@@ -177,20 +207,19 @@ impl Context<'_> {
     /// method's frame, a callable) goes through here, so `fast` only ever
     /// finds this request's at the indices its call sites cached.
     pub(crate) fn closure_at(&mut self, i: u32) -> Rc<Closure> {
-        let slot = &mut self.closures[i as usize];
-        if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
-            let isolate = &mut *self.isolate;
-            let (table, pinned, request) = (&mut isolate.code, &isolate.pinned, isolate.requests);
-            let closure = table.closures[i as usize].get_or_insert_with(|| {
+        if Rc::ptr_eq(&self.closures[i as usize], &self.isolate.unbuilt) {
+            let request = self.isolate.requests;
+            if self.isolate.code.closures[i as usize].is_none() {
                 // New: its caches are empty, so it is this request's already.
-                let closure = Closure::new(Arc::clone(&table.codes[i as usize]));
+                let closure = Closure::new(Arc::clone(&self.isolate.code.codes[i as usize]), self.isolate);
                 closure.request.set(request);
-                closure
-            });
-            closure.renew(request, pinned);
-            *slot = Rc::clone(closure);
+                self.isolate.code.closures[i as usize] = Some(closure);
+            }
+            let closure = self.isolate.code.closures[i as usize].as_ref().expect("made above");
+            closure.renew(request, &self.isolate.pinned);
+            self.closures[i as usize] = Rc::clone(closure);
         }
-        Rc::clone(slot)
+        Rc::clone(&self.closures[i as usize])
     }
 
     /// Whether this request resolved the function at `i` (its closure is
@@ -225,7 +254,18 @@ pub(crate) struct MethodSite {
 
 pub(crate) enum MethodCode {
     User(std::rc::Weak<Closure>),
-    Native(p8_runtime::object::Native, PhpStr),
+    /// A builtin class's method, its name, and which of its first 64
+    /// parameters its stub signature takes by reference (bit n: parameter
+    /// n; looked up once, when the site remembers it).
+    Native(p8_runtime::object::Native, PhpStr, u64),
+}
+
+/// The parameters (bit n: parameter n, the first 64) that builtin method
+/// `name` declared by `declaring` takes by reference, from its stub
+/// signature (as `method_takes_ref` finds it).
+fn native_refs(declaring: &Class, name: &PhpStr) -> u64 {
+    let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
+    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| s.params.iter().take(64).enumerate().filter(|(_, p)| p.by_ref).fold(0, |m, (i, _)| m | 1 << i))
 }
 
 /// A property read the cache answers: the same class, a scope that may
@@ -284,6 +324,7 @@ impl Context<'_> {
         }
         match &s.code {
             MethodCode::User(c) => Some(c.upgrade()?.code.param_by_ref(n)),
+            MethodCode::Native(_, _, refs) if n < 64 => Some(refs & 1 << n != 0),
             MethodCode::Native(..) => None,
         }
     }
@@ -307,7 +348,7 @@ impl Context<'_> {
         let declaring = s.declaring.upgrade()?;
         let func = match &s.code {
             MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
-            MethodCode::Native(n, name) => crate::classes::Code::Native(*n, name.clone()),
+            MethodCode::Native(n, name, _) => crate::classes::Code::Native(*n, name.clone()),
         };
         let this = (!s.is_static).then(|| Rc::clone(o));
         Some(crate::classes::MethodFrame::method(func, this, declaring, Rc::clone(&o.class)))
@@ -324,7 +365,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone()),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(&o.class) as usize,
@@ -348,7 +389,7 @@ impl Context<'_> {
         let declaring = s.declaring.upgrade()?;
         let code = match &s.code {
             MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
-            MethodCode::Native(n, name) => crate::classes::Code::Native(*n, name.clone()),
+            MethodCode::Native(n, name, _) => crate::classes::Code::Native(*n, name.clone()),
         };
         let frame = self.frames.last();
         if s.is_static {
@@ -376,7 +417,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone()),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(target) as usize,

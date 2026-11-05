@@ -1,0 +1,29 @@
+int(2)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+int(3)
+int(6)
+string(2) "a+"
+string(3) "a/2"
+int(20)
+3 4 5 
+NULL
+bool(false)
+int(3)
+int(11)
+set a
+get a
+set a
+get a
+int(6)
+Cannot modify readonly property Ro::$v
+Cannot modify readonly property Ro::$v
+Non-static method NoThis::get() cannot be called statically
+int(1)
+string(7) "no this"
+int(1)
+int(5)

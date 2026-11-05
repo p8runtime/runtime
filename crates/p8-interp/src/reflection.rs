@@ -1158,7 +1158,8 @@ fn fa_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
         if info.is_static && info.is_closure {
             out.push_str("static ");
         }
-        out.push_str("function ");
+        // A closure with a scope is a public method of it (_function_string).
+        out.push_str(if info.is_closure && info.user && info.closure_scope.is_some() { "public method " } else { "function " });
     }
     if info.returns_ref {
         out.push('&');

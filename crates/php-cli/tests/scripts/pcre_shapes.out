@@ -1,0 +1,296 @@
+int(1)
+array(2) {
+  [0]=>
+  string(8) "id=12345"
+  [1]=>
+  string(5) "12345"
+}
+int(0)
+int(1)
+array(1) {
+  [0]=>
+  string(12) "lazy dog. id"
+}
+int(1)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "dog"
+    [1]=>
+    int(130)
+  }
+}
+int(1)
+array(2) {
+  [0]=>
+  string(8) "id=12345"
+  [1]=>
+  string(5) "12345"
+}
+int(1)
+int(1)
+int(1)
+int(0)
+int(1)
+array(1) {
+  [0]=>
+  string(2) "ab"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(6) "123456"
+}
+int(0)
+int(1)
+array(4) {
+  [0]=>
+  string(16) "user@example.com"
+  [1]=>
+  string(4) "user"
+  [2]=>
+  string(7) "example"
+  [3]=>
+  string(3) "com"
+}
+int(1)
+array(7) {
+  [0]=>
+  string(10) "2024-06-07"
+  ["y"]=>
+  string(4) "2024"
+  [1]=>
+  string(4) "2024"
+  ["m"]=>
+  string(2) "06"
+  [2]=>
+  string(2) "06"
+  ["d"]=>
+  string(2) "07"
+  [3]=>
+  string(2) "07"
+}
+int(1)
+array(4) {
+  [0]=>
+  string(2) "ac"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(1) "c"
+}
+int(1)
+array(4) {
+  [0]=>
+  string(2) "ac"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  NULL
+  [3]=>
+  string(1) "c"
+}
+int(1)
+array(4) {
+  [0]=>
+  string(1) "b"
+  ["x"]=>
+  string(1) "b"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(1) "b"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(13) "héllo wörld"
+}
+int(1)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "ör"
+    [1]=>
+    int(8)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "r"
+    [1]=>
+    int(10)
+  }
+}
+int(1)
+array(1) {
+  [0]=>
+  string(4) "wör"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(6) "école"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(6) "ÉCOLE"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(3) "caf"
+}
+bool(false)
+int(4)
+string(56) "Malformed UTF-8 characters, possibly incorrectly encoded"
+int(1)
+int(0)
+int(5)
+array(1) {
+  [0]=>
+  array(5) {
+    [0]=>
+    string(3) "one"
+    [1]=>
+    string(3) "two"
+    [2]=>
+    string(5) "three"
+    [3]=>
+    string(4) "four"
+    [4]=>
+    string(4) "five"
+  }
+}
+int(3)
+array(3) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(2) "1x"
+    [1]=>
+    string(1) "1"
+    [2]=>
+    string(1) "x"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    string(1) "2"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(2) "3x"
+    [1]=>
+    string(1) "3"
+    [2]=>
+    string(1) "x"
+  }
+}
+int(4)
+array(1) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(3) "aaa"
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+  }
+}
+string(7) "a b c d"
+string(7) "f00 b00"
+string(7) "-a-b-c-"
+string(12) "world hello!"
+string(3) "bba"
+int(2)
+string(11) "a2 b44 c666"
+string(20) "n*st*dn c*llsc h*r*h"
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+  [3]=>
+  string(1) "d"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+array(5) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "-"
+  [2]=>
+  string(1) "b"
+  [3]=>
+  string(1) "-"
+  [4]=>
+  string(1) "c"
+}
+array(2) {
+  [0]=>
+  string(1) "1"
+  [2]=>
+  string(2) "22"
+}
+array(1) {
+  [1]=>
+  string(1) "a"
+}
+int(1)
+array(3) {
+  [0]=>
+  string(18) "/posts/42/comments"
+  ["id"]=>
+  string(2) "42"
+  [1]=>
+  string(2) "42"
+}
+
+Warning: preg_match(): Compilation failed: missing closing parenthesis at offset 1 in %s on line 40
+bool(false)
+string(5) "kept?"
+int(0)
+array(0) {
+}
+bool(false)
+string(25) "Backtrack limit exhausted"
+int(0)
+string(8) "No error"
+bool(false)
+string(25) "Recursion limit exhausted"
+int(1)
+string(8) "No error"
+int(1)
+array(2) {
+  [0]=>
+  string(4) "id=7"
+  [1]=>
+  string(1) "7"
+}
+array(2) {
+  [0]=>
+  string(4) "id=N"
+  [1]=>
+  string(2) "xN"
+}

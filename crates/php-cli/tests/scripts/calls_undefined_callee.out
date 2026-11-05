@@ -1,0 +1,5 @@
+handler: Undefined variable $g
+Error: Value of type null is not callable
+int(5)
+Exception: from handler: Undefined variable $k
+bool(false)
