@@ -2670,7 +2670,7 @@ impl Context<'_> {
                                     return self.call_method(regs, m, at, 2, (base + dst as usize) as u32, pc);
                                 }
                                 t => {
-                                    let list = self.place_args(&t, &a)?;
+                                    let list = self.place_args(&t, &a, true)?;
                                     resolved = Some(t);
                                     list
                                 }
@@ -2760,7 +2760,7 @@ impl Context<'_> {
                     let Some(m) = self.constructor(&object) else { return Ok(Next::Go(pc)) };
                     let target = callable::Target::Frame(m);
                     let list = match &arr {
-                        Value::Array(a) => self.place_args(&target, a)?,
+                        Value::Array(a) => self.place_args(&target, a, true)?,
                         _ => Vec::new(),
                     };
                     let callable::Target::Frame(m) = target else { unreachable!("a frame") };

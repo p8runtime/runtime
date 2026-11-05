@@ -663,21 +663,30 @@ impl Context<'_> {
     /// A call's argument array (`...`, named arguments) in parameter
     /// order: string keys are named arguments. A skipped optional
     /// parameter is Undef for a user function (its default runs) or its
-    /// default for a builtin.
-    pub(crate) fn place_args(&mut self, target: &Target, list: &PhpArray) -> Result<Vec<Value>, Throw> {
+    /// default for a builtin. `unpacking`: the list is a `...` spread (its
+    /// errors say so).
+    pub(crate) fn place_args(&mut self, target: &Target, list: &PhpArray, unpacking: bool) -> Result<Vec<Value>, Throw> {
         if !list.iter().any(|(k, _)| matches!(k, Key::Str(_))) {
             return Ok(list.values().map(Value::deref).collect());
         }
         let mut extra = PhpArray::new();
         let mut out: Vec<Value> = Vec::new();
         let mut set: Vec<bool> = Vec::new();
+        let mut named = false;
         for (k, v) in list.iter() {
             match k {
+                // (ZEND_SEND_UNPACK, zend_call_function: a position means
+                // nothing after a name.)
+                Key::Int(_) if named => {
+                    let message = format!("Cannot use positional argument after named argument{}", if unpacking { " during unpacking" } else { "" });
+                    return Err(self.throw("Error", message));
+                }
                 Key::Int(_) => {
                     out.push(self.arg_or_ref(target, out.len(), v));
                     set.push(true);
                 }
                 Key::Str(key) => {
+                    named = true;
                     let Some(i) = self.named_position(target, key.as_bytes()) else {
                         // A variadic user function collects it by name.
                         if matches!(target, Target::Frame(_)) && self.named_params(target).1.last().is_some_and(|p| p.variadic) {
@@ -710,8 +719,11 @@ impl Context<'_> {
         // to run it), another left to its code; looked at in its parameters.
         if let Target::Frame(MethodFrame { func: Code::User(clo), .. }) = target {
             for i in 0..out.len() {
+                if set[i] {
+                    continue;
+                }
                 let p = &clo.code.params[i];
-                if set[i] || !(p.has_default || p.variadic) {
+                if !(p.has_default || p.variadic) {
                     continue;
                 }
                 if let Some(Some(d)) = clo.defaults.get(i) {

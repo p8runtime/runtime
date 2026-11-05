@@ -188,7 +188,7 @@ impl Context<'_> {
         if let Some(ctor) = self.constructor(&object) {
             object.destructed.set(false);
             let target = Target::Frame(ctor);
-            let mut list = self.place_args(&target, args)?;
+            let mut list = self.place_args(&target, args, false)?;
             self.invoke_callee(&Callee::Method(Rc::clone(class), PhpStr::from("__construct")), Some(Rc::clone(&object)), &mut list)?;
         } else if let Some((Key::Str(name), _)) = args.iter().find(|(k, _)| matches!(k, Key::Str(_))) {
             return Err(self.throw("Error", format!("Unknown named parameter ${}", String::from_utf8_lossy(name.as_bytes()))));
