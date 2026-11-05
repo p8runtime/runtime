@@ -136,6 +136,14 @@ struct NativeCall {
     top: bool,
 }
 
+/// What a dimension write did: the value written (an assignment's
+/// result), or the object (ArrayAccess) its path reached at that level,
+/// with the value still to write.
+pub(crate) enum Written {
+    Done(Value),
+    Object(Rc<Object>, usize, Value),
+}
+
 /// What `step` leaves the frame loop to do.
 enum Next {
     /// Continue this frame at the pc.
@@ -1547,33 +1555,32 @@ impl Context<'_> {
                     let v = self.fetch_dim(&container, w, func, key, quiet)?;
                     reg!(dst) = v;
                 }
+                // The path is walked once: each level's key converted for its
+                // container; an ArrayAccess object on the way takes the rest.
                 Instr::AssignDim { var, keys, n, append, val, dst } => {
                     let v = self.operand(w, func, val);
-                    // The keys are looked at in place: a list of them is made
-                    // only for an ArrayAccess object on the path.
-                    let key_regs = &w[keys as usize..keys as usize + n as usize];
-                    if arrayaccess::path_has_object(&reg!(var), key_regs, append) {
-                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
-                        let root = reg!(var).deref();
-                        let r = self.aa_write(regs, &root, &key_values, append, arrayaccess::DimOp::Set(v))?;
-                        regs[base + dst as usize] = r;
-                        return Ok(Next::Go(pc));
-                    }
                     // The result is what was stored: a string offset's one byte.
-                    reg!(dst) = self.assign_dim(w, func, var, keys, n, append, v, None)?;
+                    reg!(dst) = match self.assign_dim(w, func, var, keys, n, append, v, None)? {
+                        Written::Done(r) => r,
+                        Written::Object(o, at, v) => {
+                            let rest: Vec<Value> = w[keys as usize + at..keys as usize + n as usize].iter().map(Value::deref).collect();
+                            let r = self.aa_write(regs, &Value::Object(o), &rest, append, arrayaccess::DimOp::Set(v))?;
+                            regs[base + dst as usize] = r;
+                            return Ok(Next::Go(pc));
+                        }
+                    };
                 }
                 Instr::AssignDimOp { op, var, keys, n, val, dst } => {
                     let v = self.operand(w, func, val);
-                    let key_regs = &w[keys as usize..keys as usize + n as usize];
-                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
-                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
-                        let root = reg!(var).deref();
-                        let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::Op(op, v))?;
-                        regs[base + dst as usize] = r;
-                        return Ok(Next::Go(pc));
-                    }
-                    let result = self.assign_dim(w, func, var, keys, n, false, v, Some(op))?;
-                    reg!(dst) = result;
+                    reg!(dst) = match self.assign_dim(w, func, var, keys, n, false, v, Some(op))? {
+                        Written::Done(r) => r,
+                        Written::Object(o, at, v) => {
+                            let rest: Vec<Value> = w[keys as usize + at..keys as usize + n as usize].iter().map(Value::deref).collect();
+                            let r = self.aa_write(regs, &Value::Object(o), &rest, false, arrayaccess::DimOp::Op(op, v))?;
+                            regs[base + dst as usize] = r;
+                            return Ok(Next::Go(pc));
+                        }
+                    };
                 }
                 Instr::IssetDim { dst, var, keys, n } => {
                     let key_regs = &w[keys as usize..keys as usize + n as usize];
@@ -2769,25 +2776,25 @@ impl Context<'_> {
                         return Ok(Next::Go(insn_at));
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                    // A path into an object (ArrayAccess): `$obj->p[k] = v` is its offsetSet.
-                    // (Looked at where it is: no copy of the array on the common path.)
-                    if self.peek_prop_with(&target, &name, |root| arrayaccess::path_has_object(root, &keys, append)) == Some(true)
-                        && let Some(root) = self.peek_prop(&target, &name)
-                    {
-                        let dim_op = match op {
-                            Some(op) => arrayaccess::DimOp::Op(op, v),
-                            None => arrayaccess::DimOp::Set(v),
-                        };
-                        regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
-                        return Ok(Next::Go(pc));
-                    }
+                    // The path walked once from the property; an object on it
+                    // (ArrayAccess: `$obj->p[k] = v` is its offsetSet) takes
+                    // the keys from there.
+                    let written = self.update_prop_dim(&target, &name, &keys, append, v, op);
+                    let r = match written {
+                        Ok(Written::Done(r)) => Ok(r),
+                        Ok(Written::Object(o, at, v)) => {
+                            let dim_op = match op {
+                                Some(op) => arrayaccess::DimOp::Op(op, v),
+                                None => arrayaccess::DimOp::Set(v),
+                            };
+                            self.aa_write(regs, &Value::Object(o), &keys[at..], append, dim_op)
+                        }
+                        Err(t) => Err(t),
+                    };
                     // (Its room kept for the next; what it holds goes now.)
                     keys.clear();
                     self.dim_keys = keys;
-                    let path = self.key_path(w, func, at + 2, n)?;
-                    let r = self.update_prop_dim(&target, &name, &path, append, v, op);
-                    self.key_path_done(path);
-                    reg!(dst) = r?;
+                    regs[base + dst as usize] = r?;
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
@@ -4097,7 +4104,7 @@ impl Context<'_> {
         append: bool,
         val: Value,
         op: Option<BinOp>,
-    ) -> Result<Value, Throw> {
+    ) -> Result<Written, Throw> {
         let slot = var as usize;
         // `$s[k] = v` on a string: the offset as a string reads it (casts
         // warn as such), before any array key conversion.
@@ -4129,21 +4136,9 @@ impl Context<'_> {
                 Value::Ref(cell) => *cell.borrow_mut() = s,
                 other => *other = s,
             }
-            return r;
+            return r.map(Written::Done);
         }
-        let path = self.key_path(w, func, keys, n)?;
-        // Take the variable's value out, update it, put it back.
-        let mut root = match &mut w[slot] {
-            Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
-            other => std::mem::take(other),
-        };
-        let result = self.update_path(&mut root, &path, append, val, op);
-        self.key_path_done(path);
-        match &mut w[slot] {
-            Value::Ref(cell) => *cell.borrow_mut() = root,
-            other => *other = root,
-        }
-        result
+        self.write_dim(w, func, slot, keys, n, append, val, op)
     }
 
     /// A string offset written (zend_check_dimension_interned's rules, as
@@ -4196,6 +4191,31 @@ impl Context<'_> {
         Ok(Value::Str(PhpStr::byte(byte)))
     }
 
+    /// A dimension write's root, through `n` key registers at `keys`:
+    /// the value written (a string offset's one byte), or the object
+    /// (ArrayAccess) the path reached, at that level, with the value.
+    /// An undefined key register warns first, as reading it does.
+    #[allow(clippy::too_many_arguments)] // AssignDim/AssignDimOp's operands, decoded once by the caller
+    fn write_dim(&mut self, w: &mut [Value], func: &Function, slot: usize, keys: Reg, n: u8, append: bool, val: Value, op: Option<BinOp>) -> Result<Written, Throw> {
+        let range = keys as usize..keys as usize + n as usize;
+        for r in range.clone() {
+            if matches!(w[r], Value::Undef) {
+                self.undefined(func, r as Reg);
+            }
+        }
+        // Taken out, written, put back (nothing runs PHP code meanwhile).
+        let mut root = match &mut w[slot] {
+            Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+            other => std::mem::take(other),
+        };
+        let result = self.update_path(&mut root, &w[range], 0, append, val, op);
+        match &mut w[slot] {
+            Value::Ref(cell) => *cell.borrow_mut() = root,
+            other => *other = root,
+        }
+        result
+    }
+
     /// "Undefined array key …" for reading `key` that is not there.
     #[cold]
     fn undefined_key(&mut self, key: &Key) {
@@ -4206,15 +4226,27 @@ impl Context<'_> {
         self.warn(format!("Undefined array key {shown}"));
     }
 
-    fn update_path(&mut self, target: &mut Value, path: &[Key], append: bool, val: Value, op: Option<BinOp>) -> Result<Value, Throw> {
+    /// `target[k1]..[kn] = val` (or `op=`), one level at a time as PHP's
+    /// zend_fetch_dimension_address does: each container separated
+    /// (copy-on-write) and written in place, its key converted only now,
+    /// for the kind of container it is. `raw` are the keys as written (a
+    /// reference or an undefined register is read through). A container
+    /// that is an object stops the walk: Written::Object hands it back,
+    /// with the keys still to go and the value, for its ArrayAccess path
+    /// (which runs PHP code, so the caller puts the variable back first).
+    fn update_path(&mut self, target: &mut Value, raw: &[Value], depth: usize, append: bool, val: Value, op: Option<BinOp>) -> Result<Written, Throw> {
         if matches!(target, Value::Null | Value::Undef) {
             *target = Value::Array(Rc::new(PhpArray::new()));
         }
         let arr = match target {
             Value::Array(a) => Rc::make_mut(a),
+            Value::Object(o) => return Ok(Written::Object(Rc::clone(o), depth, val)),
             Value::Ref(cell) => {
+                if let Value::Object(o) = &*cell.borrow() {
+                    return Ok(Written::Object(Rc::clone(o), depth, val));
+                }
                 let mut inner = std::mem::take(&mut *cell.borrow_mut());
-                let r = self.update_path(&mut inner, path, append, val, op);
+                let r = self.update_path(&mut inner, raw, depth, append, val, op);
                 *cell.borrow_mut() = inner;
                 return r;
             }
@@ -4222,69 +4254,70 @@ impl Context<'_> {
                 self.diags.push(Diag::Deprecated("Automatic conversion of false to array is deprecated".into()));
                 self.report_diags();
                 *target = Value::Array(Rc::new(PhpArray::new()));
-                return self.update_path(target, path, append, val, op);
+                return self.update_path(target, raw, depth, append, val, op);
             }
             Value::Str(text) => {
-                // A string inside an array or a property: its offset from the key.
+                // A string inside an array or a property: its offset from
+                // the key as written (casts warn as such).
                 if append {
                     return Err(self.throw("Error", "[] operator not supported for strings"));
                 }
-                let Some((key, rest)) = path.split_first() else { return Err(self.throw("Error", "[] operator not supported for strings")) };
-                let offset = self.string_offset(&key.to_value())?;
+                let Some((key, rest)) = raw.split_first() else { return Err(self.throw("Error", "[] operator not supported for strings")) };
+                let offset = self.string_offset(&key.deref())?;
                 if !rest.is_empty() {
                     return Err(self.throw("Error", "Cannot use string offset as an array"));
                 }
                 if op.is_some() {
                     return Err(self.throw("Error", "Cannot use assign-op operators with string offsets"));
                 }
-                return self.assign_string_offset(text, offset, val);
+                return self.assign_string_offset(text, offset, val).map(Written::Done);
             }
             _ => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
         };
-        match path.split_first() {
-            None => {
-                // `$a[] = v`
-                if arr.push(val.clone()).is_err() {
-                    return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
-                }
-                Ok(val)
+        let Some((raw_key, rest)) = raw.split_first() else {
+            // `$a[] = v`
+            if arr.push(val.clone()).is_err() {
+                return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
             }
-            Some((key, rest)) if rest.is_empty() && !append => match op {
-                None => {
-                    // One lookup: the element written in place, else added.
-                    match arr.get_mut(key) {
-                        Some(Value::Ref(cell)) => *cell.borrow_mut() = val.clone(),
-                        Some(slot) => *slot = val.clone(),
-                        None => arr.insert(key.clone(), val.clone()),
+            return Ok(Written::Done(val));
+        };
+        // This level is an array: its key, converted as an array's.
+        let key = &self.key_of(raw_key, "access")?;
+        Ok(Written::Done(match (rest.is_empty() && !append, op) {
+            (true, None) => {
+                // One lookup: the element written in place, else added.
+                match arr.get_mut(key) {
+                    Some(Value::Ref(cell)) => *cell.borrow_mut() = val.clone(),
+                    Some(slot) => *slot = val.clone(),
+                    None => arr.insert(key.clone(), val.clone()),
+                }
+                val
+            }
+            (true, Some(op)) => {
+                let old = match arr.get(key) {
+                    Some(v) => v.deref(),
+                    None => {
+                        self.undefined_key(key);
+                        Value::Null
                     }
-                    Ok(val)
-                }
-                Some(op) => {
-                    let old = match arr.get(key) {
-                        Some(v) => v.deref(),
-                        None => {
-                            self.undefined_key(key);
-                            Value::Null
-                        }
-                    };
-                    let r = ops::binary(op, &old, &val, &mut self.diags);
-                    self.report_diags();
-                    let new = r.map_err(|e| self.op_error(e))?;
-                    arr.insert(key.clone(), new.clone());
-                    Ok(new)
-                }
-            },
+                };
+                let r = ops::binary(op, &old, &val, &mut self.diags);
+                self.report_diags();
+                let new = r.map_err(|e| self.op_error(e))?;
+                arr.insert(key.clone(), new.clone());
+                new
+            }
             // A level on the way: its element (made null if missing),
             // written into where it is (ZEND_FETCH_DIM_W), one lookup. A
             // compound assignment reads it first (ZEND_FETCH_DIM_RW): a
             // missing one warns.
-            Some((key, rest)) => {
+            (false, op) => {
                 if op.is_some() && !arr.contains_key(key) {
                     self.undefined_key(key);
                 }
-                self.update_path(arr.slot_mut(key), rest, append, val, op)
+                return self.update_path(arr.slot_mut(key), rest, depth + 1, append, val, op);
             }
-        }
+        }))
     }
 
     /// Arguments past the parameters, for func_get_args().
