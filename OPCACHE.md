@@ -32,7 +32,7 @@ As PHP 8.6 starts it (`accel_startup`):
 | `opcache.file_update_protection` | a file changed in the last N seconds is not cached. |
 | `opcache.max_file_size` | a larger file is not cached. |
 | `opcache.blacklist_filename` | the glob of blacklist files, with entries resolved against the blacklist file's folder; `?`, `*` and `**` as PHP matches them, by prefix. A blacklisted file is never cached and counts as a blacklist miss. |
-| `opcache.file_cache` | p8's file cache on disk. |
+| `opcache.file_cache` | p8's file cache on disk, used when OPcache starts (in the CLI: with `enable_cli=1`). |
 | `opcache.file_cache_only` | nothing is kept in memory; status reports `file_cache_only`. |
 | `opcache.file_cache_read_only` | file-cache entries are read and never written or removed. |
 | `opcache.restrict_api` | a script whose path does not start with it gets the warning "Zend OPcache API is restricted by "restrict_api" configuration directive", and the function returns false. |
@@ -85,11 +85,12 @@ phpinfo(). They change nothing in p8:
 - Startup checks PHP makes on the file cache's folder (an absolute, accessible path) are not
   made. An unusable folder is a cache that misses.
 
-## Not like PHP, by design
+## The file cache follows OPcache
 
-`opcache.file_cache` works in p8's CLI without `opcache.enable_cli`, as it did before
-OPcache was reported. PHP's CLI ignores it unless OPcache started. That is p8's ahead-of-time
-compile cache, kept for speed.
+`opcache.file_cache` takes effect only when OPcache starts, as in PHP 8.6. In the CLI that
+needs `-d opcache.enable_cli=1` as well. With the default `enable_cli=0`, `-d opcache.file_cache=<dir>`
+alone does nothing. Under `php2 -S` it needs only `opcache.enable` (on by default).
+Before OPcache was reported, p8's CLI used the file cache without `enable_cli`.
 
 ## Tests that cannot pass
 

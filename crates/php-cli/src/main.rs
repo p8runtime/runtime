@@ -46,9 +46,14 @@ fn extensions(server: bool) -> Vec<p8::Extension> {
 }
 
 /// `opcache.file_cache=<dir>`: keep compiled files in that directory, for
-/// the runs after this one (off unless set, as in PHP).
-fn file_cache(platform: p8::Platform, ini: &[(String, String)]) -> p8::Platform {
-    let value = |name: &str| ini.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.trim().to_string());
+/// the runs after this one (off unless set, as in PHP). It is OPcache's,
+/// so it takes effect only when OPcache starts: in the CLI (`cli`) that
+/// needs opcache.enable_cli=1 too, as in PHP 8.6.
+fn file_cache(platform: p8::Platform, ini: &[(String, String)], cli: bool) -> p8::Platform {
+    let value = |name: &str| ini.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.trim().to_string()).or_else(|| platform.ini_default(name));
+    if !p8::OpcacheSettings::from_ini(cli, &value).started() {
+        return platform;
+    }
     let read_only = value("opcache.file_cache_read_only").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "on" | "yes" | "true"));
     match value("opcache.file_cache") {
         Some(dir) if !dir.is_empty() && read_only => platform.read_only_file_cache(dir),
@@ -121,7 +126,7 @@ fn main() {
     let platform = p8::Platform::new(&extensions(false))
         // A file included again (a template part per post) is not compiled again.
         .keep_compiled();
-    let platform = file_cache(platform, &ini);
+    let platform = file_cache(platform, &ini, true);
     let platform = opcache(platform, &ini, true);
     let file = if named { path.clone() } else { p8::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };
     // -l: compile only, as `php -l` checks a file's syntax.

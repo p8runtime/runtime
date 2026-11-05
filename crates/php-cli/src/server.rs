@@ -482,7 +482,7 @@ fn with_server(config: &Config, host: String, port: u16, docroot: String, serve:
         .keep_compiled();
     let mut ini: Vec<(String, String)> = SERVER_INI.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
     ini.extend(config.ini.iter().cloned());
-    let platform = crate::file_cache(platform, &ini);
+    let platform = crate::file_cache(platform, &ini, false);
     // php -S is not the CLI: OPcache runs with opcache.enable alone, as in PHP.
     let platform = crate::opcache(platform, &ini, false);
     let mut isolate = platform.new_isolate();
