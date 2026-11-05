@@ -508,7 +508,9 @@ pub(crate) fn args_plain(params: &[p8_bytecode::Param], w: &[Value], argc: usize
 /// its base, with its arguments already in the first registers.
 #[inline(always)]
 pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
-    let frame = frames.last_mut().expect("the frame just pushed");
+    let top = frames.len - 1;
+    let (slots, spare) = (&mut frames.slots, &mut frames.spare);
+    let frame = &mut slots[top];
     let (func, base, argc) = (&frame.func, frame.base as usize, frame.argc as usize);
     let code = &*func.code;
     let need = base + code.nregs as usize;
@@ -517,7 +519,7 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     }
     let nparams = code.params.len();
     if argc > nparams {
-        frame.extra = take_extra(regs, code, base, nparams, argc);
+        frame.extra = take_extra(spare, regs, base, nparams, argc);
     }
     let consts_at = code.consts_at as usize;
     for r in &mut regs[base + argc.min(nparams)..base + consts_at] {
@@ -585,8 +587,12 @@ pub(crate) fn ini_on(v: &Value) -> bool {
 #[inline(always)]
 pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     give_back_shared(frames, regs);
-    let frame = frames.pop();
-    frame.extra = None;
+    frames.len -= 1;
+    let (slots, spare) = (&mut frames.slots, &mut frames.spare);
+    let frame = &mut slots[frames.len];
+    if let Some(extra) = frame.extra.take() {
+        crate::frames::recycle_extra(spare, extra);
+    }
     // Locals die with the frame (before the result lands: the result
     // register may be inside the window).
     let base = frame.base as usize;

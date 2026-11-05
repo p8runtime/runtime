@@ -409,6 +409,34 @@ impl Context<'_> {
     /// CallValue: call `callee` with the `argc` arguments at `args`
     /// (absolute registers), its result to `ret`.
     pub(crate) fn call_value(&mut self, regs: &mut Vec<Value>, callee: &Value, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+        // A Closure of PHP code: its frame made from the closure itself, and
+        // its captured values put straight into the callee's variables, no
+        // list of them made per call (ZEND_BIND_LEXICAL bound them once, at
+        // creation).
+        let closure = match callee {
+            Value::Object(o) => Some(Rc::clone(o)),
+            Value::Ref(cell) => match &*cell.borrow() {
+                Value::Object(o) => Some(Rc::clone(o)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(o) = &closure
+            && let Some(data) = closure_data(o)
+            && let ClosureFunc::User(clo) = &data.func
+            && !clo.code.is_generator
+            && data.trampoline.is_none()
+        {
+            let m = MethodFrame { func: Code::User(Rc::clone(clo)), this: data.this.clone(), scope: data.scope.clone(), called: data.called.clone(), captured: Vec::new(), trampoline: None };
+            let next = self.call_target(regs, Target::Frame(m), args, argc, ret, pc)?;
+            if let Next::Switch = next {
+                // The frame just pushed starts at `args`.
+                for (r, v) in clo.code.bound.iter().zip(data.captured.borrow().iter()) {
+                    regs[args + *r as usize] = v.clone();
+                }
+            }
+            return Ok(next);
+        }
         let target = self.resolve_callable(callee)?;
         self.call_target(regs, target, args, argc, ret, pc)
     }

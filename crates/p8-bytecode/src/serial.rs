@@ -499,7 +499,7 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
-    handlers, decls, is_generator, lambdas, bound, silences, meta, partials,
+    handlers, decls, is_generator, lambdas, bound, silences, arg_vars, meta, partials,
 });
 record!(PartialSite { args, variadic, name, line });
 record!(PartialArg { name, placeholder });
@@ -778,7 +778,7 @@ impl Code for Instr {
             Instr::Unsilence { saved } => { w.byte(68); saved.put(w); }
             Instr::MakeClosure { dst, func, is_static } => { w.byte(69); dst.put(w); func.put(w); is_static.put(w); }
             Instr::Capture { closure, var, by_ref, quiet } => { w.byte(70); closure.put(w); var.put(w); by_ref.put(w); quiet.put(w); }
-            Instr::CallValue { dst, callee, base, argc } => { w.byte(71); dst.put(w); callee.put(w); base.put(w); argc.put(w); }
+            Instr::CallValue { dst, callee, base, argc, vars } => { w.byte(71); dst.put(w); callee.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::BindRef { var, src } => { w.byte(72); var.put(w); src.put(w); }
             Instr::RefDim { var, root, keys, n, append } => { w.byte(73); var.put(w); root.put(w); keys.put(w); n.put(w); append.put(w); }
             Instr::DimSetRef { root, keys, n, append, src } => { w.byte(74); root.put(w); keys.put(w); n.put(w); append.put(w); src.put(w); }
@@ -807,7 +807,7 @@ impl Code for Instr {
             Instr::IssetProp { dst, obj, name } => { w.byte(97); dst.put(w); obj.put(w); name.put(w); }
             Instr::UnsetProp { obj, name } => { w.byte(98); obj.put(w); name.put(w); }
             Instr::MethodCall { dst, obj, method, base, argc } => { w.byte(99); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
-            Instr::StaticCall { dst, class, method, base, argc } => { w.byte(100); dst.put(w); class.put(w); method.put(w); base.put(w); argc.put(w); }
+            Instr::StaticCall { dst, class, method, base, argc, vars } => { w.byte(100); dst.put(w); class.put(w); method.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::ClassConst { dst, class, name } => { w.byte(101); dst.put(w); class.put(w); name.put(w); }
             Instr::FetchStaticProp { dst, class, name } => { w.byte(102); dst.put(w); class.put(w); name.put(w); }
             Instr::AssignStaticProp { class, name, val, dst } => { w.byte(103); class.put(w); name.put(w); val.put(w); dst.put(w); }
@@ -890,7 +890,7 @@ impl Code for Instr {
             68 => Instr::Unsilence { saved: Code::get(r)? },
             69 => Instr::MakeClosure { dst: Code::get(r)?, func: Code::get(r)?, is_static: Code::get(r)? },
             70 => Instr::Capture { closure: Code::get(r)?, var: Code::get(r)?, by_ref: Code::get(r)?, quiet: Code::get(r)? },
-            71 => Instr::CallValue { dst: Code::get(r)?, callee: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
+            71 => Instr::CallValue { dst: Code::get(r)?, callee: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)?, vars: Code::get(r)? },
             72 => Instr::BindRef { var: Code::get(r)?, src: Code::get(r)? },
             73 => Instr::RefDim { var: Code::get(r)?, root: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)? },
             74 => Instr::DimSetRef { root: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, src: Code::get(r)? },
@@ -919,7 +919,7 @@ impl Code for Instr {
             97 => Instr::IssetProp { dst: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)? },
             98 => Instr::UnsetProp { obj: Code::get(r)?, name: Code::get(r)? },
             99 => Instr::MethodCall { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
-            100 => Instr::StaticCall { dst: Code::get(r)?, class: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
+            100 => Instr::StaticCall { dst: Code::get(r)?, class: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)?, vars: Code::get(r)? },
             101 => Instr::ClassConst { dst: Code::get(r)?, class: Code::get(r)?, name: Code::get(r)? },
             102 => Instr::FetchStaticProp { dst: Code::get(r)?, class: Code::get(r)?, name: Code::get(r)? },
             103 => Instr::AssignStaticProp { class: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
