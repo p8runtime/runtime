@@ -208,8 +208,10 @@ pub enum Instr {
     /// function's, undefined ones stay unset without a warning).
     Capture { closure: Reg, var: Reg, by_ref: bool, quiet: bool },
     /// Call the value in `callee` (a closure, a callable string or array,
-    /// an invokable object) with the `argc` arguments at `base`.
-    CallValue { dst: Reg, callee: Reg, base: Reg, argc: u8 },
+    /// an invokable object) with the `argc` arguments at `base`. `vars`:
+    /// the variables passed as they are, sent by the call itself (an
+    /// index into `Function::arg_vars`; NO_VARS: none).
+    CallValue { dst: Reg, callee: Reg, base: Reg, argc: u8, vars: u16 },
     /// `$var = &$src`: both name one value from now on.
     BindRef { var: Reg, src: Reg },
     /// `$var = &$root[k1]..[kn]` (`append`: a last `[]`), and an element
@@ -283,8 +285,9 @@ pub enum Instr {
     UnsetProp { obj: Reg, name: Reg },
     /// `$obj->method(args)`: `method` names a site (its name)
     MethodCall { dst: Reg, obj: Reg, method: u16, base: Reg, argc: u8 },
-    /// `C::method(args)`, `parent::method(args)`, `static::…`
-    StaticCall { dst: Reg, class: u16, method: u16, base: Reg, argc: u8 },
+    /// `C::method(args)`, `parent::method(args)`, `static::…` (`vars` as
+    /// CallValue's)
+    StaticCall { dst: Reg, class: u16, method: u16, base: Reg, argc: u8, vars: u16 },
     /// `C::NAME`
     ClassConst { dst: Reg, class: u16, name: Reg },
     /// `C::$name`
@@ -795,10 +798,19 @@ pub struct Function {
     /// `@` expressions: (Silence pc, Unsilence pc, the register saving
     /// the level), so an exception leaving one puts the level back.
     pub silences: Vec<(u32, u32, Reg)>,
+    /// For a StaticCall or CallValue whose arguments are variables and
+    /// constants only: each variable's argument position and register.
+    /// The call sends them once its target is known (by reference where
+    /// the parameter takes one), as PHP's SEND_VAR_EX would, with no
+    /// instruction per argument before it.
+    pub arg_vars: Vec<Vec<(u8, Reg)>>,
     pub meta: Meta,
     /// The partial applications this code makes (`Rare::Partial`).
     pub partials: Vec<PartialSite>,
 }
+
+/// A call's `vars` when it has no `Function::arg_vars` entry.
+pub const NO_VARS: u16 = u16::MAX;
 
 /// A compiled file: its top-level code, every function it declares, and
 /// every class (in order), for linking them when it runs.
