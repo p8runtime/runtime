@@ -33,6 +33,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_pad", run: array_pad, by_ref: &[] },
     Builtin { name: "array_key_first", run: array_key_first, by_ref: &[] },
     Builtin { name: "array_key_last", run: array_key_last, by_ref: &[] },
+    Builtin { name: "array_first", run: array_first, by_ref: &[] },
+    Builtin { name: "array_last", run: array_last, by_ref: &[] },
     Builtin { name: "array_count_values", run: array_count_values, by_ref: &[] },
     Builtin { name: "array_chunk", run: array_chunk, by_ref: &[] },
     Builtin { name: "array_diff", run: array_diff, by_ref: &[] },
@@ -363,6 +365,18 @@ fn array_key_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 
 fn array_key_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(arr(args, 0).iter().last().map_or(Value::Null, |(k, _)| k.to_value()))
+}
+
+/// array_first(array $array): mixed (PHP 8.5): the first value, dereferenced
+/// (RETURN_COPY_DEREF), or null for an empty array.
+fn array_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(arr(args, 0).values().next().map_or(Value::Null, Value::deref))
+}
+
+/// array_last(array $array): mixed (PHP 8.5): the last value, dereferenced,
+/// or null for an empty array.
+fn array_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(arr(args, 0).values().last().map_or(Value::Null, Value::deref))
 }
 
 fn array_count_values(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
