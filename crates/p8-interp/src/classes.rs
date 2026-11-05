@@ -1020,41 +1020,6 @@ impl Context<'_> {
         self.throw("Error", format!("Cannot {operation} {visibility} property {}::${} from {scope}", text(&prop.declaring_name), text(&prop.name)))
     }
 
-    /// What `$obj->name` holds, read without hooks, magic or diagnostics:
-    /// None unless it is a property visible here.
-    pub(crate) fn peek_prop(&self, target: &Value, name: &Value) -> Option<Value> {
-        self.peek_prop_with(target, name, Value::deref)
-    }
-
-    /// `peek_prop`, looking at the value where it is: `f` of it (through a
-    /// reference), nothing copied.
-    pub(crate) fn peek_prop_with<R>(&self, target: &Value, name: &Value, f: impl FnOnce(&Value) -> R) -> Option<R> {
-        let object = match target {
-            Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => match &*cell.borrow() {
-                Value::Object(o) => Rc::clone(o),
-                _ => return None,
-            },
-            _ => return None,
-        };
-        let name = name.to_php_string()?;
-        let scope = self.frames.last().and_then(|f| f.scope.as_deref());
-        let seen = |v: &Value| match v {
-            Value::Ref(cell) => f(&cell.borrow()),
-            v => f(v),
-        };
-        match object.class.slot(name.as_bytes(), scope.map(|s| s.lower.as_slice())) {
-            Some(slot) => {
-                let prop = &object.class.properties[slot];
-                let declaring = self.declaring(&object.class, &prop.declaring);
-                if !visible(prop.visibility, &declaring, scope) {
-                    return None;
-                }
-                Some(seen(&object.slots.borrow()[slot]))
-            }
-            None => object.dynamic.borrow().get(&Key::from_string(name)).map(seen),
-        }
-    }
 
     /// `$obj->name`
     pub(crate) fn fetch_prop(&mut self, target: &Value, name: &Value, quiet: bool) -> Result<Value, Throw> {
@@ -1283,11 +1248,11 @@ impl Context<'_> {
         &mut self,
         target: &Value,
         name: &Value,
-        path: &[Key],
+        keys: &[Value],
         append: bool,
         val: Value,
         op: Option<p8_runtime::ops::BinOp>,
-    ) -> Result<Value, Throw> {
+    ) -> Result<crate::Written, Throw> {
         let pname = self.prop_name(name)?;
         let object = self.target_object(target, &pname, "assign")?;
         let slot = self.prop_slot(&object, pname.as_bytes())?;
@@ -1316,7 +1281,7 @@ impl Context<'_> {
                 object.dynamic.borrow_mut().remove(&key).unwrap_or(Value::Null)
             }
         };
-        let result = self.update_path(&mut root, path, append, val, op);
+        let result = self.update_path(&mut root, keys, 0, append, val, op);
         match &slot {
             Some((i, _)) => {
                 let mut slots = object.slots.borrow_mut();
@@ -1542,6 +1507,10 @@ impl Context<'_> {
     /// As hooked_property; `check_visibility` false: as the dump
     /// functions see it (any visibility).
     pub(crate) fn hooked_property_seen<'c>(&self, o: &'c Rc<Object>, name: &[u8], check_visibility: bool) -> Option<&'c Property> {
+        // A class with no hooked property: no lookup by name.
+        if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
+            return None;
+        }
         let slots = o.class.slots.get(name)?;
         let p = slots.iter().map(|&i| &o.class.properties[i]).find(|p| p.hooks != 0)?;
         let declaring = self.class_named(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(&o.class));
