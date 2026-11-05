@@ -5115,8 +5115,11 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 /// Arguments past the parameters, moved out for func_get_args() (and a
 /// variadic parameter's `CollectVariadic`).
 #[cold]
-fn take_extra(regs: &mut [Value], _func: &Function, base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
-    Some(Box::new(Extra { args: regs[base + nparams..base + argc].iter_mut().map(std::mem::take).collect(), vars: Vars::default(), shared: None }))
+fn take_extra(spare: &mut Vec<Box<Extra>>, regs: &mut [Value], base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
+    // A spare one (emptied) if there is one: no allocation.
+    let mut extra = spare.pop().unwrap_or_default();
+    extra.args.extend(regs[base + nparams..base + argc].iter_mut().map(std::mem::take));
+    Some(extra)
 }
 
 /// `$a[k] op= v` for an int or string `k`, `$a` an array holding a number

@@ -31,7 +31,8 @@ pub(crate) const NO_RET: u32 = u32::MAX;
 /// A frame's arguments past its parameters and its run-time variables.
 #[derive(Default)]
 pub(crate) struct Extra {
-    pub(crate) args: Box<[Value]>,
+    /// (A list: an Extra is kept for the next frame that needs one, room and all.)
+    pub(crate) args: Vec<Value>,
     pub(crate) vars: Vars,
     /// A file's code included in a function's scope: where each of its
     /// variables is the including frame's. Their bindings go back there
@@ -159,6 +160,21 @@ pub(crate) struct Frames {
     /// The frame the running `execute` started at: a call from a builtin
     /// back into PHP runs its own `execute` above the frames below.
     pub(crate) floor: usize,
+    /// Extras of finished frames, emptied, for the next frames that need
+    /// one (a variadic call's): no allocation per call.
+    pub(crate) spare: Vec<Box<Extra>>,
+}
+
+/// A finished frame's Extra: what it holds goes now, the box is kept (up
+/// to a few).
+#[inline(never)]
+pub(crate) fn recycle_extra(spare: &mut Vec<Box<Extra>>, mut extra: Box<Extra>) {
+    extra.args.clear();
+    extra.vars.0.clear();
+    extra.shared = None;
+    if spare.len() < 16 {
+        spare.push(extra);
+    }
 }
 
 impl Frames {
