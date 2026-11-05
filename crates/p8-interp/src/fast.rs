@@ -88,9 +88,14 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 Instr::FetchProp { dst, obj, name, .. } => {
                     let site = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i));
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                    let hit = match (site, &w[obj as usize]) {
-                        (Some(site), Value::Object(o)) => cached_prop(site.get(), o, scope),
-                        _ => None,
+                    // THIS: the method's own `$this`, from the frame.
+                    let hit = match site {
+                        Some(site) if obj == p8_bytecode::THIS => top.this.as_ref().and_then(|o| cached_prop(site.get(), o, scope)),
+                        Some(site) => match &w[obj as usize] {
+                            Value::Object(o) => cached_prop(site.get(), o, scope),
+                            _ => None,
+                        },
+                        None => None,
                     };
                     let Some(v) = hit else { return pc };
                     w[dst as usize] = v;
