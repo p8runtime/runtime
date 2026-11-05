@@ -59,8 +59,9 @@ const MORE_RESULTS: u16 = 0x08;
 /// SERVER_STATUS_NO_BACKSLASH_ESCAPES: the NO_BACKSLASH_ESCAPES SQL mode.
 pub const STATUS_NO_BACKSLASH_ESCAPES: u16 = 0x200;
 
-/// What mysqlnd calls itself (mysqlnd_get_client_info()).
-pub const CLIENT_INFO: &str = "mysqlnd 8.4.27";
+/// What mysqlnd calls itself (mysqlnd_get_client_info()): "mysqlnd " and
+/// PHP's version (MYSQLND_VERSION).
+pub const CLIENT_INFO: &str = concat!("mysqlnd ", p8_stubs::php_version!());
 
 /// utf8mb4_general_ci, the collation mysqlnd connects with (utf8mb4).
 pub const DEFAULT_CHARSET: u16 = 45;

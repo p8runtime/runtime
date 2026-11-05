@@ -32,20 +32,24 @@ pub enum TestResult {
 const MAX_OUTPUT: usize = 1 << 20;
 
 /// The settings php-src's run-tests.php gives every test (its
-/// `$ini_overwrites`); a test's --INI-- section comes after and wins.
+/// `$ini_overwrites`, as of the target's release, 8.6); a test's --INI--
+/// section comes after and wins.
 const RUN_TESTS_INI: &[(&str, &str)] = &[
     ("output_handler", ""),
     ("open_basedir", ""),
     ("disable_functions", ""),
     ("output_buffering", "Off"),
-    // run-tests.php passes E_ALL as the PHP running it has it: 30719 in 8.4.
+    // run-tests.php passes E_ALL as the PHP running it has it: 30719 (8.4+).
     ("error_reporting", "30719"),
+    // (8.5+) a test that wants fatal errors' traces asks for them.
+    ("fatal_error_backtraces", "Off"),
     ("display_errors", "1"),
     ("display_startup_errors", "1"),
+    ("error_include_args", "0"),
     ("log_errors", "0"),
     ("html_errors", "0"),
     ("track_errors", "0"),
-    ("report_memleaks", "1"),
+    // (report_memleaks=1 is gone: the directive is deprecated since 8.5.)
     ("report_zend_debug", "0"),
     ("docref_root", ""),
     ("docref_ext", ".html"),

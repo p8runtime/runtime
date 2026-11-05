@@ -1,7 +1,8 @@
-//! p8 values against real PHP 8.4: every pair of a matrix of values
+//! p8 values against real PHP 8.6: every pair of a matrix of values
 //! compared with <=>, == and ===, and each value converted to bool, int,
 //! float and string, must match tests/fixtures/semantics.txt (written by
-//! crates/p8-runtime/tests/gen_semantics.php under PHP 8.4).
+//! crates/p8-runtime/tests/gen_semantics.php under PHP 8.6; the values are
+//! the same as 8.4's).
 
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::string::PhpStr;
@@ -71,7 +72,7 @@ fn value_is_sixteen_bytes() {
 }
 
 #[test]
-fn matches_php_8_4() {
+fn matches_php_8_6() {
     let values = values();
     let fixture = include_str!("fixtures/semantics.txt");
     let mut failures = Vec::new();

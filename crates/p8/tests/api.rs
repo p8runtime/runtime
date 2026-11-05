@@ -255,13 +255,17 @@ fn interrupted(platform: &p8::Platform, source: &str, interrupt: fn(&p8::Interru
 fn a_watchdog_stops_a_loop_running_in_the_fast_path() {
     let (status, out, _) = interrupted(&platform(), "<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
     assert_eq!(status, 255);
-    assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\n");
+    // With its stack trace, as fatal errors have since PHP 8.5.
+    assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\nStack trace:\n#0 {main}\n");
 }
 
 #[test]
 fn a_watchdog_stops_loops_and_recursion_outside_the_fast_path() {
     let (status, out, _) = interrupted(&platform(), "<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
-    assert_eq!((status, out.as_str()), (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\n"));
+    assert_eq!(
+        (status, out.as_str()),
+        (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\nStack trace:\n#0 {main}\n")
+    );
 
     let source = "<?php\nfunction f($n) { return $n < 1 ? 0 : f($n - 1) + f($n - 1); }\nf(60);";
     let (status, out, _) = interrupted(&platform(), source, |h| h.terminate());
@@ -364,6 +368,87 @@ fn a_file_cache_serves_later_platforms() {
     }
     assert_eq!(run(), ((0, "changed 42\n".to_string()), 2));
     assert_eq!(run(), ((0, "changed 42\n".to_string()), 0));
+}
+
+/// opcache.file_cache_read_only: a cache made ahead of time is used and
+/// never written: nothing is compiled from it, a file without an entry is
+/// compiled every time, and no entry appears for it.
+#[test]
+fn a_read_only_file_cache_is_used_and_never_written() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("file_cache_read_only");
+    let cache = dir.join("cache");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("test dir");
+    let part = dir.join("part.php");
+    std::fs::write(&part, "<?php echo 'part';").expect("write part");
+    let main = format!("<?php include {:?}; echo \"\\n\";", part.to_str().expect("utf-8 path"));
+    let entries = || std::fs::read_dir(&cache).map(|d| d.count()).unwrap_or(0);
+    let run = |platform: p8::Platform| {
+        let before = platform.compiled_files();
+        let mut isolate = platform.new_isolate();
+        let out = request(&platform, &mut isolate, &main);
+        (out, platform.compiled_files() - before)
+    };
+    let fresh = || p8::Platform::new(&[p8::extensions::STANDARD]);
+    // Read only and empty: compiled each time, nothing written.
+    assert_eq!(run(fresh().read_only_file_cache(&cache)), ((0, "part\n".to_string()), 2));
+    assert_eq!(run(fresh().read_only_file_cache(&cache)), ((0, "part\n".to_string()), 2));
+    assert_eq!(entries(), 0, "a read-only cache writes nothing");
+    // Made by a writing cache, then read only: nothing compiled.
+    assert_eq!(run(fresh().file_cache(&cache)), ((0, "part\n".to_string()), 2));
+    let made = entries();
+    assert_eq!(made, 2);
+    assert_eq!(run(fresh().read_only_file_cache(&cache)), ((0, "part\n".to_string()), 0));
+    // A changed file is compiled, and its stale entry stays as it was.
+    std::fs::write(&part, "<?php echo 'changed';").expect("rewrite part");
+    let entry_bytes = |c: &std::path::Path| {
+        let mut all: Vec<Vec<u8>> = std::fs::read_dir(c).expect("cache dir").map(|e| std::fs::read(e.expect("entry").path()).expect("entry")).collect();
+        all.sort();
+        all
+    };
+    let before = entry_bytes(&cache);
+    assert_eq!(run(fresh().read_only_file_cache(&cache)), ((0, "changed\n".to_string()), 1));
+    assert_eq!(entry_bytes(&cache), before, "a stale entry is not written over");
+}
+
+/// Zend OPcache over the kept files, through the functions a script calls:
+/// a file compiled once is a hit in the next request, invalidating it drops
+/// it, and opcache_reset() empties the cache when the next request starts.
+#[test]
+fn opcache_functions_act_on_the_kept_files() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("opcache_functions");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("test dir");
+    let part = dir.join("part.php");
+    std::fs::write(&part, "<?php return 1;").expect("write part");
+    let real = std::fs::canonicalize(&part).expect("real path");
+    let settings = |name: &str| match name {
+        "opcache.enable" | "opcache.enable_cli" => Some("1".to_string()),
+        // The file was just written: cache it anyway.
+        "opcache.file_update_protection" => Some("0".to_string()),
+        _ => None,
+    };
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD]).keep_compiled().opcache(p8::OpcacheSettings::from_ini(true, &settings));
+    let mut isolate = platform.new_isolate();
+    let report = format!(
+        "$s = opcache_get_status(); $o = $s['opcache_statistics']; \
+         echo $o['num_cached_scripts'] > 0 ? 'cached' : 'empty', ' hits=', $o['hits'], ' restarts=', $o['manual_restarts'], \
+         ' part=', var_export(opcache_is_script_cached({0:?}), true), ' listed=', var_export(isset($s['scripts'][{0:?}]), true), \"\\n\";",
+        real.to_str().expect("utf-8 path")
+    );
+    let include = format!("include {:?};", part.to_str().expect("utf-8 path"));
+    let mut run = |body: &str| request(&platform, &mut isolate, &format!("<?php {include} {body} {report}")).1;
+    let first = run("");
+    assert!(first.contains("part=true listed=true"), "compiled and cached: {first}");
+    assert!(first.contains("hits=0"), "nothing taken from the cache yet: {first}");
+    let second = run("");
+    assert!(!second.contains("hits=0"), "the next request takes part.php from the cache: {second}");
+    let invalidated = run(&format!("var_dump(opcache_invalidate({:?}, true));", part.to_str().expect("utf-8 path")));
+    assert!(invalidated.starts_with("bool(true)\n") && invalidated.contains("part=false"), "invalidated: {invalidated}");
+    let reset = run("var_dump(opcache_reset());");
+    assert!(reset.starts_with("bool(true)\n") && reset.contains("restarts=0") && reset.contains("part=true"), "reset waits for the next request: {reset}");
+    let after = run("");
+    assert!(after.contains("restarts=1") && after.contains("hits=0"), "the cache was emptied as the request started: {after}");
 }
 
 #[test]

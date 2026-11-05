@@ -1,2 +1,4 @@
 
-Fatal error: Class X contains 1 abstract method and must therefore be declared abstract or implement the remaining methods (I::g) in %s on line 3
+Fatal error: Class X contains 1 abstract method and must therefore be declared abstract or implement the remaining method (I::g) in %s on line 3
+Stack trace:
+#0 {main}

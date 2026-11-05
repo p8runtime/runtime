@@ -18,5 +18,7 @@ float(9.223372036854776E+18)
 float(-9.223372036854776E+18)
 NULL
 int(1)
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 45
 string(2) "a9"
 string(2) "b0"

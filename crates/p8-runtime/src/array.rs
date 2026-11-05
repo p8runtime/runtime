@@ -108,7 +108,13 @@ pub enum KeyIssue {
     LosesPrecision(f64),
     /// Not usable as a key (array, object): "Illegal offset type".
     Illegal(&'static str),
+    /// Null (or undefined) as a key: the empty string, deprecated since 8.5
+    /// where PHP reads, writes or tests an offset (not for unset()).
+    NullOffset,
 }
+
+/// What PHP 8.5+ says when null is an array offset.
+pub const NULL_OFFSET_DEPRECATION: &str = "Using null as an array offset is deprecated, use an empty string instead";
 
 impl Key {
     /// The key a string names: a canonical decimal integer is an int key
@@ -125,7 +131,7 @@ impl Key {
         Ok(match value {
             Value::Int(i) => (Key::Int(*i), None),
             Value::Str(s) => (Key::from_string(s.clone()), None),
-            Value::Null | Value::Undef => (Key::Str(PhpStr::empty()), None),
+            Value::Null | Value::Undef => (Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset)),
             Value::Bool(b) => (Key::Int(i64::from(*b)), None),
             Value::Float(f) => {
                 // Not an int as it is: a fraction, NaN/INF, or out of the
@@ -921,7 +927,7 @@ mod tests {
         assert_eq!(k("9223372036854775808"), Key::Str(PhpStr::from("9223372036854775808")));
         assert_eq!(Key::from_value(&Value::Float(1.5)), Ok((Key::Int(1), Some(KeyIssue::LosesPrecision(1.5)))));
         assert_eq!(Key::from_value(&Value::Bool(true)), Ok((Key::Int(1), None)));
-        assert_eq!(Key::from_value(&Value::Null), Ok((Key::Str(PhpStr::empty()), None)));
+        assert_eq!(Key::from_value(&Value::Null), Ok((Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset))));
     }
 
     #[test]
