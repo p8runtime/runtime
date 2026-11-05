@@ -137,6 +137,10 @@ struct FnBuilder<'a> {
     /// in the global table where they are used.
     auto_globals: bool,
     is_static: bool,
+    /// An instance method: `$this` always exists, so a property access
+    /// on it reads the frame's (THIS) rather than a copy
+    /// (zend_compile.c this_guaranteed_exists).
+    this_known: bool,
     tries: Vec<TryCtx<'a>>,
     handlers: Vec<Handler>,
     /// Closures and arrow functions made in this code (`MakeClosure`).
@@ -199,6 +203,7 @@ impl FnBuilder<'_> {
             class: None,
             auto_globals: false,
             is_static: false,
+            this_known: false,
             tries: Vec::new(),
             handlers: Vec::new(),
             lambdas: Vec::new(),
@@ -475,6 +480,10 @@ impl FnBuilder<'_> {
         }
         let position = &order.position;
         let map = |r: Reg| -> Reg {
+            // `$this` from the frame is no register.
+            if r == p8_bytecode::THIS {
+                return r;
+            }
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
             (match r >> KIND_SHIFT {
                 CV => index,
@@ -2238,6 +2247,7 @@ impl<'src> Compiler<'src> {
         if let Some((class, is_static)) = self.method.take() {
             f.class = Some(class);
             f.is_static = is_static;
+            f.this_known = !is_static;
         }
         for p in params {
             // A default making a partial application is checked as the
@@ -2330,8 +2340,14 @@ impl<'src> Compiler<'src> {
                 ty_decl: p.ty.map(|t| self.type_decl(t)),
                 meta: Meta { attrs: f.params[i].attrs.clone(), ..Meta::default() },
             });
-            let obj = f.temp();
-            f.emit(Instr::This { dst: obj });
+            // `$this` from the frame (a constructor always has one).
+            let obj = if f.this_known {
+                p8_bytecode::THIS
+            } else {
+                let obj = f.temp();
+                f.emit(Instr::This { dst: obj });
+                obj
+            };
             let key = f.name_constant(Frozen::Str(name));
             let dst = f.temp();
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst, take: false });
@@ -3231,6 +3247,19 @@ impl<'src> Compiler<'src> {
             }
             other => self.expr(f, other),
         }
+    }
+
+    /// The object operand of a property read or write: `$this` in an
+    /// instance method is the frame's own (THIS), not a copy made in a
+    /// temporary first.
+    fn prop_obj(&mut self, f: &mut FnBuilder, target: &Expr) -> Result<Reg> {
+        if f.this_known
+            && let Expr::Variable { name, .. } = target
+            && self.text(*name) == b"$this"
+        {
+            return Ok(p8_bytecode::THIS);
+        }
+        self.expr(f, target)
     }
 
     /// `prop_name` for the name operand of a property instruction (see
@@ -4181,7 +4210,7 @@ impl<'src> Compiler<'src> {
                     dst
                 }
                 Expr::PropertyFetch { target, property, .. } => {
-                    let obj = self.expr(f, target)?;
+                    let obj = self.prop_obj(f, target)?;
                     let name = self.prop_name_operand(f, property)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
@@ -4336,7 +4365,7 @@ impl<'src> Compiler<'src> {
                         dst
                     }
                     Expr::PropertyFetch { target, property, .. } => {
-                        let obj = self.expr(f, target)?;
+                        let obj = self.prop_obj(f, target)?;
                         let name = self.prop_name_operand(f, property)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
@@ -4358,7 +4387,7 @@ impl<'src> Compiler<'src> {
             Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
             Expr::Znode { reg, .. } => *reg as Reg,
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::PropertyFetch { target, property, .. }, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
@@ -4366,7 +4395,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::PostInc { var: Expr::PropertyFetch { target, property, .. }, .. }
             | Expr::PostDec { var: Expr::PropertyFetch { target, property, .. }, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
@@ -4675,7 +4704,7 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::PropertyFetch { target, property, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = out(f, hint, mark);
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });

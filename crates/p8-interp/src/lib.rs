@@ -949,6 +949,19 @@ impl Context<'_> {
         self.show(E_NOTICE, message);
     }
 
+    /// A property instruction's object: THIS is the running method's own
+    /// `$this` (from its frame), else the register's value.
+    #[inline]
+    fn prop_target(&mut self, w: &[Value], func: &Function, obj: Reg) -> Result<Value, Throw> {
+        if obj == p8_bytecode::THIS {
+            return match self.frames.last().and_then(|f| f.this.clone()) {
+                Some(this) => Ok(Value::Object(this)),
+                None => Err(self.throw("Error", "Using $this when not in object context")),
+            };
+        }
+        Ok(self.operand(w, func, obj))
+    }
+
     /// The value in register `r` of the frame window `w`, as an operand:
     /// looks through references; an undefined variable warns and reads as null.
     #[inline(always)]
@@ -2642,7 +2655,7 @@ impl Context<'_> {
                     None => return Err(self.throw("Error", "Using $this when not in object context")),
                 },
                 Instr::FetchProp { dst, obj, name, quiet } => {
-                    let target = if quiet { reg!(obj).deref() } else { self.operand(w, func, obj) };
+                    let target = if quiet { reg!(obj).deref() } else { self.prop_target(w, func, obj)? };
                     // The name's constant: its cache entry.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     if let (Some(site), Value::Object(o)) = (site, &target)
@@ -2691,7 +2704,7 @@ impl Context<'_> {
                     }
                 }
                 Instr::AssignProp { obj, name, val, dst, take } => {
-                    let target = self.operand(w, func, obj);
+                    let target = self.prop_target(w, func, obj)?;
                     // The name's constant: the same cache entry reads use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
@@ -2743,7 +2756,7 @@ impl Context<'_> {
                     reg!(dst) = v;
                 }
                 Instr::AssignPropOp { op, obj, name, val, dst } => {
-                    let target = self.operand(w, func, obj);
+                    let target = self.prop_target(w, func, obj)?;
                     let y = self.operand(w, func, val);
                     // The name's constant: the cache entry reads and writes use.
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
@@ -2795,7 +2808,7 @@ impl Context<'_> {
                     reg!(dst) = v;
                 }
                 Instr::PropIncDec { obj, name, dst, inc, post } => {
-                    let target = self.operand(w, func, obj);
+                    let target = self.prop_target(w, func, obj)?;
                     let site = (name as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     if let (Some(site), Value::Object(o), Value::Str(pname)) = (site, &target, &name!(name))
                         && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
