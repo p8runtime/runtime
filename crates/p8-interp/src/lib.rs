@@ -4196,6 +4196,16 @@ impl Context<'_> {
         Ok(Value::Str(PhpStr::byte(byte)))
     }
 
+    /// "Undefined array key …" for reading `key` that is not there.
+    #[cold]
+    fn undefined_key(&mut self, key: &Key) {
+        let shown = match key {
+            Key::Int(i) => i.to_string(),
+            Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
+        };
+        self.warn(format!("Undefined array key {shown}"));
+    }
+
     fn update_path(&mut self, target: &mut Value, path: &[Key], append: bool, val: Value, op: Option<BinOp>) -> Result<Value, Throw> {
         if matches!(target, Value::Null | Value::Undef) {
             *target = Value::Array(Rc::new(PhpArray::new()));
@@ -4253,11 +4263,7 @@ impl Context<'_> {
                     let old = match arr.get(key) {
                         Some(v) => v.deref(),
                         None => {
-                            let shown = match key {
-                                Key::Int(i) => i.to_string(),
-                                Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
-                            };
-                            self.warn(format!("Undefined array key {shown}"));
+                            self.undefined_key(key);
                             Value::Null
                         }
                     };
@@ -4269,8 +4275,15 @@ impl Context<'_> {
                 }
             },
             // A level on the way: its element (made null if missing),
-            // written into where it is (ZEND_FETCH_DIM_W), one lookup.
-            Some((key, rest)) => self.update_path(arr.slot_mut(key), rest, append, val, op),
+            // written into where it is (ZEND_FETCH_DIM_W), one lookup. A
+            // compound assignment reads it first (ZEND_FETCH_DIM_RW): a
+            // missing one warns.
+            Some((key, rest)) => {
+                if op.is_some() && !arr.contains_key(key) {
+                    self.undefined_key(key);
+                }
+                self.update_path(arr.slot_mut(key), rest, append, val, op)
+            }
         }
     }
 
