@@ -20,6 +20,11 @@ pub trait Loader {
     fn load(&self, source: &[u8], file: &str) -> Result<Arc<Program>, LoadError>;
     /// eval()'s code (no `<?php`; it returns null unless it returns).
     fn load_eval(&self, code: &[u8], file: &str) -> Result<Arc<Program>, LoadError>;
+    /// The cache the files it compiles are kept in, as Zend OPcache
+    /// presents it (None: it keeps none).
+    fn code_cache(&self) -> Option<Arc<dyn p8_runtime::opcache::CodeCache>> {
+        None
+    }
     /// A partial application's closure (PHP 8.6): `source` is a file whose
     /// code makes one closure, compiled as part of `file`; the closure's
     /// code, named `name`, scoped to `class` (zend_accel_compile_pfa).
@@ -84,6 +89,32 @@ impl Context<'_> {
         // opens it, not as the include named it.
         let file = real.to_string_lossy().into_owned();
         self.compile_included(real, file, &source).map(|p| Some(Ok(p)))
+    }
+
+    /// opcache_compile_file(): the file found as include finds it, compiled
+    /// into the loader's cache and not run (nothing it declares is
+    /// declared). A file not found warns as an include does, under the
+    /// function's name; one that does not compile is "could not compile".
+    pub(crate) fn opcache_compile_file(&mut self, name: &[u8]) -> Result<bool, Throw> {
+        let shown = String::from_utf8_lossy(name).into_owned();
+        let include_path = self.include_path();
+        let current = self.location().0;
+        let found = if name.is_empty() { None } else { resolve(&shown, &include_path, &current) };
+        let Some((path, source)) = found.and_then(|p| std::fs::read(&p).ok().map(|s| (p, s))) else {
+            self.warn("opcache_compile_file(): Failed to open stream: No such file or directory");
+            self.warn(format!("opcache_compile_file(): Failed opening '{shown}' for inclusion (include_path='{include_path}')"));
+            return Ok(false);
+        };
+        let Some(loader) = self.loader.clone() else { return Ok(false) };
+        let real = p8_runtime::os::canonicalize(&path).unwrap_or(path);
+        match loader.load(&source, &real.to_string_lossy()) {
+            Ok(_) => Ok(true),
+            Err(e) if e.parse => Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(&*real.to_string_lossy()), line: e.line, props: Vec::new() }),
+            Err(_) => {
+                self.warn(format!("Zend OPcache could not compile file {shown}"));
+                Ok(false)
+            }
+        }
     }
 
     /// An include that found nothing to open: a require's Error, or an

@@ -75,6 +75,19 @@ pub static MODULES: &[ModuleSpec] = &[
         ],
     },
     ModuleSpec {
+        name: "Zend OPcache",
+        version: Some(crate::PHP_VERSION),
+        deps: &[],
+        functions: &["opcache_reset", "opcache_get_status", "opcache_compile_file", "opcache_invalidate", "opcache_jit_blacklist", "opcache_get_configuration", "opcache_is_script_cached"],
+        classes: &[],
+        ini: &[("opcache.enable", 7, IniDisplay::Bool), ("opcache.use_cwd", 4, IniDisplay::Bool), ("opcache.validate_timestamps", 7, IniDisplay::Bool), ("opcache.validate_permission", 4, IniDisplay::Bool), ("opcache.validate_root", 4, IniDisplay::Bool), ("opcache.dups_fix", 7, IniDisplay::Bool), ("opcache.revalidate_path", 7, IniDisplay::Bool), ("opcache.log_verbosity_level", 4, IniDisplay::Plain), ("opcache.memory_consumption", 4, IniDisplay::Plain), ("opcache.interned_strings_buffer", 4, IniDisplay::Plain), ("opcache.max_accelerated_files", 4, IniDisplay::Plain), ("opcache.max_wasted_percentage", 4, IniDisplay::Plain), ("opcache.force_restart_timeout", 4, IniDisplay::Plain), ("opcache.revalidate_freq", 7, IniDisplay::Plain), ("opcache.file_update_protection", 7, IniDisplay::Plain), ("opcache.preferred_memory_model", 4, IniDisplay::Plain), ("opcache.blacklist_filename", 4, IniDisplay::Plain), ("opcache.max_file_size", 4, IniDisplay::Plain), ("opcache.protect_memory", 4, IniDisplay::Bool), ("opcache.save_comments", 4, IniDisplay::Bool), ("opcache.record_warnings", 4, IniDisplay::Bool), ("opcache.optimization_level", 4, IniDisplay::Plain), ("opcache.opt_debug_level", 4, IniDisplay::Plain), ("opcache.enable_file_override", 4, IniDisplay::Bool), ("opcache.enable_cli", 4, IniDisplay::Bool), ("opcache.error_log", 4, IniDisplay::Plain), ("opcache.restrict_api", 4, IniDisplay::Plain), ("opcache.lockfile_path", 4, IniDisplay::Plain), ("opcache.file_cache", 4, IniDisplay::Plain), ("opcache.file_cache_only", 4, IniDisplay::Bool), ("opcache.file_cache_consistency_checks", 4, IniDisplay::Bool), ("opcache.huge_code_pages", 4, IniDisplay::Bool), ("opcache.preload", 4, IniDisplay::Plain), ("opcache.preload_user", 4, IniDisplay::Plain), ("opcache.jit", 7, IniDisplay::Plain), ("opcache.jit_buffer_size", 4, IniDisplay::Plain), ("opcache.jit_debug", 7, IniDisplay::Plain), ("opcache.jit_bisect_limit", 7, IniDisplay::Plain), ("opcache.jit_prof_threshold", 7, IniDisplay::Plain), ("opcache.jit_max_root_traces", 4, IniDisplay::Plain), ("opcache.jit_max_side_traces", 4, IniDisplay::Plain), ("opcache.jit_max_exit_counters", 4, IniDisplay::Plain), ("opcache.jit_hot_loop", 4, IniDisplay::Plain), ("opcache.jit_hot_func", 4, IniDisplay::Plain), ("opcache.jit_hot_return", 4, IniDisplay::Plain), ("opcache.jit_hot_side_exit", 7, IniDisplay::Plain), ("opcache.jit_blacklist_root_trace", 7, IniDisplay::Plain), ("opcache.jit_blacklist_side_trace", 7, IniDisplay::Plain), ("opcache.jit_max_loop_unrolls", 7, IniDisplay::Plain), ("opcache.jit_max_recursive_calls", 7, IniDisplay::Plain), ("opcache.jit_max_recursive_returns", 7, IniDisplay::Plain), ("opcache.jit_max_polymorphic_calls", 7, IniDisplay::Plain), ("opcache.jit_max_trace_length", 7, IniDisplay::Plain)],
+        info: &[
+            "",
+            "{accel_info}",
+            "{ini}",
+        ],
+    },
+    ModuleSpec {
         name: "random",
         version: Some(crate::PHP_VERSION),
         deps: &[],

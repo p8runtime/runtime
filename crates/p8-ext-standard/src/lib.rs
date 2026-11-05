@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 mod array;
 mod array2;
+mod opcache;
 mod range;
 mod callback;
 mod context;
@@ -165,10 +166,13 @@ fn register(registry: &mut Registry) {
     for (name, value) in zlib::CONSTANTS {
         registry.add_constant(name.as_bytes(), *value);
     }
-    // The PHP modules this extension provides, in PHP's order.
-    for module in ["Core", "date", "filter", "hash", "json", "random", "Reflection", "SPL", "standard", "ctype", "zlib"] {
+    // The PHP modules this extension provides, in PHP's order. Zend OPcache
+    // is built into PHP since 8.5; its functions act on the host's
+    // compile cache (opcache.rs).
+    for module in ["Core", "date", "filter", "hash", "json", "Zend OPcache", "random", "Reflection", "SPL", "standard", "ctype", "zlib"] {
         registry.add_module(module);
     }
+    registry.add_functions(opcache::BUILTINS);
     registry.add_functions(file::BUILTINS);
     // The streams a user-space wrapper opened that are still open close
     // when the request ends (stream_close), as PHP frees its resources.
@@ -452,11 +456,15 @@ fn extension_loaded(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
     Ok(Value::Bool(ctx.modules().iter().any(|m| m.as_bytes().eq_ignore_ascii_case(name.as_bytes()))))
 }
 
-/// get_loaded_extensions(bool $zend_extensions = false): p8 has no Zend
-/// extensions (no OPcache).
+/// get_loaded_extensions(bool $zend_extensions = false): with
+/// $zend_extensions, the one Zend extension, OPcache (a module too).
 fn get_loaded_extensions(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let zend = args.first().is_some_and(|v| v.to_bool());
-    let names = if zend { Vec::new() } else { ctx.modules().iter().map(|m| Value::str(*m)).collect() };
+    let names = if zend {
+        ctx.modules().iter().filter(|m| **m == "Zend OPcache").map(|m| Value::str(*m)).collect()
+    } else {
+        ctx.modules().iter().map(|m| Value::str(*m)).collect()
+    };
     Ok(Value::Array(std::rc::Rc::new(PhpArray::from_list(names))))
 }
 

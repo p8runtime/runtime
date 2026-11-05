@@ -5197,6 +5197,14 @@ impl Ctx for Context<'_> {
         self.included_order.clone()
     }
 
+    fn code_cache(&self) -> Option<std::sync::Arc<dyn p8_runtime::opcache::CodeCache>> {
+        self.loader.as_ref().and_then(|l| l.code_cache())
+    }
+
+    fn compile_file(&mut self, path: &[u8]) -> Result<bool, Throw> {
+        self.opcache_compile_file(path)
+    }
+
     fn state(&mut self, key: &'static str) -> &mut Value {
         // (A builtin call checks the flag before looking the callback up.)
         if key == "header_callback" {
