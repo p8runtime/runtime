@@ -15,7 +15,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         self.bump(); // consume (
 
         let mut args = bumpalo::collections::Vec::new_in(self.arena);
-        let mut has_named = false;
         while self.current_token.kind != TokenKind::CloseParen
             && self.current_token.kind != TokenKind::Eof
         {
@@ -31,9 +30,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 name = Some(self.arena.alloc(self.current_token));
                 self.bump(); // Identifier
                 self.bump(); // Colon
-                has_named = true;
             } else if self.current_token.kind == TokenKind::Ellipsis {
-                if self.next_token.kind == TokenKind::CloseParen {
+                if matches!(self.next_token.kind, TokenKind::CloseParen | TokenKind::Comma) {
+                    // `...` as an argument of its own: the first-class
+                    // callable syntax, or a partial application's variadic
+                    // placeholder (allowed after named arguments; where it
+                    // may appear is checked when the call is compiled).
                     let span = self.current_token.span;
                     self.bump(); // Eat ...
                     let value = self.arena.alloc(Expr::VariadicPlaceholder { span });
@@ -43,18 +45,28 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         unpack: false,
                         span,
                     });
+                    if self.current_token.kind == TokenKind::Comma {
+                        self.bump();
+                    }
                     continue;
                 }
                 unpack = true;
                 self.bump();
-            } else if has_named {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Cannot use positional argument after named argument",
-                });
             }
+            // A positional argument after a named one is a compile error
+            // (zend_compile_args), reported where the call is compiled.
 
-            let value = self.parse_expr(0);
+            // `?` (or `name: ?`): a partial application's placeholder.
+            let value = if !unpack
+                && self.current_token.kind == TokenKind::Question
+                && matches!(self.next_token.kind, TokenKind::CloseParen | TokenKind::Comma)
+            {
+                let span = self.current_token.span;
+                self.bump();
+                &*self.arena.alloc(Expr::Placeholder { span })
+            } else {
+                self.parse_expr(0)
+            };
 
             args.push(Arg {
                 name,
@@ -81,6 +93,41 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             self.bump();
         }
         (args.into_bump_slice(), Span::new(start, end))
+    }
+
+    /// At the `(` after `clone`: whether an argument list follows, as
+    /// php-src's clone_argument_list has it: `()`, a named, spread or
+    /// `...` argument first, or a first expression followed by a comma.
+    /// One expression closed by `)` is not one (`clone($o)` is the
+    /// construct). Looks ahead and comes back to the `(`.
+    fn clone_has_argument_list(&mut self) -> bool {
+        let saved = (
+            self.lexer.clone(),
+            self.current_token,
+            self.next_token,
+            self.current_doc_comment,
+            self.next_doc_comment,
+            self.prev_end,
+            self.errors.len(),
+        );
+        self.bump(); // (
+        let list = match self.current_token.kind {
+            TokenKind::CloseParen | TokenKind::Ellipsis => true,
+            kind if (kind == TokenKind::Identifier || kind.is_semi_reserved()) && self.next_token.kind == TokenKind::Colon => true,
+            _ => {
+                self.parse_expr(0);
+                self.current_token.kind != TokenKind::CloseParen
+            }
+        };
+        let (lexer, current, next, current_doc, next_doc, prev_end, errors) = saved;
+        self.lexer = lexer;
+        self.current_token = current;
+        self.next_token = next;
+        self.current_doc_comment = current_doc;
+        self.next_doc_comment = next_doc;
+        self.prev_end = prev_end;
+        self.errors.truncate(errors);
+        list
     }
 
     pub(crate) fn parse_parameter_list(&mut self) -> &'ast [Param<'ast>] {
@@ -275,6 +322,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     if let Expr::Error { .. } = item.value {
                         continue;
                     }
+                    // A call (or pipe) as a list target parses; the compiler
+                    // says what PHP's does ("Can't use function return value
+                    // in write context").
+                    if matches!(item.value, Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. }) {
+                        continue;
+                    }
                     if !self.is_assignable(item.value) {
                         return false;
                     }
@@ -450,6 +503,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 TokenKind::GtEq => BinaryOp::GtEq,
                 TokenKind::AmpersandAmpersand => BinaryOp::And,
                 TokenKind::PipePipe => BinaryOp::Or,
+                TokenKind::PipeGt => BinaryOp::Pipe,
                 TokenKind::Ampersand
                 | TokenKind::AmpersandFollowedByVarOrVararg
                 | TokenKind::AmpersandNotFollowedByVarOrVararg => BinaryOp::BitAnd,
@@ -1314,6 +1368,17 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Clone => {
                 self.bump();
+                // `clone(...)` with an argument list (`clone($o, [...])`,
+                // `clone()`, `clone($o,)`, `clone(object: $o)`, `clone(...)`)
+                // is a call of the function clone(). One expression in
+                // parentheses is the construct's operand (php-src's
+                // clone_argument_list).
+                if self.current_token.kind == TokenKind::OpenParen && self.clone_has_argument_list() {
+                    let (args, args_span) = self.parse_call_arguments();
+                    let func = self.arena.alloc(Expr::Variable { name: token.span, span: token.span });
+                    let span = Span::new(token.span.start, args_span.end);
+                    return self.arena.alloc(Expr::Call { func, args, span });
+                }
                 // The operand takes its calls, `[...]`, `->` and `::` (`clone
                 // f()` clones what f returns), not ++/-- or any operator.
                 let expr = self.parse_expr(185);
@@ -1734,6 +1799,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             | BinaryOp::NotEqEq
             | BinaryOp::Spaceship => (110, 111),
             BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => (120, 121),
+
+            // T_PIPE: below '.', above the comparisons; left-associative.
+            BinaryOp::Pipe => (125, 126),
 
             BinaryOp::ShiftLeft | BinaryOp::ShiftRight => (130, 131),
 

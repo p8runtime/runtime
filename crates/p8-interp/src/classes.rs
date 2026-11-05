@@ -8,7 +8,7 @@
 
 use crate::{Closure, Context};
 use p8_bytecode::{ClassDef, ClassRef, Function};
-use p8_runtime::array::Key;
+use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
     CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_LAZY, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Thunk, Visibility,
@@ -731,7 +731,7 @@ impl Context<'_> {
             return Err(self.cannot_instantiate(class));
         }
         let data = class.make_data.map(|make| make());
-        let object = Object::with_slots(Rc::clone(class), &self.ids, data, info.defaults.to_vec());
+        let object = Object::with_slots(Rc::clone(class), &self.ids, data, p8_runtime::object::Props::from_slice(&info.defaults));
         if info.throwable {
             // Where it was made, and the calls that led there.
             let (file, line) = self.location();
@@ -825,7 +825,7 @@ impl Context<'_> {
     /// The class a method's protected access is checked against: the top
     /// of the classes declaring it (zend_get_function_root_class), so two
     /// subclasses of the class that first declared it may call each other's.
-    fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, key: Option<Sym>) -> Rc<Class> {
+    pub(crate) fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, key: Option<Sym>) -> Rc<Class> {
         let mut root = Rc::clone(declaring);
         if method.visibility != Visibility::Protected {
             return root;
@@ -1036,25 +1036,6 @@ impl Context<'_> {
         self.throw("Error", format!("Cannot {operation} {visibility} property {}::${} from {scope}", text(&prop.declaring_name), text(&prop.name)))
     }
 
-    /// What `$obj->name` holds, read without hooks, magic or diagnostics:
-    /// None unless it is a property visible here.
-    pub(crate) fn peek_prop(&self, target: &Value, name: &Value) -> Option<Value> {
-        let Value::Object(object) = target.deref() else { return None };
-        let name = name.to_php_string()?;
-        let scope = self.scope().0;
-        match object.class.slot(name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) {
-            Some(slot) => {
-                let prop = &object.class.properties[slot];
-                let declaring = self.declaring(&object.class, &prop.declaring);
-                if !visible(prop.visibility, &declaring, scope.as_deref()) {
-                    return None;
-                }
-                let v = object.slots.borrow()[slot].deref();
-                Some(v)
-            }
-            None => object.dynamic.borrow().get(&Key::from_string(name)).map(Value::deref),
-        }
-    }
 
     /// `$obj->name`
     pub(crate) fn fetch_prop(&mut self, target: &Value, name: &Value, quiet: bool) -> Result<Value, Throw> {
@@ -1130,8 +1111,15 @@ impl Context<'_> {
         }
         match self.prop_slot(&object, name.as_bytes())? {
             Some((slot, prop)) => {
+                // An object is handed out as a copy; anything else is not
+                // to be had (zend_std_read_property for BP_VAR_W).
                 if prop.readonly {
-                    return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
+                    match object.slots.borrow()[slot].deref() {
+                        v @ Value::Object(_) => return Ok(Rc::new(RefCell::new(v))),
+                        Value::Undef if for_unset => return Ok(Rc::new(RefCell::new(Value::Null))),
+                        _ => {}
+                    }
+                    return Err(self.throw("Error", format!("Cannot indirectly modify readonly property {}::${}", text(&prop.declaring_name), text(&name))));
                 }
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
                     // An object is handed out as a copy (writes through it
@@ -1145,6 +1133,7 @@ impl Context<'_> {
                 }
                 Ok(crate::refs::make_ref(&mut object.slots.borrow_mut()[slot]))
             }
+            None if name.as_bytes().first() == Some(&0) => Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
                 let key = Key::from_string(name.clone());
                 if !object.dynamic.borrow().contains_key(&key) {
@@ -1193,6 +1182,8 @@ impl Context<'_> {
         let object = self.target_object(target, &name, "assign")?;
         match self.prop_slot(&object, name.as_bytes())? {
             Some((slot, prop)) => self.write_slot(&object, slot, prop, &name, value)?,
+            // A mangled name ("\0A\0p") is no property's (zend_bad_property_name).
+            None if name.as_bytes().first() == Some(&0) => return Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
                 let key = Key::from_string(name.clone());
                 let exists = object.dynamic.borrow().contains_key(&key);
@@ -1211,13 +1202,32 @@ impl Context<'_> {
     }
 
 
+    /// `write_slot` for the write a property cache answers: stored at once
+    /// when there is nothing to check (not readonly, no set visibility,
+    /// untyped or already of its type, as zend_assign_to_typed_prop's
+    /// ZEND_TYPE_CONTAINS_CODE test); else the full checks.
+    #[inline]
+    pub(crate) fn write_cached(&mut self, object: &Object, slot: usize, name: &PhpStr, value: Value) -> Result<(), Throw> {
+        let prop = &object.class.properties[slot];
+        if !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.as_ref().is_none_or(|t| t.quick(&value)) {
+            let mut slots = object.slots.borrow_mut();
+            match &mut slots[slot] {
+                Value::Ref(cell) => *cell.borrow_mut() = value,
+                s => *s = value,
+            }
+            return Ok(());
+        }
+        self.write_slot(object, slot, prop, name, value)
+    }
+
     /// Store `value` in declared property `slot` of `object` (`prop`, named
     /// `name`): its readonly and set-visibility rules and its type checked,
     /// as zend_std_write_property does once it has the property's offset.
     pub(crate) fn write_slot(&mut self, object: &Object, slot: usize, prop: &Property, name: &PhpStr, value: Value) -> Result<(), Throw> {
         // Who may initialize a readonly property is its set
         // visibility's business (implicitly protected(set)).
-        if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) {
+        // (In a clone's __clone or clone()'s updates, once more.)
+        if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) && !self.reinitable(object, slot) {
             return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(name))));
         }
         if prop.set_visibility.is_some() && !self.may_set(object, prop) {
@@ -1228,7 +1238,7 @@ impl Context<'_> {
         let value = match &prop.ty_decl {
             Some(ty) => {
                 let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
-                match self.check_type(ty, &value, strict) {
+                match self.check_type(ty, &value, strict)? {
                     Ok(Some(converted)) => converted,
                     Ok(None) => value,
                     Err(()) => {
@@ -1247,6 +1257,9 @@ impl Context<'_> {
             }
             None => value,
         };
+        if prop.readonly && !self.reinit.is_empty() {
+            self.reinit_done(object, slot);
+        }
         let mut slots = object.slots.borrow_mut();
         match &slots[slot] {
             Value::Ref(cell) => *cell.borrow_mut() = value,
@@ -1269,45 +1282,69 @@ impl Context<'_> {
         &mut self,
         target: &Value,
         name: &Value,
-        path: &[Key],
+        keys: &[Value],
         append: bool,
         val: Value,
         op: Option<p8_runtime::ops::BinOp>,
-    ) -> Result<Value, Throw> {
+    ) -> Result<crate::Written, Throw> {
         let pname = self.prop_name(name)?;
         let object = self.target_object(target, &pname, "assign")?;
         let slot = self.prop_slot(&object, pname.as_bytes())?;
+        // (Even in __clone: zend_std_read_property for BP_VAR_W.)
+        if let Some((_, prop)) = &slot
+            && prop.readonly
+        {
+            return Err(self.throw("Error", format!("Cannot indirectly modify readonly property {}::${}", text(&prop.declaring_name), text(&pname))));
+        }
         if let Some((_, prop)) = &slot
             && prop.set_visibility.is_some()
             && !self.may_set(&object, prop)
         {
             return Err(self.set_visibility_error(prop, "indirectly modify"));
         }
-        let mut root = match &slot {
-            Some((i, _)) => {
-                let mut slots = object.slots.borrow_mut();
-                match &mut slots[*i] {
-                    Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
-                    v => std::mem::take(v),
-                }
+        let slot = slot.map(|(i, _)| i);
+        self.update_slot_dim(&object, slot, &pname, keys, append, val, op)
+    }
+
+    /// `$obj->p[k1]..[kn] = val` into the property's place: declared slot
+    /// `slot`, else the dynamic property `pname` (made at the end if it
+    /// is not there, as PHP adds it; one that is keeps its place). Taken
+    /// out, written, put back (nothing runs PHP code meanwhile).
+    #[allow(clippy::too_many_arguments)] // AssignPropDim's operands, decoded once
+    pub(crate) fn update_slot_dim(
+        &mut self,
+        object: &Rc<Object>,
+        slot: Option<usize>,
+        pname: &PhpStr,
+        keys: &[Value],
+        append: bool,
+        val: Value,
+        op: Option<p8_runtime::ops::BinOp>,
+    ) -> Result<crate::Written, Throw> {
+        fn take(v: &mut Value) -> Value {
+            match v {
+                Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                v => std::mem::take(v),
             }
-            None => {
-                let key = Key::from_string(pname.clone());
-                object.dynamic.borrow_mut().remove(&key).unwrap_or(Value::Null)
+        }
+        fn put(v: &mut Value, root: Value) {
+            match v {
+                Value::Ref(cell) => *cell.borrow_mut() = root,
+                v => *v = root,
             }
+        }
+        let key = || Key::from_string(pname.clone());
+        let mut root = match slot {
+            Some(i) => take(&mut object.slots.borrow_mut()[i]),
+            None => match take(object.dynamic.borrow_mut().slot_mut(&key())) {
+                Value::Undef => Value::Null,
+                v => v,
+            },
         };
-        let result = self.update_path(&mut root, path, append, val, op);
-        match &slot {
-            Some((i, _)) => {
-                let mut slots = object.slots.borrow_mut();
-                match &mut slots[*i] {
-                    Value::Ref(cell) => *cell.borrow_mut() = root,
-                    v => *v = root,
-                }
-            }
-            None => {
-                object.dynamic.borrow_mut().insert(Key::from_string(pname), root);
-            }
+        let result = self.update_path(&mut root, keys, 0, append, val, op);
+        match slot {
+            Some(i) => put(&mut object.slots.borrow_mut()[i], root),
+            None => put(object.dynamic.borrow_mut().slot_mut(&key()), root),
         }
         result
     }
@@ -1340,7 +1377,7 @@ impl Context<'_> {
         };
         match self.prop_slot(&object, name.as_bytes())? {
             Some((i, prop)) => {
-                if prop.readonly {
+                if prop.readonly && !self.reinitable(&object, i) {
                     return Err(self.throw("Error", format!("Cannot unset readonly property {}::${}", text(&object.class.name), text(&name))));
                 }
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
@@ -1522,6 +1559,10 @@ impl Context<'_> {
     /// As hooked_property; `check_visibility` false: as the dump
     /// functions see it (any visibility).
     pub(crate) fn hooked_property_seen<'c>(&self, o: &'c Rc<Object>, name: &[u8], check_visibility: bool) -> Option<&'c Property> {
+        // A class with no hooked property: no lookup by name.
+        if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
+            return None;
+        }
         let slots = o.class.slots.get(name)?;
         let p = slots.iter().map(|&i| &o.class.properties[i]).find(|p| p.hooks != 0)?;
         let declaring = self.class_named(&p.declaring).cloned().unwrap_or_else(|| Rc::clone(&o.class));
@@ -1602,10 +1643,15 @@ impl Context<'_> {
     /// Check `v` against a declared type in the running code: Ok(Some)
     /// the converted value, Ok(None) as it is, Err a TypeError's case.
     /// (A deprecation it brings is reported here.)
-    pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, ()> {
+    /// (Outer Err: what looking up a class a callable names threw.)
+    pub(crate) fn check_type(&mut self, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Result<Option<Value>, ()>, Throw> {
         if ty.quick(v) {
-            return Ok(None);
+            return Ok(Ok(None));
         }
+        // `callable`: whether the code checking can call it (zend_is_callable).
+        let callable = ty.mask & p8_runtime::types::T_CALLABLE != 0
+            && matches!(v.deref(), Value::Str(_) | Value::Array(_) | Value::Object(_))
+            && self.why_not_callable(v, true)?.is_none();
         let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
         let is_a = |o: &Object, name: &[u8]| match name {
             b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
@@ -1613,8 +1659,8 @@ impl Context<'_> {
             n => o.class.is_a(n),
         };
         let static_ok = |o: &Object| called.is_some_and(|c| o.class.is_a(&c.lower));
-        let verdict = ty.verify(v, strict, &is_a, &static_ok);
-        match verdict {
+        let verdict = ty.verify(v, strict, &is_a, &static_ok, callable);
+        Ok(match verdict {
             p8_runtime::types::Verdict::Accepted(c) => Ok(c),
             p8_runtime::types::Verdict::Deprecated(m, c) => {
                 self.diags.push(p8_runtime::ops::Diag::Deprecated(m));
@@ -1622,7 +1668,7 @@ impl Context<'_> {
                 Ok(c)
             }
             p8_runtime::types::Verdict::Refused => Err(()),
-        }
+        })
     }
 
     /// How messages name the running function: `f`, `A::m`, `{closure}`.
@@ -1660,7 +1706,7 @@ impl Context<'_> {
                 let Value::Array(list) = regs[base + i].clone() else { continue };
                 let mut checked = (*list).clone();
                 for (k, v) in list.iter() {
-                    let coerced = match self.check_type(ty, &v.deref(), strict) {
+                    let coerced = match self.check_type(ty, &v.deref(), strict)? {
                         Err(()) => self.stringable(regs, ty, &v.deref(), strict)?.map(Some).ok_or(()),
                         other => other,
                     };
@@ -1683,7 +1729,7 @@ impl Context<'_> {
                 continue;
             }
             let v = regs[base + i].deref();
-            let converted = match self.check_type(ty, &v, strict) {
+            let converted = match self.check_type(ty, &v, strict)? {
                 Ok(converted) => converted,
                 Err(()) => match self.stringable(regs, ty, &v, strict)? {
                     Some(s) => Some(s),
@@ -1718,8 +1764,37 @@ impl Context<'_> {
         let at = called_at.map_or(String::new(), |(file, line)| format!(", called in {file} on line {line}"));
         self.throw(
             "TypeError",
-            format!("{}(): Argument #{pos}{label} must be of type {}, {} given{at}", self.function_display(), ty.shown_resolved(), p8_runtime::args::value_name(v)),
+            format!("{}(): Argument #{pos}{label} must be of type {}, {} given{at}", self.function_display(), self.type_shown(ty), p8_runtime::args::value_name(v)),
         )
+    }
+
+    /// A type as a message shows it where the running code is
+    /// (zend_type_to_string_resolved): `self` and `parent` as the scope's
+    /// classes, `static` as the called class.
+    pub(crate) fn type_shown(&self, ty: &p8_runtime::types::TypeDecl) -> String {
+        let frame = self.frames.last();
+        let scope = frame.and_then(|f| f.scope.as_ref());
+        let relative = ty.classes.iter().any(|c| c.as_bytes().eq_ignore_ascii_case(b"self") || c.as_bytes().eq_ignore_ascii_case(b"parent"));
+        let called = frame.and_then(|f| f.called.as_ref().or(f.this.as_ref().map(|t| &t.class))).or(scope);
+        let is_static = ty.mask & p8_runtime::types::T_STATIC != 0 && called.is_some();
+        if scope.is_none() || !(relative || is_static) {
+            return ty.shown_resolved();
+        }
+        let mut classes: Vec<p8_runtime::frozen::Text> = ty
+            .classes
+            .iter()
+            .map(|c| match c.as_bytes().to_ascii_lowercase().as_slice() {
+                b"self" => scope.map_or_else(|| c.clone(), |s| p8_runtime::frozen::Text::from(s.name.as_bytes())),
+                b"parent" => scope.and_then(|s| s.parent.as_ref()).map_or_else(|| c.clone(), |p| p8_runtime::frozen::Text::from(p.name.as_bytes())),
+                _ => c.clone(),
+            })
+            .collect();
+        let mut mask = ty.mask;
+        if is_static && let Some(called) = called {
+            mask &= !p8_runtime::types::T_STATIC;
+            classes.insert(0, p8_runtime::frozen::Text::from(called.name.as_bytes()));
+        }
+        p8_runtime::types::TypeDecl::new(mask, classes.clone(), classes, ty.intersection).shown_resolved()
     }
 
     /// `(object) $v`: an object as is; an array's entries as a stdClass's
@@ -1805,7 +1880,8 @@ impl Context<'_> {
     /// `clone $x`: the copy, and its `__clone`'s frame (if any).
     pub(crate) fn clone_object(&mut self, v: &Value) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
         let Value::Object(o) = v.deref() else {
-            return Err(self.throw("Error", "__clone method called on non-object"));
+            let given = p8_runtime::args::value_name(&v.deref());
+            return Err(self.throw("TypeError", format!("clone(): Argument #1 ($object) must be of type object, {given} given")));
         };
         if o.class.flags & p8_runtime::object::CLASS_UNCLONEABLE != 0 {
             return Err(self.throw("Error", format!("Trying to clone an uncloneable object of class {}", text(&o.class.name))));
@@ -1830,11 +1906,107 @@ impl Context<'_> {
         if !visible(method.visibility, &declaring, self.scope().0.as_deref()) {
             return Err(self.throw(
                 "Error",
-                format!("Call to {} {}::__clone() from {}", method.visibility.word(), text(&o.class.name), self.scope_name()),
+                format!("Call to {} method {}::__clone() from {}", method.visibility.word(), text(&o.class.name), self.scope_name()),
             ));
         }
         let func = self.code_of(&method);
         Ok((Rc::clone(&copy), Some(MethodFrame::method(func, Some(copy), declaring, Rc::clone(&o.class)))))
+    }
+
+    /// Run `copy`'s __clone (`hook`), its readonly properties writable
+    /// once more while it runs (zend_objects_clone_members).
+    pub(crate) fn run_clone_hook(&mut self, regs: &mut Vec<Value>, copy: &Rc<Object>, hook: MethodFrame) -> Result<(), Throw> {
+        let reinit = self.reinit_begin(copy);
+        let r = self.run_nested(regs, hook, &mut []);
+        if reinit {
+            self.reinit.pop();
+        }
+        r.map(drop)
+    }
+
+    /// clone($object, $withProperties) (ZEND_FUNCTION(clone) and
+    /// zend_objects_clone_obj_with): the clone, its __clone run, then
+    /// each of `with`'s properties assigned to it in the calling scope,
+    /// its readonly ones writable once more.
+    pub(crate) fn clone_with(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, with: &PhpArray) -> Result<Value, Throw> {
+        // A lazy object is initialized before it is cloned.
+        if object.is_uninit_lazy() {
+            self.lazy_init(regs, object)?;
+        }
+        let (copy, hook) = self.clone_object(&Value::Object(Rc::clone(object)))?;
+        if let Some(hook) = hook {
+            self.run_clone_hook(regs, &copy, hook)?;
+        }
+        if !with.is_empty() {
+            let reinit = self.reinit_begin(&copy);
+            let r = self.clone_updates(regs, &copy, with);
+            if reinit {
+                self.reinit.pop();
+            }
+            r?;
+        }
+        Ok(Value::Object(copy))
+    }
+
+    fn clone_updates(&mut self, regs: &mut Vec<Value>, copy: &Rc<Object>, with: &PhpArray) -> Result<(), Throw> {
+        let target = Value::Object(Rc::clone(copy));
+        for (key, value) in with.iter() {
+            let value = match value {
+                // A reference only the array holds is its value.
+                Value::Ref(cell) if Rc::strong_count(cell) == 1 => cell.borrow().clone(),
+                Value::Ref(_) => return Err(self.throw("Error", "Cannot assign by reference when cloning with updated properties")),
+                v => v.clone(),
+            };
+            let name = match key.to_value() {
+                Value::Int(n) => Value::Str(PhpStr::new(n.to_string().into_bytes())),
+                name => name,
+            };
+            self.assign_prop_value(regs, &target, &name, value)?;
+        }
+        Ok(())
+    }
+
+    /// `$target->name = value` as the running code does it: its set hook,
+    /// else __set, else the property itself (zend_std_write_property).
+    pub(crate) fn assign_prop_value(&mut self, regs: &mut Vec<Value>, target: &Value, name: &Value, value: Value) -> Result<(), Throw> {
+        if let Some(hook) = self.prop_hook(target, name, p8_runtime::object::HOOK_SET) {
+            self.run_nested(regs, hook?, &mut [value])?;
+            return Ok(());
+        }
+        if let Some(found) = self.prop_magic(target, name, Magic::Set) {
+            let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+            self.run_magic(regs, found, &mut [pname, value])?;
+            return Ok(());
+        }
+        let target = self.lazy_forward(target, name).unwrap_or_else(|| target.clone());
+        self.write_prop(&target, name, value)
+    }
+
+    /// `o`'s readonly properties made writable once more (pushed on
+    /// `reinit`), when it has any.
+    fn reinit_begin(&mut self, o: &Rc<Object>) -> bool {
+        if !o.class.properties.iter().any(|p| p.readonly) {
+            return false;
+        }
+        let slots = o.class.properties.iter().map(|p| p.readonly).collect();
+        self.reinit.push((Rc::clone(o), slots));
+        true
+    }
+
+    /// Whether readonly `slot` of `object` may be written once more.
+    fn reinitable(&self, object: &Object, slot: usize) -> bool {
+        self.reinit.iter().rev().any(|(o, slots)| std::ptr::eq(Rc::as_ptr(o), object) && slots.get(slot).copied().unwrap_or(false))
+    }
+
+    /// Readonly `slot` of `object` written: not again.
+    fn reinit_done(&mut self, object: &Object, slot: usize) {
+        for (o, slots) in self.reinit.iter_mut() {
+            if std::ptr::eq(Rc::as_ptr(o), object)
+                && let Some(s) = slots.get_mut(slot)
+            {
+                *s = false;
+            }
+        }
     }
 }
 
@@ -1875,24 +2047,20 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     if let Some(props) = o.class.get_properties {
         return props(o);
     }
-    let mut out = p8_runtime::array::PhpArray::new();
     let slots = o.slots.borrow();
+    let mut out = p8_runtime::array::PhpArray::hashed(slots.len() + o.dynamic.borrow().len());
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if matches!(v, Value::Undef) || p.is_internal() {
             continue;
         }
-        let mut name = Vec::new();
-        match p.visibility {
-            Visibility::Public => {}
-            Visibility::Protected => name.extend_from_slice(b"\0*\0"),
-            Visibility::Private => {
-                name.push(0);
-                name.extend_from_slice(p.declaring_name.as_bytes());
-                name.push(0);
-            }
-        }
-        name.extend_from_slice(p.name.as_bytes());
-        out.insert(Key::from_string(PhpStr::new(name)), v.clone());
+        // A public property's key is its name itself; the others' are
+        // mangled ("\0*\0name", "\0Class\0name"), made in one piece.
+        let name = match p.visibility {
+            Visibility::Public => p.name.clone(),
+            Visibility::Protected => PhpStr::concat_all(&[b"\0*\0", p.name.as_bytes()]),
+            Visibility::Private => PhpStr::concat_all(&[b"\0", p.declaring_name.as_bytes(), b"\0", p.name.as_bytes()]),
+        };
+        out.insert(Key::from_string(name), v.clone());
     }
     for (k, v) in o.dynamic.borrow().iter() {
         out.insert(k, v.clone());

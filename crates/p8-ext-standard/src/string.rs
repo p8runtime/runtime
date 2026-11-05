@@ -95,12 +95,23 @@ fn ord(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::Int(i64::from(s.as_bytes().first().copied().unwrap_or(0))))
 }
 
+/// `s` with each byte mapped by `f`: `s` itself when nothing changes (as
+/// zend_string_tolower hands back the same string), else built once.
+fn map_bytes(s: PhpStr, changes: impl Fn(&u8) -> bool, f: impl Fn(&u8) -> u8) -> Result<Value, Throw> {
+    let bytes = s.as_bytes();
+    let Some(first) = bytes.iter().position(changes) else { return Ok(Value::Str(s)) };
+    let mut out = PhpStr::scratch(bytes.len());
+    out.extend_from_slice(&bytes[..first]);
+    out.extend(bytes[first..].iter().map(f));
+    Ok(Value::Str(PhpStr::from_scratch(out)))
+}
+
 fn strtolower(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    string(str_arg(args, 0).as_bytes().to_ascii_lowercase())
+    map_bytes(str_arg(args, 0), u8::is_ascii_uppercase, u8::to_ascii_lowercase)
 }
 
 fn strtoupper(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    string(str_arg(args, 0).as_bytes().to_ascii_uppercase())
+    map_bytes(str_arg(args, 0), u8::is_ascii_lowercase, u8::to_ascii_uppercase)
 }
 
 fn ucfirst(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -294,7 +305,11 @@ fn sub_range(len: usize, offset: i64, length: Option<i64>) -> (usize, usize) {
 fn substr(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = str_arg(args, 0);
     let (a, b) = sub_range(s.len(), arg(args, 1).to_int(), opt(args, 2).map(|v| v.to_int()));
-    string(s.as_bytes()[a..b].to_vec())
+    // The whole string: itself (RETURN_STR_COPY); else one copy of the part.
+    if a == 0 && b == s.len() {
+        return Ok(Value::Str(s));
+    }
+    Ok(Value::Str(PhpStr::from(&s.as_bytes()[a..b])))
 }
 
 fn substr_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -387,9 +402,10 @@ fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
         _ => {}
     }
-    // Sized once for the pieces' strings and the separators between them.
+    // Built once, in the thread's buffer, sized for the pieces' strings
+    // and the separators between them.
     let len = list.iter().map(|(_, v)| p8_runtime::ops::string_len_hint(v)).sum::<usize>() + sep.len() * (list.len() - 1);
-    let mut out = Vec::with_capacity(len);
+    let mut out = PhpStr::scratch(len);
     let mut diags = Vec::new();
     for (i, (_, v)) in list.iter().enumerate() {
         if i > 0 {
@@ -410,7 +426,7 @@ fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !diags.is_empty() {
         ctx.warn("Array to string conversion");
     }
-    string(out)
+    Ok(Value::Str(PhpStr::from_scratch(out)))
 }
 
 /// explode($separator, $string, $limit = PHP_INT_MAX)
@@ -495,7 +511,7 @@ fn replace_one(subject: &[u8], search: &[u8], replace: &[u8], fold: bool, count:
         (subject, std::borrow::Cow::Borrowed(search))
     };
     let first = find(hay, &needle)?;
-    let mut out = Vec::with_capacity(subject.len());
+    let mut out = PhpStr::scratch(subject.len());
     let mut i = 0;
     let mut at = Some(first);
     while let Some(found) = at {
@@ -559,7 +575,7 @@ fn replace_in(subject: &Value, search: &Value, replace: &Value, fold: bool, coun
         }
     }
     match (text, subject) {
-        (Some(t), _) => Value::Str(PhpStr::new(t)),
+        (Some(t), _) => Value::Str(PhpStr::from_scratch(t)),
         (None, Value::Str(s)) => Value::Str(s.clone()),
         (None, _) => Value::Str(PhpStr::new(subject_buf)),
     }
@@ -633,7 +649,7 @@ fn strtr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
         map.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
         let bytes = s.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
+        let mut out = PhpStr::scratch(bytes.len());
         let mut i = 0;
         'scan: while i < bytes.len() {
             for (from, to) in &map {
@@ -646,7 +662,7 @@ fn strtr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             out.push(bytes[i]);
             i += 1;
         }
-        return string(out);
+        return Ok(Value::Str(PhpStr::from_scratch(out)));
     }
     if args.len() < 3 {
         return Err(ctx.throw("ArgumentCountError", "strtr() expects exactly 3 arguments, 2 given".into()));
@@ -738,14 +754,20 @@ fn htmlspecialchars(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     let flags = if args.len() > 1 { arg(args, 1).to_int() } else { 3 | 8 };
     let double = args.len() < 4 || arg(args, 3).to_bool();
     let scrubbed;
-    let bytes = if utf8_charset(args, 2) {
+    // Valid UTF-8 (most text) is scrubbed as it is: no copy.
+    let bytes = if utf8_charset(args, 2) && std::str::from_utf8(s.as_bytes()).is_err() {
         let Some(clean) = utf8_scrub(s.as_bytes(), flags) else { return string(Vec::new()) };
         scrubbed = clean;
         &scrubbed[..]
     } else {
         s.as_bytes()
     };
-    let mut out = Vec::with_capacity(bytes.len());
+    // Nothing to escape: the string itself.
+    let special = |c: &u8| matches!(c, b'&' | b'<' | b'>') || (*c == b'"' && flags & 2 != 0) || (*c == b'\'' && flags & 3 == 3);
+    if std::ptr::eq(bytes, s.as_bytes()) && !bytes.iter().any(special) {
+        return Ok(Value::Str(s));
+    }
+    let mut out = PhpStr::scratch(bytes.len() + 16);
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i];
@@ -765,7 +787,7 @@ fn htmlspecialchars(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         }
         i += 1;
     }
-    string(out)
+    Ok(Value::Str(PhpStr::from_scratch(out)))
 }
 
 /// Whether the charset argument at `i` is UTF-8 (left out, null or empty:

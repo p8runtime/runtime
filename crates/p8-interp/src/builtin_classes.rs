@@ -239,7 +239,8 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
     declare(
         &mut c,
         "Generator",
-        p8_runtime::object::CLASS_FINAL,
+        // zend_generator_handlers has no clone_obj.
+        p8_runtime::object::CLASS_FINAL | p8_runtime::object::CLASS_UNCLONEABLE,
         None,
         &["Iterator"],
         Vec::new(),

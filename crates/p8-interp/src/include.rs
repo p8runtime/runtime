@@ -20,6 +20,10 @@ pub trait Loader {
     fn load(&self, source: &[u8], file: &str) -> Result<Arc<Program>, LoadError>;
     /// eval()'s code (no `<?php`; it returns null unless it returns).
     fn load_eval(&self, code: &[u8], file: &str) -> Result<Arc<Program>, LoadError>;
+    /// A partial application's closure (PHP 8.6): `source` is a file whose
+    /// code makes one closure, compiled as part of `file`; the closure's
+    /// code, named `name`, scoped to `class` (zend_accel_compile_pfa).
+    fn load_partial(&self, source: &[u8], file: &str, name: &[u8], class: Option<&[u8]>, is_static: bool) -> Result<Arc<p8_bytecode::Function>, LoadError>;
 }
 
 /// A file that does not compile.

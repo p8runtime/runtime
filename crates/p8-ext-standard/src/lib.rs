@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 mod array;
 mod array2;
+mod range;
 mod callback;
 mod context;
 mod dates;
@@ -83,7 +84,7 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "defined", run: defined, by_ref: &[] },
     Builtin { name: "func_get_args", run: func_get_args, by_ref: &[] },
     Builtin { name: "array_keys", run: array_keys, by_ref: &[] },
-    Builtin { name: "range", run: range, by_ref: &[] },
+    Builtin { name: "range", run: range::range, by_ref: &[] },
 ];
 
 /// The standard extension: its functions and PHP 8.4's constants (the
@@ -150,6 +151,8 @@ fn register(registry: &mut Registry) {
     }
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
+    // basic_functions.stub.php: `@prefer-ref $array`, `@prefer-ref $rest`.
+    registry.mark_prefer_ref(&["array_multisort"]);
     registry.add_functions(callback::BUILTINS);
     registry.add_functions(ctype::BUILTINS);
     registry.add_functions(zlib::BUILTINS);
@@ -231,7 +234,7 @@ fn register(registry: &mut Registry) {
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(class::REENTER);
-    registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
+    registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
     for (module, name, value, deprecation) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
@@ -496,20 +499,6 @@ fn func_get_args(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// range() for int bounds and step (the float and character forms come with the port).
-fn range(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let (start, end) = (arg(args, 0).to_int(), arg(args, 1).to_int());
-    let step = if args.len() > 2 { arg(args, 2).to_int().abs() } else { 1 };
-    if step == 0 {
-        return Ok(Value::Array(Rc::new(PhpArray::from_list(vec![Value::Int(start)]))));
-    }
-    let values: Vec<Value> = if start <= end {
-        (start..=end).step_by(step as usize).map(Value::Int).collect()
-    } else {
-        (end..=start).rev().step_by(step as usize).map(Value::Int).collect()
-    };
-    Ok(Value::Array(Rc::new(PhpArray::from_list(values))))
-}
-
 /// array_keys($array, $filter_value, $strict = false): with a filter value
 /// (even null), only the keys whose values match it.
 fn array_keys(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

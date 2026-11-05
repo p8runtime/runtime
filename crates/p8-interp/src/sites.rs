@@ -25,6 +25,11 @@ pub struct Closure {
     /// in a class's code) resolved to: a name, once declared, is always
     /// the same class. Held weakly.
     pub(crate) class_refs: Box<[RefCell<std::rc::Weak<Class>>]>,
+    /// Each parameter's default when it is a constant value, as a value
+    /// (empty when none has one): put in place for an argument not passed
+    /// as the frame is entered (`fill_defaults`), as PHP's RECV_INIT does
+    /// for a constant default. The compiler leaves no code for a literal.
+    pub(crate) defaults: Box<[Option<Value>]>,
 }
 
 impl Closure {
@@ -35,13 +40,30 @@ impl Closure {
     }
 
     fn with_consts(code: Arc<Function>, thaw: impl Fn(&p8_runtime::frozen::Frozen) -> Value) -> Rc<Closure> {
-        let consts = code.consts.iter().map(thaw).collect();
+        let consts = code.consts.iter().map(&thaw).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
         let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
         let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
         let news = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs })
+        let defaults = if code.params.iter().any(|p| p.default.is_some()) {
+            code.params
+                .iter()
+                .map(|p| {
+                    let v = p.default.as_ref().map(&thaw)?;
+                    // An int default of a `float` parameter is a float (the
+                    // one conversion PHP makes of a default).
+                    let float = p.ty.as_ref().is_some_and(|t| t.mask & p8_runtime::types::T_FLOAT != 0 && t.mask & p8_runtime::types::T_INT == 0);
+                    Some(match v {
+                        Value::Int(i) if float => Value::Float(i as f64),
+                        v => v,
+                    })
+                })
+                .collect()
+        } else {
+            Box::default()
+        };
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults })
     }
 
     /// The stand-in for a declared function or method whose closure has not
@@ -77,6 +99,7 @@ impl Closure {
             bound: Vec::new(),
             silences: Vec::new(),
             meta: Default::default(),
+            partials: Vec::new(),
             compile_diags: Vec::new(),
         };
         Closure::with_consts(Arc::new(code), |c| c.to_value())

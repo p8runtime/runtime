@@ -36,7 +36,7 @@ impl Context<'_> {
 
     /// find_class(), None where no class of that name is there after the
     /// autoloaders ran.
-    fn load_class(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
+    pub(crate) fn load_class(&mut self, name: &[u8]) -> Result<Option<Rc<Class>>, Throw> {
         let name = name.strip_prefix(b"\\").unwrap_or(name);
         // A name no code ever named is no class's (only the autoloaders
         // may declare it).
