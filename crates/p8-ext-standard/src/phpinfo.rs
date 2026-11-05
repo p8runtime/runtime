@@ -170,7 +170,7 @@ fn general(ctx: &mut dyn Ctx) {
     stream_hash(ctx, "Stream Socket Transports", &[b"tcp".to_vec()]);
     stream_hash(ctx, "Stream Filters", &[]);
     ctx.echo(b"\n\n");
-    let zend = format!("Zend Engine v4.4.{}, Copyright (c) Zend Technologies\n", crate::PHP_VERSION.rsplit('.').next().unwrap_or("0"));
+    let zend = format!("Zend Engine v{}, Copyright © Zend by Perforce\n", crate::zend_engine_version());
     ctx.echo(b"This program makes use of the Zend Scripting Language Engine:\n");
     ctx.echo(zend.as_bytes());
 }
@@ -187,8 +187,8 @@ fn stream_hash(ctx: &mut dyn Ctx, name: &str, names: &[Vec<u8>]) {
 }
 
 /// When the running binary was built (PHP's __DATE__ " " __TIME__): its
-/// modification time, in UTC.
-fn build_date() -> String {
+/// modification time, in UTC. Also PHP_BUILD_DATE.
+pub(crate) fn build_date() -> String {
     let built = std::env::current_exe().and_then(std::fs::metadata).and_then(|m| m.modified()).ok();
     let secs = built.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
     chrono::DateTime::from_timestamp(secs, 0).map_or_else(String::new, |t| t.format("%b %e %Y %H:%M:%S").to_string())

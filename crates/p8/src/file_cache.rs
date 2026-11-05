@@ -40,6 +40,9 @@ pub(crate) struct FileCache {
     dir: PathBuf,
     /// What compiled code depends on besides its path and source.
     engine: [u8; 16],
+    /// opcache.file_cache_read_only: entries are read, never written or
+    /// removed (a cache built ahead of time on a read-only disk).
+    read_only: bool,
 }
 
 impl FileCache {
@@ -47,7 +50,7 @@ impl FileCache {
     /// tell its build apart from another's (no executable to look at),
     /// as a cache keyed only by version could serve a rebuilt engine
     /// stale code.
-    pub(crate) fn new(dir: PathBuf, modules: &[&str]) -> Option<FileCache> {
+    pub(crate) fn new(dir: PathBuf, modules: &[&str], read_only: bool) -> Option<FileCache> {
         let exe = std::env::current_exe().ok()?;
         let meta = std::fs::metadata(&exe).ok()?;
         let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
@@ -61,7 +64,7 @@ impl FileCache {
         for m in modules {
             field(&mut h, m.as_bytes());
         }
-        Some(FileCache { dir, engine: h.digest128().to_le_bytes() })
+        Some(FileCache { dir, engine: h.digest128().to_le_bytes(), read_only })
     }
 
     /// Where the entry for this path is.
@@ -82,6 +85,9 @@ impl FileCache {
     /// cannot be written is a cache that misses.
     pub(crate) fn store(&self, source: &[u8], file: &str, program: &Program, symbols: &Symbols) {
         use std::io::Write;
+        if self.read_only {
+            return;
+        }
         let (head, table, body) = parts(program, &self.engine, file, source, symbols);
         let _ = std::fs::create_dir_all(&self.dir);
         let target = self.path(file);
@@ -97,6 +103,14 @@ impl FileCache {
         if written.is_err() || std::fs::rename(&temp, &target).is_err() {
             let _ = std::fs::remove_file(&temp);
         }
+    }
+
+    /// Drop the entry for this path (zend_file_cache_invalidate).
+    pub(crate) fn forget(&self, file: &str) {
+        if self.read_only {
+            return;
+        }
+        let _ = std::fs::remove_file(self.path(file));
     }
 }
 

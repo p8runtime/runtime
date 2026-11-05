@@ -88,6 +88,16 @@ impl Context<'_> {
         }
     }
 
+    /// A call of a builtin method PHP deprecates (zend_deprecated_function).
+    #[inline]
+    pub(crate) fn method_deprecated(&mut self, m: &Method) {
+        if let Some(message) = &m.deprecation {
+            let message = message.to_string();
+            self.diags.push(p8_runtime::ops::Diag::Deprecated(message));
+            self.report_diags();
+        }
+    }
+
     /// What a method runs: its closure (made now if this is its first
     /// use), or its Rust function.
     pub(crate) fn code_of(&mut self, m: &Method) -> Code {
@@ -215,6 +225,11 @@ impl Context<'_> {
                 if parent.flags & CLASS_INTERFACE != 0 {
                     return Err(self.fatal_at(format!("Class {name} cannot extend interface {}", text(&parent.name)), def.line));
                 }
+                // Enums first: a user enum is final too, a built-in one isn't
+                // (zend_do_inheritance_ex, GH-16315).
+                if parent.flags & CLASS_ENUM != 0 {
+                    return Err(self.fatal_at(format!("Class {name} cannot extend enum {}", text(&parent.name)), def.line));
+                }
                 if parent.flags & CLASS_FINAL != 0 {
                     return Err(self.fatal_at(format!("Class {name} cannot extend final class {}", text(&parent.name)), def.line));
                 }
@@ -336,14 +351,6 @@ impl Context<'_> {
                 }
             }
         }
-        // The parent's statics after the class's own (sharing their cells).
-        if let Some(p) = &parent {
-            for (k, s) in &p.statics {
-                if !statics.contains_key(k) {
-                    statics.insert(k.clone(), s.clone());
-                }
-            }
-        }
         // Traits: their methods (the class's own win, then theirs over
         // the parent's), properties, statics and constants, as the class's.
         let own: Vec<Sym> = def.methods.iter().map(|m| m.func.sym).collect();
@@ -459,70 +466,26 @@ impl Context<'_> {
                 });
             }
         }
+        // The parent's statics after the class's own and its traits'
+        // (sharing their cells): traits are bound before the parent (8.5).
+        if let Some(p) = &parent {
+            for (k, s) in &p.statics {
+                if !statics.contains_key(k) {
+                    statics.insert(k.clone(), s.clone());
+                }
+            }
+        }
         // A class (or interface) with __toString() implements Stringable.
         if (methods.get_sym(known::TO_STRING).is_some() || own.contains(&known::TO_STRING)) && lower.as_slice() != b"stringable" && !interfaces.iter().any(|i| **i == *b"stringable") {
             interfaces.push(Rc::from(&b"stringable"[..]));
         }
-        // An enum: its cases are constants (objects made when first used),
-        // `name` (and `value`) readonly properties, cases()/from()/tryFrom().
-        if def.flags & CLASS_ENUM != 0 {
-            for x in std::iter::once(&b"unitenum"[..]).chain(def.enum_backing.is_some().then_some(&b"backedenum"[..])) {
-                if !interfaces.iter().any(|i| **i == *x) {
-                    interfaces.push(Rc::from(x));
-                }
-            }
-            let prop = |n: &str, ty: Option<&str>| Property {
-                name: PhpStr::from(n),
-                default: Value::Undef,
-                visibility: Visibility::Public,
-                set_visibility: Some(Visibility::Protected),
-                declaring: lower.clone(),
-                declaring_name: class_name.clone(),
-                readonly: true,
-                is_final: false,
-                ty: Some(PhpStr::from(ty.unwrap_or("string"))),
-                ty_decl: None,
-                init: None,
-                hooks: 0,
-            };
-            properties.insert(0, prop("name", None));
-            if let Some(t) = &def.enum_backing {
-                properties.insert(1, prop("value", Some(&text_of(t))));
-            }
-            for (case, value) in &def.cases {
-                constants.insert(
-                    case.as_bytes().to_vec(),
-                    Rc::new(Constant {
-                        value: value.as_ref().map_or(Value::Null, |v| self.isolate.thaw(v)),
-                        visibility: Visibility::Public,
-                        declaring_name: class_name.clone(),
-                        is_case: true,
-                        init: None,
-                    }),
-                );
-            }
-            let natives: &[(&str, p8_runtime::object::NativeStatic)] = if def.enum_backing.is_some() {
-                &[("cases", crate::builtin_classes::enum_cases), ("from", crate::builtin_classes::enum_from), ("tryFrom", crate::builtin_classes::enum_try_from)]
-            } else {
-                &[("cases", crate::builtin_classes::enum_cases)]
-            };
-            for (n, f) in natives {
-                methods.insert(
-                    n.to_ascii_lowercase().into_bytes(),
-                    Rc::new(Method {
-                        name: PhpStr::from(*n),
-                        func: u32::MAX,
-                        native: Some(p8_runtime::object::Native::Static(*f)),
-                        visibility: Visibility::Public,
-                        is_static: true,
-                        is_abstract: false,
-                        is_final: false,
-                        declaring: Rc::clone(&declaring),
-                        declaring_name: class_name.clone(),
-                    }),
-                );
-            }
-        }
+        let enum_flags = if def.flags & CLASS_ENUM != 0 {
+            let backing = def.enum_backing.as_ref().map(text_of);
+            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::Null, |v| self.isolate.thaw(v)))).collect();
+            EnumMembers { interfaces: &mut interfaces, properties: &mut properties, constants: &mut constants, methods: &mut methods }.add(&declaring, &class_name, backing.as_deref(), cases)
+        } else {
+            0
+        };
         let mut slots = p8_runtime::object::Slots::default();
         for (i, p) in properties.iter().enumerate() {
             slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
@@ -563,6 +526,7 @@ impl Context<'_> {
                     is_final: m.is_final,
                     declaring: Rc::clone(&declaring),
                     declaring_name: class_name.clone(),
+                    deprecation: None,
                 }),
             );
         }
@@ -588,15 +552,16 @@ impl Context<'_> {
                 let more = if n > 3 { ", ..." } else { "" };
                 return Err(self.fatal_at(
                     format!(
-                        "Class {name} contains {n} abstract method{} and must therefore be declared abstract or implement the remaining methods ({listed}{more})",
-                        if n == 1 { "" } else { "s" }
+                        "Class {name} contains {n} abstract method{s} and must therefore be declared abstract or implement the remaining method{s} ({listed}{more})",
+                        s = if n == 1 { "" } else { "s" }
                     ),
                     def.line,
                 ));
             }
         }
-        // PHP's order: the class's own methods, the inherited ones, then
-        // the traits' (get_class_methods, reflection).
+        // PHP's order: the class's own methods, the traits', then the
+        // inherited ones (get_class_methods, reflection; traits are bound
+        // before the parent since 8.5).
         // One pass over the methods, not a removal (which shifts all after
         // it) per own or trait method.
         let mut ordered = p8_runtime::object::Methods::with_capacity(&symbols, methods.len());
@@ -619,12 +584,12 @@ impl Context<'_> {
                 ordered.insert_sym(*key, m);
             }
         }
-        ordered.extend(inherited);
         for key in &trait_order {
             if let Some(m) = trait_methods.remove(key) {
                 ordered.insert_sym(*key, m);
             }
         }
+        ordered.extend(inherited);
         let methods = ordered;
         let native_dtor = parent.as_ref().and_then(|p| p.native_dtor);
         let destructor = if methods.get_sym(known::DESTRUCT).is_some() || native_dtor.is_some() { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
@@ -653,7 +618,7 @@ impl Context<'_> {
         Ok(Rc::new(Class {
             name: class_name,
             lower,
-            flags: def.flags | destructor,
+            flags: def.flags | destructor | enum_flags,
             parent,
             interfaces,
             properties,
@@ -897,6 +862,7 @@ impl Context<'_> {
         if method.is_abstract {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
+        self.method_deprecated(&method);
         let func = self.code_of(&method);
         let this = (!method.is_static).then_some(object);
         Ok(MethodFrame::method(func, this, declaring, class))
@@ -934,6 +900,7 @@ impl Context<'_> {
         }
         let this = self.frames.last().and_then(|f| f.this.clone());
         let forward = matches!(func.classes[class as usize], ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope);
+        self.method_deprecated(method);
         let fframe = self.code_of(method);
         if method.is_static {
             let called = match self.frames.last().and_then(|f| f.called.as_ref()) {
@@ -1805,6 +1772,9 @@ impl Context<'_> {
         if let Value::Object(_) = v {
             return v;
         }
+        if v.is_nan() {
+            self.nan_coerced("object");
+        }
         let class = Rc::clone(self.class_named(b"stdclass").expect("stdClass"));
         let o = Object::new(class, &self.ids);
         {
@@ -2017,20 +1987,21 @@ impl Context<'_> {
 /// `(array) $object`: initialized properties under PHP's mangled names
 /// ("\0A\0p" private to A, "\0*\0p" protected), then dynamic ones.
 /// The order PHP keeps a class's properties in (its properties_info, as
-/// zend_do_inheritance and trait binding build it): its `own` as declared,
-/// then its parent's that it does not redeclare (not the parent's private
-/// ones), then what its traits add.
+/// trait binding and zend_do_inheritance build it): its `own` as declared,
+/// then what its traits add, then its parent's that it does not redeclare
+/// (not the parent's private ones): traits are bound before the parent
+/// since 8.5.
 pub(crate) fn property_order(mut own: Vec<PhpStr>, parent: Option<&Class>, traits: Vec<PhpStr>) -> Vec<PhpStr> {
+    for n in traits {
+        if !own.contains(&n) {
+            own.push(n);
+        }
+    }
     if let Some(p) = parent {
         for n in &p.property_order {
             if !own.contains(n) && !declared_private(p, n.as_bytes()) {
                 own.push(n.clone());
             }
-        }
-    }
-    for n in traits {
-        if !own.contains(&n) {
-            own.push(n);
         }
     }
     own
@@ -2073,6 +2044,81 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
 
 fn text_of(t: &p8_runtime::frozen::Text) -> String {
     String::from_utf8_lossy(t.as_bytes()).into_owned()
+}
+
+/// The parts of a class that being an enum adds to, for a user enum (being
+/// linked) and a built-in one (`builtin_classes::declare_spec`) alike.
+pub(crate) struct EnumMembers<'a> {
+    pub(crate) interfaces: &'a mut Vec<Rc<[u8]>>,
+    pub(crate) properties: &'a mut Vec<Property>,
+    pub(crate) constants: &'a mut p8_runtime::object::Constants,
+    pub(crate) methods: &'a mut p8_runtime::object::Methods,
+}
+
+impl EnumMembers<'_> {
+    /// What an enum is given (zend_enum.c: zend_enum_add_interfaces,
+    /// zend_enum_register_props, zend_enum_register_funcs): UnitEnum (and
+    /// BackedEnum), the readonly `name` (and `value`) properties first,
+    /// each case as a constant (its object made when first used), and the
+    /// static cases() (and from()/tryFrom()). `backing` is "int" or
+    /// "string" for a backed enum; a pure enum's case values are Null.
+    /// Returns the class flags an enum adds: uncloneable (zend_enum.c's
+    /// object handlers have no clone_obj).
+    #[must_use]
+    pub(crate) fn add(self, declaring: &Rc<[u8]>, class_name: &PhpStr, backing: Option<&str>, cases: Vec<(&[u8], Value)>) -> u32 {
+        for x in std::iter::once(&b"unitenum"[..]).chain(backing.is_some().then_some(&b"backedenum"[..])) {
+            if !self.interfaces.iter().any(|i| **i == *x) {
+                self.interfaces.push(Rc::from(x));
+            }
+        }
+        let prop = |n: &str, ty: &str| Property {
+            name: PhpStr::from(n),
+            default: Value::Undef,
+            visibility: Visibility::Public,
+            set_visibility: Some(Visibility::Protected),
+            declaring: declaring.to_vec(),
+            declaring_name: class_name.clone(),
+            readonly: true,
+            is_final: false,
+            ty: Some(PhpStr::from(ty)),
+            ty_decl: None,
+            init: None,
+            hooks: 0,
+        };
+        self.properties.insert(0, prop("name", "string"));
+        if let Some(t) = backing {
+            self.properties.insert(1, prop("value", t));
+        }
+        for (case, value) in cases {
+            self.constants.insert(
+                case.to_vec(),
+                Rc::new(Constant { value, visibility: Visibility::Public, declaring_name: class_name.clone(), is_case: true, init: None }),
+            );
+        }
+        let natives: &[(&str, p8_runtime::object::NativeStatic)] = if backing.is_some() {
+            &[("cases", crate::builtin_classes::enum_cases), ("from", crate::builtin_classes::enum_from), ("tryFrom", crate::builtin_classes::enum_try_from)]
+        } else {
+            &[("cases", crate::builtin_classes::enum_cases)]
+        };
+        for (n, f) in natives {
+            self.methods.insert(
+                n.to_ascii_lowercase().into_bytes(),
+                Rc::new(Method {
+                    name: PhpStr::from(*n),
+                    func: u32::MAX,
+                    native: Some(p8_runtime::object::Native::Static(*f)),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    declaring: Rc::clone(declaring),
+                    declaring_name: class_name.clone(),
+                    deprecation: None,
+                }),
+            );
+        }
+        p8_runtime::object::CLASS_UNCLONEABLE
+    }
 }
 
 /// Narrower is larger: public < protected < private.

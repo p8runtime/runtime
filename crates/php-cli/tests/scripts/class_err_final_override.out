@@ -1,2 +1,4 @@
 
 Fatal error: Cannot override final method A::f() in %s on line 3
+Stack trace:
+#0 {main}

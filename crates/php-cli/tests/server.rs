@@ -1,8 +1,12 @@
 //! `php2 -S`: PHP's built-in web server. Each case sends a raw request and
 //! compares the whole raw response (status line, headers, body) with what
 //! `php -S` of php:8.4-cli answered to the same bytes (tests/server/expected,
-//! the dates, temporary file names and document root replaced by %DATE%,
-//! %TMP% and %ROOT%).
+//! the dates, temporary file names, document root and PHP version replaced
+//! by %DATE%, %TMP%, %ROOT% and %VERSION%). p8's target is PHP 8.6: what
+//! 8.6's `php -S` answers differently (it no longer echoes Host, session
+//! cookies are HttpOnly and SameSite=Lax by default, error pages have a
+//! viewport tag) is re-recorded when p8 does it (#279); argv is not made
+//! from the query string since register_argc_argv is off by default (8.5).
 //!
 //! To record the answers with real PHP, serve the same files from a
 //! container and run the ignored test:
@@ -95,6 +99,28 @@ fn raw(text: &str) -> Vec<u8> {
 }
 
 /// A response with what varies replaced.
+/// `text` with each "PHP/<version>" (and its JSON form "PHP\/<version>")
+/// as "PHP/%VERSION%": X-Powered-By, SERVER_SOFTWARE.
+fn php_version_token(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let next = [rest.find("PHP/").map(|i| (i, 4)), rest.find("PHP\\/").map(|i| (i, 5))].into_iter().flatten().min();
+        let Some((i, n)) = next else { break };
+        out.push_str(&rest[..i + n]);
+        let tail = &rest[i + n..];
+        let len = tail.find(|c: char| !(c.is_ascii_alphanumeric() || c == '.')).unwrap_or(tail.len());
+        if tail[..len].starts_with(|c: char| c.is_ascii_digit()) {
+            out.push_str("%VERSION%");
+        } else {
+            out.push_str(&tail[..len]);
+        }
+        rest = &tail[len..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn normalize(response: &[u8], root: &str) -> String {
     let text = String::from_utf8_lossy(response).replace(root, "%ROOT%");
     let mut out = String::new();
@@ -202,6 +228,9 @@ X-Powered-By is not {}", p8::powered_by()));
         let ours = format!(" p8/{}", p8::P8_VERSION);
         let ours_json = format!(" p8\\/{}", p8::P8_VERSION);
         let got = normalize(text.replace(&ours, "").replace(&ours_json, "").as_bytes(), &root);
+        // The PHP version is the build's: what php2 reports (PHP_VERSION)
+        // whatever release recorded the answers.
+        let (got, expected) = (php_version_token(&got), php_version_token(&expected));
         if got != expected {
             failures.push(format!("--- {name}\nexpected:\n{expected}\ngot:\n{got}"));
         }

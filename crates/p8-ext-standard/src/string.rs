@@ -74,12 +74,25 @@ fn opt(args: &[Value], i: usize) -> Option<Value> {
     }
 }
 
-fn chr(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::byte(arg(args, 0).to_int().rem_euclid(256) as u8)))
+fn chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let c = arg(args, 0).to_int();
+    if !(0..=255).contains(&c) {
+        ctx.deprecated(
+            "chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256",
+        );
+    }
+    Ok(Value::Str(PhpStr::byte(c.rem_euclid(256) as u8)))
 }
 
-fn ord(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(i64::from(str_arg(args, 0).as_bytes().first().copied().unwrap_or(0))))
+fn ord(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let s = str_arg(args, 0);
+    // (8.5) a string that isn't exactly one byte
+    match s.len() {
+        1 => {}
+        0 => ctx.deprecated("ord(): Providing an empty string is deprecated"),
+        _ => ctx.deprecated("ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead"),
+    }
+    Ok(Value::Int(i64::from(s.as_bytes().first().copied().unwrap_or(0))))
 }
 
 /// `s` with each byte mapped by `f`: `s` itself when nothing changes (as

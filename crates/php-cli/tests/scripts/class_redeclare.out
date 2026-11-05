@@ -1,2 +1,4 @@
 
 Fatal error: Cannot redeclare interface I (previously declared in %s:3) in %s on line 4
+Stack trace:
+#0 {main}

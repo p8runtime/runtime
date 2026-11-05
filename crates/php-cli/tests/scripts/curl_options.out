@@ -52,6 +52,8 @@ string(1) "p"
 string(19) "http://example.com/"
 string(0) ""
 string(19) "http://example.com/"
+
+Deprecated: Function curl_close() is deprecated since 8.5, as it has no effect since PHP 8.0 in %s on line 63
 NULL
 string(8) "No error"
 string(26) "Could not resolve hostname"

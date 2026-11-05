@@ -120,7 +120,7 @@
 == fromstring trunc gif: [W: imagecreatefromstring(): Data is not in a recognized format] false
 == fromstring trunc bmp: [W: imagecreatefromstring(): Passed data is not in "BMP" format] [W: imagecreatefromstring(): Couldn't create GD Image Stream out of Data] false
 == jpeg missing: [W: imagecreatefromjpeg(/nonexistent.jpg): Failed to open stream: No such file or directory] false
-== destroy: true
+== destroy: [W: Function imagedestroy() is deprecated since 8.5, as it has no effect since PHP 8.0] true
 == clone: Error: Trying to clone an uncloneable object of class GdImage
 == serialize: Exception: Serialization of 'GdImage' is not allowed
 == typeerr: TypeError: imagesx(): Argument #1 ($image) must be of type GdImage, string given

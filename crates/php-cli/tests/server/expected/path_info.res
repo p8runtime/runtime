@@ -15,8 +15,6 @@ PHP_SELF=/info.php/extra/p
 QUERY_STRING=a=1&b[]=2
 HTTP_X_CUSTOM_HEADER=some value
 HTTP_ACCEPT=*/*
-argv=["a=1&b[]=2"]
-argc=1
 info.php
 cli-server cli-server info.php doc
 true

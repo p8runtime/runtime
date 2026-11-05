@@ -135,7 +135,7 @@ Windows Infrastructure => Alex Schoenmaker
 --
 bool(true)
 phpinfo()
-PHP Version => 8.4.27
+PHP Version => 8.6.0
 Server API => Command Line Interface
 Virtual Directory Support => disabled
 Loaded Configuration File => (none)

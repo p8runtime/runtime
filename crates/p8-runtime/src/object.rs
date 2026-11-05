@@ -315,6 +315,10 @@ pub struct Method {
     /// all the methods it declares.
     pub declaring: Rc<[u8]>,
     pub declaring_name: PhpStr,
+    /// What calling it raises, for a builtin method PHP declares
+    /// #[\Deprecated] ("Method C::m() is deprecated since 8.x, …"); looked
+    /// up once, when the class is made.
+    pub deprecation: Option<Rc<str>>,
 }
 
 /// A class's constants by name, in the order they were declared; shared

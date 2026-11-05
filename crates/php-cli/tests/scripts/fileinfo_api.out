@@ -61,7 +61,7 @@
 == finfo_file empty: ValueError: finfo_file(): Argument #2 ($filename) must not be empty
 == finfo_file nul: TypeError: finfo_file(): Argument #2 ($filename) must not contain any null bytes
 == finfo_file notobj: TypeError: finfo_file(): Argument #1 ($finfo) must be of type finfo, string given
-== finfo_close: true
+[W: Function finfo_close() is deprecated since 8.5, as finfo objects are freed automatically] == finfo_close: true
 == default open: 'finfo'
 == default flags: 'ASCII text, with no line terminators'
 == open any flags: 'finfo'

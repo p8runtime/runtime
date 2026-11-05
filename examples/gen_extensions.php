@@ -16,7 +16,7 @@
 // ("lit:"; PHP's own branch for a build without the feature).
 
 const EXTENSIONS = [
-    'Core', 'date', 'filter', 'hash', 'json', 'random', 'Reflection', 'SPL', 'standard', 'ctype', 'zlib',
+    'Core', 'date', 'filter', 'hash', 'json', 'Zend OPcache', 'random', 'Reflection', 'SPL', 'standard', 'ctype', 'zlib',
     'xmlwriter', 'xml', 'libxml', 'dom', 'SimpleXML', 'tokenizer', 'mbstring', 'pcre', 'mysqli', 'curl',
     'gd', 'exif', 'zip', 'fileinfo', 'session', 'PDO', 'pdo_sqlite', 'pdo_mysql', 'sockets', 'openssl',
     'intl', 'pdo_pgsql',
@@ -42,6 +42,9 @@ const CURL_FEATURES = [
 
 const SOURCES = [
     'Core' => ['PHP Version' => 'const:PHP_VERSION'],
+    'random' => ['Version' => 'const:PHP_VERSION'],
+    // mysqlnd's version is PHP's
+    'pdo_mysql' => ['Client API version' => 'lit:mysqlnd {const:PHP_VERSION}'],
     'date' => [
         // p8's dates are its own code, not timelib.
         'timelib version' => 'omit',
@@ -138,6 +141,15 @@ const SOURCES = [
 ];
 
 
+// Sections whose rows before the ini table are what the module's state is
+// (which rows, not only their values): p8 prints them itself, from the
+// same state, where the section says "{name}" (crates/p8-runtime/src/info.rs).
+const STATEFUL = [
+    // zend_accel_info(): "Up and Running" and the cache's counters, or why
+    // it did not start.
+    'Zend OPcache' => '{accel_info}',
+];
+
 // What a source gives in this PHP (null: the row goes), as p8 computes it
 // (crates/p8-runtime/src/info.rs).
 function source(string $spec): ?string
@@ -229,6 +241,10 @@ function section(string $ext, array $ini): array
             $displays[$name] = display($local, $ini[$name]['local_value']);
         }
     }
+    if (isset(STATEFUL[$ext])) {
+        ($lines[0] ?? null) === '' && end($lines) === '{ini}' || fail("$ext: not a table then the ini entries");
+        return [['', STATEFUL[$ext], '{ini}'], $displays];
+    }
     $out = [];
     foreach ($lines as $line) {
         if ($line === '{ini}') {
@@ -288,7 +304,9 @@ foreach (EXTENSIONS as $ext) {
     [$info, $displays] = section($ext, $ini);
     echo "    ModuleSpec {\n";
     echo "        name: ", rust_str($r->getName()), ",\n";
-    echo "        version: ", $r->getVersion() === null ? 'None' : 'Some(' . rust_str($r->getVersion()) . ')', ",\n";
+    // A bundled extension's version is PHP's own: p8's PHP_VERSION, not a copy.
+    $version = $r->getVersion();
+    echo "        version: ", $version === null ? 'None' : ($version === PHP_VERSION ? 'Some(crate::PHP_VERSION)' : 'Some(' . rust_str($version) . ')'), ",\n";
     echo "        deps: &[", implode(', ', array_map(fn ($d, $rel) => '(' . rust_str($d) . ', ' . rust_str($rel) . ')', array_keys($r->getDependencies()), $r->getDependencies())), "],\n";
     echo "        functions: &[", implode(', ', array_map('rust_str', array_keys($r->getFunctions()))), "],\n";
     echo "        classes: &[", implode(', ', array_map('rust_str', $r->getClassNames())), "],\n";
