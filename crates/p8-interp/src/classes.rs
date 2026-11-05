@@ -1186,6 +1186,24 @@ impl Context<'_> {
     }
 
 
+    /// `write_slot` for the write a property cache answers: stored at once
+    /// when there is nothing to check (not readonly, no set visibility,
+    /// untyped or already of its type, as zend_assign_to_typed_prop's
+    /// ZEND_TYPE_CONTAINS_CODE test); else the full checks.
+    #[inline]
+    pub(crate) fn write_cached(&mut self, object: &Object, slot: usize, name: &PhpStr, value: Value) -> Result<(), Throw> {
+        let prop = &object.class.properties[slot];
+        if !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.as_ref().is_none_or(|t| t.quick(&value)) {
+            let mut slots = object.slots.borrow_mut();
+            match &mut slots[slot] {
+                Value::Ref(cell) => *cell.borrow_mut() = value,
+                s => *s = value,
+            }
+            return Ok(());
+        }
+        self.write_slot(object, slot, prop, name, value)
+    }
+
     /// Store `value` in declared property `slot` of `object` (`prop`, named
     /// `name`): its readonly and set-visibility rules and its type checked,
     /// as zend_std_write_property does once it has the property's offset.

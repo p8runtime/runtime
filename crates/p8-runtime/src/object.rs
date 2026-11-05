@@ -758,7 +758,16 @@ impl Default for Props {
 impl Props {
     /// Copies of `values`.
     pub fn from_slice(values: &[Value]) -> Props {
-        values.iter().cloned().collect()
+        // One copy of the block, as object_properties_init's of the
+        // default properties table: in place, or into one buffer.
+        if values.len() > INLINE_PROPS {
+            let mut heap = crate::array::values_buffer(values.len());
+            heap.extend_from_slice(values);
+            return Props(PropsRepr::Heap(heap));
+        }
+        let mut inline: [Value; INLINE_PROPS] = Default::default();
+        inline[..values.len()].clone_from_slice(values);
+        Props(PropsRepr::Inline { len: values.len() as u8, values: inline })
     }
 
     /// Every value gone (none left).
