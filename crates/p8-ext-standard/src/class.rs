@@ -225,10 +225,14 @@ fn spl_autoload_register(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 
 fn spl_autoload_unregister(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callable = arg(args, 0);
-    // spl_autoload_call itself: every autoloader goes (php_spl.c).
+    // spl_autoload_call itself: every autoloader goes (php_spl.c),
+    // deprecated since PHP 8.5.
     if let Value::Str(s) = &callable
         && s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes()).eq_ignore_ascii_case(b"spl_autoload_call")
     {
+        ctx.deprecated(
+            "spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()",
+        );
         for loader in ctx.autoloaders() {
             ctx.autoloader(loader, None);
         }
