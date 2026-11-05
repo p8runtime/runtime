@@ -144,7 +144,23 @@ pub fn lookup(name: &[u8]) -> Option<&'static Sig> {
         .binary_search_by(|s| cmp_ignore_case(s.name, name))
         .ok()
         .map(|i| &table[i])
+        .or_else(|| PHP86.iter().find(|s| s.name.eq_ignore_ascii_case(name)))
 }
+
+/// What PHP 8.6 adds to the 8.4 stubs the table is generated from (until
+/// it is generated from 8.6's): Zend/zend_builtin_functions.stub.php's clone().
+static PHP86: &[Sig] = &[Sig {
+    name: "clone",
+    params: &[
+        Param { name: "object", mask: T_OBJECT, classes: &[], by_ref: false, variadic: false, default: None },
+        Param { name: "withProperties", mask: T_ARRAY, classes: &[], by_ref: false, variadic: false, default: Some("[]") },
+    ],
+    ret_mask: T_OBJECT,
+    ret_classes: &[],
+    tentative: false,
+    returns_ref: false,
+    flags: 0,
+}];
 
 fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
     a.bytes()

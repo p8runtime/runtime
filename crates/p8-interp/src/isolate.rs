@@ -181,6 +181,13 @@ pub struct Isolate {
     /// The ini defaults as strings, made once (ini_get() of a setting
     /// no request changed hands out the same string each time).
     pub(crate) ini_texts: RefCell<HashMap<(usize, usize), PhpStr>>,
+    /// Compiled code's string and array constants as values, made once
+    /// for the isolate (every request's closures and classes share them,
+    /// as PHP's requests share opcache's interned literals): by the
+    /// address of the constant's shared bytes or entries, the constant
+    /// kept beside so the address stays its own. A value is never written
+    /// in place (one holder more than a register's: a write copies).
+    pub(crate) thawed: RefCell<HashMap<usize, (p8_runtime::frozen::Frozen, Value)>>,
     /// What a declared function's closure slot holds until the function
     /// is first resolved (sites.rs `Closure::unbuilt`).
     pub(crate) unbuilt: Rc<Closure>,
@@ -191,6 +198,9 @@ pub struct Isolate {
     pub(crate) requests: u64,
     /// The next static property declaration's cell id (`Static::id`).
     pub(crate) next_static: p8_runtime::object::StaticId,
+    /// Partial applications' closure code, compiled once for the isolate
+    /// (per site and function applied) and shared by every request.
+    pub(crate) partials: RefCell<HashMap<crate::partial::CacheKey, crate::partial::Compiled>>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -217,12 +227,37 @@ impl Isolate {
             },
             names,
             ini_texts: RefCell::new(HashMap::default()),
+            thawed: RefCell::new(HashMap::default()),
             unbuilt: Closure::unbuilt(&registry),
             code: Default::default(),
             requests: 0,
             next_static: 0,
+            partials: RefCell::new(HashMap::default()),
             registry,
         }
+    }
+
+    /// A constant of compiled code as a value: a string or an array made
+    /// once for the isolate (see `thawed`), anything else as it is.
+    pub(crate) fn thaw(&self, f: &p8_runtime::frozen::Frozen) -> Value {
+        use p8_runtime::frozen::Frozen;
+        let at = match f {
+            Frozen::Str(t) => t.as_bytes().as_ptr() as usize,
+            Frozen::Array(entries) => entries.as_ptr() as usize,
+            _ => return f.to_value(),
+        };
+        let mut thawed = self.thawed.borrow_mut();
+        if let Some((_, v)) = thawed.get(&at) {
+            return v.clone();
+        }
+        // (Code an isolate only evals, again and again, would grow this
+        // without end: past a bound it starts over.)
+        if thawed.len() >= 1 << 18 {
+            thawed.clear();
+        }
+        let v = f.to_value();
+        thawed.insert(at, (f.clone(), v.clone()));
+        v
     }
 
     /// An ini default (a registry's static text) as a string, shared.
@@ -283,6 +318,7 @@ impl Isolate {
             ids,
             native_class: None,
             ext_state: HashMap::default(),
+            header_callback_set: false,
             ended_globals: Vec::new(),
             resource_classes: HashMap::default(),
             resource_ids,
@@ -293,6 +329,7 @@ impl Isolate {
             named_extra: None,
             class_defaults: HashMap::default(),
             new_infos: HashMap::default(),
+            last_new: None,
             const_cache: HashMap::default(),
             const_evaluating: Vec::new(),
             autoloaders: Vec::new(),
@@ -310,12 +347,14 @@ impl Isolate {
             in_handler: false,
             arg_buf: Vec::new(),
             key_path: Vec::new(),
+            dim_keys: Vec::new(),
             lambdas: HashMap::default(),
             natives: Vec::new(),
             native_args: Vec::new(),
             running_builtin: None,
             statics: HashMap::default(),
             magic_guard: Vec::new(),
+            reinit: Vec::new(),
             result_reg: 0,
             header_throw: None,
             deferred_write: None,
@@ -404,8 +443,14 @@ pub struct Context<'i> {
     pub(crate) arg_buf: Vec<Value>,
     /// A dimension write's keys while it runs (kept for its capacity).
     pub(crate) key_path: Vec<Key>,
+    /// A property dimension write's keys as written (AssignPropDim; kept
+    /// for its capacity).
+    pub(crate) dim_keys: Vec<Value>,
     /// Extensions' per-request state (Ctx::state).
     pub(crate) ext_state: HashMap<&'static str, Value>,
+    /// Whether header_register_callback() was ever called here: until
+    /// then a builtin call skips looking its callback up in `ext_state`.
+    pub(crate) header_callback_set: bool,
     /// The main frame's globals as the script left them, kept until the
     /// request's end hooks have run.
     pub(crate) ended_globals: Vec<Value>,
@@ -433,6 +478,9 @@ pub struct Context<'i> {
     /// How to make each class's objects, by the class's address
     /// (instances.rs): worked out at its first `new`.
     pub(crate) new_infos: HashMap<usize, Rc<instances::NewInfo>>,
+    /// The NewInfo the last `new` used: the Construct that follows finds
+    /// its constructor there (unless a `new` in the arguments came between).
+    pub(crate) last_new: Option<Rc<instances::NewInfo>>,
     /// Class constants computed by code: (declaring class, name) → value.
     pub(crate) const_cache: HashMap<(Vec<u8>, Vec<u8>), Value>,
     /// The ones being computed (a constant that needs itself is an error).
@@ -481,6 +529,10 @@ pub struct Context<'i> {
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     pub(crate) magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
+    /// Clones whose readonly properties may be written once more while
+    /// their __clone or clone()'s updates run: (the clone, which slots
+    /// still may), PHP's IS_PROP_REINITABLE. Innermost last.
+    pub(crate) reinit: Vec<(Rc<p8_runtime::object::Object>, Vec<bool>)>,
     /// The register a running nested call's result lands in: destructors
     /// that run as its frame goes (after it returned) start above it.
     pub(crate) result_reg: usize,

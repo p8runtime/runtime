@@ -13,7 +13,7 @@
 //! range) give `None`. The caller checks a digest of the bytes first, so
 //! a file that decodes is the program that was written.
 
-use crate::{AttrArg, AttrDef, CastKind, ClassDef, ClassName, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, Meta, MethodDef, Param, Program, PropDef, Rare, Site, Sym, TraitRule};
+use crate::{AttrArg, AttrDef, CastKind, ClassDef, ClassName, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, Meta, MethodDef, Param, PartialArg, PartialSite, Program, PropDef, Rare, Site, Sym, TraitRule};
 use p8_runtime::frozen::{Frozen, Text};
 use p8_runtime::object::Visibility;
 use p8_runtime::ops::BinOp;
@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 14;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -499,8 +499,10 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
-    handlers, decls, is_generator, lambdas, bound, silences, meta,
+    handlers, decls, is_generator, lambdas, bound, silences, arg_vars, meta, partials,
 });
+record!(PartialSite { args, variadic, name, line });
+record!(PartialArg { name, placeholder });
 record!(ClassDef {
     name, sym, deps, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line, meta, case_meta,
 });
@@ -513,7 +515,7 @@ record!(ConstDef { name, value, code, visibility, is_final, meta });
 record!(PropDef { name, default, code, hooks, visibility, set_visibility, is_static, readonly, is_final, ty, ty_decl, meta });
 record!(MethodDef { func, visibility, is_static, is_abstract, is_final });
 record!(Site { name, sym, fallback, display });
-record!(Param { name, by_ref, has_default, variadic, ty, default, default_const, promoted, attrs });
+record!(Param { name, by_ref, has_default, variadic, ty, default, default_const, default_src, default_ns, promoted, attrs });
 record!(Handler { start, end, target, slot, depth });
 record!(TypeDecl { mask, classes, lower, written, intersection });
 
@@ -651,6 +653,8 @@ impl Code for Rare {
             Rare::CallableArgByRef => 19,
             Rare::ThrowError => 20,
             Rare::AutoGlobal => 21,
+            Rare::PipeArgByRef => 22,
+            Rare::Partial => 23,
         });
     }
     fn get(r: &mut Reader) -> Got<Self> {
@@ -677,6 +681,8 @@ impl Code for Rare {
             19 => Rare::CallableArgByRef,
             20 => Rare::ThrowError,
             21 => Rare::AutoGlobal,
+            22 => Rare::PipeArgByRef,
+            23 => Rare::Partial,
             _ => return Err(Bad),
         })
     }
@@ -772,7 +778,7 @@ impl Code for Instr {
             Instr::Unsilence { saved } => { w.byte(68); saved.put(w); }
             Instr::MakeClosure { dst, func, is_static } => { w.byte(69); dst.put(w); func.put(w); is_static.put(w); }
             Instr::Capture { closure, var, by_ref, quiet } => { w.byte(70); closure.put(w); var.put(w); by_ref.put(w); quiet.put(w); }
-            Instr::CallValue { dst, callee, base, argc } => { w.byte(71); dst.put(w); callee.put(w); base.put(w); argc.put(w); }
+            Instr::CallValue { dst, callee, base, argc, vars } => { w.byte(71); dst.put(w); callee.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::BindRef { var, src } => { w.byte(72); var.put(w); src.put(w); }
             Instr::RefDim { var, root, keys, n, append } => { w.byte(73); var.put(w); root.put(w); keys.put(w); n.put(w); append.put(w); }
             Instr::DimSetRef { root, keys, n, append, src } => { w.byte(74); root.put(w); keys.put(w); n.put(w); append.put(w); src.put(w); }
@@ -797,11 +803,11 @@ impl Code for Instr {
             Instr::AssignProp { obj, name, val, dst, take } => { w.byte(93); obj.put(w); name.put(w); val.put(w); dst.put(w); take.put(w); }
             Instr::AssignPropOp { op, obj, name, val, dst } => { w.byte(94); op.put(w); obj.put(w); name.put(w); val.put(w); dst.put(w); }
             Instr::PropIncDec { obj, name, dst, inc, post } => { w.byte(95); obj.put(w); name.put(w); dst.put(w); inc.put(w); post.put(w); }
-            Instr::AssignPropDim { op, base, n, append, val, dst } => { w.byte(96); op.put(w); base.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
+            Instr::AssignPropDim { op, base, name, n, append, val, dst } => { w.byte(96); op.put(w); base.put(w); name.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
             Instr::IssetProp { dst, obj, name } => { w.byte(97); dst.put(w); obj.put(w); name.put(w); }
             Instr::UnsetProp { obj, name } => { w.byte(98); obj.put(w); name.put(w); }
             Instr::MethodCall { dst, obj, method, base, argc } => { w.byte(99); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
-            Instr::StaticCall { dst, class, method, base, argc } => { w.byte(100); dst.put(w); class.put(w); method.put(w); base.put(w); argc.put(w); }
+            Instr::StaticCall { dst, class, method, base, argc, vars } => { w.byte(100); dst.put(w); class.put(w); method.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::ClassConst { dst, class, name } => { w.byte(101); dst.put(w); class.put(w); name.put(w); }
             Instr::FetchStaticProp { dst, class, name } => { w.byte(102); dst.put(w); class.put(w); name.put(w); }
             Instr::AssignStaticProp { class, name, val, dst } => { w.byte(103); class.put(w); name.put(w); val.put(w); dst.put(w); }
@@ -884,7 +890,7 @@ impl Code for Instr {
             68 => Instr::Unsilence { saved: Code::get(r)? },
             69 => Instr::MakeClosure { dst: Code::get(r)?, func: Code::get(r)?, is_static: Code::get(r)? },
             70 => Instr::Capture { closure: Code::get(r)?, var: Code::get(r)?, by_ref: Code::get(r)?, quiet: Code::get(r)? },
-            71 => Instr::CallValue { dst: Code::get(r)?, callee: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
+            71 => Instr::CallValue { dst: Code::get(r)?, callee: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)?, vars: Code::get(r)? },
             72 => Instr::BindRef { var: Code::get(r)?, src: Code::get(r)? },
             73 => Instr::RefDim { var: Code::get(r)?, root: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)? },
             74 => Instr::DimSetRef { root: Code::get(r)?, keys: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, src: Code::get(r)? },
@@ -909,11 +915,11 @@ impl Code for Instr {
             93 => Instr::AssignProp { obj: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)?, take: Code::get(r)? },
             94 => Instr::AssignPropOp { op: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             95 => Instr::PropIncDec { obj: Code::get(r)?, name: Code::get(r)?, dst: Code::get(r)?, inc: Code::get(r)?, post: Code::get(r)? },
-            96 => Instr::AssignPropDim { op: Code::get(r)?, base: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
+            96 => Instr::AssignPropDim { op: Code::get(r)?, base: Code::get(r)?, name: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             97 => Instr::IssetProp { dst: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)? },
             98 => Instr::UnsetProp { obj: Code::get(r)?, name: Code::get(r)? },
             99 => Instr::MethodCall { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
-            100 => Instr::StaticCall { dst: Code::get(r)?, class: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
+            100 => Instr::StaticCall { dst: Code::get(r)?, class: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)?, vars: Code::get(r)? },
             101 => Instr::ClassConst { dst: Code::get(r)?, class: Code::get(r)?, name: Code::get(r)? },
             102 => Instr::FetchStaticProp { dst: Code::get(r)?, class: Code::get(r)?, name: Code::get(r)? },
             103 => Instr::AssignStaticProp { class: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },

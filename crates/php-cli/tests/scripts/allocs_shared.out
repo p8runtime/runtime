@@ -1,0 +1,197 @@
+array(2) {
+  [0]=>
+  array(2) {
+    ["k"]=>
+    array(1) {
+      ["deep"]=>
+      string(2) "v!"
+    }
+    ["list"]=>
+    array(4) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+      [2]=>
+      int(3)
+      [3]=>
+      int(4)
+    }
+  }
+  [1]=>
+  string(24) "Literal string here more"
+}
+array(2) {
+  [0]=>
+  array(2) {
+    ["k"]=>
+    array(1) {
+      ["deep"]=>
+      string(2) "v!"
+    }
+    ["list"]=>
+    array(4) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+      [2]=>
+      int(3)
+      [3]=>
+      int(4)
+    }
+  }
+  [1]=>
+  string(24) "Literal string here more"
+}
+object(C)#1 (2) {
+  ["p"]=>
+  array(1) {
+    ["x"]=>
+    array(2) {
+      ["y"]=>
+      int(2)
+      ["z"]=>
+      string(3) "new"
+    }
+  }
+  ["str"]=>
+  string(15) "Property string"
+}
+array(1) {
+  ["n"]=>
+  int(1)
+}
+array(2) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  ["b"]=>
+  string(4) "text"
+}
+array(2) {
+  ["a"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+  ["b"]=>
+  string(5) "text?"
+}
+array(1) {
+  ["x"]=>
+  array(1) {
+    ["y"]=>
+    int(1)
+  }
+}
+string(15) "property string"
+array(1) {
+  ["closure"]=>
+  string(5) "value"
+}
+array(1) {
+  ["closure"]=>
+  string(7) "changed"
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+  [3]=>
+  int(4)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+array(1) {
+  ["a"]=>
+  int(1)
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  [0]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "c"
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [3]=>
+  string(4) "next"
+}
+string(1) "q"
+string(1) "q"
+array(0) {
+}
+array(3) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+  [0]=>
+  int(3)
+}
+array(2) {
+  ["k"]=>
+  string(1) "b"
+  [0]=>
+  string(1) "c"
+}
+string(0) ""
+string(3) "one"
+string(1) "7"
+string(8) "1.5,1,,x"
+string(2) "ab"
+string(8) "just two"
+string(5) "solo!"
+array(1) {
+  [0]=>
+  string(4) "solo"
+}
+string(2) "T!"
+string(6) "T!|x|2"

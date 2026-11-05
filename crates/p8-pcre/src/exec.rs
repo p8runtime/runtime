@@ -6,20 +6,22 @@
 //! run nested, and on success keep their undo records but drop their
 //! choices.
 
-use crate::compile::{Atom, Inst, Prog, RepeatKind};
+use crate::compile::{Atom, First, Inst, Prog, RepeatKind};
+use std::cell::Cell;
 use crate::parse::{Assert, Newline};
 use crate::unicode;
 use crate::{decode, Captures, MatchError, MatchOptions};
 
 #[derive(Clone)]
-struct Frame {
+pub(crate) struct Frame {
     group: u32,
     ret: u32,
     pos: usize,
     saved: Vec<Option<usize>>,
 }
 
-enum Bt {
+/// A backtrack record (see the module's doc).
+pub(crate) enum Bt {
     Alt { pc: u32, pos: usize, alt: bool },
     GiveBack { next: u32, min: usize, pos: usize },
     TakeMore { rep: u32, pos: usize, count: u32 },
@@ -32,7 +34,7 @@ enum Bt {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Barrier {
+pub(crate) enum Barrier {
     Commit,
     Prune,
     Skip(usize),
@@ -65,13 +67,32 @@ struct Vm<'a> {
     nest: u32,
 }
 
+thread_local! {
+    /// The last match's capture slots, for the next one to reuse.
+    static SLOTS: Cell<Vec<Option<usize>>> = const { Cell::new(Vec::new()) };
+}
+
 pub(crate) fn exec(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions) -> Result<Option<Captures>, MatchError> {
+    let mut caps = Captures { slots: SLOTS.take(), mark: None };
+    let found = exec_into(p, s, start, opts, &mut caps);
+    let result = found.map(|found| found.then(|| Captures { slots: caps.slots.clone(), mark: caps.mark.take() }));
+    SLOTS.set(caps.slots);
+    result
+}
+
+/// [`exec`] into `caps` (its room reused): whether there is a match.
+pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, caps: &mut Captures) -> Result<bool, MatchError> {
+    let mut slots = std::mem::take(&mut caps.slots);
+    slots.clear();
+    slots.resize(p.slots, None);
     let mut vm = Vm {
         p,
         s,
-        slots: vec![None; p.slots],
+        slots,
         regs: vec![0; p.regs],
-        stack: Vec::new(),
+        // The program's last backtrack stack (its room): a match allocates
+        // none once it has grown. (A match within a match takes an empty one.)
+        stack: p.stack.take(),
         frames: Vec::new(),
         mark: None,
         steps: 0,
@@ -84,12 +105,50 @@ pub(crate) fn exec(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions) -> Res
         targets: Vec::new(),
         nest: 0,
     };
+    let found = search(&mut vm, start, opts);
+    let Vm { slots, mut stack, mark, .. } = vm;
+    caps.slots = slots;
+    caps.mark = None;
+    stack.clear();
+    // (Not a big one: a cached pattern would hold it for the request.)
+    if stack.capacity() <= 1024 {
+        p.stack.set(stack);
+    }
+    let end = found?;
+    if let Some(end) = end {
+        caps.slots[1] = Some(end);
+        caps.mark = mark.map(|m| p.marks[m as usize].clone());
+    }
+    Ok(end.is_some())
+}
+
+/// Where a match can start at or after `at`: the next byte a match can
+/// start with (memchr for one to three of them), or `at` when any can.
+#[inline]
+fn next_start(p: &Prog, s: &[u8], at: usize) -> Option<usize> {
+    let rest = &s[at..];
+    let n = match &p.first {
+        First::Any => return Some(at),
+        First::One(a) => memchr::memchr(*a, rest),
+        First::Two(a, b) => memchr::memchr2(*a, *b, rest),
+        First::Three(a, b, c) => memchr::memchr3(*a, *b, *c, rest),
+        First::Set(set) => rest.iter().position(|&b| set[b as usize]),
+        First::Text(finder) => finder.find(rest),
+    };
+    n.map(|n| at + n)
+}
+
+/// Tries each start from `start`: the match's end (its captures in the
+/// machine's slots).
+fn search(vm: &mut Vm, start: usize, opts: &MatchOptions) -> Result<Option<usize>, MatchError> {
+    let p = vm.p;
+    let s = vm.s;
     let anchored = p.anchored || opts.anchored;
     let mut at = start;
     while at <= s.len() {
-        if let Some(first) = &p.first {
-            match s[at..].iter().position(|&b| first[b as usize]) {
-                Some(n) => at += n,
+        if !matches!(p.first, First::Any) {
+            match next_start(p, s, at) {
+                Some(n) => at = n,
                 None => break,
             }
             if anchored && at != start {
@@ -111,11 +170,7 @@ pub(crate) fn exec(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions) -> Res
         vm.step()?;
         let mut next = None;
         match vm.run(0, at)? {
-            Outcome::Match(end) | Outcome::Accept(end) => {
-                vm.slots[1] = Some(end);
-                let mark = vm.mark.map(|m| p.marks[m as usize].clone());
-                return Ok(Some(Captures { slots: vm.slots, mark }));
-            }
+            Outcome::Match(end) | Outcome::Accept(end) => return Ok(Some(end)),
             Outcome::NoMatch | Outcome::Verb(Barrier::Prune | Barrier::Then) => {}
             Outcome::Verb(Barrier::Commit) => break,
             Outcome::Verb(Barrier::Skip(to)) => {
@@ -271,6 +326,37 @@ impl Vm<'_> {
                 ok.then_some(at + n)
             }
         }
+    }
+
+    /// `atom` as many more times as it matches from `at`, up to `max` in
+    /// all (`count` so far): where that ends, and the count. A class runs
+    /// over single-byte characters straight from its bitmap.
+    #[inline]
+    fn take_greedy(&self, atom: Atom, mut at: usize, mut count: u32, max: u32) -> (usize, u32) {
+        if let Atom::Set(i) = atom {
+            let low = &self.p.sets[i as usize].low;
+            let s = self.s;
+            while count < max && at < s.len() {
+                let b = s[at];
+                if self.p.utf && b >= 0x80 {
+                    // A multi-byte character: the general loop below.
+                    break;
+                }
+                if low[(b >> 6) as usize] & (1 << (b & 63)) == 0 {
+                    return (at, count);
+                }
+                at += 1;
+                count += 1;
+            }
+        }
+        while count < max {
+            match self.atom(atom, at) {
+                Some(n) => at = n,
+                None => break,
+            }
+            count += 1;
+        }
+        (at, count)
     }
 
     fn set_slot(&mut self, idx: u32, value: Option<usize>) -> Result<(), MatchError> {
@@ -514,13 +600,7 @@ impl Vm<'_> {
                         match kind {
                             RepeatKind::Greedy | RepeatKind::Possessive => {
                                 let floor = at;
-                                while count < max {
-                                    match self.atom(atom, at) {
-                                        Some(n) => at = n,
-                                        None => break,
-                                    }
-                                    count += 1;
-                                }
+                                at = self.take_greedy(atom, at, count, max).0;
                                 if kind == RepeatKind::Greedy && at > floor {
                                     self.push_choice(Bt::GiveBack { next: pc + 1, min: floor, pos: at })?;
                                 }

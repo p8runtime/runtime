@@ -751,13 +751,124 @@ impl std::fmt::Debug for Data {
     }
 }
 
+/// How many declared properties live inside the object itself.
+const INLINE_PROPS: usize = 4;
+
+/// An object's declared properties, one value per slot. Up to
+/// INLINE_PROPS of them are kept in the object (one allocation for the
+/// object and its properties, as zend_object's properties_table is); more
+/// in a buffer of their own.
+#[derive(Debug, Clone)]
+pub struct Props(PropsRepr);
+
+#[derive(Debug, Clone)]
+enum PropsRepr {
+    Inline { len: u8, values: [Value; INLINE_PROPS] },
+    Heap(Vec<Value>),
+}
+
+impl Default for Props {
+    fn default() -> Self {
+        Props(PropsRepr::Inline { len: 0, values: Default::default() })
+    }
+}
+
+impl Props {
+    /// Copies of `values`.
+    pub fn from_slice(values: &[Value]) -> Props {
+        // One copy of the block, as object_properties_init's of the
+        // default properties table: in place, or into one buffer.
+        if values.len() > INLINE_PROPS {
+            let mut heap = crate::array::values_buffer(values.len());
+            heap.extend_from_slice(values);
+            return Props(PropsRepr::Heap(heap));
+        }
+        let mut inline: [Value; INLINE_PROPS] = Default::default();
+        inline[..values.len()].clone_from_slice(values);
+        Props(PropsRepr::Inline { len: values.len() as u8, values: inline })
+    }
+
+    /// Every value gone (none left).
+    pub fn clear(&mut self) {
+        match &mut self.0 {
+            PropsRepr::Inline { len, values } => {
+                for v in &mut values[..*len as usize] {
+                    *v = Value::Undef;
+                }
+                *len = 0;
+            }
+            PropsRepr::Heap(v) => v.clear(),
+        }
+    }
+
+    /// Every value gone, and a buffer of their own kept for the next
+    /// object or array (see [`crate::array::values_buffer`]).
+    pub fn release(&mut self) {
+        match &mut self.0 {
+            PropsRepr::Heap(v) => crate::array::keep_values_buffer(std::mem::take(v)),
+            PropsRepr::Inline { .. } => self.clear(),
+        }
+    }
+}
+
+impl FromIterator<Value> for Props {
+    fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Props {
+        let mut iter = iter.into_iter();
+        let mut values: [Value; INLINE_PROPS] = Default::default();
+        for (n, slot) in values.iter_mut().enumerate() {
+            match iter.next() {
+                Some(v) => *slot = v,
+                None => return Props(PropsRepr::Inline { len: n as u8, values }),
+            }
+        }
+        match iter.next() {
+            None => Props(PropsRepr::Inline { len: INLINE_PROPS as u8, values }),
+            Some(v) => {
+                // (In a kept buffer when there is one of its size.)
+                let mut heap: Vec<Value> = crate::array::values_buffer(INLINE_PROPS + 1 + iter.size_hint().0);
+                heap.extend(values);
+                heap.push(v);
+                heap.extend(iter);
+                Props(PropsRepr::Heap(heap))
+            }
+        }
+    }
+}
+
+impl From<Vec<Value>> for Props {
+    fn from(values: Vec<Value>) -> Props {
+        if values.len() <= INLINE_PROPS { values.into_iter().collect() } else { Props(PropsRepr::Heap(values)) }
+    }
+}
+
+impl std::ops::Deref for Props {
+    type Target = [Value];
+    #[inline]
+    fn deref(&self) -> &[Value] {
+        match &self.0 {
+            PropsRepr::Inline { len, values } => &values[..*len as usize],
+            PropsRepr::Heap(v) => v,
+        }
+    }
+}
+
+impl std::ops::DerefMut for Props {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [Value] {
+        match &mut self.0 {
+            PropsRepr::Inline { len, values } => &mut values[..*len as usize],
+            PropsRepr::Heap(v) => v,
+        }
+    }
+}
+
 /// A PHP object.
 #[derive(Debug)]
 pub struct Object {
     pub class: Rc<Class>,
     pub data: Option<Data>,
     /// Declared properties by slot; Undef where unset or uninitialized.
-    pub slots: RefCell<Vec<Value>>,
+    pub slots: RefCell<Props>,
     /// Properties added at run time (`$o->new = 1`), in order.
     pub dynamic: RefCell<PhpArray>,
     pub id: u32,
@@ -796,7 +907,7 @@ impl Object {
 
     /// A new object whose slots start as `slots` (one value per declared
     /// property: the class's defaults, prepared once by whoever makes many).
-    pub fn with_slots(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: Vec<Value>) -> Rc<Object> {
+    pub fn with_slots(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: Props) -> Rc<Object> {
         debug_assert_eq!(slots.len(), class.properties.len());
         let o = Rc::new(Object {
             class,
@@ -866,7 +977,8 @@ impl Drop for Object {
         // Its properties go before its id does (PHP frees an object, and
         // runs the destructors that brings, before its handle is free):
         // emptied in place, their storage freed with the object after.
-        self.slots.get_mut().clear();
+        // (A buffer of their own kept for the next object or array.)
+        self.slots.get_mut().release();
         let dynamic = self.dynamic.get_mut();
         if !dynamic.is_empty() {
             drop(std::mem::take(dynamic));
@@ -881,6 +993,29 @@ impl Drop for Object {
             self.ids.give_back(self.id);
         } else {
             self.ids.park(self.id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod props_tests {
+    use super::*;
+
+    #[test]
+    fn a_few_properties_live_in_the_object_more_in_a_buffer() {
+        for n in [0, 1, 3, 4, 5, 9] {
+            let values: Vec<Value> = (0..n).map(Value::Int).collect();
+            let mut p = Props::from_slice(&values);
+            assert_eq!((p.len(), matches!(p.0, PropsRepr::Inline { .. })), (n as usize, n <= INLINE_PROPS as i64));
+            assert!(p.iter().map(Value::to_int).eq(0..n));
+            assert!(Props::from(values.clone()).iter().map(Value::to_int).eq(0..n));
+            if n > 0 {
+                p[n as usize - 1] = Value::Int(99);
+                assert_eq!(p.last().map(Value::to_int), Some(99));
+            }
+            let copy = p.clone();
+            p.clear();
+            assert_eq!((p.len(), copy.len()), (0, n as usize));
         }
     }
 }

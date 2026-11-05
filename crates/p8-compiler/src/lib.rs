@@ -10,8 +10,8 @@
 //! always the caller's topmost registers: the callee's frame starts there.
 
 use p8_bytecode::{
-    AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, Sym, TraitRule,
-    ClassName,
+    AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PartialArg, PartialSite, PropDef, Reg, Site, Sym, TraitRule,
+    ClassName, NO_VARS,
     CONST_EXPR, Rare,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
@@ -137,6 +137,10 @@ struct FnBuilder<'a> {
     /// in the global table where they are used.
     auto_globals: bool,
     is_static: bool,
+    /// An instance method: `$this` always exists, so a property access
+    /// on it reads the frame's (THIS) rather than a copy
+    /// (zend_compile.c this_guaranteed_exists).
+    this_known: bool,
     tries: Vec<TryCtx<'a>>,
     handlers: Vec<Handler>,
     /// Closures and arrow functions made in this code (`MakeClosure`).
@@ -150,6 +154,10 @@ struct FnBuilder<'a> {
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
     silences: Vec<(u32, u32, Reg)>,
+    /// `Function::arg_vars`.
+    arg_vars: Vec<Vec<(u8, Reg)>>,
+    /// Partial applications made in this code (`Rare::Partial`).
+    partials: Vec<PartialSite>,
     loops_made: usize,
     /// `label:` positions and the loops open there; `goto`s to patch.
     labels: HashMap<Vec<u8>, (u32, Vec<usize>)>,
@@ -197,6 +205,7 @@ impl FnBuilder<'_> {
             class: None,
             auto_globals: false,
             is_static: false,
+            this_known: false,
             tries: Vec::new(),
             handlers: Vec::new(),
             lambdas: Vec::new(),
@@ -205,6 +214,8 @@ impl FnBuilder<'_> {
             is_generator: false,
             decls: Vec::new(),
             silences: Vec::new(),
+            arg_vars: Vec::new(),
+            partials: Vec::new(),
             loops_made: 0,
             labels: HashMap::default(),
             gotos: Vec::new(),
@@ -472,6 +483,10 @@ impl FnBuilder<'_> {
         }
         let position = &order.position;
         let map = |r: Reg| -> Reg {
+            // `$this` from the frame is no register.
+            if r == p8_bytecode::THIS {
+                return r;
+            }
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
             (match r >> KIND_SHIFT {
                 CV => index,
@@ -492,6 +507,9 @@ impl FnBuilder<'_> {
         }
         for s in &mut self.silences {
             s.2 = map(s.2);
+        }
+        for (_, r) in self.arg_vars.iter_mut().flatten() {
+            *r = map(*r);
         }
         for c in &mut self.classes {
             if let ClassRef::Dynamic(r) = c {
@@ -531,6 +549,8 @@ impl FnBuilder<'_> {
             meta: self.meta,
             decls: self.decls,
             silences: self.silences,
+            arg_vars: self.arg_vars,
+            partials: self.partials,
         }
     }
 }
@@ -663,6 +683,21 @@ fn settled_set_visibility(what: (&[u8], &[u8]), visibility: Visibility, declared
     Ok((set != visibility).then_some(set))
 }
 
+/// A property's type PHP rejects at compile time (zend_compile_prop_decl,
+/// zend_compile_params for a promoted one): `callable`, and for a declared
+/// property `void` and `never` too ("Property A::$p cannot have type callable").
+fn prop_type_allowed(what: (&[u8], &[u8]), ty: Option<&p8_runtime::types::TypeDecl>, promoted: bool, line: u32) -> Result<()> {
+    use p8_runtime::types::{T_CALLABLE, T_NEVER, T_VOID};
+    let forbidden = if promoted { T_CALLABLE } else { T_CALLABLE | T_VOID | T_NEVER };
+    match ty {
+        Some(ty) if ty.mask & forbidden != 0 => Err(CompileError {
+            message: format!("Property {}::${} cannot have type {}", String::from_utf8_lossy(what.0), String::from_utf8_lossy(what.1), ty.shown()),
+            line,
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// A declared type as PHP prints it (`?int`, `A|B`).
 fn type_text(c: &Compiler, t: &p8_syntax::ast::Type) -> Vec<u8> {
     use p8_syntax::ast::Type;
@@ -736,8 +771,45 @@ fn has_ref_items(items: &[p8_syntax::ast::ArrayItem]) -> bool {
 }
 
 /// Whether a call's arguments are `...` (the first-class callable syntax).
+/// The pipe's call (the last instruction) gets its argument as a
+/// temporary, which a by-reference parameter refuses (ZEND_SEND_VAL_EX):
+/// the check goes right before it, once the callee is known there.
+fn pipe_send_check(f: &mut FnBuilder) {
+    let Some(last) = f.code.len().checked_sub(1) else { return };
+    let check = match f.code[last] {
+        Instr::Call { site, .. } => Instr::rare(Rare::PipeArgByRef, 0, site, 0, 0),
+        Instr::MethodCall { obj, method, .. } => Instr::rare(Rare::PipeArgByRef, obj, method, 1, 0),
+        Instr::StaticCall { class, method, .. } => Instr::rare(Rare::PipeArgByRef, 0, method, 2, class),
+        Instr::CallValue { callee, .. } => Instr::rare(Rare::PipeArgByRef, callee, 0, 3, 0),
+        _ => return,
+    };
+    let line = f.lines[last];
+    f.code.insert(last, check);
+    f.lines.insert(last, line);
+}
+
 fn is_placeholder(args: &[p8_syntax::ast::Arg]) -> bool {
-    matches!(args, [arg] if matches!(arg.value, Expr::VariadicPlaceholder { .. }))
+    matches!(args, [arg] if matches!(arg.value, Expr::VariadicPlaceholder { .. }) && arg.name.is_none())
+}
+
+/// Whether a call is a partial application (PHP 8.6): a `?` among its
+/// arguments, or `...` beside others.
+fn is_partial(args: &[p8_syntax::ast::Arg]) -> bool {
+    !is_placeholder(args) && args.iter().any(|a| matches!(a.value, Expr::Placeholder { .. } | Expr::VariadicPlaceholder { .. }))
+}
+
+/// Whether an expression makes a partial application anywhere in it.
+fn makes_partial(e: &Expr) -> bool {
+    match e {
+        Expr::Call { args, .. } | Expr::StaticCall { args, .. } | Expr::MethodCall { args, .. } | Expr::New { args, .. } => {
+            is_partial(args) || args.iter().any(|a| makes_partial(a.value))
+        }
+        Expr::Array { items, .. } => items.iter().any(|i| i.key.is_some_and(makes_partial) || makes_partial(i.value)),
+        Expr::Binary { left, right, .. } => makes_partial(left) || makes_partial(right),
+        Expr::Unary { expr, .. } | Expr::Cast { expr, .. } => makes_partial(expr),
+        Expr::Ternary { condition, if_true, if_false, .. } => makes_partial(condition) || if_true.is_some_and(makes_partial) || makes_partial(if_false),
+        _ => false,
+    }
 }
 
 /// Reopen the try blocks `leave_tries` left (the code after the exit is
@@ -773,7 +845,8 @@ fn name_operand(instr: &Instr) -> Option<Reg> {
         | ClassConst { name, .. }
         | FetchStaticProp { name, .. }
         | AssignStaticProp { name, .. }
-        | AssignStaticPropOp { name, .. } => Some(name),
+        | AssignStaticPropOp { name, .. }
+        | AssignPropDim { name, .. } => Some(name),
         _ => None,
     }
 }
@@ -893,8 +966,9 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *name = f(*name);
             *dst = f(*dst);
         }
-        AssignPropDim { base, val, dst, .. } => {
+        AssignPropDim { base, name, val, dst, .. } => {
             *base = f(*base);
+            *name = f(*name);
             *val = f(*val);
             *dst = f(*dst);
         }
@@ -1178,6 +1252,8 @@ struct ClassScope {
     parent: Option<Text>,
     /// A trait: `self` is the class using it, known when the code runs.
     in_trait: bool,
+    /// A readonly class: its properties, promoted ones too, are readonly.
+    readonly: bool,
 }
 
 type Result<T> = std::result::Result<T, CompileError>;
@@ -2178,13 +2254,23 @@ impl<'src> Compiler<'src> {
         if let Some((class, is_static)) = self.method.take() {
             f.class = Some(class);
             f.is_static = is_static;
+            f.this_known = !is_static;
         }
         for p in params {
+            // A default making a partial application is checked as the
+            // constant expression it is.
+            if let Some(d) = p.default
+                && makes_partial(d)
+            {
+                self.check_attr_const(d)?;
+            }
             let text = self.text(p.name.span);
             f.cv(&text[1..]);
             let ty = p.ty.map(|t| self.type_decl(t));
             let default = p.default.and_then(|d| self.const_value(d).ok());
             let default_const = p.default.and_then(|d| self.default_const_name(d));
+            let default_src = if default.is_none() { p.default.and_then(|d| self.default_src(d)).map(|s| Text::from(s.as_slice())) } else { None };
+            let default_ns = default_src.as_ref().filter(|_| !self.ns.is_empty()).map(|_| Text::from(self.ns.as_slice()));
             let promoted = visibility_of(self, p.modifiers).is_some()
                 || p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"))
                 || set_visibility_of(self, p.modifiers)?.is_some();
@@ -2197,6 +2283,8 @@ impl<'src> Compiler<'src> {
                 ty,
                 default,
                 default_const,
+                default_src,
+                default_ns,
                 promoted,
                 attrs,
             });
@@ -2204,7 +2292,7 @@ impl<'src> Compiler<'src> {
         // A set hook written without its parameter takes `$value`.
         if std::mem::take(&mut self.hook_value) && params.is_empty() {
             f.cv(b"value");
-            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, default_const: None, promoted: false, attrs: Vec::new() });
+            f.params.push(Param { name: Text::from("value"), by_ref: false, has_default: false, variadic: false, ty: None, default: None, default_const: None, default_src: None, default_ns: None, promoted: false, attrs: Vec::new() });
         }
         f.decl_line = f.line;
         if params.last().is_some_and(|p| p.variadic) {
@@ -2217,6 +2305,11 @@ impl<'src> Compiler<'src> {
         // call checks the required ones were).
         for (i, p) in params.iter().enumerate() {
             if let Some(default) = p.default {
+                // A literal is put in place as the frame is entered (the
+                // parameter's `default`): no code runs for it.
+                if self.literal(default).is_some() && f.params[i].default.is_some() {
+                    continue;
+                }
                 let at = f.emit(Instr::ArgDefault { n: i as u8, target: 0 });
                 let var = reg(CV, i);
                 let value = self.expr(&mut f, default)?;
@@ -2234,10 +2327,11 @@ impl<'src> Compiler<'src> {
             let visibility = visibility_of(self, p.modifiers).unwrap_or(Visibility::Public);
             let text = self.text(p.name.span);
             let name = Text::from(&text[1..]);
-            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"));
+            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")) || self.scope.as_ref().is_some_and(|s| s.readonly);
             let class = self.scope.as_ref().map_or_else(|| Text::from(""), |s| s.name.clone());
             let set_declared = set_visibility_of(self, p.modifiers)?;
             let set_visibility = settled_set_visibility((class.as_bytes(), name.as_bytes()), visibility, set_declared, readonly, p.ty.is_some(), line)?;
+            prop_type_allowed((class.as_bytes(), name.as_bytes()), p.ty.map(|t| self.type_decl(t)).as_ref(), true, line)?;
             self.promoted.push(PropDef {
                 name: name.clone(),
                 default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
@@ -2253,8 +2347,14 @@ impl<'src> Compiler<'src> {
                 ty_decl: p.ty.map(|t| self.type_decl(t)),
                 meta: Meta { attrs: f.params[i].attrs.clone(), ..Meta::default() },
             });
-            let obj = f.temp();
-            f.emit(Instr::This { dst: obj });
+            // `$this` from the frame (a constructor always has one).
+            let obj = if f.this_known {
+                p8_bytecode::THIS
+            } else {
+                let obj = f.temp();
+                f.emit(Instr::This { dst: obj });
+                obj
+            };
             let key = f.name_constant(Frozen::Str(name));
             let dst = f.temp();
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst, take: false });
@@ -2353,6 +2453,10 @@ impl<'src> Compiler<'src> {
                 }
                 continue;
             }
+            // zend_verify_list_assign_target: a call is not a target.
+            if matches!(item.value, Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. }) {
+                return Err(CompileError { message: "Can't use function return value in write context".into(), line: self.line(item.value.span()) });
+            }
             let elem = f.temp();
             match item.value {
                 // Fetched for writing, its references made below: no warning
@@ -2428,9 +2532,9 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::Assign { var, src: val });
             }
             Expr::ArrayDimFetch { .. } if dim_root_is_prop(target) => {
-                let (base, n, append) = self.prop_dim_path(f, target)?;
+                let (base, name, n, append) = self.prop_dim_path(f, target)?;
                 let dst = f.temp();
-                f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+                f.emit(Instr::AssignPropDim { op: None, base, name, n, append, val, dst });
             }
             Expr::ArrayDimFetch { .. } => {
                 let (var, keys, n, append) = self.dim_path(f, target)?;
@@ -2461,7 +2565,9 @@ impl<'src> Compiler<'src> {
 
     /// `MakeClosure` of `func` into a new temporary (not a variable: a
     /// `use` of the variable being assigned takes its old value).
-    fn make_closure(&mut self, f: &mut FnBuilder, func: Function, is_static: bool) -> Reg {
+    fn make_closure(&mut self, f: &mut FnBuilder, mut func: Function, is_static: bool) -> Reg {
+        // `static function`: ZEND_ACC_STATIC (reflection shows it).
+        func.is_static |= is_static;
         f.lambdas.push(Arc::new(func));
         let dst = f.temp();
         f.emit(Instr::MakeClosure { dst, func: (f.lambdas.len() - 1) as u16, is_static });
@@ -2558,7 +2664,7 @@ impl<'src> Compiler<'src> {
                 _ => {}
             }
         }
-        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT });
+        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT, readonly: flags & CLASS_READONLY != 0 });
         let (mut constants, mut properties, mut methods) = (Vec::new(), Vec::new(), Vec::new());
         let (mut traits, mut trait_rules) = (Vec::new(), Vec::new());
         let mut cases = Vec::new();
@@ -2591,6 +2697,7 @@ impl<'src> Compiler<'src> {
                         let name = Text::from(text.strip_prefix(b"$").unwrap_or(text));
                         let set_visibility =
                             settled_set_visibility((display.as_bytes(), name.as_bytes()), visibility, set_declared, readonly && !has(b"static"), ty.is_some(), self.line(e.name.span))?;
+                        prop_type_allowed((display.as_bytes(), name.as_bytes()), ty.map(|t| self.type_decl(t)).as_ref(), false, self.line(e.name.span))?;
                         properties.push(PropDef {
                             meta,
                             name,
@@ -2754,6 +2861,7 @@ impl<'src> Compiler<'src> {
                     };
                     if !interface {
                         let meta = self.meta_of(attributes, *doc_comment, *span, 8)?;
+                        prop_type_allowed((display.as_bytes(), pname.as_bytes()), ty.map(|t| self.type_decl(t)).as_ref(), false, self.line(name.span))?;
                         properties.push(PropDef {
                             meta,
                             name: pname,
@@ -2988,6 +3096,99 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    /// A parameter's default as PHP source that means the same anywhere
+    /// in its namespace: the expression as written, its constant and
+    /// class names resolved (`K` → `\App\K`, `C::X` → `\App\C::X`; `self`,
+    /// `parent` and `static` stay). An unqualified constant that falls
+    /// back to the global one stays unqualified. None for what a constant
+    /// expression may not hold, or holds that depends on where it is
+    /// written (magic constants, closures).
+    fn default_src(&self, e: &Expr) -> Option<Vec<u8>> {
+        let span = e.span();
+        let mut edits: Vec<(Span, Vec<u8>)> = Vec::new();
+        self.default_names(e, &mut edits)?;
+        edits.sort_by_key(|(s, _)| s.start);
+        let mut out = Vec::new();
+        let mut at = span.start;
+        for (s, text) in edits {
+            out.extend_from_slice(&self.source[at..s.start]);
+            out.extend_from_slice(&text);
+            at = s.end;
+        }
+        out.extend_from_slice(&self.source[at..span.end]);
+        Some(out)
+    }
+
+    /// default_src's names to replace, and None for what it cannot write.
+    fn default_names(&self, e: &Expr, edits: &mut Vec<(Span, Vec<u8>)>) -> Option<()> {
+        let class = |s: &Self, name: Span, edits: &mut Vec<(Span, Vec<u8>)>| -> Option<()> {
+            let text = s.text(name);
+            if text.starts_with(b"$") {
+                return None;
+            }
+            if !matches!(text.to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static") {
+                edits.push((name, [b"\\".as_slice(), &s.class_name(text)].concat()));
+            }
+            Some(())
+        };
+        match e {
+            Expr::Integer { .. } | Expr::Float { .. } | Expr::String { .. } | Expr::Boolean { .. } | Expr::Null { .. } => Some(()),
+            Expr::Variable { name, .. } => {
+                let text = self.text(*name);
+                let bare = text.strip_prefix(b"\\").unwrap_or(text);
+                if text.starts_with(b"$") {
+                    return None;
+                }
+                if matches!(bare.to_ascii_lowercase().as_slice(), b"true" | b"false" | b"null") {
+                    return Some(());
+                }
+                let (full, fallback) = self.ns_name(text, &self.use_consts, false);
+                if fallback.is_none() {
+                    edits.push((*name, [b"\\".as_slice(), &full].concat()));
+                }
+                Some(())
+            }
+            Expr::ClassConstFetch { class: Expr::Variable { name, .. }, constant: Expr::Variable { name: c, .. }, .. } if !self.text(*c).starts_with(b"$") => class(self, *name, edits),
+            Expr::New { class: Expr::Variable { name, .. }, args, .. } => {
+                class(self, *name, edits)?;
+                args.iter().try_for_each(|a| if a.unpack { None } else { self.default_names(a.value, edits) })
+            }
+            Expr::Array { items, .. } => items.iter().try_for_each(|i| {
+                if i.by_ref {
+                    return None;
+                }
+                if let Some(k) = i.key {
+                    self.default_names(k, edits)?;
+                }
+                self.default_names(i.value, edits)
+            }),
+            Expr::Unary { op, expr, .. } if !matches!(op, UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::ErrorSuppress | UnaryOp::Reference) => self.default_names(expr, edits),
+            Expr::Binary { left, right, .. } => {
+                self.default_names(left, edits)?;
+                self.default_names(right, edits)
+            }
+            Expr::Ternary { condition, if_true, if_false, .. } => {
+                self.default_names(condition, edits)?;
+                if let Some(t) = if_true {
+                    self.default_names(t, edits)?;
+                }
+                self.default_names(if_false, edits)
+            }
+            Expr::ArrayDimFetch { array, dim: Some(dim), .. } => {
+                self.default_names(array, edits)?;
+                self.default_names(dim, edits)
+            }
+            Expr::PropertyFetch { target, property: Expr::Variable { name, .. }, .. }
+            | Expr::NullsafePropertyFetch { target, property: Expr::Variable { name, .. }, .. }
+                if !self.text(*name).starts_with(b"$") =>
+            {
+                self.default_names(target, edits)
+            }
+            Expr::Cast { expr, .. } => self.default_names(expr, edits),
+            _ => None,
+        }
+    }
+
     /// The index of the class a name expression names: `self` and
     /// `parent` resolved now, `static` when the code runs.
     fn class_ref(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<u16> {
@@ -3053,6 +3254,21 @@ impl<'src> Compiler<'src> {
             }
             other => self.expr(f, other),
         }
+    }
+
+    /// The object operand of a property read or write: `$this` in an
+    /// instance method is the frame's own (THIS), not a copy made in a
+    /// temporary first.
+    fn prop_obj(&mut self, f: &mut FnBuilder, target: &Expr) -> Result<Reg> {
+        if self.frame_this(f, target) {
+            return Ok(p8_bytecode::THIS);
+        }
+        self.expr(f, target)
+    }
+
+    /// Whether `target` is `$this` in an instance method (`prop_obj`).
+    fn frame_this(&self, f: &FnBuilder, target: &Expr) -> bool {
+        f.this_known && matches!(target, Expr::Variable { name, .. } if self.text(*name) == b"$this")
     }
 
     /// `prop_name` for the name operand of a property instruction (see
@@ -3339,7 +3555,9 @@ impl<'src> Compiler<'src> {
     }
 
     /// Call the callable [a, b] (a method named at run time).
-    fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
+    /// The result goes to `hint` when there is one (see `out`; `mark` is
+    /// where the call's temporaries start).
+    fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg], hint: Option<Reg>, mark: usize) -> Result<Reg> {
         let callee = f.temp();
         f.emit(Instr::NewArray { dst: callee, n: 0 });
         f.emit(Instr::ArrayPush { arr: callee, val: a, take: false });
@@ -3347,9 +3565,16 @@ impl<'src> Compiler<'src> {
         if needs_spread(args) {
             return self.spread_call(f, callee, args);
         }
-        let (base, argc) = self.value_args(f, args, callee)?;
-        f.emit(Instr::CallValue { dst: base, callee, base, argc });
-        Ok(base)
+        let (base, argc, vars) = match self.deferred_args(f, args)? {
+            Some(sent) => sent,
+            None => {
+                let (base, argc) = self.value_args(f, args, callee)?;
+                (base, argc, NO_VARS)
+            }
+        };
+        let dst = out(f, hint, mark);
+        f.emit(Instr::CallValue { dst, callee, base, argc, vars });
+        Ok(dst)
     }
 
     /// A method call's arguments. The method is known only when the call
@@ -3382,6 +3607,36 @@ impl<'src> Compiler<'src> {
             }
         }
         Ok((regs[0], args.len() as u8))
+    }
+
+    /// The arguments of a StaticCall or CallValue when each is a variable
+    /// or a literal (nothing runs between them, so when a variable is read
+    /// makes no difference): the literals into their registers, the
+    /// variables left for the call to send once its target is known
+    /// (`Function::arg_vars`), with no instruction each. None, nothing
+    /// emitted, otherwise.
+    fn deferred_args(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<Option<(Reg, u8, u16)>> {
+        let var = |c: &Self, e: &Expr| match e {
+            Expr::Variable { name, .. } => {
+                let t = c.text(*name);
+                t.starts_with(b"$") && !matches!(t, b"$this" | b"$GLOBALS")
+            }
+            _ => false,
+        };
+        let plain = |c: &Self, a: &p8_syntax::ast::Arg| !a.unpack && a.name.is_none() && (var(c, a.value) || c.literal(a.value).is_some());
+        if !args.iter().all(|a| plain(self, a)) || !args.iter().any(|a| var(self, a.value)) || f.arg_vars.len() >= NO_VARS as usize {
+            return Ok(None);
+        }
+        let regs: Vec<Reg> = (0..args.len()).map(|_| f.temp()).collect();
+        let mut vars = Vec::new();
+        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+            match arg.value {
+                Expr::Variable { name, .. } if var(self, arg.value) => vars.push((n as u8, f.cv(&self.text(*name)[1..]))),
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        f.arg_vars.push(vars);
+        Ok(Some((regs[0], args.len() as u8, (f.arg_vars.len() - 1) as u16)))
     }
 
     /// The arguments of a call of a value (`$f(...)`, `[$o, 'm'](...)`): a
@@ -3491,7 +3746,10 @@ impl<'src> Compiler<'src> {
     /// `$obj->name[k1]..[kn]`: the object, the name and the keys in
     /// consecutive temporaries from the returned base; the key count and
     /// whether the last dimension is `[]`.
-    fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, u8, bool)> {
+    /// `$obj->p[k1]..[kn]`'s operands for AssignPropDim: the object's
+    /// register (the keys follow it, from `+ 2`), the name's (its constant
+    /// when it is one), the key count, and whether the last is `[]`.
+    fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, Reg, u8, bool)> {
         let mut dims = Vec::new();
         let mut cur = e;
         while let Expr::ArrayDimFetch { array, dim, .. } = cur
@@ -3510,15 +3768,29 @@ impl<'src> Compiler<'src> {
         }
         let keyed: Vec<&Expr> = dims.iter().flatten().copied().collect();
         let base = f.temp();
+        // (`base + 1` stays the name's place: a run-time name lands there.)
         let name = f.temp();
         let keys: Vec<Reg> = keyed.iter().map(|_| f.temp()).collect();
-        self.expr_into(f, target, base)?;
-        let n = self.prop_name(f, property)?;
-        f.emit(Instr::Move { dst: name, src: n });
+        // `$this` in an instance method: the frame's, flagged in the count
+        // (DIM_THIS), with nothing put in `base`.
+        let this = keys.len() < usize::from(p8_bytecode::DIM_THIS) && self.frame_this(f, target);
+        if !this {
+            self.expr_into(f, target, base)?;
+        }
+        let n = self.prop_name_operand(f, property)?;
+        // A constant name is used where it is; a run-time one is kept in its
+        // place while the keys are worked out.
+        let name = if n >> KIND_SHIFT == CONST {
+            n
+        } else {
+            f.emit(Instr::Move { dst: name, src: n });
+            name
+        };
         for (r, d) in keys.iter().zip(&keyed) {
             self.expr_into(f, d, *r)?;
         }
-        Ok((base, keys.len() as u8, append))
+        let n = keys.len() as u8 | if this { p8_bytecode::DIM_THIS } else { 0 };
+        Ok((base, name, n, append))
     }
 
     fn literal(&self, e: &Expr) -> Option<Frozen> {
@@ -3672,9 +3944,12 @@ impl<'src> Compiler<'src> {
                     }
                 }
                 let mut args = Vec::with_capacity(a.args.len());
-                for arg in a.args {
+                for (i, arg) in a.args.iter().enumerate() {
                     if arg.unpack {
                         return Err(CompileError { message: "Cannot use unpacking in attribute argument list".into(), line: self.line(arg.span) });
+                    }
+                    if arg.name.is_none() && a.args[..i].iter().any(|b| b.name.is_some()) {
+                        return Err(CompileError { message: "Cannot use positional argument after named argument".into(), line: self.line(arg.span) });
                     }
                     self.check_attr_const(arg.value)?;
                     let (value, code) = self.const_init(arg.value)?;
@@ -3691,6 +3966,20 @@ impl<'src> Compiler<'src> {
     fn check_attr_const(&self, e: &Expr) -> Result<()> {
         let invalid = || CompileError { message: "Constant expression contains invalid operations".into(), line: self.line(e.span()) };
         match e {
+            // A first-class callable or partial application of a named
+            // function or static method is one (PHP 8.5, 8.6), its bound
+            // arguments constant expressions too (zend_compile_const_expr_fcc).
+            Expr::Call { func, args, .. } | Expr::StaticCall { class: func, args, .. } if is_placeholder(args) || is_partial(args) => {
+                if matches!(func, Expr::Variable { name, .. } if self.text(*name).starts_with(b"$")) {
+                    return Err(invalid());
+                }
+                for arg in *args {
+                    if !matches!(arg.value, Expr::Placeholder { .. } | Expr::VariadicPlaceholder { .. }) {
+                        self.check_attr_const(arg.value)?;
+                    }
+                }
+                Ok(())
+            }
             Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::Assign { .. } | Expr::Closure { .. } | Expr::ArrowFunction { .. } => Err(invalid()),
             Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => Err(invalid()),
             Expr::Array { items, .. } => {
@@ -3812,7 +4101,8 @@ impl<'src> Compiler<'src> {
             Expr::Call { func, .. } if self.is_builtin(func) => {
                 Err(CompileError { message: "Cannot use result of built-in function in write context".into(), line: self.line(root.span()) })
             }
-            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => {
+            // (A pipe is a call: its result written into, GH-22490.)
+            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. } | Expr::Znode { .. } => {
                 let r = self.expr(f, root)?;
                 let dst = f.temp();
                 f.emit(Instr::Move { dst, src: r });
@@ -3828,6 +4118,12 @@ impl<'src> Compiler<'src> {
     /// result written there directly would bypass a reference it holds).
     fn expr_into(&mut self, f: &mut FnBuilder, e: &Expr, dst: Reg) -> Result<()> {
         debug_assert_eq!(dst >> KIND_SHIFT, TEMP, "expr_into targets a temporary");
+        // A value already computed (the pipe's): moved where it goes, as
+        // PHP sends a TMP (no copy left behind).
+        if let Expr::Znode { reg, once: true, .. } = e {
+            f.emit(Instr::AssignTake { var: dst, src: *reg as Reg });
+            return Ok(());
+        }
         let r = self.expr_to(f, e, Some(dst))?;
         if r != dst {
             f.emit(Instr::Move { dst, src: r });
@@ -3949,10 +4245,10 @@ impl<'src> Compiler<'src> {
                     dst
                 }
                 Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
-                    let (base, n, append) = self.prop_dim_path(f, var)?;
+                    let (base, name, n, append) = self.prop_dim_path(f, var)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
-                    f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+                    f.emit(Instr::AssignPropDim { op: None, base, name, n, append, val, dst });
                     dst
                 }
                 Expr::ArrayDimFetch { .. } => {
@@ -3965,7 +4261,7 @@ impl<'src> Compiler<'src> {
                     dst
                 }
                 Expr::PropertyFetch { target, property, .. } => {
-                    let obj = self.expr(f, target)?;
+                    let obj = self.prop_obj(f, target)?;
                     let name = self.prop_name_operand(f, property)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
@@ -4038,6 +4334,34 @@ impl<'src> Compiler<'src> {
                 let Some(bin) = assign_binop(*op) else {
                     // `$a ??= v`: assigned only when $a is not set.
                     let _ = span;
+                    // A call the target is read from (`f()->p ??= v`,
+                    // `(1 |> f(...))[0] ??= v`) runs once, its result read
+                    // and written (zend_compile_assign_coalesce memoizes).
+                    // (A builtin's result is no write target: the error
+                    // below says so, as PHP's compiler does.)
+                    // (assert() compiles to a call like a user function's.)
+                    let builtin = |e: &Expr| {
+                        matches!(e, Expr::Call { func, .. } if self.is_builtin(func)
+                            && !matches!(func, Expr::Variable { name, .. } if self.text(*name).strip_prefix(b"\\").unwrap_or(self.text(*name)).eq_ignore_ascii_case(b"assert")))
+                    };
+                    let is_call = |e: &Expr| !builtin(e) && matches!(e, Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. });
+                    let root;
+                    let memo;
+                    let var: &Expr = match var {
+                        Expr::PropertyFetch { target, property, span } if is_call(target) => {
+                            let r = self.expr(f, target)?;
+                            root = Expr::Znode { reg: r as u32, once: false, span: target.span() };
+                            memo = Expr::PropertyFetch { target: &root, property, span: *span };
+                            &memo
+                        }
+                        Expr::ArrayDimFetch { array, dim, span } if is_call(array) => {
+                            let r = self.expr(f, array)?;
+                            root = Expr::Znode { reg: r as u32, once: false, span: array.span() };
+                            memo = Expr::ArrayDimFetch { array: &root, dim: *dim, span: *span };
+                            &memo
+                        }
+                        other => other,
+                    };
                     let current = self.quiet(f, var)?;
                     let dst = f.temp();
                     let set = f.emit(Instr::JumpIfSet { src: current, dst, target: 0 });
@@ -4085,14 +4409,14 @@ impl<'src> Compiler<'src> {
                         dst
                     }
                     Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
-                        let (base, n, append) = self.prop_dim_path(f, var)?;
+                        let (base, name, n, append) = self.prop_dim_path(f, var)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
-                        f.emit(Instr::AssignPropDim { op: Some(bin), base, n, append, val, dst });
+                        f.emit(Instr::AssignPropDim { op: Some(bin), base, name, n, append, val, dst });
                         dst
                     }
                     Expr::PropertyFetch { target, property, .. } => {
-                        let obj = self.expr(f, target)?;
+                        let obj = self.prop_obj(f, target)?;
                         let name = self.prop_name_operand(f, property)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
@@ -4110,9 +4434,11 @@ impl<'src> Compiler<'src> {
                     other => return Err(self.unsupported(other.span(), "this compound assignment")),
                 }
             }
+            Expr::Binary { left, op: BinaryOp::Pipe, right, span } => self.pipe(f, left, right, *span, hint, mark)?,
             Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
+            Expr::Znode { reg, .. } => *reg as Reg,
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::PropertyFetch { target, property, .. }, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
@@ -4120,7 +4446,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::PostInc { var: Expr::PropertyFetch { target, property, .. }, .. }
             | Expr::PostDec { var: Expr::PropertyFetch { target, property, .. }, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
@@ -4401,6 +4727,12 @@ impl<'src> Compiler<'src> {
                 f.patch_all(ends, f.here());
                 dst
             }
+            Expr::New { args, span, .. } if is_placeholder(args) || is_partial(args) => {
+                return Err(CompileError { message: "Cannot create Closure for new expression".into(), line: self.line(*span) });
+            }
+            Expr::NullsafeMethodCall { args, span, .. } if is_placeholder(args) || is_partial(args) => {
+                return Err(CompileError { message: "Cannot combine nullsafe operator with Closure creation".into(), line: self.line(*span) });
+            }
             Expr::New { class, args, .. } if matches!(class, Expr::AnonymousClass { .. }) => self.anonymous_class(f, class, args, hint)?,
             Expr::New { class, args, .. } => {
                 let class = self.class_ref(f, class)?;
@@ -4423,13 +4755,13 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::PropertyFetch { target, property, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = out(f, hint, mark);
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
                 dst
             }
-            Expr::MethodCall { target, method, args, .. } if needs_spread(args) => {
+            Expr::MethodCall { target, method, args, .. } if needs_spread(args) && !is_partial(args) => {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
@@ -4443,7 +4775,7 @@ impl<'src> Compiler<'src> {
             // where the call runs (as PHP's callables do: $this and the
             // called class go along).
             Expr::StaticCall { class: class_expr @ Expr::Variable { .. }, method: Expr::Variable { name: method, .. }, args, .. }
-                if needs_spread(args) && !self.text(*method).starts_with(b"$") =>
+                if needs_spread(args) && !is_partial(args) && !self.text(*method).starts_with(b"$") =>
             {
                 let Expr::Variable { name: written, .. } = class_expr else { unreachable!("matched a name") };
                 let written = self.text(*written);
@@ -4458,22 +4790,26 @@ impl<'src> Compiler<'src> {
                     f.constant(Frozen::Str(Text::from(self.class_name(written).as_slice())))
                 };
                 let m = f.constant(Frozen::Str(Text::from(self.text(*method))));
-                self.call_pair(f, name, m, args)?
+                self.call_pair(f, name, m, args, hint, mark)?
             }
-            Expr::MethodCall { target, method, args, .. } if is_placeholder(args) => {
-                // `$o->m(...)`: a Closure of [$o, 'm'].
+            Expr::MethodCall { target, method, args, span } if is_placeholder(args) || is_partial(args) => {
+                // `$o->m(...)`: a Closure of [$o, 'm'] (`$o->m(?)`: its
+                // partial application).
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
                 f.emit(Instr::NewArray { dst: pair, n: 0 });
                 f.emit(Instr::ArrayPush { arr: pair, val: obj, take: false });
                 f.emit(Instr::ArrayPush { arr: pair, val: name, take: false });
+                if is_partial(args) {
+                    return self.partial(f, pair, args, *span);
+                }
                 let dst = f.temp();
                 f.emit(Instr::FromCallable { dst, src: pair });
                 dst
             }
-            Expr::StaticCall { class: class_expr @ Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, .. }
-                if is_placeholder(args) =>
+            Expr::StaticCall { class: class_expr @ Expr::Variable { name: class, .. }, method: Expr::Variable { name: method, .. }, args, span }
+                if is_placeholder(args) || is_partial(args) =>
             {
                 // `C::m(...)`: a Closure of "C::m", the class name resolved
                 // as written here (self, parent and static stay keywords);
@@ -4496,6 +4832,9 @@ impl<'src> Compiler<'src> {
                     let text = [class.as_slice(), b"::", self.text(*method)].concat();
                     f.constant(Frozen::Str(Text::from(text.as_slice())))
                 };
+                if is_partial(args) {
+                    return self.partial(f, src, args, *span);
+                }
                 let dst = f.temp();
                 f.emit(Instr::FromCallable { dst, src });
                 dst
@@ -4509,7 +4848,7 @@ impl<'src> Compiler<'src> {
                 if text.starts_with(b"$") {
                     // `$o->$m()`: the callable [$o, $m].
                     let m = self.expr(f, method)?;
-                    return self.call_pair(f, obj, m, args);
+                    return self.call_pair(f, obj, m, args, hint, mark);
                 }
                 let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
@@ -4518,8 +4857,11 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
                     |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
                 )?;
-                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
-                base
+                // Straight into where the value goes (as a function call's
+                // is): no copy left behind in the arguments' registers.
+                let dst = out(f, hint, mark);
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
+                dst
             }
             // `parent::$prop::get()` / `::set($v)`: the parent's hook (or
             // its stored value when the parent's property has none).
@@ -4535,8 +4877,9 @@ impl<'src> Compiler<'src> {
                 let display = [self.text(*prop), b"::", self.text(*m).to_ascii_lowercase().as_slice()].concat();
                 let site = self.named_site(f, &display);
                 let (base, argc) = self.args_by_value(f, args)?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
-                base
+                let dst = out(f, hint, mark);
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc, vars: NO_VARS });
+                dst
             }
             Expr::StaticCall { class: class_expr, method, args, .. } => {
                 let class = self.class_ref(f, class_expr)?;
@@ -4559,17 +4902,26 @@ impl<'src> Compiler<'src> {
                         }
                     };
                     let m = self.expr(f, method)?;
-                    return self.call_pair(f, name, m, args);
+                    return self.call_pair(f, name, m, args, hint, mark);
                 }
                 let site = self.named_site(f, text);
-                let (base, argc) = self.method_args(
-                    f,
-                    args,
-                    |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
-                    |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
-                )?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
-                base
+                let (base, argc, vars) = match self.deferred_args(f, args)? {
+                    Some(sent) => sent,
+                    None => {
+                        let (base, argc) = self.method_args(
+                            f,
+                            args,
+                            |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
+                            |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
+                        )?;
+                        (base, argc, NO_VARS)
+                    }
+                };
+                // Straight into where the value goes (as a function call's
+                // is): no copy left behind in the arguments' registers.
+                let dst = out(f, hint, mark);
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc, vars });
+                dst
             }
             // `C::${expr}`, `C::$$v`: a static property named when it runs.
             Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
@@ -4793,9 +5145,10 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::NullsafeMethodCall { target, method, args, .. } => {
-                // Null: no call, and its arguments are not evaluated.
+                // Null: no call, and its arguments are not evaluated. The
+                // result straight into where it goes (no copy left behind).
                 let obj = self.expr(f, target)?;
-                let dst = f.temp();
+                let dst = hint.unwrap_or_else(|| f.temp());
                 let null = f.constant(Frozen::Null);
                 let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
                 let Expr::Variable { name, .. } = method else {
@@ -4809,8 +5162,7 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
                     |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
                 )?;
-                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
-                f.emit(Instr::Move { dst, src: base });
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(is_null, f.here());
                 f.emit(Instr::LoadNull { dst });
@@ -4895,6 +5247,95 @@ impl<'src> Compiler<'src> {
         let dst = f.temp();
         f.emit(Instr::FetchConst { site, dst });
         dst
+    }
+
+    /// `$value |> $callable` (zend_compile_pipe): the value computed first
+    /// (into a temporary of its own, so a by-reference parameter refuses
+    /// it), then the call. A first-class callable on the right
+    /// (`f(...)`, `$o->m(...)`, `C::m(...)`) becomes that call with the
+    /// value as its argument; anything else is called as a value,
+    /// `($callable)($value)`.
+    fn pipe(&mut self, f: &mut FnBuilder, left: &Expr, right: &Expr, span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
+        if let Expr::ArrowFunction { span: arrow, .. } = right
+            && !self.parenthesized(*arrow)
+        {
+            return Err(CompileError { message: "Arrow functions on the right hand side of |> must be parenthesized".into(), line: self.line(*arrow) });
+        }
+        let value = self.expr(f, left)?;
+        // ZEND_QM_ASSIGN of a variable: a temporary, never a reference.
+        let value = if value >> KIND_SHIFT == TEMP {
+            value
+        } else {
+            let t = f.temp();
+            f.emit(Instr::Move { dst: t, src: value });
+            t
+        };
+        let znode = Expr::Znode { reg: value as u32, once: true, span: left.span() };
+        let arg = [p8_syntax::ast::Arg { name: None, value: &znode, unpack: false, span: left.span() }];
+        // assert() gets its own source as an extra argument: never
+        // rewritten (zend_is_pipe_optimizable_callable_name).
+        let is_assert = |func: &Expr| matches!(func, Expr::Variable { name, .. } if self.text(*name).trim_ascii_start().strip_prefix(b"\\").unwrap_or(self.text(*name)).eq_ignore_ascii_case(b"assert"));
+        // zend_partial_apply: a first-class callable or a partial
+        // application with one placeholder on the right becomes the call
+        // with the value in the placeholder's place (`$v |> f(1, ?)` is
+        // `f(1, $v)`; `name: ?` passes it by that name). Not with more
+        // placeholders (a missing argument), nor `...` after named
+        // arguments (a positional one would follow them).
+        let applied = |args: &[p8_syntax::ast::Arg<'_>]| -> Option<usize> {
+            if !is_placeholder(args) && !is_partial(args) {
+                return None;
+            }
+            let mut found = None;
+            let mut named = false;
+            for (i, a) in args.iter().enumerate() {
+                named |= a.name.is_some();
+                if matches!(a.value, Expr::Placeholder { .. } | Expr::VariadicPlaceholder { .. }) {
+                    if found.is_some() || (named && matches!(a.value, Expr::VariadicPlaceholder { .. })) {
+                        return None;
+                    }
+                    found = Some(i);
+                }
+            }
+            found
+        };
+        fn with_value<'a>(args: &[p8_syntax::ast::Arg<'a>], at: usize, value: &'a Expr<'a>) -> Vec<p8_syntax::ast::Arg<'a>> {
+            args.iter().enumerate().map(|(i, a)| if i == at { p8_syntax::ast::Arg { name: a.name, value, unpack: false, span: a.span } } else { *a }).collect()
+        }
+        let replaced = |args, at| with_value(args, at, &znode);
+        let pfa_args;
+        let call = match right {
+            Expr::Call { func, args, span } if !is_assert(func) && let Some(at) = applied(args) => {
+                pfa_args = replaced(args, at);
+                Expr::Call { func, args: &pfa_args, span: *span }
+            }
+            Expr::MethodCall { target, method, args, span } if let Some(at) = applied(args) => {
+                pfa_args = replaced(args, at);
+                Expr::MethodCall { target, method, args: &pfa_args, span: *span }
+            }
+            Expr::StaticCall { class, method, args, span } if let Some(at) = applied(args) => {
+                pfa_args = replaced(args, at);
+                Expr::StaticCall { class, method, args: &pfa_args, span: *span }
+            }
+            callable => {
+                let callee = self.expr(f, callable)?;
+                let callee = Expr::Znode { reg: callee as u32, once: true, span: callable.span() };
+                let call = Expr::Call { func: &callee, args: &arg, span };
+                let r = self.expr_to(f, &call, hint)?;
+                pipe_send_check(f);
+                return Ok(r);
+            }
+        };
+        let _ = mark;
+        let r = self.expr_to(f, &call, hint)?;
+        pipe_send_check(f);
+        Ok(r)
+    }
+
+    /// Whether the expression at `span` is written in parentheses.
+    fn parenthesized(&self, span: Span) -> bool {
+        let before = &self.source[..span.start.min(self.source.len())];
+        let after = &self.source[span.end.min(self.source.len())..];
+        before.trim_ascii_end().ends_with(b"(") && after.trim_ascii_start().starts_with(b")")
     }
 
     fn binary(&mut self, f: &mut FnBuilder, left: &Expr, op: BinaryOp, right: &Expr, hint: Option<Reg>, mark: usize) -> Result<Reg> {
@@ -5022,7 +5463,7 @@ impl<'src> Compiler<'src> {
                 let exists = f.constant(Frozen::Str(Text::from("function_exists")));
                 let base = f.temp();
                 f.emit(Instr::Move { dst: base, src: full });
-                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
+                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1, vars: NO_VARS });
                 let callee = f.temp();
                 let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
                 f.emit(Instr::Move { dst: callee, src: full });
@@ -5036,7 +5477,100 @@ impl<'src> Compiler<'src> {
         })
     }
 
+    /// A partial application of the callable in `callee` (PHP 8.6): its
+    /// arguments checked as zend_compile_args_ex checks them, the values
+    /// bound now (a reference where the callee takes one), and a
+    /// Rare::Partial making the Closure (ZEND_CALLABLE_CONVERT_PARTIAL).
+    fn partial(&mut self, f: &mut FnBuilder, callee: Reg, args: &[p8_syntax::ast::Arg], span: Span) -> Result<Reg> {
+        let line = self.line(span);
+        let error = |message: &str| CompileError { message: message.into(), line };
+        let (mut named, mut variadic) = (false, false);
+        let mut site = Vec::new();
+        for arg in args {
+            if arg.unpack {
+                return Err(error(if named { "Cannot use argument unpacking after named arguments" } else { "Cannot combine partial application and unpacking" }));
+            }
+            let is_variadic = matches!(arg.value, Expr::VariadicPlaceholder { .. });
+            if arg.name.is_some() {
+                named = true;
+                if variadic {
+                    return Err(error("Variadic placeholder must be last"));
+                }
+            } else {
+                if named && !is_variadic {
+                    return Err(error("Cannot use positional argument after named argument"));
+                }
+                if variadic {
+                    return Err(error(if is_variadic { "Variadic placeholder may only appear once" } else { "Variadic placeholder must be last" }));
+                }
+            }
+            if is_variadic {
+                variadic = true;
+                continue;
+            }
+            site.push(PartialArg {
+                name: arg.name.map(|t| Text::from(self.text(t.span))),
+                placeholder: matches!(arg.value, Expr::Placeholder { .. }),
+            });
+        }
+        let written: Vec<&p8_syntax::ast::Arg> = args.iter().filter(|a| !matches!(a.value, Expr::VariadicPlaceholder { .. })).collect();
+        let regs: Vec<Reg> = (0..written.len().max(1)).map(|_| f.temp()).collect();
+        for (n, (arg, r)) in written.iter().zip(&regs).enumerate() {
+            match arg.value {
+                Expr::Placeholder { .. } => {}
+                value if self.can_ref_arg(value) && !matches!(value, Expr::Variable { name, .. } if matches!(self.text(*name), b"$this" | b"$GLOBALS")) => {
+                    // Positional arguments come first: n is the parameter;
+                    // a named one is asked about by its name.
+                    let flag = f.temp();
+                    match arg.name {
+                        Some(name) => {
+                            let key = f.constant(Frozen::Str(Text::from(self.text(name.span))));
+                            f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, key, u16::MAX));
+                        }
+                        None => {
+                            f.emit(Instr::rare(Rare::CallableArgByRef, flag, callee, 0, n as u16));
+                        }
+                    }
+                    self.ref_or_value_with(f, value, *r, flag)?;
+                }
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        let name = self.partial_name(f, line);
+        f.partials.push(PartialSite { args: site, variadic, name, line });
+        let dst = f.temp();
+        f.emit(Instr::rare(Rare::Partial, dst, callee, regs[0], (f.partials.len() - 1) as u16));
+        Ok(dst)
+    }
+
+    /// zend_compile_partial_name: `{closure:pfa:<where>:<line>}`, where
+    /// is the function making it (`C::m()`, `f()`; a closure as named)
+    /// or, at the top level, the file.
+    fn partial_name(&self, f: &FnBuilder, line: u32) -> Text {
+        let place = if f.name.as_bytes() == b"{main}" {
+            self.file.to_string()
+        } else {
+            let name = String::from_utf8_lossy(f.name.as_bytes());
+            if f.name.as_bytes().starts_with(b"{closure") {
+                name.into_owned()
+            } else {
+                match &f.class {
+                    Some(c) => format!("{}::{name}()", String::from_utf8_lossy(c.as_bytes())),
+                    None => format!("{name}()"),
+                }
+            }
+        };
+        Text::from(format!("{{closure:pfa:{place}:{line}}}").as_bytes())
+    }
+
     fn call(&mut self, f: &mut FnBuilder, func: &Expr, args: &[p8_syntax::ast::Arg], span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
+        if is_partial(args) {
+            let callee = match func {
+                Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => self.function_callee(f, *name)?,
+                other => self.expr(f, other)?,
+            };
+            return self.partial(f, callee, args, span);
+        }
         // `f(...)`: a Closure of the function.
         if is_placeholder(args) {
             let src = match func {
@@ -5048,8 +5582,9 @@ impl<'src> Compiler<'src> {
             return Ok(dst);
         }
         // A call of a value: `$f()`, `(function () {})()`, `$o->p()()`.
+        // `(NAME)(…)`: the constant's value is called, not a function of that name.
         let dynamic = match func {
-            Expr::Variable { name, .. } => self.text(*name).starts_with(b"$"),
+            Expr::Variable { name, span } => self.text(*name).starts_with(b"$") || self.parenthesized(*span),
             _ => true,
         };
         if needs_spread(args) {
@@ -5061,10 +5596,19 @@ impl<'src> Compiler<'src> {
         }
         if dynamic {
             let callee = self.expr(f, func)?;
-            let (base, argc) = self.value_args(f, args, callee)?;
-            f.emit(Instr::CallValue { dst: base, callee, base, argc });
-            let _ = (span, hint, mark);
-            return Ok(base);
+            let (base, argc, vars) = match self.deferred_args(f, args)? {
+                Some(sent) => sent,
+                None => {
+                    let (base, argc) = self.value_args(f, args, callee)?;
+                    (base, argc, NO_VARS)
+                }
+            };
+            // Straight into where the value goes (as a named call's is): no
+            // copy left behind in the arguments' registers.
+            let dst = out(f, hint, mark);
+            f.emit(Instr::CallValue { dst, callee, base, argc, vars });
+            let _ = span;
+            return Ok(dst);
         }
         let Expr::Variable { name, .. } = func else { unreachable!("a name") };
         let text = self.text(*name);
@@ -5081,6 +5625,18 @@ impl<'src> Compiler<'src> {
             && let Some(Frozen::Str(s)) = self.literal(arg.value)
         {
             return Ok(f.constant(Frozen::Int(s.as_bytes().len() as i64)));
+        }
+        // clone() of one argument is the clone construct
+        // (zend_compile_func_clone): `clone($o,)`.
+        if fallback.as_deref().unwrap_or(&lower) == b"clone"
+            && let [arg] = args
+            && !arg.unpack
+            && arg.name.is_none()
+        {
+            let src = self.expr(f, arg.value)?;
+            let dst = out(f, hint, mark);
+            f.emit(Instr::Clone { dst, src });
+            return Ok(dst);
         }
         // Whether argument n is passed by reference, when the callee is known now.
         let by_ref = |n: usize| -> Option<bool> {
