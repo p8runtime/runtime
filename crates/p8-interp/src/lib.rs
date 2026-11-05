@@ -3024,11 +3024,13 @@ impl Context<'_> {
                         return Ok(Next::Go(insn_at));
                     }
                     let (copy, hook) = self.clone_object(&v)?;
-                    reg!(dst) = Value::Object(copy);
                     if let Some(m) = hook {
-                        // __clone runs in a window past this frame's.
-                        return self.call_method(regs, m, base + func.nregs as usize, 0, NO_RET, pc);
+                        // Its readonly properties writable once more meanwhile.
+                        self.run_clone_hook(regs, &copy, m)?;
+                        regs[base + dst as usize] = Value::Object(copy);
+                        return Ok(Next::Go(pc));
                     }
+                    reg!(dst) = Value::Object(copy);
                 }
                 Instr::Throw { src } => {
                     let v = self.operand(w, func, src);
@@ -5096,6 +5098,13 @@ impl Ctx for Context<'_> {
 
     fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<Object>, Throw> {
         self.make_lazy(class, obj, initializer, options, proxy)
+    }
+
+    fn clone_with(&mut self, object: &Rc<Object>, with: &p8_runtime::array::PhpArray) -> Result<Value, Throw> {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let r = Context::clone_with(self, &mut regs, object, with);
+        self.isolate.regs = regs;
+        r
     }
 
     fn lazy_initialize(&mut self, o: &Rc<Object>) -> Result<Rc<Object>, Throw> {

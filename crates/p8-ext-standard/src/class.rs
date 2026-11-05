@@ -14,6 +14,7 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "clone", run: clone, by_ref: &[] },
     Builtin { name: "get_class", run: get_class, by_ref: &[] },
     Builtin { name: "get_parent_class", run: get_parent_class, by_ref: &[] },
     Builtin { name: "get_object_vars", run: get_object_vars, by_ref: &[] },
@@ -345,6 +346,17 @@ fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
 
 /// get_object_vars($object): the properties the calling code can see,
 /// initialized ones only, by their plain names.
+/// clone(object $object, array $withProperties = []): what `clone $object`
+/// makes, with the properties updated (ZEND_FUNCTION(clone)).
+fn clone(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let with = match arg(args, 1) {
+        Value::Array(a) => a,
+        _ => Rc::new(PhpArray::new()),
+    };
+    ctx.clone_with(&o, &with)
+}
+
 fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
     let o = if o.lazy.get() != 0 { ctx.lazy_initialize(&o)? } else { o };

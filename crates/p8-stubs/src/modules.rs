@@ -120,6 +120,7 @@ pub static FUNCTION_MODULES: &[(&str, &str)] = &[
     ("clearstatcache", "standard"),
     ("cli_get_process_title", "standard"),
     ("cli_set_process_title", "standard"),
+    ("clone", "Core"),
     ("closedir", "standard"),
     ("closelog", "standard"),
     ("collator_asort", "intl"),

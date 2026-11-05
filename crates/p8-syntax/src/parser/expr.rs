@@ -83,6 +83,41 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         (args.into_bump_slice(), Span::new(start, end))
     }
 
+    /// At the `(` after `clone`: whether an argument list follows, as
+    /// php-src's clone_argument_list has it: `()`, a named, spread or
+    /// `...` argument first, or a first expression followed by a comma.
+    /// One expression closed by `)` is not one (`clone($o)` is the
+    /// construct). Looks ahead and comes back to the `(`.
+    fn clone_has_argument_list(&mut self) -> bool {
+        let saved = (
+            self.lexer.clone(),
+            self.current_token,
+            self.next_token,
+            self.current_doc_comment,
+            self.next_doc_comment,
+            self.prev_end,
+            self.errors.len(),
+        );
+        self.bump(); // (
+        let list = match self.current_token.kind {
+            TokenKind::CloseParen | TokenKind::Ellipsis => true,
+            kind if (kind == TokenKind::Identifier || kind.is_semi_reserved()) && self.next_token.kind == TokenKind::Colon => true,
+            _ => {
+                self.parse_expr(0);
+                self.current_token.kind != TokenKind::CloseParen
+            }
+        };
+        let (lexer, current, next, current_doc, next_doc, prev_end, errors) = saved;
+        self.lexer = lexer;
+        self.current_token = current;
+        self.next_token = next;
+        self.current_doc_comment = current_doc;
+        self.next_doc_comment = next_doc;
+        self.prev_end = prev_end;
+        self.errors.truncate(errors);
+        list
+    }
+
     pub(crate) fn parse_parameter_list(&mut self) -> &'ast [Param<'ast>] {
         if self.current_token.kind == TokenKind::OpenParen {
             self.bump();
@@ -1321,6 +1356,17 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             }
             TokenKind::Clone => {
                 self.bump();
+                // `clone(...)` with an argument list (`clone($o, [...])`,
+                // `clone()`, `clone($o,)`, `clone(object: $o)`, `clone(...)`)
+                // is a call of the function clone(). One expression in
+                // parentheses is the construct's operand (php-src's
+                // clone_argument_list).
+                if self.current_token.kind == TokenKind::OpenParen && self.clone_has_argument_list() {
+                    let (args, args_span) = self.parse_call_arguments();
+                    let func = self.arena.alloc(Expr::Variable { name: token.span, span: token.span });
+                    let span = Span::new(token.span.start, args_span.end);
+                    return self.arena.alloc(Expr::Call { func, args, span });
+                }
                 // The operand takes its calls, `[...]`, `->` and `::` (`clone
                 // f()` clones what f returns), not ++/-- or any operator.
                 let expr = self.parse_expr(185);

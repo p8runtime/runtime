@@ -337,6 +337,7 @@ impl Isolate {
             running_builtin: None,
             statics: HashMap::default(),
             magic_guard: Vec::new(),
+            reinit: Vec::new(),
             result_reg: 0,
             header_throw: None,
             deferred_write: None,
@@ -509,6 +510,10 @@ pub struct Context<'i> {
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     pub(crate) magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
+    /// Clones whose readonly properties may be written once more while
+    /// their __clone or clone()'s updates run: (the clone, which slots
+    /// still may), PHP's IS_PROP_REINITABLE. Innermost last.
+    pub(crate) reinit: Vec<(Rc<p8_runtime::object::Object>, Vec<bool>)>,
     /// The register a running nested call's result lands in: destructors
     /// that run as its frame goes (after it returned) start above it.
     pub(crate) result_reg: usize,
