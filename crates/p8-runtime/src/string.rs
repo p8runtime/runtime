@@ -55,6 +55,14 @@ thread_local! {
         .collect();
 }
 
+thread_local! {
+    /// The buffer strings are built in (PhpStr::scratch), between builds.
+    static SCRATCH: Cell<Vec<u8>> = const { Cell::new(Vec::new()) };
+}
+
+/// The biggest scratch buffer kept for the next build.
+const SCRATCH_KEEP: usize = 64 * 1024;
+
 /// Every byte value, for SMALL's one-byte strings.
 const BYTES: [u8; 256] = {
     let mut all = [0u8; 256];
@@ -73,6 +81,53 @@ impl PhpStr {
             return s;
         }
         PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes: Bytes::Heap(bytes) }))
+    }
+
+    /// A buffer to build a string in (smart_str), with room for `hint`
+    /// bytes: the thread's reused one, so building allocates nothing until
+    /// the string is made from it ([`PhpStr::from_scratch`]).
+    pub fn scratch(hint: usize) -> Vec<u8> {
+        let mut buf = SCRATCH.with(|s| s.take());
+        buf.clear();
+        buf.reserve(hint);
+        buf
+    }
+
+    /// The string built in `buf` (from [`PhpStr::scratch`]): a short one in
+    /// its own allocation (the buffer kept for the next), a longer one in
+    /// the buffer itself when it is about its size, else in an exact copy.
+    pub fn from_scratch(buf: Vec<u8>) -> PhpStr {
+        let keep = |buf: Vec<u8>| {
+            if buf.capacity() <= SCRATCH_KEEP {
+                SCRATCH.with(|s| s.set(buf));
+            }
+        };
+        if buf.len() <= INLINE || buf.capacity() > 2 * buf.len() + 64 {
+            let s = Self::copy_of(&buf);
+            keep(buf);
+            return s;
+        }
+        PhpStr::new(buf)
+    }
+
+    /// `parts` one after another, in one piece: a short result in the
+    /// string's own allocation, a longer one in a buffer of its size.
+    pub fn concat_all(parts: &[&[u8]]) -> Self {
+        let len: usize = parts.iter().map(|p| p.len()).sum();
+        if len <= INLINE {
+            let mut buf = [0; INLINE];
+            let mut at = 0;
+            for p in parts {
+                buf[at..at + p.len()].copy_from_slice(p);
+                at += p.len();
+            }
+            return Self::copy_of(&buf[..len]);
+        }
+        let mut v = Vec::with_capacity(len);
+        for p in parts {
+            v.extend_from_slice(p);
+        }
+        Self::new(v)
     }
 
     /// The shared string for zero or one bytes (None for longer ones, and
@@ -380,6 +435,27 @@ mod tests {
         }
         assert!(grows < 20, "{grows}");
         assert_eq!(base.len(), 33);
+    }
+
+    #[test]
+    fn built_strings_take_one_allocation_when_short_and_their_buffer_when_long() {
+        let mut b = PhpStr::scratch(4);
+        b.extend_from_slice(b"short one");
+        let s = PhpStr::from_scratch(b);
+        assert!(matches!(s.0.bytes, Bytes::Inline { .. }));
+        assert_eq!(s.as_bytes(), b"short one");
+        // The buffer came back: the next build starts with its room.
+        assert!(PhpStr::scratch(0).capacity() >= 9);
+        let mut b = PhpStr::scratch(40);
+        b.extend_from_slice(&[b'x'; 40]);
+        let ptr = b.as_ptr();
+        let long = PhpStr::from_scratch(b);
+        // About its size: the string is the buffer itself, no copy.
+        assert_eq!((long.len(), long.as_bytes().as_ptr()), (40, ptr));
+        assert_eq!(PhpStr::concat_all(&[b"\0", b"Class", b"\0", b"p"]).as_bytes(), b"\0Class\0p");
+        assert!(matches!(PhpStr::concat_all(&[b"ab", b"cd"]).0.bytes, Bytes::Inline { .. }));
+        assert_eq!(PhpStr::concat_all(&[&[b'y'; 30], b"z"]).len(), 31);
+        assert!(PhpStr::ptr_eq(&PhpStr::concat_all(&[]), &PhpStr::empty()));
     }
 
     #[test]
