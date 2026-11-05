@@ -639,6 +639,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
                     BinaryOp::LogicalOr => "or",
                     BinaryOp::LogicalXor => "xor",
                     BinaryOp::Instanceof => "instanceof",
+                    BinaryOp::Pipe => "|>",
                 });
                 self.write(" ");
                 self.visit_expr(left);
@@ -1134,6 +1135,7 @@ impl<'a, 'ast> Visitor<'ast> for SExprFormatter<'a> {
             }
             Expr::VariadicPlaceholder { .. } => self.write("(...)"),
             Expr::Error { .. } => self.write("(error)"),
+            Expr::Znode { reg, .. } => self.write(&format!("(znode {reg})")),
         }
     }
 

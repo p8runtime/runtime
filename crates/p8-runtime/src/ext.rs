@@ -386,6 +386,9 @@ pub struct Call {
     pub counts: (usize, usize),
     pub deprecated: bool,
     pub reenters: bool,
+    /// Its by-reference parameters take a value too (the stub's
+    /// `@prefer-ref`: ZEND_SEND_PREFER_REF).
+    pub prefer_ref: bool,
 }
 
 /// A constant's value as an extension declares it.
@@ -570,6 +573,7 @@ impl Registry {
                 reenters: sig.is_some_and(|s| {
                     s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
                 }),
+                prefer_ref: false,
             });
             self.deprecations.push(deprecation);
             let sym = self.symbols.intern(f.name.as_bytes());
@@ -709,6 +713,22 @@ impl Registry {
                 self.calls[i].reenters = true;
             }
         }
+    }
+
+    /// Builtins whose by-reference parameters also take a value (the
+    /// stubs' `@prefer-ref`: array_multisort's).
+    pub fn mark_prefer_ref(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(i) = self.lookup(n.as_bytes()) {
+                self.calls[i].prefer_ref = true;
+            }
+        }
+    }
+
+    /// Whether builtin `i`'s by-reference parameter `n` must get a
+    /// reference (not `@prefer-ref`).
+    pub fn must_be_ref(&self, i: usize, n: usize) -> bool {
+        self.by_ref(i, n) && !self.calls[i].prefer_ref
     }
 
     pub fn by_ref(&self, i: usize, n: usize) -> bool {
