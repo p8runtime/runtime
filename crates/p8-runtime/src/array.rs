@@ -7,7 +7,91 @@
 use crate::string::PhpStr;
 use crate::value::Value;
 use crate::number::dval_to_lval;
+use std::cell::RefCell;
 use std::cmp::Ordering;
+
+/// Freed array buffers of the two sizes most arrays have (8 and 16
+/// entries), kept for the next array on this thread (an isolate's): a new
+/// small array, or one growing to 16, takes one instead of allocating.
+/// What they held is gone before they are kept (nothing outlives its
+/// request); at most POOL_MAX of each.
+struct Pool<T> {
+    eight: Vec<Vec<T>>,
+    sixteen: Vec<Vec<T>>,
+}
+
+const POOL_MAX: usize = 256;
+
+thread_local! {
+    static VALUES: RefCell<Pool<Value>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
+    static BUCKETS: RefCell<Pool<Bucket>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
+}
+
+/// The pool size for room of `n` (None: not pooled).
+#[inline]
+fn class(n: usize) -> Option<usize> {
+    match n {
+        0..=8 => Some(8),
+        9..=16 => Some(16),
+        _ => None,
+    }
+}
+
+/// An empty buffer with room for at least `n`: a kept one when `n` is a
+/// pooled size, else a new one.
+#[inline]
+fn take<T>(pool: &'static std::thread::LocalKey<RefCell<Pool<T>>>, n: usize) -> Vec<T> {
+    let Some(size) = class(n) else { return Vec::with_capacity(n) };
+    let kept = pool
+        .try_with(|p| p.try_borrow_mut().ok().and_then(|mut p| if size == 8 { p.eight.pop() } else { p.sixteen.pop() }))
+        .ok()
+        .flatten();
+    kept.unwrap_or_else(|| Vec::with_capacity(size))
+}
+
+/// Keep `v` for a later array when it is a pooled size (emptied first:
+/// its values go now, as they would with the buffer).
+#[inline]
+fn give<T>(pool: &'static std::thread::LocalKey<RefCell<Pool<T>>>, mut v: Vec<T>) {
+    let size = v.capacity();
+    if size != 8 && size != 16 {
+        return;
+    }
+    // (Dropping the values may free other arrays, which give theirs: the
+    // pool is not borrowed meanwhile.)
+    v.clear();
+    let _ = pool.try_with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut() {
+            let list = if size == 8 { &mut p.eight } else { &mut p.sixteen };
+            if list.len() < POOL_MAX {
+                list.push(v);
+            }
+        }
+    });
+}
+
+/// A values buffer with room for `n` (an object's properties, a frame's
+/// extra arguments): from the pool when `n` is a pooled size.
+pub fn values_buffer(n: usize) -> Vec<Value> {
+    if n == 0 { Vec::new() } else { take(&VALUES, n) }
+}
+
+/// Keep a values buffer that is done with (see [`values_buffer`]).
+pub fn keep_values_buffer(v: Vec<Value>) {
+    give(&VALUES, v);
+}
+
+impl Drop for Packed {
+    fn drop(&mut self) {
+        give(&VALUES, std::mem::take(&mut self.slots));
+    }
+}
+
+impl Drop for Hashed {
+    fn drop(&mut self) {
+        give(&BUCKETS, std::mem::take(&mut self.buckets));
+    }
+}
 
 /// An array key: PHP normalizes "123" to 123, so a key is an int or a
 /// string that is not a canonical integer.
@@ -231,7 +315,13 @@ pub(crate) fn dup(v: &Value) -> Value {
 
 impl Clone for Packed {
     fn clone(&self) -> Self {
-        Packed { slots: self.slots.iter().map(dup).collect(), holes: self.holes }
+        // A small list's copy in a kept buffer when there is one.
+        let mut slots = match class(self.slots.len()) {
+            Some(_) if !self.slots.is_empty() => take(&VALUES, self.slots.len()),
+            _ => Vec::with_capacity(self.slots.len()),
+        };
+        slots.extend(self.slots.iter().map(dup));
+        Packed { slots, holes: self.holes }
     }
 }
 
@@ -239,11 +329,9 @@ impl Clone for Packed {
 /// chains and all.
 impl Clone for Hashed {
     fn clone(&self) -> Self {
-        let buckets = self
-            .buckets
-            .iter()
-            .map(|b| Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: b.head })
-            .collect();
+        // (In a kept buffer when its size is a pooled one.)
+        let mut buckets = take(&BUCKETS, self.buckets.len());
+        buckets.extend(self.buckets.iter().map(|b| Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: b.head }));
         Hashed { buckets, used: self.used, live: self.live }
     }
 }
@@ -253,7 +341,7 @@ impl Hashed {
     fn with_capacity(n: usize) -> Hashed {
         let size = n.max(MIN_SIZE).next_power_of_two();
         assert!(size < UNSET as usize, "array too large");
-        let mut buckets = Vec::with_capacity(size);
+        let mut buckets = take(&BUCKETS, size);
         buckets.resize_with(size, Bucket::empty);
         Hashed { buckets, used: 0, live: 0 }
     }
@@ -321,10 +409,11 @@ impl Hashed {
     /// entries moved to it at their positions, the chains made again.
     fn resize(&mut self, size: usize) {
         assert!(size < UNSET as usize, "array too large");
-        let mut buckets = Vec::with_capacity(size);
+        // (Eight to sixteen: a kept buffer, and the eight kept.)
+        let mut buckets = take(&BUCKETS, size);
         buckets.extend(self.buckets.drain(..self.used));
         buckets.resize_with(size, Bucket::empty);
-        self.buckets = buckets;
+        give(&BUCKETS, std::mem::replace(&mut self.buckets, buckets));
         self.reindex();
     }
 
@@ -488,7 +577,8 @@ impl PhpArray {
 
     /// An empty list with room for `capacity` elements pushed onto it.
     pub fn list_with_capacity(capacity: usize) -> Self {
-        PhpArray { storage: Storage::Packed(Packed { slots: Vec::with_capacity(capacity), holes: 0 }), next_free: None, cursor: 0 }
+        let slots = if capacity == 0 { Vec::new() } else { take(&VALUES, capacity) };
+        PhpArray { storage: Storage::Packed(Packed { slots, holes: 0 }), next_free: None, cursor: 0 }
     }
 
     /// An empty array sized for `capacity` keyed entries (array_init_size,
@@ -623,7 +713,12 @@ impl PhpArray {
                 Key::Int(i) if p.fits(i) => {
                     let gap = i as usize - p.slots.len();
                     if p.slots.capacity() == 0 {
-                        p.slots.reserve_exact(MIN_PACKED.max(i as usize + 1));
+                        p.slots = take(&VALUES, MIN_PACKED.max(i as usize + 1));
+                    } else if i as usize >= p.slots.capacity() && p.slots.capacity() == 8 && i < 16 {
+                        // From eight to sixteen: a kept buffer, the values moved.
+                        let mut more = take(&VALUES, 16);
+                        more.append(&mut p.slots);
+                        give(&VALUES, std::mem::replace(&mut p.slots, more));
                     }
                     p.slots.resize(i as usize, Value::Undef);
                     p.holes += gap;
@@ -998,5 +1093,49 @@ mod tests {
         assert_eq!(keys.len(), 8);
         assert_eq!(keys[2], Key::Str(PhpStr::from("k2")));
         assert_eq!(keys[3], Key::Str(PhpStr::from("k4")));
+    }
+
+    #[test]
+    fn freed_small_buffers_are_reused_empty() {
+        let buffer = |a: &PhpArray| match &a.storage {
+            Storage::Packed(p) => (p.slots.as_ptr() as usize, p.slots.capacity()),
+            Storage::Hashed(h) => (h.buckets.as_ptr() as usize, h.buckets.capacity()),
+        };
+        // A list: its buffer of eight is the next small list's.
+        let mut a = PhpArray::new();
+        for i in 0..5 {
+            a.push(int(i)).unwrap();
+        }
+        let (at, room) = buffer(&a);
+        assert_eq!(room, 8);
+        drop(a);
+        let b = PhpArray::list_with_capacity(3);
+        assert_eq!(buffer(&b), (at, 8));
+        assert_eq!(b.len(), 0);
+        // Growing to sixteen takes a kept one and keeps the eight.
+        let mut c = PhpArray::list_with_capacity(8);
+        for i in 0..9 {
+            c.push(int(i)).unwrap();
+        }
+        assert_eq!(buffer(&c).1, 16);
+        assert!(c.iter().map(|(_, v)| v.to_int()).eq(0..9));
+        // A table the same: the next table's, its old entries gone.
+        let mut h = PhpArray::new();
+        h.insert(Key::Str(PhpStr::from("k")), int(1));
+        let (at, room) = buffer(&h);
+        assert_eq!(room, 8);
+        drop(h);
+        let mut h2 = PhpArray::new();
+        h2.insert(Key::Str(PhpStr::from("other")), int(2));
+        assert_eq!(buffer(&h2), (at, 8));
+        assert_eq!(h2.len(), 1);
+        assert!(h2.get(&Key::Str(PhpStr::from("k"))).is_none());
+        // A table growing past eight keeps its eight for the next.
+        let mut g = PhpArray::new();
+        for i in 0..9 {
+            g.insert(Key::Str(PhpStr::from(format!("g{i}").as_str())), int(i));
+        }
+        assert_eq!(buffer(&g).1, 16);
+        assert!(g.iter().map(|(_, v)| v.to_int()).eq(0..9));
     }
 }

@@ -773,6 +773,15 @@ impl Props {
             PropsRepr::Heap(v) => v.clear(),
         }
     }
+
+    /// Every value gone, and a buffer of their own kept for the next
+    /// object or array (see [`crate::array::values_buffer`]).
+    pub fn release(&mut self) {
+        match &mut self.0 {
+            PropsRepr::Heap(v) => crate::array::keep_values_buffer(std::mem::take(v)),
+            PropsRepr::Inline { .. } => self.clear(),
+        }
+    }
 }
 
 impl FromIterator<Value> for Props {
@@ -788,7 +797,8 @@ impl FromIterator<Value> for Props {
         match iter.next() {
             None => Props(PropsRepr::Inline { len: INLINE_PROPS as u8, values }),
             Some(v) => {
-                let mut heap: Vec<Value> = Vec::with_capacity(INLINE_PROPS + 1 + iter.size_hint().0);
+                // (In a kept buffer when there is one of its size.)
+                let mut heap: Vec<Value> = crate::array::values_buffer(INLINE_PROPS + 1 + iter.size_hint().0);
                 heap.extend(values);
                 heap.push(v);
                 heap.extend(iter);
@@ -940,7 +950,8 @@ impl Drop for Object {
         // Its properties go before its id does (PHP frees an object, and
         // runs the destructors that brings, before its handle is free):
         // emptied in place, their storage freed with the object after.
-        self.slots.get_mut().clear();
+        // (A buffer of their own kept for the next object or array.)
+        self.slots.get_mut().release();
         let dynamic = self.dynamic.get_mut();
         if !dynamic.is_empty() {
             drop(std::mem::take(dynamic));
