@@ -11,7 +11,7 @@
 
 use p8_bytecode::{
     AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PartialArg, PartialSite, PropDef, Reg, Site, Sym, TraitRule,
-    ClassName, CompileDiag,
+    ClassName, CompileDiag, NO_VARS,
     CONST_EXPR, Rare,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
@@ -137,6 +137,10 @@ struct FnBuilder<'a> {
     /// in the global table where they are used.
     auto_globals: bool,
     is_static: bool,
+    /// An instance method: `$this` always exists, so a property access
+    /// on it reads the frame's (THIS) rather than a copy
+    /// (zend_compile.c this_guaranteed_exists).
+    this_known: bool,
     tries: Vec<TryCtx<'a>>,
     handlers: Vec<Handler>,
     /// Closures and arrow functions made in this code (`MakeClosure`).
@@ -150,6 +154,8 @@ struct FnBuilder<'a> {
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
     silences: Vec<(u32, u32, Reg)>,
+    /// `Function::arg_vars`.
+    arg_vars: Vec<Vec<(u8, Reg)>>,
     /// Partial applications made in this code (`Rare::Partial`).
     partials: Vec<PartialSite>,
     loops_made: usize,
@@ -201,6 +207,7 @@ impl FnBuilder<'_> {
             class: None,
             auto_globals: false,
             is_static: false,
+            this_known: false,
             tries: Vec::new(),
             handlers: Vec::new(),
             lambdas: Vec::new(),
@@ -209,6 +216,7 @@ impl FnBuilder<'_> {
             is_generator: false,
             decls: Vec::new(),
             silences: Vec::new(),
+            arg_vars: Vec::new(),
             partials: Vec::new(),
             loops_made: 0,
             labels: HashMap::default(),
@@ -478,6 +486,10 @@ impl FnBuilder<'_> {
         }
         let position = &order.position;
         let map = |r: Reg| -> Reg {
+            // `$this` from the frame is no register.
+            if r == p8_bytecode::THIS {
+                return r;
+            }
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
             (match r >> KIND_SHIFT {
                 CV => index,
@@ -498,6 +510,9 @@ impl FnBuilder<'_> {
         }
         for s in &mut self.silences {
             s.2 = map(s.2);
+        }
+        for (_, r) in self.arg_vars.iter_mut().flatten() {
+            *r = map(*r);
         }
         for c in &mut self.classes {
             if let ClassRef::Dynamic(r) = c {
@@ -537,6 +552,7 @@ impl FnBuilder<'_> {
             meta: self.meta,
             decls: self.decls,
             silences: self.silences,
+            arg_vars: self.arg_vars,
             partials: self.partials,
             compile_diags: Vec::new(),
         }
@@ -2318,6 +2334,7 @@ impl<'src> Compiler<'src> {
         if let Some((class, is_static)) = self.method.take() {
             f.class = Some(class);
             f.is_static = is_static;
+            f.this_known = !is_static;
         }
         for p in params {
             // A default making a partial application is checked as the
@@ -2410,8 +2427,14 @@ impl<'src> Compiler<'src> {
                 ty_decl: p.ty.map(|t| self.type_decl(t)),
                 meta: Meta { attrs: f.params[i].attrs.clone(), ..Meta::default() },
             });
-            let obj = f.temp();
-            f.emit(Instr::This { dst: obj });
+            // `$this` from the frame (a constructor always has one).
+            let obj = if f.this_known {
+                p8_bytecode::THIS
+            } else {
+                let obj = f.temp();
+                f.emit(Instr::This { dst: obj });
+                obj
+            };
             let key = f.name_constant(Frozen::Str(name));
             let dst = f.temp();
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst, take: false });
@@ -3357,6 +3380,21 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    /// The object operand of a property read or write: `$this` in an
+    /// instance method is the frame's own (THIS), not a copy made in a
+    /// temporary first.
+    fn prop_obj(&mut self, f: &mut FnBuilder, target: &Expr) -> Result<Reg> {
+        if self.frame_this(f, target) {
+            return Ok(p8_bytecode::THIS);
+        }
+        self.expr(f, target)
+    }
+
+    /// Whether `target` is `$this` in an instance method (`prop_obj`).
+    fn frame_this(&self, f: &FnBuilder, target: &Expr) -> bool {
+        f.this_known && matches!(target, Expr::Variable { name, .. } if self.text(*name) == b"$this")
+    }
+
     /// `prop_name` for the name operand of a property instruction (see
     /// `name_operand`): a literal name is a name-only constant.
     fn prop_name_operand(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
@@ -3651,9 +3689,15 @@ impl<'src> Compiler<'src> {
         if needs_spread(args) {
             return self.spread_call(f, callee, args);
         }
-        let (base, argc) = self.value_args(f, args, callee)?;
+        let (base, argc, vars) = match self.deferred_args(f, args)? {
+            Some(sent) => sent,
+            None => {
+                let (base, argc) = self.value_args(f, args, callee)?;
+                (base, argc, NO_VARS)
+            }
+        };
         let dst = out(f, hint, mark);
-        f.emit(Instr::CallValue { dst, callee, base, argc });
+        f.emit(Instr::CallValue { dst, callee, base, argc, vars });
         Ok(dst)
     }
 
@@ -3687,6 +3731,36 @@ impl<'src> Compiler<'src> {
             }
         }
         Ok((regs[0], args.len() as u8))
+    }
+
+    /// The arguments of a StaticCall or CallValue when each is a variable
+    /// or a literal (nothing runs between them, so when a variable is read
+    /// makes no difference): the literals into their registers, the
+    /// variables left for the call to send once its target is known
+    /// (`Function::arg_vars`), with no instruction each. None, nothing
+    /// emitted, otherwise.
+    fn deferred_args(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<Option<(Reg, u8, u16)>> {
+        let var = |c: &Self, e: &Expr| match e {
+            Expr::Variable { name, .. } => {
+                let t = c.text(*name);
+                t.starts_with(b"$") && !matches!(t, b"$this" | b"$GLOBALS")
+            }
+            _ => false,
+        };
+        let plain = |c: &Self, a: &p8_syntax::ast::Arg| !a.unpack && a.name.is_none() && (var(c, a.value) || c.literal(a.value).is_some());
+        if !args.iter().all(|a| plain(self, a)) || !args.iter().any(|a| var(self, a.value)) || f.arg_vars.len() >= NO_VARS as usize {
+            return Ok(None);
+        }
+        let regs: Vec<Reg> = (0..args.len()).map(|_| f.temp()).collect();
+        let mut vars = Vec::new();
+        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+            match arg.value {
+                Expr::Variable { name, .. } if var(self, arg.value) => vars.push((n as u8, f.cv(&self.text(*name)[1..]))),
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        f.arg_vars.push(vars);
+        Ok(Some((regs[0], args.len() as u8, (f.arg_vars.len() - 1) as u16)))
     }
 
     /// The arguments of a call of a value (`$f(...)`, `[$o, 'm'](...)`): a
@@ -3821,7 +3895,12 @@ impl<'src> Compiler<'src> {
         // (`base + 1` stays the name's place: a run-time name lands there.)
         let name = f.temp();
         let keys: Vec<Reg> = keyed.iter().map(|_| f.temp()).collect();
-        self.expr_into(f, target, base)?;
+        // `$this` in an instance method: the frame's, flagged in the count
+        // (DIM_THIS), with nothing put in `base`.
+        let this = keys.len() < usize::from(p8_bytecode::DIM_THIS) && self.frame_this(f, target);
+        if !this {
+            self.expr_into(f, target, base)?;
+        }
         let n = self.prop_name_operand(f, property)?;
         // A constant name is used where it is; a run-time one is kept in its
         // place while the keys are worked out.
@@ -3834,7 +3913,8 @@ impl<'src> Compiler<'src> {
         for (r, d) in keys.iter().zip(&keyed) {
             self.expr_into(f, d, *r)?;
         }
-        Ok((base, name, keys.len() as u8, append))
+        let n = keys.len() as u8 | if this { p8_bytecode::DIM_THIS } else { 0 };
+        Ok((base, name, n, append))
     }
 
     fn literal(&self, e: &Expr) -> Option<Frozen> {
@@ -4305,7 +4385,7 @@ impl<'src> Compiler<'src> {
                     dst
                 }
                 Expr::PropertyFetch { target, property, .. } => {
-                    let obj = self.expr(f, target)?;
+                    let obj = self.prop_obj(f, target)?;
                     let name = self.prop_name_operand(f, property)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
@@ -4460,7 +4540,7 @@ impl<'src> Compiler<'src> {
                         dst
                     }
                     Expr::PropertyFetch { target, property, .. } => {
-                        let obj = self.expr(f, target)?;
+                        let obj = self.prop_obj(f, target)?;
                         let name = self.prop_name_operand(f, property)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
@@ -4482,7 +4562,7 @@ impl<'src> Compiler<'src> {
             Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
             Expr::Znode { reg, .. } => *reg as Reg,
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::PropertyFetch { target, property, .. }, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(op, UnaryOp::PreInc), post: false });
@@ -4490,7 +4570,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::PostInc { var: Expr::PropertyFetch { target, property, .. }, .. }
             | Expr::PostDec { var: Expr::PropertyFetch { target, property, .. }, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::PropIncDec { obj, name, dst, inc: matches!(e, Expr::PostInc { .. }), post: true });
@@ -4799,7 +4879,7 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::PropertyFetch { target, property, .. } => {
-                let obj = self.expr(f, target)?;
+                let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = out(f, hint, mark);
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
@@ -4922,7 +5002,7 @@ impl<'src> Compiler<'src> {
                 let site = self.named_site(f, &display);
                 let (base, argc) = self.args_by_value(f, args)?;
                 let dst = out(f, hint, mark);
-                f.emit(Instr::StaticCall { dst, class, method: site, base, argc });
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc, vars: NO_VARS });
                 dst
             }
             Expr::StaticCall { class: class_expr, method, args, .. } => {
@@ -4949,16 +5029,22 @@ impl<'src> Compiler<'src> {
                     return self.call_pair(f, name, m, args, hint, mark);
                 }
                 let site = self.named_site(f, text);
-                let (base, argc) = self.method_args(
-                    f,
-                    args,
-                    |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
-                    |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
-                )?;
+                let (base, argc, vars) = match self.deferred_args(f, args)? {
+                    Some(sent) => sent,
+                    None => {
+                        let (base, argc) = self.method_args(
+                            f,
+                            args,
+                            |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
+                            |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
+                        )?;
+                        (base, argc, NO_VARS)
+                    }
+                };
                 // Straight into where the value goes (as a function call's
                 // is): no copy left behind in the arguments' registers.
                 let dst = out(f, hint, mark);
-                f.emit(Instr::StaticCall { dst, class, method: site, base, argc });
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc, vars });
                 dst
             }
             // `C::${expr}`, `C::$$v`: a static property named when it runs.
@@ -5501,7 +5587,7 @@ impl<'src> Compiler<'src> {
                 let exists = f.constant(Frozen::Str(Text::from("function_exists")));
                 let base = f.temp();
                 f.emit(Instr::Move { dst: base, src: full });
-                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
+                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1, vars: NO_VARS });
                 let callee = f.temp();
                 let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
                 f.emit(Instr::Move { dst: callee, src: full });
@@ -5634,11 +5720,17 @@ impl<'src> Compiler<'src> {
         }
         if dynamic {
             let callee = self.expr(f, func)?;
-            let (base, argc) = self.value_args(f, args, callee)?;
+            let (base, argc, vars) = match self.deferred_args(f, args)? {
+                Some(sent) => sent,
+                None => {
+                    let (base, argc) = self.value_args(f, args, callee)?;
+                    (base, argc, NO_VARS)
+                }
+            };
             // Straight into where the value goes (as a named call's is): no
             // copy left behind in the arguments' registers.
             let dst = out(f, hint, mark);
-            f.emit(Instr::CallValue { dst, callee, base, argc });
+            f.emit(Instr::CallValue { dst, callee, base, argc, vars });
             let _ = span;
             return Ok(dst);
         }

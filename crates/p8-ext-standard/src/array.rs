@@ -7,10 +7,25 @@
 
 use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
+use p8_runtime::object::CLASS_ENUM;
 use p8_runtime::value::Value;
 use std::cmp::Ordering;
 use std::rc::Rc;
+
+/// enum SortDirection (PHP 8.6, basic_functions.stub.php), a pure enum no
+/// builtin takes: `case Ascending; case Descending;`.
+pub const CLASSES: &[ClassSpec] = &[ClassSpec {
+    name: "SortDirection",
+    parent: None,
+    interfaces: &[],
+    // Not final: zend_register_internal_enum sets only ZEND_ACC_ENUM.
+    flags: CLASS_ENUM,
+    properties: &[],
+    methods: &[],
+    constants: &[("Ascending", Constant::Null), ("Descending", Constant::Null)],
+    debug_info: None,
+}];
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_multisort", run: array_multisort, by_ref: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
@@ -33,6 +48,8 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_pad", run: array_pad, by_ref: &[] },
     Builtin { name: "array_key_first", run: array_key_first, by_ref: &[] },
     Builtin { name: "array_key_last", run: array_key_last, by_ref: &[] },
+    Builtin { name: "array_first", run: array_first, by_ref: &[] },
+    Builtin { name: "array_last", run: array_last, by_ref: &[] },
     Builtin { name: "array_count_values", run: array_count_values, by_ref: &[] },
     Builtin { name: "array_chunk", run: array_chunk, by_ref: &[] },
     Builtin { name: "array_diff", run: array_diff, by_ref: &[] },
@@ -363,6 +380,18 @@ fn array_key_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 
 fn array_key_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(arr(args, 0).iter().last().map_or(Value::Null, |(k, _)| k.to_value()))
+}
+
+/// array_first(array $array): mixed (PHP 8.5): the first value, dereferenced
+/// (RETURN_COPY_DEREF), or null for an empty array.
+fn array_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(arr(args, 0).values().next().map_or(Value::Null, Value::deref))
+}
+
+/// array_last(array $array): mixed (PHP 8.5): the last value, dereferenced,
+/// or null for an empty array.
+fn array_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    Ok(arr(args, 0).values().last().map_or(Value::Null, Value::deref))
 }
 
 fn array_count_values(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

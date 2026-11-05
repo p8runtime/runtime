@@ -1,0 +1,66 @@
+bool(true)
+bool(true)
+enum(SortDirection::Ascending)
+array(2) {
+  [0]=>
+  enum(SortDirection::Ascending)
+  [1]=>
+  enum(SortDirection::Descending)
+}
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+Descending
+bool(true)
+array(8) {
+  [0]=>
+  string(16) "HalfAwayFromZero"
+  [1]=>
+  string(15) "HalfTowardsZero"
+  [2]=>
+  string(8) "HalfEven"
+  [3]=>
+  string(7) "HalfOdd"
+  [4]=>
+  string(11) "TowardsZero"
+  [5]=>
+  string(12) "AwayFromZero"
+  [6]=>
+  string(16) "NegativeInfinity"
+  [7]=>
+  string(16) "PositiveInfinity"
+}
+desc
+bool(true)
+bool(false)
+bool(false)
+string(8) "standard"
+bool(true)
+bool(false)
+Ascending,Descending
+array(1) {
+  ["UnitEnum"]=>
+  string(8) "UnitEnum"
+}
+Error: Cannot instantiate enum SortDirection
+Error: Trying to clone an uncloneable object of class SortDirection
+Error: Cannot modify readonly property SortDirection::$name
+Error: Call to undefined method SortDirection::from()
+E:24:"SortDirection:Descending";
+bool(true)
+HalfAwayFromZero  3 -3 1.6 -1.5
+HalfTowardsZero   2 -2 1.5 -1.4
+HalfEven          2 -2 1.6 -1.4
+HalfOdd           3 -3 1.5 -1.5
+TowardsZero       2 -2 1.5 -1.4
+AwayFromZero      3 -3 1.6 -1.5
+NegativeInfinity  2 -3 1.5 -1.5
+PositiveInfinity  3 -2 1.6 -1.4
+bool(true)
+float(5)
+float(6)
+TypeError: round(): Argument #3 ($mode) must be of type RoundingMode|int, SortDirection given
+ValueError: round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)
+RoundingMode|int
+Error: Trying to clone an uncloneable object of class Mine

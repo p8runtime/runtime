@@ -309,6 +309,31 @@ pub(crate) fn on_demand(registry: &p8_runtime::ext::Registry) -> HashMap<Sym, &'
 }
 
 /// Declare a class an extension (or the engine's Reflection) specifies.
+/// A built-in enum (a ClassSpec with CLASS_ENUM): its `constants` are its
+/// cases, in order, each Null for a pure enum or its backing value (all
+/// Int or all Str) for a backed one. The members are a user enum's
+/// (`EnumMembers`, shared with linking).
+fn declare_enum_members(class: &mut Class, spec: &p8_runtime::ext::ClassSpec, declaring: &Rc<[u8]>) {
+    use p8_runtime::ext::Constant;
+    let backing = spec.constants.first().and_then(|(_, v)| match v {
+        Constant::Int(_) => Some("int"),
+        Constant::Str(_) => Some("string"),
+        _ => None,
+    });
+    let cases = spec.constants.iter().map(|(n, v)| (n.as_bytes(), v.to_value())).collect();
+    let flags = crate::classes::EnumMembers { interfaces: &mut class.interfaces, properties: &mut class.properties, constants: &mut class.constants, methods: &mut class.methods }
+        .add(declaring, &class.name, backing, cases);
+    class.flags |= flags;
+    class.enum_cases = spec.constants.iter().map(|(n, _)| PhpStr::from(*n)).collect();
+    class.enum_backing = backing.map(PhpStr::from);
+    let mut slots = p8_runtime::object::Slots::default();
+    for (i, p) in class.properties.iter().enumerate() {
+        slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
+    }
+    class.slots = slots;
+    class.property_order = class.properties.iter().map(|p| p.name.clone()).collect();
+}
+
 pub(crate) fn declare_spec(
     c: &mut Classes,
     spec: &p8_runtime::ext::ClassSpec,
@@ -352,13 +377,17 @@ pub(crate) fn declare_spec(
     if class.native_dtor.is_some() {
         class.flags |= p8_runtime::object::CLASS_DESTRUCTOR;
     }
-    for (n, value) in spec.constants {
-        class.constants.insert(
-            n.as_bytes().to_vec(),
-            Rc::new(p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None }),
-        );
-    }
     let declaring: Rc<[u8]> = Rc::from(class.lower.as_slice());
+    if spec.flags & p8_runtime::object::CLASS_ENUM != 0 {
+        declare_enum_members(class, spec, &declaring);
+    } else {
+        for (n, value) in spec.constants {
+            class.constants.insert(
+                n.as_bytes().to_vec(),
+                Rc::new(p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None }),
+            );
+        }
+    }
     for (n, m) in spec.methods {
         if let Some(Native::Static(f)) = m {
             class.methods.insert(

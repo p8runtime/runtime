@@ -1,0 +1,26 @@
+NULL
+NULL
+int(1)
+int(3)
+string(1) "x"
+string(1) "y"
+string(4) "nine"
+string(3) "two"
+NULL
+NULL
+int(1)
+int(1)
+int(1)
+bool(true)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+TypeError: array_first(): Argument #1 ($array) must be of type array, string given
+TypeError: array_last(): Argument #1 ($array) must be of type array, null given
+ArgumentCountError: array_first() expects exactly 1 argument, 0 given
+ArgumentCountError: array_last() expects exactly 1 argument, 2 given
+1 array mixed
+bool(true)
