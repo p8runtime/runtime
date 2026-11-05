@@ -736,6 +736,23 @@ fn has_ref_items(items: &[p8_syntax::ast::ArrayItem]) -> bool {
 }
 
 /// Whether a call's arguments are `...` (the first-class callable syntax).
+/// The pipe's call (the last instruction) gets its argument as a
+/// temporary, which a by-reference parameter refuses (ZEND_SEND_VAL_EX):
+/// the check goes right before it, once the callee is known there.
+fn pipe_send_check(f: &mut FnBuilder) {
+    let Some(last) = f.code.len().checked_sub(1) else { return };
+    let check = match f.code[last] {
+        Instr::Call { site, .. } => Instr::rare(Rare::PipeArgByRef, 0, site, 0, 0),
+        Instr::MethodCall { obj, method, .. } => Instr::rare(Rare::PipeArgByRef, obj, method, 1, 0),
+        Instr::StaticCall { class, method, .. } => Instr::rare(Rare::PipeArgByRef, 0, method, 2, class),
+        Instr::CallValue { callee, .. } => Instr::rare(Rare::PipeArgByRef, callee, 0, 3, 0),
+        _ => return,
+    };
+    let line = f.lines[last];
+    f.code.insert(last, check);
+    f.lines.insert(last, line);
+}
+
 fn is_placeholder(args: &[p8_syntax::ast::Arg]) -> bool {
     matches!(args, [arg] if matches!(arg.value, Expr::VariadicPlaceholder { .. }))
 }
@@ -2353,6 +2370,10 @@ impl<'src> Compiler<'src> {
                 }
                 continue;
             }
+            // zend_verify_list_assign_target: a call is not a target.
+            if matches!(item.value, Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. }) {
+                return Err(CompileError { message: "Can't use function return value in write context".into(), line: self.line(item.value.span()) });
+            }
             let elem = f.temp();
             match item.value {
                 // Fetched for writing, its references made below: no warning
@@ -3812,7 +3833,8 @@ impl<'src> Compiler<'src> {
             Expr::Call { func, .. } if self.is_builtin(func) => {
                 Err(CompileError { message: "Cannot use result of built-in function in write context".into(), line: self.line(root.span()) })
             }
-            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } => {
+            // (A pipe is a call: its result written into, GH-22490.)
+            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. } | Expr::Znode { .. } => {
                 let r = self.expr(f, root)?;
                 let dst = f.temp();
                 f.emit(Instr::Move { dst, src: r });
@@ -3828,6 +3850,12 @@ impl<'src> Compiler<'src> {
     /// result written there directly would bypass a reference it holds).
     fn expr_into(&mut self, f: &mut FnBuilder, e: &Expr, dst: Reg) -> Result<()> {
         debug_assert_eq!(dst >> KIND_SHIFT, TEMP, "expr_into targets a temporary");
+        // A value already computed (the pipe's): moved where it goes, as
+        // PHP sends a TMP (no copy left behind).
+        if let Expr::Znode { reg, once: true, .. } = e {
+            f.emit(Instr::AssignTake { var: dst, src: *reg as Reg });
+            return Ok(());
+        }
         let r = self.expr_to(f, e, Some(dst))?;
         if r != dst {
             f.emit(Instr::Move { dst, src: r });
@@ -4038,6 +4066,34 @@ impl<'src> Compiler<'src> {
                 let Some(bin) = assign_binop(*op) else {
                     // `$a ??= v`: assigned only when $a is not set.
                     let _ = span;
+                    // A call the target is read from (`f()->p ??= v`,
+                    // `(1 |> f(...))[0] ??= v`) runs once, its result read
+                    // and written (zend_compile_assign_coalesce memoizes).
+                    // (A builtin's result is no write target: the error
+                    // below says so, as PHP's compiler does.)
+                    // (assert() compiles to a call like a user function's.)
+                    let builtin = |e: &Expr| {
+                        matches!(e, Expr::Call { func, .. } if self.is_builtin(func)
+                            && !matches!(func, Expr::Variable { name, .. } if self.text(*name).strip_prefix(b"\\").unwrap_or(self.text(*name)).eq_ignore_ascii_case(b"assert")))
+                    };
+                    let is_call = |e: &Expr| !builtin(e) && matches!(e, Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::NullsafeMethodCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. });
+                    let root;
+                    let memo;
+                    let var: &Expr = match var {
+                        Expr::PropertyFetch { target, property, span } if is_call(target) => {
+                            let r = self.expr(f, target)?;
+                            root = Expr::Znode { reg: r as u32, once: false, span: target.span() };
+                            memo = Expr::PropertyFetch { target: &root, property, span: *span };
+                            &memo
+                        }
+                        Expr::ArrayDimFetch { array, dim, span } if is_call(array) => {
+                            let r = self.expr(f, array)?;
+                            root = Expr::Znode { reg: r as u32, once: false, span: array.span() };
+                            memo = Expr::ArrayDimFetch { array: &root, dim: *dim, span: *span };
+                            &memo
+                        }
+                        other => other,
+                    };
                     let current = self.quiet(f, var)?;
                     let dst = f.temp();
                     let set = f.emit(Instr::JumpIfSet { src: current, dst, target: 0 });
@@ -4110,7 +4166,9 @@ impl<'src> Compiler<'src> {
                     other => return Err(self.unsupported(other.span(), "this compound assignment")),
                 }
             }
+            Expr::Binary { left, op: BinaryOp::Pipe, right, span } => self.pipe(f, left, right, *span, hint, mark)?,
             Expr::Binary { left, op, right, .. } => self.binary(f, left, *op, right, hint, mark)?,
+            Expr::Znode { reg, .. } => *reg as Reg,
             Expr::Unary { op: op @ (UnaryOp::PreInc | UnaryOp::PreDec), expr: Expr::PropertyFetch { target, property, .. }, .. } => {
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
@@ -4895,6 +4953,58 @@ impl<'src> Compiler<'src> {
         let dst = f.temp();
         f.emit(Instr::FetchConst { site, dst });
         dst
+    }
+
+    /// `$value |> $callable` (zend_compile_pipe): the value computed first
+    /// (into a temporary of its own, so a by-reference parameter refuses
+    /// it), then the call. A first-class callable on the right
+    /// (`f(...)`, `$o->m(...)`, `C::m(...)`) becomes that call with the
+    /// value as its argument; anything else is called as a value,
+    /// `($callable)($value)`.
+    fn pipe(&mut self, f: &mut FnBuilder, left: &Expr, right: &Expr, span: Span, hint: Option<Reg>, mark: usize) -> Result<Reg> {
+        if let Expr::ArrowFunction { span: arrow, .. } = right
+            && !self.parenthesized(*arrow)
+        {
+            return Err(CompileError { message: "Arrow functions on the right hand side of |> must be parenthesized".into(), line: self.line(*arrow) });
+        }
+        let value = self.expr(f, left)?;
+        // ZEND_QM_ASSIGN of a variable: a temporary, never a reference.
+        let value = if value >> KIND_SHIFT == TEMP {
+            value
+        } else {
+            let t = f.temp();
+            f.emit(Instr::Move { dst: t, src: value });
+            t
+        };
+        let znode = Expr::Znode { reg: value as u32, once: true, span: left.span() };
+        let arg = [p8_syntax::ast::Arg { name: None, value: &znode, unpack: false, span: left.span() }];
+        // assert() gets its own source as an extra argument: never
+        // rewritten (zend_is_pipe_optimizable_callable_name).
+        let is_assert = |func: &Expr| matches!(func, Expr::Variable { name, .. } if self.text(*name).trim_ascii_start().strip_prefix(b"\\").unwrap_or(self.text(*name)).eq_ignore_ascii_case(b"assert"));
+        let call = match right {
+            Expr::Call { func, args, span } if is_placeholder(args) && !is_assert(func) => Expr::Call { func, args: &arg, span: *span },
+            Expr::MethodCall { target, method, args, span } if is_placeholder(args) => Expr::MethodCall { target, method, args: &arg, span: *span },
+            Expr::StaticCall { class, method, args, span } if is_placeholder(args) => Expr::StaticCall { class, method, args: &arg, span: *span },
+            callable => {
+                let callee = self.expr(f, callable)?;
+                let callee = Expr::Znode { reg: callee as u32, once: true, span: callable.span() };
+                let call = Expr::Call { func: &callee, args: &arg, span };
+                let r = self.expr_to(f, &call, hint)?;
+                pipe_send_check(f);
+                return Ok(r);
+            }
+        };
+        let _ = mark;
+        let r = self.expr_to(f, &call, hint)?;
+        pipe_send_check(f);
+        Ok(r)
+    }
+
+    /// Whether the expression at `span` is written in parentheses.
+    fn parenthesized(&self, span: Span) -> bool {
+        let before = &self.source[..span.start.min(self.source.len())];
+        let after = &self.source[span.end.min(self.source.len())..];
+        before.trim_ascii_end().ends_with(b"(") && after.trim_ascii_start().starts_with(b")")
     }
 
     fn binary(&mut self, f: &mut FnBuilder, left: &Expr, op: BinaryOp, right: &Expr, hint: Option<Reg>, mark: usize) -> Result<Reg> {

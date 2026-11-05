@@ -275,6 +275,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                     if let Expr::Error { .. } = item.value {
                         continue;
                     }
+                    // A call (or pipe) as a list target parses; the compiler
+                    // says what PHP's does ("Can't use function return value
+                    // in write context").
+                    if matches!(item.value, Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::Binary { op: BinaryOp::Pipe, .. }) {
+                        continue;
+                    }
                     if !self.is_assignable(item.value) {
                         return false;
                     }
@@ -450,6 +456,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 TokenKind::GtEq => BinaryOp::GtEq,
                 TokenKind::AmpersandAmpersand => BinaryOp::And,
                 TokenKind::PipePipe => BinaryOp::Or,
+                TokenKind::PipeGt => BinaryOp::Pipe,
                 TokenKind::Ampersand
                 | TokenKind::AmpersandFollowedByVarOrVararg
                 | TokenKind::AmpersandNotFollowedByVarOrVararg => BinaryOp::BitAnd,
@@ -1734,6 +1741,9 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             | BinaryOp::NotEqEq
             | BinaryOp::Spaceship => (110, 111),
             BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => (120, 121),
+
+            // T_PIPE: below '.', above the comparisons; left-associative.
+            BinaryOp::Pipe => (125, 126),
 
             BinaryOp::ShiftLeft | BinaryOp::ShiftRight => (130, 131),
 

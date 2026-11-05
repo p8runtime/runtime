@@ -651,6 +651,7 @@ impl Code for Rare {
             Rare::CallableArgByRef => 19,
             Rare::ThrowError => 20,
             Rare::AutoGlobal => 21,
+            Rare::PipeArgByRef => 22,
         });
     }
     fn get(r: &mut Reader) -> Got<Self> {
@@ -677,6 +678,7 @@ impl Code for Rare {
             19 => Rare::CallableArgByRef,
             20 => Rare::ThrowError,
             21 => Rare::AutoGlobal,
+            22 => Rare::PipeArgByRef,
             _ => return Err(Bad),
         })
     }

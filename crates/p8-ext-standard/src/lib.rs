@@ -144,6 +144,8 @@ fn register(registry: &mut Registry) {
     }
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
+    // basic_functions.stub.php: `@prefer-ref $array`, `@prefer-ref $rest`.
+    registry.mark_prefer_ref(&["array_multisort"]);
     registry.add_functions(callback::BUILTINS);
     registry.add_functions(ctype::BUILTINS);
     registry.add_functions(zlib::BUILTINS);

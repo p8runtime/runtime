@@ -364,6 +364,13 @@ pub enum Rare {
     /// the global table at each use, never bound once. One not set stays
     /// unset (a read is not a `global` statement, which makes it null).
     AutoGlobal,
+    /// `$v |> callable`: the callable's first parameter must not take a
+    /// reference (the value is a temporary: ZEND_SEND_VAL_EX's "could not
+    /// be passed by reference"). c is what calls: 0 the function of call
+    /// site b; 1 the method named by call site b of the object in a; 2 the
+    /// static method named by site b of class `class`; 3 the callable
+    /// value in a.
+    PipeArgByRef,
 }
 
 impl Instr {

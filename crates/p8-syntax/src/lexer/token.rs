@@ -211,6 +211,7 @@ pub enum TokenKind {
 
     AmpersandAmpersand, // &&
     PipePipe,           // ||
+    PipeGt,             // |> (T_PIPE)
     LogicalAnd,         // and
     LogicalOr,          // or
     LogicalXor,         // xor
