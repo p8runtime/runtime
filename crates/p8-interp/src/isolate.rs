@@ -191,6 +191,9 @@ pub struct Isolate {
     /// What a declared function's closure slot holds until the function
     /// is first resolved (sites.rs `Closure::unbuilt`).
     pub(crate) unbuilt: Rc<Closure>,
+    /// Partial applications' closure code, compiled once for the isolate
+    /// (per site and function applied) and shared by every request.
+    pub(crate) partials: RefCell<HashMap<crate::partial::CacheKey, crate::partial::Compiled>>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -219,6 +222,7 @@ impl Isolate {
             ini_texts: RefCell::new(HashMap::default()),
             thawed: RefCell::new(HashMap::default()),
             unbuilt: Closure::unbuilt(&registry),
+            partials: RefCell::new(HashMap::default()),
             registry,
         }
     }

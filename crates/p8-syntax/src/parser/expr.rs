@@ -15,7 +15,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         self.bump(); // consume (
 
         let mut args = bumpalo::collections::Vec::new_in(self.arena);
-        let mut has_named = false;
         while self.current_token.kind != TokenKind::CloseParen
             && self.current_token.kind != TokenKind::Eof
         {
@@ -31,9 +30,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 name = Some(self.arena.alloc(self.current_token));
                 self.bump(); // Identifier
                 self.bump(); // Colon
-                has_named = true;
             } else if self.current_token.kind == TokenKind::Ellipsis {
-                if self.next_token.kind == TokenKind::CloseParen {
+                if matches!(self.next_token.kind, TokenKind::CloseParen | TokenKind::Comma) {
+                    // `...` as an argument of its own: the first-class
+                    // callable syntax, or a partial application's variadic
+                    // placeholder (allowed after named arguments; where it
+                    // may appear is checked when the call is compiled).
                     let span = self.current_token.span;
                     self.bump(); // Eat ...
                     let value = self.arena.alloc(Expr::VariadicPlaceholder { span });
@@ -43,18 +45,28 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                         unpack: false,
                         span,
                     });
+                    if self.current_token.kind == TokenKind::Comma {
+                        self.bump();
+                    }
                     continue;
                 }
                 unpack = true;
                 self.bump();
-            } else if has_named {
-                self.errors.push(ParseError {
-                    span: self.current_token.span,
-                    message: "Cannot use positional argument after named argument",
-                });
             }
+            // A positional argument after a named one is a compile error
+            // (zend_compile_args), reported where the call is compiled.
 
-            let value = self.parse_expr(0);
+            // `?` (or `name: ?`): a partial application's placeholder.
+            let value = if !unpack
+                && self.current_token.kind == TokenKind::Question
+                && matches!(self.next_token.kind, TokenKind::CloseParen | TokenKind::Comma)
+            {
+                let span = self.current_token.span;
+                self.bump();
+                &*self.arena.alloc(Expr::Placeholder { span })
+            } else {
+                self.parse_expr(0)
+            };
 
             args.push(Arg {
                 name,

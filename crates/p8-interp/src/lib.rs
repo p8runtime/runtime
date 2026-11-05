@@ -14,6 +14,7 @@ mod lazy;
 mod include;
 mod instances;
 mod meta;
+mod partial;
 mod reflect_info;
 mod reflection;
 mod refs;
@@ -2042,7 +2043,8 @@ impl Context<'_> {
                                     // b: 0 a value returned, else none (`return;`, the end).
                                     let given = if b != 0 { "none".into() } else { p8_runtime::args::value_name(&v) };
                                     let name = self.function_display();
-                                    return Err(self.throw("TypeError", format!("{name}(): Return value must be of type {}, {given} returned", ty.shown_resolved())));
+                                    let shown = self.type_shown(ty);
+                                    return Err(self.throw("TypeError", format!("{name}(): Return value must be of type {shown}, {given} returned")));
                                 }
                             }
                         }
@@ -2181,6 +2183,12 @@ impl Context<'_> {
                     Rare::ThrowError => {
                         let message = reg!(a).to_php_string().unwrap_or_else(PhpStr::empty);
                         return Err(self.throw("Error", String::from_utf8_lossy(message.as_bytes()).into_owned()));
+                    }
+                    Rare::Partial => {
+                        let callee = self.operand(w, func, b);
+                        let n = func.partials[class as usize].args.len();
+                        let values: Vec<Value> = (0..n).map(|i| w[c as usize + i].clone()).collect();
+                        reg!(a) = self.partial(&clo.code, class, callee, values, func.strict)?;
                     }
                     Rare::CallableArgByRef => {
                         let callee = reg!(b).clone();

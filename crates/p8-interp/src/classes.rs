@@ -1730,8 +1730,37 @@ impl Context<'_> {
         let at = called_at.map_or(String::new(), |(file, line)| format!(", called in {file} on line {line}"));
         self.throw(
             "TypeError",
-            format!("{}(): Argument #{pos}{label} must be of type {}, {} given{at}", self.function_display(), ty.shown_resolved(), p8_runtime::args::value_name(v)),
+            format!("{}(): Argument #{pos}{label} must be of type {}, {} given{at}", self.function_display(), self.type_shown(ty), p8_runtime::args::value_name(v)),
         )
+    }
+
+    /// A type as a message shows it where the running code is
+    /// (zend_type_to_string_resolved): `self` and `parent` as the scope's
+    /// classes, `static` as the called class.
+    pub(crate) fn type_shown(&self, ty: &p8_runtime::types::TypeDecl) -> String {
+        let frame = self.frames.last();
+        let scope = frame.and_then(|f| f.scope.as_ref());
+        let relative = ty.classes.iter().any(|c| c.as_bytes().eq_ignore_ascii_case(b"self") || c.as_bytes().eq_ignore_ascii_case(b"parent"));
+        let called = frame.and_then(|f| f.called.as_ref().or(f.this.as_ref().map(|t| &t.class))).or(scope);
+        let is_static = ty.mask & p8_runtime::types::T_STATIC != 0 && called.is_some();
+        if scope.is_none() || !(relative || is_static) {
+            return ty.shown_resolved();
+        }
+        let mut classes: Vec<p8_runtime::frozen::Text> = ty
+            .classes
+            .iter()
+            .map(|c| match c.as_bytes().to_ascii_lowercase().as_slice() {
+                b"self" => scope.map_or_else(|| c.clone(), |s| p8_runtime::frozen::Text::from(s.name.as_bytes())),
+                b"parent" => scope.and_then(|s| s.parent.as_ref()).map_or_else(|| c.clone(), |p| p8_runtime::frozen::Text::from(p.name.as_bytes())),
+                _ => c.clone(),
+            })
+            .collect();
+        let mut mask = ty.mask;
+        if is_static && let Some(called) = called {
+            mask &= !p8_runtime::types::T_STATIC;
+            classes.insert(0, p8_runtime::frozen::Text::from(called.name.as_bytes()));
+        }
+        p8_runtime::types::TypeDecl::new(mask, classes.clone(), classes, ty.intersection).shown_resolved()
     }
 
     /// `(object) $v`: an object as is; an array's entries as a stdClass's

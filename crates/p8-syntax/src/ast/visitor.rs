@@ -475,6 +475,7 @@ pub fn walk_expr<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, expr: ExprId<
         | Expr::MagicConst { .. }
         | Expr::VariadicPlaceholder { .. }
         | Expr::Znode { .. }
+        | Expr::Placeholder { .. }
         | Expr::Error { .. } => {}
         Expr::IndirectVariable { name, .. } => {
             visitor.visit_expr(name);

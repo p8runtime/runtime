@@ -1,0 +1,178 @@
+# positional
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+# named
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  string(1) "C"
+  [2]=>
+  string(1) "B"
+}
+Closure [ <user> static function {closure:pfa:%s:34} ] {
+  @@ %s 34 - 34
+
+  - Bound Variables [1] {
+      Variable #0 [ $a ]
+  }
+
+  - Parameters [2] {
+    Parameter #0 [ <required> $c ]
+    Parameter #1 [ <required> $b ]
+  }
+}
+# variadic
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  array(0) {
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(4)
+  }
+  [3]=>
+  array(4) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+    [3]=>
+    int(4)
+  }
+}
+array(5) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+  [3]=>
+  int(4)
+  [4]=>
+  int(5)
+}
+Closure [ <user> static function {closure:pfa:%s:42} ] {
+  @@ %s 42 - 42
+
+  - Bound Variables [1] {
+      Variable #0 [ $a ]
+  }
+
+  - Parameters [2] {
+    Parameter #0 [ <required> $b ]
+    Parameter #1 [ <optional> $c = 'c' ]
+  }
+}
+# methods
+int(106)
+int(21)
+Closure [ <user> static public method {closure:pfa:%s:50} ] {
+  @@ %s 50 - 50
+
+  - Bound Variables [1] {
+      Variable #0 [ $y ]
+  }
+
+  - Parameters [1] {
+    Parameter #0 [ <required> $x ]
+  }
+}
+string(8) "hidden 1"
+string(12) "missing(1,2)"
+# closures
+string(3) "x/y"
+Closure [ <user> function {closure:pfa:%s:59} ] {
+  @@ %s 59 - 59
+
+  - Bound Variables [2] {
+      Variable #0 [ $fn ]
+      Variable #1 [ $y ]
+  }
+
+  - Parameters [1] {
+    Parameter #0 [ <required> $x ]
+  }
+}
+int(4)
+string(6) "bonono"
+# references
+int(6)
+int(16)
+# errors
+ArgumentCountError: Partial application of g() expects at least 2 arguments, 1 given
+ArgumentCountError: Partial application of g() expects at most 3 arguments, 4 given
+Error: Named parameter $a overwrites previous placeholder
+ArgumentCountError: g(): Argument #2 ($b) not passed
+Error: Unknown named parameter $x
+Error: inc(): Argument #1 ($x) could not be passed by reference
+ArgumentCountError: array_keys(): Argument #2 ($filter_value) must be passed explicitly, because the default value is not known
+Too few arguments to function {closure:pfa:%s:94}(), 0 passed and exactly 1 expected
+# pipe
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(5)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(5)
+}
+string(6) "bonono"
+# debug info
+Closure Object
+(
+    [name] => {closure:pfa:%s:106}
+    [file] => %s
+    [line] => 106
+    [static] => Array
+        (
+            [a] => 1
+            [c] => 3
+        )
+
+    [parameter] => Array
+        (
+            [$b] => <required>
+        )
+
+)
+
