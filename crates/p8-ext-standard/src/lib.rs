@@ -91,8 +91,15 @@ static BUILTINS: &[Builtin] = &[
 /// table examples/gen_defaults.php generates from real PHP).
 pub const EXTENSION: Extension = Extension { name: "standard", register };
 
-/// The PHP release p8 reports (PHP_VERSION).
-pub const PHP_VERSION: &str = "8.4.27";
+/// The PHP release p8 reports (PHP_VERSION) and the numbers derived from
+/// it: defined once in p8-stubs, next to the extension table that reports
+/// the version too.
+pub use p8_runtime::stubs::{PHP_MAJOR_VERSION, PHP_MINOR_VERSION, PHP_RELEASE_VERSION, PHP_VERSION, PHP_VERSION_ID};
+
+/// The Zend Engine's version for this PHP: 4.<minor>.<release> (PHP 8.x).
+pub fn zend_engine_version() -> String {
+    format!("4.{PHP_MINOR_VERSION}.{PHP_RELEASE_VERSION}")
+}
 
 /// p8's own version (P8_VERSION, php2 -v, X-Powered-By, phpinfo()): the
 /// release p8 is built as, from Cargo.
@@ -114,10 +121,10 @@ pub const DEBUG_BUILD: bool = cfg!(debug_assertions);
 const HOST_CONSTANTS: &[(&str, Constant)] = &[
     ("PHP_VERSION", Constant::Str(PHP_VERSION.as_bytes())),
     ("P8_VERSION", Constant::Str(P8_VERSION.as_bytes())),
-    ("PHP_VERSION_ID", Constant::Int(80427)),
-    ("PHP_MAJOR_VERSION", Constant::Int(8)),
-    ("PHP_MINOR_VERSION", Constant::Int(4)),
-    ("PHP_RELEASE_VERSION", Constant::Int(27)),
+    ("PHP_VERSION_ID", Constant::Int(PHP_VERSION_ID)),
+    ("PHP_MAJOR_VERSION", Constant::Int(PHP_MAJOR_VERSION)),
+    ("PHP_MINOR_VERSION", Constant::Int(PHP_MINOR_VERSION)),
+    ("PHP_RELEASE_VERSION", Constant::Int(PHP_RELEASE_VERSION)),
     ("PHP_EXTRA_VERSION", Constant::Str(b"")),
     ("PHP_OS", Constant::Str(if cfg!(target_os = "macos") { b"Darwin" } else { b"Linux" })),
     ("PHP_OS_FAMILY", Constant::Str(if cfg!(target_os = "macos") { b"Darwin" } else { b"Linux" })),
@@ -144,6 +151,8 @@ fn register(registry: &mut Registry) {
     }
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
+    registry.add_classes(array::CLASSES);
+    registry.add_classes(math::CLASSES);
     // basic_functions.stub.php: `@prefer-ref $array`, `@prefer-ref $rest`.
     registry.mark_prefer_ref(&["array_multisort"]);
     registry.add_functions(callback::BUILTINS);
@@ -209,6 +218,10 @@ fn register(registry: &mut Registry) {
     // The binary running this script (PHP_BINARY), for tests that run PHP again.
     let binary = std::env::current_exe().map(|p| p.into_os_string().into_encoded_bytes()).unwrap_or_default();
     registry.add_constant(b"PHP_BINARY", Constant::Str(Box::leak(binary.into_boxed_slice())));
+    // PHP_BUILD_DATE (8.5+): what phpinfo() shows as "Build Date". (PHP
+    // defines PHP_BUILD_PROVIDER only when the build names one; p8's doesn't.)
+    let built = phpinfo::build_date().into_bytes();
+    registry.add_constant(b"PHP_BUILD_DATE", Constant::Str(Box::leak(built.into_boxed_slice())));
     registry.add_functions(string::BUILTINS);
     registry.add_functions(var::BUILTINS);
     // These reach the caller's variables or run PHP code (__serialize,
@@ -223,8 +236,8 @@ fn register(registry: &mut Registry) {
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(class::REENTER);
-    registry.mark_reenters(&["clone", "implode", "join","getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
-    for (module, name, value, _) in defaults::CONSTANTS {
+    registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
+    for (module, name, value, deprecation) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
             defaults::ConstValue::Float(bits) => Constant::Float(f64::from_bits(*bits)),
@@ -233,6 +246,9 @@ fn register(registry: &mut Registry) {
             defaults::ConstValue::Null => Constant::Null,
         };
         registry.add_constant_in(module, name, value);
+        if let Some(message) = deprecation {
+            registry.deprecate_constant(name, message);
+        }
     }
 }
 
@@ -446,8 +462,23 @@ fn get_loaded_extensions(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 
 fn define(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = str_arg(args, 0);
+    // ZEND_FUNCTION(define): the third argument is deprecated (8.6), and
+    // has been ignored since 8.0.
+    if args.len() == 3 {
+        ctx.deprecated(
+            "define(): Argument #3 ($case_insensitive) is ignored and treated as false since declaration of case-insensitive constants is no longer supported, passing the argument explicitly is unnecessary",
+        );
+        if arg(args, 2).to_bool() {
+            ctx.warn("define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported, this will be an error in PHP 9.0");
+        }
+    }
+    // zend_register_constant: "_", "let" and "is" (8.6)
+    if let Some((word, _)) = p8_runtime::symbol::deprecated_name(name.as_bytes()) {
+        ctx.deprecated(&format!("Calling a constant \"{word}\" is deprecated since 8.6"));
+    }
     if !ctx.define(name.as_bytes(), arg(args, 1)) {
-        ctx.warn(&format!("Constant {} already defined", String::from_utf8_lossy(name.as_bytes())));
+        // zend_register_constant (8.5: redeclaring is on its way to an error)
+        ctx.warn(&format!("Constant {} already defined, this will be an error in PHP 9", String::from_utf8_lossy(name.as_bytes())));
         return Ok(Value::Bool(false));
     }
     Ok(Value::Bool(true))

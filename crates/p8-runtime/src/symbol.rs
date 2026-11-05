@@ -305,6 +305,34 @@ fn with_lower<R>(name: &[u8], upto: usize, f: impl FnOnce(&[u8]) -> R) -> R {
     f(folded)
 }
 
+/// Whether `name` (its last part, any case) is one PHP reserves and no
+/// class or class alias may take (zend_is_reserved_class_name; "array"
+/// and "callable" are there for aliases, since 8.5).
+pub fn reserved_class_name(name: &[u8]) -> bool {
+    const RESERVED: &[&[u8]] = &[
+        b"bool", b"false", b"float", b"int", b"null", b"parent", b"self", b"static", b"string", b"true", b"void", b"never", b"iterable", b"object",
+        b"mixed", b"array", b"callable",
+    ];
+    let last = name.rsplit(|&c| c == b'\\').next().unwrap_or(name);
+    RESERVED.iter().any(|r| r.eq_ignore_ascii_case(last))
+}
+
+/// A name PHP deprecates as a class, constant or alias name, as
+/// zend_assert_valid_class_name and zend_register_constant test it: "_"
+/// (8.4), "let" or "is" (8.6, any case), alone or as the last part of a
+/// namespaced name. Gives the word and the release that deprecated it.
+pub fn deprecated_name(name: &[u8]) -> Option<(&'static str, &'static str)> {
+    if name == b"_" || name.ends_with(b"\\_") {
+        Some(("_", "8.4"))
+    } else if name.eq_ignore_ascii_case(b"let") || name.ends_with(b"\\let") {
+        Some(("let", "8.6"))
+    } else if name.eq_ignore_ascii_case(b"is") || name.ends_with(b"\\is") {
+        Some(("is", "8.6"))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

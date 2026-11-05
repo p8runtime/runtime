@@ -60,7 +60,8 @@ const FLAG_IPV4: i64 = 0x0010_0000;
 const FLAG_IPV6: i64 = 0x0020_0000;
 const NO_RES_RANGE: i64 = 0x0040_0000;
 const NO_PRIV_RANGE: i64 = 0x0080_0000;
-const GLOBAL_RANGE: i64 = 0x1000_0000;
+// (0x1000_0000 until 8.5, which gave that bit to FILTER_THROW_ON_FAILURE)
+const GLOBAL_RANGE: i64 = 0x2000_0000;
 const FLAG_HOSTNAME: i64 = 0x10_0000;
 const EMAIL_UNICODE: i64 = 0x10_0000;
 

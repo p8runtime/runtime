@@ -1,5 +1,5 @@
 //! max_execution_time: a script that runs past it ends with PHP's fatal
-//! error (as php:8.4-cli prints it) and status 255, in about that time.
+//! error (as PHP 8.6 prints it) and status 255, in about that time.
 
 use std::path::Path;
 use std::process::Command;
@@ -13,7 +13,8 @@ fn max_execution_time_stops_a_loop() {
     let took = started.elapsed();
     let shown = std::fs::canonicalize(&script).expect("canonical path");
     let got = String::from_utf8_lossy(&out.stdout).replace(&*shown.to_string_lossy(), "%s");
-    assert_eq!(got, "\nFatal error: Maximum execution time of 1 second exceeded in %s on line 5\n");
+    // With its stack trace (fatal_error_backtraces, PHP 8.5+).
+    assert_eq!(got, "\nFatal error: Maximum execution time of 1 second exceeded in %s on line 5\nStack trace:\n#0 {main}\n");
     assert_eq!(out.status.code(), Some(255));
     assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "stopped after {took:?}");
 }

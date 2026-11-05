@@ -40,6 +40,8 @@ bool(true)
 int(1)
 bool(false)
 bool(true)
+
+Deprecated: Method SplObjectStorage::attach() is deprecated since 8.5, use method SplObjectStorage::offsetSet() instead in %s on line 13
 string(163) "x:i:2;O:8:"stdClass":1:{s:1:"n";i:1;},a:1:{i:0;s:1:"x";};O:12:"DateTimeZone":2:{s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";},N;;m:a:1:{s:5:"extra";s:1:"e";}"
 string(197) "O:5:"Store":2:{i:0;a:4:{i:0;O:8:"stdClass":1:{s:1:"n";i:1;}i:1;a:1:{i:0;s:1:"x";}i:2;O:12:"DateTimeZone":2:{s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";}i:3;N;}i:1;a:1:{s:5:"extra";s:1:"e";}}"
 int(2)

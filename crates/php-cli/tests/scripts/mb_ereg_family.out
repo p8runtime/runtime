@@ -1,9 +1,21 @@
+
+Deprecated: Function mb_split() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 4
 array(2) {
   [0]=>
   string(5) "a = 1"
   [1]=>
   string(5) "b = 2"
 }
+
+Deprecated: Function mb_split() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 5
+
+Deprecated: Function mb_split() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 5
+
+Deprecated: Function mb_split() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 5
+
+Deprecated: Function mb_split() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 5
+
+Deprecated: Function mb_split() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 5
 array(5) {
   [0]=>
   string(2) "α"
@@ -36,6 +48,8 @@ array(2) {
   [1]=>
   string(2) "bc"
 }
+
+Deprecated: Function mb_ereg() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 6
 bool(true)
 array(3) {
   [0]=>
@@ -45,19 +59,49 @@ array(3) {
   ["word"]=>
   string(7) "größe"
 }
+
+Deprecated: Function mb_ereg() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 7
 bool(false)
 array(0) {
 }
+
+Deprecated: Function mb_eregi() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 8
+
+Deprecated: Function mb_ereg_match() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 8
+
+Deprecated: Function mb_ereg_match() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 8
+
+Deprecated: Function mb_ereg_match() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 8
 bool(true)
 bool(true)
 bool(false)
 bool(true)
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 9
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 9
+
+Deprecated: Function mb_eregi_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 9
 string(21) "1a[\k<x>] 2b[\k<x>] c"
 string(9) "f<oo><oo>"
 string(3) "ete"
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 10
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 10
 string(5) "-a-b-"
 string(6) "-a--b-"
+
+Deprecated: Function mb_ereg_replace_callback() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 11
 string(8) "a2 b44 c"
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 12
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 12
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 12
+
+Deprecated: Function mb_ereg_replace() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 12
 string(3) "a
 b"
 string(3) "a
@@ -65,6 +109,10 @@ X"
 string(1) "X"
 string(3) "a
 b"
+
+Deprecated: Function mb_regex_set_options() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 13
+
+Deprecated: Function mb_split() is deprecated since 8.6, because the underlying library is no longer maintained in %s on line 13
 string(2) "pr"
 array(1) {
   [0]=>

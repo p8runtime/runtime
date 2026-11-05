@@ -155,6 +155,9 @@ impl Context<'_> {
     /// returns false lets PHP's own report show it.
     pub(crate) fn dispatch_errors(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
         let pending = std::mem::take(&mut self.pending_errors);
+        // The builtin an E_USER_ERROR came from (call_builtin): the fatal
+        // error's first frame if the handler declines it, else forgotten.
+        let raised_in = if pending.iter().any(|e| e.0 == 256) { self.failed_call.take() } else { None };
         let Some((handler, _)) = self.error_handlers.last().cloned() else { return Ok(()) };
         for (level, message, file, line) in pending {
             self.in_handler = true;
@@ -169,6 +172,7 @@ impl Context<'_> {
             if let Value::Bool(false) = r? {
                 // An E_USER_ERROR the handler declines is fatal.
                 if level == 256 {
+                    self.failed_call = raised_in;
                     return Err(Throw::Fatal { message, file, line });
                 }
                 self.print_diag(level, &message, &file, line);

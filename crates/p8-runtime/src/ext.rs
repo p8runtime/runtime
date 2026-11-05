@@ -132,6 +132,12 @@ pub trait Ctx {
     fn error_level(&mut self, new: Option<i64>) -> i64;
     /// The constant `name` (as written), defined by the script or an extension.
     fn constant(&self, name: &[u8]) -> Option<Value>;
+    /// What fetching builtin constant `name` raises if it is deprecated
+    /// (Registry::deprecate_constant).
+    fn constant_deprecation(&self, name: &[u8]) -> Option<&'static str> {
+        let _ = name;
+        None
+    }
     /// define(): false when `name` is already defined.
     fn define(&mut self, name: &[u8], value: Value) -> bool;
     /// Set the constant `name`, whether or not it is defined: for the one
@@ -455,6 +461,10 @@ pub struct Registry {
     /// The constants in the order they were added, each with its module
     /// (get_defined_constants(true) groups by it: "Core", "pcre", ...).
     constant_order: Vec<(&'static str, &'static [u8], crate::symbol::Sym)>,
+    /// What fetching a deprecated constant says (its #[\Deprecated]: "Constant
+    /// E_STRICT is deprecated since 8.4, the error level was removed"), by
+    /// its key's symbol.
+    constant_deprecations: crate::fast::HashMap<crate::symbol::Sym, &'static str>,
     /// The extension registering now (its constants' module, by default).
     module: &'static str,
     /// Classes extensions declare, in order (a parent before its children).
@@ -655,6 +665,17 @@ impl Registry {
 
     pub fn add_constant(&mut self, name: &'static [u8], value: Constant) {
         self.add_constant_in(self.module, name, value);
+    }
+
+    /// Mark constant `name` deprecated, with the message fetching it raises.
+    pub fn deprecate_constant(&mut self, name: &[u8], message: &'static str) {
+        let sym = self.symbols.intern(&const_key(name));
+        self.constant_deprecations.insert(sym, message);
+    }
+
+    /// What fetching the constant whose key is `sym` raises, if it is deprecated.
+    pub fn constant_deprecation(&self, sym: crate::symbol::Sym) -> Option<&'static str> {
+        self.constant_deprecations.get(&sym).copied()
     }
 
     /// A constant that belongs to `module` (PHP's name for its extension).

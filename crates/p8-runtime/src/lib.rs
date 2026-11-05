@@ -10,6 +10,7 @@ pub mod ext;
 pub mod fast;
 pub mod frozen;
 pub mod gc;
+pub mod glob;
 pub mod info;
 pub mod number;
 pub mod numeric;

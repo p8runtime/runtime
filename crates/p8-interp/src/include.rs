@@ -157,6 +157,7 @@ impl Context<'_> {
             Err(e) if e.parse => return Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(file.as_str()), line: e.line, props: Vec::new() }),
             Err(e) => return Err(Throw::Fatal { message: e.message, file: Rc::from(file.as_str()), line: e.line }),
         };
+        self.raise_compile_diags(&program.main);
         for f in &program.functions {
             if let Err(message) = self.declare(Arc::clone(f)) {
                 return Err(Throw::Fatal { message, file: Rc::from(&*f.file), line: f.line });
@@ -206,6 +207,7 @@ impl Context<'_> {
             Err(e) if e.parse => return Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(name.as_str()), line: e.line, props: Vec::new() }),
             Err(e) => return Err(Throw::Fatal { message: e.message, file: Rc::from(name.as_str()), line: e.line }),
         };
+        self.raise_compile_diags(&program.main);
         for f in &program.functions {
             if let Err(message) = self.declare(Arc::clone(f)) {
                 return Err(Throw::Fatal { message, file: Rc::from(&*f.file), line: f.line });

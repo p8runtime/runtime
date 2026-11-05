@@ -110,19 +110,6 @@ fn same_autoloader(a: &Value, b: &Value) -> bool {
     same && xm == ym
 }
 
-/// The builtin constants PHP marks deprecated (CONST_DEPRECATED), as one
-/// a FetchConst names (or falls back to).
-fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static str> {
-    const DEPRECATED: &[&str] = &[
-        "FILE_TEXT", "FILE_BINARY", "ASSERT_ACTIVE", "ASSERT_CALLBACK", "ASSERT_BAIL", "ASSERT_WARNING", "ASSERT_EXCEPTION",
-        "DOM_PHP_ERR", "SUNFUNCS_RET_TIMESTAMP", "SUNFUNCS_RET_STRING", "SUNFUNCS_RET_DOUBLE", "MT_RAND_PHP", "E_STRICT",
-        "FILTER_SANITIZE_STRING", "FILTER_SANITIZE_STRIPPED",
-    ];
-    let global = |n: &[u8]| n.strip_prefix(b"\\").unwrap_or(n).to_vec();
-    let names = [Some(global(name)), fallback.map(global)];
-    DEPRECATED.iter().copied().find(|d| names.iter().flatten().any(|n| n == d.as_bytes()))
-}
-
 /// A builtin that is running PHP code (array_map's callback): where it
 /// was called (the frame count then), its name and arguments.
 struct NativeCall {
@@ -458,10 +445,11 @@ impl Context<'_> {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         server.insert(key("REQUEST_TIME_FLOAT"), Value::Float(now.as_secs_f64()));
         server.insert(key("REQUEST_TIME"), Value::Int(now.as_secs() as i64));
-        let register = match Ctx::ini_get(self, b"register_argc_argv") {
-            Some(Value::Str(s)) => !matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"" | b"0" | b"off" | b"no" | b"false"),
-            _ => true,
-        };
+        // The command line's arguments are always there (the CLI hands PHP
+        // its argc, php_auto_globals_create_server): register_argc_argv,
+        // off by default since 8.5, only decides whether argv is made from a
+        // query string, which a script run from the command line has not.
+        let register = true;
         if register {
             server.insert(key("argv"), args.clone());
             server.insert(key("argc"), argc.clone());
@@ -522,14 +510,44 @@ impl Context<'_> {
 
     /// Run the innermost buffer's handler on its contents (`phase`); what it
     /// gives back (its contents, without a handler or when it returns false).
-    fn ob_handle(&mut self, regs: &mut Vec<Value>, phase: i64) -> Result<Vec<u8>, Throw> {
+    /// What the user error handler throws while the deprecation about a
+    /// handler's output is raised is thrown once the ob_* operation is done
+    /// (its output written), as PHP's comes after php_output_handler_op:
+    /// `late`.
+    fn ob_handle(&mut self, regs: &mut Vec<Value>, phase: i64, late: &mut Option<Throw>) -> Result<Vec<u8>, Throw> {
         let Some(buffer) = self.out.buffers.last_mut() else { return Ok(Vec::new()) };
         let data = std::mem::take(&mut buffer.data);
         let Some(handler) = buffer.handler.clone() else { return Ok(data) };
         let phase = if buffer.started { phase } else { phase | OB_START };
         buffer.started = true;
-        // The handler's own output is not buffered output.
-        let r = self.call_with_regs(regs, &handler, &mut [Value::Str(PhpStr::new(data.clone())), Value::Int(phase)])?;
+        // The handler's own output is not buffered output (see
+        // Output::write_while_handling).
+        let at = self.out.buffers.len() - 1;
+        let outer = self.out.running.replace(at);
+        let r = self.call_with_regs(regs, &handler, &mut [Value::Str(PhpStr::new(data.clone())), Value::Int(phase)]);
+        // Output from the handler: deprecated (8.5), raised with its buffer
+        // disabled, so the message goes past it.
+        if r.is_ok() && self.out.buffers.get(at).is_some_and(|b| b.produced) {
+            self.out.buffers[at].produced = false;
+            self.out.buffers[at].disabled = true;
+            let message = format!("Producing output from user output handler {} is deprecated", handler_name(&Some(handler.clone())));
+            match self.running_builtin {
+                Some(i) => {
+                    let name = self.isolate.registry.function(i).name;
+                    self.show(E_DEPRECATED, &format!("{name}(): {message}"));
+                    // A user error handler runs now, inside the ob_* call.
+                    if let Err(t) = self.dispatch_errors(regs) {
+                        *late = Some(t);
+                    }
+                }
+                None => self.print_diag(E_DEPRECATED, &format!("PHP Request Shutdown: {message}"), "Unknown", 0),
+            }
+            if let Some(b) = self.out.buffers.get_mut(at) {
+                b.disabled = false;
+            }
+        }
+        self.out.running = outer;
+        let r = r?;
         Ok(match r {
             Value::Bool(false) => data,
             v => v.to_php_string().map_or_else(Vec::new, |s| s.as_bytes().to_vec()),
@@ -542,7 +560,7 @@ impl Context<'_> {
         Ok(match op {
             Ob::Start { handler, chunk } => {
                 let handler = (!matches!(handler, Value::Null)).then_some(handler);
-                self.out.buffers.push(Buffer { data: Vec::new(), handler, chunk: chunk.max(0) as usize, started: false });
+                self.out.buffers.push(Buffer { data: Vec::new(), handler, chunk: chunk.max(0) as usize, started: false, produced: false, disabled: false });
                 Value::Bool(true)
             }
             _ if none && !matches!(op, Ob::Level | Ob::Handlers | Ob::Status { .. }) => Value::Bool(false),
@@ -550,23 +568,29 @@ impl Context<'_> {
             Ob::Length => Value::Int(self.out.buffers.last().map_or(0, |b| b.data.len()) as i64),
             Ob::Level => Value::Int(self.out.buffers.len() as i64),
             Ob::Clean => {
-                self.ob_handle(regs, OB_CLEAN)?;
+                let mut late = None;
+                self.ob_handle(regs, OB_CLEAN, &mut late)?;
+                late.map_or(Ok(()), Err)?;
                 Value::Bool(true)
             }
             Ob::Flush => {
-                let out = self.ob_handle(regs, OB_FLUSH)?;
+                let mut late = None;
+                let out = self.ob_handle(regs, OB_FLUSH, &mut late)?;
                 self.out.write_below(&out);
                 self.note_output_start();
+                late.map_or(Ok(()), Err)?;
                 Value::Bool(true)
             }
             Ob::End { flush } => {
                 let phase = if flush { OB_FINAL } else { OB_CLEAN | OB_FINAL };
-                let out = self.ob_handle(regs, phase)?;
+                let mut late = None;
+                let out = self.ob_handle(regs, phase, &mut late)?;
                 if flush {
                     self.out.write_below(&out);
                     self.note_output_start();
                 }
                 self.out.buffers.pop();
+                late.map_or(Ok(()), Err)?;
                 Value::Bool(true)
             }
             Ob::Handlers => {
@@ -668,6 +692,7 @@ impl Context<'_> {
             }
         }
         let defs = std::mem::take(&mut self.class_defs);
+        self.raise_compile_diags(&main);
         let started = self.run_request_hooks(&mut regs, false);
         let mut result = match started.and_then(|()| self.early_bind(&defs, Some(Rc::from(&*main.file)))) {
             Ok(()) => self.execute(&mut regs),
@@ -760,7 +785,9 @@ impl Context<'_> {
             Ok(()) => 0,
             Err(Throw::Exit(status)) => status,
             Err(Throw::Fatal { message, file, line }) => {
-                let text = self.error_text("Fatal error", &message, &file, line, true);
+                // With the stack trace it was raised with (8.5+).
+                let trace = self.fatal_trace.take();
+                let text = self.error_text_traced("Fatal error", &message, &file, line, true, trace.as_deref());
                 self.write_out(text.as_bytes());
                 self.last_error = Some((1, message, file.to_string(), line));
                 255
@@ -903,13 +930,23 @@ impl Context<'_> {
     /// html_errors is on (a web server's default). The message of a fatal
     /// error is escaped (`escape`), the others are not, as in php_error_cb().
     pub fn error_text(&self, label: &str, message: &str, file: &str, line: u32, escape: bool) -> String {
+        self.error_text_traced(label, message, file, line, escape, None)
+    }
+
+    /// error_text, with the stack trace a fatal error was raised with
+    /// (php_error_cb: after "on line N" in text; the HTML of an E_ERROR,
+    /// which is escaped, shows none).
+    pub fn error_text_traced(&self, label: &str, message: &str, file: &str, line: u32, escape: bool, trace: Option<&str>) -> String {
         let html = match Ctx::ini_get(self, b"html_errors") {
             Some(Value::Str(s)) => matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"1" | b"on" | b"true" | b"yes"),
             Some(v) => v.to_bool(),
             None => false,
         };
         if !html {
-            return format!("\n{label}: {message} in {file} on line {line}\n");
+            return match trace {
+                Some(trace) => format!("\n{label}: {message} in {file} on line {line}\nStack trace:\n{trace}\n"),
+                None => format!("\n{label}: {message} in {file} on line {line}\n"),
+            };
         }
         let message = if escape { message.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;") } else { message.to_string() };
         format!("<br />\n<b>{label}</b>:  {message} in <b>{file}</b> on line <b>{line}</b><br />\n")
@@ -1003,6 +1040,43 @@ impl Context<'_> {
             Value::Undef | Value::Ref(_) => std::borrow::Cow::Owned(self.operand(w, func, r)),
             v => std::borrow::Cow::Borrowed(v),
         }
+    }
+
+    /// What compiling a file raised (its main code's `compile_diags`),
+    /// raised now that it is compiled and before it runs, as PHP 8.5 does
+    /// with errors delayed during compilation: a user error handler gets
+    /// them (after the include or eval), else they are shown at their line.
+    pub(crate) fn raise_compile_diags(&mut self, main: &Function) {
+        if main.compile_diags.is_empty() {
+            return;
+        }
+        let file: Rc<str> = Rc::from(&*main.file);
+        for d in &main.compile_diags {
+            let message = String::from_utf8_lossy(d.message.as_bytes()).into_owned();
+            if self.user_handles_level(d.level) {
+                self.pending_errors.push((d.level, message, Rc::clone(&file), d.line));
+            } else {
+                self.print_diag(d.level, &message, &file, d.line);
+            }
+        }
+    }
+
+    /// A register as a condition (i_zend_is_true): NAN is true, with
+    /// PHP 8.5's "unexpected NAN value was coerced to bool" warning.
+    #[inline]
+    fn truthy(&mut self, w: &[Value], func: &Function, r: Reg) -> bool {
+        let v = self.operand_ref(w, func, r);
+        let t = v.to_bool();
+        if v.is_nan() {
+            self.nan_coerced("bool");
+        }
+        t
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn nan_coerced(&mut self, type_name: &str) {
+        self.warn(format!("unexpected NAN value was coerced to {type_name}"));
     }
 
     /// Reading an undefined register: a warning for a variable, then null.
@@ -1415,11 +1489,11 @@ impl Context<'_> {
                     assign(w, var, new);
                 }
                 Instr::Not { dst, src } => {
-                    let t = self.operand_ref(w, func, src).to_bool();
+                    let t = self.truthy(w, func, src);
                     reg!(dst) = Value::Bool(!t);
                 }
                 Instr::ToBool { dst, src } => {
-                    let t = self.operand_ref(w, func, src).to_bool();
+                    let t = self.truthy(w, func, src);
                     reg!(dst) = Value::Bool(t);
                 }
                 Instr::Neg { dst, src } => {
@@ -1430,7 +1504,9 @@ impl Context<'_> {
                 }
                 Instr::BitNot { dst, src } => {
                     let v = self.operand(w, func, src);
-                    reg!(dst) = ops::bit_not(&v).map_err(|e| self.op_error(e))?;
+                    let r = ops::bit_not(&v, &mut self.diags);
+                    self.report_diags();
+                    reg!(dst) = r.map_err(|e| self.op_error(e))?;
                 }
                 Instr::Cast { kind: CastKind::String, dst, src } => {
                     let v = self.operand(w, func, src);
@@ -1445,9 +1521,22 @@ impl Context<'_> {
                 Instr::Cast { kind, dst, src } => {
                     let v = self.operand(w, func, src);
                     reg!(dst) = match kind {
-                        CastKind::Int => Value::Int(v.to_int()),
+                        CastKind::Int => {
+                            // zval_get_long: a float through zend_dval_to_lval,
+                            // which warns when it isn't representable (8.5+).
+                            if let Value::Float(f) = v.deref() {
+                                self.diags.extend(ops::float_to_int_cast_diag(f));
+                                self.report_diags();
+                            }
+                            Value::Int(v.to_int())
+                        }
                         CastKind::Float => Value::Float(v.to_float()),
-                        CastKind::Bool => Value::Bool(v.to_bool()),
+                        CastKind::Bool => {
+                            if v.is_nan() {
+                                self.nan_coerced("bool");
+                            }
+                            Value::Bool(v.to_bool())
+                        }
                         CastKind::String => {
                             let v = self.object_to_string(v)?;
                             if let Some(e) = ops::object_string_error(&v) {
@@ -1466,7 +1555,12 @@ impl Context<'_> {
                             }
                             Value::Object(o) => Value::Array(Rc::new(classes::object_to_array(&o.proxy_instance().unwrap_or(o)))),
                             Value::Null => Value::Array(Rc::new(PhpArray::new())),
-                            other => Value::Array(Rc::new(PhpArray::from_list(vec![other]))),
+                            other => {
+                                if other.is_nan() {
+                                    self.nan_coerced("array");
+                                }
+                                Value::Array(Rc::new(PhpArray::from_list(vec![other])))
+                            }
                         },
                         CastKind::Unset => Value::Null,
                     };
@@ -1490,7 +1584,7 @@ impl Context<'_> {
                 Instr::JumpIf { cond, target } => {
                     let c = match &reg!(cond) {
                         Value::Bool(b) => *b,
-                        _ => self.operand_ref(w, func, cond).to_bool(),
+                        _ => self.truthy(w, func, cond),
                     };
                     if c {
                         pc = target as usize;
@@ -1499,7 +1593,7 @@ impl Context<'_> {
                 Instr::JumpIfNot { cond, target } => {
                     let c = match &reg!(cond) {
                         Value::Bool(b) => *b,
-                        _ => self.operand_ref(w, func, cond).to_bool(),
+                        _ => self.truthy(w, func, cond),
                     };
                     if !c {
                         pc = target as usize;
@@ -1844,14 +1938,19 @@ impl Context<'_> {
                     let s = &func.sites[site as usize];
                     let v = match clo.sites[site as usize].get() {
                         Some(Callee::Constant(v)) => v.clone(),
-                        _ => match self.constant_by_key(s.sym).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1))) {
+                        _ => match self.constant_by_key(s.sym).map(|v| (v, s.sym)).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1).map(|v| (v, g.1)))) {
                             // Deprecated: said on every fetch, so never cached.
-                            Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(str::to_string).or_else(|| self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes()))) => {
-                                self.diags.push(Diag::Deprecated(format!("Constant {name} is deprecated")));
+                            // A builtin one says what its #[\Deprecated] does.
+                            Some((v, key))
+                                if let Some(message) = self.isolate.registry.constant_deprecation(key).map(str::to_string).or_else(|| {
+                                    self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(|name| format!("Constant {name} is deprecated"))
+                                }) =>
+                            {
+                                self.diags.push(Diag::Deprecated(message));
                                 self.report_diags();
                                 v
                             }
-                            Some(v) => {
+                            Some((v, _)) => {
                                 let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
                                 v
                             }
@@ -3768,7 +3867,13 @@ impl Context<'_> {
             r = Err(t);
         }
         match r {
-            Err(Throw::Error { .. }) => self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args),
+            // The builtin the error was raised in is the trace's first
+            // frame (an exception's, and a fatal error's since 8.5).
+            Err(Throw::Error { .. } | Throw::Fatal { .. }) => self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args),
+            // An E_USER_ERROR waiting for the user handler (trigger_error()):
+            // if the handler declines it, the fatal error's trace starts
+            // with this call (see dispatch_errors).
+            Ok(_) if self.pending_errors.iter().any(|e| e.0 == 256) => self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args),
             Err(Throw::Autoload(n)) => r = Err(self.unlent_autoload(n)),
             _ => {}
         }
@@ -4103,13 +4208,21 @@ impl Context<'_> {
         match Key::from_value(v) {
             Ok((k, None)) => Ok(k),
             Ok((k, Some(KeyIssue::LosesPrecision(f)))) => {
-                let shown = float_to_string(f, Precision::Shortest, 'E');
-                self.diags.push(Diag::Deprecated(format!("Implicit conversion from float {shown} to int loses precision")));
+                ops::float_to_int_diags(f, &mut self.diags);
                 self.report_diags();
+                Ok(k)
+            }
+            // Null as an offset: deprecated (8.5), but not when unsetting.
+            Ok((k, Some(KeyIssue::NullOffset))) => {
+                if what != "unset" {
+                    self.diags.push(Diag::Deprecated(p8_runtime::array::NULL_OFFSET_DEPRECATION.into()));
+                    self.report_diags();
+                }
                 Ok(k)
             }
             // from_value reports illegal keys as errors only
             Ok((k, Some(KeyIssue::Illegal(_)))) => Ok(k),
+            Err(KeyIssue::NullOffset) => Ok(Key::Str(PhpStr::empty())),
             Err(KeyIssue::Illegal(t)) => {
                 // (Only here, off the common path: a resource is a key.)
                 if let Some(k) = self.resource_key(v) {
@@ -4135,13 +4248,18 @@ impl Context<'_> {
     fn isset_key(&mut self, v: &Value, last: bool) -> Result<Key, Throw> {
         match Key::from_value(v) {
             Ok((k, Some(KeyIssue::LosesPrecision(f)))) => {
-                let shown = float_to_string(f, Precision::Shortest, 'E');
-                self.diags.push(Diag::Deprecated(format!("Implicit conversion from float {shown} to int loses precision")));
+                ops::float_to_int_diags(f, &mut self.diags);
+                self.report_diags();
+                Ok(k)
+            }
+            Ok((k, Some(KeyIssue::NullOffset))) => {
+                self.diags.push(Diag::Deprecated(p8_runtime::array::NULL_OFFSET_DEPRECATION.into()));
                 self.report_diags();
                 Ok(k)
             }
             Ok((k, _)) => Ok(k),
             Err(KeyIssue::LosesPrecision(f)) => Ok(Key::Int(f as i64)),
+            Err(KeyIssue::NullOffset) => Ok(Key::Str(PhpStr::empty())),
             Err(KeyIssue::Illegal(t)) => {
                 if let Some(k) = self.resource_key(v) {
                     return Ok(k);
@@ -4172,9 +4290,8 @@ impl Context<'_> {
                 };
                 Err(self.throw("TypeError", format!("Cannot access offset of type {t} on string")))
             }
-            Value::Float(f) if last && (f.fract() != 0.0 || !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(f)) => {
-                let shown = float_to_string(*f, Precision::Shortest, 'E');
-                self.diags.push(Diag::Deprecated(format!("Implicit conversion from float {shown} to int loses precision")));
+            Value::Float(f) if last && !ops::float_is_int(*f) => {
+                ops::float_to_int_diags(*f, &mut self.diags);
                 self.report_diags();
                 Ok(isset_string_offset(s, &k))
             }
@@ -4734,6 +4851,12 @@ impl Ctx for Context<'_> {
 
     fn constant(&self, name: &[u8]) -> Option<Value> {
         self.constant_value(name)
+    }
+
+    fn constant_deprecation(&self, name: &[u8]) -> Option<&'static str> {
+        let registry = &self.isolate.registry;
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        registry.symbols().find_const(name).and_then(|sym| registry.constant_deprecation(sym))
     }
 
     fn set_constant(&mut self, name: &[u8], value: Value) {
@@ -5304,9 +5427,10 @@ impl Ctx for Context<'_> {
         }
     }
 
+    /// The command line's arguments (getopt()), there whatever
+    /// register_argc_argv says (see request_globals).
     fn request_argv(&self) -> Option<Vec<String>> {
-        let off = matches!(Ctx::ini_get(self, b"register_argc_argv"), Some(Value::Str(s)) if matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"" | b"0" | b"off" | b"no" | b"false"));
-        if off { None } else { self.argv.clone() }
+        self.argv.clone()
     }
 
     fn global_value(&self, name: &[u8]) -> Option<Value> {
@@ -5528,7 +5652,12 @@ fn append_str(w: &mut [Value], var: Reg, src: Reg) -> bool {
 /// (so when it is converted cannot be observed).
 #[inline(always)]
 fn silent_str(v: &Value) -> bool {
-    matches!(v, Value::Str(_) | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Null)
+    match v {
+        Value::Str(_) | Value::Int(_) | Value::Bool(_) | Value::Null => true,
+        // NAN warns when it becomes a string (8.5+)
+        Value::Float(f) => !f.is_nan(),
+        _ => false,
+    }
 }
 
 /// `a . b` on values that convert silently, the result not into a

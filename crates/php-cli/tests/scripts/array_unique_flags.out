@@ -1,16 +1,26 @@
+
+Deprecated: Constant SORT_LOCALE_STRING is deprecated since 8.6, use one of the Collator::*sort*() methods instead in %s on line 12
 set 0 flags 2: {"0":3,"2":"a","3":"A","4":1,"7":null,"9":0,"11":"abc","12":"1e1","13":10,"14":" 1","15":"1 "}
 set 0 flags 0: {"0":3,"2":"a","3":"A","4":1,"7":null,"10":"0","11":"abc","12":"1e1"}
 set 0 flags 1: {"0":3,"2":"a","4":1,"12":"1e1"}
 set 0 flags 5: {"0":3,"2":"a","3":"A","4":1,"7":null,"9":0,"11":"abc","12":"1e1","13":10,"14":" 1","15":"1 "}
+
+Deprecated: Constant SORT_LOCALE_STRING is deprecated since 8.6, use one of the Collator::*sort*() methods instead in %s on line 12
 set 1 flags 2: {"x":"b","y":"a","6":"c"}
 set 1 flags 0: {"x":"b","y":"a","6":"c"}
 set 1 flags 1: {"x":"b"}
 set 1 flags 5: {"x":"b","y":"a","6":"c"}
+
+Deprecated: Constant SORT_LOCALE_STRING is deprecated since 8.6, use one of the Collator::*sort*() methods instead in %s on line 12
 set 2 flags 0: {"0":[1,2],"2":[2],"3":"Array"}
+
+Deprecated: Constant SORT_LOCALE_STRING is deprecated since 8.6, use one of the Collator::*sort*() methods instead in %s on line 12
 set 3 flags 2: [0.30000000000000004]
 set 3 flags 0: [0.30000000000000004,0.3]
 set 3 flags 1: [0.30000000000000004,0.3]
 set 3 flags 5: [0.30000000000000004]
+
+Deprecated: Constant SORT_LOCALE_STRING is deprecated since 8.6, use one of the Collator::*sort*() methods instead in %s on line 12
 set 4 flags 2: ["10","9","9a","1e1","abc","ABC","abc "]
 set 4 flags 0: {"0":"10","1":"9","2":"9a","4":"abc","5":"ABC","6":"abc "}
 set 4 flags 1: {"0":"10","1":"9","4":"abc"}

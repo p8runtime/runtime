@@ -406,5 +406,7 @@ pub fn register(registry: &mut Registry) {
     for (name, value) in CONSTANTS {
         registry.add_constant(name.as_bytes(), Constant::Int(*value));
     }
+    // Its #[\Deprecated] (ext/dom/php_dom.stub.php), as PHP 8.6 words it.
+    registry.deprecate_constant(b"DOM_PHP_ERR", "Constant DOM_PHP_ERR is deprecated since 8.4, as it is no longer used");
     registry.add_module("dom");
 }

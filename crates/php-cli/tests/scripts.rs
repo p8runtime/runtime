@@ -1,6 +1,8 @@
 //! p8 end to end through the php2 host: each tests/scripts/NAME.php must print exactly
-//! what PHP 8.4 printed for it (NAME.out, recorded with php:8.4-cli reading
-//! the script from stdin, its file name replaced by %s).
+//! what real PHP printed for it (NAME.out, recorded reading the script from
+//! stdin, its file name replaced by %s). Recorded with php:8.4-cli; p8's
+//! target is PHP 8.6 since 4 Nov 2026, and a script is re-recorded with 8.6
+//! when p8 does what 8.6 does for it (#279).
 
 use std::path::Path;
 use std::process::Command;

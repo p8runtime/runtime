@@ -49,13 +49,7 @@ const AFL_IS_TORRENTZIP: i64 = 4;
 const AFL_WANT_TORRENTZIP: i64 = 8;
 const AFL_CREATE_OR_KEEP_FILE_FOR_EMPTY_ARCHIVE: i64 = 16;
 
-const GLOB_ERR: i64 = 1 << 0;
-const GLOB_MARK: i64 = 1 << 1;
-const GLOB_NOSORT: i64 = 1 << 2;
-const GLOB_NOCHECK: i64 = 1 << 4;
-const GLOB_NOESCAPE: i64 = 1 << 6;
-const GLOB_BRACE: i64 = 1 << 10;
-const GLOB_ONLYDIR: i64 = 1 << 13;
+use p8_runtime::glob::{BRACE as GLOB_BRACE, ERR as GLOB_ERR, MARK as GLOB_MARK, NOCHECK as GLOB_NOCHECK, NOESCAPE as GLOB_NOESCAPE, NOSORT as GLOB_NOSORT, ONLYDIR as GLOB_ONLYDIR};
 
 fn register(registry: &mut Registry) {
     registry.add_functions(procedural::BUILTINS);

@@ -92,6 +92,17 @@ impl Value {
         }
     }
 
+    /// Whether this is a NAN float (through a reference): what PHP 8.5+
+    /// warns about when it is coerced to bool, string, array or object.
+    #[inline]
+    pub fn is_nan(&self) -> bool {
+        match self {
+            Value::Float(f) => f.is_nan(),
+            Value::Ref(cell) => cell.borrow().is_nan(),
+            _ => false,
+        }
+    }
+
     /// zval_get_long: floats wrap as zend_dval_to_lval does; numeric
     /// strings read their numeric prefix, saturating when out of range.
     pub fn to_int(&self) -> i64 {

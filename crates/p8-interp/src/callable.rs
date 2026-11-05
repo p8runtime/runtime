@@ -403,6 +403,7 @@ impl Context<'_> {
         let scope = self.class_named(&method.declaring).cloned().unwrap_or_else(|| Rc::clone(&target));
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).or(forwarded).unwrap_or(target);
         let this = if method.is_static { None } else { this };
+        self.method_deprecated(&method);
         Ok(Target::Frame(MethodFrame::method(self.code_of(&method), this, scope, called)))
     }
 

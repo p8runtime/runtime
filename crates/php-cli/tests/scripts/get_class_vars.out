@@ -46,7 +46,7 @@ array(2) {
   string(6) "static"
 }
 
-Fatal error: Uncaught TypeError: get_class_vars(): Argument #1 ($class) must be a valid class name, Nope given in %s:11
+Fatal error: Uncaught TypeError: get_class_vars(): Argument #1 ($class) must be a valid class name, "Nope" given in %s:11
 Stack trace:
 #0 %s(11): get_class_vars('Nope')
 #1 {main}

@@ -189,13 +189,17 @@ fn interrupted(platform: &p8::Platform, source: &str, interrupt: fn(&p8::Interru
 fn a_watchdog_stops_a_loop_running_in_the_fast_path() {
     let (status, out, _) = interrupted(&platform(), "<?php\n$i = 0;\nwhile (true) { $i++; }", |h| h.timeout(1));
     assert_eq!(status, 255);
-    assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\n");
+    // With its stack trace, as fatal errors have since PHP 8.5.
+    assert_eq!(out, "\nFatal error: Maximum execution time of 1 second exceeded in t.php on line 3\nStack trace:\n#0 {main}\n");
 }
 
 #[test]
 fn a_watchdog_stops_loops_and_recursion_outside_the_fast_path() {
     let (status, out, _) = interrupted(&platform(), "<?php\n$s = '';\nwhile (true) { $s = 'a' . 'b'; }", |h| h.timeout(30));
-    assert_eq!((status, out.as_str()), (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\n"));
+    assert_eq!(
+        (status, out.as_str()),
+        (255, "\nFatal error: Maximum execution time of 30 seconds exceeded in t.php on line 3\nStack trace:\n#0 {main}\n")
+    );
 
     let source = "<?php\nfunction f($n) { return $n < 1 ? 0 : f($n - 1) + f($n - 1); }\nf(60);";
     let (status, out, _) = interrupted(&platform(), source, |h| h.terminate());

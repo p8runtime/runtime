@@ -119,7 +119,13 @@ fn ini_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Value::Bool(b) => Value::Str(PhpStr::from(if b { "1" } else { "" })),
         v => v,
     };
-    Ok(match ctx.ini_set(str_arg(args, 0).as_bytes(), value) {
+    let name = str_arg(args, 0);
+    // zend_alter_ini_entry_ex: a script may change only what PHP_INI_USER
+    // (1) allows; a PHP_INI_SYSTEM or PERDIR directive is fixed by then.
+    if crate::defaults::INI_ACCESS.iter().any(|(n, access)| n.as_bytes() == name.as_bytes() && access & 1 == 0) {
+        return Ok(Value::Bool(false));
+    }
+    Ok(match ctx.ini_set(name.as_bytes(), value) {
         Some(Value::Null) => Value::Str(PhpStr::empty()),
         Some(old) => old,
         None => Value::Bool(false),
@@ -766,10 +772,9 @@ fn get_defined_functions(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Th
     Ok(Value::Array(Rc::new(out)))
 }
 
-/// zend_version(): the Zend Engine's version (4.4.x for PHP 8.4.x).
+/// zend_version(): the Zend Engine's version (4.6.x for PHP 8.6.x).
 fn zend_version(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let patch = crate::PHP_VERSION.rsplit('.').next().unwrap_or("0");
-    Ok(Value::Str(PhpStr::from(format!("4.4.{patch}"))))
+    Ok(Value::Str(PhpStr::from(crate::zend_engine_version())))
 }
 
 /// quoted_printable_encode() (php_quot_print_encode): RFC 2045 lines of
