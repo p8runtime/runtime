@@ -1,6 +1,6 @@
 # p8
 
-A PHP 8.4 engine in safe Rust. It is embeddable. The hosts are the `php2` command and its built-in server, `php2 -S`.
+A PHP 8.6 engine in safe Rust. It is embeddable. The hosts are the `php2` command and its built-in server, `php2 -S`.
 
 Not released yet. It is graded on php-src's own tests: [p8-test-suite.addis.gg](https://p8-test-suite.addis.gg).
 
