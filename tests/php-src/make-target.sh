@@ -14,9 +14,10 @@ set -euo pipefail
 src=${1:?usage: make-target.sh /path/to/php-src /path/to/p8-test-suite}
 suite=${2:?usage: make-target.sh /path/to/php-src /path/to/p8-test-suite}
 here=$(cd "$(dirname "$0")" && pwd)
-read -r tag sha < <(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["tag"], p["sha256"])' "$suite/php-src.json")
-image="p8-target/php:$tag"
-docker build -q -t "$image" --build-arg PHP_TAG="$tag" --build-arg PHP_SHA256="$sha" - < "$here/php-src.Dockerfile" > /dev/null
+# shellcheck source=reference.sh
+. "$here/reference.sh"
+php_reference "$suite"
+image=$php_ref
 junit=$(mktemp "${TMPDIR:-.}/junit.XXXXXX")
 tar --exclude=.git -C "$src" -cf - . | docker run --rm -i "$image" bash -c '
   mkdir -p /src && cd /src && tar xf - 2>/dev/null

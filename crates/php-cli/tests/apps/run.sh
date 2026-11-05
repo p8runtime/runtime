@@ -1,5 +1,7 @@
 #!/bin/bash
-# An app's own test suite under PHP 8.4 (docker, ./Dockerfile) and under p8,
+# An app's own test suite under the reference PHP (the release
+# p8-test-suite pins, tests/php-src/reference.sh; docker, ./Dockerfile; the
+# suite checkout next to this repository, or P8_TEST_SUITE) and under p8,
 # compared test by test (./compare.php): how many of the tests PHP passes
 # p8 passes too. The app is described by ./<app>.conf (its repository and
 # pinned commit, the test command, how tests are grouped). Writes the app
@@ -43,8 +45,10 @@ fi
 cd src
 git checkout -q -- .
 
-image=p8-php-apps:$(shasum -a 256 "$here/Dockerfile" | cut -c1-12)
-docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" "$here" >/dev/null
+# shellcheck source=../../../../tests/php-src/reference.sh
+. "$repo/tests/php-src/reference.sh"
+php_reference "${P8_TEST_SUITE:-$repo/../p8-test-suite}"
+image=$(php_image p8-php-apps "$here/Dockerfile" "$here")
 top=/$(printf '%s' "$PWD" | cut -d/ -f2)
 # A shell command under PHP in a copy of the checkout at the same path (the
 # tests print paths); what it writes to stdout comes back.

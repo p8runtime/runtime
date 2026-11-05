@@ -13,7 +13,11 @@ target and p8's recorded results live in
   8.6 images no longer include), runs php-src's `run-tests.php` with it, runs
   the failures again one at a time, and counts a test when a JUnit entry has
   no failure, error or skip. Moving to a new PHP release is: update
-  `php-src.json` in the suite, run `make-target.sh`, record a run.
+  `php-src.json` in the suite, run `make-target.sh`, record a run. The app
+  harnesses (`crates/php-cli/tests`: the WordPress gate, the WordPress and
+  MediaWiki suites, `apps/run.sh`) compare p8 with the same build:
+  `reference.sh` builds it for both, and `php-ext.Dockerfile` adds what
+  their images need to install extensions.
 - `results.txt` and `run.json`: p8's state for each target test at a `main`
   commit. **A change may not lose a test that passes there.**
 - `php-src.json`: the php-src release, which the checkout must be at.
