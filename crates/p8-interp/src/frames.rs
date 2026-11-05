@@ -31,7 +31,9 @@ pub(crate) const NO_RET: u32 = u32::MAX;
 /// A frame's arguments past its parameters and its run-time variables.
 #[derive(Default)]
 pub(crate) struct Extra {
-    /// (A list: an Extra is kept for the next frame that needs one, room and all.)
+    /// (A list: an Extra is kept for the next frame that needs one, room
+    /// and all; a new one's list is a kept buffer, given back when the
+    /// Extra goes.)
     pub(crate) args: Vec<Value>,
     pub(crate) vars: Vars,
     /// A file's code included in a function's scope: where each of its
@@ -39,6 +41,12 @@ pub(crate) struct Extra {
     /// when it ends: `global $x`, `$x = &$y`, `unset($x)` in the file
     /// rebind the function's variable, as one symbol table in PHP.
     pub(crate) shared: Option<Box<[Origin]>>,
+}
+
+impl Drop for Extra {
+    fn drop(&mut self) {
+        p8_runtime::array::keep_values_buffer(std::mem::take(&mut self.args));
+    }
 }
 
 /// Where an included file's variable lives in the scope that included it.

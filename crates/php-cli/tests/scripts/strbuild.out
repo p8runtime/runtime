@@ -1,0 +1,125 @@
+str421.51end
+a42b1.5c1destr
+[toString 1][toString 2]xT1yT2z
+[toString 1][toString 2]obj T1 and T2 done
+arr: Array
+
+Warning: Array to string conversion in %s on line 21
+arr: Array
+in 1 and 1
+string(6) "abcd42"
+string(65) "a long piece of text 42 and some more 1.5 to pass the inline size"
+int(65)
+int(140)
+string(20) "0,1,2,3,4,5,6,7,8,9,"
+string(10) ",47,48,49,"
+[toString 1][toString 1][toString 1][toString 1][toString 1]string(11) "xT1T1T1T1T1"
+int(140)
+int(141)
+string(13) "already lower"
+string(15) "mixed case ÄÖ"
+string(5) "UPPER"
+string(12) "LOWER 123 ß"
+string(12) "nothing here"
+string(12) "bbbbnbbbnbbb"
+string(2) "cc"
+string(0) ""
+int(3)
+string(3) "xxx"
+string(4) "same"
+string(12) "empty search"
+string(29) "plain text, nothing to escape"
+string(60) "&lt;a href=&quot;x&quot;&gt;&#039;q&#039; &amp; co&lt;/a&gt;"
+string(12) "bad � utf8"
+string(12) "bad � utf8"
+string(4) "bad "
+string(4) "it's"
+string(10) "&amp; &lt;"
+string(5) "whole"
+string(5) "whole"
+string(3) "hol"
+string(0) ""
+string(0) ""
+string(13) "no match here"
+string(6) "banana"
+string(6) "bbnana"
+string(11) "no Q? yes Q"
+[toString 1][toString 2]string(10) "a,2,3.5,1,"
+string(0) ""
+string(4) "solo"
+string(1) "7"
+string(9) "T1, x, T2"
+string(9) "bye w0rld"
+string(3) "abc"
+string(3) "xyc"
+string(5) "plain"
+string(8) "esc
+é"q"
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(2) "bb"
+  [2]=>
+  array(1) {
+    ["k"]=>
+    string(37) "a value long enough to be on the heap"
+  }
+}
+NULL
+int(5)
+NULL
+int(3)
+string(4) "😀"
+array(4) {
+  [0]=>
+  string(3) "abc"
+  ["k"]=>
+  string(38) "a string long enough to be on the heap"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(10) "nul\0inside"
+}
+array(1) {
+  [0]=>
+  string(5) "short"
+}
+object(__PHP_Incomplete_Class)#4 (2) {
+  ["__PHP_Incomplete_Class_Name"]=>
+  string(7) "Missing"
+  ["p"]=>
+  string(1) "v"
+}
+
+Deprecated: Creation of dynamic property P::$5 is deprecated in %s on line 45
+
+Deprecated: Creation of dynamic property P::$dyn is deprecated in %s on line 45
+int(6)
+array(6) {
+  [0]=>
+  int(3)
+  [1]=>
+  int(6)
+  [2]=>
+  int(6)
+  [3]=>
+  int(30)
+  [4]=>
+  int(1)
+  [5]=>
+  int(3)
+}
+int(2)
+int(3)
+string(4) "five"
+array(4) {
+  ["pub"]=>
+  int(1)
+  ["long_public_property_name_here"]=>
+  int(4)
+  [5]=>
+  string(4) "five"
+  ["dyn"]=>
+  string(1) "d"
+}

@@ -1,0 +1,28 @@
+int(1)
+free captured
+closure gone
+free method
+after method
+free static
+after static
+free nullsafe
+after nullsafe
+free invoke
+after invoke
+free string callable
+after string callable
+free array callable
+after array callable
+free static by name
+after static by name
+free named function
+after named
+free in json
+17
+after json
+free nested a
+free nested b
+after sum
+kept by $s
+free arg of closure
+end

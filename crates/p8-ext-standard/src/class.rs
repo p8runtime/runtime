@@ -14,6 +14,7 @@ use p8_runtime::value::Value;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "clone", run: clone, by_ref: &[] },
     Builtin { name: "get_class", run: get_class, by_ref: &[] },
     Builtin { name: "get_parent_class", run: get_parent_class, by_ref: &[] },
     Builtin { name: "get_object_vars", run: get_object_vars, by_ref: &[] },
@@ -43,6 +44,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "spl_autoload_register", run: spl_autoload_register, by_ref: &[] },
     Builtin { name: "spl_autoload_unregister", run: spl_autoload_unregister, by_ref: &[] },
     Builtin { name: "spl_autoload_functions", run: spl_autoload_functions, by_ref: &[] },
+    Builtin { name: "spl_autoload_call", run: spl_autoload_call, by_ref: &[] },
     Builtin { name: "register_shutdown_function", run: register_shutdown_function, by_ref: &[] },
 ];
 
@@ -51,7 +53,7 @@ pub static BUILTINS: &[Builtin] = &[
 /// autoloaders (zend_lookup_class).
 pub const REENTER: &[&str] = &[
     "constant", "get_class_methods", "class_alias", "get_parent_class", "get_class_vars", "method_exists", "property_exists", "class_exists",
-    "interface_exists", "trait_exists", "enum_exists", "is_a", "is_subclass_of",
+    "interface_exists", "trait_exists", "enum_exists", "is_a", "is_subclass_of", "spl_autoload_call",
 ];
 
 /// get_class_methods(object|string $object_or_class): the methods the
@@ -223,7 +225,29 @@ fn spl_autoload_register(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 }
 
 fn spl_autoload_unregister(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(ctx.autoloader(arg(args, 0), None)))
+    let callable = arg(args, 0);
+    // spl_autoload_call itself: every autoloader goes (php_spl.c),
+    // deprecated since PHP 8.5.
+    if let Value::Str(s) = &callable
+        && s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes()).eq_ignore_ascii_case(b"spl_autoload_call")
+    {
+        ctx.deprecated(
+            "spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()",
+        );
+        for loader in ctx.autoloaders() {
+            ctx.autoloader(loader, None);
+        }
+        return Ok(Value::Bool(true));
+    }
+    Ok(Value::Bool(ctx.autoloader(callable, None)))
+}
+
+/// spl_autoload_call(string $class): the autoloaders run for `$class`
+/// (unless it is declared already), as a lookup of it runs them.
+fn spl_autoload_call(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let name = str_arg(args, 0);
+    ctx.class_load(name.as_bytes())?;
+    Ok(Value::Null)
 }
 
 fn spl_autoload_functions(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
@@ -322,6 +346,17 @@ fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
 
 /// get_object_vars($object): the properties the calling code can see,
 /// initialized ones only, by their plain names.
+/// clone(object $object, array $withProperties = []): what `clone $object`
+/// makes, with the properties updated (ZEND_FUNCTION(clone)).
+fn clone(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let with = match arg(args, 1) {
+        Value::Array(a) => a,
+        _ => Rc::new(PhpArray::new()),
+    };
+    ctx.clone_with(&o, &with)
+}
+
 fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
     let o = if o.lazy.get() != 0 { ctx.lazy_initialize(&o)? } else { o };

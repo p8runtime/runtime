@@ -1,0 +1,45 @@
+inc(1) dbl(2) int(4)
+inc(1) dbl(2) int(4)
+string(2) "04"
+int(5)
+int(-2)
+int(-2)
+string(9) "invoked 7"
+int(8)
+int(13)
+int(-10)
+string(3) "ABC"
+int(3)
+string(4) "abab"
+string(2) "AB"
+dbl(6) int(12)
+dbl(3) dbl(3) dbl(4) bool(true)
+bool(true)
+int(8)
+dbl(2) inc(1) string(2) "4!"
+int(2)
+inc(0) make(m) string(3) "m:1"
+byref(...): Error: byref(): Argument #1 ($a) could not be passed by reference
+'byref': Error: byref(): Argument #1 ($a) could not be passed by reference
+[$o, m]: Error: R::m(): Argument #1 ($x) could not be passed by reference
+$r->m(...): Error: R::m(): Argument #1 ($x) could not be passed by reference
+R::s(...): Error: R::s(): Argument #1 ($y) could not be passed by reference
+int(1)
+bool(true)
+string(0) ""
+string(0) ""
+string(7) "default"
+int(1)
+string(5) "first"
+int(2)
+array(3) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+}
+thrown at 1
+Call to undefined function undefined_function()
+Call to undefined function nope()

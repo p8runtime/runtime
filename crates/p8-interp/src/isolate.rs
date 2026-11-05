@@ -191,6 +191,9 @@ pub struct Isolate {
     /// What a declared function's closure slot holds until the function
     /// is first resolved (sites.rs `Closure::unbuilt`).
     pub(crate) unbuilt: Rc<Closure>,
+    /// Partial applications' closure code, compiled once for the isolate
+    /// (per site and function applied) and shared by every request.
+    pub(crate) partials: RefCell<HashMap<crate::partial::CacheKey, crate::partial::Compiled>>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -219,6 +222,7 @@ impl Isolate {
             ini_texts: RefCell::new(HashMap::default()),
             thawed: RefCell::new(HashMap::default()),
             unbuilt: Closure::unbuilt(&registry),
+            partials: RefCell::new(HashMap::default()),
             registry,
         }
     }
@@ -313,6 +317,7 @@ impl Isolate {
             named_extra: None,
             class_defaults: HashMap::default(),
             new_infos: HashMap::default(),
+            last_new: None,
             const_cache: HashMap::default(),
             const_evaluating: Vec::new(),
             autoloaders: Vec::new(),
@@ -337,6 +342,7 @@ impl Isolate {
             running_builtin: None,
             statics: HashMap::default(),
             magic_guard: Vec::new(),
+            reinit: Vec::new(),
             result_reg: 0,
             header_throw: None,
             deferred_write: None,
@@ -461,6 +467,9 @@ pub struct Context<'i> {
     /// How to make each class's objects, by the class's address
     /// (instances.rs): worked out at its first `new`.
     pub(crate) new_infos: HashMap<usize, Rc<instances::NewInfo>>,
+    /// The NewInfo the last `new` used: the Construct that follows finds
+    /// its constructor there (unless a `new` in the arguments came between).
+    pub(crate) last_new: Option<Rc<instances::NewInfo>>,
     /// Class constants computed by code: (declaring class, name) → value.
     pub(crate) const_cache: HashMap<(Vec<u8>, Vec<u8>), Value>,
     /// The ones being computed (a constant that needs itself is an error).
@@ -509,6 +518,10 @@ pub struct Context<'i> {
     /// The magic property methods running: (object, property, which), so
     /// a property access inside `__get('x')` is a plain one (zend's guards).
     pub(crate) magic_guard: Vec<(usize, PhpStr, crate::classes::Magic)>,
+    /// Clones whose readonly properties may be written once more while
+    /// their __clone or clone()'s updates run: (the clone, which slots
+    /// still may), PHP's IS_PROP_REINITABLE. Innermost last.
+    pub(crate) reinit: Vec<(Rc<p8_runtime::object::Object>, Vec<bool>)>,
     /// The register a running nested call's result lands in: destructors
     /// that run as its frame goes (after it returned) start above it.
     pub(crate) result_reg: usize,

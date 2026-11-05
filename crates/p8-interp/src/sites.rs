@@ -100,6 +100,7 @@ impl Closure {
             silences: Vec::new(),
             arg_vars: Vec::new(),
             meta: Default::default(),
+            partials: Vec::new(),
         };
         Closure::with_consts(Arc::new(code), |c| c.to_value())
     }

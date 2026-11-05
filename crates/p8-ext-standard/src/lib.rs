@@ -144,6 +144,8 @@ fn register(registry: &mut Registry) {
     }
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
+    // basic_functions.stub.php: `@prefer-ref $array`, `@prefer-ref $rest`.
+    registry.mark_prefer_ref(&["array_multisort"]);
     registry.add_functions(callback::BUILTINS);
     registry.add_functions(ctype::BUILTINS);
     registry.add_functions(zlib::BUILTINS);
@@ -221,7 +223,7 @@ fn register(registry: &mut Registry) {
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(class::REENTER);
-    registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
+    registry.mark_reenters(&["clone", "implode", "join","getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
     for (module, name, value, _) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
