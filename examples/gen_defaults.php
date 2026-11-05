@@ -12,7 +12,7 @@
 // test run), so they match exactly. Constants that describe the build or the
 // host (paths, the OS) are left out: the runtime defines those itself.
 
-const EXTENSIONS = ['Core', 'standard', 'date', 'pcre', 'json', 'mbstring', 'hash', 'zlib', 'SPL', 'random', 'ctype', 'tokenizer', 'filter'];
+const EXTENSIONS = ['Core', 'standard', 'date', 'pcre', 'json', 'mbstring', 'hash', 'zlib', 'SPL', 'random', 'ctype', 'tokenizer', 'filter', 'Zend OPcache'];
 
 const HOST = [
     'PHP_BINARY', 'PHP_BINDIR', 'PHP_LIBDIR', 'PHP_DATADIR', 'PHP_SYSCONFDIR',
@@ -77,7 +77,8 @@ echo "];\n";
 $all_ini = ini_get_all(null, false);
 $owner = array_fill_keys(array_keys($all_ini), 'core');
 foreach (get_loaded_extensions() as $ext) {
-    foreach (array_keys(@ini_get_all($ext, false) ?: []) as $name) {
+    // (ini_get_all() finds an extension by its lowercase name: "zend opcache")
+    foreach (array_keys(@ini_get_all(strtolower($ext), false) ?: []) as $name) {
         $owner[$name] = strtolower($ext);
     }
 }

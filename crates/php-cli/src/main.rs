@@ -48,10 +48,22 @@ fn extensions(server: bool) -> Vec<p8::Extension> {
 /// `opcache.file_cache=<dir>`: keep compiled files in that directory, for
 /// the runs after this one (off unless set, as in PHP).
 fn file_cache(platform: p8::Platform, ini: &[(String, String)]) -> p8::Platform {
-    match ini.iter().rev().find(|(n, _)| n == "opcache.file_cache").map(|(_, v)| v.trim()) {
+    let value = |name: &str| ini.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.trim().to_string());
+    let read_only = value("opcache.file_cache_read_only").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "on" | "yes" | "true"));
+    match value("opcache.file_cache") {
+        Some(dir) if !dir.is_empty() && read_only => platform.read_only_file_cache(dir),
         Some(dir) if !dir.is_empty() => platform.file_cache(dir),
         _ => platform,
     }
+}
+
+/// Zend OPcache over the kept files, started as PHP starts it from these
+/// settings (`-d`, else the built-in defaults): the CLI (`cli`) needs
+/// opcache.enable_cli as well as opcache.enable; php -S does not.
+fn opcache(platform: p8::Platform, ini: &[(String, String)], cli: bool) -> p8::Platform {
+    let value = |name: &str| ini.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.clone()).or_else(|| platform.ini_default(name));
+    let settings = p8::OpcacheSettings::from_ini(cli, &value);
+    platform.opcache(settings)
 }
 
 /// Run `f` with a native stack deep enough for deep PHP recursion: on a
@@ -110,6 +122,7 @@ fn main() {
         // A file included again (a template part per post) is not compiled again.
         .keep_compiled();
     let platform = file_cache(platform, &ini);
+    let platform = opcache(platform, &ini, true);
     let file = if named { path.clone() } else { p8::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };
     // -l: compile only, as `php -l` checks a file's syntax.
     if lint {

@@ -141,11 +141,80 @@ pub fn print_module(ctx: &mut dyn Ctx, module: &str) -> Result<(), Throw> {
     for line in spec.info {
         if *line == "{ini}" {
             print_ini_entries(ctx, spec);
+        } else if *line == "{accel_info}" {
+            accel_info(ctx)?;
         } else if let Some(text) = render(ctx, line)? {
             ctx.echo(&text);
             ctx.echo(b"\n");
         }
     }
+    Ok(())
+}
+
+/// zend_accel_info(): Zend OPcache's rows, from the compile cache
+/// (`Ctx::code_cache`). Two of PHP's rows are not printed: "Shared memory
+/// model" (p8's cache is the Platform's memory, not a shared segment) and
+/// the interned strings' (p8 keeps no interned string buffer; PHP prints
+/// them only with one).
+fn accel_info(ctx: &mut dyn Ctx) -> Result<(), Throw> {
+    use crate::opcache::{accelerator_enabled, ini_on, ini_text, max_cached_keys};
+    let row = |ctx: &mut dyn Ctx, label: &str, value: &str| ctx.echo(format!("{label} => {value}\n").as_bytes());
+    let file_cache_only = ini_on(ctx, "opcache.file_cache_only");
+    let cache = ctx.code_cache();
+    let started = cache.as_ref().is_some_and(|c| c.started());
+    let enable = ini_on(ctx, "opcache.enable");
+    let caching = if accelerator_enabled(ctx) || file_cache_only { "Up and Running" } else { "Disabled" };
+    row(ctx, "Opcode Caching", caching);
+    let optimizing = enable && started && crate::ini::quantity(ini_text(ctx, "opcache.optimization_level").as_bytes()) != 0;
+    row(ctx, "Optimization", if optimizing { "Enabled" } else { "Disabled" });
+    row(ctx, "SHM Cache", if file_cache_only { "Disabled" } else { "Enabled" });
+    let file_cache = if ini_text(ctx, "opcache.file_cache").is_empty() { "Disabled" } else { "Enabled" };
+    row(ctx, "File Cache", file_cache);
+    // JIT_G(enabled) is false: p8 compiles no machine code.
+    row(ctx, "JIT", "Disabled");
+    let Some(cache) = cache else { return Ok(()) };
+    if !file_cache_only && !enable {
+        return Ok(());
+    }
+    if !started {
+        // accel_startup(): the one reason p8 does not start it.
+        row(ctx, "Startup Failed", "Opcode Caching is disabled for CLI");
+        return Ok(());
+    }
+    row(ctx, "Startup", "OK");
+    if file_cache_only {
+        return Ok(());
+    }
+    let status = cache.status(false);
+    let consumption = crate::ini::quantity(ini_text(ctx, "opcache.memory_consumption").as_bytes()).saturating_mul(1 << 20);
+    let max_keys = max_cached_keys(crate::ini::quantity(ini_text(ctx, "opcache.max_accelerated_files").as_bytes()));
+    let used = status.used_memory as i64;
+    for (label, value) in [
+        ("Cache hits", status.hits as i64),
+        ("Cache misses", status.misses as i64),
+        ("Used memory", used),
+        ("Free memory", (consumption - used).max(0)),
+        ("Wasted memory", 0),
+        ("Cached scripts", status.num_cached_scripts as i64),
+        ("Cached keys", status.num_cached_scripts as i64),
+        ("Max keys", max_keys),
+        ("OOM restarts", 0),
+        ("Hash keys restarts", 0),
+        ("Manual restarts", status.manual_restarts as i64),
+    ] {
+        row(ctx, label, &value.to_string());
+    }
+    // php_format_date(DATE_ISO8601, t, localtime): date() in the default timezone.
+    let format = ctx.constant(b"DATE_ISO8601").unwrap_or(Value::str("Y-m-d\\TH:i:sO"));
+    let date = |ctx: &mut dyn Ctx, t: i64| -> Result<String, Throw> {
+        let v = ctx.call(&Value::str("date"), &mut [format.clone(), Value::Int(t)])?;
+        Ok(String::from_utf8_lossy(&bytes(&v)).into_owned())
+    };
+    let start = date(ctx, status.start_time)?;
+    row(ctx, "Start time", &start);
+    let last = if status.last_restart_time == 0 { "none".to_string() } else { date(ctx, status.last_restart_time)? };
+    row(ctx, "Last restart time", &last);
+    row(ctx, "Last force restart time", "none");
     Ok(())
 }
 

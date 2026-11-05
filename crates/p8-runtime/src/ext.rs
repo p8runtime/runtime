@@ -132,6 +132,18 @@ pub trait Ctx {
     fn error_level(&mut self, new: Option<i64>) -> i64;
     /// The constant `name` (as written), defined by the script or an extension.
     fn constant(&self, name: &[u8]) -> Option<Value>;
+    /// The compile cache the host keeps, as Zend OPcache sees it (None:
+    /// the host keeps none).
+    fn code_cache(&self) -> Option<std::sync::Arc<dyn crate::opcache::CodeCache>> {
+        None
+    }
+    /// opcache_compile_file(): compile `path` (resolved as include does)
+    /// into the cache without running it. Ok(false): it could not be
+    /// opened (warned as include warns) or did not compile.
+    fn compile_file(&mut self, path: &[u8]) -> Result<bool, Throw> {
+        let _ = path;
+        Ok(false)
+    }
     /// What fetching builtin constant `name` raises if it is deprecated
     /// (Registry::deprecate_constant).
     fn constant_deprecation(&self, name: &[u8]) -> Option<&'static str> {
