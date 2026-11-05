@@ -1,0 +1,18 @@
+NULL
+NULL
+string(3) "eh2"
+string(3) "eh1"
+string(3) "err"
+bool(true)
+NULL
+NULL
+NULL
+bool(true)
+string(3) "xh1"
+array(2) {
+  [0]=>
+  string(1) "H"
+  [1]=>
+  string(3) "exc"
+}
+NULL

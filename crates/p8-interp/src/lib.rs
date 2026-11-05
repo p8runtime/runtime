@@ -5257,6 +5257,14 @@ impl Ctx for Context<'_> {
         old
     }
 
+    fn current_error_handler(&self) -> Value {
+        self.error_handlers.last().map(|(h, _)| h.clone()).unwrap_or(Value::Null)
+    }
+
+    fn current_exception_handler(&self) -> Value {
+        self.exception_handlers.last().cloned().unwrap_or(Value::Null)
+    }
+
     fn autoloader(&mut self, callable: Value, register: Option<bool>) -> bool {
         let at = self.autoloaders.iter().position(|a| same_autoloader(a, &callable));
         match (register, at) {
