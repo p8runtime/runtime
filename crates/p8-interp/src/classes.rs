@@ -717,7 +717,7 @@ impl Context<'_> {
             return Err(self.cannot_instantiate(class));
         }
         let data = class.make_data.map(|make| make());
-        let object = Object::with_slots(Rc::clone(class), &self.ids, data, info.defaults.to_vec());
+        let object = Object::with_slots(Rc::clone(class), &self.ids, data, p8_runtime::object::Props::from_slice(&info.defaults));
         if info.throwable {
             // Where it was made, and the calls that led there.
             let (file, line) = self.location();
