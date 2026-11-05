@@ -2015,7 +2015,7 @@ impl Context<'_> {
                     Rare::VerifyReturn => {
                         if let Some(ty) = func.ret_type.as_ref().filter(|_| !func.is_generator) {
                             let v = self.operand(w, func, a);
-                            match self.check_type(ty, &v, func.strict) {
+                            match self.check_type(ty, &v, func.strict)? {
                                 Ok(Some(converted)) => reg!(a) = converted,
                                 Ok(None) => {}
                                 Err(()) => {
@@ -3567,6 +3567,22 @@ impl Context<'_> {
     /// Run builtin `i` on `args`: PHP's argument checks and conversions
     /// (from the stub signature), then the function.
     #[inline(always)]
+    /// A builtin's `callable` arguments, checked as zend_parse_arg_func
+    /// does (zend_fcall_info_init): Err the TypeError for the first that
+    /// cannot be called from here.
+    fn check_callbacks(&mut self, sig: &p8_runtime::stubs::Sig, args: &[Value]) -> Result<Result<(), p8_runtime::args::Refused>, Throw> {
+        for (n, arg) in args.iter().enumerate() {
+            let Some(param) = sig.params.get(n).or_else(|| sig.params.last().filter(|p| p.variadic)) else { break };
+            if !p8_runtime::args::wants_callable_check(param, arg) {
+                continue;
+            }
+            if let Some(why) = self.why_not_callable(arg, true)? {
+                return Ok(Err(p8_runtime::args::callback_error(sig, n, &why)));
+            }
+        }
+        Ok(Ok(()))
+    }
+
     fn run_builtin(&mut self, i: usize, args: &mut [Value]) -> Result<Value, Throw> {
         let call = *self.isolate.registry.call(i);
         if call.deprecated
@@ -3576,8 +3592,13 @@ impl Context<'_> {
         }
         if let Some(sig) = call.sig {
             self.stringify_args(sig, args)?;
-            let checked = p8_runtime::args::check_counted(sig, call.counts, args, &mut self.diags);
+            let mut checked = p8_runtime::args::check_counted(sig, call.counts, args, &mut self.diags);
             self.report_diags();
+            // Callbacks: whether each can be called from here (a builtin
+            // taking one is a builtin that may run PHP code).
+            if checked.is_ok() && call.reenters && !call.own_callbacks {
+                checked = self.check_callbacks(sig, args)?;
+            }
             if let Err((class, message)) = checked {
                 let name = self.isolate.registry.function(i).name;
                 if !opcode_function(name, args.len()) {
@@ -4582,6 +4603,22 @@ impl Ctx for Context<'_> {
         self.callable(v)
     }
 
+    fn why_not_callable(&mut self, v: &Value) -> Option<String> {
+        let saved = std::mem::take(&mut self.failed_call);
+        let r = Context::why_not_callable(self, v, false);
+        self.failed_call = saved;
+        match r {
+            Ok(why) => why,
+            // A class an autoloader could not declare (not lent: asked
+            // again later).
+            Err(Throw::Autoload(name)) => {
+                self.autoload_tried.remove(&name.as_bytes().to_ascii_lowercase());
+                Some(format!("class \"{}\" not found", String::from_utf8_lossy(name.as_bytes())))
+            }
+            Err(_) => Some("no array or string given".into()),
+        }
+    }
+
     fn output_started(&self) -> Option<(Rc<str>, u32)> {
         self.output_start.clone()
     }
@@ -4594,7 +4631,15 @@ impl Ctx for Context<'_> {
         self.bind(closure, new_this, scope)
     }
 
+    /// Closure::fromCallable(): checked as zend_create_closure_from_callable
+    /// does (zend_is_callable_ex) first. (`f(...)` and reflection make
+    /// their closures without that check.)
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw> {
+        if !matches!(callable.deref(), Value::Object(o) if callable::closure_data(&o).is_some())
+            && let Some(why) = self.why_not_callable(callable, true)?
+        {
+            return Err(self.throw("TypeError", format!("Failed to create closure from callable: {why}")));
+        }
         self.closure_from_callable(callable)
     }
 

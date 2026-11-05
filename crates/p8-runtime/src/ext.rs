@@ -167,6 +167,10 @@ pub trait Ctx {
     fn call(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw>;
     /// is_callable(): whether `v` names something that can be called.
     fn is_callable(&mut self, v: &Value) -> bool;
+    /// Why `v` cannot be called from the running code, as PHP words it
+    /// (zend_is_callable's error: `function "f" not found or invalid
+    /// function name`, …); None when it can.
+    fn why_not_callable(&mut self, v: &Value) -> Option<String>;
     /// A copy of a Closure bound to `new_this` (null: unbound) and the
     /// class scope `scope` names (None: its own).
     fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
@@ -386,6 +390,10 @@ pub struct Call {
     pub counts: (usize, usize),
     pub deprecated: bool,
     pub reenters: bool,
+    /// Whether the builtin checks its callables itself, after work PHP
+    /// does first (session_set_save_handler's deprecation): the engine
+    /// does not check them before it runs.
+    pub own_callbacks: bool,
     /// Its by-reference parameters take a value too (the stub's
     /// `@prefer-ref`: ZEND_SEND_PREFER_REF).
     pub prefer_ref: bool,
@@ -573,6 +581,7 @@ impl Registry {
                 reenters: sig.is_some_and(|s| {
                     s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
                 }),
+                own_callbacks: false,
                 prefer_ref: false,
             });
             self.deprecations.push(deprecation);
@@ -711,6 +720,17 @@ impl Registry {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
                 self.calls[i].reenters = true;
+            }
+        }
+    }
+
+    /// Builtins that check their callables themselves (PHP's parse their
+    /// arguments by hand, after a deprecation or a choice of signature):
+    /// the engine leaves their `callable` arguments to them.
+    pub fn own_callbacks(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(i) = self.lookup(n.as_bytes()) {
+                self.calls[i].own_callbacks = true;
             }
         }
     }

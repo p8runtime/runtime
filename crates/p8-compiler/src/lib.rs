@@ -663,6 +663,21 @@ fn settled_set_visibility(what: (&[u8], &[u8]), visibility: Visibility, declared
     Ok((set != visibility).then_some(set))
 }
 
+/// A property's type PHP rejects at compile time (zend_compile_prop_decl,
+/// zend_compile_params for a promoted one): `callable`, and for a declared
+/// property `void` and `never` too ("Property A::$p cannot have type callable").
+fn prop_type_allowed(what: (&[u8], &[u8]), ty: Option<&p8_runtime::types::TypeDecl>, promoted: bool, line: u32) -> Result<()> {
+    use p8_runtime::types::{T_CALLABLE, T_NEVER, T_VOID};
+    let forbidden = if promoted { T_CALLABLE } else { T_CALLABLE | T_VOID | T_NEVER };
+    match ty {
+        Some(ty) if ty.mask & forbidden != 0 => Err(CompileError {
+            message: format!("Property {}::${} cannot have type {}", String::from_utf8_lossy(what.0), String::from_utf8_lossy(what.1), ty.shown()),
+            line,
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// A declared type as PHP prints it (`?int`, `A|B`).
 fn type_text(c: &Compiler, t: &p8_syntax::ast::Type) -> Vec<u8> {
     use p8_syntax::ast::Type;
@@ -2255,6 +2270,7 @@ impl<'src> Compiler<'src> {
             let class = self.scope.as_ref().map_or_else(|| Text::from(""), |s| s.name.clone());
             let set_declared = set_visibility_of(self, p.modifiers)?;
             let set_visibility = settled_set_visibility((class.as_bytes(), name.as_bytes()), visibility, set_declared, readonly, p.ty.is_some(), line)?;
+            prop_type_allowed((class.as_bytes(), name.as_bytes()), p.ty.map(|t| self.type_decl(t)).as_ref(), true, line)?;
             self.promoted.push(PropDef {
                 name: name.clone(),
                 default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
@@ -2612,6 +2628,7 @@ impl<'src> Compiler<'src> {
                         let name = Text::from(text.strip_prefix(b"$").unwrap_or(text));
                         let set_visibility =
                             settled_set_visibility((display.as_bytes(), name.as_bytes()), visibility, set_declared, readonly && !has(b"static"), ty.is_some(), self.line(e.name.span))?;
+                        prop_type_allowed((display.as_bytes(), name.as_bytes()), ty.map(|t| self.type_decl(t)).as_ref(), false, self.line(e.name.span))?;
                         properties.push(PropDef {
                             meta,
                             name,
@@ -2775,6 +2792,7 @@ impl<'src> Compiler<'src> {
                     };
                     if !interface {
                         let meta = self.meta_of(attributes, *doc_comment, *span, 8)?;
+                        prop_type_allowed((display.as_bytes(), pname.as_bytes()), ty.map(|t| self.type_decl(t)).as_ref(), false, self.line(name.span))?;
                         properties.push(PropDef {
                             meta,
                             name: pname,
