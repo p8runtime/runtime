@@ -9,7 +9,7 @@ bool(false)
 Warning: stream_wrapper_register(): Protocol php:// is already defined. in %s on line 15
 bool(false)
 bool(true)
-TypeError: stream_wrapper_register(): Argument #2 ($class) must be a valid class name, NoSuchClass given
+TypeError: stream_wrapper_register(): Argument #2 ($class) must be a valid class name, "NoSuchClass" given
 bool(true)
 bool(true)
 -- unregistered

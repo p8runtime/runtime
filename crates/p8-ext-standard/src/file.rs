@@ -1680,7 +1680,7 @@ fn stream_wrapper_register(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
     let func = called(ctx, "stream_wrapper_register");
     let (protocol, name) = (str_arg(args, 0), str_arg(args, 1));
     let Some(class) = ctx.class_load(name.as_bytes())? else {
-        return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($class) must be a valid class name, {} given", text(&name))));
+        return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($class) must be a valid class name, {} given", crate::class::class_name_given(&Value::Str(name)))));
     };
     // PHP keeps a registration as a resource ("stream factory"), failed
     // or not: it takes a number.
