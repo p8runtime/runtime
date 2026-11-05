@@ -20,6 +20,12 @@ pub mod serial;
 /// A register index within the current frame.
 pub type Reg = u16;
 
+/// The `obj` operand of a property access (FetchProp, AssignProp,
+/// AssignPropOp, PropIncDec) that is the running method's `$this`, read
+/// from its frame: no register holds a copy (PHP's UNUSED op1 where
+/// `$this` is known to exist).
+pub const THIS: Reg = Reg::MAX;
+
 /// Comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmp {
