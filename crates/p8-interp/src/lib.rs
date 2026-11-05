@@ -2409,6 +2409,13 @@ impl Context<'_> {
                 }
                 Instr::CallValue { dst, callee, base: args, argc, vars } => {
                     let target = self.operand(w, func, callee);
+                    // An undefined callee: its warning reaches the error
+                    // handler, then the call fails before any argument is
+                    // read (INIT_DYNAMIC_CALL).
+                    if !self.pending_errors.is_empty() && matches!(target, Value::Null) {
+                        self.dispatch_errors(regs)?;
+                        return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                    }
                     if vars != p8_bytecode::NO_VARS {
                         // By reference where the callable takes one: a
                         // closure answers itself; anything else resolved (a
