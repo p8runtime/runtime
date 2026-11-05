@@ -1,0 +1,64 @@
+array(5) {
+  [0]=>
+  array(5) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(3)
+    [2]=>
+    int(6)
+    [3]=>
+    int(106)
+    [4]=>
+    int(113)
+  }
+  [1]=>
+  int(10)
+  [2]=>
+  array(2) {
+    ["a"]=>
+    array(2) {
+      ["b"]=>
+      int(11)
+      ["c"]=>
+      array(1) {
+        [0]=>
+        string(1) "x"
+      }
+    }
+    ["s"]=>
+    string(4) "abcd"
+  }
+  [3]=>
+  array(2) {
+    ["k"]=>
+    string(1) "v"
+    [0]=>
+    string(6) "pushed"
+  }
+  [4]=>
+  array(3) {
+    [0]=>
+    string(5) "add 1"
+    [1]=>
+    string(5) "add 2"
+    [2]=>
+    string(5) "add 3"
+  }
+}
+string(19) "__call nothere(1,2)"
+int(4)
+string(65) "Pipes::byRef(): Argument #1 ($a) could not be passed by reference"
+string(51) "Indirect modification of Hook::$list is not allowed"
+set arr
+array(1) {
+  ["arr"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+string(52) "Cannot indirectly modify readonly property Ro::$list"
+Non-static method NoThis::callIt() cannot be called statically
+Non-static method NoThis::write() cannot be called statically
+int(2)
