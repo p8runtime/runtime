@@ -803,7 +803,7 @@ impl Code for Instr {
             Instr::AssignProp { obj, name, val, dst, take } => { w.byte(93); obj.put(w); name.put(w); val.put(w); dst.put(w); take.put(w); }
             Instr::AssignPropOp { op, obj, name, val, dst } => { w.byte(94); op.put(w); obj.put(w); name.put(w); val.put(w); dst.put(w); }
             Instr::PropIncDec { obj, name, dst, inc, post } => { w.byte(95); obj.put(w); name.put(w); dst.put(w); inc.put(w); post.put(w); }
-            Instr::AssignPropDim { op, base, n, append, val, dst } => { w.byte(96); op.put(w); base.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
+            Instr::AssignPropDim { op, base, name, n, append, val, dst } => { w.byte(96); op.put(w); base.put(w); name.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
             Instr::IssetProp { dst, obj, name } => { w.byte(97); dst.put(w); obj.put(w); name.put(w); }
             Instr::UnsetProp { obj, name } => { w.byte(98); obj.put(w); name.put(w); }
             Instr::MethodCall { dst, obj, method, base, argc } => { w.byte(99); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
@@ -915,7 +915,7 @@ impl Code for Instr {
             93 => Instr::AssignProp { obj: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)?, take: Code::get(r)? },
             94 => Instr::AssignPropOp { op: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             95 => Instr::PropIncDec { obj: Code::get(r)?, name: Code::get(r)?, dst: Code::get(r)?, inc: Code::get(r)?, post: Code::get(r)? },
-            96 => Instr::AssignPropDim { op: Code::get(r)?, base: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
+            96 => Instr::AssignPropDim { op: Code::get(r)?, base: Code::get(r)?, name: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             97 => Instr::IssetProp { dst: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)? },
             98 => Instr::UnsetProp { obj: Code::get(r)?, name: Code::get(r)? },
             99 => Instr::MethodCall { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },

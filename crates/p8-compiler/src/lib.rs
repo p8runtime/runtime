@@ -667,6 +667,21 @@ fn settled_set_visibility(what: (&[u8], &[u8]), visibility: Visibility, declared
     Ok((set != visibility).then_some(set))
 }
 
+/// A property's type PHP rejects at compile time (zend_compile_prop_decl,
+/// zend_compile_params for a promoted one): `callable`, and for a declared
+/// property `void` and `never` too ("Property A::$p cannot have type callable").
+fn prop_type_allowed(what: (&[u8], &[u8]), ty: Option<&p8_runtime::types::TypeDecl>, promoted: bool, line: u32) -> Result<()> {
+    use p8_runtime::types::{T_CALLABLE, T_NEVER, T_VOID};
+    let forbidden = if promoted { T_CALLABLE } else { T_CALLABLE | T_VOID | T_NEVER };
+    match ty {
+        Some(ty) if ty.mask & forbidden != 0 => Err(CompileError {
+            message: format!("Property {}::${} cannot have type {}", String::from_utf8_lossy(what.0), String::from_utf8_lossy(what.1), ty.shown()),
+            line,
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// A declared type as PHP prints it (`?int`, `A|B`).
 fn type_text(c: &Compiler, t: &p8_syntax::ast::Type) -> Vec<u8> {
     use p8_syntax::ast::Type;
@@ -814,7 +829,8 @@ fn name_operand(instr: &Instr) -> Option<Reg> {
         | ClassConst { name, .. }
         | FetchStaticProp { name, .. }
         | AssignStaticProp { name, .. }
-        | AssignStaticPropOp { name, .. } => Some(name),
+        | AssignStaticPropOp { name, .. }
+        | AssignPropDim { name, .. } => Some(name),
         _ => None,
     }
 }
@@ -934,8 +950,9 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *name = f(*name);
             *dst = f(*dst);
         }
-        AssignPropDim { base, val, dst, .. } => {
+        AssignPropDim { base, name, val, dst, .. } => {
             *base = f(*base);
+            *name = f(*name);
             *val = f(*val);
             *dst = f(*dst);
         }
@@ -1219,6 +1236,8 @@ struct ClassScope {
     parent: Option<Text>,
     /// A trait: `self` is the class using it, known when the code runs.
     in_trait: bool,
+    /// A readonly class: its properties, promoted ones too, are readonly.
+    readonly: bool,
 }
 
 type Result<T> = std::result::Result<T, CompileError>;
@@ -2286,10 +2305,11 @@ impl<'src> Compiler<'src> {
             let visibility = visibility_of(self, p.modifiers).unwrap_or(Visibility::Public);
             let text = self.text(p.name.span);
             let name = Text::from(&text[1..]);
-            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"));
+            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")) || self.scope.as_ref().is_some_and(|s| s.readonly);
             let class = self.scope.as_ref().map_or_else(|| Text::from(""), |s| s.name.clone());
             let set_declared = set_visibility_of(self, p.modifiers)?;
             let set_visibility = settled_set_visibility((class.as_bytes(), name.as_bytes()), visibility, set_declared, readonly, p.ty.is_some(), line)?;
+            prop_type_allowed((class.as_bytes(), name.as_bytes()), p.ty.map(|t| self.type_decl(t)).as_ref(), true, line)?;
             self.promoted.push(PropDef {
                 name: name.clone(),
                 default: if p.ty.is_some() { None } else { Some(Frozen::Null) },
@@ -2484,9 +2504,9 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::Assign { var, src: val });
             }
             Expr::ArrayDimFetch { .. } if dim_root_is_prop(target) => {
-                let (base, n, append) = self.prop_dim_path(f, target)?;
+                let (base, name, n, append) = self.prop_dim_path(f, target)?;
                 let dst = f.temp();
-                f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+                f.emit(Instr::AssignPropDim { op: None, base, name, n, append, val, dst });
             }
             Expr::ArrayDimFetch { .. } => {
                 let (var, keys, n, append) = self.dim_path(f, target)?;
@@ -2616,7 +2636,7 @@ impl<'src> Compiler<'src> {
                 _ => {}
             }
         }
-        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT });
+        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT, readonly: flags & CLASS_READONLY != 0 });
         let (mut constants, mut properties, mut methods) = (Vec::new(), Vec::new(), Vec::new());
         let (mut traits, mut trait_rules) = (Vec::new(), Vec::new());
         let mut cases = Vec::new();
@@ -2649,6 +2669,7 @@ impl<'src> Compiler<'src> {
                         let name = Text::from(text.strip_prefix(b"$").unwrap_or(text));
                         let set_visibility =
                             settled_set_visibility((display.as_bytes(), name.as_bytes()), visibility, set_declared, readonly && !has(b"static"), ty.is_some(), self.line(e.name.span))?;
+                        prop_type_allowed((display.as_bytes(), name.as_bytes()), ty.map(|t| self.type_decl(t)).as_ref(), false, self.line(e.name.span))?;
                         properties.push(PropDef {
                             meta,
                             name,
@@ -2812,6 +2833,7 @@ impl<'src> Compiler<'src> {
                     };
                     if !interface {
                         let meta = self.meta_of(attributes, *doc_comment, *span, 8)?;
+                        prop_type_allowed((display.as_bytes(), pname.as_bytes()), ty.map(|t| self.type_decl(t)).as_ref(), false, self.line(name.span))?;
                         properties.push(PropDef {
                             meta,
                             name: pname,
@@ -3490,7 +3512,9 @@ impl<'src> Compiler<'src> {
     }
 
     /// Call the callable [a, b] (a method named at run time).
-    fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg]) -> Result<Reg> {
+    /// The result goes to `hint` when there is one (see `out`; `mark` is
+    /// where the call's temporaries start).
+    fn call_pair(&mut self, f: &mut FnBuilder, a: Reg, b: Reg, args: &[p8_syntax::ast::Arg], hint: Option<Reg>, mark: usize) -> Result<Reg> {
         let callee = f.temp();
         f.emit(Instr::NewArray { dst: callee, n: 0 });
         f.emit(Instr::ArrayPush { arr: callee, val: a, take: false });
@@ -3499,8 +3523,9 @@ impl<'src> Compiler<'src> {
             return self.spread_call(f, callee, args);
         }
         let (base, argc) = self.value_args(f, args, callee)?;
-        f.emit(Instr::CallValue { dst: base, callee, base, argc });
-        Ok(base)
+        let dst = out(f, hint, mark);
+        f.emit(Instr::CallValue { dst, callee, base, argc });
+        Ok(dst)
     }
 
     /// A method call's arguments. The method is known only when the call
@@ -3642,7 +3667,10 @@ impl<'src> Compiler<'src> {
     /// `$obj->name[k1]..[kn]`: the object, the name and the keys in
     /// consecutive temporaries from the returned base; the key count and
     /// whether the last dimension is `[]`.
-    fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, u8, bool)> {
+    /// `$obj->p[k1]..[kn]`'s operands for AssignPropDim: the object's
+    /// register (the keys follow it, from `+ 2`), the name's (its constant
+    /// when it is one), the key count, and whether the last is `[]`.
+    fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, Reg, u8, bool)> {
         let mut dims = Vec::new();
         let mut cur = e;
         while let Expr::ArrayDimFetch { array, dim, .. } = cur
@@ -3661,15 +3689,23 @@ impl<'src> Compiler<'src> {
         }
         let keyed: Vec<&Expr> = dims.iter().flatten().copied().collect();
         let base = f.temp();
+        // (`base + 1` stays the name's place: a run-time name lands there.)
         let name = f.temp();
         let keys: Vec<Reg> = keyed.iter().map(|_| f.temp()).collect();
         self.expr_into(f, target, base)?;
-        let n = self.prop_name(f, property)?;
-        f.emit(Instr::Move { dst: name, src: n });
+        let n = self.prop_name_operand(f, property)?;
+        // A constant name is used where it is; a run-time one is kept in its
+        // place while the keys are worked out.
+        let name = if n >> KIND_SHIFT == CONST {
+            n
+        } else {
+            f.emit(Instr::Move { dst: name, src: n });
+            name
+        };
         for (r, d) in keys.iter().zip(&keyed) {
             self.expr_into(f, d, *r)?;
         }
-        Ok((base, keys.len() as u8, append))
+        Ok((base, name, keys.len() as u8, append))
     }
 
     fn literal(&self, e: &Expr) -> Option<Frozen> {
@@ -4124,10 +4160,10 @@ impl<'src> Compiler<'src> {
                     dst
                 }
                 Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
-                    let (base, n, append) = self.prop_dim_path(f, var)?;
+                    let (base, name, n, append) = self.prop_dim_path(f, var)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
-                    f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+                    f.emit(Instr::AssignPropDim { op: None, base, name, n, append, val, dst });
                     dst
                 }
                 Expr::ArrayDimFetch { .. } => {
@@ -4288,10 +4324,10 @@ impl<'src> Compiler<'src> {
                         dst
                     }
                     Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
-                        let (base, n, append) = self.prop_dim_path(f, var)?;
+                        let (base, name, n, append) = self.prop_dim_path(f, var)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
-                        f.emit(Instr::AssignPropDim { op: Some(bin), base, n, append, val, dst });
+                        f.emit(Instr::AssignPropDim { op: Some(bin), base, name, n, append, val, dst });
                         dst
                     }
                     Expr::PropertyFetch { target, property, .. } => {
@@ -4669,7 +4705,7 @@ impl<'src> Compiler<'src> {
                     f.constant(Frozen::Str(Text::from(self.class_name(written).as_slice())))
                 };
                 let m = f.constant(Frozen::Str(Text::from(self.text(*method))));
-                self.call_pair(f, name, m, args)?
+                self.call_pair(f, name, m, args, hint, mark)?
             }
             Expr::MethodCall { target, method, args, span } if is_placeholder(args) || is_partial(args) => {
                 // `$o->m(...)`: a Closure of [$o, 'm'] (`$o->m(?)`: its
@@ -4727,7 +4763,7 @@ impl<'src> Compiler<'src> {
                 if text.starts_with(b"$") {
                     // `$o->$m()`: the callable [$o, $m].
                     let m = self.expr(f, method)?;
-                    return self.call_pair(f, obj, m, args);
+                    return self.call_pair(f, obj, m, args, hint, mark);
                 }
                 let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
@@ -4736,8 +4772,11 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
                     |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
                 )?;
-                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
-                base
+                // Straight into where the value goes (as a function call's
+                // is): no copy left behind in the arguments' registers.
+                let dst = out(f, hint, mark);
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
+                dst
             }
             // `parent::$prop::get()` / `::set($v)`: the parent's hook (or
             // its stored value when the parent's property has none).
@@ -4753,8 +4792,9 @@ impl<'src> Compiler<'src> {
                 let display = [self.text(*prop), b"::", self.text(*m).to_ascii_lowercase().as_slice()].concat();
                 let site = self.named_site(f, &display);
                 let (base, argc) = self.args_by_value(f, args)?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
-                base
+                let dst = out(f, hint, mark);
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc });
+                dst
             }
             Expr::StaticCall { class: class_expr, method, args, .. } => {
                 let class = self.class_ref(f, class_expr)?;
@@ -4777,7 +4817,7 @@ impl<'src> Compiler<'src> {
                         }
                     };
                     let m = self.expr(f, method)?;
-                    return self.call_pair(f, name, m, args);
+                    return self.call_pair(f, name, m, args, hint, mark);
                 }
                 let site = self.named_site(f, text);
                 let (base, argc) = self.method_args(
@@ -4786,8 +4826,11 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
                     |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
                 )?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
-                base
+                // Straight into where the value goes (as a function call's
+                // is): no copy left behind in the arguments' registers.
+                let dst = out(f, hint, mark);
+                f.emit(Instr::StaticCall { dst, class, method: site, base, argc });
+                dst
             }
             // `C::${expr}`, `C::$$v`: a static property named when it runs.
             Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
@@ -5011,9 +5054,10 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::NullsafeMethodCall { target, method, args, .. } => {
-                // Null: no call, and its arguments are not evaluated.
+                // Null: no call, and its arguments are not evaluated. The
+                // result straight into where it goes (no copy left behind).
                 let obj = self.expr(f, target)?;
-                let dst = f.temp();
+                let dst = hint.unwrap_or_else(|| f.temp());
                 let null = f.constant(Frozen::Null);
                 let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
                 let Expr::Variable { name, .. } = method else {
@@ -5027,8 +5071,7 @@ impl<'src> Compiler<'src> {
                     |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
                     |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
                 )?;
-                f.emit(Instr::MethodCall { dst: base, obj, method: site, base, argc });
-                f.emit(Instr::Move { dst, src: base });
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(is_null, f.here());
                 f.emit(Instr::LoadNull { dst });
@@ -5463,9 +5506,12 @@ impl<'src> Compiler<'src> {
         if dynamic {
             let callee = self.expr(f, func)?;
             let (base, argc) = self.value_args(f, args, callee)?;
-            f.emit(Instr::CallValue { dst: base, callee, base, argc });
-            let _ = (span, hint, mark);
-            return Ok(base);
+            // Straight into where the value goes (as a named call's is): no
+            // copy left behind in the arguments' registers.
+            let dst = out(f, hint, mark);
+            f.emit(Instr::CallValue { dst, callee, base, argc });
+            let _ = span;
+            return Ok(dst);
         }
         let Expr::Variable { name, .. } = func else { unreachable!("a name") };
         let text = self.text(*name);
@@ -5482,6 +5528,18 @@ impl<'src> Compiler<'src> {
             && let Some(Frozen::Str(s)) = self.literal(arg.value)
         {
             return Ok(f.constant(Frozen::Int(s.as_bytes().len() as i64)));
+        }
+        // clone() of one argument is the clone construct
+        // (zend_compile_func_clone): `clone($o,)`.
+        if fallback.as_deref().unwrap_or(&lower) == b"clone"
+            && let [arg] = args
+            && !arg.unpack
+            && arg.name.is_none()
+        {
+            let src = self.expr(f, arg.value)?;
+            let dst = out(f, hint, mark);
+            f.emit(Instr::Clone { dst, src });
+            return Ok(dst);
         }
         // Whether argument n is passed by reference, when the callee is known now.
         let by_ref = |n: usize| -> Option<bool> {

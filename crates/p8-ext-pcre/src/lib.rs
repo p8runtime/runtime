@@ -801,9 +801,12 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
     let mut last_end = 0usize;
     let mut spare = Spare::of(ctx, c);
     let mut result = exec(spare.2, c, subject, start, Flags::default(), true, &mut spare.0);
-    if matches!(result, Ok(Some(_))) {
+    match result {
         // About the subject's length: the room made once.
-        out.reserve(s.len());
+        Ok(Some(_)) if limit > 0 => out.reserve(s.len()),
+        // Nothing to replace: no copy (the caller hands back the subject).
+        Ok(_) => return Ok(Some(Vec::new())),
+        Err(_) => {}
     }
     loop {
         let mut piece = last_end;
@@ -869,7 +872,11 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
 /// match failed.
 fn replace_with(ctx: &mut dyn Ctx, regex: &PhpStr, s: &PhpStr, with: &Replacement, limit: usize, count: &mut usize) -> Result<Option<PhpStr>, Throw> {
     let Some(c) = compiled_str(ctx, regex) else { return Ok(None) };
-    Ok(replace_one(ctx, &c, s, with, limit, count)?.map(PhpStr::new))
+    let before = *count;
+    let out = replace_one(ctx, &c, s, with, limit, count)?;
+    // Nothing replaced: the subject itself (php_pcre_replace_impl hands
+    // back the same string), not a copy.
+    Ok(out.map(|bytes| if *count == before { s.clone() } else { PhpStr::new(bytes) }))
 }
 
 fn limit_arg(args: &[Value], i: usize) -> usize {
