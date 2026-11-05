@@ -1,7 +1,7 @@
 # vite-plugin-p8
 
 PHP pages and PHP templates in a Vite project, run by
-[p8](../../README.md) (a PHP 8.4 runtime written in Rust) compiled to
+[p8](../../README.md) (a PHP 8.6 runtime written in Rust) compiled to
 WebAssembly (`wasm32-wasip1`) and run in Node through `node:wasi`. No PHP
 install and no native binary is needed.
 
