@@ -53,6 +53,21 @@ impl Value {
         Value::Str(s.into())
     }
 
+    /// Store `v` here, as `*self = v` does, but the old value goes through
+    /// the drop code only when it holds something to free. A register write
+    /// is the interpreter's commonest operation, and most overwrite a
+    /// scalar or nothing: the compiler's drop of a `Value` is an out-of-line
+    /// call that only then finds there is nothing to do.
+    #[inline(always)]
+    pub fn set(&mut self, v: Value) {
+        if matches!(self, Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Undef) {
+            // A scalar owns nothing: forgetting it frees nothing either.
+            std::mem::forget(std::mem::replace(self, v));
+        } else {
+            *self = v;
+        }
+    }
+
     /// The value itself, looking through a reference.
     #[inline]
     pub fn deref(&self) -> Value {

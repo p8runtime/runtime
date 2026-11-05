@@ -43,7 +43,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                     // A variable holding a reference is written through it (`step`).
                     Some(_) if matches!(w[$dst as usize], Value::Ref(_)) => return pc,
                     Some(r) => {
-                        w[$dst as usize] = r;
+                        w[$dst as usize].set(r);
                         pc += 1;
                     }
                     None if $op == BinOp::Concat && concat(w, $dst, $a, $b) => pc += 1,
@@ -78,7 +78,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 // `$this`, in a method that has one (else `step` raises).
                 Instr::This { dst } => match &top.this {
                     Some(this) => {
-                        w[dst as usize] = Value::Object(Rc::clone(this));
+                        w[dst as usize].set(Value::Object(Rc::clone(this)));
                         pc += 1;
                     }
                     None => return pc,
@@ -93,7 +93,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         _ => None,
                     };
                     let Some(v) = hit else { return pc };
-                    w[dst as usize] = v;
+                    w[dst as usize].set(v);
                     pc += 1;
                 }
                 // Function entry, when every passed argument is plainly of
@@ -127,7 +127,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         return pc;
                     }
                     let Some(v) = copied(&w[var as usize]) else { return pc };
-                    w[arg as usize] = v;
+                    w[arg as usize].set(v);
                     pc += 1;
                     if ids.has_pending() {
                         return pc;
@@ -149,7 +149,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 Instr::JumpNotIdentical { a, b, target } => jump_if!(Cmp::Identical, false, a, b, target),
                 Instr::Compare { cmp, dst, a, b } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
                     Some(t) if cmp != Cmp::Spaceship && !matches!(w[dst as usize], Value::Ref(_)) => {
-                        w[dst as usize] = Value::Bool(t);
+                        w[dst as usize].set(Value::Bool(t));
                         pc += 1;
                     }
                     _ => return pc,
@@ -186,7 +186,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 // `execute` runs it before the next instruction.
                 Instr::Move { dst, src } => match copied(&w[src as usize]) {
                     Some(v) => {
-                        w[dst as usize] = v;
+                        w[dst as usize].set(v);
                         pc += 1;
                         if ids.has_pending() {
                             return pc;
@@ -252,7 +252,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                     };
                     match v {
                         Some(v) => {
-                            w[dst as usize] = v;
+                            w[dst as usize].set(v);
                             pc += 1;
                             if ids.has_pending() {
                                 return pc;
@@ -283,7 +283,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                     if !done {
                         return pc;
                     }
-                    w[dst as usize] = v;
+                    w[dst as usize].set(v);
                     pc += 1;
                     if ids.has_pending() {
                         return pc;
@@ -307,7 +307,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 // $var op= number, $var holding a number
                 Instr::AssignOp { op, var, src } => match num_op(op, &w[var as usize], &w[src as usize]) {
                     Some(r) => {
-                        w[var as usize] = r;
+                        w[var as usize].set(r);
                         pc += 1;
                     }
                     // $str .= string
@@ -320,7 +320,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                     let i = *slot;
                     let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { return pc };
                     *slot = n;
-                    w[dst as usize] = Value::Int(if post { i } else { n });
+                    w[dst as usize].set(Value::Int(if post { i } else { n }));
                     pc += 1;
                 }
                 // Every other instruction (listed, so dispatch needs no range check).

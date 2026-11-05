@@ -5052,8 +5052,8 @@ fn int_test(cmp: Cmp, x: i64, y: i64) -> bool {
 fn assign(w: &mut [Value], r: Reg, value: Value) {
     let slot = &mut w[r as usize];
     match slot {
-        Value::Ref(cell) => *cell.borrow_mut() = value,
-        _ => *slot = value,
+        Value::Ref(cell) => cell.borrow_mut().set(value),
+        _ => slot.set(value),
     }
 }
 
@@ -5290,7 +5290,7 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
         let Some((p, v)) = a.value_at(pos) else { return false };
         (p, v.deref(), None)
     };
-    w[iter as usize + 1] = Value::Int(p as i64 + 1);
+    w[iter as usize + 1].set(Value::Int(p as i64 + 1));
     assign(w, val, v);
     if let Some(k) = k {
         assign(w, key, k.into_value());
