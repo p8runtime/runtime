@@ -805,7 +805,8 @@ fn name_operand(instr: &Instr) -> Option<Reg> {
         | ClassConst { name, .. }
         | FetchStaticProp { name, .. }
         | AssignStaticProp { name, .. }
-        | AssignStaticPropOp { name, .. } => Some(name),
+        | AssignStaticPropOp { name, .. }
+        | AssignPropDim { name, .. } => Some(name),
         _ => None,
     }
 }
@@ -925,8 +926,9 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
             *name = f(*name);
             *dst = f(*dst);
         }
-        AssignPropDim { base, val, dst, .. } => {
+        AssignPropDim { base, name, val, dst, .. } => {
             *base = f(*base);
+            *name = f(*name);
             *val = f(*val);
             *dst = f(*dst);
         }
@@ -2467,9 +2469,9 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::Assign { var, src: val });
             }
             Expr::ArrayDimFetch { .. } if dim_root_is_prop(target) => {
-                let (base, n, append) = self.prop_dim_path(f, target)?;
+                let (base, name, n, append) = self.prop_dim_path(f, target)?;
                 let dst = f.temp();
-                f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+                f.emit(Instr::AssignPropDim { op: None, base, name, n, append, val, dst });
             }
             Expr::ArrayDimFetch { .. } => {
                 let (var, keys, n, append) = self.dim_path(f, target)?;
@@ -3535,7 +3537,10 @@ impl<'src> Compiler<'src> {
     /// `$obj->name[k1]..[kn]`: the object, the name and the keys in
     /// consecutive temporaries from the returned base; the key count and
     /// whether the last dimension is `[]`.
-    fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, u8, bool)> {
+    /// `$obj->p[k1]..[kn]`'s operands for AssignPropDim: the object's
+    /// register (the keys follow it, from `+ 2`), the name's (its constant
+    /// when it is one), the key count, and whether the last is `[]`.
+    fn prop_dim_path(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<(Reg, Reg, u8, bool)> {
         let mut dims = Vec::new();
         let mut cur = e;
         while let Expr::ArrayDimFetch { array, dim, .. } = cur
@@ -3554,15 +3559,23 @@ impl<'src> Compiler<'src> {
         }
         let keyed: Vec<&Expr> = dims.iter().flatten().copied().collect();
         let base = f.temp();
+        // (`base + 1` stays the name's place: a run-time name lands there.)
         let name = f.temp();
         let keys: Vec<Reg> = keyed.iter().map(|_| f.temp()).collect();
         self.expr_into(f, target, base)?;
-        let n = self.prop_name(f, property)?;
-        f.emit(Instr::Move { dst: name, src: n });
+        let n = self.prop_name_operand(f, property)?;
+        // A constant name is used where it is; a run-time one is kept in its
+        // place while the keys are worked out.
+        let name = if n >> KIND_SHIFT == CONST {
+            n
+        } else {
+            f.emit(Instr::Move { dst: name, src: n });
+            name
+        };
         for (r, d) in keys.iter().zip(&keyed) {
             self.expr_into(f, d, *r)?;
         }
-        Ok((base, keys.len() as u8, append))
+        Ok((base, name, keys.len() as u8, append))
     }
 
     fn literal(&self, e: &Expr) -> Option<Frozen> {
@@ -4000,10 +4013,10 @@ impl<'src> Compiler<'src> {
                     dst
                 }
                 Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
-                    let (base, n, append) = self.prop_dim_path(f, var)?;
+                    let (base, name, n, append) = self.prop_dim_path(f, var)?;
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
-                    f.emit(Instr::AssignPropDim { op: None, base, n, append, val, dst });
+                    f.emit(Instr::AssignPropDim { op: None, base, name, n, append, val, dst });
                     dst
                 }
                 Expr::ArrayDimFetch { .. } => {
@@ -4164,10 +4177,10 @@ impl<'src> Compiler<'src> {
                         dst
                     }
                     Expr::ArrayDimFetch { .. } if dim_root_is_prop(var) => {
-                        let (base, n, append) = self.prop_dim_path(f, var)?;
+                        let (base, name, n, append) = self.prop_dim_path(f, var)?;
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
-                        f.emit(Instr::AssignPropDim { op: Some(bin), base, n, append, val, dst });
+                        f.emit(Instr::AssignPropDim { op: Some(bin), base, name, n, append, val, dst });
                         dst
                     }
                     Expr::PropertyFetch { target, property, .. } => {

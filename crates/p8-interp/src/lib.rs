@@ -1559,6 +1559,15 @@ impl Context<'_> {
                 // container; an ArrayAccess object on the way takes the rest.
                 Instr::AssignDim { var, keys, n, append, val, dst } => {
                     let v = self.operand(w, func, val);
+                    // `$a[] = v` on an array variable (the commonest write):
+                    // appended in place, nothing else to look at.
+                    if n == 0
+                        && append
+                        && let Value::Array(a) = &mut reg!(var)
+                    {
+                        reg!(dst) = self.append(Rc::make_mut(a), v)?;
+                        return Ok(Next::Go(pc));
+                    }
                     // The result is what was stored: a string offset's one byte.
                     reg!(dst) = match self.assign_dim(w, func, var, keys, n, append, v, None)? {
                         Written::Done(r) => r,
@@ -2783,9 +2792,12 @@ impl Context<'_> {
                     }
                     reg!(dst) = if post { old } else { new };
                 }
-                Instr::AssignPropDim { op, base: at, n, append, val, dst } => {
+                Instr::AssignPropDim { op, base: at, name: name_reg, n, append, val, dst } => {
                     let target = self.operand(w, func, at);
-                    let name = reg!(at + 1).clone();
+                    let name = name!(name_reg).clone();
+                    // A name constant's cache entry: the one property reads
+                    // and writes of that name use.
+                    let site = (name_reg as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.props.get(i));
                     // A hooked property's value is not modified in place.
                     if let (Value::Object(o), Some(pn)) = (&target, name.to_php_string())
                         && let Some(p) = self.hooked_property(o, pn.as_bytes())
@@ -2802,6 +2814,25 @@ impl Context<'_> {
                         keys.push(k);
                     }
                     let v = self.operand(w, func, val);
+                    // A declared property the cache knows for this class and
+                    // scope (visible, no hooks, the object not lazy; one that
+                    // is unset only in a class without magic): its slot,
+                    // without the lookup by name. A readonly or asymmetric
+                    // one takes the full path (its checks).
+                    if let (Some(site), Value::Object(o)) = (site, &target)
+                        && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
+                        && o.class.properties[slot].set_visibility.is_none()
+                        && !o.class.properties[slot].readonly
+                        && let Value::Str(pname) = &name
+                    {
+                        let o = Rc::clone(o);
+                        let written = self.update_slot_dim(&o, Some(slot), pname, &keys, append, v, op);
+                        let r = self.finish_prop_dim(regs, written, &keys, append, op);
+                        keys.clear();
+                        self.dim_keys = keys;
+                        regs[base + dst as usize] = r?;
+                        return Ok(Next::Go(pc));
+                    }
                     // An overloaded property: __get's value is written into
                     // only when it is an object; otherwise nothing changes.
                     if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Get) {
@@ -2833,21 +2864,15 @@ impl Context<'_> {
                     // (ArrayAccess: `$obj->p[k] = v` is its offsetSet) takes
                     // the keys from there.
                     let written = self.update_prop_dim(&target, &name, &keys, append, v, op);
-                    let r = match written {
-                        Ok(Written::Done(r)) => Ok(r),
-                        Ok(Written::Object(o, at, v)) => {
-                            let dim_op = match op {
-                                Some(op) => arrayaccess::DimOp::Op(op, v),
-                                None => arrayaccess::DimOp::Set(v),
-                            };
-                            self.aa_write(regs, &Value::Object(o), &keys[at..], append, dim_op)
-                        }
-                        Err(t) => Err(t),
-                    };
+                    let r = self.finish_prop_dim(regs, written, &keys, append, op);
                     // (Its room kept for the next; what it holds goes now.)
                     keys.clear();
                     self.dim_keys = keys;
                     regs[base + dst as usize] = r?;
+                    // The next write of this name here finds the slot cached.
+                    if let (Some(site), Value::Object(o)) = (site, &target) {
+                        self.remember_prop(site, o, &name);
+                    }
                 }
                 Instr::IssetProp { dst, obj, name } => {
                     let target = reg!(obj).deref();
@@ -4292,6 +4317,31 @@ impl Context<'_> {
         result
     }
 
+    /// `$a[] = val` into `arr`: the value (the assignment's result), or
+    /// PHP's error when the next key is taken.
+    #[inline]
+    fn append(&mut self, arr: &mut PhpArray, val: Value) -> Result<Value, Throw> {
+        if arr.push(val.clone()).is_err() {
+            return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
+        }
+        Ok(val)
+    }
+
+    /// A property dimension write's end: its result, or (the path reached
+    /// an object) the ArrayAccess write of the keys from there.
+    fn finish_prop_dim(&mut self, regs: &mut Vec<Value>, written: Result<Written, Throw>, keys: &[Value], append: bool, op: Option<BinOp>) -> Result<Value, Throw> {
+        match written? {
+            Written::Done(r) => Ok(r),
+            Written::Object(o, at, v) => {
+                let dim_op = match op {
+                    Some(op) => arrayaccess::DimOp::Op(op, v),
+                    None => arrayaccess::DimOp::Set(v),
+                };
+                self.aa_write(regs, &Value::Object(o), &keys[at..], append, dim_op)
+            }
+        }
+    }
+
     /// "Undefined array key …" for reading `key` that is not there.
     #[cold]
     fn undefined_key(&mut self, key: &Key) {
@@ -4351,11 +4401,7 @@ impl Context<'_> {
             _ => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
         };
         let Some((raw_key, rest)) = raw.split_first() else {
-            // `$a[] = v`
-            if arr.push(val.clone()).is_err() {
-                return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
-            }
-            return Ok(Written::Done(val));
+            return self.append(arr, val).map(Written::Done);
         };
         // This level is an array: its key, converted as an array's.
         let key = &self.key_of(raw_key, "access")?;

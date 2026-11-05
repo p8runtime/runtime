@@ -1268,31 +1268,49 @@ impl Context<'_> {
         {
             return Err(self.set_visibility_error(prop, "indirectly modify"));
         }
-        let mut root = match &slot {
-            Some((i, _)) => {
-                let mut slots = object.slots.borrow_mut();
-                match &mut slots[*i] {
-                    Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
-                    v => std::mem::take(v),
-                }
+        let slot = slot.map(|(i, _)| i);
+        self.update_slot_dim(&object, slot, &pname, keys, append, val, op)
+    }
+
+    /// `$obj->p[k1]..[kn] = val` into the property's place: declared slot
+    /// `slot`, else the dynamic property `pname` (made at the end if it
+    /// is not there, as PHP adds it; one that is keeps its place). Taken
+    /// out, written, put back (nothing runs PHP code meanwhile).
+    #[allow(clippy::too_many_arguments)] // AssignPropDim's operands, decoded once
+    pub(crate) fn update_slot_dim(
+        &mut self,
+        object: &Rc<Object>,
+        slot: Option<usize>,
+        pname: &PhpStr,
+        keys: &[Value],
+        append: bool,
+        val: Value,
+        op: Option<p8_runtime::ops::BinOp>,
+    ) -> Result<crate::Written, Throw> {
+        fn take(v: &mut Value) -> Value {
+            match v {
+                Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                v => std::mem::take(v),
             }
-            None => {
-                let key = Key::from_string(pname.clone());
-                object.dynamic.borrow_mut().remove(&key).unwrap_or(Value::Null)
+        }
+        fn put(v: &mut Value, root: Value) {
+            match v {
+                Value::Ref(cell) => *cell.borrow_mut() = root,
+                v => *v = root,
             }
+        }
+        let key = || Key::from_string(pname.clone());
+        let mut root = match slot {
+            Some(i) => take(&mut object.slots.borrow_mut()[i]),
+            None => match take(object.dynamic.borrow_mut().slot_mut(&key())) {
+                Value::Undef => Value::Null,
+                v => v,
+            },
         };
         let result = self.update_path(&mut root, keys, 0, append, val, op);
-        match &slot {
-            Some((i, _)) => {
-                let mut slots = object.slots.borrow_mut();
-                match &mut slots[*i] {
-                    Value::Ref(cell) => *cell.borrow_mut() = root,
-                    v => *v = root,
-                }
-            }
-            None => {
-                object.dynamic.borrow_mut().insert(Key::from_string(pname), root);
-            }
+        match slot {
+            Some(i) => put(&mut object.slots.borrow_mut()[i], root),
+            None => put(object.dynamic.borrow_mut().slot_mut(&key()), root),
         }
         result
     }

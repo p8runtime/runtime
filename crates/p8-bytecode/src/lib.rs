@@ -267,9 +267,10 @@ pub enum Instr {
     /// `++$obj->name` and the like
     PropIncDec { obj: Reg, name: Reg, dst: Reg, inc: bool, post: bool },
     /// `$obj->name[k1]..[kn] = val` (or `op=` with `op`): the object at
-    /// `base`, the property name at `base + 1`, the keys after (`append`:
-    /// the last dimension is `[]`)
-    AssignPropDim { op: Option<BinOp>, base: Reg, n: u8, append: bool, val: Reg, dst: Reg },
+    /// `base`, the keys from `base + 2` (`append`: the last dimension is
+    /// `[]`), the property name in `name` (its constant when it is one, as
+    /// AssignProp's: the property's cache entry is that constant's)
+    AssignPropDim { op: Option<BinOp>, base: Reg, name: Reg, n: u8, append: bool, val: Reg, dst: Reg },
     /// `isset($obj->name)`
     IssetProp { dst: Reg, obj: Reg, name: Reg },
     /// `unset($obj->name)`
