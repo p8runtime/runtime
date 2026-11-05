@@ -257,7 +257,7 @@ impl Context<'_> {
             if let Some(ty) = param.and_then(|p| p.ty.as_ref())
                 && !matches!(v, Value::Ref(_))
             {
-                match self.check_type(ty, &v, strict) {
+                match self.check_type(ty, &v, strict)? {
                     Ok(Some(converted)) => v = converted,
                     Ok(None) => {}
                     Err(()) => {
