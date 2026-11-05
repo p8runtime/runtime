@@ -8,7 +8,7 @@
 
 use crate::{Closure, Context};
 use p8_bytecode::{ClassDef, ClassRef, Function};
-use p8_runtime::array::Key;
+use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
     CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_LAZY, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Thunk, Visibility,
@@ -1114,8 +1114,15 @@ impl Context<'_> {
         }
         match self.prop_slot(&object, name.as_bytes())? {
             Some((slot, prop)) => {
+                // An object is handed out as a copy; anything else is not
+                // to be had (zend_std_read_property for BP_VAR_W).
                 if prop.readonly {
-                    return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&object.class.name), text(&name))));
+                    match object.slots.borrow()[slot].deref() {
+                        v @ Value::Object(_) => return Ok(Rc::new(RefCell::new(v))),
+                        Value::Undef if for_unset => return Ok(Rc::new(RefCell::new(Value::Null))),
+                        _ => {}
+                    }
+                    return Err(self.throw("Error", format!("Cannot indirectly modify readonly property {}::${}", text(&prop.declaring_name), text(&name))));
                 }
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
                     // An object is handed out as a copy (writes through it
@@ -1129,6 +1136,7 @@ impl Context<'_> {
                 }
                 Ok(crate::refs::make_ref(&mut object.slots.borrow_mut()[slot]))
             }
+            None if name.as_bytes().first() == Some(&0) => Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
                 let key = Key::from_string(name.clone());
                 if !object.dynamic.borrow().contains_key(&key) {
@@ -1177,6 +1185,8 @@ impl Context<'_> {
         let object = self.target_object(target, &name, "assign")?;
         match self.prop_slot(&object, name.as_bytes())? {
             Some((slot, prop)) => self.write_slot(&object, slot, prop, &name, value)?,
+            // A mangled name ("\0A\0p") is no property's (zend_bad_property_name).
+            None if name.as_bytes().first() == Some(&0) => return Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
                 let key = Key::from_string(name.clone());
                 let exists = object.dynamic.borrow().contains_key(&key);
@@ -1201,7 +1211,8 @@ impl Context<'_> {
     pub(crate) fn write_slot(&mut self, object: &Object, slot: usize, prop: &Property, name: &PhpStr, value: Value) -> Result<(), Throw> {
         // Who may initialize a readonly property is its set
         // visibility's business (implicitly protected(set)).
-        if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) {
+        // (In a clone's __clone or clone()'s updates, once more.)
+        if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) && !self.reinitable(object, slot) {
             return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(name))));
         }
         if prop.set_visibility.is_some() && !self.may_set(object, prop) {
@@ -1231,6 +1242,9 @@ impl Context<'_> {
             }
             None => value,
         };
+        if prop.readonly && !self.reinit.is_empty() {
+            self.reinit_done(object, slot);
+        }
         let mut slots = object.slots.borrow_mut();
         match &slots[slot] {
             Value::Ref(cell) => *cell.borrow_mut() = value,
@@ -1261,6 +1275,12 @@ impl Context<'_> {
         let pname = self.prop_name(name)?;
         let object = self.target_object(target, &pname, "assign")?;
         let slot = self.prop_slot(&object, pname.as_bytes())?;
+        // (Even in __clone: zend_std_read_property for BP_VAR_W.)
+        if let Some((_, prop)) = &slot
+            && prop.readonly
+        {
+            return Err(self.throw("Error", format!("Cannot indirectly modify readonly property {}::${}", text(&prop.declaring_name), text(&pname))));
+        }
         if let Some((_, prop)) = &slot
             && prop.set_visibility.is_some()
             && !self.may_set(&object, prop)
@@ -1324,7 +1344,7 @@ impl Context<'_> {
         };
         match self.prop_slot(&object, name.as_bytes())? {
             Some((i, prop)) => {
-                if prop.readonly {
+                if prop.readonly && !self.reinitable(&object, i) {
                     return Err(self.throw("Error", format!("Cannot unset readonly property {}::${}", text(&object.class.name), text(&name))));
                 }
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
@@ -1786,7 +1806,8 @@ impl Context<'_> {
     /// `clone $x`: the copy, and its `__clone`'s frame (if any).
     pub(crate) fn clone_object(&mut self, v: &Value) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
         let Value::Object(o) = v.deref() else {
-            return Err(self.throw("Error", "__clone method called on non-object"));
+            let given = p8_runtime::args::value_name(&v.deref());
+            return Err(self.throw("TypeError", format!("clone(): Argument #1 ($object) must be of type object, {given} given")));
         };
         if o.class.flags & p8_runtime::object::CLASS_UNCLONEABLE != 0 {
             return Err(self.throw("Error", format!("Trying to clone an uncloneable object of class {}", text(&o.class.name))));
@@ -1811,11 +1832,107 @@ impl Context<'_> {
         if !visible(method.visibility, &declaring, self.scope().0.as_deref()) {
             return Err(self.throw(
                 "Error",
-                format!("Call to {} {}::__clone() from {}", method.visibility.word(), text(&o.class.name), self.scope_name()),
+                format!("Call to {} method {}::__clone() from {}", method.visibility.word(), text(&o.class.name), self.scope_name()),
             ));
         }
         let func = self.code_of(&method);
         Ok((Rc::clone(&copy), Some(MethodFrame::method(func, Some(copy), declaring, Rc::clone(&o.class)))))
+    }
+
+    /// Run `copy`'s __clone (`hook`), its readonly properties writable
+    /// once more while it runs (zend_objects_clone_members).
+    pub(crate) fn run_clone_hook(&mut self, regs: &mut Vec<Value>, copy: &Rc<Object>, hook: MethodFrame) -> Result<(), Throw> {
+        let reinit = self.reinit_begin(copy);
+        let r = self.run_nested(regs, hook, &mut []);
+        if reinit {
+            self.reinit.pop();
+        }
+        r.map(drop)
+    }
+
+    /// clone($object, $withProperties) (ZEND_FUNCTION(clone) and
+    /// zend_objects_clone_obj_with): the clone, its __clone run, then
+    /// each of `with`'s properties assigned to it in the calling scope,
+    /// its readonly ones writable once more.
+    pub(crate) fn clone_with(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, with: &PhpArray) -> Result<Value, Throw> {
+        // A lazy object is initialized before it is cloned.
+        if object.is_uninit_lazy() {
+            self.lazy_init(regs, object)?;
+        }
+        let (copy, hook) = self.clone_object(&Value::Object(Rc::clone(object)))?;
+        if let Some(hook) = hook {
+            self.run_clone_hook(regs, &copy, hook)?;
+        }
+        if !with.is_empty() {
+            let reinit = self.reinit_begin(&copy);
+            let r = self.clone_updates(regs, &copy, with);
+            if reinit {
+                self.reinit.pop();
+            }
+            r?;
+        }
+        Ok(Value::Object(copy))
+    }
+
+    fn clone_updates(&mut self, regs: &mut Vec<Value>, copy: &Rc<Object>, with: &PhpArray) -> Result<(), Throw> {
+        let target = Value::Object(Rc::clone(copy));
+        for (key, value) in with.iter() {
+            let value = match value {
+                // A reference only the array holds is its value.
+                Value::Ref(cell) if Rc::strong_count(cell) == 1 => cell.borrow().clone(),
+                Value::Ref(_) => return Err(self.throw("Error", "Cannot assign by reference when cloning with updated properties")),
+                v => v.clone(),
+            };
+            let name = match key.to_value() {
+                Value::Int(n) => Value::Str(PhpStr::new(n.to_string().into_bytes())),
+                name => name,
+            };
+            self.assign_prop_value(regs, &target, &name, value)?;
+        }
+        Ok(())
+    }
+
+    /// `$target->name = value` as the running code does it: its set hook,
+    /// else __set, else the property itself (zend_std_write_property).
+    pub(crate) fn assign_prop_value(&mut self, regs: &mut Vec<Value>, target: &Value, name: &Value, value: Value) -> Result<(), Throw> {
+        if let Some(hook) = self.prop_hook(target, name, p8_runtime::object::HOOK_SET) {
+            self.run_nested(regs, hook?, &mut [value])?;
+            return Ok(());
+        }
+        if let Some(found) = self.prop_magic(target, name, Magic::Set) {
+            let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+            self.run_magic(regs, found, &mut [pname, value])?;
+            return Ok(());
+        }
+        let target = self.lazy_forward(target, name).unwrap_or_else(|| target.clone());
+        self.write_prop(&target, name, value)
+    }
+
+    /// `o`'s readonly properties made writable once more (pushed on
+    /// `reinit`), when it has any.
+    fn reinit_begin(&mut self, o: &Rc<Object>) -> bool {
+        if !o.class.properties.iter().any(|p| p.readonly) {
+            return false;
+        }
+        let slots = o.class.properties.iter().map(|p| p.readonly).collect();
+        self.reinit.push((Rc::clone(o), slots));
+        true
+    }
+
+    /// Whether readonly `slot` of `object` may be written once more.
+    fn reinitable(&self, object: &Object, slot: usize) -> bool {
+        self.reinit.iter().rev().any(|(o, slots)| std::ptr::eq(Rc::as_ptr(o), object) && slots.get(slot).copied().unwrap_or(false))
+    }
+
+    /// Readonly `slot` of `object` written: not again.
+    fn reinit_done(&mut self, object: &Object, slot: usize) {
+        for (o, slots) in self.reinit.iter_mut() {
+            if std::ptr::eq(Rc::as_ptr(o), object)
+                && let Some(s) = slots.get_mut(slot)
+            {
+                *s = false;
+            }
+        }
     }
 }
 

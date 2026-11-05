@@ -1178,6 +1178,8 @@ struct ClassScope {
     parent: Option<Text>,
     /// A trait: `self` is the class using it, known when the code runs.
     in_trait: bool,
+    /// A readonly class: its properties, promoted ones too, are readonly.
+    readonly: bool,
 }
 
 type Result<T> = std::result::Result<T, CompileError>;
@@ -2234,7 +2236,7 @@ impl<'src> Compiler<'src> {
             let visibility = visibility_of(self, p.modifiers).unwrap_or(Visibility::Public);
             let text = self.text(p.name.span);
             let name = Text::from(&text[1..]);
-            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly"));
+            let readonly = p.modifiers.iter().any(|m| self.text(m.span).eq_ignore_ascii_case(b"readonly")) || self.scope.as_ref().is_some_and(|s| s.readonly);
             let class = self.scope.as_ref().map_or_else(|| Text::from(""), |s| s.name.clone());
             let set_declared = set_visibility_of(self, p.modifiers)?;
             let set_visibility = settled_set_visibility((class.as_bytes(), name.as_bytes()), visibility, set_declared, readonly, p.ty.is_some(), line)?;
@@ -2558,7 +2560,7 @@ impl<'src> Compiler<'src> {
                 _ => {}
             }
         }
-        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT });
+        let saved = self.scope.replace(ClassScope { name: display.clone(), parent: parent.clone(), in_trait: class_kind == CLASS_TRAIT, readonly: flags & CLASS_READONLY != 0 });
         let (mut constants, mut properties, mut methods) = (Vec::new(), Vec::new(), Vec::new());
         let (mut traits, mut trait_rules) = (Vec::new(), Vec::new());
         let mut cases = Vec::new();
@@ -5081,6 +5083,18 @@ impl<'src> Compiler<'src> {
             && let Some(Frozen::Str(s)) = self.literal(arg.value)
         {
             return Ok(f.constant(Frozen::Int(s.as_bytes().len() as i64)));
+        }
+        // clone() of one argument is the clone construct
+        // (zend_compile_func_clone): `clone($o,)`.
+        if fallback.as_deref().unwrap_or(&lower) == b"clone"
+            && let [arg] = args
+            && !arg.unpack
+            && arg.name.is_none()
+        {
+            let src = self.expr(f, arg.value)?;
+            let dst = out(f, hint, mark);
+            f.emit(Instr::Clone { dst, src });
+            return Ok(dst);
         }
         // Whether argument n is passed by reference, when the callee is known now.
         let by_ref = |n: usize| -> Option<bool> {

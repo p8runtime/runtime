@@ -334,6 +334,14 @@ pub trait Ctx {
         Err(self.throw("Error", "Lazy objects are not supported here".into()))
     }
 
+    /// clone($object, $withProperties) (ZEND_FUNCTION(clone)): a clone of
+    /// `object`, its __clone run, then each of `with`'s properties
+    /// assigned to it as the calling code would assign it.
+    fn clone_with(&mut self, object: &Rc<crate::object::Object>, with: &crate::array::PhpArray) -> Result<Value, Throw> {
+        let _ = (object, with);
+        Err(self.throw("Error", "clone() is not supported here".into()))
+    }
+
     /// A lazy object initialized: the object its accesses go to.
     fn lazy_initialize(&mut self, o: &Rc<crate::object::Object>) -> Result<Rc<crate::object::Object>, Throw> {
         Ok(Rc::clone(o))
