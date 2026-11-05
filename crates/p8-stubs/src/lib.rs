@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
-//! PHP 8.4's signatures for its builtin functions and methods, generated
+//! PHP 8.6's signatures for its builtin functions and methods, generated
 //! from php-src's `*.stub.php` files (`examples/gen_signatures.rs`): the
 //! parameters' names, types, defaults and by-reference flags that PHP's
 //! argument checks and error messages come from. Shared by both engines.
@@ -196,7 +196,7 @@ fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// "Function f() is deprecated since 8.x, <message>" for a function or
-/// method PHP 8.4 declares #[\Deprecated] (zend_deprecated_function).
+/// method PHP 8.6 declares #[\Deprecated] (zend_deprecated_function).
 pub fn deprecation(sig: &Sig) -> Option<String> {
     let table = table::DEPRECATED;
     let i = table

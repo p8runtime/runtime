@@ -389,7 +389,7 @@ impl RequestContext {
             };
             let sym = self.interner.intern(name);
             self.constants.insert(sym, value);
-            if *deprecated {
+            if deprecated.is_some() {
                 self.deprecated_constants.insert(sym);
             }
         }

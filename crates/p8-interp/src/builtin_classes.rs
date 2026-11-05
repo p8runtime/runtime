@@ -110,6 +110,7 @@ fn declare(
                 is_final: *is_final,
                 declaring: Rc::clone(&declaring),
                 declaring_name: PhpStr::from(name),
+                deprecation: method_deprecation(name, m),
             }),
         );
     }
@@ -371,10 +372,17 @@ pub(crate) fn declare_spec(
                     is_final: false,
                     declaring: Rc::clone(&declaring),
                     declaring_name: PhpStr::from(spec.name),
+                    deprecation: method_deprecation(spec.name, n),
                 }),
             );
         }
     }
+}
+
+/// What calling builtin method `class::method` raises if PHP declares it
+/// #[\Deprecated] (its stub; p8_stubs::deprecation).
+fn method_deprecation(class: &str, method: &str) -> Option<Rc<str>> {
+    p8_stubs::lookup(format!("{class}::{method}").as_bytes()).and_then(p8_stubs::deprecation).map(Rc::from)
 }
 
 fn gen_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {

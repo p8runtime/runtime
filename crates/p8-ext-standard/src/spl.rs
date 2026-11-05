@@ -140,10 +140,23 @@ fn change<R>(o: &Object, f: impl FnOnce(&mut PhpArray) -> R) -> R {
     }
 }
 
+/// spl_array_set_array (8.5): an object as the storage is deprecated, said
+/// by `method` of ArrayObject or ArrayIterator (whichever `this` is).
+fn object_storage_deprecated(ctx: &mut dyn Ctx, this: &Rc<Object>, method: &str) {
+    let kind = if this.class.is_a(b"arrayiterator") { "ArrayIterator" } else { "ArrayObject" };
+    ctx.deprecated(&format!(
+        "{kind}::{method}(): Using an object as a backing array for {kind} is deprecated, as it allows violating class constraints and invariants"
+    ));
+}
+
 fn ao_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let storage = match arg(args, 0) {
         Value::Null | Value::Undef => Value::Array(Rc::new(PhpArray::new())),
-        v @ (Value::Array(_) | Value::Object(_)) => v,
+        v @ Value::Array(_) => v,
+        v @ Value::Object(_) => {
+            object_storage_deprecated(ctx, this, "__construct");
+            v
+        }
         other => {
             let class = class_name(this);
             return Err(ctx.throw("TypeError", format!("{class}::__construct(): Argument #1 ($array) must be of type array, {} given", other.type_name())));
@@ -224,7 +237,11 @@ fn ao_get_array_copy(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
 fn ao_exchange_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let old = elements(this);
     let new = match arg(args, 0) {
-        v @ (Value::Array(_) | Value::Object(_)) => v,
+        v @ Value::Array(_) => v,
+        v @ Value::Object(_) => {
+            object_storage_deprecated(ctx, this, "exchangeArray");
+            v
+        }
         other => {
             return Err(ctx.throw("TypeError", format!("ArrayObject::exchangeArray(): Argument #1 ($array) must be of type array, {} given", other.type_name())));
         }
@@ -286,6 +303,9 @@ fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     let Some(rest) = bytes[at..].strip_prefix(b"m:") else { return bad(ctx, at) };
     let Some((Value::Array(m), _)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, at + 2) };
     set(this, "\0flags", Value::Int(flags));
+    if matches!(storage, Value::Object(_)) {
+        object_storage_deprecated(ctx, this, "unserialize");
+    }
     set(this, "storage", storage);
     for (k, v) in m.iter() {
         let key = match k {

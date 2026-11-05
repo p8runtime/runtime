@@ -88,6 +88,16 @@ impl Context<'_> {
         }
     }
 
+    /// A call of a builtin method PHP deprecates (zend_deprecated_function).
+    #[inline]
+    pub(crate) fn method_deprecated(&mut self, m: &Method) {
+        if let Some(message) = &m.deprecation {
+            let message = message.to_string();
+            self.diags.push(p8_runtime::ops::Diag::Deprecated(message));
+            self.report_diags();
+        }
+    }
+
     /// What a method runs: its closure (made now if this is its first
     /// use), or its Rust function.
     pub(crate) fn code_of(&mut self, m: &Method) -> Code {
@@ -502,6 +512,7 @@ impl Context<'_> {
                         is_final: false,
                         declaring: Rc::clone(&declaring),
                         declaring_name: class_name.clone(),
+                        deprecation: None,
                     }),
                 );
             }
@@ -546,6 +557,7 @@ impl Context<'_> {
                     is_final: m.is_final,
                     declaring: Rc::clone(&declaring),
                     declaring_name: class_name.clone(),
+                    deprecation: None,
                 }),
             );
         }
@@ -881,6 +893,7 @@ impl Context<'_> {
         if method.is_abstract {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
+        self.method_deprecated(&method);
         let func = self.code_of(&method);
         let this = (!method.is_static).then_some(object);
         Ok(MethodFrame::method(func, this, declaring, class))
@@ -918,6 +931,7 @@ impl Context<'_> {
         }
         let this = self.frames.last().and_then(|f| f.this.clone());
         let forward = matches!(func.classes[class as usize], ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope);
+        self.method_deprecated(method);
         let fframe = self.code_of(method);
         if method.is_static {
             let called = match self.frames.last().and_then(|f| f.called.as_ref()) {
