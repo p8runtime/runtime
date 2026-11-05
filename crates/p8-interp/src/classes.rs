@@ -42,11 +42,13 @@ pub(crate) struct MethodFrame {
     /// going to __call / __callStatic: its name; the call's arguments are
     /// handed over as (name, [arguments]).
     pub trampoline: Option<PhpStr>,
+    /// The Closure object called (Closure::getCurrent() answers it).
+    pub closure: Option<Rc<Object>>,
 }
 
 impl MethodFrame {
     pub(crate) fn method(func: Code, this: Option<Rc<Object>>, scope: Rc<Class>, called: Rc<Class>) -> MethodFrame {
-        MethodFrame { func, this, scope: Some(scope), called: Some(called), captured: Vec::new(), trampoline: None }
+        MethodFrame { func, this, scope: Some(scope), called: Some(called), captured: Vec::new(), trampoline: None, closure: None }
     }
 }
 
@@ -93,6 +95,16 @@ impl Context<'_> {
     pub(crate) fn method_deprecated(&mut self, m: &Method) {
         if let Some(message) = &m.deprecation {
             let message = message.to_string();
+            self.diags.push(p8_runtime::ops::Diag::Deprecated(message));
+            self.report_diags();
+        }
+    }
+
+    /// A static method called on the trait declaring it, not on a class
+    /// using it (zend_std_get_static_method).
+    pub(crate) fn trait_static_deprecated(&mut self, target: &Class, m: &Method) {
+        if target.flags & p8_runtime::object::CLASS_TRAIT != 0 {
+            let message = format!("Calling static trait method {}::{} is deprecated, it should only be called on a class using the trait", text(&target.name), text(&m.name));
             self.diags.push(p8_runtime::ops::Diag::Deprecated(message));
             self.report_diags();
         }
@@ -880,6 +892,7 @@ impl Context<'_> {
         if method.is_abstract {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
+        self.trait_static_deprecated(&target, method);
         let this = self.frames.last().and_then(|f| f.this.clone());
         let forward = matches!(func.classes[class as usize], ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope);
         self.method_deprecated(method);
@@ -937,8 +950,10 @@ impl Context<'_> {
         let prop = &object.class.properties[slot];
         let declaring = self.declaring(&object.class, &prop.declaring);
         if !visible(prop.visibility, &declaring, scope.as_deref()) {
-            // A parent's private property is invisible here: as if absent.
-            if prop.visibility == Visibility::Private && scope.as_ref().is_some_and(|s| s.lower != prop.declaring) {
+            // A parent's private property is invisible here: as if absent
+            // (zend_get_property_offset); the object's class's own is an
+            // error, whoever reads it.
+            if prop.visibility == Visibility::Private && object.class.lower != prop.declaring {
                 return Ok(None);
             }
             return Err(self.throw(
@@ -1413,7 +1428,7 @@ impl Context<'_> {
     /// Run a constant expression's code in `scope`.
     fn run_thunk(&mut self, regs: &mut Vec<Value>, thunk: &Thunk, scope: Rc<Class>) -> Result<Value, Throw> {
         let func = thunk.0.downcast_ref::<Arc<Function>>().expect("a constant expression's code");
-        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func), self.isolate)), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None };
+        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func), self.isolate)), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None, closure: None };
         // The caller is at the instruction that needs the value (its line
         // is where an error in the code is reported).
         let (pc, saved) = (self.pc, self.frames.last().map(|f| f.pc));

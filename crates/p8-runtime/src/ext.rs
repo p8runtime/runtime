@@ -346,6 +346,11 @@ pub trait Ctx {
         None
     }
 
+    /// Closure::getCurrent(): the Closure object the calling code runs as.
+    fn current_closure(&mut self) -> Result<Value, Throw> {
+        Err(self.throw("Error", "Current function is not a closure".into()))
+    }
+
     /// Fibers: start, resume, throw, suspend, getCurrent (op), for
     /// `fiber` (None for the static ones).
     fn fiber_op(&mut self, fiber: Option<&Rc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {

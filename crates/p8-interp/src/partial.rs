@@ -379,8 +379,7 @@ impl Context<'_> {
                     trampoline: false,
                 }
             }
-            ClosureFunc::Builtin(i) => {
-                let b = self.isolate.registry.function(*i);
+            ClosureFunc::Builtin(i, b) => {
                 let call = if is_closure {
                     Call::Closure
                 } else if b.name.eq_ignore_ascii_case("assert") {

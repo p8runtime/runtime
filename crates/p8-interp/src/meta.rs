@@ -150,7 +150,7 @@ impl Context<'_> {
 
     /// Run a constant expression's code, in `scope`.
     fn eval_code(&mut self, code: &Arc<Function>, scope: Option<Rc<Class>>) -> Result<Value, Throw> {
-        let frame = MethodFrame { func: Code::User(Closure::new(Arc::clone(code), self.isolate)), this: None, scope: scope.clone(), called: scope, captured: Vec::new(), trampoline: None };
+        let frame = MethodFrame { func: Code::User(Closure::new(Arc::clone(code), self.isolate)), this: None, scope: scope.clone(), called: scope, captured: Vec::new(), trampoline: None, closure: None };
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let r = self.run_nested(&mut regs, frame, &mut []);
         self.isolate.regs = regs;

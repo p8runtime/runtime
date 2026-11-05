@@ -21,6 +21,9 @@ pub(crate) struct Frame {
     pub(crate) called: Option<Rc<Class>>,
     /// The Generator whose code this frame runs, if any.
     pub(crate) generator: Option<Rc<Object>>,
+    /// The Closure object whose code this frame runs, if it was called
+    /// as one (Closure::getCurrent()); cleared as the frame ends.
+    pub(crate) closure: Option<Rc<Object>>,
     /// Its variables are the global ones: the main script, and a file
     /// included at global scope (at any depth of includes).
     pub(crate) global: bool,
@@ -229,6 +232,7 @@ impl Frames {
                 scope: None,
                 called: None,
                 generator: None,
+                closure: None,
                 global: false,
             }),
         }

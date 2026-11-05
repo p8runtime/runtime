@@ -391,6 +391,10 @@ pub enum Rare {
     /// describes, their values from register c on (one register per
     /// argument written, a placeholder's left unused); ZEND_CALLABLE_CONVERT_PARTIAL.
     Partial,
+    /// `C::m(...)` in a constant expression: a = a Closure of the static
+    /// method "C::m" in b, looked up as zend_ast_evaluate does (no
+    /// __callStatic, never the caller's `$this`).
+    ConstCallable,
 }
 
 /// A partial application as written (ZEND_CALLABLE_CONVERT_PARTIAL's
@@ -796,6 +800,12 @@ pub struct Function {
     /// A generator function (its code contains `yield`): a call returns a
     /// Generator that runs it.
     pub is_generator: bool,
+    /// A declaration's constant expression (CONST_EXPR) evaluated as an
+    /// expression, not a bare constant's name: in a class, what it raises
+    /// is reported where it is written, the trace saying where it was
+    /// needed (zend_ast_evaluate_ex's filename and lineno override; a bare
+    /// constant is looked up in place, zval_update_constant_ex).
+    pub own_location: bool,
     /// Closures and arrow functions this code makes (`MakeClosure`).
     pub lambdas: Vec<Arc<Function>>,
     /// For a closure: the registers its captured values go into, in order.

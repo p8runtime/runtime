@@ -213,7 +213,7 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
     );
     let closure = Rc::get_mut(c.get_mut(b"closure".as_slice()).expect("Closure")).expect("not shared yet");
     closure.debug_info = Some(crate::callable::debug_info);
-    for (name, f) in [("bind", closure_bind as p8_runtime::object::NativeStatic), ("fromCallable", closure_from_callable)] {
+    for (name, f) in [("bind", closure_bind as p8_runtime::object::NativeStatic), ("fromCallable", closure_from_callable), ("getCurrent", closure_get_current)] {
         let lower = name.to_ascii_lowercase().into_bytes();
         let mut m = Method::clone(&closure.methods[b"bindto".as_slice()]);
         m.name = PhpStr::from(name);
@@ -527,6 +527,14 @@ fn closure_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 fn closure_from_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callable = args.first().map(Value::deref).unwrap_or(Value::Null);
     ctx.closure_from(&callable)
+}
+
+/// Closure::getCurrent(): the closure running (PHP 8.5).
+fn closure_get_current(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    if !args.is_empty() {
+        return Err(ctx.throw("ArgumentCountError", format!("Closure::getCurrent() expects exactly 0 arguments, {} given", args.len())));
+    }
+    ctx.current_closure()
 }
 
 /// The class Throwable's private properties belong to: Exception or Error.

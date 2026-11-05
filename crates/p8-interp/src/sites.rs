@@ -95,6 +95,7 @@ impl Closure {
             handlers: Vec::new(),
             decls: Vec::new(),
             is_generator: false,
+            own_location: false,
             lambdas: Vec::new(),
             bound: Vec::new(),
             silences: Vec::new(),

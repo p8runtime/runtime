@@ -195,8 +195,7 @@ impl Context<'_> {
                 let data = closure_data(o)?;
                 let mut info = match &data.func {
                     ClosureFunc::User(clo) => self.user_info(&clo.code, None),
-                    ClosureFunc::Builtin(i) => {
-                        let b = self.isolate.registry.function(*i);
+                    ClosureFunc::Builtin(_, b) => {
                         self.stub_info(b.name, PhpStr::from(b.name), None)
                     }
                     ClosureFunc::Method(_, name) => {

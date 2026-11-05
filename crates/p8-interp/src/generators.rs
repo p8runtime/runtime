@@ -207,6 +207,7 @@ impl Context<'_> {
         frame.this = None;
         frame.scope = None;
         frame.called = None;
+        frame.closure = None;
         let state = gen_of(&generator).expect("a Generator");
         let mut s = state.0.borrow_mut();
         s.regs = regs[base..base + nregs].iter_mut().map(|r| std::mem::replace(r, Value::Undef)).collect();

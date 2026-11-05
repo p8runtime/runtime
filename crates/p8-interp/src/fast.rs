@@ -613,6 +613,9 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
         frame.scope = None;
         frame.called = None;
     }
+    if frame.closure.is_some() {
+        frame.closure = None;
+    }
     if frame.ret != NO_RET {
         regs[frame.ret as usize] = value;
     }

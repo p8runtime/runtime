@@ -55,10 +55,50 @@ impl Context<'_> {
             entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
             let _ = trace.push(Value::Array(Rc::new(entry)));
         }
+        // A builtin's entry: called from `caller`, at `line`.
+        let native_entry = |n: &NativeCall, caller: &Frame, line: u32| {
+            let mut entry = PhpArray::new();
+            entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
+            entry.insert(key("line"), Value::Int(i64::from(line)));
+            match &n.method {
+                Some((name, class, this)) => {
+                    entry.insert(key("function"), Value::Str(name.clone()));
+                    entry.insert(key("class"), Value::Str(class.clone()));
+                    if objects && let Some(this) = this {
+                        entry.insert(key("object"), Value::Object(Rc::clone(this)));
+                    }
+                    entry.insert(key("type"), Value::str(if this.is_some() { "->" } else { "::" }));
+                }
+                None => {
+                    entry.insert(key("function"), Value::str(n.name));
+                }
+            }
+            entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
+            entry
+        };
         for k in (1..frames.len()).rev() {
             let ((frame, frame_regs), (caller, _)) = (frames[k], frames[k - 1]);
-            // A constant expression's code runs in place: no frame of its own.
             if frame.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() {
+                // A function's constant expression runs in place: no frame
+                // of its own. A class's reports where it is written (see
+                // location()), so the trace says where it was needed: the
+                // builtin evaluating it (ReflectionAttribute::newInstance),
+                // or "[constant expression]" (zend_fetch_debug_backtrace's
+                // entry for the filename override).
+                if frame.func.code.own_location && frame.scope.is_some() {
+                    let line = caller.func.code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
+                    let entry = match natives.iter().find(|(depth, _)| *depth == k) {
+                        Some(&(_, n)) => native_entry(n, caller, line),
+                        None => {
+                            let mut entry = PhpArray::new();
+                            entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
+                            entry.insert(key("line"), Value::Int(i64::from(line)));
+                            entry.insert(key("function"), Value::str("[constant expression]"));
+                            entry
+                        }
+                    };
+                    let _ = trace.push(Value::Array(Rc::new(entry)));
+                }
                 continue;
             }
             let mut entry = PhpArray::new();
@@ -122,24 +162,7 @@ impl Context<'_> {
             entry.insert(key("args"), Value::Array(Rc::new(args)));
             let _ = trace.push(Value::Array(Rc::new(entry)));
             if let Some(n) = native {
-                let mut entry = PhpArray::new();
-                entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
-                entry.insert(key("line"), Value::Int(i64::from(line)));
-                match &n.method {
-                    Some((name, class, this)) => {
-                        entry.insert(key("function"), Value::Str(name.clone()));
-                        entry.insert(key("class"), Value::Str(class.clone()));
-                        if objects && let Some(this) = this {
-                            entry.insert(key("object"), Value::Object(Rc::clone(this)));
-                        }
-                        entry.insert(key("type"), Value::str(if this.is_some() { "->" } else { "::" }));
-                    }
-                    None => {
-                        entry.insert(key("function"), Value::str(n.name));
-                    }
-                }
-                entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
-                let _ = trace.push(Value::Array(Rc::new(entry)));
+                let _ = trace.push(Value::Array(Rc::new(native_entry(n, caller, line))));
             }
         }
         trace
@@ -290,4 +313,5 @@ pub(crate) fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     frame.scope = None;
     frame.called = None;
     frame.generator = None;
+    frame.closure = None;
 }
