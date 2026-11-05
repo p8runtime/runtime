@@ -2192,6 +2192,13 @@ impl Context<'_> {
                     }
                     Rare::CallableArgByRef => {
                         let callee = reg!(b).clone();
+                        // A closure answers for itself (no frame made for it).
+                        if class != u16::MAX
+                            && let Some(by_ref) = Self::closure_takes_ref(&callee, class as usize)
+                        {
+                            reg!(a) = Value::Bool(by_ref);
+                            return Ok(Next::Go(pc));
+                        }
                         let retry = self.autoload_retry.clone();
                         let by_ref = match self.resolve_callable(&callee) {
                             Ok(t) if class == u16::MAX => {
@@ -2468,6 +2475,8 @@ impl Context<'_> {
                 }
                 Instr::CallSpread { dst, callee, args } => {
                     let target = self.operand(w, func, callee);
+                    // (What the callable is, once it was resolved for the list.)
+                    let mut resolved = None;
                     let list: Vec<Value> = match self.operand(w, func, args) {
                         // Named arguments: placed by the target's parameters.
                         Value::Array(a) if a.iter().any(|(k, _)| matches!(k, p8_runtime::array::Key::Str(_))) => {
@@ -2488,14 +2497,20 @@ impl Context<'_> {
                                     regs[at + 1] = Value::Array(Rc::new(packed));
                                     return self.call_method(regs, m, at, 2, (base + dst as usize) as u32, pc);
                                 }
-                                t => self.place_args(&t, &a)?,
+                                t => {
+                                    let list = self.place_args(&t, &a)?;
+                                    resolved = Some(t);
+                                    list
+                                }
                             }
                         }
                         // References (the arguments compiled as ones) kept
                         // for the parameters that take them.
                         Value::Array(a) if a.values().any(|v| matches!(v, Value::Ref(_))) => {
                             let t = self.resolve_callable(&target)?;
-                            a.values().enumerate().map(|(n, v)| if matches!(v, Value::Ref(_)) && self.takes_ref(&t, n) { v.clone() } else { v.deref() }).collect()
+                            let list = a.values().enumerate().map(|(n, v)| if matches!(v, Value::Ref(_)) && self.takes_ref(&t, n) { v.clone() } else { v.deref() }).collect();
+                            resolved = Some(t);
+                            list
                         }
                         Value::Array(a) => a.values().map(Value::deref).collect(),
                         _ => Vec::new(),
@@ -2508,7 +2523,11 @@ impl Context<'_> {
                     for (i, v) in list.into_iter().enumerate() {
                         regs[at + i] = v;
                     }
-                    return self.call_value(regs, &target, at, argc, (base + dst as usize) as u32, pc);
+                    let ret = (base + dst as usize) as u32;
+                    return match resolved {
+                        Some(t) => self.call_target(regs, t, at, argc, ret, pc),
+                        None => self.call_value(regs, &target, at, argc, ret, pc),
+                    };
                 }
                 Instr::ArrayUnpack { arr, src } => {
                     let v = self.operand(w, func, src);

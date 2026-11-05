@@ -286,10 +286,33 @@ impl Context<'_> {
     /// Whether the parameter of `target` named `name` takes a reference.
     /// An unknown name answers yes, so the variable is not read (and
     /// warned about) before the call reports the name, as in PHP.
+    /// Whether a Closure of PHP code takes its argument `n` by reference,
+    /// read from the closure itself (no frame made); None for any other
+    /// callable.
+    pub(crate) fn closure_takes_ref(callee: &Value, n: usize) -> Option<bool> {
+        let Value::Object(o) = callee.deref() else { return None };
+        match &closure_data(&o)?.func {
+            ClosureFunc::User(clo) => Some(clo.code.param_by_ref(n)),
+            _ => None,
+        }
+    }
+
     pub(crate) fn named_takes_ref(&self, target: &Target, name: &[u8]) -> bool {
-        let (_, params) = self.named_params(target);
-        let name = String::from_utf8_lossy(name);
-        params.iter().position(|p| p.name == name && !p.variadic).is_none_or(|i| self.takes_ref(target, i))
+        self.named_position(target, name).is_none_or(|i| self.takes_ref(target, i))
+    }
+
+    /// The position of the (non-variadic) parameter named `name` of
+    /// `target`. A user function's are compared where they are: no list
+    /// of its parameters is made.
+    fn named_position(&self, target: &Target, name: &[u8]) -> Option<usize> {
+        match target {
+            Target::Frame(MethodFrame { func: Code::User(clo), .. }) => clo.code.params.iter().position(|p| p.name.as_bytes() == name && !p.variadic),
+            _ => {
+                let (_, params) = self.named_params(target);
+                let name = String::from_utf8_lossy(name);
+                params.iter().position(|p| p.name == name && !p.variadic)
+            }
+        }
     }
 
     /// What `callable` calls, with PHP's error when it is not callable.
@@ -386,7 +409,13 @@ impl Context<'_> {
     /// CallValue: call `callee` with the `argc` arguments at `args`
     /// (absolute registers), its result to `ret`.
     pub(crate) fn call_value(&mut self, regs: &mut Vec<Value>, callee: &Value, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
-        match self.resolve_callable(callee)? {
+        let target = self.resolve_callable(callee)?;
+        self.call_target(regs, target, args, argc, ret, pc)
+    }
+
+    /// `call_value` of a callable already resolved.
+    pub(crate) fn call_target(&mut self, regs: &mut Vec<Value>, target: Target, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+        match target {
             Target::Frame(m) => {
                 // Arguments arrive by value: a reference is read through,
                 // unless its parameter takes one (a spread call's).
@@ -547,7 +576,6 @@ impl Context<'_> {
         if !list.iter().any(|(k, _)| matches!(k, Key::Str(_))) {
             return Ok(list.values().map(Value::deref).collect());
         }
-        let (fname, params) = self.named_params(target);
         let mut extra = PhpArray::new();
         let mut out: Vec<Value> = Vec::new();
         let mut set: Vec<bool> = Vec::new();
@@ -558,17 +586,16 @@ impl Context<'_> {
                     set.push(true);
                 }
                 Key::Str(key) => {
-                    let name = String::from_utf8_lossy(key.as_bytes()).into_owned();
-                    let Some(i) = params.iter().position(|p| p.name == name && !p.variadic) else {
+                    let Some(i) = self.named_position(target, key.as_bytes()) else {
                         // A variadic user function collects it by name.
-                        if params.last().is_some_and(|p| p.variadic) && matches!(target, Target::Frame(_)) {
+                        if matches!(target, Target::Frame(_)) && self.named_params(target).1.last().is_some_and(|p| p.variadic) {
                             extra.insert(Key::Str(key.clone()), v.deref());
                             continue;
                         }
-                        return Err(self.throw("Error", format!("Unknown named parameter ${name}")));
+                        return Err(self.throw("Error", format!("Unknown named parameter ${}", text(key.as_bytes()))));
                     };
                     if i < set.len() && set[i] {
-                        return Err(self.throw("Error", format!("Named parameter ${name} overwrites previous argument")));
+                        return Err(self.throw("Error", format!("Named parameter ${} overwrites previous argument", text(key.as_bytes()))));
                     }
                     if out.len() <= i {
                         out.resize(i + 1, Value::Undef);
@@ -579,7 +606,35 @@ impl Context<'_> {
                 }
             }
         }
-        // The holes: optional parameters left out.
+        // The holes: optional parameters left out (their list made only
+        // when there is one).
+        if set.iter().all(|&s| s) {
+            if !extra.is_empty() {
+                self.named_extra = Some((self.frames.len() + 1, extra));
+            }
+            return Ok(out);
+        }
+        // A user function's: a constant default put in place (it has no code
+        // to run it), another left to its code; looked at in its parameters.
+        if let Target::Frame(MethodFrame { func: Code::User(clo), .. }) = target {
+            for i in 0..out.len() {
+                let p = &clo.code.params[i];
+                if set[i] || !(p.has_default || p.variadic) {
+                    continue;
+                }
+                if let Some(Some(d)) = clo.defaults.get(i) {
+                    out[i] = d.clone();
+                }
+                set[i] = true;
+            }
+            if set.iter().all(|&s| s) {
+                if !extra.is_empty() {
+                    self.named_extra = Some((self.frames.len() + 1, extra));
+                }
+                return Ok(out);
+            }
+        }
+        let (fname, params) = self.named_params(target);
         for i in 0..out.len() {
             if set[i] {
                 continue;

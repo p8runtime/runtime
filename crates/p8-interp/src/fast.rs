@@ -518,6 +518,10 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     for r in &mut regs[base + argc.min(nparams)..base + consts_at] {
         clear(r);
     }
+    // Arguments not passed: their constant defaults.
+    if argc < nparams && !func.defaults.is_empty() {
+        fill_defaults(&func.defaults, &mut regs[base..base + nparams], argc);
+    }
     // Only the constants read as values (names stay in the constants).
     let values = code.value_consts as usize;
     for (r, c) in regs[base + consts_at..base + consts_at + values].iter_mut().zip(func.consts.iter()) {
@@ -547,6 +551,19 @@ pub(crate) fn returned(regs: &mut [Value], frame: &Frame, base: usize, src: Reg)
         Value::Ref(cell) => Some(cell.borrow().clone()),
         _ if temp || own_var => Some(std::mem::take(r)),
         v => Some(v.clone()),
+    }
+}
+
+/// The constant defaults (`Closure::defaults`) of the parameters from
+/// `from` on whose registers (`params`, the frame's first) are empty.
+#[inline(never)]
+pub(crate) fn fill_defaults(defaults: &[Option<Value>], params: &mut [Value], from: usize) {
+    for (r, d) in params.iter_mut().zip(defaults.iter()).skip(from) {
+        if let Some(d) = d
+            && matches!(r, Value::Undef)
+        {
+            *r = d.clone();
+        }
     }
 }
 

@@ -2288,6 +2288,11 @@ impl<'src> Compiler<'src> {
         // call checks the required ones were).
         for (i, p) in params.iter().enumerate() {
             if let Some(default) = p.default {
+                // A literal is put in place as the frame is entered (the
+                // parameter's `default`): no code runs for it.
+                if self.literal(default).is_some() && f.params[i].default.is_some() {
+                    continue;
+                }
                 let at = f.emit(Instr::ArgDefault { n: i as u8, target: 0 });
                 let var = reg(CV, i);
                 let value = self.expr(&mut f, default)?;
