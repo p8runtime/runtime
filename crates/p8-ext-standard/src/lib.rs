@@ -232,7 +232,7 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(class::REENTER);
     registry.mark_reenters(&["implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
-    for (module, name, value, _) in defaults::CONSTANTS {
+    for (module, name, value, deprecation) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
             defaults::ConstValue::Float(bits) => Constant::Float(f64::from_bits(*bits)),
@@ -241,6 +241,9 @@ fn register(registry: &mut Registry) {
             defaults::ConstValue::Null => Constant::Null,
         };
         registry.add_constant_in(module, name, value);
+        if let Some(message) = deprecation {
+            registry.deprecate_constant(name, message);
+        }
     }
 }
 
@@ -454,8 +457,23 @@ fn get_loaded_extensions(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 
 fn define(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = str_arg(args, 0);
+    // ZEND_FUNCTION(define): the third argument is deprecated (8.6), and
+    // has been ignored since 8.0.
+    if args.len() == 3 {
+        ctx.deprecated(
+            "define(): Argument #3 ($case_insensitive) is ignored and treated as false since declaration of case-insensitive constants is no longer supported, passing the argument explicitly is unnecessary",
+        );
+        if arg(args, 2).to_bool() {
+            ctx.warn("define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported, this will be an error in PHP 9.0");
+        }
+    }
+    // zend_register_constant: "_", "let" and "is" (8.6)
+    if let Some((word, _)) = p8_runtime::symbol::deprecated_name(name.as_bytes()) {
+        ctx.deprecated(&format!("Calling a constant \"{word}\" is deprecated since 8.6"));
+    }
     if !ctx.define(name.as_bytes(), arg(args, 1)) {
-        ctx.warn(&format!("Constant {} already defined", String::from_utf8_lossy(name.as_bytes())));
+        // zend_register_constant (8.5: redeclaring is on its way to an error)
+        ctx.warn(&format!("Constant {} already defined, this will be an error in PHP 9", String::from_utf8_lossy(name.as_bytes())));
         return Ok(Value::Bool(false));
     }
     Ok(Value::Bool(true))

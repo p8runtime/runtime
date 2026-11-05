@@ -322,14 +322,6 @@ impl Context<'_> {
                 }
             }
         }
-        // The parent's statics after the class's own (sharing their cells).
-        if let Some(p) = &parent {
-            for (k, s) in &p.statics {
-                if !statics.contains_key(k) {
-                    statics.insert(k.clone(), s.clone());
-                }
-            }
-        }
         // Traits: their methods (the class's own win, then theirs over
         // the parent's), properties, statics and constants, as the class's.
         let own: Vec<Sym> = def.methods.iter().map(|m| m.func.sym).collect();
@@ -439,6 +431,15 @@ impl Context<'_> {
                     c.declaring_name = class_name.clone();
                     Rc::new(c)
                 });
+            }
+        }
+        // The parent's statics after the class's own and its traits'
+        // (sharing their cells): traits are bound before the parent (8.5).
+        if let Some(p) = &parent {
+            for (k, s) in &p.statics {
+                if !statics.contains_key(k) {
+                    statics.insert(k.clone(), s.clone());
+                }
             }
         }
         // A class (or interface) with __toString() implements Stringable.
@@ -577,8 +578,9 @@ impl Context<'_> {
                 ));
             }
         }
-        // PHP's order: the class's own methods, the inherited ones, then
-        // the traits' (get_class_methods, reflection).
+        // PHP's order: the class's own methods, the traits', then the
+        // inherited ones (get_class_methods, reflection; traits are bound
+        // before the parent since 8.5).
         // One pass over the methods, not a removal (which shifts all after
         // it) per own or trait method.
         let mut ordered = p8_runtime::object::Methods::with_capacity(&symbols, methods.len());
@@ -601,12 +603,12 @@ impl Context<'_> {
                 ordered.insert_sym(*key, m);
             }
         }
-        ordered.extend(inherited);
         for key in &trait_order {
             if let Some(m) = trait_methods.remove(key) {
                 ordered.insert_sym(*key, m);
             }
         }
+        ordered.extend(inherited);
         let methods = ordered;
         let native_dtor = parent.as_ref().and_then(|p| p.native_dtor);
         let destructor = if methods.get_sym(known::DESTRUCT).is_some() || native_dtor.is_some() { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 };
@@ -1825,20 +1827,21 @@ impl Context<'_> {
 /// `(array) $object`: initialized properties under PHP's mangled names
 /// ("\0A\0p" private to A, "\0*\0p" protected), then dynamic ones.
 /// The order PHP keeps a class's properties in (its properties_info, as
-/// zend_do_inheritance and trait binding build it): its `own` as declared,
-/// then its parent's that it does not redeclare (not the parent's private
-/// ones), then what its traits add.
+/// trait binding and zend_do_inheritance build it): its `own` as declared,
+/// then what its traits add, then its parent's that it does not redeclare
+/// (not the parent's private ones): traits are bound before the parent
+/// since 8.5.
 pub(crate) fn property_order(mut own: Vec<PhpStr>, parent: Option<&Class>, traits: Vec<PhpStr>) -> Vec<PhpStr> {
+    for n in traits {
+        if !own.contains(&n) {
+            own.push(n);
+        }
+    }
     if let Some(p) = parent {
         for n in &p.property_order {
             if !own.contains(n) && !declared_private(p, n.as_bytes()) {
                 own.push(n.clone());
             }
-        }
-    }
-    for n in traits {
-        if !own.contains(&n) {
-            own.push(n);
         }
     }
     own

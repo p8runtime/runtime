@@ -1775,6 +1775,12 @@ impl<'src> Compiler<'src> {
             Stmt::Function { attributes, name, params, body, by_ref, return_type, doc_comment, span } => {
                 let full = join(&self.ns, self.text(name.span));
                 let line = self.line(name.span);
+                // zend_begin_func_decl (8.6): these names are deprecated.
+                let written = self.text(name.span);
+                if [&b"readonly"[..], b"let", b"is"].iter().any(|w| written.eq_ignore_ascii_case(w)) {
+                    let message = format!("Calling a function \"{}\" is deprecated since 8.6", String::from_utf8_lossy(written));
+                    self.deprecated(message, line);
+                }
                 let meta = self.meta_of(attributes, *doc_comment, *span, 2)?;
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
                 self.pending_meta = Some(meta);
@@ -1811,6 +1817,21 @@ impl<'src> Compiler<'src> {
                         None => full.rsplit(|&c| c == b'\\').next().unwrap_or(&full).to_vec(),
                     };
                     let kind = if u.kind == UseKind::Normal { *kind } else { u.kind };
+                    // zend_compile_use: "_", "let" and "is" as the name
+                    // imported under (8.6; "_" stays allowed for a function).
+                    if alias == b"_" || alias.eq_ignore_ascii_case(b"let") || alias.eq_ignore_ascii_case(b"is") {
+                        let shown = String::from_utf8_lossy(&alias).into_owned();
+                        let message = match kind {
+                            UseKind::Normal => Some(format!("Using \"{shown}\" as a class name is deprecated")),
+                            UseKind::Const => Some(format!("Using \"{shown}\" as a constant name is deprecated since 8.6")),
+                            UseKind::Function if alias != b"_" => Some(format!("Using \"{shown}\" as a function name is deprecated since 8.6")),
+                            UseKind::Function => None,
+                        };
+                        if let Some(message) = message {
+                            let line = f.line;
+                            self.deprecated(message, line);
+                        }
+                    }
                     match kind {
                         UseKind::Normal => self.use_classes.insert(alias.to_ascii_lowercase(), full),
                         UseKind::Function => self.use_functions.insert(alias.to_ascii_lowercase(), full),
@@ -2613,6 +2634,29 @@ impl<'src> Compiler<'src> {
         decl: (&[p8_syntax::ast::AttributeGroup], Option<Span>, Span),
     ) -> Result<Arc<ClassDef>> {
         use p8_syntax::ast::{ClassMember, TraitAdaptation};
+        // zend_compile_class_decl's zend_assert_valid_class_name: "_" (8.4),
+        // "let" and "is" (8.6) are deprecated names.
+        // zend_get_object_type
+        let object_type = if class_kind & CLASS_ENUM != 0 {
+            "enum"
+        } else if class_kind == CLASS_INTERFACE {
+            "interface"
+        } else if class_kind == CLASS_TRAIT {
+            "trait"
+        } else {
+            "class"
+        };
+        if let Some((word, since)) = p8_runtime::symbol::deprecated_name(display.as_bytes()) {
+            let article = if object_type.starts_with(['e', 'i']) { "an" } else { "a" };
+            self.deprecated(format!("Using \"{word}\" as {article} {object_type} name is deprecated since {since}"), line);
+        }
+        // zend_declare_typed_class_constant (8.6)
+        let namespace_const = |c: &mut Self, name: Span| {
+            if c.text(name).eq_ignore_ascii_case(b"namespace") {
+                let line = c.line(name);
+                c.deprecated(format!("Declaring {object_type} constant called 'namespace' is deprecated"), line);
+            }
+        };
         // Taken now: a class its methods declare is not a top-level one.
         let top = std::mem::take(&mut self.declaring_top);
         let interface = class_kind == CLASS_INTERFACE;
@@ -2846,6 +2890,7 @@ impl<'src> Compiler<'src> {
                 }
                 ClassMember::Const { attributes, modifiers, consts, doc_comment, .. } => {
                     for c in *consts {
+                        namespace_const(self, c.name.span);
                         let (value, code) = self.const_init(c.value)?;
                         let meta = self.meta_of(attributes, *doc_comment, c.span, 16)?;
                         constants.push(ConstDef {
@@ -2877,6 +2922,7 @@ impl<'src> Compiler<'src> {
                     });
                 }
                 ClassMember::Case { attributes, name, value, doc_comment, span } => {
+                    namespace_const(self, name.span);
                     let value = match value {
                         Some(v) => Some(self.const_value(v)?),
                         None => None,

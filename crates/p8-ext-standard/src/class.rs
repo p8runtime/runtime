@@ -97,6 +97,15 @@ fn class_alias(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         ctx.warn(&format!("Class \"{}\" not found", String::from_utf8_lossy(original.as_bytes())));
         return Ok(Value::Bool(false));
     };
+    // zend_register_class_alias_ex: zend_assert_valid_class_name(lcname,
+    // "a class alias"), the name lowercased (and without a leading "\").
+    let lower = alias.as_bytes().strip_prefix(b"\\").unwrap_or(alias.as_bytes()).to_ascii_lowercase();
+    if p8_runtime::symbol::reserved_class_name(&lower) {
+        return Err(ctx.fatal(format!("Cannot use \"{}\" as a class alias as it is reserved", String::from_utf8_lossy(&lower))));
+    }
+    if let Some((word, since)) = p8_runtime::symbol::deprecated_name(&lower) {
+        ctx.deprecated(&format!("Using \"{word}\" as a class alias is deprecated since {since}"));
+    }
     if !ctx.class_alias(class, alias.as_bytes()) {
         ctx.warn(&format!("Cannot declare class {}, because the name is already in use", String::from_utf8_lossy(alias.as_bytes())));
         return Ok(Value::Bool(false));
@@ -133,7 +142,12 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         };
     }
     match ctx.constant(text) {
-        Some(v) => Ok(v),
+        Some(v) => {
+            if let Some(message) = ctx.constant_deprecation(text) {
+                ctx.deprecated(message);
+            }
+            Ok(v)
+        }
         None => Err(ctx.throw("Error", format!("Undefined constant \"{}\"", String::from_utf8_lossy(text)))),
     }
 }

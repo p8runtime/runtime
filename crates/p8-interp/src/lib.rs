@@ -109,19 +109,6 @@ fn same_autoloader(a: &Value, b: &Value) -> bool {
     same && xm == ym
 }
 
-/// The builtin constants PHP marks deprecated (CONST_DEPRECATED), as one
-/// a FetchConst names (or falls back to).
-fn deprecated_constant(name: &[u8], fallback: Option<&[u8]>) -> Option<&'static str> {
-    const DEPRECATED: &[&str] = &[
-        "FILE_TEXT", "FILE_BINARY", "ASSERT_ACTIVE", "ASSERT_CALLBACK", "ASSERT_BAIL", "ASSERT_WARNING", "ASSERT_EXCEPTION",
-        "DOM_PHP_ERR", "SUNFUNCS_RET_TIMESTAMP", "SUNFUNCS_RET_STRING", "SUNFUNCS_RET_DOUBLE", "MT_RAND_PHP", "E_STRICT",
-        "FILTER_SANITIZE_STRING", "FILTER_SANITIZE_STRIPPED",
-    ];
-    let global = |n: &[u8]| n.strip_prefix(b"\\").unwrap_or(n).to_vec();
-    let names = [Some(global(name)), fallback.map(global)];
-    DEPRECATED.iter().copied().find(|d| names.iter().flatten().any(|n| n == d.as_bytes()))
-}
-
 /// A builtin that is running PHP code (array_map's callback): where it
 /// was called (the frame count then), its name and arguments.
 struct NativeCall {
@@ -1921,14 +1908,19 @@ impl Context<'_> {
                     let s = &func.sites[site as usize];
                     let v = match clo.sites[site as usize].get() {
                         Some(Callee::Constant(v)) => v.clone(),
-                        _ => match self.constant_by_key(s.sym).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1))) {
+                        _ => match self.constant_by_key(s.sym).map(|v| (v, s.sym)).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1).map(|v| (v, g.1)))) {
                             // Deprecated: said on every fetch, so never cached.
-                            Some(v) if let Some(name) = deprecated_constant(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(str::to_string).or_else(|| self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes()))) => {
-                                self.diags.push(Diag::Deprecated(format!("Constant {name} is deprecated")));
+                            // A builtin one says what its #[\Deprecated] does.
+                            Some((v, key))
+                                if let Some(message) = self.isolate.registry.constant_deprecation(key).map(str::to_string).or_else(|| {
+                                    self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(|name| format!("Constant {name} is deprecated"))
+                                }) =>
+                            {
+                                self.diags.push(Diag::Deprecated(message));
                                 self.report_diags();
                                 v
                             }
-                            Some(v) => {
+                            Some((v, _)) => {
                                 let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
                                 v
                             }
@@ -4559,6 +4551,12 @@ impl Ctx for Context<'_> {
 
     fn constant(&self, name: &[u8]) -> Option<Value> {
         self.constant_value(name)
+    }
+
+    fn constant_deprecation(&self, name: &[u8]) -> Option<&'static str> {
+        let registry = &self.isolate.registry;
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        registry.symbols().find_const(name).and_then(|sym| registry.constant_deprecation(sym))
     }
 
     fn set_constant(&mut self, name: &[u8], value: Value) {
