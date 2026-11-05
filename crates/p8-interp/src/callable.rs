@@ -243,9 +243,21 @@ impl Context<'_> {
     /// An unknown name answers yes, so the variable is not read (and
     /// warned about) before the call reports the name, as in PHP.
     pub(crate) fn named_takes_ref(&self, target: &Target, name: &[u8]) -> bool {
-        let (_, params) = self.named_params(target);
-        let name = String::from_utf8_lossy(name);
-        params.iter().position(|p| p.name == name && !p.variadic).is_none_or(|i| self.takes_ref(target, i))
+        self.named_position(target, name).is_none_or(|i| self.takes_ref(target, i))
+    }
+
+    /// The position of the (non-variadic) parameter named `name` of
+    /// `target`. A user function's are compared where they are: no list
+    /// of its parameters is made.
+    fn named_position(&self, target: &Target, name: &[u8]) -> Option<usize> {
+        match target {
+            Target::Frame(MethodFrame { func: Code::User(clo), .. }) => clo.code.params.iter().position(|p| p.name.as_bytes() == name && !p.variadic),
+            _ => {
+                let (_, params) = self.named_params(target);
+                let name = String::from_utf8_lossy(name);
+                params.iter().position(|p| p.name == name && !p.variadic)
+            }
+        }
     }
 
     /// What `callable` calls, with PHP's error when it is not callable.
@@ -502,7 +514,6 @@ impl Context<'_> {
         if !list.iter().any(|(k, _)| matches!(k, Key::Str(_))) {
             return Ok(list.values().map(Value::deref).collect());
         }
-        let (fname, params) = self.named_params(target);
         let mut extra = PhpArray::new();
         let mut out: Vec<Value> = Vec::new();
         let mut set: Vec<bool> = Vec::new();
@@ -513,17 +524,16 @@ impl Context<'_> {
                     set.push(true);
                 }
                 Key::Str(key) => {
-                    let name = String::from_utf8_lossy(key.as_bytes()).into_owned();
-                    let Some(i) = params.iter().position(|p| p.name == name && !p.variadic) else {
+                    let Some(i) = self.named_position(target, key.as_bytes()) else {
                         // A variadic user function collects it by name.
-                        if params.last().is_some_and(|p| p.variadic) && matches!(target, Target::Frame(_)) {
+                        if matches!(target, Target::Frame(_)) && self.named_params(target).1.last().is_some_and(|p| p.variadic) {
                             extra.insert(Key::Str(key.clone()), v.deref());
                             continue;
                         }
-                        return Err(self.throw("Error", format!("Unknown named parameter ${name}")));
+                        return Err(self.throw("Error", format!("Unknown named parameter ${}", text(key.as_bytes()))));
                     };
                     if i < set.len() && set[i] {
-                        return Err(self.throw("Error", format!("Named parameter ${name} overwrites previous argument")));
+                        return Err(self.throw("Error", format!("Named parameter ${} overwrites previous argument", text(key.as_bytes()))));
                     }
                     if out.len() <= i {
                         out.resize(i + 1, Value::Undef);
@@ -534,7 +544,15 @@ impl Context<'_> {
                 }
             }
         }
-        // The holes: optional parameters left out.
+        // The holes: optional parameters left out (their list made only
+        // when there is one).
+        if set.iter().all(|&s| s) {
+            if !extra.is_empty() {
+                self.named_extra = Some((self.frames.len() + 1, extra));
+            }
+            return Ok(out);
+        }
+        let (fname, params) = self.named_params(target);
         for i in 0..out.len() {
             if set[i] {
                 continue;
@@ -542,6 +560,13 @@ impl Context<'_> {
             let p = &params[i];
             if !p.optional {
                 return Err(self.throw("ArgumentCountError", format!("{fname}(): Argument #{} (${}) not passed", i + 1, p.name)));
+            }
+            // A user function's constant default (it has no code to run it).
+            if let Target::Frame(MethodFrame { func: Code::User(clo), .. }) = target
+                && let Some(Some(d)) = clo.defaults.get(i)
+            {
+                out[i] = d.clone();
+                continue;
             }
             if let Some(text) = p.default {
                 out[i] = match self.stub_default(text) {

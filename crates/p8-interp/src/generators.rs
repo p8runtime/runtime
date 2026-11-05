@@ -86,6 +86,9 @@ impl Context<'_> {
         for (i, c) in func.consts[..code.value_consts as usize].iter().enumerate() {
             window[code.consts_at as usize + i] = c.clone();
         }
+        if argc < nparams && !func.defaults.is_empty() {
+            crate::fast::fill_defaults(&func.defaults, &mut window[..nparams], argc);
+        }
         for (r, v) in code.bound.iter().zip(m.captured) {
             window[*r as usize] = v;
         }
