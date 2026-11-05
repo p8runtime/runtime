@@ -227,7 +227,14 @@ impl Context<'_> {
         {
             return Ok(Value::Object(o));
         }
-        let data = match self.resolve_callable(callable)? {
+        let data = self.callable_data(callable)?;
+        Ok(self.new_closure(data))
+    }
+
+    /// What a Closure of `callable` (not a Closure itself) holds, no
+    /// object made (a partial application makes its own).
+    pub(crate) fn callable_data(&mut self, callable: &Value) -> Result<ClosureData, Throw> {
+        Ok(match self.resolve_callable(callable)? {
             Target::Builtin(i) => ClosureData {
                 func: ClosureFunc::Builtin(i),
                 is_static: true,
@@ -258,8 +265,7 @@ impl Context<'_> {
                 trampoline: None,
                 fake: true,
             },
-        };
-        Ok(self.new_closure(data))
+        })
     }
 
     /// Whether `target` takes its argument `n` by reference.

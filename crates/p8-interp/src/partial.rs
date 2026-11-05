@@ -171,12 +171,19 @@ impl Context<'_> {
     /// made by `code`'s site `index` (zend_partial_create).
     pub(crate) fn partial(&mut self, code: &Arc<Function>, index: u16, callee: Value, values: Vec<Value>, strict: bool) -> Result<Value, Throw> {
         let site = &code.partials[index as usize];
-        let is_closure = matches!(callee.deref(), Value::Object(o) if closure_data(&o).is_some());
-        let target = match self.closure_from_callable(&callee)? {
-            Value::Object(o) => o,
-            _ => return Ok(Value::Null),
+        // A Closure is applied as it is; another callable as the closure
+        // `f(...)` would make of it (no object made: only the partial
+        // application's own is).
+        let target = match callee.deref() {
+            Value::Object(o) if closure_data(&o).is_some() => Some(o),
+            _ => None,
         };
-        let Some(data) = closure_data(&target) else { return Ok(Value::Null) };
+        let is_closure = target.is_some();
+        let resolved = match target {
+            Some(_) => None,
+            None => Some(self.callable_data(&callee)?),
+        };
+        let Some(data) = target.as_deref().and_then(closure_data).or(resolved.as_ref()) else { return Ok(Value::Null) };
         let (this, scope, called) = (data.this.clone(), data.scope.clone(), data.called.clone());
         let applied = self.applied(data, is_closure, this.is_some());
         let (mut argv, extra, named_positions) = self.send_args(site, &applied, values)?;
@@ -195,7 +202,7 @@ impl Context<'_> {
         };
         // A static closure unless applied to an object, or to a closure
         // that is not static.
-        let is_static = this.is_none() && !(matches!(applied.call, Call::Closure) && !data.is_static);
+        let is_static = this.is_none() && (data.is_static || !matches!(applied.call, Call::Closure));
         let key: CacheKey = (Arc::as_ptr(code) as usize, index, applied.code.as_ref().map_or(applied.builtin_key, |c| Arc::as_ptr(c) as usize), this.is_some());
         let cached = if applied.never_cache { None } else { self.isolate.partials.borrow().get(&key).map(|c| Arc::clone(&c.func)) };
         let func = match cached {
@@ -218,7 +225,13 @@ impl Context<'_> {
                 let f = self.compile_partial(site, &applied, &mut argv, extra.as_ref(), &named_positions, is_static, class.as_deref(), &code.file)?;
                 if !applied.never_cache {
                     let compiled = Compiled { func: Arc::clone(&f), _site: Arc::clone(code), _applied: applied.code.clone() };
-                    self.isolate.partials.borrow_mut().insert(key, compiled);
+                    let mut partials = self.isolate.partials.borrow_mut();
+                    // (Code an isolate compiles again and again, eval's,
+                    // would grow this without end: past a bound it starts over.)
+                    if partials.len() >= 1 << 14 {
+                        partials.clear();
+                    }
+                    partials.insert(key, compiled);
                 }
                 f
             }
@@ -227,8 +240,10 @@ impl Context<'_> {
         // checked as the code making the closure would pass them), the
         // extra named arguments.
         let mut captured = Vec::new();
-        if matches!(applied.call, Call::Closure) {
-            captured.push(Value::Object(Rc::clone(&target)));
+        if matches!(applied.call, Call::Closure)
+            && let Some(target) = &target
+        {
+            captured.push(Value::Object(Rc::clone(target)));
         }
         for (offset, slot) in argv.iter().enumerate() {
             let Slot::Value(v) = slot else { continue };
@@ -666,10 +681,9 @@ impl Context<'_> {
             self.forwarding_call(applied, argv, &names, site.variadic, num_params, false, extra.is_some())?.into_bytes()
         };
         let mut src = Vec::new();
+        // On the line the partial application is written on.
         src.extend_from_slice(b"<?php");
-        for _ in 1..site.line.max(1) {
-            src.push(b'\n');
-        }
+        src.resize(src.len() + site.line.max(1) as usize - 1, b'\n');
         src.push(b' ');
         if let Some(ns) = &applied.ns {
             src.extend_from_slice(b"namespace ");
@@ -801,16 +815,16 @@ fn assign_names(argv: &[Slot], applied: &Applied, variadic: bool, extra: bool) -
             || names.extra_named_params.as_slice() == name
             || names.inner_closure.as_slice() == name
     };
-    for offset in 0..argc.min(num_args) {
-        if matches!(argv[offset], Slot::Placeholder) {
+    for (offset, slot) in argv.iter().enumerate().take(num_args) {
+        if matches!(slot, Slot::Placeholder) {
             names.params[offset] = param_name(offset);
         }
     }
     if variadic && applied.variadic.is_some() {
         names.variadic_param = param_name(num_args);
     }
-    for offset in num_args..argc {
-        if !matches!(argv[offset], Slot::Placeholder) {
+    for (offset, slot) in argv.iter().enumerate().skip(num_args) {
+        if !matches!(slot, Slot::Placeholder) {
             continue;
         }
         let orig = param_name(num_args);
@@ -824,8 +838,8 @@ fn assign_names(argv: &[Slot], applied: &Applied, variadic: bool, extra: bool) -
         };
         names.params[offset] = name;
     }
-    for offset in 0..argc {
-        if !matches!(argv[offset], Slot::Value(_)) {
+    for (offset, slot) in argv.iter().enumerate() {
+        if !matches!(slot, Slot::Value(_)) {
             continue;
         }
         let orig = param_name(offset.min(num_args));
