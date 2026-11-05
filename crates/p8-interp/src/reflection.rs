@@ -406,7 +406,7 @@ class_method!(rc_get_properties, |ctx, class, this, args| {
     // `null` (PHPUnit passes it) means no filter, like no argument.
     let filter = args.first().map(Value::deref).filter(|v| !matches!(v, Value::Null | Value::Undef)).map(|v| v.to_int());
     // In declaration order, static and instance properties together (the
-    // class's own, then its parents', then its traits'; no parent's
+    // class's own, then its traits', then its parents' (8.5); no parent's
     // private one).
     let mut out = Vec::new();
     for n in &class.property_order {

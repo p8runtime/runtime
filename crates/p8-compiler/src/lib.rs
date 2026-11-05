@@ -11,7 +11,7 @@
 
 use p8_bytecode::{
     AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PartialArg, PartialSite, PropDef, Reg, Site, Sym, TraitRule,
-    ClassName, NO_VARS,
+    ClassName, CompileDiag, NO_VARS,
     CONST_EXPR, Rare,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
@@ -163,6 +163,8 @@ struct FnBuilder<'a> {
     labels: HashMap<Vec<u8>, (u32, Vec<usize>)>,
     gotos: Vec<Goto>,
     meta: Meta,
+    /// Compiling a `finally` body of this function (CG(context).in_finally).
+    in_finally: bool,
 }
 
 /// A `goto` waiting for its label (which may come later).
@@ -220,6 +222,7 @@ impl FnBuilder<'_> {
             labels: HashMap::default(),
             gotos: Vec::new(),
             meta: Meta::default(),
+            in_finally: false,
         }
     }
 
@@ -551,6 +554,7 @@ impl FnBuilder<'_> {
             silences: self.silences,
             arg_vars: self.arg_vars,
             partials: self.partials,
+            compile_diags: Vec::new(),
         }
     }
 }
@@ -1244,7 +1248,18 @@ pub struct Compiler<'src> {
     pending_ret: Option<p8_runtime::types::TypeDecl>,
     /// The doc comment, attributes and last line of the function about to be compiled.
     pending_meta: Option<Meta>,
+    /// What compiling raised that isn't fatal (deprecations), in order: the
+    /// main code's `compile_diags`.
+    diags: Vec<CompileDiag>,
+    /// The `finally` bodies compiled so far (by address): p8 compiles one at
+    /// each way out of its `try`, PHP once, so only the first copy raises.
+    finally_seen: HashSet<usize>,
+    /// Compiling a later copy of a `finally` body: raise nothing.
+    mute_diags: bool,
 }
+
+/// PHP's E_DEPRECATED and E_WARNING levels, for compile-time diagnostics.
+const E_DEPRECATED: i64 = 8192;
 
 /// The class being compiled.
 struct ClassScope {
@@ -1319,7 +1334,46 @@ impl<'src> Compiler<'src> {
             strict: false,
             pending_ret: None,
             pending_meta: None,
+            diags: Vec::new(),
+            finally_seen: HashSet::default(),
+            mute_diags: false,
         }
+    }
+
+    /// zend_error(E_DEPRECATED, …) while compiling: raised once the file is
+    /// compiled, before it runs (see `Function::compile_diags`).
+    fn deprecated(&mut self, message: impl Into<String>, line: u32) {
+        if !self.mute_diags {
+            self.diags.push(CompileDiag { level: E_DEPRECATED, message: Text::from(message.into().as_bytes()), line });
+        }
+    }
+
+    /// zend_compile_return's deprecations: a value returned from a
+    /// constructor or destructor (8.5), a return in a `finally` (8.6).
+    fn return_deprecations(&mut self, f: &FnBuilder, has_value: bool, span: Span) {
+        let line = self.line(span);
+        if has_value && self.scope.is_some() && f.class.is_some() {
+            if f.name.as_bytes().eq_ignore_ascii_case(b"__construct") {
+                self.deprecated("Returning a value from a constructor is deprecated", line);
+            } else if f.name.as_bytes().eq_ignore_ascii_case(b"__destruct") {
+                self.deprecated("Returning a value from a destructor is deprecated", line);
+            }
+        }
+        if f.in_finally {
+            self.deprecated("Returning from a finally block is deprecated", line);
+        }
+    }
+
+    /// A `finally` body, compiled in place (see `finally_seen`).
+    fn finally_body<'a>(&mut self, f: &mut FnBuilder<'a>, body: &'a [StmtId<'a>]) -> Result<()> {
+        let again = !self.finally_seen.insert(body.as_ptr() as usize);
+        let (was_in, was_mute) = (f.in_finally, self.mute_diags);
+        f.in_finally = true;
+        self.mute_diags |= again;
+        let r = self.stmts(f, body);
+        f.in_finally = was_in;
+        self.mute_diags = was_mute;
+        r
     }
 
     /// A class name as written, fully qualified: through the imports and
@@ -1455,7 +1509,9 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        let main = Arc::new(f.finish(self.file.clone(), &mut self.const_order));
+        let mut main = f.finish(self.file.clone(), &mut self.const_order);
+        main.compile_diags = std::mem::take(&mut self.diags);
+        let main = Arc::new(main);
         Ok(Program { main, functions: self.functions, classes: self.classes })
     }
 
@@ -1469,6 +1525,9 @@ impl<'src> Compiler<'src> {
 
     fn stmt<'a>(&mut self, f: &mut FnBuilder<'a>, stmt: &'a Stmt<'a>) -> Result<()> {
         f.line = self.line(stmt.span());
+        if let Stmt::Return { expr, span } = stmt {
+            self.return_deprecations(f, expr.is_some(), *span);
+        }
         match stmt {
             Stmt::Expression { expr, .. } => self.discard(f, expr)?,
             Stmt::Echo { exprs, .. } => {
@@ -1792,6 +1851,12 @@ impl<'src> Compiler<'src> {
             Stmt::Function { attributes, name, params, body, by_ref, return_type, doc_comment, span } => {
                 let full = join(&self.ns, self.text(name.span));
                 let line = self.line(name.span);
+                // zend_begin_func_decl (8.6): these names are deprecated.
+                let written = self.text(name.span);
+                if [&b"readonly"[..], b"let", b"is"].iter().any(|w| written.eq_ignore_ascii_case(w)) {
+                    let message = format!("Calling a function \"{}\" is deprecated since 8.6", String::from_utf8_lossy(written));
+                    self.deprecated(message, line);
+                }
                 let meta = self.meta_of(attributes, *doc_comment, *span, 2)?;
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
                 self.pending_meta = Some(meta);
@@ -1828,6 +1893,21 @@ impl<'src> Compiler<'src> {
                         None => full.rsplit(|&c| c == b'\\').next().unwrap_or(&full).to_vec(),
                     };
                     let kind = if u.kind == UseKind::Normal { *kind } else { u.kind };
+                    // zend_compile_use: "_", "let" and "is" as the name
+                    // imported under (8.6; "_" stays allowed for a function).
+                    if alias == b"_" || alias.eq_ignore_ascii_case(b"let") || alias.eq_ignore_ascii_case(b"is") {
+                        let shown = String::from_utf8_lossy(&alias).into_owned();
+                        let message = match kind {
+                            UseKind::Normal => Some(format!("Using \"{shown}\" as a class name is deprecated")),
+                            UseKind::Const => Some(format!("Using \"{shown}\" as a constant name is deprecated since 8.6")),
+                            UseKind::Function if alias != b"_" => Some(format!("Using \"{shown}\" as a function name is deprecated since 8.6")),
+                            UseKind::Function => None,
+                        };
+                        if let Some(message) = message {
+                            let line = f.line;
+                            self.deprecated(message, line);
+                        }
+                    }
                     match kind {
                         UseKind::Normal => self.use_classes.insert(alias.to_ascii_lowercase(), full),
                         UseKind::Function => self.use_functions.insert(alias.to_ascii_lowercase(), full),
@@ -2086,7 +2166,7 @@ impl<'src> Compiler<'src> {
             let mut t = f.tries.pop().expect("a try block to leave");
             t.close(f.here());
             if let Some(body) = t.finally {
-                self.stmts(f, body)?;
+                self.finally_body(f, body)?;
             }
             left.push(t);
         }
@@ -2154,12 +2234,12 @@ impl<'src> Compiler<'src> {
         let rethrow = f.here();
         f.patch(no_match, rethrow);
         if let Some(body) = finally {
-            self.stmts(f, body)?;
+            self.finally_body(f, body)?;
         }
         f.emit(Instr::Throw { src: slot });
         f.patch_all(to_finally, f.here());
         if let Some(body) = finally {
-            self.stmts(f, body)?;
+            self.finally_body(f, body)?;
         }
         let first = if catches.is_empty() { rethrow } else { tests };
         for (start, end) in protected.segments {
@@ -2373,7 +2453,21 @@ impl<'src> Compiler<'src> {
         let mut captures = Vec::new();
         match body {
             Body::Stmts(body) => {
+                let diags_at = self.diags.len();
                 self.stmts(&mut f, body)?;
+                // zend_compile_func_decl: a constructor or destructor with
+                // `yield` (8.5), raised before what its body raises.
+                if f.is_generator && f.class.is_some() && !self.mute_diags {
+                    let kind = match f.name.as_bytes().to_ascii_lowercase().as_slice() {
+                        b"__construct" => Some("constructor"),
+                        b"__destruct" => Some("destructor"),
+                        _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        let message = Text::from(format!("Making a {kind} a Generator is deprecated").as_bytes());
+                        self.diags.insert(diags_at, CompileDiag { level: E_DEPRECATED, message, line });
+                    }
+                }
                 // Falling off the end returns null: checked against the type
                 // (none returned), but for void.
                 if f.ret_type.as_ref().is_some_and(|t| !t.is_void()) {
@@ -2646,6 +2740,29 @@ impl<'src> Compiler<'src> {
         decl: (&[p8_syntax::ast::AttributeGroup], Option<Span>, Span),
     ) -> Result<Arc<ClassDef>> {
         use p8_syntax::ast::{ClassMember, TraitAdaptation};
+        // zend_compile_class_decl's zend_assert_valid_class_name: "_" (8.4),
+        // "let" and "is" (8.6) are deprecated names.
+        // zend_get_object_type
+        let object_type = if class_kind & CLASS_ENUM != 0 {
+            "enum"
+        } else if class_kind == CLASS_INTERFACE {
+            "interface"
+        } else if class_kind == CLASS_TRAIT {
+            "trait"
+        } else {
+            "class"
+        };
+        if let Some((word, since)) = p8_runtime::symbol::deprecated_name(display.as_bytes()) {
+            let article = if object_type.starts_with(['e', 'i']) { "an" } else { "a" };
+            self.deprecated(format!("Using \"{word}\" as {article} {object_type} name is deprecated since {since}"), line);
+        }
+        // zend_declare_typed_class_constant (8.6)
+        let namespace_const = |c: &mut Self, name: Span| {
+            if c.text(name).eq_ignore_ascii_case(b"namespace") {
+                let line = c.line(name);
+                c.deprecated(format!("Declaring {object_type} constant called 'namespace' is deprecated"), line);
+            }
+        };
         // Taken now: a class its methods declare is not a top-level one.
         let top = std::mem::take(&mut self.declaring_top);
         let interface = class_kind == CLASS_INTERFACE;
@@ -2881,6 +2998,7 @@ impl<'src> Compiler<'src> {
                 }
                 ClassMember::Const { attributes, modifiers, consts, doc_comment, .. } => {
                     for c in *consts {
+                        namespace_const(self, c.name.span);
                         let (value, code) = self.const_init(c.value)?;
                         let meta = self.meta_of(attributes, *doc_comment, c.span, 16)?;
                         constants.push(ConstDef {
@@ -2912,6 +3030,7 @@ impl<'src> Compiler<'src> {
                     });
                 }
                 ClassMember::Case { attributes, name, value, doc_comment, span } => {
+                    namespace_const(self, name.span);
                     let value = match value {
                         Some(v) => Some(self.const_value(v)?),
                         None => None,
@@ -2995,7 +3114,12 @@ impl<'src> Compiler<'src> {
             Expr::Binary { left, op: BinaryOp::Concat, right, .. } => self.foldable(left) && self.foldable(right),
             Expr::Unary { op: UnaryOp::Minus | UnaryOp::Plus, expr, .. } => is_literal(expr),
             Expr::Array { items, .. } => items.iter().all(|i| {
-                !i.unpack && !i.by_ref && i.key.is_none_or(|k| is_literal(k) && !float_key(k)) && self.foldable(i.value)
+                // A float or null key is converted (and reported) when the
+                // array is built, as PHP does: not folded.
+                !i.unpack
+                    && !i.by_ref
+                    && i.key.is_none_or(|k| is_literal(k) && !float_key(k) && !matches!(self.literal(k), Some(Frozen::Null)))
+                    && self.foldable(i.value)
             }),
             other => is_literal(other),
         }

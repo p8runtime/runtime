@@ -48,12 +48,12 @@ open code://missing.php rb 65665 NULL
 
 Warning: include(code://missing.php): Failed to open stream: "Code::stream_open" call failed in %s on line 38
 
-Warning: include(): Failed opening 'code://missing.php' for inclusion (include_path='.:/usr/local/lib/php') in %s on line 38
+Warning: include(): Failed opening 'code://missing.php' for inclusion (include_path='.:') in %s on line 38
 bool(false)
 open code://missing.php rb 65665 NULL
 
 Warning: require(code://missing.php): Failed to open stream: "Code::stream_open" call failed in %s on line 40
-Error: Failed opening required 'code://missing.php' (include_path='.:/usr/local/lib/php')
+Error: Failed opening required 'code://missing.php' (include_path='.:')
 open code://parse.php rb 65665 NULL
 set_option 2 0 8192
 stat

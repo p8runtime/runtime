@@ -5,7 +5,15 @@
 012
 012
 0.5 1.5 2.5 
-abcd
+a
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 18
+b
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 18
+c
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 18
+d
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 18
+
 01789
 01234
 9223372036854775805

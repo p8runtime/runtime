@@ -14,8 +14,6 @@ PHP_SELF=/info.php
 HTTP_AUTHORIZATION=Basic dXNlcjpwYXNz
 PHP_AUTH_USER=user
 PHP_AUTH_PW=pass
-argv=[]
-argc=0
 info.php
 cli-server cli-server info.php doc
 true

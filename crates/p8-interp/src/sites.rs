@@ -145,6 +145,7 @@ impl Closure {
             arg_vars: Vec::new(),
             meta: Default::default(),
             partials: Vec::new(),
+            compile_diags: Vec::new(),
         };
         Closure::with_consts(Arc::new(code), |c| c.to_value())
     }

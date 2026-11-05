@@ -6,7 +6,7 @@ use crate::{IniDisplay, ModuleSpec};
 pub static MODULES: &[ModuleSpec] = &[
     ModuleSpec {
         name: "Core",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["clone", "exit", "die", "zend_version", "func_num_args", "func_get_arg", "func_get_args", "strlen", "strcmp", "strncmp", "strcasecmp", "strncasecmp", "error_reporting", "define", "defined", "get_class", "get_called_class", "get_parent_class", "is_subclass_of", "is_a", "get_class_vars", "get_object_vars", "get_mangled_object_vars", "get_class_methods", "method_exists", "property_exists", "class_exists", "interface_exists", "trait_exists", "enum_exists", "function_exists", "class_alias", "get_included_files", "get_required_files", "trigger_error", "user_error", "set_error_handler", "restore_error_handler", "set_exception_handler", "restore_exception_handler", "get_declared_classes", "get_declared_traits", "get_declared_interfaces", "get_defined_functions", "get_defined_vars", "get_resource_type", "get_resource_id", "get_resources", "get_loaded_extensions", "get_defined_constants", "debug_backtrace", "debug_print_backtrace", "extension_loaded", "get_extension_funcs", "gc_mem_caches", "gc_collect_cycles", "gc_enabled", "gc_enable", "gc_disable", "gc_status"],
         classes: &["Traversable", "IteratorAggregate", "Iterator", "Serializable", "ArrayAccess", "Countable", "Stringable", "InternalIterator", "Throwable", "Exception", "ErrorException", "Error", "CompileError", "ParseError", "TypeError", "ArgumentCountError", "ValueError", "ArithmeticError", "DivisionByZeroError", "UnhandledMatchError", "RequestParseBodyException", "Closure", "Generator", "ClosedGeneratorException", "WeakReference", "WeakMap", "Attribute", "ReturnTypeWillChange", "AllowDynamicProperties", "SensitiveParameter", "SensitiveParameterValue", "Override", "Deprecated", "UnitEnum", "BackedEnum", "Fiber", "FiberError", "stdClass"],
@@ -19,7 +19,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "date",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["strtotime", "date", "idate", "gmdate", "mktime", "gmmktime", "checkdate", "strftime", "gmstrftime", "time", "localtime", "getdate", "date_create", "date_create_immutable", "date_create_from_format", "date_create_immutable_from_format", "date_parse", "date_parse_from_format", "date_get_last_errors", "date_format", "date_modify", "date_add", "date_sub", "date_timezone_get", "date_timezone_set", "date_offset_get", "date_diff", "date_time_set", "date_date_set", "date_isodate_set", "date_timestamp_set", "date_timestamp_get", "timezone_open", "timezone_name_get", "timezone_name_from_abbr", "timezone_offset_get", "timezone_transitions_get", "timezone_location_get", "timezone_identifiers_list", "timezone_abbreviations_list", "timezone_version_get", "date_interval_create_from_date_string", "date_interval_format", "date_default_timezone_set", "date_default_timezone_get", "date_sunrise", "date_sunset", "date_sun_info"],
         classes: &["DateTimeInterface", "DateTime", "DateTimeImmutable", "DateTimeZone", "DateInterval", "DatePeriod", "DateError", "DateObjectError", "DateRangeError", "DateException", "DateInvalidTimeZoneException", "DateInvalidOperationException", "DateMalformedStringException", "DateMalformedIntervalStringException", "DateMalformedPeriodStringException"],
@@ -35,7 +35,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "filter",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["filter_has_var", "filter_input", "filter_var", "filter_input_array", "filter_var_array", "filter_list", "filter_id"],
         classes: &[],
@@ -48,7 +48,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "hash",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["hash", "hash_file", "hash_hmac", "hash_hmac_file", "hash_init", "hash_update", "hash_update_stream", "hash_update_file", "hash_final", "hash_copy", "hash_algos", "hash_hmac_algos", "hash_pbkdf2", "hash_equals", "hash_hkdf", "mhash_get_block_size", "mhash_get_hash_name", "mhash_keygen_s2k", "mhash_count", "mhash"],
         classes: &["HashContext"],
@@ -64,7 +64,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "json",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["json_encode", "json_decode", "json_validate", "json_last_error", "json_last_error_msg"],
         classes: &["JsonSerializable", "JsonException"],
@@ -75,20 +75,33 @@ pub static MODULES: &[ModuleSpec] = &[
         ],
     },
     ModuleSpec {
+        name: "Zend OPcache",
+        version: Some(crate::PHP_VERSION),
+        deps: &[],
+        functions: &["opcache_reset", "opcache_get_status", "opcache_compile_file", "opcache_invalidate", "opcache_jit_blacklist", "opcache_get_configuration", "opcache_is_script_cached"],
+        classes: &[],
+        ini: &[("opcache.enable", 7, IniDisplay::Bool), ("opcache.use_cwd", 4, IniDisplay::Bool), ("opcache.validate_timestamps", 7, IniDisplay::Bool), ("opcache.validate_permission", 4, IniDisplay::Bool), ("opcache.validate_root", 4, IniDisplay::Bool), ("opcache.dups_fix", 7, IniDisplay::Bool), ("opcache.revalidate_path", 7, IniDisplay::Bool), ("opcache.log_verbosity_level", 4, IniDisplay::Plain), ("opcache.memory_consumption", 4, IniDisplay::Plain), ("opcache.interned_strings_buffer", 4, IniDisplay::Plain), ("opcache.max_accelerated_files", 4, IniDisplay::Plain), ("opcache.max_wasted_percentage", 4, IniDisplay::Plain), ("opcache.force_restart_timeout", 4, IniDisplay::Plain), ("opcache.revalidate_freq", 7, IniDisplay::Plain), ("opcache.file_update_protection", 7, IniDisplay::Plain), ("opcache.preferred_memory_model", 4, IniDisplay::Plain), ("opcache.blacklist_filename", 4, IniDisplay::Plain), ("opcache.max_file_size", 4, IniDisplay::Plain), ("opcache.protect_memory", 4, IniDisplay::Bool), ("opcache.save_comments", 4, IniDisplay::Bool), ("opcache.record_warnings", 4, IniDisplay::Bool), ("opcache.optimization_level", 4, IniDisplay::Plain), ("opcache.opt_debug_level", 4, IniDisplay::Plain), ("opcache.enable_file_override", 4, IniDisplay::Bool), ("opcache.enable_cli", 4, IniDisplay::Bool), ("opcache.error_log", 4, IniDisplay::Plain), ("opcache.restrict_api", 4, IniDisplay::Plain), ("opcache.lockfile_path", 4, IniDisplay::Plain), ("opcache.file_cache", 4, IniDisplay::Plain), ("opcache.file_cache_only", 4, IniDisplay::Bool), ("opcache.file_cache_consistency_checks", 4, IniDisplay::Bool), ("opcache.huge_code_pages", 4, IniDisplay::Bool), ("opcache.preload", 4, IniDisplay::Plain), ("opcache.preload_user", 4, IniDisplay::Plain), ("opcache.jit", 7, IniDisplay::Plain), ("opcache.jit_buffer_size", 4, IniDisplay::Plain), ("opcache.jit_debug", 7, IniDisplay::Plain), ("opcache.jit_bisect_limit", 7, IniDisplay::Plain), ("opcache.jit_prof_threshold", 7, IniDisplay::Plain), ("opcache.jit_max_root_traces", 4, IniDisplay::Plain), ("opcache.jit_max_side_traces", 4, IniDisplay::Plain), ("opcache.jit_max_exit_counters", 4, IniDisplay::Plain), ("opcache.jit_hot_loop", 4, IniDisplay::Plain), ("opcache.jit_hot_func", 4, IniDisplay::Plain), ("opcache.jit_hot_return", 4, IniDisplay::Plain), ("opcache.jit_hot_side_exit", 7, IniDisplay::Plain), ("opcache.jit_blacklist_root_trace", 7, IniDisplay::Plain), ("opcache.jit_blacklist_side_trace", 7, IniDisplay::Plain), ("opcache.jit_max_loop_unrolls", 7, IniDisplay::Plain), ("opcache.jit_max_recursive_calls", 7, IniDisplay::Plain), ("opcache.jit_max_recursive_returns", 7, IniDisplay::Plain), ("opcache.jit_max_polymorphic_calls", 7, IniDisplay::Plain), ("opcache.jit_max_trace_length", 7, IniDisplay::Plain)],
+        info: &[
+            "",
+            "{accel_info}",
+            "{ini}",
+        ],
+    },
+    ModuleSpec {
         name: "random",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["lcg_value", "mt_srand", "srand", "rand", "mt_rand", "mt_getrandmax", "getrandmax", "random_bytes", "random_int"],
         classes: &["Random\\Engine", "Random\\CryptoSafeEngine", "Random\\RandomError", "Random\\BrokenRandomEngineError", "Random\\RandomException", "Random\\Engine\\Mt19937", "Random\\Engine\\PcgOneseq128XslRr64", "Random\\Engine\\Xoshiro256StarStar", "Random\\Engine\\Secure", "Random\\Randomizer", "Random\\IntervalBoundary"],
         ini: &[],
         info: &[
             "",
-            "Version => 8.4.27",
+            "Version => {const:PHP_VERSION}",
         ],
     },
     ModuleSpec {
         name: "Reflection",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &[],
         classes: &["ReflectionException", "Reflection", "Reflector", "ReflectionFunctionAbstract", "ReflectionFunction", "ReflectionGenerator", "ReflectionParameter", "ReflectionType", "ReflectionNamedType", "ReflectionUnionType", "ReflectionIntersectionType", "ReflectionMethod", "ReflectionClass", "ReflectionObject", "ReflectionProperty", "ReflectionClassConstant", "ReflectionExtension", "ReflectionZendExtension", "ReflectionReference", "ReflectionAttribute", "ReflectionEnum", "ReflectionEnumUnitCase", "ReflectionEnumBackedCase", "ReflectionFiber", "ReflectionConstant", "PropertyHookType"],
@@ -100,7 +113,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "SPL",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("json", "Required")],
         functions: &["class_implements", "class_parents", "class_uses", "spl_autoload", "spl_autoload_call", "spl_autoload_extensions", "spl_autoload_functions", "spl_autoload_register", "spl_autoload_unregister", "spl_classes", "spl_object_hash", "spl_object_id", "iterator_apply", "iterator_count", "iterator_to_array"],
         classes: &["LogicException", "BadFunctionCallException", "BadMethodCallException", "DomainException", "InvalidArgumentException", "LengthException", "OutOfRangeException", "RuntimeException", "OutOfBoundsException", "OverflowException", "RangeException", "UnderflowException", "UnexpectedValueException", "RecursiveIterator", "OuterIterator", "RecursiveIteratorIterator", "IteratorIterator", "FilterIterator", "RecursiveFilterIterator", "CallbackFilterIterator", "RecursiveCallbackFilterIterator", "ParentIterator", "SeekableIterator", "LimitIterator", "CachingIterator", "RecursiveCachingIterator", "NoRewindIterator", "AppendIterator", "InfiniteIterator", "RegexIterator", "RecursiveRegexIterator", "EmptyIterator", "RecursiveTreeIterator", "ArrayObject", "ArrayIterator", "RecursiveArrayIterator", "SplFileInfo", "DirectoryIterator", "FilesystemIterator", "RecursiveDirectoryIterator", "GlobIterator", "SplFileObject", "SplTempFileObject", "SplDoublyLinkedList", "SplQueue", "SplStack", "SplHeap", "SplMinHeap", "SplMaxHeap", "SplPriorityQueue", "SplFixedArray", "SplObserver", "SplSubject", "SplObjectStorage", "MultipleIterator"],
@@ -114,7 +127,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "standard",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("session", "Optional")],
         functions: &["set_time_limit", "header_register_callback", "ob_start", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_get_clean", "ob_get_contents", "ob_get_level", "ob_get_length", "ob_list_handlers", "ob_get_status", "ob_implicit_flush", "output_reset_rewrite_vars", "output_add_rewrite_var", "stream_wrapper_register", "stream_register_wrapper", "stream_wrapper_unregister", "stream_wrapper_restore", "array_push", "krsort", "ksort", "count", "sizeof", "natsort", "natcasesort", "asort", "arsort", "sort", "rsort", "usort", "uasort", "uksort", "end", "prev", "next", "reset", "current", "pos", "key", "min", "max", "array_walk", "array_walk_recursive", "in_array", "array_search", "extract", "compact", "array_fill", "array_fill_keys", "range", "shuffle", "array_pop", "array_shift", "array_unshift", "array_splice", "array_slice", "array_merge", "array_merge_recursive", "array_replace", "array_replace_recursive", "array_keys", "array_key_first", "array_key_last", "array_values", "array_count_values", "array_column", "array_reverse", "array_pad", "array_flip", "array_change_key_case", "array_unique", "array_intersect_key", "array_intersect_ukey", "array_intersect", "array_uintersect", "array_intersect_assoc", "array_uintersect_assoc", "array_intersect_uassoc", "array_uintersect_uassoc", "array_diff_key", "array_diff_ukey", "array_diff", "array_udiff", "array_diff_assoc", "array_diff_uassoc", "array_udiff_assoc", "array_udiff_uassoc", "array_multisort", "array_rand", "array_sum", "array_product", "array_reduce", "array_filter", "array_find", "array_find_key", "array_any", "array_all", "array_map", "array_key_exists", "key_exists", "array_chunk", "array_combine", "array_is_list", "base64_encode", "base64_decode", "constant", "ip2long", "long2ip", "getenv", "putenv", "getopt", "flush", "sleep", "usleep", "time_nanosleep", "time_sleep_until", "get_current_user", "get_cfg_var", "error_log", "error_get_last", "error_clear_last", "call_user_func", "call_user_func_array", "forward_static_call", "forward_static_call_array", "register_shutdown_function", "highlight_file", "show_source", "php_strip_whitespace", "highlight_string", "ini_get", "ini_get_all", "ini_set", "ini_alter", "ini_restore", "ini_parse_quantity", "set_include_path", "get_include_path", "print_r", "connection_aborted", "connection_status", "ignore_user_abort", "getservbyname", "getservbyport", "getprotobyname", "getprotobynumber", "register_tick_function", "unregister_tick_function", "is_uploaded_file", "move_uploaded_file", "parse_ini_file", "parse_ini_string", "sys_getloadavg", "get_browser", "crc32", "crypt", "strptime", "gethostname", "gethostbyaddr", "gethostbyname", "gethostbynamel", "dns_check_record", "checkdnsrr", "dns_get_record", "dns_get_mx", "getmxrr", "net_get_interfaces", "ftok", "hrtime", "md5", "md5_file", "getmyuid", "getmygid", "getmypid", "getmyinode", "getlastmod", "sha1", "sha1_file", "openlog", "closelog", "syslog", "inet_ntop", "inet_pton", "metaphone", "header", "header_remove", "setrawcookie", "setcookie", "http_response_code", "headers_sent", "headers_list", "htmlspecialchars", "htmlspecialchars_decode", "html_entity_decode", "htmlentities", "get_html_translation_table", "assert", "assert_options", "bin2hex", "hex2bin", "strspn", "strcspn", "nl_langinfo", "strcoll", "trim", "rtrim", "chop", "ltrim", "wordwrap", "explode", "implode", "join", "strtok", "strtoupper", "strtolower", "str_increment", "str_decrement", "basename", "dirname", "pathinfo", "stristr", "strstr", "strchr", "strpos", "stripos", "strrpos", "strripos", "strrchr", "str_contains", "str_starts_with", "str_ends_with", "chunk_split", "substr", "substr_replace", "quotemeta", "ord", "chr", "ucfirst", "lcfirst", "ucwords", "strtr", "strrev", "similar_text", "addcslashes", "addslashes", "stripcslashes", "stripslashes", "str_replace", "str_ireplace", "hebrev", "nl2br", "strip_tags", "setlocale", "parse_str", "str_getcsv", "str_repeat", "count_chars", "strnatcmp", "localeconv", "strnatcasecmp", "substr_count", "str_pad", "sscanf", "str_rot13", "str_shuffle", "str_word_count", "str_split", "strpbrk", "substr_compare", "utf8_encode", "utf8_decode", "opendir", "dir", "closedir", "chdir", "chroot", "getcwd", "rewinddir", "readdir", "scandir", "glob", "exec", "system", "passthru", "escapeshellcmd", "escapeshellarg", "shell_exec", "proc_nice", "flock", "get_meta_tags", "pclose", "popen", "readfile", "rewind", "rmdir", "umask", "fclose", "feof", "fgetc", "fgets", "fread", "fopen", "fscanf", "fpassthru", "ftruncate", "fstat", "fseek", "ftell", "fflush", "fsync", "fdatasync", "fwrite", "fputs", "mkdir", "rename", "copy", "tempnam", "tmpfile", "file", "file_get_contents", "unlink", "file_put_contents", "fputcsv", "fgetcsv", "realpath", "fnmatch", "sys_get_temp_dir", "fileatime", "filectime", "filegroup", "fileinode", "filemtime", "fileowner", "fileperms", "filesize", "filetype", "file_exists", "is_writable", "is_writeable", "is_readable", "is_executable", "is_file", "is_dir", "is_link", "stat", "lstat", "chown", "chgrp", "lchown", "lchgrp", "chmod", "touch", "clearstatcache", "disk_total_space", "disk_free_space", "diskfreespace", "realpath_cache_get", "realpath_cache_size", "sprintf", "printf", "vprintf", "vsprintf", "fprintf", "vfprintf", "fsockopen", "pfsockopen", "http_build_query", "http_get_last_response_headers", "http_clear_last_response_headers", "request_parse_body", "image_type_to_mime_type", "image_type_to_extension", "getimagesize", "getimagesizefromstring", "phpinfo", "phpversion", "phpcredits", "php_sapi_name", "php_uname", "php_ini_scanned_files", "php_ini_loaded_file", "iptcembed", "iptcparse", "levenshtein", "readlink", "linkinfo", "symlink", "link", "mail", "abs", "ceil", "floor", "round", "sin", "cos", "tan", "asin", "acos", "atan", "atanh", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "expm1", "log1p", "pi", "is_finite", "is_nan", "intdiv", "is_infinite", "pow", "exp", "log", "log10", "sqrt", "hypot", "deg2rad", "rad2deg", "bindec", "hexdec", "octdec", "decbin", "decoct", "dechex", "base_convert", "number_format", "fmod", "fdiv", "fpow", "microtime", "gettimeofday", "getrusage", "pack", "unpack", "password_get_info", "password_hash", "password_needs_rehash", "password_verify", "password_algos", "proc_open", "proc_close", "proc_terminate", "proc_get_status", "quoted_printable_decode", "quoted_printable_encode", "soundex", "stream_select", "stream_context_create", "stream_context_set_params", "stream_context_get_params", "stream_context_set_option", "stream_context_set_options", "stream_context_get_options", "stream_context_get_default", "stream_context_set_default", "stream_filter_prepend", "stream_filter_append", "stream_filter_remove", "stream_socket_client", "stream_socket_server", "stream_socket_accept", "stream_socket_get_name", "stream_socket_recvfrom", "stream_socket_sendto", "stream_socket_enable_crypto", "stream_socket_shutdown", "stream_socket_pair", "stream_copy_to_stream", "stream_get_contents", "stream_supports_lock", "stream_set_write_buffer", "set_file_buffer", "stream_set_read_buffer", "stream_set_blocking", "socket_set_blocking", "stream_get_meta_data", "socket_get_status", "stream_get_line", "stream_resolve_include_path", "stream_get_wrappers", "stream_get_transports", "stream_is_local", "stream_isatty", "stream_set_chunk_size", "stream_set_timeout", "socket_set_timeout", "gettype", "get_debug_type", "settype", "intval", "floatval", "doubleval", "boolval", "strval", "is_null", "is_resource", "is_bool", "is_int", "is_integer", "is_long", "is_float", "is_double", "is_numeric", "is_string", "is_array", "is_object", "is_scalar", "is_callable", "is_iterable", "is_countable", "uniqid", "parse_url", "urlencode", "urldecode", "rawurlencode", "rawurldecode", "get_headers", "stream_bucket_make_writeable", "stream_bucket_prepend", "stream_bucket_append", "stream_bucket_new", "stream_get_filters", "stream_filter_register", "convert_uuencode", "convert_uudecode", "var_dump", "var_export", "debug_zval_dump", "serialize", "unserialize", "memory_get_usage", "memory_get_peak_usage", "memory_reset_peak_usage", "version_compare", "dl", "cli_set_process_title", "cli_get_process_title"],
         classes: &["__PHP_Incomplete_Class", "AssertionError", "RoundingMode", "php_user_filter", "StreamBucket", "Directory"],
@@ -128,7 +141,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "ctype",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["ctype_alnum", "ctype_alpha", "ctype_cntrl", "ctype_digit", "ctype_lower", "ctype_graph", "ctype_print", "ctype_punct", "ctype_space", "ctype_upper", "ctype_xdigit"],
         classes: &[],
@@ -140,7 +153,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "zlib",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["ob_gzhandler", "zlib_get_coding_type", "gzfile", "gzopen", "readgzfile", "zlib_encode", "zlib_decode", "gzdeflate", "gzencode", "gzcompress", "gzinflate", "gzdecode", "gzuncompress", "gzwrite", "gzputs", "gzrewind", "gzclose", "gzeof", "gzgetc", "gzpassthru", "gzseek", "gztell", "gzread", "gzgets", "deflate_init", "deflate_add", "inflate_init", "inflate_add", "inflate_get_status", "inflate_get_read_len"],
         classes: &["InflateContext", "DeflateContext"],
@@ -156,7 +169,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "xmlwriter",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("libxml", "Required")],
         functions: &["xmlwriter_open_uri", "xmlwriter_open_memory", "xmlwriter_set_indent", "xmlwriter_set_indent_string", "xmlwriter_start_comment", "xmlwriter_end_comment", "xmlwriter_start_attribute", "xmlwriter_end_attribute", "xmlwriter_write_attribute", "xmlwriter_start_attribute_ns", "xmlwriter_write_attribute_ns", "xmlwriter_start_element", "xmlwriter_end_element", "xmlwriter_full_end_element", "xmlwriter_start_element_ns", "xmlwriter_write_element", "xmlwriter_write_element_ns", "xmlwriter_start_pi", "xmlwriter_end_pi", "xmlwriter_write_pi", "xmlwriter_start_cdata", "xmlwriter_end_cdata", "xmlwriter_write_cdata", "xmlwriter_text", "xmlwriter_write_raw", "xmlwriter_start_document", "xmlwriter_end_document", "xmlwriter_write_comment", "xmlwriter_start_dtd", "xmlwriter_end_dtd", "xmlwriter_write_dtd", "xmlwriter_start_dtd_element", "xmlwriter_end_dtd_element", "xmlwriter_write_dtd_element", "xmlwriter_start_dtd_attlist", "xmlwriter_end_dtd_attlist", "xmlwriter_write_dtd_attlist", "xmlwriter_start_dtd_entity", "xmlwriter_end_dtd_entity", "xmlwriter_write_dtd_entity", "xmlwriter_output_memory", "xmlwriter_flush"],
         classes: &["XMLWriter"],
@@ -168,7 +181,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "xml",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("libxml", "Required")],
         functions: &["xml_parser_create", "xml_parser_create_ns", "xml_set_object", "xml_set_element_handler", "xml_set_character_data_handler", "xml_set_processing_instruction_handler", "xml_set_default_handler", "xml_set_unparsed_entity_decl_handler", "xml_set_notation_decl_handler", "xml_set_external_entity_ref_handler", "xml_set_start_namespace_decl_handler", "xml_set_end_namespace_decl_handler", "xml_parse", "xml_parse_into_struct", "xml_get_error_code", "xml_error_string", "xml_get_current_line_number", "xml_get_current_column_number", "xml_get_current_byte_index", "xml_parser_free", "xml_parser_set_option", "xml_parser_get_option"],
         classes: &["XMLParser"],
@@ -182,7 +195,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "libxml",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["libxml_set_streams_context", "libxml_use_internal_errors", "libxml_get_last_error", "libxml_get_errors", "libxml_clear_errors", "libxml_disable_entity_loader", "libxml_set_external_entity_loader", "libxml_get_external_entity_loader"],
         classes: &["LibXMLError"],
@@ -216,7 +229,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "SimpleXML",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("libxml", "Required"), ("spl", "Required")],
         functions: &["simplexml_load_file", "simplexml_load_string", "simplexml_import_dom"],
         classes: &["SimpleXMLElement", "SimpleXMLIterator"],
@@ -229,7 +242,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "tokenizer",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["token_get_all", "token_name"],
         classes: &["PhpToken"],
@@ -241,7 +254,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "mbstring",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("pcre", "Required")],
         functions: &["mb_language", "mb_internal_encoding", "mb_http_input", "mb_http_output", "mb_detect_order", "mb_substitute_character", "mb_preferred_mime_name", "mb_parse_str", "mb_output_handler", "mb_str_split", "mb_strlen", "mb_strpos", "mb_strrpos", "mb_stripos", "mb_strripos", "mb_strstr", "mb_strrchr", "mb_stristr", "mb_strrichr", "mb_substr_count", "mb_substr", "mb_strcut", "mb_strwidth", "mb_strimwidth", "mb_convert_encoding", "mb_convert_case", "mb_strtoupper", "mb_strtolower", "mb_ucfirst", "mb_lcfirst", "mb_trim", "mb_ltrim", "mb_rtrim", "mb_detect_encoding", "mb_list_encodings", "mb_encoding_aliases", "mb_encode_mimeheader", "mb_decode_mimeheader", "mb_convert_kana", "mb_convert_variables", "mb_encode_numericentity", "mb_decode_numericentity", "mb_send_mail", "mb_get_info", "mb_check_encoding", "mb_scrub", "mb_ord", "mb_chr", "mb_str_pad", "mb_regex_encoding", "mb_ereg", "mb_eregi", "mb_ereg_replace", "mb_eregi_replace", "mb_ereg_replace_callback", "mb_split", "mb_ereg_match", "mb_ereg_search", "mb_ereg_search_pos", "mb_ereg_search_regs", "mb_ereg_search_init", "mb_ereg_search_getregs", "mb_ereg_search_getpos", "mb_ereg_search_setpos", "mb_regex_set_options"],
         classes: &[],
@@ -258,7 +271,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "pcre",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["preg_match", "preg_match_all", "preg_replace", "preg_filter", "preg_replace_callback", "preg_replace_callback_array", "preg_split", "preg_quote", "preg_grep", "preg_last_error", "preg_last_error_msg"],
         classes: &[],
@@ -273,7 +286,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "mysqli",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("spl", "Required"), ("mysqlnd", "Required")],
         functions: &["mysqli_affected_rows", "mysqli_autocommit", "mysqli_begin_transaction", "mysqli_change_user", "mysqli_character_set_name", "mysqli_close", "mysqli_commit", "mysqli_connect", "mysqli_connect_errno", "mysqli_connect_error", "mysqli_data_seek", "mysqli_dump_debug_info", "mysqli_debug", "mysqli_errno", "mysqli_error", "mysqli_error_list", "mysqli_stmt_execute", "mysqli_execute", "mysqli_execute_query", "mysqli_fetch_field", "mysqli_fetch_fields", "mysqli_fetch_field_direct", "mysqli_fetch_lengths", "mysqli_fetch_all", "mysqli_fetch_array", "mysqli_fetch_assoc", "mysqli_fetch_object", "mysqli_fetch_row", "mysqli_fetch_column", "mysqli_field_count", "mysqli_field_seek", "mysqli_field_tell", "mysqli_free_result", "mysqli_get_connection_stats", "mysqli_get_client_stats", "mysqli_get_charset", "mysqli_get_client_info", "mysqli_get_client_version", "mysqli_get_links_stats", "mysqli_get_host_info", "mysqli_get_proto_info", "mysqli_get_server_info", "mysqli_get_server_version", "mysqli_get_warnings", "mysqli_init", "mysqli_info", "mysqli_insert_id", "mysqli_kill", "mysqli_more_results", "mysqli_multi_query", "mysqli_next_result", "mysqli_num_fields", "mysqli_num_rows", "mysqli_options", "mysqli_set_opt", "mysqli_ping", "mysqli_poll", "mysqli_prepare", "mysqli_report", "mysqli_query", "mysqli_real_connect", "mysqli_real_escape_string", "mysqli_escape_string", "mysqli_real_query", "mysqli_reap_async_query", "mysqli_release_savepoint", "mysqli_rollback", "mysqli_savepoint", "mysqli_select_db", "mysqli_set_charset", "mysqli_stmt_affected_rows", "mysqli_stmt_attr_get", "mysqli_stmt_attr_set", "mysqli_stmt_bind_param", "mysqli_stmt_bind_result", "mysqli_stmt_close", "mysqli_stmt_data_seek", "mysqli_stmt_errno", "mysqli_stmt_error", "mysqli_stmt_error_list", "mysqli_stmt_fetch", "mysqli_stmt_field_count", "mysqli_stmt_free_result", "mysqli_stmt_get_result", "mysqli_stmt_get_warnings", "mysqli_stmt_init", "mysqli_stmt_insert_id", "mysqli_stmt_more_results", "mysqli_stmt_next_result", "mysqli_stmt_num_rows", "mysqli_stmt_param_count", "mysqli_stmt_prepare", "mysqli_stmt_reset", "mysqli_stmt_result_metadata", "mysqli_stmt_send_long_data", "mysqli_stmt_store_result", "mysqli_stmt_sqlstate", "mysqli_sqlstate", "mysqli_ssl_set", "mysqli_stat", "mysqli_store_result", "mysqli_thread_id", "mysqli_thread_safe", "mysqli_use_result", "mysqli_warning_count", "mysqli_refresh"],
         classes: &["mysqli_sql_exception", "mysqli_driver", "mysqli", "mysqli_warning", "mysqli_result", "mysqli_stmt"],
@@ -287,7 +300,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "curl",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["curl_close", "curl_copy_handle", "curl_errno", "curl_error", "curl_escape", "curl_unescape", "curl_multi_setopt", "curl_exec", "curl_file_create", "curl_getinfo", "curl_init", "curl_upkeep", "curl_multi_add_handle", "curl_multi_close", "curl_multi_errno", "curl_multi_exec", "curl_multi_getcontent", "curl_multi_info_read", "curl_multi_init", "curl_multi_remove_handle", "curl_multi_select", "curl_multi_strerror", "curl_pause", "curl_reset", "curl_setopt_array", "curl_setopt", "curl_share_close", "curl_share_errno", "curl_share_init", "curl_share_setopt", "curl_share_strerror", "curl_strerror", "curl_version"],
         classes: &["CurlHandle", "CurlMultiHandle", "CurlShareHandle", "CURLFile", "CURLStringFile"],
@@ -337,7 +350,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "gd",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["gd_info", "imageloadfont", "imagesetstyle", "imagecreatetruecolor", "imageistruecolor", "imagetruecolortopalette", "imagepalettetotruecolor", "imagecolormatch", "imagesetthickness", "imagefilledellipse", "imagefilledarc", "imagealphablending", "imagesavealpha", "imagelayereffect", "imagecolorallocatealpha", "imagecolorresolvealpha", "imagecolorclosestalpha", "imagecolorexactalpha", "imagecopyresampled", "imagerotate", "imagesettile", "imagesetbrush", "imagecreate", "imagetypes", "imagecreatefromstring", "imagecreatefromgif", "imagecreatefromjpeg", "imagecreatefrompng", "imagecreatefromwebp", "imagecreatefromxbm", "imagecreatefromwbmp", "imagecreatefromgd", "imagecreatefromgd2", "imagecreatefromgd2part", "imagecreatefrombmp", "imagecreatefromtga", "imagexbm", "imagegif", "imagepng", "imagewebp", "imagejpeg", "imagewbmp", "imagegd", "imagegd2", "imagebmp", "imagedestroy", "imagecolorallocate", "imagepalettecopy", "imagecolorat", "imagecolorclosest", "imagecolorclosesthwb", "imagecolordeallocate", "imagecolorresolve", "imagecolorexact", "imagecolorset", "imagecolorsforindex", "imagegammacorrect", "imagesetpixel", "imageline", "imagedashedline", "imagerectangle", "imagefilledrectangle", "imagearc", "imageellipse", "imagefilltoborder", "imagefill", "imagecolorstotal", "imagecolortransparent", "imageinterlace", "imagepolygon", "imageopenpolygon", "imagefilledpolygon", "imagefontwidth", "imagefontheight", "imagechar", "imagecharup", "imagestring", "imagestringup", "imagecopy", "imagecopymerge", "imagecopymergegray", "imagecopyresized", "imagesx", "imagesy", "imagesetclip", "imagegetclip", "imageftbbox", "imagefttext", "imagettfbbox", "imagettftext", "imagefilter", "imageconvolution", "imageflip", "imageantialias", "imagecrop", "imagecropauto", "imagescale", "imageaffine", "imageaffinematrixget", "imageaffinematrixconcat", "imagegetinterpolation", "imagesetinterpolation", "imageresolution"],
         classes: &["GdImage", "GdFont"],
@@ -362,7 +375,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "exif",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("standard", "Required"), ("mbstring", "Optional")],
         functions: &["exif_tagname", "exif_read_data", "exif_thumbnail", "exif_imagetype"],
         classes: &[],
@@ -399,7 +412,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "fileinfo",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["finfo_open", "finfo_close", "finfo_set_flags", "finfo_file", "finfo_buffer", "mime_content_type"],
         classes: &["finfo"],
@@ -412,7 +425,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "session",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("spl", "Optional")],
         functions: &["session_name", "session_module_name", "session_save_path", "session_id", "session_create_id", "session_regenerate_id", "session_decode", "session_encode", "session_destroy", "session_unset", "session_gc", "session_get_cookie_params", "session_write_close", "session_abort", "session_reset", "session_status", "session_register_shutdown", "session_commit", "session_set_save_handler", "session_cache_limiter", "session_cache_expire", "session_set_cookie_params", "session_start"],
         classes: &["SessionHandlerInterface", "SessionIdInterface", "SessionUpdateTimestampHandlerInterface", "SessionHandler"],
@@ -427,7 +440,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "PDO",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("spl", "Required")],
         functions: &["pdo_drivers"],
         classes: &["PDOException", "PDO", "PDOStatement", "PDORow"],
@@ -440,7 +453,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "pdo_sqlite",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("pdo", "Required")],
         functions: &[],
         classes: &["Pdo\\Sqlite"],
@@ -452,7 +465,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "pdo_mysql",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("pdo", "Required"), ("mysqlnd", "Required")],
         functions: &[],
         classes: &["Pdo\\Mysql"],
@@ -460,13 +473,13 @@ pub static MODULES: &[ModuleSpec] = &[
         info: &[
             "",
             "PDO Driver for MySQL => enabled",
-            "Client API version => mysqlnd 8.4.27",
+            "Client API version => mysqlnd {const:PHP_VERSION}",
             "{ini}",
         ],
     },
     ModuleSpec {
         name: "sockets",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["socket_select", "socket_create_listen", "socket_accept", "socket_set_nonblock", "socket_set_block", "socket_listen", "socket_close", "socket_write", "socket_read", "socket_getsockname", "socket_getpeername", "socket_create", "socket_connect", "socket_strerror", "socket_bind", "socket_recv", "socket_send", "socket_recvfrom", "socket_sendto", "socket_get_option", "socket_getopt", "socket_set_option", "socket_setopt", "socket_create_pair", "socket_shutdown", "socket_atmark", "socket_last_error", "socket_clear_error", "socket_import_stream", "socket_export_stream", "socket_sendmsg", "socket_recvmsg", "socket_cmsg_space", "socket_addrinfo_lookup", "socket_addrinfo_connect", "socket_addrinfo_bind", "socket_addrinfo_explain"],
         classes: &["Socket", "AddressInfo"],
@@ -478,7 +491,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "openssl",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["openssl_x509_export_to_file", "openssl_x509_export", "openssl_x509_fingerprint", "openssl_x509_check_private_key", "openssl_x509_verify", "openssl_x509_parse", "openssl_x509_checkpurpose", "openssl_x509_read", "openssl_x509_free", "openssl_pkcs12_export_to_file", "openssl_pkcs12_export", "openssl_pkcs12_read", "openssl_csr_export_to_file", "openssl_csr_export", "openssl_csr_sign", "openssl_csr_new", "openssl_csr_get_subject", "openssl_csr_get_public_key", "openssl_pkey_new", "openssl_pkey_export_to_file", "openssl_pkey_export", "openssl_pkey_get_public", "openssl_get_publickey", "openssl_pkey_free", "openssl_free_key", "openssl_pkey_get_private", "openssl_get_privatekey", "openssl_pkey_get_details", "openssl_pbkdf2", "openssl_pkcs7_verify", "openssl_pkcs7_encrypt", "openssl_pkcs7_sign", "openssl_pkcs7_decrypt", "openssl_pkcs7_read", "openssl_cms_verify", "openssl_cms_encrypt", "openssl_cms_sign", "openssl_cms_decrypt", "openssl_cms_read", "openssl_private_encrypt", "openssl_private_decrypt", "openssl_public_encrypt", "openssl_public_decrypt", "openssl_error_string", "openssl_sign", "openssl_verify", "openssl_seal", "openssl_open", "openssl_get_md_methods", "openssl_get_cipher_methods", "openssl_get_curve_names", "openssl_digest", "openssl_encrypt", "openssl_decrypt", "openssl_cipher_iv_length", "openssl_cipher_key_length", "openssl_dh_compute_key", "openssl_pkey_derive", "openssl_random_pseudo_bytes", "openssl_spki_new", "openssl_spki_verify", "openssl_spki_export", "openssl_spki_export_challenge", "openssl_get_cert_locations"],
         classes: &["OpenSSLCertificate", "OpenSSLCertificateSigningRequest", "OpenSSLAsymmetricKey"],
@@ -493,7 +506,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "intl",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[],
         functions: &["intlcal_create_instance", "intlcal_get_keyword_values_for_locale", "intlcal_get_now", "intlcal_get_available_locales", "intlcal_get", "intlcal_get_time", "intlcal_set_time", "intlcal_add", "intlcal_set_time_zone", "intlcal_after", "intlcal_before", "intlcal_set", "intlcal_roll", "intlcal_clear", "intlcal_field_difference", "intlcal_get_actual_maximum", "intlcal_get_actual_minimum", "intlcal_get_day_of_week_type", "intlcal_get_first_day_of_week", "intlcal_get_least_maximum", "intlcal_get_greatest_minimum", "intlcal_get_locale", "intlcal_get_maximum", "intlcal_get_minimal_days_in_first_week", "intlcal_set_minimal_days_in_first_week", "intlcal_get_minimum", "intlcal_get_time_zone", "intlcal_get_type", "intlcal_get_weekend_transition", "intlcal_in_daylight_time", "intlcal_is_lenient", "intlcal_is_set", "intlcal_is_equivalent_to", "intlcal_is_weekend", "intlcal_set_first_day_of_week", "intlcal_set_lenient", "intlcal_get_repeated_wall_time_option", "intlcal_equals", "intlcal_get_skipped_wall_time_option", "intlcal_set_repeated_wall_time_option", "intlcal_set_skipped_wall_time_option", "intlcal_from_date_time", "intlcal_to_date_time", "intlcal_get_error_code", "intlcal_get_error_message", "intlgregcal_create_instance", "intlgregcal_set_gregorian_change", "intlgregcal_get_gregorian_change", "intlgregcal_is_leap_year", "collator_create", "collator_compare", "collator_get_attribute", "collator_set_attribute", "collator_get_strength", "collator_set_strength", "collator_sort", "collator_sort_with_sort_keys", "collator_asort", "collator_get_locale", "collator_get_error_code", "collator_get_error_message", "collator_get_sort_key", "intl_get_error_code", "intl_get_error_message", "intl_is_failure", "intl_error_name", "datefmt_create", "datefmt_get_datetype", "datefmt_get_timetype", "datefmt_get_calendar", "datefmt_set_calendar", "datefmt_get_timezone_id", "datefmt_get_calendar_object", "datefmt_get_timezone", "datefmt_set_timezone", "datefmt_set_pattern", "datefmt_get_pattern", "datefmt_get_locale", "datefmt_set_lenient", "datefmt_is_lenient", "datefmt_format", "datefmt_format_object", "datefmt_parse", "datefmt_localtime", "datefmt_get_error_code", "datefmt_get_error_message", "numfmt_create", "numfmt_format", "numfmt_parse", "numfmt_format_currency", "numfmt_parse_currency", "numfmt_set_attribute", "numfmt_get_attribute", "numfmt_set_text_attribute", "numfmt_get_text_attribute", "numfmt_set_symbol", "numfmt_get_symbol", "numfmt_set_pattern", "numfmt_get_pattern", "numfmt_get_locale", "numfmt_get_error_code", "numfmt_get_error_message", "grapheme_strlen", "grapheme_strpos", "grapheme_stripos", "grapheme_strrpos", "grapheme_strripos", "grapheme_substr", "grapheme_strstr", "grapheme_stristr", "grapheme_str_split", "grapheme_extract", "idn_to_ascii", "idn_to_utf8", "locale_get_default", "locale_set_default", "locale_get_primary_language", "locale_get_script", "locale_get_region", "locale_get_keywords", "locale_get_display_script", "locale_get_display_region", "locale_get_display_name", "locale_get_display_language", "locale_get_display_variant", "locale_compose", "locale_parse", "locale_get_all_variants", "locale_filter_matches", "locale_canonicalize", "locale_lookup", "locale_accept_from_http", "msgfmt_create", "msgfmt_format", "msgfmt_format_message", "msgfmt_parse", "msgfmt_parse_message", "msgfmt_set_pattern", "msgfmt_get_pattern", "msgfmt_get_locale", "msgfmt_get_error_code", "msgfmt_get_error_message", "normalizer_normalize", "normalizer_is_normalized", "normalizer_get_raw_decomposition", "resourcebundle_create", "resourcebundle_get", "resourcebundle_count", "resourcebundle_locales", "resourcebundle_get_error_code", "resourcebundle_get_error_message", "intltz_count_equivalent_ids", "intltz_create_default", "intltz_create_enumeration", "intltz_create_time_zone", "intltz_create_time_zone_id_enumeration", "intltz_from_date_time_zone", "intltz_get_canonical_id", "intltz_get_display_name", "intltz_get_dst_savings", "intltz_get_equivalent_id", "intltz_get_error_code", "intltz_get_error_message", "intltz_get_gmt", "intltz_get_id", "intltz_get_offset", "intltz_get_raw_offset", "intltz_get_region", "intltz_get_tz_data_version", "intltz_get_unknown", "intltz_get_windows_id", "intltz_get_id_for_windows_id", "intltz_has_same_rules", "intltz_to_date_time_zone", "intltz_use_daylight_time", "intltz_get_iana_id", "transliterator_create", "transliterator_create_from_rules", "transliterator_list_ids", "transliterator_create_inverse", "transliterator_transliterate", "transliterator_get_error_code", "transliterator_get_error_message"],
         classes: &["Collator", "NumberFormatter", "Normalizer", "Locale", "MessageFormatter", "IntlDateFormatter", "IntlDatePatternGenerator", "ResourceBundle", "Transliterator", "IntlTimeZone", "IntlCalendar", "IntlGregorianCalendar", "Spoofchecker", "IntlException", "IntlIterator", "IntlBreakIterator", "IntlRuleBasedBreakIterator", "IntlCodePointBreakIterator", "IntlPartsIterator", "UConverter", "IntlChar"],
@@ -510,7 +523,7 @@ pub static MODULES: &[ModuleSpec] = &[
     },
     ModuleSpec {
         name: "pdo_pgsql",
-        version: Some("8.4.27"),
+        version: Some(crate::PHP_VERSION),
         deps: &[("pdo", "Required")],
         functions: &[],
         classes: &["Pdo\\Pgsql"],

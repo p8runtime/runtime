@@ -812,6 +812,20 @@ pub struct Function {
     pub meta: Meta,
     /// The partial applications this code makes (`Rare::Partial`).
     pub partials: Vec<PartialSite>,
+    /// For a file's main code: what compiling the file raised that isn't
+    /// fatal (deprecations, warnings), in order. PHP 8.5 delays these until
+    /// the file is compiled, then raises them (user error handler included)
+    /// before it runs; the loader does the same.
+    pub compile_diags: Vec<CompileDiag>,
+}
+
+/// A non-fatal error raised while compiling: its PHP error level
+/// (E_DEPRECATED, E_WARNING, ...), message and line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompileDiag {
+    pub level: i64,
+    pub message: Text,
+    pub line: u32,
 }
 
 /// A call's `vars` when it has no `Function::arg_vars` entry.

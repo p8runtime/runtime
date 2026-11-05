@@ -70,7 +70,33 @@ impl Context<'_> {
                 entry.insert(key("file"), Value::Str(PhpStr::from(&*code.file)));
                 entry.insert(key("line"), Value::Int(i64::from(line)));
             }
+            let at = caller.func.code.code.get((caller.pc as usize).saturating_sub(1));
             let code = &frame.func.code;
+            // A file's or eval()'s code (its main function) shows as the
+            // include or eval that ran it (zend_fetch_debug_backtrace's
+            // pseudo functions): `include('/path/f.php')`, its args before
+            // its function; `eval()`, no args.
+            if code.name.as_bytes() == b"{main}" {
+                let (function, path) = match at {
+                    Some(p8_bytecode::Instr::Eval { .. }) => ("eval", false),
+                    Some(p8_bytecode::Instr::Include { kind, .. }) => (
+                        match kind {
+                            p8_bytecode::IncludeKind::Include => "include",
+                            p8_bytecode::IncludeKind::IncludeOnce => "include_once",
+                            p8_bytecode::IncludeKind::Require => "require",
+                            p8_bytecode::IncludeKind::RequireOnce => "require_once",
+                        },
+                        true,
+                    ),
+                    _ => ("{main}", false),
+                };
+                if path {
+                    entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(PhpStr::from(&*code.file))]))));
+                }
+                entry.insert(key("function"), Value::str(function));
+                let _ = trace.push(Value::Array(Rc::new(entry)));
+                continue;
+            }
             entry.insert(key("function"), Value::Str(PhpStr::from(code.name.as_bytes())));
             // A closure made in a class shows that class, as a method does.
             if code.class.is_some() || (frame.scope.is_some() && code.name.as_bytes().starts_with(b"{closure")) {
@@ -138,7 +164,39 @@ impl Context<'_> {
 
     /// The object an engine error (`Throw::Error`) becomes.
     pub(crate) fn exception(&mut self, regs: &dyn Fn(usize) -> Value, t: Throw) -> Throw {
-        let Throw::Error { class, message, file, line, props } = t else { return t };
+        let Throw::Error { class, message, file, line, props } = t else {
+            // A fatal error, where it was raised: its trace, for showing with
+            // it (fatal_error_backtraces; zend_error_impl fetches it then).
+            if matches!(t, Throw::Fatal { .. }) && self.fatal_trace.borrow().is_none() && self.fatal_error_backtraces() {
+                let trace = p8_runtime::trace::trace_string(&Value::Array(Rc::new(self.raised_trace(regs))));
+                *self.fatal_trace.borrow_mut() = Some(trace);
+            }
+            return t;
+        };
+        self.exception_object(regs, class, message, file, line, props)
+    }
+
+    /// Whether fatal errors carry their stack trace (the
+    /// fatal_error_backtraces ini, on by default since 8.5).
+    fn fatal_error_backtraces(&self) -> bool {
+        use p8_runtime::ext::Ctx;
+        Ctx::ini_get(self, b"fatal_error_backtraces").is_none_or(|v| crate::ini_on(&v))
+    }
+
+    /// The trace of where an error is being raised: the calls that led
+    /// here, under the builtin it was raised in (`failed_call`), if any.
+    fn raised_trace(&mut self, regs: &dyn Fn(usize) -> Value) -> PhpArray {
+        let trace = self.trace(regs);
+        let Some(top) = self.failed_call.take() else { return trace };
+        let mut with = PhpArray::from_list(vec![Value::Array(Rc::new(top))]);
+        for (_, v) in trace.iter() {
+            let _ = with.push(v.clone());
+        }
+        with
+    }
+
+    /// The object an engine error becomes, with the trace of where it was raised.
+    fn exception_object(&mut self, regs: &dyn Fn(usize) -> Value, class: &'static str, message: String, file: Rc<str>, line: u32, props: Vec<(&'static str, Value)>) -> Throw {
         let found = self.sym_of(class.as_bytes()).and_then(|key| self.classes.get(&key).cloned().or_else(|| self.builtin_on_demand(key)));
         let class = match found {
             Some(c) => c,
@@ -149,14 +207,7 @@ impl Context<'_> {
         class.write(&object, b"message", root, Value::Str(PhpStr::from(message)));
         class.write(&object, b"file", root, Value::Str(PhpStr::from(&*file)));
         class.write(&object, b"line", root, Value::Int(i64::from(line)));
-        let mut trace = self.trace(regs);
-        if let Some(top) = self.failed_call.take() {
-            let mut with = PhpArray::from_list(vec![Value::Array(Rc::new(top))]);
-            for (_, v) in trace.iter() {
-                let _ = with.push(v.clone());
-            }
-            trace = with;
-        }
+        let trace = self.raised_trace(regs);
         class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
         for (name, value) in props {
             class.write(&object, name.as_bytes(), &class.lower, value);

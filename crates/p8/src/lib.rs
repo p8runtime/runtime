@@ -35,6 +35,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod file_cache;
+mod opcache;
+pub use opcache::OpcacheSettings;
 mod request;
 
 pub use p8_interp::{Host, InterruptHandle};
@@ -85,7 +87,22 @@ pub struct Platform {
 
 impl Platform {
     pub fn new(extensions: &[Extension]) -> Platform {
-        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, compiled: AtomicUsize::new(0), partials: AtomicUsize::new(0) }) }
+        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, compiled: AtomicUsize::new(0), opcache: None, partials: AtomicUsize::new(0) }) }
+    }
+
+    /// Report the cache this Platform keeps (keep_compiled, file_cache) as
+    /// Zend OPcache, started with `settings`: the `opcache_*` functions act
+    /// on it, and while OPcache runs it caches by OPcache's rules (see the
+    /// `opcache` module).
+    pub fn opcache(self, settings: OpcacheSettings) -> Platform {
+        let compiler = Arc::try_unwrap(self.compiler).unwrap_or_else(|_| panic!("opcache() is set before the Platform is shared"));
+        Platform { compiler: Arc::new(Compiler { opcache: Some(opcache::Opcache::new(settings)), ..compiler }) }
+    }
+
+    /// An ini directive's built-in default (for a host reading its own
+    /// settings over the defaults).
+    pub fn ini_default(&self, name: &str) -> Option<String> {
+        self.compiler.registry.ini_default(name.as_bytes()).flatten().map(|v| String::from_utf8_lossy(v).into_owned())
     }
 
     /// Keep every file compiled (the script and what it includes), for
@@ -105,14 +122,25 @@ impl Platform {
     /// p8's is compiled over. Without an executable to tell builds apart
     /// by (WASI), nothing is kept.
     pub fn file_cache(self, dir: impl Into<PathBuf>) -> Platform {
-        let files = file_cache::FileCache::new(dir.into(), self.compiler.registry.modules()).map(Arc::new);
+        self.file_cache_with(dir.into(), false)
+    }
+
+    /// A file cache in `dir` that is only read (`opcache.file_cache_read_only`):
+    /// entries made ahead of time are used, nothing is written or removed,
+    /// a file without a sound entry is compiled each time.
+    pub fn read_only_file_cache(self, dir: impl Into<PathBuf>) -> Platform {
+        self.file_cache_with(dir.into(), true)
+    }
+
+    fn file_cache_with(self, dir: PathBuf, read_only: bool) -> Platform {
+        let files = file_cache::FileCache::new(dir, self.compiler.registry.modules(), read_only).map(Arc::new);
         let cache = self.compiler.cache.as_ref().map(|_| Mutex::new(HashMap::new()));
         self.with(cache, files)
     }
 
-    fn with(self, cache: Option<Mutex<Kept>>, files: Option<Arc<file_cache::FileCache>>) -> Platform {
-        let registry = Arc::clone(&self.compiler.registry);
-        Platform { compiler: Arc::new(Compiler { registry, cache, files, compiled: AtomicUsize::new(0), partials: AtomicUsize::new(0) }) }
+    fn with(self, cache: Option<Mutex<HashMap<String, Kept>>>, files: Option<Arc<file_cache::FileCache>>) -> Platform {
+        let compiler = Arc::try_unwrap(self.compiler).unwrap_or_else(|_| panic!("a Platform is configured before it is shared"));
+        Platform { compiler: Arc::new(Compiler { cache, files, compiled: AtomicUsize::new(0), partials: AtomicUsize::new(0), ..compiler }) }
     }
 
     /// How many files this Platform has compiled from their source (not
@@ -154,30 +182,87 @@ impl Platform {
 /// What compiles a script and the files it includes.
 struct Compiler {
     registry: Arc<Registry>,
-    cache: Option<Mutex<Kept>>,
+    cache: Option<Mutex<HashMap<String, Kept>>>,
     /// Where compiled files are kept on disk, if anywhere.
     files: Option<Arc<file_cache::FileCache>>,
     /// Files compiled from source.
     compiled: AtomicUsize,
+    /// Zend OPcache over the cache, when the host reports one.
+    opcache: Option<opcache::Opcache>,
     /// Partial applications' closures compiled.
     partials: AtomicUsize,
 }
 
-/// The compiled files by path, each with the source it was compiled from
-/// (a file is used again only while its source is the same).
-type Kept = HashMap<String, (Vec<u8>, Arc<p8_bytecode::Program>)>;
+/// A compiled file kept by its path: the source it was compiled from and
+/// what OPcache knows of it.
+struct Kept {
+    source: Vec<u8>,
+    program: Arc<p8_bytecode::Program>,
+    stats: opcache::ScriptStats,
+}
 
 impl Compiler {
     fn file(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
         let Some(cache) = &self.cache else { return self.load(source, file) };
-        if let Some((kept, program)) = cache.lock().expect("code cache").get(file)
-            && kept.as_slice() == source
+        // While OPcache runs, a file it caches is checked by its rules (so,
+        // as in PHP, a changed file can run as it was until revalidated);
+        // anything else p8 keeps is used again only while its source is
+        // the same, which no script can tell from compiling it again.
+        let opcache = self.opcache.as_ref().filter(|o| o.active());
         {
-            return Ok(Arc::clone(program));
+            let mut kept = cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(entry) = kept.get_mut(file) {
+                let valid = match opcache {
+                    Some(o) if entry.stats.opcache => o.still_valid(file, &mut entry.stats),
+                    // One OPcache would not cache: a miss each time it is
+                    // loaded, while it still would not (else it is
+                    // compiled again, to be cached now).
+                    Some(o) => entry.source.as_slice() == source
+                        && match o.refusal(file, source.len()) {
+                            Some(refusal) => {
+                                o.miss(refusal == opcache::Refusal::Blacklisted);
+                                true
+                            }
+                            None => false,
+                        },
+                    None => entry.source.as_slice() == source,
+                };
+                if valid {
+                    if let Some(o) = opcache.filter(|_| entry.stats.opcache) {
+                        o.hit(&mut entry.stats);
+                    }
+                    return Ok(Arc::clone(&entry.program));
+                }
+                kept.remove(file);
+            }
         }
         let program = self.load(source, file)?;
-        cache.lock().expect("code cache").insert(file.to_string(), (source.to_vec(), Arc::clone(&program)));
+        let stats = match opcache {
+            Some(o) => match o.refusal(file, source.len()) {
+                Some(refusal) => {
+                    o.miss(refusal == opcache::Refusal::Blacklisted);
+                    opcache::ScriptStats::default()
+                }
+                None => {
+                    o.miss(false);
+                    o.new_stats(file)
+                }
+            },
+            None => opcache::ScriptStats::default(),
+        };
+        cache.lock().unwrap_or_else(|e| e.into_inner()).insert(file.to_string(), Kept { source: source.to_vec(), program: Arc::clone(&program), stats });
         Ok(program)
+    }
+
+    /// A request starts: OPcache's pending restart (opcache_reset())
+    /// empties the cache now.
+    fn begin_request(&self) {
+        if let Some(o) = &self.opcache
+            && o.begin_request()
+            && let Some(cache) = &self.cache
+        {
+            cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
     }
 
     /// A file's program: from the file cache, else compiled (and kept there).
@@ -206,6 +291,11 @@ impl p8_interp::Loader for Load {
             Ok(program) => Ok(program),
             Err(e) => Err(p8_interp::LoadError { parse: e.kind == ErrorKind::Parse, message: e.message, line: e.line }),
         }
+    }
+
+    fn code_cache(&self) -> Option<Arc<dyn p8_runtime::opcache::CodeCache>> {
+        self.0.opcache.as_ref()?;
+        Some(Arc::clone(&self.0) as Arc<dyn p8_runtime::opcache::CodeCache>)
     }
 
     fn load_eval(&self, code: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, p8_interp::LoadError> {
@@ -308,6 +398,7 @@ impl Isolate {
     /// Start a request whose output goes to `host`. The context borrows the
     /// isolate until it is dropped, which ends the request.
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
+        self.compiler.begin_request();
         let mut inner = self.inner.new_context(host);
         inner.set_loader(Rc::new(Load(Arc::clone(&self.compiler))));
         Context { inner, warnings: Vec::new(), uploads: Vec::new() }

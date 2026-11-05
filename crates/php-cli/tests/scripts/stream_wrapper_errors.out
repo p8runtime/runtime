@@ -9,7 +9,7 @@ bool(false)
 Warning: stream_wrapper_register(): Protocol php:// is already defined. in %s on line 15
 bool(false)
 bool(true)
-TypeError: stream_wrapper_register(): Argument #2 ($class) must be a valid class name, NoSuchClass given
+TypeError: stream_wrapper_register(): Argument #2 ($class) must be a valid class name, "NoSuchClass" given
 bool(true)
 bool(true)
 -- unregistered
@@ -204,13 +204,13 @@ Warning: include(): remote:// wrapper is disabled in the server configuration by
 
 Warning: include(remote://inc.php): Failed to open stream: no suitable wrapper could be found in %s on line 124
 
-Warning: include(): Failed opening 'remote://inc.php' for inclusion (include_path='.:/usr/local/lib/php') in %s on line 124
+Warning: include(): Failed opening 'remote://inc.php' for inclusion (include_path='.:') in %s on line 124
 bool(false)
 
 Warning: require(): remote:// wrapper is disabled in the server configuration by allow_url_include=0 in %s on line 126
 
 Warning: require(remote://req.php): Failed to open stream: no suitable wrapper could be found in %s on line 126
-Error: Failed opening required 'remote://req.php' (include_path='.:/usr/local/lib/php')
+Error: Failed opening required 'remote://req.php' (include_path='.:')
 
 Warning: file_put_contents(): Exclusive locks may only be set for regular files in %s on line 130
 bool(false)

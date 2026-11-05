@@ -77,6 +77,10 @@ array(4) {
   [3]=>
   string(1) "y"
 }
+
+Deprecated: Method SplObjectStorage::attach() is deprecated since 8.5, use method SplObjectStorage::offsetSet() instead in %s on line 25
+
+Deprecated: Method SplObjectStorage::contains() is deprecated since 8.5, use method SplObjectStorage::offsetExists() instead in %s on line 25
 int(2)
 bool(true)
 string(3) "two"
@@ -103,6 +107,8 @@ object(SplObjectStorage)#7 (1) {
 }
 0 one
 1 two
+
+Deprecated: Method SplObjectStorage::detach() is deprecated since 8.5, use method SplObjectStorage::offsetUnset() instead in %s on line 28
 int(1)
 int(3)
 int(2)

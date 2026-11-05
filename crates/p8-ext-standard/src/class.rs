@@ -68,7 +68,7 @@ fn get_class_methods(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
     let Some(class) = class else {
         return Err(ctx.throw(
             "TypeError",
-            format!("get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given", v.type_name()),
+            format!("get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given", class_name_given(&v)),
         ));
     };
     let scope = ctx.scope();
@@ -99,11 +99,29 @@ fn class_alias(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         ctx.warn(&format!("Class \"{}\" not found", String::from_utf8_lossy(original.as_bytes())));
         return Ok(Value::Bool(false));
     };
+    // zend_register_class_alias_ex: zend_assert_valid_class_name(lcname,
+    // "a class alias"), the name lowercased (and without a leading "\").
+    let lower = alias.as_bytes().strip_prefix(b"\\").unwrap_or(alias.as_bytes()).to_ascii_lowercase();
+    if p8_runtime::symbol::reserved_class_name(&lower) {
+        return Err(ctx.fatal(format!("Cannot use \"{}\" as a class alias as it is reserved", String::from_utf8_lossy(&lower))));
+    }
+    if let Some((word, since)) = p8_runtime::symbol::deprecated_name(&lower) {
+        ctx.deprecated(&format!("Using \"{word}\" as a class alias is deprecated since {since}"));
+    }
     if !ctx.class_alias(class, alias.as_bytes()) {
         ctx.warn(&format!("Cannot declare class {}, because the name is already in use", String::from_utf8_lossy(alias.as_bytes())));
         return Ok(Value::Bool(false));
     }
     Ok(Value::Bool(true))
+}
+
+/// How a class-name parameter's error names what it was given
+/// (zend_wrong_parameter_type_error, 8.6): a string quoted, else its type.
+pub(crate) fn class_name_given(v: &Value) -> String {
+    match v {
+        Value::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
+        v => v.type_name().to_string(),
+    }
 }
 
 /// constant(string $name): a constant, or a class constant ("C::NAME").
@@ -135,7 +153,12 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         };
     }
     match ctx.constant(text) {
-        Some(v) => Ok(v),
+        Some(v) => {
+            if let Some(message) = ctx.constant_deprecation(text) {
+                ctx.deprecated(message);
+            }
+            Ok(v)
+        }
         None => Err(ctx.throw("Error", format!("Undefined constant \"{}\"", String::from_utf8_lossy(text)))),
     }
 }
@@ -304,7 +327,7 @@ fn get_parent_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
             None => {
                 return Err(ctx.throw(
                     "TypeError",
-                    format!("get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given", v.type_name()),
+                    format!("get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given", class_name_given(&v)),
                 ));
             }
         },
@@ -396,7 +419,7 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
 fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = str_arg(args, 0);
     let Some(class) = ctx.class_load(name.as_bytes())? else {
-        return Err(ctx.throw("TypeError", format!("get_class_vars(): Argument #1 ($class) must be a valid class name, {} given", String::from_utf8_lossy(name.as_bytes()))));
+        return Err(ctx.throw("TypeError", format!("get_class_vars(): Argument #1 ($class) must be a valid class name, {} given", class_name_given(&Value::Str(name)))));
     };
     let defaults = ctx.class_defaults(&class)?;
     let scope = ctx.scope();

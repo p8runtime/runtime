@@ -4,7 +4,8 @@
 //! Reference: $PHP_SRC_PATH/ext/standard/math.c
 
 use crate::arg;
-use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
+use p8_runtime::object::CLASS_ENUM;
 use p8_runtime::ops::{self, BinOp};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
@@ -75,10 +76,46 @@ const FLOOR: i64 = 6;
 const TOWARD_ZERO: i64 = 7;
 const AWAY_FROM_ZERO: i64 = 8;
 
-/// round($num, $precision = 0, $mode = PHP_ROUND_HALF_UP)
+/// enum RoundingMode (PHP 8.4, basic_functions.stub.php), a pure enum:
+/// round()'s `$mode`, each case one of the PHP_ROUND_* modes
+/// (ROUNDING_MODES, in case order).
+pub const CLASSES: &[ClassSpec] = &[ClassSpec {
+    name: "RoundingMode",
+    parent: None,
+    interfaces: &[],
+    // Not final: zend_register_internal_enum sets only ZEND_ACC_ENUM.
+    flags: CLASS_ENUM,
+    properties: &[],
+    methods: &[],
+    constants: &[
+        ("HalfAwayFromZero", Constant::Null),
+        ("HalfTowardsZero", Constant::Null),
+        ("HalfEven", Constant::Null),
+        ("HalfOdd", Constant::Null),
+        ("TowardsZero", Constant::Null),
+        ("AwayFromZero", Constant::Null),
+        ("NegativeInfinity", Constant::Null),
+        ("PositiveInfinity", Constant::Null),
+    ],
+    debug_info: None,
+}];
+
+/// php_math_round_mode_from_enum: RoundingMode's cases, in order, as modes.
+const ROUNDING_MODES: [i64; 8] = [HALF_UP, HALF_DOWN, HALF_EVEN, HALF_ODD, TOWARD_ZERO, AWAY_FROM_ZERO, FLOOR, CEILING];
+
+/// round($num, $precision = 0, int|RoundingMode $mode = RoundingMode::HalfAwayFromZero)
 fn round(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let places = if args.len() > 1 { arg(args, 1).to_int().clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32 } else { 0 };
-    let mode = if args.len() > 2 { arg(args, 2).to_int() } else { HALF_UP };
+    let mode = match args.get(2).map(Value::deref) {
+        None => HALF_UP,
+        // A RoundingMode case (the argument check let no other object in).
+        Some(Value::Object(o)) => {
+            let name = o.class.read(&o, b"name", &o.class.lower);
+            let case = CLASSES[0].constants.iter().position(|(n, _)| name.to_php_string().is_some_and(|s| s.as_bytes() == n.as_bytes()));
+            case.map_or(HALF_UP, |i| ROUNDING_MODES[i])
+        }
+        Some(v) => v.to_int(),
+    };
     if !(HALF_UP..=AWAY_FROM_ZERO).contains(&mode) {
         return Err(ctx.throw("ValueError", "round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)".into()));
     }
