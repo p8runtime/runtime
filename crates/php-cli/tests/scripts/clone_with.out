@@ -1,0 +1,201 @@
+construct: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+parens: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+trailing comma: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+with: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(5)
+}
+with method: object(Point) (2) {
+  ["x"]=>
+  int(9)
+  ["y"]=>
+  int(2)
+}
+original: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+int keys: object(stdClass) (3) {
+  ["0"]=>
+  string(1) "a"
+  ["1"]=>
+  string(1) "b"
+  ["k"]=>
+  string(1) "v"
+}
+empty with: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+with from a variable: object(Point) (2) {
+  ["x"]=>
+  int(7)
+  ["y"]=>
+  int(2)
+}
+named: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(3)
+}
+spread: object(Point) (2) {
+  ["x"]=>
+  int(4)
+  ["y"]=>
+  int(2)
+}
+first-class callable: object(Point) (2) {
+  ["x"]=>
+  int(8)
+  ["y"]=>
+  int(2)
+}
+string callable: bool(true)
+call_user_func: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(11)
+}
+clone($p)->x clones ($p)->x: TypeError: clone(): Argument #1 ($object) must be of type object, int given
+(clone($p))->x: int(2)
+o a order: object(Point) (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(0)
+}
+own scope: object(P) (4) {
+  ["a"]=>
+  string(1) "a"
+  ["b":protected]=>
+  string(1) "B"
+  ["c":"P":private]=>
+  string(1) "C"
+  ["d"]=>
+  string(1) "D"
+}
+child scope: object(C) (4) {
+  ["a"]=>
+  string(1) "a"
+  ["b":protected]=>
+  string(2) "B2"
+  ["c":"P":private]=>
+  string(1) "c"
+  ["d"]=>
+  string(1) "d"
+}
+private(set) from child: Error: Cannot modify private(set) property P::$d from scope C
+protected from outside: Error: Cannot access protected property P::$b
+private(set) from outside: Error: Cannot modify private(set) property P::$d from global scope
+set(abc) hook: object(Hooked) (1) {
+  ["name"]=>
+  string(3) "ABC"
+}
+__set(p) __set(q) __set: object(Magic) (1) {
+  ["data":"Magic":private]=>
+  array(2) {
+    ["p"]=>
+    int(1)
+    ["q"]=>
+    int(2)
+  }
+}
+hook throws: Exception: bad a
+type: TypeError: Cannot assign string to property Typed::$n of type int
+coerced: object(Typed) (1) {
+  ["n"]=>
+  int(42)
+}
+__clone then with: object(WithClone) (2) {
+  ["log"]=>
+  array(1) {
+    [0]=>
+    string(18) "__clone saw v=orig"
+  }
+  ["v"]=>
+  string(9) "from with"
+}
+private __clone: Error: Call to private method PrivateClone::__clone() from global scope
+private __clone, no with: Error: Call to private method PrivateClone::__clone() from global scope
+readonly __clone: object(Money) (2) {
+  ["amount"]=>
+  int(11)
+  ["cur"]=>
+  string(3) "CAD"
+}
+readonly __clone and with: object(Money) (2) {
+  ["amount"]=>
+  int(1)
+  ["cur"]=>
+  string(3) "USD"
+}
+readonly from outside scope: Error: Cannot modify protected(set) readonly property Money::$cur from global scope
+
+Deprecated: Creation of dynamic property Money::$nope is deprecated in %s on line 100
+readonly class with: object(Pair) (2) {
+  ["a"]=>
+  int(3)
+  ["b"]=>
+  int(2)
+}
+readonly after clone-with: Error: Cannot modify readonly property Pair::$b
+readonly twice in __clone: Error: Cannot modify readonly property Twice::$v
+Cannot assign string to property TypeFirst::$v of type int
+type error keeps the write: object(TypeFirst) (1) {
+  ["v"]=>
+  int(5)
+}
+unset in __clone: object(UnsetClone) (1) {
+  ["o"]=>
+  object(stdClass) (1) {
+    ["fresh"]=>
+    bool(true)
+  }
+}
+indirect in __clone: Error: Cannot indirectly modify readonly property Indirect::$list
+hook writes readonly: object(HookSetsReadonly) (2) {
+  ["foo"]=>
+  string(1) "f"
+  ["bar"]=>
+  string(7) "by hook"
+}
+hook used it up: Error: Cannot modify readonly property HookSetsReadonly::$bar
+readonly outside clone: Error: Cannot modify readonly property Money::$amount
+reference: Error: Cannot assign by reference when cloning with updated properties
+reference only the array holds: object(stdClass) (1) {
+  ["x"]=>
+  string(1) "r"
+}
+mangled name: Error: Cannot access property starting with "\0"
+
+Deprecated: Creation of dynamic property Point::$z is deprecated in %s on line 147
+not an object: TypeError: clone(): Argument #1 ($object) must be of type object, int given
+not an array: TypeError: clone(): Argument #2 ($withProperties) must be of type array, int given
+no arguments: ArgumentCountError: clone() expects at least 1 argument, 0 given
+too many: ArgumentCountError: clone() expects at most 2 arguments, 3 given
+uncloneable: Error: Trying to clone an uncloneable object of class Generator
+bool(true)
+clone 2 1

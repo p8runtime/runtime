@@ -91,7 +91,7 @@ pub enum MatchError {
 }
 
 /// A successful match: offsets of each group (0 is the whole match).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Captures {
     slots: Vec<Option<usize>>,
     pub mark: Option<Vec<u8>>,
@@ -157,6 +157,13 @@ impl Regex {
     /// Looks for a match at or after byte `start`.
     pub fn exec(&self, subject: &[u8], start: usize, options: &MatchOptions) -> Result<Option<Captures>, MatchError> {
         exec::exec(&self.prog, subject, start.min(subject.len()), options)
+    }
+
+    /// [`exec`](Regex::exec) into `caps`, reusing its room (a loop over a
+    /// subject's matches allocates nothing per match): whether it matched.
+    /// `caps` holds the match only when it did.
+    pub fn exec_into(&self, subject: &[u8], start: usize, options: &MatchOptions, caps: &mut Captures) -> Result<bool, MatchError> {
+        exec::exec_into(&self.prog, subject, start.min(subject.len()), options, caps)
     }
 }
 

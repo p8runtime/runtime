@@ -31,13 +31,22 @@ pub(crate) const NO_RET: u32 = u32::MAX;
 /// A frame's arguments past its parameters and its run-time variables.
 #[derive(Default)]
 pub(crate) struct Extra {
-    pub(crate) args: Box<[Value]>,
+    /// (A list: an Extra is kept for the next frame that needs one, room
+    /// and all; a new one's list is a kept buffer, given back when the
+    /// Extra goes.)
+    pub(crate) args: Vec<Value>,
     pub(crate) vars: Vars,
     /// A file's code included in a function's scope: where each of its
     /// variables is the including frame's. Their bindings go back there
     /// when it ends: `global $x`, `$x = &$y`, `unset($x)` in the file
     /// rebind the function's variable, as one symbol table in PHP.
     pub(crate) shared: Option<Box<[Origin]>>,
+}
+
+impl Drop for Extra {
+    fn drop(&mut self) {
+        p8_runtime::array::keep_values_buffer(std::mem::take(&mut self.args));
+    }
 }
 
 /// Where an included file's variable lives in the scope that included it.
@@ -159,6 +168,24 @@ pub(crate) struct Frames {
     /// The frame the running `execute` started at: a call from a builtin
     /// back into PHP runs its own `execute` above the frames below.
     pub(crate) floor: usize,
+    /// Extras of finished frames, emptied, for the next frames that need
+    /// one (a variadic call's): no allocation per call. (Boxes: a frame
+    /// holds its Extra boxed, and these are those boxes, moved back.)
+    #[allow(clippy::vec_box)] // the frames' own boxes, kept to be handed back
+    pub(crate) spare: Vec<Box<Extra>>,
+}
+
+/// A finished frame's Extra: what it holds goes now, the box is kept (up
+/// to a few).
+#[inline(never)]
+#[allow(clippy::vec_box)] // see `Frames::spare`
+pub(crate) fn recycle_extra(spare: &mut Vec<Box<Extra>>, mut extra: Box<Extra>) {
+    extra.args.clear();
+    extra.vars.0.clear();
+    extra.shared = None;
+    if spare.len() < 16 {
+        spare.push(extra);
+    }
 }
 
 impl Frames {

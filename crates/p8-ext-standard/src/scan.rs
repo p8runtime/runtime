@@ -670,7 +670,9 @@ fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     let message = match arg(args, 1) {
         Value::Null if args.len() > 2 => arg(args, 2).to_php_string().unwrap_or_else(PhpStr::empty),
-        Value::Null => PhpStr::from("assert(false)"),
+        // Called by value (`$f = 'assert'`, a callable, a pipe): no
+        // source from the compiler, and php_assert throws with no message.
+        Value::Null => PhpStr::empty(),
         Value::Object(o) if o.class.is_a(b"throwable") => return Err(Throw::Object(o)),
         v => v.to_php_string().unwrap_or_else(PhpStr::empty),
     };
