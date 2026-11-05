@@ -151,6 +151,8 @@ fn register(registry: &mut Registry) {
     }
     registry.add_functions(BUILTINS);
     registry.add_functions(array::BUILTINS);
+    registry.add_classes(array::CLASSES);
+    registry.add_classes(math::CLASSES);
     // basic_functions.stub.php: `@prefer-ref $array`, `@prefer-ref $rest`.
     registry.mark_prefer_ref(&["array_multisort"]);
     registry.add_functions(callback::BUILTINS);
