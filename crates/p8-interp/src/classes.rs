@@ -212,6 +212,11 @@ impl Context<'_> {
                 if parent.flags & CLASS_INTERFACE != 0 {
                     return Err(self.fatal_at(format!("Class {name} cannot extend interface {}", text(&parent.name)), def.line));
                 }
+                // Enums first: a user enum is final too, a built-in one isn't
+                // (zend_do_inheritance_ex, GH-16315).
+                if parent.flags & CLASS_ENUM != 0 {
+                    return Err(self.fatal_at(format!("Class {name} cannot extend enum {}", text(&parent.name)), def.line));
+                }
                 if parent.flags & CLASS_FINAL != 0 {
                     return Err(self.fatal_at(format!("Class {name} cannot extend final class {}", text(&parent.name)), def.line));
                 }
@@ -456,67 +461,13 @@ impl Context<'_> {
         if (methods.get_sym(known::TO_STRING).is_some() || own.contains(&known::TO_STRING)) && lower.as_slice() != b"stringable" && !interfaces.iter().any(|i| **i == *b"stringable") {
             interfaces.push(Rc::from(&b"stringable"[..]));
         }
-        // An enum: its cases are constants (objects made when first used),
-        // `name` (and `value`) readonly properties, cases()/from()/tryFrom().
-        if def.flags & CLASS_ENUM != 0 {
-            for x in std::iter::once(&b"unitenum"[..]).chain(def.enum_backing.is_some().then_some(&b"backedenum"[..])) {
-                if !interfaces.iter().any(|i| **i == *x) {
-                    interfaces.push(Rc::from(x));
-                }
-            }
-            let prop = |n: &str, ty: Option<&str>| Property {
-                name: PhpStr::from(n),
-                default: Value::Undef,
-                visibility: Visibility::Public,
-                set_visibility: Some(Visibility::Protected),
-                declaring: lower.clone(),
-                declaring_name: class_name.clone(),
-                readonly: true,
-                is_final: false,
-                ty: Some(PhpStr::from(ty.unwrap_or("string"))),
-                ty_decl: None,
-                init: None,
-                hooks: 0,
-            };
-            properties.insert(0, prop("name", None));
-            if let Some(t) = &def.enum_backing {
-                properties.insert(1, prop("value", Some(&text_of(t))));
-            }
-            for (case, value) in &def.cases {
-                constants.insert(
-                    case.as_bytes().to_vec(),
-                    Rc::new(Constant {
-                        value: value.as_ref().map_or(Value::Null, |v| self.isolate.thaw(v)),
-                        visibility: Visibility::Public,
-                        declaring_name: class_name.clone(),
-                        is_case: true,
-                        init: None,
-                    }),
-                );
-            }
-            let natives: &[(&str, p8_runtime::object::NativeStatic)] = if def.enum_backing.is_some() {
-                &[("cases", crate::builtin_classes::enum_cases), ("from", crate::builtin_classes::enum_from), ("tryFrom", crate::builtin_classes::enum_try_from)]
-            } else {
-                &[("cases", crate::builtin_classes::enum_cases)]
-            };
-            for (n, f) in natives {
-                methods.insert(
-                    n.to_ascii_lowercase().into_bytes(),
-                    Rc::new(Method {
-                        name: PhpStr::from(*n),
-                        func: u32::MAX,
-                        native: Some(p8_runtime::object::Native::Static(*f)),
-                        visibility: Visibility::Public,
-                        is_static: true,
-                        is_abstract: false,
-                        is_final: false,
-                        declaring: Rc::clone(&declaring),
-                        declaring_name: class_name.clone(),
-                        deprecation: None,
-                    }),
-                );
-            }
-        }
+        let enum_flags = if def.flags & CLASS_ENUM != 0 {
+            let backing = def.enum_backing.as_ref().map(text_of);
+            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::Null, |v| self.isolate.thaw(v)))).collect();
+            EnumMembers { interfaces: &mut interfaces, properties: &mut properties, constants: &mut constants, methods: &mut methods }.add(&declaring, &class_name, backing.as_deref(), cases)
+        } else {
+            0
+        };
         let mut slots = p8_runtime::object::Slots::default();
         for (i, p) in properties.iter().enumerate() {
             slots.entry(p.name.as_bytes().to_vec()).or_default().push(i);
@@ -649,7 +600,7 @@ impl Context<'_> {
         Ok(Rc::new(Class {
             name: class_name,
             lower,
-            flags: def.flags | destructor,
+            flags: def.flags | destructor | enum_flags,
             parent,
             interfaces,
             properties,
@@ -2070,6 +2021,81 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
 
 fn text_of(t: &p8_runtime::frozen::Text) -> String {
     String::from_utf8_lossy(t.as_bytes()).into_owned()
+}
+
+/// The parts of a class that being an enum adds to, for a user enum (being
+/// linked) and a built-in one (`builtin_classes::declare_spec`) alike.
+pub(crate) struct EnumMembers<'a> {
+    pub(crate) interfaces: &'a mut Vec<Rc<[u8]>>,
+    pub(crate) properties: &'a mut Vec<Property>,
+    pub(crate) constants: &'a mut p8_runtime::object::Constants,
+    pub(crate) methods: &'a mut p8_runtime::object::Methods,
+}
+
+impl EnumMembers<'_> {
+    /// What an enum is given (zend_enum.c: zend_enum_add_interfaces,
+    /// zend_enum_register_props, zend_enum_register_funcs): UnitEnum (and
+    /// BackedEnum), the readonly `name` (and `value`) properties first,
+    /// each case as a constant (its object made when first used), and the
+    /// static cases() (and from()/tryFrom()). `backing` is "int" or
+    /// "string" for a backed enum; a pure enum's case values are Null.
+    /// Returns the class flags an enum adds: uncloneable (zend_enum.c's
+    /// object handlers have no clone_obj).
+    #[must_use]
+    pub(crate) fn add(self, declaring: &Rc<[u8]>, class_name: &PhpStr, backing: Option<&str>, cases: Vec<(&[u8], Value)>) -> u32 {
+        for x in std::iter::once(&b"unitenum"[..]).chain(backing.is_some().then_some(&b"backedenum"[..])) {
+            if !self.interfaces.iter().any(|i| **i == *x) {
+                self.interfaces.push(Rc::from(x));
+            }
+        }
+        let prop = |n: &str, ty: &str| Property {
+            name: PhpStr::from(n),
+            default: Value::Undef,
+            visibility: Visibility::Public,
+            set_visibility: Some(Visibility::Protected),
+            declaring: declaring.to_vec(),
+            declaring_name: class_name.clone(),
+            readonly: true,
+            is_final: false,
+            ty: Some(PhpStr::from(ty)),
+            ty_decl: None,
+            init: None,
+            hooks: 0,
+        };
+        self.properties.insert(0, prop("name", "string"));
+        if let Some(t) = backing {
+            self.properties.insert(1, prop("value", t));
+        }
+        for (case, value) in cases {
+            self.constants.insert(
+                case.to_vec(),
+                Rc::new(Constant { value, visibility: Visibility::Public, declaring_name: class_name.clone(), is_case: true, init: None }),
+            );
+        }
+        let natives: &[(&str, p8_runtime::object::NativeStatic)] = if backing.is_some() {
+            &[("cases", crate::builtin_classes::enum_cases), ("from", crate::builtin_classes::enum_from), ("tryFrom", crate::builtin_classes::enum_try_from)]
+        } else {
+            &[("cases", crate::builtin_classes::enum_cases)]
+        };
+        for (n, f) in natives {
+            self.methods.insert(
+                n.to_ascii_lowercase().into_bytes(),
+                Rc::new(Method {
+                    name: PhpStr::from(*n),
+                    func: u32::MAX,
+                    native: Some(p8_runtime::object::Native::Static(*f)),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    declaring: Rc::clone(declaring),
+                    declaring_name: class_name.clone(),
+                    deprecation: None,
+                }),
+            );
+        }
+        p8_runtime::object::CLASS_UNCLONEABLE
+    }
 }
 
 /// Narrower is larger: public < protected < private.

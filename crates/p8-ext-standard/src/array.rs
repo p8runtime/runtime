@@ -7,10 +7,25 @@
 
 use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
+use p8_runtime::object::CLASS_ENUM;
 use p8_runtime::value::Value;
 use std::cmp::Ordering;
 use std::rc::Rc;
+
+/// enum SortDirection (PHP 8.6, basic_functions.stub.php), a pure enum no
+/// builtin takes: `case Ascending; case Descending;`.
+pub const CLASSES: &[ClassSpec] = &[ClassSpec {
+    name: "SortDirection",
+    parent: None,
+    interfaces: &[],
+    // Not final: zend_register_internal_enum sets only ZEND_ACC_ENUM.
+    flags: CLASS_ENUM,
+    properties: &[],
+    methods: &[],
+    constants: &[("Ascending", Constant::Null), ("Descending", Constant::Null)],
+    debug_info: None,
+}];
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_multisort", run: array_multisort, by_ref: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
