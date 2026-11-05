@@ -94,7 +94,10 @@ impl TypeDecl {
 
     /// Check `v`. `is_a(o, class)`: whether object `o` is an instance of
     /// a class this type names (the caller resolves self/parent/static).
-    pub fn verify(&self, v: &Value, strict: bool, is_a: &dyn Fn(&Object, &[u8]) -> bool, static_ok: &dyn Fn(&Object) -> bool) -> Verdict {
+    /// `callable`: whether `v` can be called from the checking code (the
+    /// caller asks the engine, zend_is_callable, when the type takes a
+    /// callable; a Closure is one already, by `quick`).
+    pub fn verify(&self, v: &Value, strict: bool, is_a: &dyn Fn(&Object, &[u8]) -> bool, static_ok: &dyn Fn(&Object) -> bool, callable: bool) -> Verdict {
         let v = v.deref();
         if self.mask & T_MIXED != 0 {
             return Verdict::Accepted(None);
@@ -119,8 +122,8 @@ impl TypeDecl {
         if exact {
             return Verdict::Accepted(None);
         }
-        // A callable: a string or array is checked when called (as builtins do).
-        if self.mask & T_CALLABLE != 0 && matches!(v, Value::Str(_) | Value::Array(_) | Value::Object(_)) {
+        // A callable: one the engine found it can call.
+        if self.mask & T_CALLABLE != 0 && callable && matches!(v, Value::Str(_) | Value::Array(_) | Value::Object(_)) {
             return Verdict::Accepted(None);
         }
         let scalars = T_BOOL | T_TRUE | T_FALSE | T_INT | T_FLOAT | T_STRING;

@@ -42,6 +42,9 @@ pub fn float_to_int_cast_diag(f: f64) -> Option<Diag> {
 /// false both ways) the precision deprecation.
 pub fn float_to_int_diags(f: f64, diags: &mut Diags) {
     diags.extend(float_to_int_cast_diag(f));
+    // NAN fits too (ZEND_DOUBLE_FITS_LONG compares false both ways), which
+    // Range::contains would not let through.
+    #[allow(clippy::manual_range_contains)] // NAN must pass, see above
     let fits_long = !(f >= 9.223_372_036_854_776e18 || f < -9.223_372_036_854_776e18);
     if fits_long && dval_to_lval(f) as f64 != f {
         diags.push(Diag::Deprecated(format!(
@@ -384,10 +387,10 @@ fn concat(a: &Value, b: &Value, diags: &mut Diags) -> Value {
     if let (Value::Str(x), Value::Str(y)) = (a, b) {
         return Value::Str(PhpStr::concat(x.as_bytes(), y.as_bytes()));
     }
-    let mut bytes = Vec::with_capacity(string_len_hint(a) + string_len_hint(b));
+    let mut bytes = PhpStr::scratch(string_len_hint(a) + string_len_hint(b));
     push_string(&mut bytes, a, diags);
     push_string(&mut bytes, b, diags);
-    Value::Str(PhpStr::new(bytes))
+    Value::Str(PhpStr::from_scratch(bytes))
 }
 
 /// Append `v` as a string (what `.` and interpolation do), the same text

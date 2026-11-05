@@ -334,7 +334,7 @@ enum Fail {
     Code(i64),
 }
 
-impl Parser<'_> {
+impl<'a> Parser<'a> {
     fn ws(&mut self) {
         while self.at < self.s.len() && matches!(self.s[self.at], b' ' | b'\t' | b'\n' | b'\r') {
             self.at += 1;
@@ -508,6 +508,20 @@ impl Parser<'_> {
 
     fn string(&mut self) -> Result<PhpStr, Fail> {
         self.at += 1;
+        // No escape before the closing quote: the bytes as they are, in
+        // one string (a short one in its own allocation), no buffer.
+        let s: &'a [u8] = self.s;
+        let rest = &s[self.at..];
+        if let Some(n) = rest.iter().position(|&c| c == b'"' || c == b'\\' || c < 0x20)
+            && rest[n] == b'"'
+        {
+            let bytes = &rest[..n];
+            if std::str::from_utf8(bytes).is_err() {
+                return Err(Fail::Code(5));
+            }
+            self.at += n + 1;
+            return Ok(PhpStr::from(bytes));
+        }
         let mut out = Vec::new();
         loop {
             let Some(&c) = self.s.get(self.at) else { return Err(Fail::Code(4)) };

@@ -87,7 +87,7 @@ pub struct Platform {
 
 impl Platform {
     pub fn new(extensions: &[Extension]) -> Platform {
-        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, compiled: AtomicUsize::new(0), opcache: None }) }
+        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, compiled: AtomicUsize::new(0), opcache: None, partials: AtomicUsize::new(0) }) }
     }
 
     /// Report the cache this Platform keeps (keep_compiled, file_cache) as
@@ -140,13 +140,20 @@ impl Platform {
 
     fn with(self, cache: Option<Mutex<HashMap<String, Kept>>>, files: Option<Arc<file_cache::FileCache>>) -> Platform {
         let compiler = Arc::try_unwrap(self.compiler).unwrap_or_else(|_| panic!("a Platform is configured before it is shared"));
-        Platform { compiler: Arc::new(Compiler { cache, files, compiled: AtomicUsize::new(0), ..compiler }) }
+        Platform { compiler: Arc::new(Compiler { cache, files, compiled: AtomicUsize::new(0), partials: AtomicUsize::new(0), ..compiler }) }
     }
 
     /// How many files this Platform has compiled from their source (not
     /// taken from what it keeps in memory or on disk).
     pub fn compiled_files(&self) -> usize {
         self.compiler.compiled.load(Ordering::Relaxed)
+    }
+
+    /// How many partial applications' closures this Platform has compiled
+    /// (one per site and function applied, for each isolate: a call of
+    /// the site again only binds its values).
+    pub fn compiled_partials(&self) -> usize {
+        self.compiler.partials.load(Ordering::Relaxed)
     }
 
     /// An engine for the calling thread.
@@ -175,6 +182,8 @@ struct Compiler {
     compiled: AtomicUsize,
     /// Zend OPcache over the cache, when the host reports one.
     opcache: Option<opcache::Opcache>,
+    /// Partial applications' closures compiled.
+    partials: AtomicUsize,
 }
 
 /// A compiled file kept by its path: the source it was compiled from and
@@ -288,6 +297,22 @@ impl p8_interp::Loader for Load {
             Ok(program) => Ok(program),
             Err(e) => Err(p8_interp::LoadError { parse: e.kind == ErrorKind::Parse, message: e.message, line: e.line }),
         }
+    }
+
+    fn load_partial(&self, source: &[u8], file: &str, name: &[u8], class: Option<&[u8]>, is_static: bool) -> Result<Arc<p8_bytecode::Function>, p8_interp::LoadError> {
+        self.0.partials.fetch_add(1, Ordering::Relaxed);
+        let program = compile(&self.0.registry, source, file, false).map_err(|e| p8_interp::LoadError { parse: e.kind == ErrorKind::Parse, message: e.message, line: e.line })?;
+        // A program just compiled is held only here: its one closure is
+        // taken out of it and given the partial application's name.
+        let unshared = || p8_interp::LoadError { parse: false, message: "partial application: the closure's code is shared".into(), line: 0 };
+        let program = Arc::try_unwrap(program).map_err(|_| unshared())?;
+        let main = Arc::try_unwrap(program.main).map_err(|_| unshared())?;
+        let closure = main.lambdas.into_iter().next().ok_or_else(unshared)?;
+        let mut closure = Arc::try_unwrap(closure).map_err(|_| unshared())?;
+        closure.name = p8_runtime::frozen::Text::from(name);
+        closure.class = class.map(p8_runtime::frozen::Text::from);
+        closure.is_static = is_static;
+        Ok(Arc::new(closure))
     }
 }
 

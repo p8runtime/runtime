@@ -267,9 +267,10 @@ pub enum Instr {
     /// `++$obj->name` and the like
     PropIncDec { obj: Reg, name: Reg, dst: Reg, inc: bool, post: bool },
     /// `$obj->name[k1]..[kn] = val` (or `op=` with `op`): the object at
-    /// `base`, the property name at `base + 1`, the keys after (`append`:
-    /// the last dimension is `[]`)
-    AssignPropDim { op: Option<BinOp>, base: Reg, n: u8, append: bool, val: Reg, dst: Reg },
+    /// `base`, the keys from `base + 2` (`append`: the last dimension is
+    /// `[]`), the property name in `name` (its constant when it is one, as
+    /// AssignProp's: the property's cache entry is that constant's)
+    AssignPropDim { op: Option<BinOp>, base: Reg, name: Reg, n: u8, append: bool, val: Reg, dst: Reg },
     /// `isset($obj->name)`
     IssetProp { dst: Reg, obj: Reg, name: Reg },
     /// `unset($obj->name)`
@@ -364,6 +365,43 @@ pub enum Rare {
     /// the global table at each use, never bound once. One not set stays
     /// unset (a read is not a `global` statement, which makes it null).
     AutoGlobal,
+    /// `$v |> callable`: the callable's first parameter must not take a
+    /// reference (the value is a temporary: ZEND_SEND_VAL_EX's "could not
+    /// be passed by reference"). c is what calls: 0 the function of call
+    /// site b; 1 the method named by call site b of the object in a; 2 the
+    /// static method named by site b of class `class`; 3 the callable
+    /// value in a.
+    PipeArgByRef,
+    /// A partial application (`f(?, $x)`, PHP 8.6): a = a Closure of the
+    /// callable in b with the arguments the function's `partials[class]`
+    /// describes, their values from register c on (one register per
+    /// argument written, a placeholder's left unused); ZEND_CALLABLE_CONVERT_PARTIAL.
+    Partial,
+}
+
+/// A partial application as written (ZEND_CALLABLE_CONVERT_PARTIAL's
+/// operands): which arguments are placeholders, which are named, and the
+/// name its closures get. Program data: the closure's code is made from
+/// this and the function applied, once for the isolate.
+#[derive(Debug, Clone)]
+pub struct PartialSite {
+    /// The arguments in order, the `...` placeholder left out.
+    pub args: Vec<PartialArg>,
+    /// A `...` placeholder ends the arguments
+    /// (ZEND_PARTIAL_USES_VARIADIC_PLACEHOLDER).
+    pub variadic: bool,
+    /// `{closure:pfa:<where>:<line>}` (zend_compile_partial_name).
+    pub name: Text,
+    pub line: u32,
+}
+
+/// One argument of a partial application.
+#[derive(Debug, Clone)]
+pub struct PartialArg {
+    /// `name: …`: passed by name.
+    pub name: Option<Text>,
+    /// `?` (else a value, bound when the closure is made).
+    pub placeholder: bool,
 }
 
 impl Instr {
@@ -680,6 +718,14 @@ pub struct Param {
     /// Its default when that is a constant, by name as reflection shows
     /// it (`N\PHP_EOL`, `self::A`).
     pub default_const: Option<Text>,
+    /// Its default when that is not a constant value, as PHP source with
+    /// every name resolved (an unqualified constant left unqualified, to
+    /// fall back to the global one in `default_ns`): what a partial
+    /// application of the function passes or defaults to when the
+    /// argument is left out (php-src copies the default's AST).
+    pub default_src: Option<Text>,
+    /// The namespace `default_src` was written in.
+    pub default_ns: Option<Text>,
     /// A promoted constructor parameter (`public int $x`).
     pub promoted: bool,
     pub attrs: Vec<AttrDef>,
@@ -744,6 +790,8 @@ pub struct Function {
     /// the level), so an exception leaving one puts the level back.
     pub silences: Vec<(u32, u32, Reg)>,
     pub meta: Meta,
+    /// The partial applications this code makes (`Rare::Partial`).
+    pub partials: Vec<PartialSite>,
     /// For a file's main code: what compiling the file raised that isn't
     /// fatal (deprecations, warnings), in order. PHP 8.5 delays these until
     /// the file is compiled, then raises them (user error handler included)

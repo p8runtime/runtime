@@ -32,6 +32,9 @@ fn register(registry: &mut Registry) {
     // They reach $_SESSION and the request's variables, and call save
     // handlers, which are PHP code.
     registry.mark_reenters(&funcs::names());
+    // Its two signatures are told apart, and individual callbacks
+    // deprecated, before the callbacks are checked (session.c).
+    registry.own_callbacks(&["session_set_save_handler"]);
     registry.add_classes(classes::CLASSES);
     registry.add_constant(b"PHP_SESSION_DISABLED", Constant::Int(0));
     registry.add_constant(b"PHP_SESSION_NONE", Constant::Int(1));
