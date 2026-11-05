@@ -619,6 +619,27 @@ impl PhpArray {
         }
     }
 
+    /// The element at `key` to write into, made null first if there is none
+    /// (a write through `$a[k][...]`: ZEND_FETCH_DIM_W's slot). One lookup
+    /// when it is there.
+    pub fn slot_mut(&mut self, key: &Key) -> &mut Value {
+        let at = match &self.storage {
+            Storage::Packed(p) => match key {
+                Key::Int(i) if p.get(*i).is_some() => Some(*i as usize),
+                _ => None,
+            },
+            Storage::Hashed(h) => h.find(hash_of(key), key),
+        };
+        let Some(i) = at else {
+            self.insert(key.clone(), Value::Null);
+            return self.get_mut(key).expect("just inserted");
+        };
+        match &mut self.storage {
+            Storage::Packed(p) => &mut p.slots[i],
+            Storage::Hashed(h) => &mut h.buckets[i].value,
+        }
+    }
+
     /// `$a[] = value`; Err when the next key is taken.
     pub fn push(&mut self, value: Value) -> Result<(), NextKeyOccupied> {
         let key = self.next_key().ok_or(NextKeyOccupied)?;

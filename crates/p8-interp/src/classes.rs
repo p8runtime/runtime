@@ -1023,20 +1023,36 @@ impl Context<'_> {
     /// What `$obj->name` holds, read without hooks, magic or diagnostics:
     /// None unless it is a property visible here.
     pub(crate) fn peek_prop(&self, target: &Value, name: &Value) -> Option<Value> {
-        let Value::Object(object) = target.deref() else { return None };
+        self.peek_prop_with(target, name, Value::deref)
+    }
+
+    /// `peek_prop`, looking at the value where it is: `f` of it (through a
+    /// reference), nothing copied.
+    pub(crate) fn peek_prop_with<R>(&self, target: &Value, name: &Value, f: impl FnOnce(&Value) -> R) -> Option<R> {
+        let object = match target {
+            Value::Object(o) => Rc::clone(o),
+            Value::Ref(cell) => match &*cell.borrow() {
+                Value::Object(o) => Rc::clone(o),
+                _ => return None,
+            },
+            _ => return None,
+        };
         let name = name.to_php_string()?;
-        let scope = self.scope().0;
-        match object.class.slot(name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) {
+        let scope = self.frames.last().and_then(|f| f.scope.as_deref());
+        let seen = |v: &Value| match v {
+            Value::Ref(cell) => f(&cell.borrow()),
+            v => f(v),
+        };
+        match object.class.slot(name.as_bytes(), scope.map(|s| s.lower.as_slice())) {
             Some(slot) => {
                 let prop = &object.class.properties[slot];
                 let declaring = self.declaring(&object.class, &prop.declaring);
-                if !visible(prop.visibility, &declaring, scope.as_deref()) {
+                if !visible(prop.visibility, &declaring, scope) {
                     return None;
                 }
-                let v = object.slots.borrow()[slot].deref();
-                Some(v)
+                Some(seen(&object.slots.borrow()[slot]))
             }
-            None => object.dynamic.borrow().get(&Key::from_string(name)).map(Value::deref),
+            None => object.dynamic.borrow().get(&Key::from_string(name)).map(seen),
         }
     }
 

@@ -2770,8 +2770,9 @@ impl Context<'_> {
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     // A path into an object (ArrayAccess): `$obj->p[k] = v` is its offsetSet.
-                    if let Some(root) = self.peek_prop(&target, &name)
-                        && arrayaccess::path_has_object(&root, &keys, append)
+                    // (Looked at where it is: no copy of the array on the common path.)
+                    if self.peek_prop_with(&target, &name, |root| arrayaccess::path_has_object(root, &keys, append)) == Some(true)
+                        && let Some(root) = self.peek_prop(&target, &name)
                     {
                         let dim_op = match op {
                             Some(op) => arrayaccess::DimOp::Op(op, v),
@@ -3831,8 +3832,15 @@ impl Context<'_> {
 
     /// An array key from register `r`, reporting what PHP reports.
     fn key(&mut self, w: &[Value], func: &Function, r: Reg) -> Result<Key, Throw> {
-        let v = self.operand(w, func, r);
-        self.key_of(&v, "access")
+        match &w[r as usize] {
+            // Undefined (it warns) or a reference: its value.
+            Value::Undef | Value::Ref(_) => {
+                let v = self.operand(w, func, r);
+                self.key_of(&v, "access")
+            }
+            // Else the register itself, without a copy of it first.
+            v => self.key_of(v, "access"),
+        }
     }
 
     /// A resource used as an array key: its number, warned
@@ -4233,9 +4241,11 @@ impl Context<'_> {
             }
             Some((key, rest)) if rest.is_empty() && !append => match op {
                 None => {
+                    // One lookup: the element written in place, else added.
                     match arr.get_mut(key) {
                         Some(Value::Ref(cell)) => *cell.borrow_mut() = val.clone(),
-                        _ => arr.insert(key.clone(), val.clone()),
+                        Some(slot) => *slot = val.clone(),
+                        None => arr.insert(key.clone(), val.clone()),
                     }
                     Ok(val)
                 }
@@ -4258,15 +4268,9 @@ impl Context<'_> {
                     Ok(new)
                 }
             },
-            Some((key, rest)) => {
-                if !arr.contains_key(key) {
-                    arr.insert(key.clone(), Value::Null);
-                }
-                let mut child = std::mem::take(arr.get_mut(key).expect("just inserted"));
-                let r = self.update_path(&mut child, rest, append, val, op);
-                *arr.get_mut(key).expect("present") = child;
-                r
-            }
+            // A level on the way: its element (made null if missing),
+            // written into where it is (ZEND_FETCH_DIM_W), one lookup.
+            Some((key, rest)) => self.update_path(arr.slot_mut(key), rest, append, val, op),
         }
     }
 
