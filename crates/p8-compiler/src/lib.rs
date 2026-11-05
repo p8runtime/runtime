@@ -3823,9 +3823,12 @@ impl<'src> Compiler<'src> {
                     }
                 }
                 let mut args = Vec::with_capacity(a.args.len());
-                for arg in a.args {
+                for (i, arg) in a.args.iter().enumerate() {
                     if arg.unpack {
                         return Err(CompileError { message: "Cannot use unpacking in attribute argument list".into(), line: self.line(arg.span) });
+                    }
+                    if arg.name.is_none() && a.args[..i].iter().any(|b| b.name.is_some()) {
+                        return Err(CompileError { message: "Cannot use positional argument after named argument".into(), line: self.line(arg.span) });
                     }
                     self.check_attr_const(arg.value)?;
                     let (value, code) = self.const_init(arg.value)?;
@@ -5161,9 +5164,10 @@ impl<'src> Compiler<'src> {
             }
             found
         };
-        let replaced = |args: &[p8_syntax::ast::Arg<'_>], at: usize| -> Vec<p8_syntax::ast::Arg<'_>> {
-            args.iter().enumerate().map(|(i, a)| if i == at { p8_syntax::ast::Arg { name: a.name, value: &znode, unpack: false, span: a.span } } else { *a }).collect()
-        };
+        fn with_value<'a>(args: &[p8_syntax::ast::Arg<'a>], at: usize, value: &'a Expr<'a>) -> Vec<p8_syntax::ast::Arg<'a>> {
+            args.iter().enumerate().map(|(i, a)| if i == at { p8_syntax::ast::Arg { name: a.name, value, unpack: false, span: a.span } } else { *a }).collect()
+        }
+        let replaced = |args, at| with_value(args, at, &znode);
         let pfa_args;
         let call = match right {
             Expr::Call { func, args, span } if !is_assert(func) && let Some(at) = applied(args) => {
@@ -5444,8 +5448,9 @@ impl<'src> Compiler<'src> {
             return Ok(dst);
         }
         // A call of a value: `$f()`, `(function () {})()`, `$o->p()()`.
+        // `(NAME)(…)`: the constant's value is called, not a function of that name.
         let dynamic = match func {
-            Expr::Variable { name, .. } => self.text(*name).starts_with(b"$"),
+            Expr::Variable { name, span } => self.text(*name).starts_with(b"$") || self.parenthesized(*span),
             _ => true,
         };
         if needs_spread(args) {
