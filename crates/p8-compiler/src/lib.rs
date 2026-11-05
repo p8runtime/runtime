@@ -11,7 +11,7 @@
 
 use p8_bytecode::{
     AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PropDef, Reg, Site, Sym, TraitRule,
-    ClassName,
+    ClassName, NO_VARS,
     CONST_EXPR, Rare,
 };
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
@@ -150,6 +150,8 @@ struct FnBuilder<'a> {
     /// The classes declared in this function's code (`DeclareClass`).
     decls: Vec<Arc<ClassDef>>,
     silences: Vec<(u32, u32, Reg)>,
+    /// `Function::arg_vars`.
+    arg_vars: Vec<Vec<(u8, Reg)>>,
     loops_made: usize,
     /// `label:` positions and the loops open there; `goto`s to patch.
     labels: HashMap<Vec<u8>, (u32, Vec<usize>)>,
@@ -205,6 +207,7 @@ impl FnBuilder<'_> {
             is_generator: false,
             decls: Vec::new(),
             silences: Vec::new(),
+            arg_vars: Vec::new(),
             loops_made: 0,
             labels: HashMap::default(),
             gotos: Vec::new(),
@@ -493,6 +496,9 @@ impl FnBuilder<'_> {
         for s in &mut self.silences {
             s.2 = map(s.2);
         }
+        for (_, r) in self.arg_vars.iter_mut().flatten() {
+            *r = map(*r);
+        }
         for c in &mut self.classes {
             if let ClassRef::Dynamic(r) = c {
                 *r = map(*r);
@@ -531,6 +537,7 @@ impl FnBuilder<'_> {
             meta: self.meta,
             decls: self.decls,
             silences: self.silences,
+            arg_vars: self.arg_vars,
         }
     }
 }
@@ -3352,8 +3359,14 @@ impl<'src> Compiler<'src> {
         if needs_spread(args) {
             return self.spread_call(f, callee, args);
         }
-        let (base, argc) = self.value_args(f, args, callee)?;
-        f.emit(Instr::CallValue { dst: base, callee, base, argc });
+        let (base, argc, vars) = match self.deferred_args(f, args)? {
+            Some(sent) => sent,
+            None => {
+                let (base, argc) = self.value_args(f, args, callee)?;
+                (base, argc, NO_VARS)
+            }
+        };
+        f.emit(Instr::CallValue { dst: base, callee, base, argc, vars });
         Ok(base)
     }
 
@@ -3387,6 +3400,36 @@ impl<'src> Compiler<'src> {
             }
         }
         Ok((regs[0], args.len() as u8))
+    }
+
+    /// The arguments of a StaticCall or CallValue when each is a variable
+    /// or a literal (nothing runs between them, so when a variable is read
+    /// makes no difference): the literals into their registers, the
+    /// variables left for the call to send once its target is known
+    /// (`Function::arg_vars`), with no instruction each. None, nothing
+    /// emitted, otherwise.
+    fn deferred_args(&mut self, f: &mut FnBuilder, args: &[p8_syntax::ast::Arg]) -> Result<Option<(Reg, u8, u16)>> {
+        let var = |c: &Self, e: &Expr| match e {
+            Expr::Variable { name, .. } => {
+                let t = c.text(*name);
+                t.starts_with(b"$") && !matches!(t, b"$this" | b"$GLOBALS")
+            }
+            _ => false,
+        };
+        let plain = |c: &Self, a: &p8_syntax::ast::Arg| !a.unpack && a.name.is_none() && (var(c, a.value) || c.literal(a.value).is_some());
+        if !args.iter().all(|a| plain(self, a)) || !args.iter().any(|a| var(self, a.value)) || f.arg_vars.len() >= NO_VARS as usize {
+            return Ok(None);
+        }
+        let regs: Vec<Reg> = (0..args.len()).map(|_| f.temp()).collect();
+        let mut vars = Vec::new();
+        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+            match arg.value {
+                Expr::Variable { name, .. } if var(self, arg.value) => vars.push((n as u8, f.cv(&self.text(*name)[1..]))),
+                value => self.expr_into(f, value, *r)?,
+            }
+        }
+        f.arg_vars.push(vars);
+        Ok(Some((regs[0], args.len() as u8, (f.arg_vars.len() - 1) as u16)))
     }
 
     /// The arguments of a call of a value (`$f(...)`, `[$o, 'm'](...)`): a
@@ -4540,7 +4583,7 @@ impl<'src> Compiler<'src> {
                 let display = [self.text(*prop), b"::", self.text(*m).to_ascii_lowercase().as_slice()].concat();
                 let site = self.named_site(f, &display);
                 let (base, argc) = self.args_by_value(f, args)?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
+                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc, vars: NO_VARS });
                 base
             }
             Expr::StaticCall { class: class_expr, method, args, .. } => {
@@ -4567,13 +4610,19 @@ impl<'src> Compiler<'src> {
                     return self.call_pair(f, name, m, args);
                 }
                 let site = self.named_site(f, text);
-                let (base, argc) = self.method_args(
-                    f,
-                    args,
-                    |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
-                    |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
-                )?;
-                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc });
+                let (base, argc, vars) = match self.deferred_args(f, args)? {
+                    Some(sent) => sent,
+                    None => {
+                        let (base, argc) = self.method_args(
+                            f,
+                            args,
+                            |n, arg, var| Instr::SendVarStatic { class, method: site, n, arg, var },
+                            |dst, n| Instr::StaticArgByRef { dst, class, method: site, n },
+                        )?;
+                        (base, argc, NO_VARS)
+                    }
+                };
+                f.emit(Instr::StaticCall { dst: base, class, method: site, base, argc, vars });
                 base
             }
             // `C::${expr}`, `C::$$v`: a static property named when it runs.
@@ -5027,7 +5076,7 @@ impl<'src> Compiler<'src> {
                 let exists = f.constant(Frozen::Str(Text::from("function_exists")));
                 let base = f.temp();
                 f.emit(Instr::Move { dst: base, src: full });
-                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1 });
+                f.emit(Instr::CallValue { dst: base, callee: exists, base, argc: 1, vars: NO_VARS });
                 let callee = f.temp();
                 let other = f.emit(Instr::JumpIfNot { cond: base, target: 0 });
                 f.emit(Instr::Move { dst: callee, src: full });
@@ -5066,8 +5115,14 @@ impl<'src> Compiler<'src> {
         }
         if dynamic {
             let callee = self.expr(f, func)?;
-            let (base, argc) = self.value_args(f, args, callee)?;
-            f.emit(Instr::CallValue { dst: base, callee, base, argc });
+            let (base, argc, vars) = match self.deferred_args(f, args)? {
+                Some(sent) => sent,
+                None => {
+                    let (base, argc) = self.value_args(f, args, callee)?;
+                    (base, argc, NO_VARS)
+                }
+            };
+            f.emit(Instr::CallValue { dst: base, callee, base, argc, vars });
             let _ = (span, hint, mark);
             return Ok(base);
         }

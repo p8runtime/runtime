@@ -2330,8 +2330,35 @@ impl Context<'_> {
                     let v = self.operand(w, func, src);
                     reg!(dst) = self.closure_from_callable(&v)?;
                 }
-                Instr::CallValue { dst, callee, base: args, argc } => {
+                Instr::CallValue { dst, callee, base: args, argc, vars } => {
                     let target = self.operand(w, func, callee);
+                    if vars != p8_bytecode::NO_VARS {
+                        // By reference where the callable takes one: a
+                        // closure answers itself; anything else resolved (a
+                        // callable that is not one fails at the call).
+                        let resolved = match Self::closure_takes_ref(&target, 0) {
+                            Some(_) => None,
+                            None => {
+                                let retry = self.autoload_retry.clone();
+                                match self.resolve_callable(&target) {
+                                    Ok(t) => Some(t),
+                                    // A class not loaded yet: the autoloaders run
+                                    // and this instruction again.
+                                    Err(t @ Throw::Autoload(_)) => return Err(t),
+                                    // Not callable: the call says so before any
+                                    // argument is read (INIT_DYNAMIC_CALL fails first).
+                                    Err(_) => {
+                                        self.autoload_retry = retry;
+                                        return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                                    }
+                                }
+                            }
+                        };
+                        self.send_vars(w, func, vars, args, |cx, n| match &resolved {
+                            Some(t) => cx.takes_ref(t, n),
+                            None => Self::closure_takes_ref(&target, n).unwrap_or(false),
+                        });
+                    }
                     return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::Silence { saved } => {
@@ -2868,7 +2895,7 @@ impl Context<'_> {
                     }
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
-                Instr::StaticCall { dst, class, method, base: args, argc } => {
+                Instr::StaticCall { dst, class, method, base: args, argc, vars } => {
                     let site = &func.sites[method as usize];
                     // `parent::$prop::get()` on a parent whose property has
                     // no such hook: the stored value of `$this->prop`.
@@ -2906,6 +2933,21 @@ impl Context<'_> {
                             m
                         }
                     };
+                    // The variables passed as they are: sent now the method
+                    // is known (by reference where it takes one; __callStatic
+                    // takes them by value).
+                    if vars != p8_bytecode::NO_VARS {
+                        let user = match (&m.func, &m.trampoline) {
+                            (classes::Code::User(f), None) => Some(Rc::clone(f)),
+                            _ => None,
+                        };
+                        let native = matches!(m.func, classes::Code::Native(..)) && m.trampoline.is_none();
+                        let sym = site.sym;
+                        self.send_vars(w, func, vars, args, |cx, n| match &user {
+                            Some(f) => f.code.param_by_ref(n),
+                            None => native && cx.method_takes_ref(&target, Some(sym), n),
+                        });
+                    }
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::ClassConst { dst, class, name } => {
@@ -3611,6 +3653,18 @@ impl Context<'_> {
         let x = self.operand_ref(w, func, a);
         let y = self.operand_ref(w, func, b);
         test_values(cmp, &x, &y)
+    }
+
+    /// A call's variables passed as they are (`Function::arg_vars[vars]`)
+    /// into its argument registers from `args`: by reference where
+    /// `by_ref(n)` says the parameter takes one (an undefined variable
+    /// becomes null, no warning), else the value (an undefined one warns,
+    /// as reading it does): SEND_VAR_EX.
+    fn send_vars(&mut self, w: &mut [Value], func: &Function, vars: u16, args: Reg, by_ref: impl Fn(&Self, usize) -> bool) {
+        for &(n, var) in &func.arg_vars[vars as usize] {
+            let v = if by_ref(self, n as usize) { Value::Ref(make_ref(w, var)) } else { self.operand(w, func, var) };
+            w[args as usize + n as usize] = v;
+        }
     }
 
     /// ArgumentCountError for a call passing fewer than `func.required`

@@ -98,6 +98,7 @@ impl Closure {
             lambdas: Vec::new(),
             bound: Vec::new(),
             silences: Vec::new(),
+            arg_vars: Vec::new(),
             meta: Default::default(),
         };
         Closure::with_consts(Arc::new(code), |c| c.to_value())
