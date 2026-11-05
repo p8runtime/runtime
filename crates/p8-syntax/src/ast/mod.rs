@@ -478,6 +478,12 @@ pub enum Expr<'ast> {
     VariadicPlaceholder {
         span: Span,
     },
+    /// `?` as an argument: a partial application's placeholder (PHP 8.6,
+    /// ZEND_AST_PLACEHOLDER_ARG); `...` among other arguments is a
+    /// VariadicPlaceholder.
+    Placeholder {
+        span: Span,
+    },
     Error {
         span: Span,
     },
@@ -586,6 +592,7 @@ impl<'ast> Expr<'ast> {
             Expr::NullsafePropertyFetch { span, .. } => *span,
             Expr::NullsafeMethodCall { span, .. } => *span,
             Expr::VariadicPlaceholder { span } => *span,
+            Expr::Placeholder { span } => *span,
             Expr::Error { span } => *span,
             Expr::Znode { span, .. } => *span,
             Expr::IndirectVariable { span, .. } => *span,

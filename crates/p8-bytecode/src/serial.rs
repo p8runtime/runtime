@@ -13,7 +13,7 @@
 //! range) give `None`. The caller checks a digest of the bytes first, so
 //! a file that decodes is the program that was written.
 
-use crate::{AttrArg, AttrDef, CastKind, ClassDef, ClassName, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, Meta, MethodDef, Param, Program, PropDef, Rare, Site, Sym, TraitRule};
+use crate::{AttrArg, AttrDef, CastKind, ClassDef, ClassName, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, Meta, MethodDef, Param, PartialArg, PartialSite, Program, PropDef, Rare, Site, Sym, TraitRule};
 use p8_runtime::frozen::{Frozen, Text};
 use p8_runtime::object::Visibility;
 use p8_runtime::ops::BinOp;
@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 7;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -499,8 +499,10 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
-    handlers, decls, is_generator, lambdas, bound, silences, meta,
+    handlers, decls, is_generator, lambdas, bound, silences, meta, partials,
 });
+record!(PartialSite { args, variadic, name, line });
+record!(PartialArg { name, placeholder });
 record!(ClassDef {
     name, sym, deps, parent, interfaces, flags, constants, properties, methods, traits, trait_rules, cases, enum_backing, line, meta, case_meta,
 });
@@ -513,7 +515,7 @@ record!(ConstDef { name, value, code, visibility, is_final, meta });
 record!(PropDef { name, default, code, hooks, visibility, set_visibility, is_static, readonly, is_final, ty, ty_decl, meta });
 record!(MethodDef { func, visibility, is_static, is_abstract, is_final });
 record!(Site { name, sym, fallback, display });
-record!(Param { name, by_ref, has_default, variadic, ty, default, default_const, promoted, attrs });
+record!(Param { name, by_ref, has_default, variadic, ty, default, default_const, default_src, default_ns, promoted, attrs });
 record!(Handler { start, end, target, slot, depth });
 record!(TypeDecl { mask, classes, lower, written, intersection });
 
@@ -652,6 +654,7 @@ impl Code for Rare {
             Rare::ThrowError => 20,
             Rare::AutoGlobal => 21,
             Rare::PipeArgByRef => 22,
+            Rare::Partial => 23,
         });
     }
     fn get(r: &mut Reader) -> Got<Self> {
@@ -679,6 +682,7 @@ impl Code for Rare {
             20 => Rare::ThrowError,
             21 => Rare::AutoGlobal,
             22 => Rare::PipeArgByRef,
+            23 => Rare::Partial,
             _ => return Err(Bad),
         })
     }

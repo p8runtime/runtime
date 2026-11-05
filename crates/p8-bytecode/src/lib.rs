@@ -371,6 +371,36 @@ pub enum Rare {
     /// static method named by site b of class `class`; 3 the callable
     /// value in a.
     PipeArgByRef,
+    /// A partial application (`f(?, $x)`, PHP 8.6): a = a Closure of the
+    /// callable in b with the arguments the function's `partials[class]`
+    /// describes, their values from register c on (one register per
+    /// argument written, a placeholder's left unused); ZEND_CALLABLE_CONVERT_PARTIAL.
+    Partial,
+}
+
+/// A partial application as written (ZEND_CALLABLE_CONVERT_PARTIAL's
+/// operands): which arguments are placeholders, which are named, and the
+/// name its closures get. Program data: the closure's code is made from
+/// this and the function applied, once for the isolate.
+#[derive(Debug, Clone)]
+pub struct PartialSite {
+    /// The arguments in order, the `...` placeholder left out.
+    pub args: Vec<PartialArg>,
+    /// A `...` placeholder ends the arguments
+    /// (ZEND_PARTIAL_USES_VARIADIC_PLACEHOLDER).
+    pub variadic: bool,
+    /// `{closure:pfa:<where>:<line>}` (zend_compile_partial_name).
+    pub name: Text,
+    pub line: u32,
+}
+
+/// One argument of a partial application.
+#[derive(Debug, Clone)]
+pub struct PartialArg {
+    /// `name: …`: passed by name.
+    pub name: Option<Text>,
+    /// `?` (else a value, bound when the closure is made).
+    pub placeholder: bool,
 }
 
 impl Instr {
@@ -687,6 +717,14 @@ pub struct Param {
     /// Its default when that is a constant, by name as reflection shows
     /// it (`N\PHP_EOL`, `self::A`).
     pub default_const: Option<Text>,
+    /// Its default when that is not a constant value, as PHP source with
+    /// every name resolved (an unqualified constant left unqualified, to
+    /// fall back to the global one in `default_ns`): what a partial
+    /// application of the function passes or defaults to when the
+    /// argument is left out (php-src copies the default's AST).
+    pub default_src: Option<Text>,
+    /// The namespace `default_src` was written in.
+    pub default_ns: Option<Text>,
     /// A promoted constructor parameter (`public int $x`).
     pub promoted: bool,
     pub attrs: Vec<AttrDef>,
@@ -751,6 +789,8 @@ pub struct Function {
     /// the level), so an exception leaving one puts the level back.
     pub silences: Vec<(u32, u32, Reg)>,
     pub meta: Meta,
+    /// The partial applications this code makes (`Rare::Partial`).
+    pub partials: Vec<PartialSite>,
 }
 
 /// A compiled file: its top-level code, every function it declares, and

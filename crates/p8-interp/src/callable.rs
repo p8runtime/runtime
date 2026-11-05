@@ -29,6 +29,10 @@ pub(crate) struct ClosureData {
     pub captured: RefCell<Vec<Value>>,
     /// A Closure of a __call / __callStatic trampoline: the method name.
     pub trampoline: Option<PhpStr>,
+    /// Made from a callable (`f(...)`, Closure::fromCallable) or by a
+    /// partial application, not written as a closure: its $this and scope
+    /// are the method's (ZEND_ACC_FAKE_CLOSURE, ZEND_PARTIAL).
+    pub fake: bool,
 }
 
 /// What a Closure runs.
@@ -107,7 +111,7 @@ impl Context<'_> {
             Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called.clone()),
             None => (None, None, None),
         };
-        let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None };
+        let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None, fake: false };
         let class = Rc::clone(&self.classes[&self.isolate.known.closure]);
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
@@ -149,9 +153,29 @@ impl Context<'_> {
             Value::Object(o) => Some(o),
             _ => None,
         };
-        if this.is_some() && data.is_static {
-            self.warn("Cannot bind an instance to a static closure, this will be an error in PHP 9");
-            return Ok(Value::Null);
+        // zend_valid_closure_binding: a closure made from a method (or by
+        // a partial application) keeps its method's $this and scope.
+        let method_name = || match &data.func {
+            ClosureFunc::User(c) => text(c.code.name.as_bytes()),
+            ClosureFunc::Builtin(i) => self.isolate.registry.function(*i).name.to_string(),
+            ClosureFunc::Method(_, n) => text(n.as_bytes().rsplit(|&b| b == b':').next().unwrap_or_default()),
+        };
+        match &this {
+            Some(_) if data.is_static => {
+                self.warn("Cannot bind an instance to a static closure, this will be an error in PHP 9");
+                return Ok(Value::Null);
+            }
+            Some(t) if data.fake && data.scope.as_ref().is_some_and(|s| !t.class.is_a(&s.name.as_bytes().to_ascii_lowercase())) => {
+                let scope = data.scope.as_ref().map_or_else(String::new, |s| text(s.name.as_bytes()));
+                let message = format!("Cannot bind method {scope}::{}() to object of class {}, this will be an error in PHP 9", method_name(), text(t.class.name.as_bytes()));
+                self.warn(message);
+                return Ok(Value::Null);
+            }
+            None if data.fake && data.scope.is_some() && !data.is_static => {
+                self.warn("Cannot unbind $this of method, this will be an error in PHP 9");
+                return Ok(Value::Null);
+            }
+            _ => {}
         }
         let scope = match scope {
             None => data.scope.clone(),
@@ -172,6 +196,16 @@ impl Context<'_> {
                 }
             }
         };
+        let same_scope = match (&scope, &data.scope) {
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b) || a.name.as_bytes().eq_ignore_ascii_case(b.name.as_bytes()),
+            (None, None) => true,
+            _ => false,
+        };
+        if data.fake && !same_scope {
+            let what = if data.scope.is_none() { "function" } else { "method" };
+            self.warn(format!("Cannot rebind scope of closure created from {what}, this will be an error in PHP 9"));
+            return Ok(Value::Null);
+        }
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).or_else(|| scope.clone());
         let copy = ClosureData {
             func: data.func.clone(),
@@ -181,6 +215,7 @@ impl Context<'_> {
             called,
             captured: RefCell::new(data.captured.borrow().clone()),
             trampoline: data.trampoline.clone(),
+            fake: data.fake,
         };
         Ok(self.new_closure(copy))
     }
@@ -201,6 +236,7 @@ impl Context<'_> {
                 called: None,
                 captured: RefCell::new(Vec::new()),
                 trampoline: None,
+                fake: true,
             },
             Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, captured, trampoline }) => ClosureData {
                 func: ClosureFunc::User(func),
@@ -210,6 +246,7 @@ impl Context<'_> {
                 called,
                 captured: RefCell::new(captured),
                 trampoline,
+                fake: true,
             },
             Target::Frame(MethodFrame { func: Code::Native(native, name), this, scope, called, .. }) => ClosureData {
                 func: ClosureFunc::Method(native, name),
@@ -219,6 +256,7 @@ impl Context<'_> {
                 called,
                 captured: RefCell::new(Vec::new()),
                 trampoline: None,
+                fake: true,
             },
         };
         Ok(self.new_closure(data))
@@ -272,7 +310,8 @@ impl Context<'_> {
                 }
             }
             Value::Array(_) => Err(self.throw("Error", "Array callback must have exactly two elements")),
-            _ => Err(self.throw("Error", "Value not callable")),
+            // ZEND_INIT_DYNAMIC_CALL's message.
+            other => Err(self.throw("Error", format!("Value of type {} is not callable", other.type_name()))),
         }
     }
 
@@ -672,9 +711,18 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
     let mut out = PhpArray::new();
     let Some(data) = closure_data(o) else { return out };
     let Some(func) = data.func.user().map(|f| &f.code) else { return out };
-    out.insert(key("name"), Value::Str(PhpStr::from(func.name.as_bytes())));
-    out.insert(key("file"), Value::Str(PhpStr::from(&*func.file)));
-    out.insert(key("line"), Value::Int(i64::from(func.line)));
+    if data.fake && data.trampoline.is_none() && !func.name.as_bytes().starts_with(b"{closure") {
+        // A closure of a named function or method (ZEND_ACC_FAKE_CLOSURE).
+        let name = match &data.scope {
+            Some(scope) => format!("{}::{}", scope.name.to_string_lossy(), String::from_utf8_lossy(func.name.as_bytes())),
+            None => String::from_utf8_lossy(func.name.as_bytes()).into_owned(),
+        };
+        out.insert(key("function"), Value::Str(PhpStr::from(name)));
+    } else {
+        out.insert(key("name"), Value::Str(PhpStr::from(func.name.as_bytes())));
+        out.insert(key("file"), Value::Str(PhpStr::from(&*func.file)));
+        out.insert(key("line"), Value::Int(i64::from(func.line)));
+    }
     let captured = data.captured.borrow();
     if !captured.is_empty() {
         let mut vars = PhpArray::new();
