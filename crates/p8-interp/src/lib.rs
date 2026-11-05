@@ -2823,8 +2823,9 @@ impl Context<'_> {
                     }
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     // A path into an object (ArrayAccess): `$obj->p[k] = v` is its offsetSet.
-                    if let Some(root) = self.peek_prop(&target, &name)
-                        && arrayaccess::path_has_object(&root, &keys, append)
+                    // (Looked at where it is: no copy of the array on the common path.)
+                    if self.peek_prop_with(&target, &name, |root| arrayaccess::path_has_object(root, &keys, append)) == Some(true)
+                        && let Some(root) = self.peek_prop(&target, &name)
                     {
                         let dim_op = match op {
                             Some(op) => arrayaccess::DimOp::Op(op, v),
@@ -3907,8 +3908,15 @@ impl Context<'_> {
 
     /// An array key from register `r`, reporting what PHP reports.
     fn key(&mut self, w: &[Value], func: &Function, r: Reg) -> Result<Key, Throw> {
-        let v = self.operand(w, func, r);
-        self.key_of(&v, "access")
+        match &w[r as usize] {
+            // Undefined (it warns) or a reference: its value.
+            Value::Undef | Value::Ref(_) => {
+                let v = self.operand(w, func, r);
+                self.key_of(&v, "access")
+            }
+            // Else the register itself, without a copy of it first.
+            v => self.key_of(v, "access"),
+        }
     }
 
     /// A resource used as an array key: its number, warned
@@ -4264,6 +4272,16 @@ impl Context<'_> {
         Ok(Value::Str(PhpStr::byte(byte)))
     }
 
+    /// "Undefined array key …" for reading `key` that is not there.
+    #[cold]
+    fn undefined_key(&mut self, key: &Key) {
+        let shown = match key {
+            Key::Int(i) => i.to_string(),
+            Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
+        };
+        self.warn(format!("Undefined array key {shown}"));
+    }
+
     fn update_path(&mut self, target: &mut Value, path: &[Key], append: bool, val: Value, op: Option<BinOp>) -> Result<Value, Throw> {
         if matches!(target, Value::Null | Value::Undef) {
             *target = Value::Array(Rc::new(PhpArray::new()));
@@ -4309,9 +4327,11 @@ impl Context<'_> {
             }
             Some((key, rest)) if rest.is_empty() && !append => match op {
                 None => {
+                    // One lookup: the element written in place, else added.
                     match arr.get_mut(key) {
                         Some(Value::Ref(cell)) => *cell.borrow_mut() = val.clone(),
-                        _ => arr.insert(key.clone(), val.clone()),
+                        Some(slot) => *slot = val.clone(),
+                        None => arr.insert(key.clone(), val.clone()),
                     }
                     Ok(val)
                 }
@@ -4319,11 +4339,7 @@ impl Context<'_> {
                     let old = match arr.get(key) {
                         Some(v) => v.deref(),
                         None => {
-                            let shown = match key {
-                                Key::Int(i) => i.to_string(),
-                                Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
-                            };
-                            self.warn(format!("Undefined array key {shown}"));
+                            self.undefined_key(key);
                             Value::Null
                         }
                     };
@@ -4334,14 +4350,15 @@ impl Context<'_> {
                     Ok(new)
                 }
             },
+            // A level on the way: its element (made null if missing),
+            // written into where it is (ZEND_FETCH_DIM_W), one lookup. A
+            // compound assignment reads it first (ZEND_FETCH_DIM_RW): a
+            // missing one warns.
             Some((key, rest)) => {
-                if !arr.contains_key(key) {
-                    arr.insert(key.clone(), Value::Null);
+                if op.is_some() && !arr.contains_key(key) {
+                    self.undefined_key(key);
                 }
-                let mut child = std::mem::take(arr.get_mut(key).expect("just inserted"));
-                let r = self.update_path(&mut child, rest, append, val, op);
-                *arr.get_mut(key).expect("present") = child;
-                r
+                self.update_path(arr.slot_mut(key), rest, append, val, op)
             }
         }
     }
