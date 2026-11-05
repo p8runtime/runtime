@@ -98,7 +98,7 @@ impl Context<'_> {
         let closure = match self.lambdas.get(&key) {
             Some(c) => Rc::clone(c),
             None => {
-                let c = Closure::new(Arc::clone(func));
+                let c = Closure::new(Arc::clone(func), self.isolate);
                 self.lambdas.insert(key, Rc::clone(&c));
                 c
             }
@@ -558,6 +558,12 @@ impl Context<'_> {
     }
 
     /// The parameters of a call's target, and its name for messages.
+    /// What messages call `target` (`f`, `C::m`) and its parameters' names.
+    pub(crate) fn callable_params(&self, target: &Target) -> (String, Vec<String>) {
+        let (name, params) = self.named_params(target);
+        (name, params.into_iter().map(|p| p.name).collect())
+    }
+
     fn named_params(&self, target: &Target) -> (String, Vec<NamedParam>) {
         match target {
             Target::Builtin(i) => {

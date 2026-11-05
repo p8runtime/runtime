@@ -19,21 +19,25 @@ use std::rc::Rc;
 /// object (the root itself, or an array element on the way).
 /// (`keys` may be the key registers as they are: references are followed.)
 pub(crate) fn path_has_object(root: &Value, keys: &[Value], append: bool) -> bool {
-    let mut cur = root.deref();
     // The containers written into: root, root[k0], ... (and the last
-    // one's element too when appending).
+    // one's element too when appending). Looked at in place (borrowed
+    // through references), nothing copied.
     let walk = if append { keys.len() } else { keys.len().saturating_sub(1) };
-    for k in keys.iter().take(walk) {
-        match &cur {
-            Value::Object(_) => return true,
-            Value::Array(a) => match Key::from_value(k).ok().and_then(|(k, _)| a.get(&k).map(Value::deref)) {
-                Some(v) => cur = v,
-                None => return false,
+    fn reaches(cur: &Value, keys: &[Value]) -> bool {
+        match cur {
+            Value::Ref(cell) => reaches(&cell.borrow(), keys),
+            Value::Object(_) => true,
+            Value::Array(a) => match keys.split_first() {
+                Some((k, rest)) => match Key::from_value(k).ok().and_then(|(k, _)| a.get(&k)) {
+                    Some(v) => reaches(v, rest),
+                    None => false,
+                },
+                None => false,
             },
-            _ => return false,
+            _ => false,
         }
     }
-    matches!(cur, Value::Object(_))
+    reaches(root, &keys[..walk])
 }
 
 /// What a dimension operation does at the end of its path.

@@ -306,7 +306,7 @@ impl From<Throw> for Bad {
     }
 }
 
-impl Reader<'_> {
+impl<'a> Reader<'a> {
     /// The objects read get their __unserialize() or __wakeup(), in order,
     /// once the whole value is read (PHP's delayed calls).
     fn wake(&mut self, ctx: &mut dyn Ctx) -> Result<(), Throw> {
@@ -344,14 +344,16 @@ impl Reader<'_> {
         Ok(n)
     }
 
-    fn bytes(&mut self) -> Result<Vec<u8>, Bad> {
+    /// A length-prefixed quoted string's bytes, in the input (no copy).
+    fn bytes(&mut self) -> Result<&'a [u8], Bad> {
         let len = self.int(b':')? as usize;
         self.expect(b'"')?;
         let end = self.at + len;
         if end > self.s.len() {
             return Err(Bad::At(self.at));
         }
-        let out = self.s[self.at..end].to_vec();
+        let s: &'a [u8] = self.s;
+        let out = &s[self.at..end];
         self.at = end;
         self.expect(b'"')?;
         Ok(out)
@@ -392,7 +394,8 @@ impl Reader<'_> {
             b's' => {
                 let b = self.bytes()?;
                 self.expect(b';')?;
-                Value::Str(PhpStr::new(b))
+                // (One copy, a short one in the string's own allocation.)
+                Value::Str(PhpStr::from(b))
             }
             b'r' | b'R' => {
                 self.values.pop();
@@ -415,7 +418,7 @@ impl Reader<'_> {
                 let body = self.bytes()?;
                 self.expect(b';')?;
                 let Some(colon) = body.iter().position(|&c| c == b':') else {
-                    ctx.warn(&format!("unserialize(): Invalid enum name '{}' (missing colon)", text(&body)));
+                    ctx.warn(&format!("unserialize(): Invalid enum name '{}' (missing colon)", text(body)));
                     return Err(Bad::At(start));
                 };
                 let (name, case) = (&body[..colon], &body[colon + 1..]);
@@ -447,14 +450,14 @@ impl Reader<'_> {
                 self.expect(b':')?;
                 let n = self.int(b':')?;
                 self.expect(b'{')?;
-                let allowed = self.allowed.as_ref().is_none_or(|list| list.iter().any(|c| c.eq_ignore_ascii_case(&name)));
-                let class = if allowed { object_class(ctx, &name).map_err(|t| t.map_or(Bad::At(start), Bad::Threw))? } else { None };
+                let allowed = self.allowed.as_ref().is_none_or(|list| list.iter().any(|c| c.eq_ignore_ascii_case(name)));
+                let class = if allowed { object_class(ctx, name).map_err(|t| t.map_or(Bad::At(start), Bad::Threw))? } else { None };
                 let (o, incomplete) = match class {
                     Some(c) => (ctx.new_object(&c), false),
                     None => {
                         let c = ctx.class(b"__PHP_Incomplete_Class").ok_or(Bad::At(start))?;
                         let o = ctx.new_object(&c);
-                        o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("__PHP_Incomplete_Class_Name")), Value::Str(PhpStr::new(name)));
+                        o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("__PHP_Incomplete_Class_Name")), Value::Str(PhpStr::from(name)));
                         (o, true)
                     }
                 };

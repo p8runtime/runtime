@@ -647,7 +647,7 @@ impl Context<'_> {
         let ncv = main.consts_at as usize;
         let here = 0u8;
         self.stack_base = std::ptr::addr_of!(here) as usize;
-        self.frames.push(&Closure::new(Arc::clone(&main)), 0, 0, NO_RET);
+        self.frames.push(&Closure::new(Arc::clone(&main), self.isolate), 0, 0, NO_RET);
         self.frames.last_mut().expect("the main frame").global = true;
         enter(&mut self.frames, &mut regs);
         for (name, value) in self.request_globals() {
@@ -975,6 +975,7 @@ impl Context<'_> {
     /// `operand` for an instruction that only looks at the value: the
     /// register's own value, borrowed (no copy, so no drop of one after);
     /// a copy only for an undefined register (it warns) or a reference.
+    #[inline]
     fn operand_ref<'a>(&mut self, w: &'a [Value], func: &Function, r: Reg) -> std::borrow::Cow<'a, Value> {
         match &w[r as usize] {
             Value::Undef | Value::Ref(_) => std::borrow::Cow::Owned(self.operand(w, func, r)),
@@ -1043,7 +1044,6 @@ impl Context<'_> {
     /// cases (cached calls and returns included), `step` the one
     /// instruction it stopped at.
     fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let stop = Arc::clone(&self.stop);
         let mut pc = self.frames.last().expect("a frame").pc as usize;
         // The function `step` last ran in (refreshed when `fast` switched).
         let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
@@ -1052,7 +1052,8 @@ impl Context<'_> {
             pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
         }
         loop {
-            pc = fast(regs, &mut self.frames, &self.closures, pc, &stop, &self.ids);
+            // (The interrupt flag is borrowed, not cloned: no atomic count per run.)
+            pc = fast(regs, &mut self.frames, &self.closures, pc, &self.stop, &self.ids);
             if self.ids.has_pending() {
                 pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
             }
@@ -2068,6 +2069,59 @@ impl Context<'_> {
                             self.var_unset(w, in_main, &name);
                         }
                     }
+                    Rare::PipeArgByRef => {
+                        // The callee as the call finds it (an error finding
+                        // it is the call's own, reported there).
+                        let found: Option<(bool, String, String)> = match c {
+                            0 => match self.resolve(clo, b)? {
+                                Callee::User(fi) => {
+                                    let code = &self.codes[fi as usize];
+                                    let param = code.params.first().map(|p| String::from_utf8_lossy(p.name.as_bytes()).into_owned()).unwrap_or_default();
+                                    Some((code.param_by_ref(0), String::from_utf8_lossy(code.name.as_bytes()).into_owned(), param))
+                                }
+                                Callee::Builtin(i) => {
+                                    let registry = &self.isolate.registry;
+                                    let param = registry.sig(i).and_then(|s| s.params.first()).map(|p| p.name.to_string()).unwrap_or_default();
+                                    Some((registry.must_be_ref(i, 0), registry.function(i).name.to_string(), param))
+                                }
+                                _ => None,
+                            },
+                            _ => {
+                                let callable = match c {
+                                    1 => {
+                                        let name = Value::Str(PhpStr::from(func.sites[b as usize].display.as_bytes()));
+                                        Value::Array(Rc::new(PhpArray::from_list(vec![reg!(a).deref(), name])))
+                                    }
+                                    2 => {
+                                        let target = self.class_at(clo, class, w)?;
+                                        let name = Value::Str(PhpStr::from(func.sites[b as usize].display.as_bytes()));
+                                        Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(target.name.clone()), name])))
+                                    }
+                                    _ => reg!(a).clone(),
+                                };
+                                let retry = self.autoload_retry.clone();
+                                match self.resolve_callable(&callable) {
+                                    Ok(t) => {
+                                        let (name, params) = self.callable_params(&t);
+                                        let by_ref = match &t {
+                                            callable::Target::Builtin(i) => self.isolate.registry.must_be_ref(*i, 0),
+                                            t => self.takes_ref(t, 0),
+                                        };
+                                        Some((by_ref, name, params.into_iter().next().unwrap_or_default()))
+                                    }
+                                    Err(t @ Throw::Autoload(_)) => return Err(t),
+                                    Err(_) => {
+                                        self.autoload_retry = retry;
+                                        None
+                                    }
+                                }
+                            }
+                        };
+                        if let Some((true, name, param)) = found {
+                            let param = if param.is_empty() { String::new() } else { format!(" (${param})") };
+                            return Err(self.throw("Error", format!("{name}(): Argument #1{param} could not be passed by reference")));
+                        }
+                    }
                     Rare::AutoGlobal => {
                         // The name is a constant string: read, not converted.
                         let Value::Str(name) = self.operand(w, func, b) else { unreachable!("AutoGlobal names a constant string") };
@@ -2734,7 +2788,12 @@ impl Context<'_> {
                     }
                     // The keys as written: an ArrayAccess object takes any
                     // (SplObjectStorage's are objects); an array's are converted.
-                    let keys: Vec<Value> = (0..n).map(|i| self.operand(w, func, at + 2 + i as Reg)).collect();
+                    let mut keys = std::mem::take(&mut self.dim_keys);
+                    keys.clear();
+                    for i in 0..n {
+                        let k = self.operand(w, func, at + 2 + i as Reg);
+                        keys.push(k);
+                    }
                     let v = self.operand(w, func, val);
                     // An overloaded property: __get's value is written into
                     // only when it is an object; otherwise nothing changes.
@@ -2774,6 +2833,9 @@ impl Context<'_> {
                         regs[base + dst as usize] = self.aa_write(regs, &root, &keys, append, dim_op)?;
                         return Ok(Next::Go(pc));
                     }
+                    // (Its room kept for the next; what it holds goes now.)
+                    keys.clear();
+                    self.dim_keys = keys;
                     let path = self.key_path(w, func, at + 2, n)?;
                     let r = self.update_prop_dim(&target, &name, &path, append, v, op);
                     self.key_path_done(path);
@@ -3212,7 +3274,7 @@ impl Context<'_> {
         // A file's code has new `static` variables each time it runs (its
         // compiled code may be the last run's, kept by the loader).
         self.statics.remove(&(Arc::as_ptr(main) as usize));
-        self.frames.push(&Closure::new(Arc::clone(main)), at, 0, (base + dst as usize) as u32);
+        self.frames.push(&Closure::new(Arc::clone(main), self.isolate), at, 0, (base + dst as usize) as u32);
         enter(&mut self.frames, regs);
         for (i, cell) in cells.into_iter().enumerate() {
             regs[at + i] = Value::Ref(cell);
@@ -3398,11 +3460,19 @@ impl Context<'_> {
     /// Objects passed to `string` parameters become their __toString(), as
     /// zend_parse_arg_str does (when the registers are lent, so PHP code
     /// can run).
+    /// (Only an object argument can need it: the common call looks no
+    /// further than the arguments' kinds.)
+    #[inline]
     fn stringify_args(&mut self, sig: &p8_runtime::stubs::Sig, args: &mut [Value]) -> Result<(), Throw> {
-        use p8_runtime::stubs::{T_CALLABLE, T_MIXED, T_OBJECT, T_STRING};
-        if self.isolate.regs.is_empty() {
+        if self.isolate.regs.is_empty() || !args.iter().any(|a| matches!(a, Value::Object(_))) {
             return Ok(());
         }
+        self.stringify_objects(sig, args)
+    }
+
+    #[inline(never)]
+    fn stringify_objects(&mut self, sig: &p8_runtime::stubs::Sig, args: &mut [Value]) -> Result<(), Throw> {
+        use p8_runtime::stubs::{T_CALLABLE, T_MIXED, T_OBJECT, T_STRING};
         for (i, arg) in args.iter_mut().enumerate() {
             let Some(param) = sig.params.get(i).or_else(|| sig.params.last().filter(|p| p.variadic)) else { break };
             if param.by_ref || param.mask & T_STRING == 0 || param.mask & (T_OBJECT | T_MIXED | T_CALLABLE) != 0 {
@@ -3584,15 +3654,18 @@ impl Context<'_> {
         }
     }
 
-    #[cold]
+    /// A comparison that is not of two numbers (strings, null, arrays…):
+    /// out of line, but not rare (`$s === ''`, `$x !== null`).
     #[inline(never)]
     fn test_slow(&mut self, w: &[Value], func: &Function, cmp: Cmp, a: Reg, b: Reg) -> bool {
+        let (x, y) = (&w[a as usize], &w[b as usize]);
+        // Two defined, non-reference registers: looked at in place.
+        if !matches!(x, Value::Undef | Value::Ref(_)) && !matches!(y, Value::Undef | Value::Ref(_)) {
+            return test_values(cmp, x, y);
+        }
         let x = self.operand_ref(w, func, a);
         let y = self.operand_ref(w, func, b);
-        match compare(cmp, &x, &y) {
-            Value::Bool(t) => t,
-            v => v.to_bool(),
-        }
+        test_values(cmp, &x, &y)
     }
 
     /// ArgumentCountError for a call passing fewer than `func.required`
@@ -5237,10 +5310,11 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Reg) -> bool {
         w[dst as usize] = Value::Str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
         return true;
     }
-    let mut bytes = Vec::with_capacity(ops::string_len_hint(x) + ops::string_len_hint(y));
+    // Built in the thread's buffer: a short result is one allocation.
+    let mut bytes = PhpStr::scratch(ops::string_len_hint(x) + ops::string_len_hint(y));
     ops::push_string(&mut bytes, x, &mut diags);
     ops::push_string(&mut bytes, y, &mut diags);
-    w[dst as usize] = Value::Str(PhpStr::new(bytes));
+    w[dst as usize] = Value::Str(PhpStr::from_scratch(bytes));
     true
 }
 
@@ -5252,11 +5326,13 @@ fn concat_n(w: &mut [Value], dst: Reg, start: Reg, n: u8) -> bool {
         return false;
     }
     let mut diags = Vec::new();
-    let mut bytes = Vec::with_capacity(parts.iter().map(ops::string_len_hint).sum());
+    // ZEND_ROPE_END: the parts measured, then written into one buffer (the
+    // thread's: a short result is one allocation, a long one its buffer).
+    let mut bytes = PhpStr::scratch(parts.iter().map(ops::string_len_hint).sum());
     for v in parts {
         ops::push_string(&mut bytes, v, &mut diags);
     }
-    w[dst as usize] = Value::Str(PhpStr::new(bytes));
+    w[dst as usize] = Value::Str(PhpStr::from_scratch(bytes));
     true
 }
 
@@ -5304,16 +5380,20 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
         Value::Int(p) => p as usize,
         _ => 0,
     };
-    let next = match &w[iter as usize] {
-        // By value: an element that is a reference (a by-reference foreach
-        // made it one) gives its value, not the reference.
-        Value::Array(a) => a.entry_at(pos).map(|(p, k, v)| (p, k, v.deref())),
-        _ => None,
+    let Value::Array(a) = &w[iter as usize] else { return false };
+    // By value: an element that is a reference (a by-reference foreach
+    // made it one) gives its value, not the reference. The key is made
+    // only when the loop names it.
+    let (p, v, k) = if has_key {
+        let Some((p, k, v)) = a.entry_at(pos) else { return false };
+        (p, v.deref(), Some(k))
+    } else {
+        let Some((p, v)) = a.value_at(pos) else { return false };
+        (p, v.deref(), None)
     };
-    let Some((p, k, v)) = next else { return false };
     w[iter as usize + 1] = Value::Int(p as i64 + 1);
     assign(w, val, v);
-    if has_key {
+    if let Some(k) = k {
         assign(w, key, k.into_value());
     }
     true
@@ -5358,6 +5438,23 @@ fn float_op(op: BinOp, x: f64, y: f64) -> Option<Value> {
         BinOp::Div if y != 0.0 => x / y,
         _ => return None,
     }))
+}
+
+/// Whether `x cmp y` holds (`<=>`: whether it is nonzero), as `compare`
+/// says, without making the result a value.
+#[inline]
+fn test_values(cmp: Cmp, x: &Value, y: &Value) -> bool {
+    match cmp {
+        Cmp::Eq => x.loose_eq(y),
+        Cmp::NotEq => !x.loose_eq(y),
+        Cmp::Identical => x.identical(y),
+        Cmp::NotIdentical => !x.identical(y),
+        Cmp::Lt => x.compare(y) == Some(Ordering::Less),
+        Cmp::Le => matches!(x.compare(y), Some(Ordering::Less | Ordering::Equal)),
+        Cmp::Gt => y.compare(x) == Some(Ordering::Less),
+        Cmp::Ge => matches!(y.compare(x), Some(Ordering::Less | Ordering::Equal)),
+        Cmp::Spaceship => x.compare(y) != Some(Ordering::Equal),
+    }
 }
 
 fn compare(cmp: Cmp, x: &Value, y: &Value) -> Value {

@@ -245,7 +245,7 @@ impl Context<'_> {
         let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
-            let default = p.default.as_ref().map_or(Value::Undef, |d| d.to_value());
+            let default = p.default.as_ref().map_or(Value::Undef, |d| self.isolate.thaw(d));
             let init = p.code.as_ref().map(|c| Thunk(Rc::new(Arc::clone(c))));
             if p.is_static {
                 if let Some(t) = init {
@@ -475,7 +475,7 @@ impl Context<'_> {
                 constants.insert(
                     case.as_bytes().to_vec(),
                     Rc::new(Constant {
-                        value: value.as_ref().map_or(Value::Null, |v| v.to_value()),
+                        value: value.as_ref().map_or(Value::Null, |v| self.isolate.thaw(v)),
                         visibility: Visibility::Public,
                         declaring_name: class_name.clone(),
                         is_case: true,
@@ -513,7 +513,7 @@ impl Context<'_> {
             constants.insert(
                 c.name.as_bytes().to_vec(),
                 Rc::new(Constant {
-                    value: c.value.to_value(),
+                    value: self.isolate.thaw(&c.value),
                     visibility: c.visibility,
                     declaring_name: class_name.clone(),
                     is_case: false,
@@ -717,7 +717,7 @@ impl Context<'_> {
             return Err(self.cannot_instantiate(class));
         }
         let data = class.make_data.map(|make| make());
-        let object = Object::with_slots(Rc::clone(class), &self.ids, data, info.defaults.to_vec());
+        let object = Object::with_slots(Rc::clone(class), &self.ids, data, p8_runtime::object::Props::from_slice(&info.defaults));
         if info.throwable {
             // Where it was made, and the calls that led there.
             let (file, line) = self.location();
@@ -1409,7 +1409,7 @@ impl Context<'_> {
     /// Run a constant expression's code in `scope`.
     fn run_thunk(&mut self, regs: &mut Vec<Value>, thunk: &Thunk, scope: Rc<Class>) -> Result<Value, Throw> {
         let func = thunk.0.downcast_ref::<Arc<Function>>().expect("a constant expression's code");
-        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func))), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None };
+        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func), self.isolate)), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None };
         // The caller is at the instruction that needs the value (its line
         // is where an error in the code is reported).
         let (pc, saved) = (self.pc, self.frames.last().map(|f| f.pc));
@@ -1860,24 +1860,20 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     if let Some(props) = o.class.get_properties {
         return props(o);
     }
-    let mut out = p8_runtime::array::PhpArray::new();
     let slots = o.slots.borrow();
+    let mut out = p8_runtime::array::PhpArray::hashed(slots.len() + o.dynamic.borrow().len());
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if matches!(v, Value::Undef) || p.is_internal() {
             continue;
         }
-        let mut name = Vec::new();
-        match p.visibility {
-            Visibility::Public => {}
-            Visibility::Protected => name.extend_from_slice(b"\0*\0"),
-            Visibility::Private => {
-                name.push(0);
-                name.extend_from_slice(p.declaring_name.as_bytes());
-                name.push(0);
-            }
-        }
-        name.extend_from_slice(p.name.as_bytes());
-        out.insert(Key::from_string(PhpStr::new(name)), v.clone());
+        // A public property's key is its name itself; the others' are
+        // mangled ("\0*\0name", "\0Class\0name"), made in one piece.
+        let name = match p.visibility {
+            Visibility::Public => p.name.clone(),
+            Visibility::Protected => PhpStr::concat_all(&[b"\0*\0", p.name.as_bytes()]),
+            Visibility::Private => PhpStr::concat_all(&[b"\0", p.declaring_name.as_bytes(), b"\0", p.name.as_bytes()]),
+        };
+        out.insert(Key::from_string(name), v.clone());
     }
     for (k, v) in o.dynamic.borrow().iter() {
         out.insert(k, v.clone());
