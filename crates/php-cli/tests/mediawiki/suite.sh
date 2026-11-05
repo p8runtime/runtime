@@ -1,6 +1,7 @@
 #!/bin/bash
 # MediaWiki's own PHPUnit unit tests (the core:unit suite, as MediaWiki's CI
-# runs it: `composer phpunit:unit`) under PHP 8.4 (docker, with the
+# runs it: `composer phpunit:unit`) under the reference PHP
+# (tests/php-src/reference.sh: docker, with the
 # extensions MediaWiki requires) and under p8, compared test by test
 # (../apps/compare.php): how many of the tests PHP passes p8 passes too.
 # Writes the run as a p8-test-suite "suite" line to
@@ -13,7 +14,9 @@
 # tracked files exactly as pinned.
 #
 # Usage: crates/php-cli/tests/mediawiki/suite.sh [path to php2]
-# Needs docker. Takes about a minute under PHP, longer under p8.
+# Needs docker and the p8-test-suite checkout next to this repository (or
+# P8_TEST_SUITE=<its path>), for the PHP version it pins. Takes about a
+# minute under PHP, longer under p8.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../../.." && pwd)
@@ -44,8 +47,10 @@ if [ "$(cat vendor/.p8-lock 2>/dev/null || true)" != "$lock" ]; then
 fi
 git checkout -q -- .
 
-image=p8-php-mwtests:$(shasum -a 256 "$here/suite/Dockerfile" | cut -c1-12)
-docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" "$here/suite" >/dev/null
+# shellcheck source=../../../../tests/php-src/reference.sh
+. "$repo/tests/php-src/reference.sh"
+php_reference "${P8_TEST_SUITE:-$repo/../p8-test-suite}"
+image=$(php_image p8-php-mwtests "$here/suite/Dockerfile" "$here/suite")
 top=/$(printf '%s' "$PWD" | cut -d/ -f2)
 # Runs a shell command under PHP in a copy of the checkout at the same path
 # (the tests print paths); files it names on stdout come back.

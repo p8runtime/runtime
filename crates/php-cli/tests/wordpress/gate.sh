@@ -1,6 +1,7 @@
 #!/bin/bash
-# WordPress gate: install WordPress on MariaDB under PHP 8.4 (docker,
-# with mysqli) and under p8, then make the same requests of each:
+# WordPress gate: install WordPress on MariaDB under the reference PHP (the
+# release p8-test-suite pins, tests/php-src/reference.sh: docker, with
+# mysqli) and under p8, then make the same requests of each:
 # - the public pages (home, a post, the feed, the REST API root, a search,
 #   the login form) and, signed in as the admin, wp-admin's (dashboard,
 #   posts, new post, settings, users, plugins);
@@ -19,8 +20,10 @@
 # and whether it matched.
 #
 # Usage: crates/php-cli/tests/wordpress/gate.sh [path to php2]
-# Needs docker. Works in .tmp/wordpress-gate; MariaDB listens on
-# 127.0.0.1:3307 (container p8-mariadb, network p8net).
+# Needs docker and the p8-test-suite checkout next to this repository
+# (or P8_TEST_SUITE=<its path>), for the PHP version it pins. Works in
+# .tmp/wordpress-gate; MariaDB listens on 127.0.0.1:3307 (container
+# p8-mariadb, network p8net).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../../.." && pwd)
@@ -67,8 +70,10 @@ if ! docker ps --format '{{.Names}}' | grep -qx p8-mariadb; then
         -e MARIADB_ROOT_PASSWORD=p8root -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11.4 >/dev/null
     until docker exec p8-mariadb mariadb -uroot -pp8root -e 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
 fi
-image=p8-php-gate:$(shasum -a 256 "$here/php.Dockerfile" | cut -c1-12)
-docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" -f "$here/php.Dockerfile" "$here" >/dev/null
+# shellcheck source=../../../../tests/php-src/reference.sh
+. "$repo/tests/php-src/reference.sh"
+php_reference "${P8_TEST_SUITE:-$repo/../p8-test-suite}"
+image=$(php_image p8-php-gate "$here/php.Dockerfile" "$here")
 
 sql() { docker exec p8-mariadb mariadb -uroot -pp8root "$@"; }
 for db in wp_php wp_p8; do
@@ -137,7 +142,7 @@ failed=0
 json() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 version_of() { tr -d '\r' < "$1" | sed -n 's/^[ \t*]*Version:[ \t]*\([^ \t]*\).*/\1/p' | head -1; }
 apps_out=$work/apps.jsonl
-printf '{"type":"run","p8":"%s","php":"8.4.27","wordpress":"%s"}\n' "$(git -C "$repo" rev-parse HEAD)" "$version" > "$apps_out"
+printf '{"type":"run","p8":"%s","php":"%s","wordpress":"%s"}\n' "$(git -C "$repo" rev-parse HEAD)" "$php_version" "$version" > "$apps_out"
 # app NAME VERSION KIND SOURCE ABOUT (what it is, in a line, for someone who has not met it)
 app() {
     printf '{"type":"app","name":"%s","version":"%s","kind":"%s","about":"%s","source":"%s"}\n' "$(json "$1")" "$(json "$2")" "$3" "$(json "$5")" "$(json "$4")" >> "$apps_out"
