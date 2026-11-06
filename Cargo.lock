@@ -4413,6 +4413,7 @@ name = "php-cli"
 version = "0.1.0"
 dependencies = [
  "p8",
+ "rusty_alloc-api",
 ]
 
 [[package]]
@@ -4512,6 +4513,12 @@ dependencies = [
  "opaque-debug",
  "universal-hash",
 ]
+
+[[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "postcard"
@@ -5441,6 +5448,26 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "rusty_alloc"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af775820e14adea82b15c22e9d2815cb85976c12285c30caa327f4d441038969"
+dependencies = [
+ "libc",
+ "portable-atomic",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "rusty_alloc-api"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72a5b07b04e499fe5ff94c9866fd3b39e148b02f978b42ee6f572f92d7e32b9f"
+dependencies = [
+ "rusty_alloc",
+]
 
 [[package]]
 name = "rustyline"

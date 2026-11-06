@@ -4,6 +4,14 @@
 
 use std::io::Write;
 
+// php2's allocator, on every platform it is built for: rusty_alloc, a
+// pure-Rust mimalloc (#319). Small objects come from per-thread free lists
+// sharded by size, as PHP's own memory manager hands out its bins; on
+// WordPress and Laravel it measured 4-7% faster than glibc and macOS's
+// allocator, with the same output.
+#[global_allocator]
+static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
+
 mod http;
 mod mime_types;
 mod server;

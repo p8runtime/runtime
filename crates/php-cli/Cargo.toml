@@ -11,3 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 p8 = { path = "../p8" }
+# php2's allocator on every platform (native and wasm32-wasip1): a pure-Rust
+# mimalloc (#319). Pinned exactly: an upgrade is a reviewed change, with the
+# allocator measurements rerun (bench/alloc-experiment).
+rusty_alloc-api = "=2.4.0"
