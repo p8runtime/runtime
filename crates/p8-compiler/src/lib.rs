@@ -1247,7 +1247,10 @@ pub struct Compiler<'src> {
     /// Where a closure in a constant expression is named after (PHP's
     /// active op array as it compiles one): the function or method whose
     /// parameters or attributes hold it (`foo()`, `C::m()`); None: the file.
-    const_owner: Option<String>,
+    /// The name and class, kept as they are: the text is made only when a
+    /// closure there is named (place_of), since every function and method
+    /// sets this and almost none hold a closure.
+    const_owner: Option<(Text, Option<Text>)>,
     /// Compiling a constant expression (a default, a constant's value, a
     /// declaration's CONST_EXPR code): `C::m(...)` is looked up as
     /// zend_ast_evaluate does (Rare::ConstCallable).
@@ -1863,7 +1866,7 @@ impl<'src> Compiler<'src> {
                     let message = format!("Calling a function \"{}\" is deprecated since 8.6", String::from_utf8_lossy(written));
                     self.deprecated(message, line);
                 }
-                let owner = self.const_owner.replace(place_of(&full, None));
+                let owner = self.const_owner.replace((Text::from(full.as_slice()), None));
                 let meta = self.meta_of(attributes, *doc_comment, *span, 2);
                 self.const_owner = owner;
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
@@ -2366,7 +2369,7 @@ impl<'src> Compiler<'src> {
             f.this_known = !is_static;
         }
         // A closure in a parameter's attribute is named after this function.
-        let owner = self.const_owner.replace(place_of(f.name.as_bytes(), f.class.as_ref().map(|c| c.as_bytes())));
+        let owner = self.const_owner.replace((f.name.clone(), f.class.clone()));
         for p in params {
             // A default is a constant expression (zend_compile_params).
             if let Some(d) = p.default {
@@ -2707,7 +2710,10 @@ impl<'src> Compiler<'src> {
         } else if f.name.as_bytes() == CONST_EXPR.as_bytes() {
             // A constant expression's closure: named after what holds the
             // expression (zend_begin_func_decl's active op array).
-            self.const_owner.clone().unwrap_or_else(|| self.file.to_string())
+            match &self.const_owner {
+                Some((name, class)) => place_of(name.as_bytes(), class.as_ref().map(|c| c.as_bytes())),
+                None => self.file.to_string(),
+            }
         } else {
             place_of(f.name.as_bytes(), f.class.as_ref().map(|c| c.as_bytes()))
         };
@@ -3047,7 +3053,7 @@ impl<'src> Compiler<'src> {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
                     let is_static = has(b"static");
-                    let place = place_of(self.text(name.span), Some(display.as_bytes()));
+                    let place = (Text::from(self.text(name.span)), Some(display.clone()));
                     let owner = self.const_owner.replace(place);
                     let meta = self.meta_of(attributes, *doc_comment, *span, 4);
                     self.const_owner = owner;
