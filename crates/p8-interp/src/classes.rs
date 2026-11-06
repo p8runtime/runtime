@@ -36,19 +36,20 @@ pub(crate) struct MethodFrame {
     /// The class the code is in (None: a function, or an unbound closure).
     pub scope: Option<Rc<Class>>,
     pub called: Option<Rc<Class>>,
-    /// A closure's captured values, for its `bound` registers.
-    pub captured: Vec<Value>,
     /// A call of a method that is not there (or not callable from here)
     /// going to __call / __callStatic: its name; the call's arguments are
     /// handed over as (name, [arguments]).
     pub trampoline: Option<PhpStr>,
-    /// The Closure object called (Closure::getCurrent() answers it).
+    /// The Closure object called: its `use` values go into the frame's
+    /// `bound` registers as it starts (read from the Closure itself, as
+    /// PHP's frame reads them from the zend_closure), and
+    /// Closure::getCurrent() answers it.
     pub closure: Option<Rc<Object>>,
 }
 
 impl MethodFrame {
     pub(crate) fn method(func: Code, this: Option<Rc<Object>>, scope: Rc<Class>, called: Rc<Class>) -> MethodFrame {
-        MethodFrame { func, this, scope: Some(scope), called: Some(called), captured: Vec::new(), trampoline: None, closure: None }
+        MethodFrame { func, this, scope: Some(scope), called: Some(called), trampoline: None, closure: None }
     }
 }
 
@@ -1428,7 +1429,7 @@ impl Context<'_> {
     /// Run a constant expression's code in `scope`.
     fn run_thunk(&mut self, regs: &mut Vec<Value>, thunk: &Thunk, scope: Rc<Class>) -> Result<Value, Throw> {
         let func = thunk.0.downcast_ref::<Arc<Function>>().expect("a constant expression's code");
-        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func), self.isolate)), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), captured: Vec::new(), trampoline: None, closure: None };
+        let m = MethodFrame { func: Code::User(Closure::new(Arc::clone(func), self.isolate)), this: None, scope: Some(Rc::clone(&scope)), called: Some(scope), trampoline: None, closure: None };
         // The caller is at the instruction that needs the value (its line
         // is where an error in the code is reported).
         let (pc, saved) = (self.pc, self.frames.last().map(|f| f.pc));

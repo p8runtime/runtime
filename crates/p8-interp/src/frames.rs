@@ -19,11 +19,13 @@ pub(crate) struct Frame {
     pub(crate) this: Option<Rc<Object>>,
     pub(crate) scope: Option<Rc<Class>>,
     pub(crate) called: Option<Rc<Class>>,
-    /// The Generator whose code this frame runs, if any.
-    pub(crate) generator: Option<Rc<Object>>,
-    /// The Closure object whose code this frame runs, if it was called
-    /// as one (Closure::getCurrent()); cleared as the frame ends.
-    pub(crate) closure: Option<Rc<Object>>,
+    /// The object whose code this frame runs: in a generator function's
+    /// code (`func.code.is_generator`) its Generator, which keeps the
+    /// Closure it was made by; else the Closure object the frame was
+    /// called as, if it was (Closure::getCurrent()). One field, as PHP
+    /// keeps neither in the frame: there the closure is the frame's
+    /// function, embedded in the zend_closure (ZEND_CLOSURE_OBJECT).
+    pub(crate) owner: Option<Rc<Object>>,
     /// Its variables are the global ones: the main script, and a file
     /// included at global scope (at any depth of includes).
     pub(crate) global: bool,
@@ -104,6 +106,12 @@ pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
 }
 
 impl Frame {
+    /// The Generator this frame runs, taken (its code returns): none in a
+    /// frame that is not a generator's (its owner is a Closure, if any).
+    pub(crate) fn take_generator(&mut self) -> Option<Rc<Object>> {
+        if self.owner.is_some() && self.func.code.is_generator { self.owner.take() } else { None }
+    }
+
     /// The arguments past the declared parameters.
     pub(crate) fn args(&self) -> &[Value] {
         self.extra.as_ref().map_or(&[], |e| &e.args)
@@ -231,8 +239,7 @@ impl Frames {
                 this: None,
                 scope: None,
                 called: None,
-                generator: None,
-                closure: None,
+                owner: None,
                 global: false,
             }),
         }

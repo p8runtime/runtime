@@ -126,7 +126,6 @@ impl Context<'_> {
                 this: data.this.clone(),
                 scope: data.scope.clone(),
                 called: data.called.clone(),
-                captured: data.captured.borrow().clone(),
                 trampoline: data.trampoline.clone(),
                 closure: Some(Rc::clone(o)),
             }),
@@ -135,7 +134,6 @@ impl Context<'_> {
                 this: data.this.clone(),
                 scope: data.scope.clone(),
                 called: data.called.clone(),
-                captured: Vec::new(),
                 trampoline: None,
                 closure: None,
             }),
@@ -308,13 +306,14 @@ impl Context<'_> {
                 trampoline: None,
                 fake: true,
             },
-            Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, captured, trampoline, .. }) => ClosureData {
+            Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, trampoline, closure }) => ClosureData {
                 func: ClosureFunc::User(func),
                 is_static: this.is_none(),
                 this,
                 scope,
                 called,
-                captured: RefCell::new(captured),
+                // A Closure's target: its `use` values too.
+                captured: RefCell::new(closure.as_deref().and_then(closure_data).map(|d| d.captured.borrow().clone()).unwrap_or_default()),
                 trampoline,
                 fake: true,
             },
@@ -417,7 +416,7 @@ impl Context<'_> {
         match self.function_named(name) {
             Some(crate::sites::Callee::User(f)) => {
                 let func = self.closure_at(f);
-                Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None, closure: None }))
+                Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None }))
             }
             Some(crate::sites::Callee::Builtin(i)) => Ok(Target::Builtin(i)),
             _ => Err(self.throw("Error", format!("Call to undefined function {}()", text(name)))),
@@ -491,15 +490,9 @@ impl Context<'_> {
             && !clo.code.is_generator
             && data.trampoline.is_none()
         {
-            let m = MethodFrame { func: Code::User(Rc::clone(clo)), this: data.this.clone(), scope: data.scope.clone(), called: data.called.clone(), captured: Vec::new(), trampoline: None, closure: Some(Rc::clone(o)) };
-            let next = self.call_target(regs, Target::Frame(m), args, argc, ret, pc)?;
-            if let Next::Switch = next {
-                // The frame just pushed starts at `args`.
-                for (r, v) in clo.code.bound.iter().zip(data.captured.borrow().iter()) {
-                    regs[args + *r as usize] = v.clone();
-                }
-            }
-            return Ok(next);
+            // Its `use` values go in as its frame starts (call_method).
+            let m = MethodFrame { func: Code::User(Rc::clone(clo)), this: data.this.clone(), scope: data.scope.clone(), called: data.called.clone(), trampoline: None, closure: Some(Rc::clone(o)) };
+            return self.call_target(regs, Target::Frame(m), args, argc, ret, pc);
         }
         let target = self.resolve_callable(callee)?;
         self.call_target(regs, target, args, argc, ret, pc)

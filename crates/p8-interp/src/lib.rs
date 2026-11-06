@@ -849,8 +849,18 @@ impl Context<'_> {
 
     /// `(int)` / `(float)` of an object that has no such cast (not a
     /// resource, no cast handler): PHP warns and makes it 1
-    /// (convert_object_to_type).
+    /// (convert_object_to_type). (Only an object, or a reference, is
+    /// looked at further: a scalar's cast goes on at once.)
+    #[inline(always)]
     fn object_cast_warning(&mut self, v: &Value, to: &str) {
+        if matches!(v, Value::Object(_) | Value::Ref(_)) {
+            self.object_cast_warning_slow(v, to);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn object_cast_warning_slow(&mut self, v: &Value, to: &str) {
         if let Value::Object(o) = v.deref()
             && o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0
             && o.class.cast_int.is_none()
@@ -2365,7 +2375,7 @@ impl Context<'_> {
                             self.ref_wanted.retain(|&r| r != ret as usize);
                         }
                         let v = if wanted { Value::Ref(make_ref(w, src)) } else { self.operand(w, func, src) };
-                        if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                        if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
                             self.finish(&g, v);
                             leave(&mut self.frames, regs, Value::Null);
                             return Ok(Next::Switch);
@@ -3329,7 +3339,7 @@ impl Context<'_> {
                                 return Err(self.missing_args(&target.code, passed, None));
                             }
                             if target.code.is_generator {
-                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None, closure: None };
+                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, trampoline: None, closure: None };
                                 let g = self.make_generator(regs, m, target, base + args as usize, argc as usize);
                                 regs[base + dst as usize] = Value::Object(g);
                                 return Ok(Next::Go(pc));
@@ -3368,7 +3378,7 @@ impl Context<'_> {
                         }
                         self.main_return = Some(v.clone());
                     }
-                    if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                    if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
                         self.finish(&g, v);
                         leave(&mut self.frames, regs, Value::Null);
                         return Ok(Next::Switch);
@@ -3381,7 +3391,7 @@ impl Context<'_> {
                     if self.frames.len() == 1 && self.frames.floor == 0 && self.fibers.is_empty() {
                         self.script_end(regs)?;
                     }
-                    if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                    if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
                         self.finish(&g, Value::Null);
                     }
                     leave(&mut self.frames, regs, Value::Null);
@@ -3457,7 +3467,7 @@ impl Context<'_> {
             return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], class));
         }
         if func.code.is_generator {
-            let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, captured: m.captured, trampoline: None, closure: m.closure };
+            let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, trampoline: None, closure: m.closure };
             let g = self.make_generator(regs, frame, Rc::clone(&func), args, argc as usize);
             if ret != NO_RET {
                 regs[ret as usize] = Value::Object(g);
@@ -3472,12 +3482,15 @@ impl Context<'_> {
         frame.this = m.this;
         frame.scope = m.scope;
         frame.called = m.called;
-        frame.closure = m.closure;
+        frame.owner = m.closure;
         enter(&mut self.frames, regs);
-        // A closure's captured values go into their variables.
-        if !m.captured.is_empty() {
-            for (r, v) in func.code.bound.iter().zip(m.captured) {
-                regs[args + *r as usize] = v;
+        // A closure's `use` values go into their variables, from the
+        // Closure called (only a closure's code has `bound` registers).
+        if !func.code.bound.is_empty()
+            && let Some(data) = self.frames.last().and_then(|f| f.owner.as_deref()).and_then(callable::closure_data)
+        {
+            for (r, v) in func.code.bound.iter().zip(data.captured.borrow().iter()) {
+                regs[args + *r as usize] = v.clone();
             }
         }
         Ok(Next::Switch)
@@ -5009,9 +5022,14 @@ impl Ctx for Context<'_> {
 
     /// Closure::getCurrent(): the Closure the calling frame was called as,
     /// one written as a closure (not one made from a named function or
-    /// method: ZEND_ACC_FAKE_CLOSURE).
+    /// method: ZEND_ACC_FAKE_CLOSURE). In a generator's code, the Closure
+    /// the generator was made by (PHP: the generator frame's function).
     fn current_closure(&mut self) -> Result<Value, Throw> {
-        match self.frames.last().and_then(|f| f.closure.clone()) {
+        let closure = self.frames.last().and_then(|f| match &f.owner {
+            Some(g) if f.func.code.is_generator => generators::closure_of(g),
+            owner => owner.clone(),
+        });
+        match closure {
             Some(o) if callable::closure_data(&o).is_some_and(|d| !d.fake) => Ok(Value::Object(o)),
             _ => Err(self.throw("Error", "Current function is not a closure")),
         }

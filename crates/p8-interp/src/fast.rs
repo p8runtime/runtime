@@ -613,8 +613,10 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
         frame.scope = None;
         frame.called = None;
     }
-    if frame.closure.is_some() {
-        frame.closure = None;
+    // The Closure it was called as (a generator's frame gave its
+    // Generator back before it got here).
+    if frame.owner.is_some() {
+        frame.owner = None;
     }
     if frame.ret != NO_RET {
         regs[frame.ret as usize] = value;
