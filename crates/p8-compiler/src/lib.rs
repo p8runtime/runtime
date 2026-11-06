@@ -548,6 +548,7 @@ impl FnBuilder<'_> {
             handlers: self.handlers,
             lambdas: self.lambdas,
             is_generator: self.is_generator,
+            own_location: false,
             bound: self.bound,
             meta: self.meta,
             decls: self.decls,
@@ -796,24 +797,19 @@ fn is_placeholder(args: &[p8_syntax::ast::Arg]) -> bool {
     matches!(args, [arg] if matches!(arg.value, Expr::VariadicPlaceholder { .. }) && arg.name.is_none())
 }
 
+/// A function as a closure made in it is named after: `C::m()`, `f()`.
+fn place_of(name: &[u8], class: Option<&[u8]>) -> String {
+    let name = String::from_utf8_lossy(name);
+    match class {
+        Some(c) => format!("{}::{name}()", String::from_utf8_lossy(c)),
+        None => format!("{name}()"),
+    }
+}
+
 /// Whether a call is a partial application (PHP 8.6): a `?` among its
 /// arguments, or `...` beside others.
 fn is_partial(args: &[p8_syntax::ast::Arg]) -> bool {
     !is_placeholder(args) && args.iter().any(|a| matches!(a.value, Expr::Placeholder { .. } | Expr::VariadicPlaceholder { .. }))
-}
-
-/// Whether an expression makes a partial application anywhere in it.
-fn makes_partial(e: &Expr) -> bool {
-    match e {
-        Expr::Call { args, .. } | Expr::StaticCall { args, .. } | Expr::MethodCall { args, .. } | Expr::New { args, .. } => {
-            is_partial(args) || args.iter().any(|a| makes_partial(a.value))
-        }
-        Expr::Array { items, .. } => items.iter().any(|i| i.key.is_some_and(makes_partial) || makes_partial(i.value)),
-        Expr::Binary { left, right, .. } => makes_partial(left) || makes_partial(right),
-        Expr::Unary { expr, .. } | Expr::Cast { expr, .. } => makes_partial(expr),
-        Expr::Ternary { condition, if_true, if_false, .. } => makes_partial(condition) || if_true.is_some_and(makes_partial) || makes_partial(if_false),
-        _ => false,
-    }
 }
 
 /// Reopen the try blocks `leave_tries` left (the code after the exit is
@@ -1248,6 +1244,17 @@ pub struct Compiler<'src> {
     pending_ret: Option<p8_runtime::types::TypeDecl>,
     /// The doc comment, attributes and last line of the function about to be compiled.
     pending_meta: Option<Meta>,
+    /// Where a closure in a constant expression is named after (PHP's
+    /// active op array as it compiles one): the function or method whose
+    /// parameters or attributes hold it (`foo()`, `C::m()`); None: the file.
+    /// The name and class, kept as they are: the text is made only when a
+    /// closure there is named (place_of), since every function and method
+    /// sets this and almost none hold a closure.
+    const_owner: Option<(Text, Option<Text>)>,
+    /// Compiling a constant expression (a default, a constant's value, a
+    /// declaration's CONST_EXPR code): `C::m(...)` is looked up as
+    /// zend_ast_evaluate does (Rare::ConstCallable).
+    in_const: bool,
     /// What compiling raised that isn't fatal (deprecations), in order: the
     /// main code's `compile_diags`.
     diags: Vec<CompileDiag>,
@@ -1334,6 +1341,8 @@ impl<'src> Compiler<'src> {
             strict: false,
             pending_ret: None,
             pending_meta: None,
+            const_owner: None,
+            in_const: false,
             diags: Vec::new(),
             finally_seen: HashSet::default(),
             mute_diags: false,
@@ -1857,9 +1866,11 @@ impl<'src> Compiler<'src> {
                     let message = format!("Calling a function \"{}\" is deprecated since 8.6", String::from_utf8_lossy(written));
                     self.deprecated(message, line);
                 }
-                let meta = self.meta_of(attributes, *doc_comment, *span, 2)?;
+                let owner = self.const_owner.replace((Text::from(full.as_slice()), None));
+                let meta = self.meta_of(attributes, *doc_comment, *span, 2);
+                self.const_owner = owner;
                 self.pending_ret = return_type.map(|t| self.type_decl(t));
-                self.pending_meta = Some(meta);
+                self.pending_meta = Some(meta?);
                 let (function, _) = self.function_with(Text::from(full.as_slice()), line, params, Body::Stmts(body), *by_ref, &[])?;
                 if self.top_functions.contains(&(stmt as *const Stmt as usize)) {
                     self.functions.push(Arc::new(function));
@@ -1976,7 +1987,11 @@ impl<'src> Compiler<'src> {
                 for c in *consts {
                     let full = join(&self.ns, self.text(c.name.span));
                     let name = f.constant(Frozen::Str(Text::from(full.as_slice())));
-                    let value = self.expr(f, c.value)?;
+                    self.check_const_expr(c.value, true)?;
+                    let in_const = std::mem::replace(&mut self.in_const, true);
+                    let value = self.expr(f, c.value);
+                    self.in_const = in_const;
+                    let value = value?;
                     let site = f.site(false, Text::from("define"), self.sym(b"define"), Text::from("define"));
                     let base = f.temp();
                     let second = f.temp();
@@ -2324,6 +2339,23 @@ impl<'src> Compiler<'src> {
         by_ref: bool,
         uses: &[p8_syntax::ast::ClosureUse],
     ) -> Result<(Function, Vec<Text>)> {
+        // A constant expression's code is one throughout; a function's
+        // body (a closure's in one too) is not.
+        let in_const = std::mem::replace(&mut self.in_const, name.as_bytes() == CONST_EXPR.as_bytes());
+        let r = self.function_body(name, line, params, body, by_ref, uses);
+        self.in_const = in_const;
+        r
+    }
+
+    fn function_body<'a>(
+        &mut self,
+        name: Text,
+        line: u32,
+        params: &[p8_syntax::ast::Param],
+        body: Body<'a>,
+        by_ref: bool,
+        uses: &[p8_syntax::ast::ClosureUse],
+    ) -> Result<(Function, Vec<Text>)> {
         let sym = self.sym_lower(name.as_bytes());
         let mut f = FnBuilder::new(name, sym);
         f.meta = self.pending_meta.take().unwrap_or_default();
@@ -2336,13 +2368,12 @@ impl<'src> Compiler<'src> {
             f.is_static = is_static;
             f.this_known = !is_static;
         }
+        // A closure in a parameter's attribute is named after this function.
+        let owner = self.const_owner.replace((f.name.clone(), f.class.clone()));
         for p in params {
-            // A default making a partial application is checked as the
-            // constant expression it is.
-            if let Some(d) = p.default
-                && makes_partial(d)
-            {
-                self.check_attr_const(d)?;
+            // A default is a constant expression (zend_compile_params).
+            if let Some(d) = p.default {
+                self.check_const_expr(d, true)?;
             }
             let text = self.text(p.name.span);
             f.cv(&text[1..]);
@@ -2369,6 +2400,7 @@ impl<'src> Compiler<'src> {
                 attrs,
             });
         }
+        self.const_owner = owner;
         // A set hook written without its parameter takes `$value`.
         if std::mem::take(&mut self.hook_value) && params.is_empty() {
             f.cv(b"value");
@@ -2392,7 +2424,10 @@ impl<'src> Compiler<'src> {
                 }
                 let at = f.emit(Instr::ArgDefault { n: i as u8, target: 0 });
                 let var = reg(CV, i);
-                let value = self.expr(&mut f, default)?;
+                self.in_const = true;
+                let value = self.expr(&mut f, default);
+                self.in_const = false;
+                let value = value?;
                 f.emit(Instr::Assign { var, src: value });
                 f.reset_temps(f.floor);
                 f.patch(at, f.here());
@@ -2672,12 +2707,15 @@ impl<'src> Compiler<'src> {
     fn closure_name(&self, f: &FnBuilder, line: u32) -> Text {
         let place = if f.name.as_bytes() == b"{main}" {
             self.file.to_string()
-        } else {
-            let name = String::from_utf8_lossy(f.name.as_bytes());
-            match &f.class {
-                Some(c) => format!("{}::{name}()", String::from_utf8_lossy(c.as_bytes())),
-                None => format!("{name}()"),
+        } else if f.name.as_bytes() == CONST_EXPR.as_bytes() {
+            // A constant expression's closure: named after what holds the
+            // expression (zend_begin_func_decl's active op array).
+            match &self.const_owner {
+                Some((name, class)) => place_of(name.as_bytes(), class.as_ref().map(|c| c.as_bytes())),
+                None => self.file.to_string(),
             }
+        } else {
+            place_of(f.name.as_bytes(), f.class.as_ref().map(|c| c.as_bytes()))
         };
         Text::from(format!("{{closure:{place}:{line}}}").as_bytes())
     }
@@ -2804,7 +2842,7 @@ impl<'src> Compiler<'src> {
                         let text = self.text(e.name.span);
                         let (default, code) = match e.default {
                             Some(x) => {
-                                let (v, code) = self.const_init(x)?;
+                                let (v, code) = self.const_init(x, false)?;
                                 (Some(v), code)
                             }
                             None if ty.is_some() => (None, None),
@@ -2970,7 +3008,7 @@ impl<'src> Compiler<'src> {
                     }
                     let (default, code) = match default {
                         Some(x) => {
-                            let (v, code) = self.const_init(x)?;
+                            let (v, code) = self.const_init(x, false)?;
                             (Some(v), code)
                         }
                         None if ty.is_some() || bits & HOOK_VIRTUAL != 0 => (None, None),
@@ -2999,7 +3037,7 @@ impl<'src> Compiler<'src> {
                 ClassMember::Const { attributes, modifiers, consts, doc_comment, .. } => {
                     for c in *consts {
                         namespace_const(self, c.name.span);
-                        let (value, code) = self.const_init(c.value)?;
+                        let (value, code) = self.const_init(c.value, false)?;
                         let meta = self.meta_of(attributes, *doc_comment, c.span, 16)?;
                         constants.push(ConstDef {
                             meta,
@@ -3015,7 +3053,11 @@ impl<'src> Compiler<'src> {
                     let words: Vec<Vec<u8>> = modifiers.iter().map(|m| self.text(m.span).to_ascii_lowercase()).collect();
                     let has = |w: &[u8]| words.iter().any(|x| x == w);
                     let is_static = has(b"static");
-                    let meta = self.meta_of(attributes, *doc_comment, *span, 4)?;
+                    let place = (Text::from(self.text(name.span)), Some(display.clone()));
+                    let owner = self.const_owner.replace(place);
+                    let meta = self.meta_of(attributes, *doc_comment, *span, 4);
+                    self.const_owner = owner;
+                    let meta = meta?;
                     self.method = Some((display.clone(), is_static));
                     self.pending_ret = return_type.map(|t| self.type_decl(t));
                     self.pending_meta = Some(meta);
@@ -3079,12 +3121,14 @@ impl<'src> Compiler<'src> {
         Ok(def)
     }
 
-    /// A constant expression in a declaration (a property default, a class
-    /// constant): literals, and arrays of them, so far.
-    /// A declaration's constant expression: its value now when it is a
-    /// literal; otherwise the code computing it (`self` is this class),
-    /// run when PHP evaluates it.
-    fn const_init(&mut self, e: &Expr) -> Result<(Frozen, Option<Arc<Function>>)> {
+    /// A declaration's constant expression (a property default, a class
+    /// constant, an attribute argument; `dynamic` as check_const_expr
+    /// takes it): its value now when it is a literal; otherwise the code
+    /// computing it (`self` is this class), run when PHP evaluates it.
+    /// A closure in it is that code's lambda: compiled once, program data;
+    /// only the Closure object is made, per request, as it runs.
+    fn const_init(&mut self, e: &Expr, dynamic: bool) -> Result<(Frozen, Option<Arc<Function>>)> {
+        self.check_const_expr(e, dynamic)?;
         if let Ok(v) = self.const_value(e) {
             return Ok((v, None));
         }
@@ -3092,7 +3136,9 @@ impl<'src> Compiler<'src> {
         let method = self.method.take();
         let r = self.function_with(Text::from(CONST_EXPR), line, &[], Body::Expr(e), false, &[]);
         self.method = method;
-        Ok((Frozen::Null, Some(Arc::new(r?.0))))
+        let mut func = r?.0;
+        func.own_location = !matches!(e, Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$"));
+        Ok((Frozen::Null, Some(Arc::new(func))))
     }
 
     /// `__DIR__`: the file's directory.
@@ -4075,8 +4121,7 @@ impl<'src> Compiler<'src> {
                     if arg.name.is_none() && a.args[..i].iter().any(|b| b.name.is_some()) {
                         return Err(CompileError { message: "Cannot use positional argument after named argument".into(), line: self.line(arg.span) });
                     }
-                    self.check_attr_const(arg.value)?;
-                    let (value, code) = self.const_init(arg.value)?;
+                    let (value, code) = self.const_init(arg.value, true)?;
                     args.push(AttrArg { name: arg.name.map(|t| Text::from(self.text(t.span))), value, code });
                 }
                 out.push(AttrDef { name, args, line });
@@ -4085,40 +4130,178 @@ impl<'src> Compiler<'src> {
         Ok(out)
     }
 
-    /// An attribute argument is a constant expression: no calls, variables
-    /// or assignments.
-    fn check_attr_const(&self, e: &Expr) -> Result<()> {
-        let invalid = || CompileError { message: "Constant expression contains invalid operations".into(), line: self.line(e.span()) };
+    /// A constant expression (an attribute argument, a default, a
+    /// constant's value) holds only what one may, as
+    /// zend_compile_const_expr checks it, with its messages. `dynamic`:
+    /// whether it may differ on each evaluation (`new`, object casts:
+    /// parameter defaults, attributes and global constants; not class
+    /// constants or property defaults).
+    fn check_const_expr(&self, e: &Expr, dynamic: bool) -> Result<()> {
+        let fail = |message: &str| Err(CompileError { message: message.into(), line: self.line(e.span()) });
+        let invalid = || fail("Constant expression contains invalid operations");
+        let is_var = |n: &Span| self.text(*n).starts_with(b"$");
         match e {
-            // A first-class callable or partial application of a named
-            // function or static method is one (PHP 8.5, 8.6), its bound
-            // arguments constant expressions too (zend_compile_const_expr_fcc).
-            Expr::Call { func, args, .. } | Expr::StaticCall { class: func, args, .. } if is_placeholder(args) || is_partial(args) => {
-                if matches!(func, Expr::Variable { name, .. } if self.text(*name).starts_with(b"$")) {
-                    return Err(invalid());
+            // A static closure, compiled as the function it is
+            // (zend_compile_const_expr_closure): its body is not checked.
+            Expr::Closure { is_static, uses, .. } => {
+                if !is_static {
+                    return fail("Closures in constant expressions must be static");
                 }
-                for arg in *args {
-                    if !matches!(arg.value, Expr::Placeholder { .. } | Expr::VariadicPlaceholder { .. }) {
-                        self.check_attr_const(arg.value)?;
-                    }
+                if !uses.is_empty() {
+                    return fail("Cannot use(...) variables in constant expression");
                 }
                 Ok(())
             }
-            Expr::Call { .. } | Expr::MethodCall { .. } | Expr::StaticCall { .. } | Expr::Assign { .. } | Expr::Closure { .. } | Expr::ArrowFunction { .. } => Err(invalid()),
-            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" => Err(invalid()),
+            // A first-class callable or partial application of a named
+            // function or static method (PHP 8.5, 8.6), its bound
+            // arguments constant expressions too (zend_compile_const_expr_fcc).
+            Expr::Call { func, args, .. } => {
+                if !is_placeholder(args) && !is_partial(args) {
+                    return invalid();
+                }
+                // `(f)(...)`: a name in parentheses is a constant (the
+                // parser keeps no parentheses: the source says).
+                let parenthesized = || self.source.get(func.span().end..).and_then(|rest| rest.iter().find(|b| !b.is_ascii_whitespace())) == Some(&b')');
+                match func {
+                    Expr::Variable { name, .. } if !is_var(name) && !parenthesized() => {}
+                    Expr::String { .. } => {}
+                    Expr::Integer { .. } | Expr::Float { .. } | Expr::Boolean { .. } | Expr::Null { .. } => return fail("Illegal function name"),
+                    _ => return fail("Cannot use dynamic function name in constant expression"),
+                }
+                self.check_const_args(args, dynamic)
+            }
+            Expr::StaticCall { class, method, args, .. } => {
+                if !is_placeholder(args) && !is_partial(args) {
+                    return invalid();
+                }
+                self.check_const_class(class)?;
+                match method {
+                    Expr::Variable { name, .. } if !is_var(name) => {}
+                    Expr::String { .. } => {}
+                    Expr::Integer { .. } | Expr::Float { .. } | Expr::Boolean { .. } | Expr::Null { .. } => return fail("Illegal method name"),
+                    _ => return fail("Cannot use dynamic method name in constant expression"),
+                }
+                self.check_const_args(args, dynamic)
+            }
+            Expr::New { class, args, .. } => {
+                if !dynamic {
+                    return fail("New expressions are not supported in this context");
+                }
+                self.check_const_class(class)?;
+                if is_placeholder(args) {
+                    return fail("Cannot create Closure for new expression");
+                }
+                self.check_const_args(args, dynamic)
+            }
+            Expr::Cast { kind, expr, .. } => {
+                if matches!(kind, p8_syntax::ast::CastKind::Object) && !dynamic {
+                    return fail("Object casts are not supported in this context");
+                }
+                self.check_const_expr(expr, dynamic)
+            }
+            Expr::Variable { name, .. } if is_var(name) && self.text(*name) != b"$this" => invalid(),
             Expr::Array { items, .. } => {
                 for item in *items {
-                    if let Some(k) = item.key {
-                        self.check_attr_const(k)?;
+                    if item.by_ref {
+                        return invalid();
                     }
-                    self.check_attr_const(item.value)?;
+                    if let Some(k) = item.key {
+                        self.check_const_expr(k, dynamic)?;
+                    }
+                    self.check_const_expr(item.value, dynamic)?;
                 }
                 Ok(())
             }
-            Expr::Binary { left, right, .. } => self.check_attr_const(left).and_then(|()| self.check_attr_const(right)),
-            Expr::Unary { expr, .. } => self.check_attr_const(expr),
+            Expr::Binary { op: BinaryOp::Instanceof | BinaryOp::Pipe, .. } => invalid(),
+            Expr::Binary { left, right, .. } => self.check_const_expr(left, dynamic).and_then(|()| self.check_const_expr(right, dynamic)),
+            Expr::Unary { op: UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::BitNot, expr, .. } => self.check_const_expr(expr, dynamic),
+            Expr::Ternary { condition, if_true, if_false, .. } => {
+                self.check_const_expr(condition, dynamic)?;
+                if let Some(t) = if_true {
+                    self.check_const_expr(t, dynamic)?;
+                }
+                self.check_const_expr(if_false, dynamic)
+            }
+            Expr::ArrayDimFetch { array, dim, .. } => {
+                self.check_const_expr(array, dynamic)?;
+                // (`[]` reading is the compiler's own error.)
+                dim.map_or(Ok(()), |d| self.check_const_expr(d, dynamic))
+            }
+            Expr::PropertyFetch { target, property, .. } | Expr::NullsafePropertyFetch { target, property, .. } => {
+                self.check_const_expr(target, dynamic)?;
+                match property {
+                    Expr::Variable { name, .. } if !is_var(name) => Ok(()),
+                    other => self.check_const_expr(other, dynamic),
+                }
+            }
+            // `C::K`; `C::$p` (a static property) is not one.
+            Expr::ClassConstFetch { class, constant, .. } => {
+                if let Expr::Variable { name, .. } = class
+                    && is_var(name)
+                {
+                    return invalid();
+                }
+                match constant {
+                    Expr::Variable { name, .. } if is_var(name) => invalid(),
+                    Expr::Variable { .. } => Ok(()),
+                    other => self.check_const_expr(other, dynamic),
+                }
+            }
+            Expr::InterpolatedString { parts, .. } => parts.iter().try_for_each(|p| self.check_const_expr(p, dynamic)),
+            Expr::Assign { .. }
+            | Expr::AssignRef { .. }
+            | Expr::AssignOp { .. }
+            | Expr::Unary { .. }
+            | Expr::MethodCall { .. }
+            | Expr::NullsafeMethodCall { .. }
+            | Expr::IndirectVariable { .. }
+            | Expr::ShellExec { .. }
+            | Expr::Include { .. }
+            | Expr::PostInc { .. }
+            | Expr::PostDec { .. }
+            | Expr::Match { .. }
+            | Expr::AnonymousClass { .. }
+            | Expr::Print { .. }
+            | Expr::Yield { .. }
+            | Expr::Empty { .. }
+            | Expr::Isset { .. }
+            | Expr::Eval { .. }
+            | Expr::Die { .. }
+            | Expr::Exit { .. }
+            | Expr::ArrowFunction { .. }
+            | Expr::Clone { .. }
+            | Expr::Throw { .. }
+            | Expr::Placeholder { .. }
+            | Expr::VariadicPlaceholder { .. } => invalid(),
             _ => Ok(()),
         }
+    }
+
+    /// The class of `new C` or `C::m(...)` in a constant expression: a
+    /// name, not `static` (zend_compile_const_expr_class_reference).
+    fn check_const_class(&self, class: &Expr) -> Result<()> {
+        let fail = |message: &str| Err(CompileError { message: message.into(), line: self.line(class.span()) });
+        match class {
+            Expr::AnonymousClass { .. } => fail("Cannot use anonymous class in constant expression"),
+            Expr::Variable { name, .. } if self.text(*name).starts_with(b"$") => fail("Cannot use dynamic class name in constant expression"),
+            Expr::Variable { name, .. } if self.text(*name).eq_ignore_ascii_case(b"static") => fail("\"static\" is not allowed in compile-time constants"),
+            Expr::Variable { .. } => Ok(()),
+            _ => fail("Cannot use dynamic class name in constant expression"),
+        }
+    }
+
+    /// The arguments of a call in a constant expression (its placeholders
+    /// stand for nothing): no unpacking (zend_compile_const_expr_args).
+    fn check_const_args(&self, args: &[p8_syntax::ast::Arg], dynamic: bool) -> Result<()> {
+        for arg in args {
+            if arg.unpack {
+                return Err(CompileError { message: "Argument unpacking in constant expressions is not supported".into(), line: self.line(arg.span) });
+            }
+            if !matches!(arg.value, Expr::Placeholder { .. } | Expr::VariadicPlaceholder { .. }) {
+                self.check_const_expr(arg.value, dynamic)?;
+            }
+        }
+        Ok(())
     }
 
     /// What reflection reads of a declaration: its doc comment, attributes
@@ -4960,7 +5143,11 @@ impl<'src> Compiler<'src> {
                     return self.partial(f, src, args, *span);
                 }
                 let dst = f.temp();
-                f.emit(Instr::FromCallable { dst, src });
+                if self.in_const && !written.starts_with(b"$") {
+                    f.emit(Instr::rare(Rare::ConstCallable, dst, src, 0, 0));
+                } else {
+                    f.emit(Instr::FromCallable { dst, src });
+                }
                 dst
             }
             Expr::MethodCall { target, method, args, .. } => {

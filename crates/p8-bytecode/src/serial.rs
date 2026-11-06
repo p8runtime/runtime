@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 15;
+pub const FORMAT: u32 = 16;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -499,7 +499,7 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
-    handlers, decls, is_generator, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
+    handlers, decls, is_generator, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
 });
 record!(CompileDiag { level, message, line });
 record!(PartialSite { args, variadic, name, line });
@@ -656,6 +656,7 @@ impl Code for Rare {
             Rare::AutoGlobal => 21,
             Rare::PipeArgByRef => 22,
             Rare::Partial => 23,
+            Rare::ConstCallable => 24,
         });
     }
     fn get(r: &mut Reader) -> Got<Self> {
@@ -684,6 +685,7 @@ impl Code for Rare {
             21 => Rare::AutoGlobal,
             22 => Rare::PipeArgByRef,
             23 => Rare::Partial,
+            24 => Rare::ConstCallable,
             _ => return Err(Bad),
         })
     }

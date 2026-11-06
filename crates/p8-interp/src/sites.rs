@@ -95,6 +95,7 @@ impl Closure {
             handlers: Vec::new(),
             decls: Vec::new(),
             is_generator: false,
+            own_location: false,
             lambdas: Vec::new(),
             bound: Vec::new(),
             silences: Vec::new(),
@@ -261,7 +262,7 @@ impl Context<'_> {
     pub(crate) fn remember_method(&self, site: &RefCell<Option<MethodSite>>, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
         let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
         let on_this = m.this.as_ref().is_none_or(|t| Rc::ptr_eq(t, o));
-        if m.trampoline.is_some() || !own_class || !on_this || !m.captured.is_empty() {
+        if m.trampoline.is_some() || !own_class || !on_this || m.closure.is_some() {
             return;
         }
         let Some(declaring) = &m.scope else { return };
@@ -313,7 +314,7 @@ impl Context<'_> {
     /// method for this target class and scope (not a __call/__callStatic
     /// trampoline).
     pub(crate) fn remember_static(&self, site: &RefCell<Option<MethodSite>>, target: &Rc<p8_runtime::object::Class>, m: &crate::classes::MethodFrame) {
-        if m.trampoline.is_some() || !m.captured.is_empty() {
+        if m.trampoline.is_some() || m.closure.is_some() {
             return;
         }
         let Some(declaring) = &m.scope else { return };

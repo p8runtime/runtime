@@ -150,7 +150,7 @@ impl Context<'_> {
 
     /// Run a constant expression's code, in `scope`.
     fn eval_code(&mut self, code: &Arc<Function>, scope: Option<Rc<Class>>) -> Result<Value, Throw> {
-        let frame = MethodFrame { func: Code::User(Closure::new(Arc::clone(code), self.isolate)), this: None, scope: scope.clone(), called: scope, captured: Vec::new(), trampoline: None };
+        let frame = MethodFrame { func: Code::User(Closure::new(Arc::clone(code), self.isolate)), this: None, scope: scope.clone(), called: scope, trampoline: None, closure: None };
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let r = self.run_nested(&mut regs, frame, &mut []);
         self.isolate.regs = regs;
@@ -188,7 +188,7 @@ impl Context<'_> {
         if let Some(ctor) = self.constructor(&object) {
             object.destructed.set(false);
             let target = Target::Frame(ctor);
-            let mut list = self.place_args(&target, args)?;
+            let mut list = self.place_args(&target, args, false)?;
             self.invoke_callee(&Callee::Method(Rc::clone(class), PhpStr::from("__construct")), Some(Rc::clone(&object)), &mut list)?;
         } else if let Some((Key::Str(name), _)) = args.iter().find(|(k, _)| matches!(k, Key::Str(_))) {
             return Err(self.throw("Error", format!("Unknown named parameter ${}", String::from_utf8_lossy(name.as_bytes()))));

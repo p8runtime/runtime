@@ -38,8 +38,9 @@ pub(crate) struct ClosureData {
 /// What a Closure runs.
 pub(crate) enum ClosureFunc {
     User(Rc<Closure>),
-    /// A builtin function (its index), from its name.
-    Builtin(usize),
+    /// A builtin function (its index, and the function: var_dump shows
+    /// its name and parameters), from its name.
+    Builtin(usize, &'static p8_runtime::ext::Builtin),
     /// A builtin class's method (`$doc->createElement(...)`), as its
     /// MethodFrame holds it.
     Method(Native, PhpStr),
@@ -59,7 +60,7 @@ impl Clone for ClosureFunc {
     fn clone(&self) -> ClosureFunc {
         match self {
             ClosureFunc::User(c) => ClosureFunc::User(Rc::clone(c)),
-            ClosureFunc::Builtin(i) => ClosureFunc::Builtin(*i),
+            ClosureFunc::Builtin(i, b) => ClosureFunc::Builtin(*i, b),
             ClosureFunc::Method(n, name) => ClosureFunc::Method(*n, name.clone()),
         }
     }
@@ -117,7 +118,7 @@ impl Context<'_> {
     }
 
     /// What calling a Closure object calls.
-    fn closure_target(&self, o: &Object) -> Option<Target> {
+    fn closure_target(&self, o: &Rc<Object>) -> Option<Target> {
         let data = closure_data(o)?;
         Some(match &data.func {
             ClosureFunc::User(func) => Target::Frame(MethodFrame {
@@ -125,18 +126,18 @@ impl Context<'_> {
                 this: data.this.clone(),
                 scope: data.scope.clone(),
                 called: data.called.clone(),
-                captured: data.captured.borrow().clone(),
                 trampoline: data.trampoline.clone(),
+                closure: Some(Rc::clone(o)),
             }),
             ClosureFunc::Method(native, name) => Target::Frame(MethodFrame {
                 func: Code::Native(*native, name.clone()),
                 this: data.this.clone(),
                 scope: data.scope.clone(),
                 called: data.called.clone(),
-                captured: Vec::new(),
                 trampoline: None,
+                closure: None,
             }),
-            ClosureFunc::Builtin(builtin) => Target::Builtin(*builtin),
+            ClosureFunc::Builtin(builtin, _) => Target::Builtin(*builtin),
         })
     }
 
@@ -157,7 +158,7 @@ impl Context<'_> {
         // a partial application) keeps its method's $this and scope.
         let method_name = || match &data.func {
             ClosureFunc::User(c) => text(c.code.name.as_bytes()),
-            ClosureFunc::Builtin(i) => self.isolate.registry.function(*i).name.to_string(),
+            ClosureFunc::Builtin(_, b) => b.name.to_string(),
             ClosureFunc::Method(_, n) => text(n.as_bytes().rsplit(|&b| b == b':').next().unwrap_or_default()),
         };
         match &this {
@@ -231,12 +232,72 @@ impl Context<'_> {
         Ok(self.new_closure(data))
     }
 
+    /// `C::m(...)`: a Closure of the static method "C::m" in `callable`,
+    /// looked up as zend_std_get_static_method looks a static call's up
+    /// (not visible from here: __callStatic, else an error; abstract: an
+    /// error; a trait's own: deprecated). `in_const`: one in a constant
+    /// expression, as zend_ast_evaluate looks it up (no __callStatic, only
+    /// a static method). Any other callable is closure_from_callable's.
+    pub(crate) fn static_callable(&mut self, callable: &Value, in_const: bool) -> Result<Value, Throw> {
+        let Value::Str(s) = callable.deref() else { return self.closure_from_callable(callable) };
+        let name = s.as_bytes();
+        let Some(at) = name.windows(2).position(|w| w == b"::") else { return self.closure_from_callable(callable) };
+        let (class, method) = (&name[..at], &name[at + 2..]);
+        let scope = self.scope().0;
+        let target = match class.to_ascii_lowercase().as_slice() {
+            b"self" => scope.clone(),
+            b"parent" => scope.as_ref().and_then(|s| s.parent.clone()),
+            b"static" => None,
+            _ => Some(self.find_class(class.strip_prefix(b"\\").unwrap_or(class))?),
+        };
+        // (`static`, or no class scope: resolve_callable says.)
+        let Some(target) = target else { return self.closure_from_callable(callable) };
+        let key = self.method_key(method);
+        let call_static = target.method_sym(p8_runtime::symbol::known::CALL_STATIC).is_some();
+        const MAGIC: &str = "Creating a callable for the magic __callStatic() method is not supported in constant expressions";
+        let Some(m) = crate::classes::method_of(&target, key).cloned() else {
+            if in_const && call_static {
+                return Err(self.throw("Error", MAGIC));
+            }
+            return self.closure_from_callable(callable);
+        };
+        if m.visibility != p8_runtime::object::Visibility::Public {
+            let declaring = self.declaring(&target, &m.declaring);
+            let access = self.access_class(&declaring, &m, key);
+            if !p8_runtime::object::visible(m.visibility, &access, scope.as_deref()) {
+                if in_const && call_static {
+                    return Err(self.throw("Error", MAGIC));
+                }
+                if !in_const && let Some(frame) = self.static_magic_call(&target, method) {
+                    let data = self.target_data(Target::Frame(frame));
+                    return Ok(self.new_closure(data));
+                }
+                let message = format!("Call to {} method {}::{}() from {}", m.visibility.word(), text(m.declaring_name.as_bytes()), text(method), self.scope_name());
+                return Err(self.throw("Error", message));
+            }
+        }
+        if in_const && !m.is_static {
+            return Err(self.throw("Error", format!("Non-static method {}::{}() cannot be called statically", text(m.declaring_name.as_bytes()), text(m.name.as_bytes()))));
+        }
+        if m.is_abstract {
+            return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(m.declaring_name.as_bytes()), text(m.name.as_bytes()))));
+        }
+        self.trait_static_deprecated(&target, &m);
+        self.closure_from_callable(callable)
+    }
+
     /// What a Closure of `callable` (not a Closure itself) holds, no
     /// object made (a partial application makes its own).
     pub(crate) fn callable_data(&mut self, callable: &Value) -> Result<ClosureData, Throw> {
-        Ok(match self.resolve_callable(callable)? {
+        let target = self.resolve_callable(callable)?;
+        Ok(self.target_data(target))
+    }
+
+    /// What a Closure calling `target` holds.
+    fn target_data(&self, target: Target) -> ClosureData {
+        match target {
             Target::Builtin(i) => ClosureData {
-                func: ClosureFunc::Builtin(i),
+                func: ClosureFunc::Builtin(i, self.isolate.registry.function(i)),
                 is_static: true,
                 this: None,
                 scope: None,
@@ -245,13 +306,14 @@ impl Context<'_> {
                 trampoline: None,
                 fake: true,
             },
-            Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, captured, trampoline }) => ClosureData {
+            Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, trampoline, closure }) => ClosureData {
                 func: ClosureFunc::User(func),
                 is_static: this.is_none(),
                 this,
                 scope,
                 called,
-                captured: RefCell::new(captured),
+                // A Closure's target: its `use` values too.
+                captured: RefCell::new(closure.as_deref().and_then(closure_data).map(|d| d.captured.borrow().clone()).unwrap_or_default()),
                 trampoline,
                 fake: true,
             },
@@ -265,7 +327,7 @@ impl Context<'_> {
                 trampoline: None,
                 fake: true,
             },
-        })
+        }
     }
 
     /// Whether `target` takes its argument `n` by reference.
@@ -354,7 +416,7 @@ impl Context<'_> {
         match self.function_named(name) {
             Some(crate::sites::Callee::User(f)) => {
                 let func = self.closure_at(f);
-                Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None }))
+                Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None }))
             }
             Some(crate::sites::Callee::Builtin(i)) => Ok(Target::Builtin(i)),
             _ => Err(self.throw("Error", format!("Call to undefined function {}()", text(name)))),
@@ -428,15 +490,9 @@ impl Context<'_> {
             && !clo.code.is_generator
             && data.trampoline.is_none()
         {
-            let m = MethodFrame { func: Code::User(Rc::clone(clo)), this: data.this.clone(), scope: data.scope.clone(), called: data.called.clone(), captured: Vec::new(), trampoline: None };
-            let next = self.call_target(regs, Target::Frame(m), args, argc, ret, pc)?;
-            if let Next::Switch = next {
-                // The frame just pushed starts at `args`.
-                for (r, v) in clo.code.bound.iter().zip(data.captured.borrow().iter()) {
-                    regs[args + *r as usize] = v.clone();
-                }
-            }
-            return Ok(next);
+            // Its `use` values go in as its frame starts (call_method).
+            let m = MethodFrame { func: Code::User(Rc::clone(clo)), this: data.this.clone(), scope: data.scope.clone(), called: data.called.clone(), trampoline: None, closure: Some(Rc::clone(o)) };
+            return self.call_target(regs, Target::Frame(m), args, argc, ret, pc);
         }
         let target = self.resolve_callable(callee)?;
         self.call_target(regs, target, args, argc, ret, pc)
@@ -600,21 +656,30 @@ impl Context<'_> {
     /// A call's argument array (`...`, named arguments) in parameter
     /// order: string keys are named arguments. A skipped optional
     /// parameter is Undef for a user function (its default runs) or its
-    /// default for a builtin.
-    pub(crate) fn place_args(&mut self, target: &Target, list: &PhpArray) -> Result<Vec<Value>, Throw> {
+    /// default for a builtin. `unpacking`: the list is a `...` spread (its
+    /// errors say so).
+    pub(crate) fn place_args(&mut self, target: &Target, list: &PhpArray, unpacking: bool) -> Result<Vec<Value>, Throw> {
         if !list.iter().any(|(k, _)| matches!(k, Key::Str(_))) {
             return Ok(list.values().map(Value::deref).collect());
         }
         let mut extra = PhpArray::new();
         let mut out: Vec<Value> = Vec::new();
         let mut set: Vec<bool> = Vec::new();
+        let mut named = false;
         for (k, v) in list.iter() {
             match k {
+                // (ZEND_SEND_UNPACK, zend_call_function: a position means
+                // nothing after a name.)
+                Key::Int(_) if named => {
+                    let message = format!("Cannot use positional argument after named argument{}", if unpacking { " during unpacking" } else { "" });
+                    return Err(self.throw("Error", message));
+                }
                 Key::Int(_) => {
                     out.push(self.arg_or_ref(target, out.len(), v));
                     set.push(true);
                 }
                 Key::Str(key) => {
+                    named = true;
                     let Some(i) = self.named_position(target, key.as_bytes()) else {
                         // A variadic user function collects it by name.
                         if matches!(target, Target::Frame(_)) && self.named_params(target).1.last().is_some_and(|p| p.variadic) {
@@ -647,8 +712,11 @@ impl Context<'_> {
         // to run it), another left to its code; looked at in its parameters.
         if let Target::Frame(MethodFrame { func: Code::User(clo), .. }) = target {
             for i in 0..out.len() {
+                if set[i] {
+                    continue;
+                }
                 let p = &clo.code.params[i];
-                if set[i] || !(p.has_default || p.variadic) {
+                if !(p.has_default || p.variadic) {
                     continue;
                 }
                 if let Some(Some(d)) = clo.defaults.get(i) {
@@ -969,6 +1037,21 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
     let key = |k: &str| Key::from_string(PhpStr::from(k));
     let mut out = PhpArray::new();
     let Some(data) = closure_data(o) else { return out };
+    if let ClosureFunc::Builtin(_, b) = &data.func {
+        // A closure of a builtin function: its name as declared, and its
+        // parameters as its stub has them.
+        let sig = p8_stubs::lookup(b.name.as_bytes());
+        out.insert(key("function"), Value::str(sig.map_or(b.name, |s| s.name)));
+        if let Some(sig) = sig.filter(|s| !s.params.is_empty()) {
+            let mut params = PhpArray::new();
+            for p in sig.params {
+                let name = format!("{}${}", if p.by_ref { "&" } else { "" }, p.name);
+                params.insert(Key::from_string(PhpStr::from(name)), Value::str(if p.optional() { "<optional>" } else { "<required>" }));
+            }
+            out.insert(key("parameter"), Value::Array(Rc::new(params)));
+        }
+        return out;
+    }
     let Some(func) = data.func.user().map(|f| &f.code) else { return out };
     if data.fake && data.trampoline.is_none() && !func.name.as_bytes().starts_with(b"{closure") {
         // A closure of a named function or method (ZEND_ACC_FAKE_CLOSURE).

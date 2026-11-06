@@ -847,6 +847,30 @@ impl Context<'_> {
         Throw::Fatal { message, file, line }
     }
 
+    /// `(int)` / `(float)` of an object that has no such cast (not a
+    /// resource, no cast handler): PHP warns and makes it 1
+    /// (convert_object_to_type). (Only an object, or a reference, is
+    /// looked at further: a scalar's cast goes on at once.)
+    #[inline(always)]
+    fn object_cast_warning(&mut self, v: &Value, to: &str) {
+        if matches!(v, Value::Object(_) | Value::Ref(_)) {
+            self.object_cast_warning_slow(v, to);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn object_cast_warning_slow(&mut self, v: &Value, to: &str) {
+        if let Value::Object(o) = v.deref()
+            && o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0
+            && o.class.cast_int.is_none()
+            && o.class.cast_string.is_none()
+        {
+            self.diags.push(Diag::Warning(format!("Object of class {} could not be converted to {to}", String::from_utf8_lossy(o.class.name.as_bytes()))));
+            self.report_diags();
+        }
+    }
+
     fn throw(&self, class: &'static str, message: impl Into<String>) -> Throw {
         let (file, line) = self.location();
         Throw::Error { class, message: message.into(), file, line, props: Vec::new() }
@@ -857,8 +881,10 @@ impl Context<'_> {
             return (Rc::from("Unknown"), 0);
         }
         match self.frames.last() {
-            // A constant expression's code: where it was needed.
-            Some(f) if f.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() => {
+            // A constant expression's code: where it was needed; a class's
+            // (its constants, defaults, attributes), where it is written
+            // (zend_ast_evaluate_ex's filename and lineno override).
+            Some(f) if f.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() && !(f.func.code.own_location && f.scope.is_some()) => {
                 let n = self.frames.len();
                 match self.frames.slots[..n].iter().rev().find(|f| f.func.code.name.as_bytes() != p8_bytecode::CONST_EXPR.as_bytes()) {
                     Some(f) => (Rc::from(&*f.func.code.file), f.func.code.lines.get((f.pc as usize).saturating_sub(1)).copied().unwrap_or(0)),
@@ -1537,9 +1563,13 @@ impl Context<'_> {
                                 self.diags.extend(ops::float_to_int_cast_diag(f));
                                 self.report_diags();
                             }
+                            self.object_cast_warning(&v, "int");
                             Value::Int(v.to_int())
                         }
-                        CastKind::Float => Value::Float(v.to_float()),
+                        CastKind::Float => {
+                            self.object_cast_warning(&v, "float");
+                            Value::Float(v.to_float())
+                        }
                         CastKind::Bool => {
                             if v.is_nan() {
                                 self.nan_coerced("bool");
@@ -1562,6 +1592,8 @@ impl Context<'_> {
                                 self.lazy_init(regs, &o)?;
                                 return Ok(Next::Go(insn_at));
                             }
+                            // A Closure is put in an array, as a scalar is (ZEND_CAST).
+                            Value::Object(o) if callable::closure_data(&o).is_some() => Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(o)]))),
                             Value::Object(o) => Value::Array(Rc::new(classes::object_to_array(&o.proxy_instance().unwrap_or(o)))),
                             Value::Null => Value::Array(Rc::new(PhpArray::new())),
                             other => {
@@ -2305,6 +2337,10 @@ impl Context<'_> {
                         let message = reg!(a).to_php_string().unwrap_or_else(PhpStr::empty);
                         return Err(self.throw("Error", String::from_utf8_lossy(message.as_bytes()).into_owned()));
                     }
+                    Rare::ConstCallable => {
+                        let v = self.operand(w, func, b);
+                        reg!(a) = self.static_callable(&v, true)?;
+                    }
                     Rare::Partial => {
                         let callee = self.operand(w, func, b);
                         let n = func.partials[class as usize].args.len();
@@ -2348,7 +2384,7 @@ impl Context<'_> {
                             self.ref_wanted.retain(|&r| r != ret as usize);
                         }
                         let v = if wanted { Value::Ref(make_ref(w, src)) } else { self.operand(w, func, src) };
-                        if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                        if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
                             self.finish(&g, v);
                             leave(&mut self.frames, regs, Value::Null);
                             return Ok(Next::Switch);
@@ -2526,7 +2562,7 @@ impl Context<'_> {
                 }
                 Instr::FromCallable { dst, src } => {
                     let v = self.operand(w, func, src);
-                    reg!(dst) = self.closure_from_callable(&v)?;
+                    reg!(dst) = self.static_callable(&v, false)?;
                 }
                 Instr::CallValue { dst, callee, base: args, argc, vars } => {
                     let target = self.operand(w, func, callee);
@@ -2653,7 +2689,7 @@ impl Context<'_> {
                                     return self.call_method(regs, m, at, 2, (base + dst as usize) as u32, pc);
                                 }
                                 t => {
-                                    let list = self.place_args(&t, &a)?;
+                                    let list = self.place_args(&t, &a, true)?;
                                     resolved = Some(t);
                                     list
                                 }
@@ -2743,7 +2779,7 @@ impl Context<'_> {
                     let Some(m) = self.constructor(&object) else { return Ok(Next::Go(pc)) };
                     let target = callable::Target::Frame(m);
                     let list = match &arr {
-                        Value::Array(a) => self.place_args(&target, a)?,
+                        Value::Array(a) => self.place_args(&target, a, true)?,
                         _ => Vec::new(),
                     };
                     let callable::Target::Frame(m) = target else { unreachable!("a frame") };
@@ -3312,7 +3348,7 @@ impl Context<'_> {
                                 return Err(self.missing_args(&target.code, passed, None));
                             }
                             if target.code.is_generator {
-                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, captured: Vec::new(), trampoline: None };
+                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, trampoline: None, closure: None };
                                 let g = self.make_generator(regs, m, target, base + args as usize, argc as usize);
                                 regs[base + dst as usize] = Value::Object(g);
                                 return Ok(Next::Go(pc));
@@ -3351,7 +3387,7 @@ impl Context<'_> {
                         }
                         self.main_return = Some(v.clone());
                     }
-                    if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                    if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
                         self.finish(&g, v);
                         leave(&mut self.frames, regs, Value::Null);
                         return Ok(Next::Switch);
@@ -3364,7 +3400,7 @@ impl Context<'_> {
                     if self.frames.len() == 1 && self.frames.floor == 0 && self.fibers.is_empty() {
                         self.script_end(regs)?;
                     }
-                    if let Some(g) = self.frames.last_mut().and_then(|f| f.generator.take()) {
+                    if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
                         self.finish(&g, Value::Null);
                     }
                     leave(&mut self.frames, regs, Value::Null);
@@ -3440,7 +3476,7 @@ impl Context<'_> {
             return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], class));
         }
         if func.code.is_generator {
-            let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, captured: m.captured, trampoline: None };
+            let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, trampoline: None, closure: m.closure };
             let g = self.make_generator(regs, frame, Rc::clone(&func), args, argc as usize);
             if ret != NO_RET {
                 regs[ret as usize] = Value::Object(g);
@@ -3455,11 +3491,15 @@ impl Context<'_> {
         frame.this = m.this;
         frame.scope = m.scope;
         frame.called = m.called;
+        frame.owner = m.closure;
         enter(&mut self.frames, regs);
-        // A closure's captured values go into their variables.
-        if !m.captured.is_empty() {
-            for (r, v) in func.code.bound.iter().zip(m.captured) {
-                regs[args + *r as usize] = v;
+        // A closure's `use` values go into their variables, from the
+        // Closure called (only a closure's code has `bound` registers).
+        if !func.code.bound.is_empty()
+            && let Some(data) = self.frames.last().and_then(|f| f.owner.as_deref()).and_then(callable::closure_data)
+        {
+            for (r, v) in func.code.bound.iter().zip(data.captured.borrow().iter()) {
+                regs[args + *r as usize] = v.clone();
             }
         }
         Ok(Next::Switch)
@@ -4987,6 +5027,21 @@ impl Ctx for Context<'_> {
 
     fn bind_closure(&mut self, closure: &Rc<Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw> {
         self.bind(closure, new_this, scope)
+    }
+
+    /// Closure::getCurrent(): the Closure the calling frame was called as,
+    /// one written as a closure (not one made from a named function or
+    /// method: ZEND_ACC_FAKE_CLOSURE). In a generator's code, the Closure
+    /// the generator was made by (PHP: the generator frame's function).
+    fn current_closure(&mut self) -> Result<Value, Throw> {
+        let closure = self.frames.last().and_then(|f| match &f.owner {
+            Some(g) if f.func.code.is_generator => generators::closure_of(g),
+            owner => owner.clone(),
+        });
+        match closure {
+            Some(o) if callable::closure_data(&o).is_some_and(|d| !d.fake) => Ok(Value::Object(o)),
+            _ => Err(self.throw("Error", "Current function is not a closure")),
+        }
     }
 
     /// Closure::fromCallable(): checked as zend_create_closure_from_callable

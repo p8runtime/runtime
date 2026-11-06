@@ -36,6 +36,11 @@ pub(crate) struct GenState {
     this: Option<Rc<Object>>,
     scope: Option<Rc<Class>>,
     called: Option<Rc<Class>>,
+    /// The Closure object it was made by calling, if it was: kept while
+    /// the generator lives, and Closure::getCurrent() in its code (PHP's
+    /// generator keeps its frame's closure the same way: ZEND_CALL_CLOSURE,
+    /// released in zend_generator_close).
+    closure: Option<Rc<Object>>,
     current: Value,
     key: Value,
     /// The largest int key yielded (the next auto key is one more).
@@ -55,6 +60,11 @@ pub(crate) struct Gen(RefCell<GenState>);
 
 pub(crate) fn gen_of(o: &Object) -> Option<&Gen> {
     o.data.as_ref().and_then(|d| d.0.downcast_ref::<Gen>())
+}
+
+/// The Closure object a Generator was made by calling, if any.
+pub(crate) fn closure_of(generator: &Object) -> Option<Rc<Object>> {
+    gen_of(generator).and_then(|g| g.0.borrow().closure.clone())
 }
 
 /// Which Generator method runs.
@@ -89,8 +99,11 @@ impl Context<'_> {
         if argc < nparams && !func.defaults.is_empty() {
             crate::fast::fill_defaults(&func.defaults, &mut window[..nparams], argc);
         }
-        for (r, v) in code.bound.iter().zip(m.captured) {
-            window[*r as usize] = v;
+        // A closure's `use` values, from the Closure called.
+        if let Some(data) = m.closure.as_deref().and_then(crate::callable::closure_data) {
+            for (r, v) in code.bound.iter().zip(data.captured.borrow().iter()) {
+                window[*r as usize] = v.clone();
+            }
         }
         let state = GenState {
             func,
@@ -100,6 +113,7 @@ impl Context<'_> {
             this: m.this,
             scope: m.scope,
             called: m.called,
+            closure: m.closure,
             current: Value::Null,
             key: Value::Null,
             largest: -1,
@@ -164,7 +178,7 @@ impl Context<'_> {
             frame.this = this;
             frame.scope = scope;
             frame.called = called;
-            frame.generator = Some(Rc::clone(object));
+            frame.owner = Some(Rc::clone(object));
         }
         self.frames.floor = index;
         let mut r = Ok(());
@@ -184,7 +198,7 @@ impl Context<'_> {
         if let (Some(caller), Some(pc)) = (self.frames.last_mut(), caller_pc) {
             caller.pc = pc;
         }
-        self.frames.slots[index].generator = None;
+        self.frames.slots[index].owner = None;
         let mut s = state.0.borrow_mut();
         s.running = false;
         if r.is_err() {
@@ -201,7 +215,7 @@ impl Context<'_> {
     /// registers; it gives `value` (under `key`, or the next int key).
     pub(crate) fn suspend(&mut self, regs: &mut [Value], value: Value, key: Option<Value>, resume_pc: usize, dst: Option<Reg>) -> Next {
         let frame = self.frames.pop();
-        let generator = frame.generator.take().expect("a generator's frame");
+        let generator = frame.owner.take().expect("a generator's frame");
         let base = frame.base as usize;
         let nregs = frame.func.code.nregs as usize;
         frame.this = None;
@@ -245,7 +259,7 @@ impl Context<'_> {
     /// (the frame stops, to run this again), or Ok(Some(result)) when
     /// that is done.
     pub(crate) fn yield_from(&mut self, regs: &mut Vec<Value>, base: usize, src: Reg, at: usize) -> Result<Result<Next, Value>, Throw> {
-        let generator = self.frames.last().and_then(|f| f.generator.clone()).expect("yield in a generator");
+        let generator = self.frames.last().and_then(|f| f.owner.clone()).expect("yield in a generator");
         let state = gen_of(&generator).expect("a Generator");
         let first = state.0.borrow().delegate.is_none();
         if first {
