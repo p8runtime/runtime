@@ -4,6 +4,25 @@
 
 use std::io::Write;
 
+// Allocator experiment (draft): at most one `alloc-*` feature picks a
+// pure-Rust allocator crate; none keeps the system allocator.
+#[cfg(feature = "alloc-dlmalloc")]
+#[global_allocator]
+static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
+#[cfg(feature = "alloc-rlsf")]
+#[global_allocator]
+static ALLOC: rlsf::GlobalTlsf = rlsf::GlobalTlsf::new();
+#[cfg(feature = "alloc-talc")]
+#[global_allocator]
+static ALLOC: talc::sync::TalcLock<
+    spinning_top::RawSpinlock,
+    talc::source::GlobalAllocSource<std::alloc::System>,
+    talc::DefaultBinning,
+> = talc::sync::TalcLock::new(talc::source::GlobalAllocSource::new(std::alloc::System));
+#[cfg(feature = "alloc-rusty")]
+#[global_allocator]
+static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
+
 mod http;
 mod mime_types;
 mod server;
