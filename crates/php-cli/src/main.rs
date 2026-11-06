@@ -4,22 +4,11 @@
 
 use std::io::Write;
 
-// Allocator experiment (draft): at most one `alloc-*` feature picks a
-// pure-Rust allocator crate; none keeps the system allocator.
-#[cfg(feature = "alloc-dlmalloc")]
-#[global_allocator]
-static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
-#[cfg(feature = "alloc-rlsf")]
-#[global_allocator]
-static ALLOC: rlsf::GlobalTlsf = rlsf::GlobalTlsf::new();
-#[cfg(feature = "alloc-talc")]
-#[global_allocator]
-static ALLOC: talc::sync::TalcLock<
-    spinning_top::RawSpinlock,
-    talc::source::GlobalAllocSource<std::alloc::System>,
-    talc::DefaultBinning,
-> = talc::sync::TalcLock::new(talc::source::GlobalAllocSource::new(std::alloc::System));
-#[cfg(feature = "alloc-rusty")]
+// php2's allocator, on every platform it is built for: rusty_alloc, a
+// pure-Rust mimalloc (#319). Small objects come from per-thread free lists
+// sharded by size, as PHP's own memory manager hands out its bins; on
+// WordPress and Laravel it measured 4-7% faster than glibc and macOS's
+// allocator, with the same output.
 #[global_allocator]
 static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 

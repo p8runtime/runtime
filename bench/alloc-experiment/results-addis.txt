@@ -1,0 +1,66 @@
+cg lv glibc 1 5400828645 - e1acc1c4ac7b | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+cg lv talc 1 5395473914 - e213c14077af | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+cg lv rusty 1 4916679852 - e0f23c87c480 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv glibc 1 1282224774 110292 23cf275293cd | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv talc 1 1258679797 115628 bb24242a2f69 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv rusty 1 1156572042 113824 fbc429ce4d59 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv talc 2 1258091559 115860 25b13b5a2c15 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv rusty 2 1155750548 113644 becffe31307a | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv glibc 2 1243982595 110648 ddc9d596d419 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv rusty 3 1151781295 113664 ca4a27dff442 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv glibc 3 1255858397 110544 88423c3c3697 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv talc 3 1247121774 115768 e15d1aaffe00 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv glibc 4 1245806754 110592 b80101a0313d | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv talc 4 1252097626 115756 267419263ef3 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv rusty 4 1151155596 113180 fbc429ce4d59 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv talc 5 1258140749 115628 e1ae8bc7269c | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv rusty 5 1153378427 113500 becffe31307a | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall lv glibc 5 1243765669 110504 2ed358fc161d | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+cg wp-r1 glibc 1 3686274951 - f7ec642e0b21 | render_ms=29839.7 
+cg wp-r4 glibc 1 11069670902 - f7ec642e0b21 | render_ms=28712.0 render_ms=19796.8 render_ms=19618.3 render_ms=19562.7 
+cg wp-r1 talc 1 3461529631 - f7ec642e0b21 | render_ms=28147.9 
+cg wp-r4 talc 1 11005173665 - f7ec642e0b21 | render_ms=28299.3 render_ms=19521.7 render_ms=19506.8 render_ms=19577.1 
+cg wp-r1 rusty 1 3214675566 - f7ec642e0b21 | render_ms=26824.3 
+cg wp-r4 rusty 1 10497862529 - f7ec642e0b21 | render_ms=26922.2 render_ms=18974.2 render_ms=18944.3 render_ms=18955.0 
+wall wp-r1 glibc 1 750245968 102768 f7ec642e0b21 | render_ms=705.1 
+wall wp-r4 glibc 1 2233210078 120436 f7ec642e0b21 | render_ms=661.9 render_ms=550.9 render_ms=467.4 render_ms=480.6 
+wall wp-r1 talc 1 719518476 108784 f7ec642e0b21 | render_ms=683.5 
+wall wp-r4 talc 1 2214153939 122612 f7ec642e0b21 | render_ms=665.4 render_ms=492.5 render_ms=490.4 render_ms=511.9 
+wall wp-r1 rusty 1 711820597 110040 f7ec642e0b21 | render_ms=681.6 
+wall wp-r4 rusty 1 2068914082 124084 f7ec642e0b21 | render_ms=649.7 render_ms=470.4 render_ms=459.9 render_ms=448.2 
+wall wp-r1 talc 2 682305718 108396 f7ec642e0b21 | render_ms=646.6 
+wall wp-r4 talc 2 2142942350 125008 f7ec642e0b21 | render_ms=650.1 render_ms=451.4 render_ms=482.6 render_ms=503.9 
+wall wp-r1 rusty 2 668059064 110220 f7ec642e0b21 | render_ms=638.2 
+wall wp-r4 rusty 2 2119490087 124180 f7ec642e0b21 | render_ms=627.7 render_ms=485.3 render_ms=493.3 render_ms=472.7 
+wall wp-r1 glibc 2 727740416 104728 f7ec642e0b21 | render_ms=683.9 
+wall wp-r4 glibc 2 2157146230 118736 f7ec642e0b21 | render_ms=658.3 render_ms=474.0 render_ms=482.1 render_ms=470.7 
+wall wp-r1 rusty 3 647876249 108208 f7ec642e0b21 | render_ms=617.8 
+wall wp-r4 rusty 3 2248759118 126084 f7ec642e0b21 | render_ms=653.9 render_ms=527.5 render_ms=501.3 render_ms=523.5 
+wall wp-r1 glibc 3 717710287 104976 f7ec642e0b21 | render_ms=671.8 
+wall wp-r4 glibc 3 2231883629 120708 f7ec642e0b21 | render_ms=667.9 render_ms=482.3 render_ms=514.0 render_ms=496.2 
+wall wp-r1 talc 3 714515369 110920 f7ec642e0b21 | render_ms=676.7 
+wall wp-r4 talc 3 2098594265 124608 f7ec642e0b21 | render_ms=652.6 render_ms=470.9 render_ms=461.6 render_ms=458.4 
+wall wp-r1 glibc 4 711164347 104956 f7ec642e0b21 | render_ms=665.5 
+wall wp-r4 glibc 4 2113247577 120304 f7ec642e0b21 | render_ms=649.4 render_ms=455.4 render_ms=472.6 render_ms=462.5 
+wall wp-r1 talc 4 735468285 109004 f7ec642e0b21 | render_ms=698.0 
+wall wp-r4 talc 4 2537399897 124456 f7ec642e0b21 | render_ms=687.6 render_ms=503.7 render_ms=493.9 render_ms=797.3 
+wall wp-r1 rusty 4 670573228 110092 f7ec642e0b21 | render_ms=640.3 
+wall wp-r4 rusty 4 2060426165 125936 f7ec642e0b21 | render_ms=650.3 render_ms=446.6 render_ms=462.4 render_ms=459.8 
+wall wp-r1 talc 5 678451670 111152 f7ec642e0b21 | render_ms=641.5 
+wall wp-r4 talc 5 3119394048 126832 f7ec642e0b21 | render_ms=1491.0 render_ms=547.5 render_ms=519.3 render_ms=507.6 
+wall wp-r1 rusty 5 685021176 110220 f7ec642e0b21 | render_ms=654.2 
+wall wp-r4 rusty 5 2542436985 123132 f7ec642e0b21 | render_ms=957.7 render_ms=475.0 render_ms=594.2 render_ms=472.7 
+wall wp-r1 glibc 5 711960447 104680 f7ec642e0b21 | render_ms=667.4 
+wall wp-r4 glibc 5 2242141167 120752 f7ec642e0b21 | render_ms=689.6 render_ms=482.7 render_ms=500.1 render_ms=496.2 
+wall wp-r1 rusty 6 664782925 109452 f7ec642e0b21 | render_ms=635.8 
+wall wp-r4 rusty 6 2120370543 124080 f7ec642e0b21 | render_ms=692.3 render_ms=471.6 render_ms=455.8 render_ms=457.9 
+wall wp-r1 glibc 6 728701351 105164 f7ec642e0b21 | render_ms=682.1 
+wall wp-r4 glibc 6 2153857823 120392 f7ec642e0b21 | render_ms=667.0 render_ms=480.6 render_ms=466.5 render_ms=468.6 
+wall wp-r1 talc 6 703749044 110848 f7ec642e0b21 | render_ms=666.6 
+wall wp-r4 talc 6 2303077428 124844 f7ec642e0b21 | render_ms=839.5 render_ms=472.2 render_ms=464.6 render_ms=472.9 
+wall wp-r1 glibc 7 722734253 104932 f7ec642e0b21 | render_ms=676.2 
+wall wp-r4 glibc 7 2446535772 120188 f7ec642e0b21 | render_ms=671.4 render_ms=496.3 render_ms=710.1 render_ms=497.9 
+wall wp-r1 talc 7 729940292 111052 f7ec642e0b21 | render_ms=692.3 
+wall wp-r4 talc 7 2410541226 126792 f7ec642e0b21 | render_ms=854.8 render_ms=513.6 render_ms=495.8 render_ms=491.0 
+wall wp-r1 rusty 7 932668449 110556 f7ec642e0b21 | render_ms=902.6 
+wall wp-r4 rusty 7 2238207175 123240 f7ec642e0b21 | render_ms=701.7 render_ms=484.5 render_ms=553.1 render_ms=458.3 
