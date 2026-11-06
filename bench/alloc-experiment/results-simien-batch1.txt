@@ -1,0 +1,120 @@
+wall wp-r1 system 1 481009920 99696 f7ec642e0b21 | render_ms=442.4 
+wall wp-r4 system 1 1119355136 108352 f7ec642e0b21 | render_ms=353.6 render_ms=244.2 render_ms=242.8 render_ms=243.2 
+wall lv system 1 882854144 113104 5281df1f11c5 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 1 878110976 94688 f7ec642e0b21 | render_ms=383.1 
+wall wp-r4 dlmalloc 1 1160375040 104064 f7ec642e0b21 | render_ms=355.3 render_ms=247.9 render_ms=260.6 render_ms=253.5 
+wall lv dlmalloc 1 686601984 106256 cae4a46ddce3 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 1 1131705856 103024 f7ec642e0b21 | render_ms=386.1 
+wall wp-r4 rlsf 1 1139404800 113088 f7ec642e0b21 | render_ms=354.8 render_ms=248.1 render_ms=248.9 render_ms=249.6 
+wall lv rlsf 1 690826240 116416 382a55904f6c | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 1 969435904 98448 f7ec642e0b21 | render_ms=385.7 
+wall wp-r4 talc 1 1128754944 108176 f7ec642e0b21 | render_ms=357.9 render_ms=246.0 render_ms=245.7 render_ms=245.6 
+wall lv talc 1 667046912 111168 3413201d3e7d | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 1 905420032 101168 f7ec642e0b21 | render_ms=361.9 
+wall wp-r4 rusty 1 1088267264 110224 f7ec642e0b21 | render_ms=330.8 render_ms=237.6 render_ms=240.8 render_ms=248.3 
+wall lv rusty 1 619714816 110768 89ec23caa2fe | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 2 386322176 94624 f7ec642e0b21 | render_ms=353.8 
+wall wp-r4 dlmalloc 2 1159939072 104080 f7ec642e0b21 | render_ms=372.0 render_ms=248.4 render_ms=249.1 render_ms=248.0 
+wall lv dlmalloc 2 678860032 106240 6780003ddfdb | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 2 386578944 103008 f7ec642e0b21 | render_ms=356.8 
+wall wp-r4 rlsf 2 1145890048 113088 f7ec642e0b21 | render_ms=358.0 render_ms=250.6 render_ms=250.0 render_ms=248.8 
+wall lv rlsf 2 678002944 116384 6780003ddfdb | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 2 379183872 98432 f7ec642e0b21 | render_ms=352.2 
+wall wp-r4 talc 2 1148491008 108192 f7ec642e0b21 | render_ms=362.7 render_ms=246.1 render_ms=252.4 render_ms=253.1 
+wall lv talc 2 675701248 111168 7972b2beb876 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 2 356782080 101152 f7ec642e0b21 | render_ms=330.9 
+wall wp-r4 rusty 2 1078305024 110240 f7ec642e0b21 | render_ms=333.0 render_ms=238.4 render_ms=238.1 render_ms=238.2 
+wall lv rusty 2 617607680 110752 e98871594cd7 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 system 2 383576064 99808 f7ec642e0b21 | render_ms=354.4 
+wall wp-r4 system 2 1130532096 108208 f7ec642e0b21 | render_ms=361.6 render_ms=244.6 render_ms=245.1 render_ms=243.2 
+wall lv system 2 682447104 113216 7972b2beb876 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 3 386201856 102992 f7ec642e0b21 | render_ms=356.4 
+wall wp-r4 rlsf 3 1146462720 113072 f7ec642e0b21 | render_ms=356.5 render_ms=249.6 render_ms=250.0 render_ms=251.3 
+wall lv rlsf 3 679578880 116384 3bf3862ea7b3 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 3 378931968 98416 f7ec642e0b21 | render_ms=352.1 
+wall wp-r4 talc 3 1121853184 108192 f7ec642e0b21 | render_ms=352.7 render_ms=245.6 render_ms=245.2 render_ms=244.8 
+wall lv talc 3 674440960 111168 3bf3862ea7b3 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 3 355821824 101152 f7ec642e0b21 | render_ms=330.5 
+wall wp-r4 rusty 3 1098181888 110240 f7ec642e0b21 | render_ms=330.7 render_ms=245.5 render_ms=245.2 render_ms=245.9 
+wall lv rusty 3 623412992 110768 89ec23caa2fe | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 system 3 383336192 99712 f7ec642e0b21 | render_ms=354.5 
+wall wp-r4 system 3 1119304704 108304 f7ec642e0b21 | render_ms=353.7 render_ms=243.7 render_ms=243.3 render_ms=243.3 
+wall lv system 3 672487168 113088 25a5c2002a48 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 3 388807936 94592 f7ec642e0b21 | render_ms=355.7 
+wall wp-r4 dlmalloc 3 1159719168 104144 f7ec642e0b21 | render_ms=359.7 render_ms=261.3 render_ms=248.1 render_ms=248.1 
+wall lv dlmalloc 3 680986880 106240 6780003ddfdb | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 4 379532288 98464 f7ec642e0b21 | render_ms=352.5 
+wall wp-r4 talc 4 1124202240 108176 f7ec642e0b21 | render_ms=352.3 render_ms=245.8 render_ms=246.5 render_ms=245.9 
+wall lv talc 4 666082816 111168 a82e4de81f4f | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 4 355854848 101152 f7ec642e0b21 | render_ms=330.4 
+wall wp-r4 rusty 4 1083239168 110240 f7ec642e0b21 | render_ms=330.8 render_ms=241.8 render_ms=243.5 render_ms=236.7 
+wall lv rusty 4 626131968 110768 b89c1768de47 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 system 4 387593984 99680 f7ec642e0b21 | render_ms=358.6 
+wall wp-r4 system 4 1130594816 108336 f7ec642e0b21 | render_ms=361.9 render_ms=243.5 render_ms=246.0 render_ms=243.7 
+wall lv system 4 663016192 113216 8d743ba776a5 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 4 387877888 94656 f7ec642e0b21 | render_ms=355.0 
+wall wp-r4 dlmalloc 4 1154083072 104112 f7ec642e0b21 | render_ms=354.8 render_ms=257.7 render_ms=251.1 render_ms=248.0 
+wall lv dlmalloc 4 700697856 106256 5281df1f11c5 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 4 387683840 102992 f7ec642e0b21 | render_ms=357.4 
+wall wp-r4 rlsf 4 1145294848 113104 f7ec642e0b21 | render_ms=357.8 render_ms=249.6 render_ms=249.7 render_ms=249.7 
+wall lv rlsf 4 678002944 116416 6780003ddfdb | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 5 356195072 101136 f7ec642e0b21 | render_ms=330.6 
+wall wp-r4 rusty 5 1075307008 110240 f7ec642e0b21 | render_ms=330.7 render_ms=237.8 render_ms=238.1 render_ms=238.4 
+wall lv rusty 5 618899968 110768 89ec23caa2fe | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 system 5 393987072 99776 f7ec642e0b21 | render_ms=364.5 
+wall wp-r4 system 5 1135806976 108160 f7ec642e0b21 | render_ms=353.7 render_ms=249.9 render_ms=252.4 render_ms=243.9 
+wall lv system 5 667022848 113264 02d3a9137f86 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 5 389372160 94608 f7ec642e0b21 | render_ms=356.8 
+wall wp-r4 dlmalloc 5 1140444160 104096 f7ec642e0b21 | render_ms=354.5 render_ms=247.9 render_ms=248.2 render_ms=247.9 
+wall lv dlmalloc 5 686310912 106240 88a150ba31f6 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 5 392155904 102992 f7ec642e0b21 | render_ms=361.8 
+wall wp-r4 rlsf 5 1166521856 113088 f7ec642e0b21 | render_ms=361.0 render_ms=259.0 render_ms=258.1 render_ms=249.7 
+wall lv rlsf 5 678332928 116384 3bf3862ea7b3 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 5 379361792 98448 f7ec642e0b21 | render_ms=352.2 
+wall wp-r4 talc 5 1125178112 108192 f7ec642e0b21 | render_ms=352.7 render_ms=246.2 render_ms=246.6 render_ms=246.0 
+wall lv talc 5 663941376 111168 a82e4de81f4f | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 system 6 380603136 99792 f7ec642e0b21 | render_ms=351.9 
+wall wp-r4 system 6 1131289856 108400 f7ec642e0b21 | render_ms=353.4 render_ms=244.2 render_ms=249.0 render_ms=249.1 
+wall lv system 6 660624896 113296 8d743ba776a5 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 6 393403136 94608 f7ec642e0b21 | render_ms=360.7 
+wall wp-r4 dlmalloc 6 1163779072 104112 f7ec642e0b21 | render_ms=361.8 render_ms=256.5 render_ms=255.0 render_ms=248.5 
+wall lv dlmalloc 6 679378944 106272 7972b2beb876 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 6 386987008 103008 f7ec642e0b21 | render_ms=357.2 
+wall wp-r4 rlsf 6 1169918976 113088 f7ec642e0b21 | render_ms=357.5 render_ms=262.6 render_ms=260.7 render_ms=250.8 
+wall lv rlsf 6 700047872 116400 5281df1f11c5 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 6 380452096 98432 f7ec642e0b21 | render_ms=353.1 
+wall wp-r4 talc 6 1228273920 108192 f7ec642e0b21 | render_ms=356.5 render_ms=343.3 render_ms=247.5 render_ms=246.0 
+wall lv talc 6 684689152 111168 e3bd11f99db7 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 6 368147200 101152 f7ec642e0b21 | render_ms=339.9 
+wall wp-r4 rusty 6 1079132928 110240 f7ec642e0b21 | render_ms=333.7 render_ms=237.8 render_ms=238.0 render_ms=238.2 
+wall lv rusty 6 620789248 110768 89ec23caa2fe | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 7 400282112 94592 f7ec642e0b21 | render_ms=366.8 
+wall wp-r4 dlmalloc 7 1162123008 104112 f7ec642e0b21 | render_ms=356.9 render_ms=248.4 render_ms=257.4 render_ms=256.8 
+wall lv dlmalloc 7 694577920 106256 c4786f4c1621 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 7 389207296 102992 f7ec642e0b21 | render_ms=359.4 
+wall wp-r4 rlsf 7 1147341056 113120 f7ec642e0b21 | render_ms=358.5 render_ms=249.9 render_ms=250.0 render_ms=250.3 
+wall lv rlsf 7 687293184 116400 88a150ba31f6 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 7 386999808 98416 f7ec642e0b21 | render_ms=359.5 
+wall wp-r4 talc 7 1146548992 108192 f7ec642e0b21 | render_ms=354.8 render_ms=264.6 render_ms=246.6 render_ms=246.1 
+wall lv talc 7 665632768 111168 8a0eeb90dbe0 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 7 358171904 101136 f7ec642e0b21 | render_ms=332.3 
+wall wp-r4 rusty 7 1077341696 110256 f7ec642e0b21 | render_ms=332.6 render_ms=238.0 render_ms=238.0 render_ms=237.9 
+wall lv rusty 7 619576832 110768 89ec23caa2fe | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 system 7 383603968 99792 f7ec642e0b21 | render_ms=353.9 
+wall wp-r4 system 7 1259175936 108320 f7ec642e0b21 | render_ms=357.7 render_ms=292.3 render_ms=284.1 render_ms=285.2 
+wall lv system 7 695461888 113200 6abd1194fc54 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rlsf 8 403371264 102992 f7ec642e0b21 | render_ms=372.7 
+wall wp-r4 rlsf 8 1299179008 113088 f7ec642e0b21 | render_ms=391.9 render_ms=282.8 render_ms=289.7 render_ms=288.0 
+wall lv rlsf 8 834450944 116368 af97aaf4d296 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 talc 8 437426944 98432 f7ec642e0b21 | render_ms=406.4 
+wall wp-r4 talc 8 1321113856 108192 f7ec642e0b21 | render_ms=408.8 render_ms=286.6 render_ms=279.8 render_ms=307.0 
+wall lv talc 8 773058816 111168 1f58961d231d | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 rusty 8 404136960 101152 f7ec642e0b21 | render_ms=375.5 
+wall wp-r4 rusty 8 1119364864 110256 f7ec642e0b21 | render_ms=373.3 render_ms=238.0 render_ms=238.3 render_ms=238.2 
+wall lv rusty 8 620282880 110752 e98871594cd7 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 system 8 384271872 99552 f7ec642e0b21 | render_ms=354.6 
+wall wp-r4 system 8 1121033216 108320 f7ec642e0b21 | render_ms=354.1 render_ms=244.0 render_ms=243.4 render_ms=243.7 
+wall lv system 8 675322624 113008 8a0eeb90dbe0 | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
+wall wp-r1 dlmalloc 8 393900288 94640 f7ec642e0b21 | render_ms=360.2 
+wall wp-r4 dlmalloc 8 1162391040 104112 f7ec642e0b21 | render_ms=356.0 render_ms=248.4 render_ms=258.7 render_ms=256.4 
+wall lv dlmalloc 8 697276928 106256 fd96c1c7e36e | Tests: 782, Assertions: 2355, Errors: 5, Failures: 2, Deprecations: 3, PHPUnit Deprecation
