@@ -1171,77 +1171,64 @@ impl Context<'_> {
         Ok(callee)
     }
 
-    /// Run frames until the bottom one returns: `fast` runs the common
-    /// cases (cached calls and returns included), `step` the one
-    /// instruction it stopped at.
-    fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let mut pc = self.frames.last().expect("a frame").pc as usize;
-        // The function `step` last ran in (refreshed when `fast` switched).
-        let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
-        // Fiber::throw(): the exception is raised where the fiber went on.
-        if let Some(e) = self.fiber_throw.take() {
-            pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
-        }
-        loop {
-            // (The interrupt flag is borrowed, not cloned: no atomic count per run.)
-            pc = fast(regs, &mut self.frames, &self.closures, pc, &self.stop, &self.ids);
-            if self.ids.has_pending() {
-                pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
-            }
-            let frame = self.frames.last().expect("a frame");
-            if !Rc::ptr_eq(&func, &frame.func) {
-                func = Rc::clone(&frame.func);
-            }
-            let (base, argc) = (frame.base as usize, frame.argc as usize);
-            self.pc = pc + 1;
-            // A builtin the call site already resolved is called from here,
-            // not through `step`.
-            if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
-                && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
-            {
-                let at = pc;
-                match self.call_builtin(regs, base, i, args, n, dst) {
-                    Ok(()) => pc += 1,
-                    Err(t) => pc = self.unwind(regs, t, pc)?,
-                }
-                if !self.pending_errors.is_empty() || self.ids.has_pending() {
-                    pc = self.after_errors(regs, pc, at)?;
-                }
-                continue;
-            }
-            let at = pc;
-            match self.step(regs, &func, base, argc, pc) {
-                Ok(Next::Go(next)) => {
-                    pc = next;
-                    // Fiber::suspend(): leave the fiber's frames where they are.
-                    if self.fiber_suspended.is_some() {
-                        if let Some(top) = self.frames.last_mut() {
-                            top.pc = pc as u32;
-                        }
-                        return Ok(());
-                    }
-                }
-                Ok(Next::Switch) => {
-                    if self.frames.len() == self.frames.floor {
-                        if !self.pending_errors.is_empty() {
-                            self.dispatch_errors(regs)?;
-                        }
-                        if self.ids.has_pending() {
-                            self.run_destructors(regs)?;
-                        }
-                        return Ok(());
-                    }
-                    pc = self.frames.last().expect("a frame").pc as usize;
-                }
-                // A class an autoloader may declare: run them, then this
-                // instruction again.
-                Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
+    /// Run the instruction at `pc` of the top frame the way `execute`'s
+    /// loop does not: a builtin the call site already resolved is called
+    /// from here, everything else runs through `step`; then what it raised
+    /// (an exception unwound to its handler, errors to the error handler,
+    /// the destructors due). Called from inside the loop, which goes on
+    /// with the pc this gives back.
+    #[cold]
+    #[inline(never)]
+    fn slow(&mut self, regs: &mut Vec<Value>, mut pc: usize) -> Result<Flow, Throw> {
+        let frame = self.frames.last().expect("a frame");
+        let func = Rc::clone(&frame.func);
+        let (base, argc) = (frame.base as usize, frame.argc as usize);
+        self.pc = pc + 1;
+        let at = pc;
+        if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
+            && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
+        {
+            match self.call_builtin(regs, base, i, args, n, dst) {
+                Ok(()) => pc += 1,
                 Err(t) => pc = self.unwind(regs, t, pc)?,
             }
             if !self.pending_errors.is_empty() || self.ids.has_pending() {
                 pc = self.after_errors(regs, pc, at)?;
             }
+            return Ok(Flow::Go(pc));
         }
+        match self.step(regs, &func, base, argc, pc) {
+            Ok(Next::Go(next)) => {
+                pc = next;
+                // Fiber::suspend(): leave the fiber's frames where they are.
+                if self.fiber_suspended.is_some() {
+                    if let Some(top) = self.frames.last_mut() {
+                        top.pc = pc as u32;
+                    }
+                    return Ok(Flow::Done);
+                }
+            }
+            Ok(Next::Switch) => {
+                if self.frames.len() == self.frames.floor {
+                    if !self.pending_errors.is_empty() {
+                        self.dispatch_errors(regs)?;
+                    }
+                    if self.ids.has_pending() {
+                        self.run_destructors(regs)?;
+                    }
+                    return Ok(Flow::Done);
+                }
+                pc = self.frames.last().expect("a frame").pc as usize;
+            }
+            // A class an autoloader may declare: run them, then this
+            // instruction again.
+            Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
+            Err(t) => pc = self.unwind(regs, t, pc)?,
+        }
+        if !self.pending_errors.is_empty() || self.ids.has_pending() {
+            pc = self.after_errors(regs, pc, at)?;
+        }
+        Ok(Flow::Go(pc))
     }
 
     /// Run the autoloaders for `name`, then go on at `at` (the instruction
@@ -3826,7 +3813,7 @@ impl Context<'_> {
     /// and the register file is lent to the context while the builtin
     /// runs, so it can call back into PHP (array_map, usort) and run the
     /// autoloaders where it looks a class up (class_exists, is_a).
-    #[inline]
+    #[inline(never)]
     fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
         // An object argument may need its __toString() (PHP code) to become

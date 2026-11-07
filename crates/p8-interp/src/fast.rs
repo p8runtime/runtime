@@ -1,38 +1,49 @@
-//! The fast tier: the instruction loop for the common cases, and the
-//! frame entry and exit it shares with `step`.
+//! The interpreter loop: the common cases of the hottest instructions
+//! inline, everything else through `Context::slow` (which runs `step`),
+//! called from inside the loop so that it never leaves it; and the frame
+//! entry and exit the loop shares with `step`.
 
 use super::*;
 
-/// Run the common cases of the hottest instructions, from `pc` of the top
-/// frame on: those that need only the frame's registers (ints and floats,
-/// jumps), plus calls to a user function the call site already resolved
-/// and returns of a value, which switch frames here. Returns the pc (in
-/// the top frame as it is then) of the first instruction it cannot run,
-/// for `step`.
-///
-/// Kept apart from everything else so its state stays in machine registers.
-#[inline(never)]
-pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Closure>], mut pc: usize, stop: &AtomicU64, ids: &Ids) -> usize {
-    // A loop's backward branch is where an interrupt is noticed: `step`
-    // then raises it.
-    let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
-    loop {
-        let top = frames.last().expect("a frame");
-        let (clo, base) = (&*top.func, top.base as usize);
-        let code = &clo.code.code[..];
-        let w = &mut regs[base..base + clo.code.nregs as usize];
+impl Context<'_> {
+    /// Run frames until the bottom one returns. The loop itself runs the
+    /// common cases of the hottest instructions: those that need only the
+    /// frame's registers (ints and floats, jumps), plus calls to a user
+    /// function the call site already resolved and returns of a value,
+    /// which switch frames here. Every other instruction, and every case
+    /// these do not cover, runs through `slow` (`step`), a call from inside
+    /// the loop; the loop goes on with the pc it gives back.
+    ///
+    /// The inner loop touches nothing but the code, the registers and the
+    /// two flags, so that its state stays in machine registers.
+    #[inline(never)]
+    pub(crate) fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
+        let mut pc = self.frames.last().expect("a frame").pc as usize;
+        // Fiber::throw(): the exception is raised where the fiber went on.
+        if let Some(e) = self.fiber_throw.take() {
+            pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
+        }
+        loop {
+            let top = self.frames.last().expect("a frame");
+            let (clo, base) = (&*top.func, top.base as usize);
+            let code = &clo.code.code[..];
+            let w = &mut regs[base..base + clo.code.nregs as usize];
+            let (stop, ids) = (&self.stop, &self.ids);
+            // A loop's backward branch is where an interrupt is noticed:
+            // `step` then raises it.
+            let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
         // A compare-and-branch on two numbers (anything else goes to `step`).
         macro_rules! jump_if {
             ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {
                 match num_test($cmp, &w[$a as usize], &w[$b as usize]) {
                     Some(t) if t == $when => {
                         if back($target, pc) {
-                            return pc;
+                            break Switch::Slow;
                         }
                         pc = $target as usize;
                     }
                     Some(_) => pc += 1,
-                    None => return pc,
+                    None => break Switch::Slow,
                 }
             };
         }
@@ -41,13 +52,13 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
             ($op:expr, $dst:expr, $a:expr, $b:expr) => {
                 match num_op($op, &w[$a as usize], &w[$b as usize]) {
                     // A variable holding a reference is written through it (`step`).
-                    Some(_) if matches!(w[$dst as usize], Value::Ref(_)) => return pc,
+                    Some(_) if matches!(w[$dst as usize], Value::Ref(_)) => break Switch::Slow,
                     Some(r) => {
                         w[$dst as usize] = r;
                         pc += 1;
                     }
                     None if $op == BinOp::Concat && concat(w, $dst, $a, $b) => pc += 1,
-                    None => return pc,
+                    None => break Switch::Slow,
                 }
             };
         }
@@ -57,14 +68,15 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
         macro_rules! step_jump {
             ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
                 // Written in place: no drop of the old value to compile.
-                let Value::Int(i) = &mut w[$var as usize] else { return pc };
-                let Some(n) = $step(*i, 1) else { return pc };
+                let Value::Int(i) = &mut w[$var as usize] else { break Switch::Slow };
+                let Some(n) = $step(*i, 1) else { break Switch::Slow };
                 *i = n;
                 match w[$b as usize] {
                     Value::Int(b) if $holds(n, b) => {
                         if back($target, pc) {
                             // The step is done: the test (next) sees the interrupt.
-                            return pc + 1;
+                            pc += 1;
+                            break Switch::Slow;
                         }
                         pc = $target as usize;
                     }
@@ -81,7 +93,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         w[dst as usize] = Value::Object(Rc::clone(this));
                         pc += 1;
                     }
-                    None => return pc,
+                    None => break Switch::Slow,
                 },
                 // A property read the name's cache entry answers (anything
                 // else, `step`: a miss, an unset slot, a reference operand).
@@ -97,7 +109,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         },
                         None => None,
                     };
-                    let Some(v) = hit else { return pc };
+                    let Some(v) = hit else { break Switch::Slow };
                     w[dst as usize] = v;
                     pc += 1;
                 }
@@ -106,14 +118,14 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 // is); a conversion, a class check or a variadic: `step`.
                 Instr::Rare { op: Rare::VerifyArgs, .. } => {
                     if !args_plain(&clo.code.params, w, top.argc as usize) {
-                        return pc;
+                        break Switch::Slow;
                     }
                     pc += 1;
                 }
                 // A return value plainly of the declared type (anything
                 // else, a generator's included: `step`).
                 Instr::Rare { op: Rare::VerifyReturn, a, .. } => match &clo.code.ret_type {
-                    Some(ty) if clo.code.is_generator || !ty.quick(&w[a as usize]) => return pc,
+                    Some(ty) if clo.code.is_generator || !ty.quick(&w[a as usize]) => break Switch::Slow,
                     _ => pc += 1,
                 },
                 // `$o->m($v)`: an argument the method the call site's cache
@@ -121,7 +133,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 // (by reference, a miss, or an undefined or reference
                 // variable: `step`, which looks the method up by name).
                 Instr::SendVarMethod { obj, method, n, arg, var } => {
-                    let Value::Object(o) = &w[obj as usize] else { return pc };
+                    let Value::Object(o) = &w[obj as usize] else { break Switch::Slow };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                     let by_value = clo.methods[method as usize].borrow().as_ref().is_some_and(|s| {
                         s.class == Rc::as_ptr(&o.class) as usize
@@ -129,18 +141,18 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                             && matches!(&s.code, MethodCode::User(code) if code.upgrade().is_some_and(|c| !c.code.param_by_ref(n as usize)))
                     });
                     if !by_value {
-                        return pc;
+                        break Switch::Slow;
                     }
-                    let Some(v) = copied(&w[var as usize]) else { return pc };
+                    let Some(v) = copied(&w[var as usize]) else { break Switch::Slow };
                     w[arg as usize] = v;
                     pc += 1;
                     if ids.has_pending() {
-                        return pc;
+                        break Switch::Pending;
                     }
                 }
                 Instr::Jump { target } => {
                     if back(target, pc) {
-                        return pc;
+                        break Switch::Slow;
                     }
                     pc = target as usize;
                 }
@@ -157,14 +169,14 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         w[dst as usize] = Value::Bool(t);
                         pc += 1;
                     }
-                    _ => return pc,
+                    _ => break Switch::Slow,
                 },
                 Instr::IncVar { var } => match &mut w[var as usize] {
                     Value::Int(i) if *i != i64::MAX => {
                         *i += 1;
                         pc += 1;
                     }
-                    _ => return pc,
+                    _ => break Switch::Slow,
                 },
                 Instr::IncJumpLt { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n < b),
                 Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
@@ -175,7 +187,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         *i -= 1;
                         pc += 1;
                     }
-                    _ => return pc,
+                    _ => break Switch::Slow,
                 },
                 Instr::Binary { op, dst, a, b } => arith!(op, dst, a, b),
                 Instr::Add { dst, a, b } => arith!(BinOp::Add, dst, a, b),
@@ -183,7 +195,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b),
                 Instr::ConcatN { dst, start, n } => {
                     if !concat_n(w, dst, start, n) {
-                        return pc;
+                        break Switch::Slow;
                     }
                     pc += 1;
                 }
@@ -194,32 +206,32 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         w[dst as usize] = v;
                         pc += 1;
                         if ids.has_pending() {
-                            return pc;
+                            break Switch::Pending;
                         }
                     }
-                    None => return pc,
+                    None => break Switch::Slow,
                 },
                 Instr::Assign { var, src } => match copied(&w[src as usize]) {
                     Some(v) => {
                         assign(w, var, v);
                         pc += 1;
                         if ids.has_pending() {
-                            return pc;
+                            break Switch::Pending;
                         }
                     }
-                    None => return pc,
+                    None => break Switch::Slow,
                 },
                 Instr::AssignTake { var, src } => match std::mem::replace(&mut w[src as usize], Value::Undef) {
                     // Through a reference, or undefined: `step`'s.
                     v @ (Value::Ref(_) | Value::Undef) => {
                         w[src as usize] = v;
-                        return pc;
+                        break Switch::Slow;
                     }
                     v => {
                         assign(w, var, v);
                         pc += 1;
                         if ids.has_pending() {
-                            return pc;
+                            break Switch::Pending;
                         }
                     }
                 },
@@ -227,18 +239,18 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                     clear(&mut w[reg as usize]);
                     pc += 1;
                     if ids.has_pending() {
-                        return pc;
+                        break Switch::Pending;
                     }
                 }
                 Instr::JumpIf { cond, target } => match w[cond as usize] {
-                    Value::Bool(true) if back(target, pc) => return pc,
+                    Value::Bool(true) if back(target, pc) => break Switch::Slow,
                     Value::Bool(c) => pc = if c { target as usize } else { pc + 1 },
-                    _ => return pc,
+                    _ => break Switch::Slow,
                 },
                 Instr::JumpIfNot { cond, target } => match w[cond as usize] {
-                    Value::Bool(false) if back(target, pc) => return pc,
+                    Value::Bool(false) if back(target, pc) => break Switch::Slow,
                     Value::Bool(c) => pc = if c { pc + 1 } else { target as usize },
-                    _ => return pc,
+                    _ => break Switch::Slow,
                 },
                 // $a[int] on an array (or a reference to one) holding a plain
                 // value at that key
@@ -260,22 +272,22 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                             w[dst as usize] = v;
                             pc += 1;
                             if ids.has_pending() {
-                                return pc;
+                                break Switch::Pending;
                             }
                         }
-                        None => return pc,
+                        None => break Switch::Slow,
                     }
                 }
                 // $a[int] = int|float|bool|null, $a an array (or a reference to one)
                 Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
                     if let Value::Str(_) = w[keys as usize] {
                         if !set_str_elem(w, var, keys, val, dst) {
-                            return pc;
+                            break Switch::Slow;
                         }
                         pc += 1;
                         continue;
                     }
-                    let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { return pc };
+                    let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { break Switch::Slow };
                     let k = *k;
                     let done = match &mut w[var as usize] {
                         Value::Array(a) => set_int_elem(a, k, &v),
@@ -286,26 +298,26 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                         _ => false,
                     };
                     if !done {
-                        return pc;
+                        break Switch::Slow;
                     }
                     w[dst as usize] = v;
                     pc += 1;
                     if ids.has_pending() {
-                        return pc;
+                        break Switch::Pending;
                     }
                 }
                 // $a[int] op= number, $a an array holding a number at
                 // that key
                 Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
                     if !dim_op(w, op, var, keys, val, dst) {
-                        return pc;
+                        break Switch::Slow;
                     }
                     pc += 1;
                 }
                 Instr::IterNext { iter, val, key, has_key, end } => {
                     // An object (a generator, an Iterator) is `step`'s.
                     if !matches!(w[iter as usize], Value::Array(_)) {
-                        return pc;
+                        break Switch::Slow;
                     }
                     pc = if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize };
                 }
@@ -317,13 +329,13 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                     }
                     // $str .= string
                     None if op == BinOp::Concat && append_str(w, var, src) => pc += 1,
-                    None => return pc,
+                    None => break Switch::Slow,
                 },
                 // $i++ / ++$i (and --) whose value is used, on an int
                 Instr::IncDec { var, dst, inc, post } => {
-                    let Value::Int(slot) = &mut w[var as usize] else { return pc };
+                    let Value::Int(slot) = &mut w[var as usize] else { break Switch::Slow };
                     let i = *slot;
-                    let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { return pc };
+                    let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { break Switch::Slow };
                     *slot = n;
                     w[dst as usize] = Value::Int(if post { i } else { n });
                     pc += 1;
@@ -398,7 +410,7 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 | Instr::InstanceOf { .. }
                 | Instr::Clone { .. }
                 | Instr::Throw { .. }
-                | Instr::CatchIf { .. } => return pc,
+                | Instr::CatchIf { .. } => break Switch::Slow,
                 // Calls and returns leave this loop, so the loop itself
                 // keeps only the code and the registers live.
                 Instr::Call { site, base: args, argc: n, dst } => break Switch::Call(site, args, n, dst),
@@ -407,88 +419,117 @@ pub(crate) fn fast(regs: &mut Vec<Value>, frames: &mut Frames, closures: &[Rc<Cl
                 Instr::ReturnNull => break Switch::ReturnNull,
             }
         };
-        match switch {
-            Switch::Call(site, args, n, dst) => {
-                // A user function the call site resolved, with its required
-                // arguments, and no interrupt pending: anything else is `step`'s.
-                let Some(&Callee::User(target)) = clo.sites[site as usize].get() else { return pc };
-                let target = &closures[target as usize];
-                if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                    return pc;
+            // Whether the instruction at `pc` is `slow`'s after all.
+            let slow = match switch {
+                Switch::Slow => true,
+                // A write freed an object with a destructor: it runs before
+                // the next instruction.
+                Switch::Pending => {
+                    pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                    false
                 }
-                if let Some(caller) = frames.last_mut() {
-                    caller.pc = (pc + 1) as u32;
-                }
-                frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
-                enter(frames, regs);
-                pc = 0;
-            }
-            Switch::Method(dst, obj, method, args, n) => {
-                // A user method the call site's cache names for this class
-                // and scope, on an object, with its required arguments, and
-                // no interrupt pending: anything else is `step`'s.
-                let Value::Object(o) = &regs[base + obj as usize] else { return pc };
-                let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                let (target, declaring) = {
-                    let site = clo.methods[method as usize].borrow();
-                    let Some(s) = site.as_ref() else { return pc };
-                    if s.class != Rc::as_ptr(&o.class) as usize || s.scope != scope || s.is_static {
-                        return pc;
+                Switch::Call(site, args, n, dst) => 'call: {
+                    // A user function the call site resolved, with its required
+                    // arguments, and no interrupt pending: anything else is `step`'s.
+                    let Some(&Callee::User(target)) = clo.sites[site as usize].get() else { break 'call true };
+                    let target = &self.closures[target as usize];
+                    if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        break 'call true;
                     }
-                    let MethodCode::User(code) = &s.code else { return pc };
-                    let (Some(target), Some(declaring)) = (code.upgrade(), s.declaring.upgrade()) else { return pc };
-                    (target, declaring)
-                };
-                if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                    return pc;
+                    if let Some(caller) = self.frames.last_mut() {
+                        caller.pc = (pc + 1) as u32;
+                    }
+                    self.frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                    enter(&mut self.frames, regs);
+                    pc = 0;
+                    false
                 }
-                let this = Rc::clone(o);
-                // A temporary (`(new A)->f()`) is released as it is used:
-                // the call's `$this` holds the object.
-                if is_temp(&clo.code, obj) {
-                    clear(&mut regs[base + obj as usize]);
+                Switch::Method(dst, obj, method, args, n) => 'method: {
+                    // A user method the call site's cache names for this class
+                    // and scope, on an object, with its required arguments, and
+                    // no interrupt pending: anything else is `step`'s.
+                    let Value::Object(o) = &regs[base + obj as usize] else { break 'method true };
+                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                    let (target, declaring) = {
+                        let site = clo.methods[method as usize].borrow();
+                        let Some(s) = site.as_ref() else { break 'method true };
+                        if s.class != Rc::as_ptr(&o.class) as usize || s.scope != scope || s.is_static {
+                            break 'method true;
+                        }
+                        let MethodCode::User(code) = &s.code else { break 'method true };
+                        let (Some(target), Some(declaring)) = (code.upgrade(), s.declaring.upgrade()) else { break 'method true };
+                        (target, declaring)
+                    };
+                    if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        break 'method true;
+                    }
+                    let this = Rc::clone(o);
+                    // A temporary (`(new A)->f()`) is released as it is used:
+                    // the call's `$this` holds the object.
+                    if is_temp(&clo.code, obj) {
+                        clear(&mut regs[base + obj as usize]);
+                    }
+                    if let Some(caller) = self.frames.last_mut() {
+                        caller.pc = (pc + 1) as u32;
+                    }
+                    self.frames.push(&target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                    let frame = self.frames.last_mut().expect("the frame just pushed");
+                    frame.called = Some(Rc::clone(&this.class));
+                    frame.this = Some(this);
+                    frame.scope = Some(declaring);
+                    enter(&mut self.frames, regs);
+                    pc = 0;
+                    false
                 }
-                if let Some(caller) = frames.last_mut() {
-                    caller.pc = (pc + 1) as u32;
+                // The main frame's return ends the run: `step` does that.
+                // The bottom frame of this `execute` returns there: `step` does it.
+                Switch::Return(_) | Switch::ReturnNull if self.frames.len() == self.frames.floor + 1 => true,
+                Switch::Return(src) => 'ret: {
+                    let Some(value) = returned(regs, self.frames.last().expect("the returning frame"), base, src) else { break 'ret true };
+                    leave(&mut self.frames, regs, value);
+                    pc = self.frames.last().expect("the caller's frame").pc as usize;
+                    if self.ids.has_pending() {
+                        pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                    }
+                    false
                 }
-                frames.push(&target, base + args as usize, n as usize, (base + dst as usize) as u32);
-                let frame = frames.last_mut().expect("the frame just pushed");
-                frame.called = Some(Rc::clone(&this.class));
-                frame.this = Some(this);
-                frame.scope = Some(declaring);
-                enter(frames, regs);
-                pc = 0;
-            }
-            // The main frame's return ends the run: `step` does that.
-            // The bottom frame of this `execute` returns there: `step` does it.
-            Switch::Return(_) | Switch::ReturnNull if frames.len() == frames.floor + 1 => return pc,
-            Switch::Return(src) => {
-                let Some(value) = returned(regs, frames.last().expect("the returning frame"), base, src) else { return pc };
-                leave(frames, regs, value);
-                pc = frames.last().expect("the caller's frame").pc as usize;
-                if ids.has_pending() {
-                    return pc;
+                Switch::ReturnNull => {
+                    leave(&mut self.frames, regs, Value::Null);
+                    pc = self.frames.last().expect("the caller's frame").pc as usize;
+                    if self.ids.has_pending() {
+                        pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                    }
+                    false
                 }
-            }
-            Switch::ReturnNull => {
-                leave(frames, regs, Value::Null);
-                pc = frames.last().expect("the caller's frame").pc as usize;
-                if ids.has_pending() {
-                    return pc;
+            };
+            if slow {
+                match self.slow(regs, pc)? {
+                    Flow::Go(next) => pc = next,
+                    Flow::Done => return Ok(()),
                 }
             }
         }
     }
 }
 
-/// Why `fast`'s inner loop stopped: a call (its site, arguments' start,
-/// count and result register) or a return (of a register, or of null).
+/// Why the inner loop stopped: a call (its site, arguments' start, count
+/// and result register), a return (of a register, or of null), an
+/// instruction (or a case of one) only `step` runs, or a destructor due.
 pub(crate) enum Switch {
     Call(u16, Reg, u8, Reg),
     /// A method call: dst, obj, method (cache index), args, argc.
     Method(Reg, Reg, u16, Reg, u8),
     Return(Reg),
     ReturnNull,
+    Slow,
+    Pending,
+}
+
+/// What `slow` leaves the loop to do: go on at a pc, or the run is over
+/// (the bottom frame returned, or a fiber suspended).
+pub(crate) enum Flow {
+    Go(usize),
+    Done,
 }
 
 /// Whether the first `argc` registers of `w` are each plainly of their
