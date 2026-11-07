@@ -11,7 +11,6 @@ use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::stream::{resource, resource_of};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "sscanf", run: sscanf, by_ref: &[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23] },
@@ -135,7 +134,7 @@ fn scan(input: &[u8], format: &[u8]) -> Option<Vec<Option<Value>>> {
                 input[start..*i].to_vec()
             };
             match conv {
-                b'n' => Scanned::Value(Value::Int(i as i64)),
+                b'n' => Scanned::Value(Value::int(i as i64)),
                 _ if i >= input.len() => Scanned::Skipped,
                 b'd' | b'u' | b'i' | b'x' | b'X' | b'o' => {
                     let radix = match conv {
@@ -154,7 +153,7 @@ fn scan(input: &[u8], format: &[u8]) -> Option<Vec<Option<Value>>> {
                     }
                     let digits = if radix == 16 { text.strip_prefix(b"0x").or_else(|| text.strip_prefix(b"0X")).unwrap_or(&text) } else { &text };
                     match std::str::from_utf8(digits).ok().and_then(|d| i64::from_str_radix(d, radix).ok()) {
-                        Some(n) => Scanned::Value(Value::Int(if neg { -n } else { n })),
+                        Some(n) => Scanned::Value(Value::int(if neg { -n } else { n })),
                         None => {
                             failed = true;
                             Scanned::Skipped
@@ -164,20 +163,20 @@ fn scan(input: &[u8], format: &[u8]) -> Option<Vec<Option<Value>>> {
                 b'f' | b'e' | b'E' | b'g' => {
                     let text = take(&mut i, &|ch, at| ch.is_ascii_digit() || ch == b'.' || ch == b'e' || ch == b'E' || ((ch == b'-' || ch == b'+') && at == 0) || ch == b'-' || ch == b'+');
                     match std::str::from_utf8(&text).ok().and_then(|t| t.parse::<f64>().ok()) {
-                        Some(x) => Scanned::Value(Value::Float(x)),
+                        Some(x) => Scanned::Value(Value::float(x)),
                         None => {
                             failed = true;
                             Scanned::Skipped
                         }
                     }
                 }
-                b's' => Scanned::Value(Value::Str(PhpStr::new(take(&mut i, &|ch, _| !ch.is_ascii_whitespace())))),
+                b's' => Scanned::Value(Value::str(PhpStr::new(take(&mut i, &|ch, _| !ch.is_ascii_whitespace())))),
                 b'c' => {
                     let n = width.unwrap_or(1);
                     let end = (i + n).min(input.len());
                     let out = input[i..end].to_vec();
                     i = end;
-                    Scanned::Value(Value::Str(PhpStr::new(out)))
+                    Scanned::Value(Value::str(PhpStr::new(out)))
                 }
                 b'[' => {
                     let (negate, members) = set.clone().unwrap_or((false, vec![false; 256]));
@@ -186,7 +185,7 @@ fn scan(input: &[u8], format: &[u8]) -> Option<Vec<Option<Value>>> {
                         failed = true;
                         Scanned::Skipped
                     } else {
-                        Scanned::Value(Value::Str(PhpStr::new(text)))
+                        Scanned::Value(Value::str(PhpStr::new(text)))
                     }
                 }
                 _ => Scanned::Skipped,
@@ -232,23 +231,23 @@ fn scan(input: &[u8], format: &[u8]) -> Option<Vec<Option<Value>>> {
 fn finish(ctx: &mut dyn Ctx, func: &str, scanned: Option<Vec<Option<Value>>>, vars: &[Value]) -> Result<Value, Throw> {
     if vars.is_empty() {
         return Ok(match scanned {
-            None => Value::Null,
-            Some(values) => Value::Array(Rc::new(PhpArray::from_list(values.into_iter().map(|v| v.unwrap_or(Value::Null)).collect()))),
+            None => Value::NULL,
+            Some(values) => Value::array(PhpArray::from_list(values.into_iter().map(|v| v.unwrap_or(Value::NULL)).collect())),
         });
     }
-    let Some(values) = scanned else { return Ok(Value::Int(-1)) };
+    let Some(values) = scanned else { return Ok(Value::int(-1)) };
     if values.len() != vars.len() {
         let _ = func;
         return Err(ctx.throw("ValueError", "Different numbers of variable names and field specifiers".into()));
     }
     let mut n = 0;
     for (v, var) in values.into_iter().zip(vars) {
-        if let (Some(v), Value::Ref(cell)) = (v, var) {
+        if let (Some(v), Some(cell)) = (v, var.as_reference()) {
             *cell.borrow_mut() = v;
             n += 1;
         }
     }
-    Ok(Value::Int(n))
+    Ok(Value::int(n))
 }
 
 /// sscanf(string $string, string $format, mixed &...$vars)
@@ -266,9 +265,9 @@ fn fscanf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Some(o) = resource_of(&v) else {
         return Err(ctx.throw("TypeError", format!("fscanf(): Argument #1 ($stream) must be of type resource, {} given", v.type_name())));
     };
-    let Some(r) = resource(&o) else { return Ok(Value::Bool(false)) };
+    let Some(r) = resource(&o) else { return Ok(Value::FALSE) };
     let line = r.stream.borrow_mut().gets(None);
-    let Some(line) = line else { return Ok(Value::Bool(false)) };
+    let Some(line) = line else { return Ok(Value::FALSE) };
     let format = str_arg(args, 1);
     let scanned = scan(&line, format.as_bytes());
     let vars: Vec<Value> = args[2.min(args.len())..].to_vec();
@@ -405,7 +404,7 @@ fn pack(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if next < args.len() {
         ctx.warn(&format!("pack(): {} arguments unused", args.len() - next));
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 /// unpack(string $format, string $string, int $offset = 0)
@@ -442,7 +441,7 @@ fn unpack(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                 };
                 if pos + len > d.len() {
                     ctx.warn(&format!("unpack(): Type {}: not enough input values, need {len} values but only {} were provided", code as char, d.len() - pos));
-                    return Ok(Value::Bool(false));
+                    return Ok(Value::FALSE);
                 }
                 let field = &d[pos..pos + len];
                 pos += len;
@@ -470,7 +469,7 @@ fn unpack(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                     }
                 };
                 let k = if name.is_empty() { Key::Int(1) } else { Key::from_string(PhpStr::from(name)) };
-                out.insert(k, Value::Str(PhpStr::new(v)));
+                out.insert(k, Value::str(PhpStr::new(v)));
             }
             b'x' => pos += count.flatten().unwrap_or(1),
             b'X' => pos = pos.saturating_sub(count.flatten().unwrap_or(1)),
@@ -492,7 +491,7 @@ fn unpack(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                 for i in 0..n {
                     if pos + size > d.len() {
                         ctx.warn(&format!("unpack(): Type {}: not enough input values, need {size} values but only {} were provided", c as char, d.len() - pos));
-                        return Ok(Value::Bool(false));
+                        return Ok(Value::FALSE);
                     }
                     let b = &d[pos..pos + size];
                     pos += size;
@@ -500,10 +499,10 @@ fn unpack(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                     let v = if float {
                         if size == 4 {
                             let arr: [u8; 4] = b.try_into().expect("4 bytes");
-                            Value::Float(f64::from(if le { f32::from_le_bytes(arr) } else { f32::from_be_bytes(arr) }))
+                            Value::float(f64::from(if le { f32::from_le_bytes(arr) } else { f32::from_be_bytes(arr) }))
                         } else {
                             let arr: [u8; 8] = b.try_into().expect("8 bytes");
-                            Value::Float(if le { f64::from_le_bytes(arr) } else { f64::from_be_bytes(arr) })
+                            Value::float(if le { f64::from_le_bytes(arr) } else { f64::from_be_bytes(arr) })
                         }
                     } else {
                         if le {
@@ -518,14 +517,14 @@ fn unpack(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                         } else {
                             raw as i64
                         };
-                        Value::Int(v)
+                        Value::int(v)
                     };
                     out.insert(key(i, n, star), v);
                 }
             }
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 const INI_SCANNER_RAW: i64 = 1;
@@ -536,10 +535,10 @@ const INI_SCANNER_TYPED: i64 = 2;
 fn ini_value(ctx: &mut dyn Ctx, raw: &[u8], mode: i64) -> Value {
     let t = raw.trim_ascii();
     if let Some(q) = t.strip_prefix(b"\"").and_then(|r| r.strip_suffix(b"\"")) {
-        return Value::Str(PhpStr::from(q));
+        return Value::str(PhpStr::from(q));
     }
     if let Some(q) = t.strip_prefix(b"'").and_then(|r| r.strip_suffix(b"'")) {
-        return Value::Str(PhpStr::from(q));
+        return Value::str(PhpStr::from(q));
     }
     // An inline comment ends the value.
     let t = match t.iter().position(|&c| c == b';') {
@@ -547,31 +546,31 @@ fn ini_value(ctx: &mut dyn Ctx, raw: &[u8], mode: i64) -> Value {
         None => t,
     };
     if mode == INI_SCANNER_RAW {
-        return Value::Str(PhpStr::from(t));
+        return Value::str(PhpStr::from(t));
     }
     let lower = t.to_ascii_lowercase();
     match lower.as_slice() {
-        b"true" | b"on" | b"yes" => return if mode == INI_SCANNER_TYPED { Value::Bool(true) } else { Value::str("1") },
-        b"false" | b"off" | b"no" | b"none" => return if mode == INI_SCANNER_TYPED { Value::Bool(false) } else { Value::str("") },
-        b"null" => return if mode == INI_SCANNER_TYPED { Value::Null } else { Value::str("") },
+        b"true" | b"on" | b"yes" => return if mode == INI_SCANNER_TYPED { Value::TRUE } else { Value::str("1") },
+        b"false" | b"off" | b"no" | b"none" => return if mode == INI_SCANNER_TYPED { Value::FALSE } else { Value::str("") },
+        b"null" => return if mode == INI_SCANNER_TYPED { Value::NULL } else { Value::str("") },
         _ => {}
     }
     if mode == INI_SCANNER_TYPED
         && let Some(n) = p8_runtime::numeric::numeric_string(t)
     {
         return match n {
-            p8_runtime::numeric::Number::Int(i) if !t.contains(&b'.') => Value::Int(i),
-            p8_runtime::numeric::Number::Int(i) => Value::Float(i as f64),
-            p8_runtime::numeric::Number::Float(f) => Value::Float(f),
+            p8_runtime::numeric::Number::Int(i) if !t.contains(&b'.') => Value::int(i),
+            p8_runtime::numeric::Number::Int(i) => Value::float(i as f64),
+            p8_runtime::numeric::Number::Float(f) => Value::float(f),
         };
     }
     // A constant's name stands for its value.
     if t.iter().all(|c| c.is_ascii_uppercase() || *c == b'_' || c.is_ascii_digit()) && t.first().is_some_and(u8::is_ascii_uppercase)
         && let Some(v) = ctx.constant(t)
     {
-        return Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty));
+        return Value::str(v.to_php_string().unwrap_or_else(PhpStr::empty));
     }
-    Value::Str(PhpStr::from(t))
+    Value::str(PhpStr::from(t))
 }
 
 fn parse_ini(ctx: &mut dyn Ctx, text: &[u8], sections: bool, mode: i64) -> Value {
@@ -579,7 +578,7 @@ fn parse_ini(ctx: &mut dyn Ctx, text: &[u8], sections: bool, mode: i64) -> Value
     let mut section: Option<(Key, PhpArray)> = None;
     let flush = |root: &mut PhpArray, section: &mut Option<(Key, PhpArray)>| {
         if let Some((k, a)) = section.take() {
-            root.insert(k, Value::Array(Rc::new(a)));
+            root.insert(k, Value::array(a));
         }
     };
     for line in text.split(|&c| c == b'\n') {
@@ -599,7 +598,7 @@ fn parse_ini(ctx: &mut dyn Ctx, text: &[u8], sections: bool, mode: i64) -> Value
         }
         let (k, v) = match line.iter().position(|&c| c == b'=') {
             Some(e) => (line[..e].trim_ascii(), ini_value(ctx, &line[e + 1..], mode)),
-            None => (line, if mode == INI_SCANNER_TYPED { Value::Null } else { Value::str("") }),
+            None => (line, if mode == INI_SCANNER_TYPED { Value::NULL } else { Value::str("") }),
         };
         let target = match &mut section {
             Some((_, a)) => a,
@@ -611,22 +610,22 @@ fn parse_ini(ctx: &mut dyn Ctx, text: &[u8], sections: bool, mode: i64) -> Value
         {
             let base = Key::from_string(PhpStr::from(&k[..open]));
             let sub = &k[open + 1..k.len() - 1];
-            let mut arr = match target.get(&base) {
-                Some(Value::Array(a)) => (**a).clone(),
-                _ => PhpArray::new(),
+            let mut arr = match target.get(&base).and_then(Value::as_array) {
+                Some(a) => a.clone(),
+                None => PhpArray::new(),
             };
             if sub.is_empty() {
                 let _ = arr.push(v);
             } else {
                 arr.insert(Key::from_string(PhpStr::from(sub)), v);
             }
-            target.insert(base, Value::Array(Rc::new(arr)));
+            target.insert(base, Value::array(arr));
         } else {
             target.insert(Key::from_string(PhpStr::from(k)), v);
         }
     }
     flush(&mut root, &mut section);
-    Value::Array(Rc::new(root))
+    Value::array(root)
 }
 
 /// parse_ini_string(string $ini_string, bool $process_sections = false, int $scanner_mode = INI_SCANNER_NORMAL)
@@ -642,7 +641,7 @@ fn parse_ini_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     if path.is_empty() {
         return Err(ctx.throw("ValueError", "parse_ini_file(): Argument #1 ($filename) cannot be empty".into()));
     }
-    let Ok(text) = std::fs::read(&path) else { return Ok(Value::Bool(false)) };
+    let Ok(text) = std::fs::read(&path) else { return Ok(Value::FALSE) };
     let sections = args.len() > 1 && arg(args, 1).to_bool();
     let mode = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
     Ok(parse_ini(ctx, &text, sections, mode))
@@ -656,9 +655,9 @@ fn parse_ini_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 /// (assert.warning); assert.bail ends the script.
 fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let setting = |ctx: &mut dyn Ctx, name: &[u8]| match ctx.ini_get(name) {
-        Some(Value::Str(s)) => {
-            let t = s.as_bytes().to_ascii_lowercase();
-            matches!(t.as_slice(), b"true" | b"yes" | b"on") || Value::Str(s).to_int() != 0
+        Some(v) if v.is_str() => {
+            let t = v.as_str().expect("a string").as_bytes().to_ascii_lowercase();
+            matches!(t.as_slice(), b"true" | b"yes" | b"on") || v.to_int() != 0
         }
         Some(v) => v.to_bool(),
         None => false,
@@ -666,26 +665,27 @@ fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     // A holding assertion is true whatever assert.active says: checked
     // first, so the common case reads no setting.
     if arg(args, 0).to_bool() || !setting(ctx, b"assert.active") {
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     let message = match arg(args, 1) {
-        Value::Null if args.len() > 2 => arg(args, 2).to_php_string().unwrap_or_else(PhpStr::empty),
+        v if v.is_null() && args.len() > 2 => arg(args, 2).to_php_string().unwrap_or_else(PhpStr::empty),
         // Called by value (`$f = 'assert'`, a callable, a pipe): no
         // source from the compiler, and php_assert throws with no message.
-        Value::Null => PhpStr::empty(),
-        Value::Object(o) if o.class.is_a(b"throwable") => return Err(Throw::Object(o)),
+        v if v.is_null() => PhpStr::empty(),
+        v if v.as_object().is_some_and(|o| o.class.is_a(b"throwable")) => return Err(Throw::Object(v.cloned_object().expect("an object"))),
         v => v.to_php_string().unwrap_or_else(PhpStr::empty),
     };
     let message = String::from_utf8_lossy(message.as_bytes()).into_owned();
     match ctx.ini_get(b"assert.callback") {
-        Some(Value::Null) | None => {}
-        Some(Value::Str(s)) if s.as_bytes().is_empty() => {}
+        None => {}
+        Some(v) if v.is_null() => {}
+        Some(v) if v.as_str().is_some_and(|s| s.is_empty()) => {}
         Some(callback) => {
             let Throw::Error { file, line, .. } = ctx.throw("Error", String::new()) else { unreachable!("an engine error") };
-            let mut call = vec![Value::Str(PhpStr::from(&*file)), Value::Int(i64::from(line)), Value::Null];
+            let mut call = vec![Value::str(PhpStr::from(&*file)), Value::int(i64::from(line)), Value::NULL];
             // The description: given, or the assertion's source the compiler passes.
-            if args.len() > 2 || (args.len() > 1 && !matches!(arg(args, 1), Value::Null)) {
-                call.push(Value::Str(PhpStr::from(message.as_str())));
+            if args.len() > 2 || (args.len() > 1 && !arg(args, 1).is_null()) {
+                call.push(Value::str(PhpStr::from(message.as_str())));
             }
             ctx.call(&callback, &mut call)?;
         }
@@ -700,5 +700,5 @@ fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if bail {
         return Err(Throw::Exit(255));
     }
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
