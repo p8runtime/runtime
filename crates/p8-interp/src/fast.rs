@@ -221,6 +221,46 @@ impl Context<'_> {
                     Some(ty) if clo.code.is_generator || !ty.quick(&$w[rx!(a as usize)]) => slow!(),
                     _ => pc += 1,
                 },
+                // A builtin PHP compiles to an opcode (strlen, count, the
+                // type tests, array_key_exists): the plain case here, once
+                // the site resolved to the builtin (the first run, and a
+                // disabled function, are `step`'s); the arguments are
+                // consumed as a call's are. Anything else is the call.
+                Instr::Rare { op, a: dst, b: args, c: argc, class: site } if op.is_intrinsic() => {
+                    if !matches!(clo.sites[usize::from(site)].get(), Some(Callee::Builtin(_))) {
+                        slow!();
+                    }
+                    let x = &$w[rx!(args as usize)];
+                    let r = match op {
+                        Rare::Strlen => match x {
+                            Value::Str(s) => Value::Int(s.len() as i64),
+                            _ => slow!(),
+                        },
+                        Rare::Count => match x {
+                            Value::Array(arr) => Value::Int(arr.len() as i64),
+                            _ => slow!(),
+                        },
+                        Rare::ArrayKeyExists => match (x, &$w[rx!(args as usize + 1)]) {
+                            (Value::Int(k), Value::Array(arr)) => Value::Bool(arr.contains_key(&Key::Int(*k))),
+                            (Value::Str(s), Value::Array(arr)) => Value::Bool(arr.contains_key(&Key::from_string(s.clone()))),
+                            _ => slow!(),
+                        },
+                        _ if matches!(x, Value::Undef | Value::Ref(_)) => slow!(),
+                        Rare::IsNull => Value::Bool(matches!(x, Value::Null)),
+                        Rare::IsBool => Value::Bool(matches!(x, Value::Bool(_))),
+                        Rare::IsInt => Value::Bool(matches!(x, Value::Int(_))),
+                        Rare::IsFloat => Value::Bool(matches!(x, Value::Float(_))),
+                        Rare::IsString => Value::Bool(matches!(x, Value::Str(_))),
+                        Rare::IsArray => Value::Bool(matches!(x, Value::Array(_))),
+                        Rare::IsObject => Value::Bool(matches!(x, Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0)),
+                        _ => slow!(),
+                    };
+                    for i in 0..usize::from(argc) {
+                        clear(&mut $w[rx!(args as usize + i)]);
+                    }
+                    put(&mut $w[rx!(dst as usize)], r);
+                    pc += 1;
+                }
                 // `$o->m($v)`: an argument the method the call site's cache
                 // names for this class and scope takes by value is copied
                 // (by reference, a miss, or an undefined or reference

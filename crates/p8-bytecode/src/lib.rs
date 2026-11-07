@@ -395,6 +395,51 @@ pub enum Rare {
     /// method "C::m" in b, looked up as zend_ast_evaluate does (no
     /// __callStatic, never the caller's `$this`).
     ConstCallable,
+    /// A call of a builtin PHP compiles to an opcode
+    /// (zend_try_compile_special_func), when the name resolves to it at
+    /// compile time: the arguments evaluated into c registers from b (as a
+    /// Call's), the result into a; `class` is the call site, which the
+    /// interpreter resolves (and keeps) as for a Call. The common case
+    /// (a string's length, an array's count, a type test) runs in the
+    /// loop; anything else is the builtin's call.
+    Strlen,
+    Count,
+    IsNull,
+    IsBool,
+    IsInt,
+    IsFloat,
+    IsString,
+    IsArray,
+    IsObject,
+    ArrayKeyExists,
+}
+
+impl Rare {
+    /// The intrinsic for a call of builtin `lower` (lowercase) with `argc`
+    /// arguments, if PHP compiles that call to an opcode.
+    pub fn intrinsic(lower: &[u8], argc: usize) -> Option<Rare> {
+        Some(match (lower, argc) {
+            (b"strlen", 1) => Rare::Strlen,
+            (b"count" | b"sizeof", 1) => Rare::Count,
+            (b"is_null", 1) => Rare::IsNull,
+            (b"is_bool", 1) => Rare::IsBool,
+            (b"is_int" | b"is_integer" | b"is_long", 1) => Rare::IsInt,
+            (b"is_float" | b"is_double", 1) => Rare::IsFloat,
+            (b"is_string", 1) => Rare::IsString,
+            (b"is_array", 1) => Rare::IsArray,
+            (b"is_object", 1) => Rare::IsObject,
+            (b"array_key_exists", 2) => Rare::ArrayKeyExists,
+            _ => return None,
+        })
+    }
+
+    /// Whether this is one of the intrinsics (`Rare::intrinsic`).
+    pub fn is_intrinsic(self) -> bool {
+        matches!(
+            self,
+            Rare::Strlen | Rare::Count | Rare::IsNull | Rare::IsBool | Rare::IsInt | Rare::IsFloat | Rare::IsString | Rare::IsArray | Rare::IsObject | Rare::ArrayKeyExists
+        )
+    }
 }
 
 /// A partial application as written (ZEND_CALLABLE_CONVERT_PARTIAL's

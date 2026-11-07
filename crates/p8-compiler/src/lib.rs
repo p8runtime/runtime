@@ -783,6 +783,7 @@ fn pipe_send_check(f: &mut FnBuilder) {
     let Some(last) = f.code.len().checked_sub(1) else { return };
     let check = match f.code[last] {
         Instr::Call { site, .. } => Instr::rare(Rare::PipeArgByRef, 0, site, 0, 0),
+        Instr::Rare { op, class: site, .. } if op.is_intrinsic() => Instr::rare(Rare::PipeArgByRef, 0, site, 0, 0),
         Instr::MethodCall { obj, method, .. } => Instr::rare(Rare::PipeArgByRef, obj, method, 1, 0),
         Instr::StaticCall { class, method, .. } => Instr::rare(Rare::PipeArgByRef, 0, method, 2, class),
         Instr::CallValue { callee, .. } => Instr::rare(Rare::PipeArgByRef, callee, 0, 3, 0),
@@ -3597,6 +3598,7 @@ impl<'src> Compiler<'src> {
                 let last = f.code.len() - 1;
                 let writes_r = match f.code[last] {
                     Instr::Call { dst, .. } | Instr::MethodCall { dst, .. } | Instr::StaticCall { dst, .. } | Instr::CallSpread { dst, .. } => dst == r,
+                    Instr::Rare { op, a: dst, .. } if op.is_intrinsic() => dst == r,
                     _ => false,
                 };
                 if writes_r {
@@ -6034,7 +6036,12 @@ impl<'src> Compiler<'src> {
         // the result may land in the first (the callee's frame is cleared
         // before its result is written).
         let dst = out(f, hint, mark);
-        f.emit(Instr::Call { site, base, argc: all.len() as u8, dst });
+        // A builtin PHP compiles to an opcode (zend_try_compile_special_func),
+        // when the name means it at compile time (no namespace fallback).
+        match Rare::intrinsic(&lower, all.len()).filter(|_| fallback.is_none()) {
+            Some(op) => f.emit(Instr::rare(op, dst, base, all.len() as Reg, site)),
+            None => f.emit(Instr::Call { site, base, argc: all.len() as u8, dst }),
+        };
         Ok(dst)
     }
 }
