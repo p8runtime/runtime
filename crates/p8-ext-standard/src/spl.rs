@@ -15,7 +15,7 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_INTERFACE, Native, Object, Visibility};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -31,7 +31,7 @@ pub(crate) fn slot(o: &Object, name: &str) -> Option<usize> {
 }
 
 pub(crate) fn get(o: &Object, name: &str) -> Value {
-    slot(o, name).map_or(Value::Null, |i| o.slots.borrow()[i].deref())
+    slot(o, name).map_or(Value::NULL, |i| o.slots.borrow()[i].deref())
 }
 
 pub(crate) fn set(o: &Object, name: &str, v: Value) {
@@ -45,9 +45,9 @@ pub(crate) fn int(o: &Object, name: &str) -> i64 {
 }
 
 pub(crate) fn array_of(v: Value) -> PhpArray {
-    match v {
-        Value::Array(a) => Rc::unwrap_or_clone(a),
-        _ => PhpArray::new(),
+    match v.into_array() {
+        Ok(a) => Rc::unwrap_or_clone(a),
+        Err(_) => PhpArray::new(),
     }
 }
 
@@ -92,29 +92,25 @@ const H_POS: (&str, Constant, Visibility) = ("\0pos", Constant::Int(0), PUBLIC);
 
 /// The elements: the array, or the object's properties.
 fn elements(o: &Object) -> PhpArray {
-    match get(o, "storage") {
-        Value::Array(a) => Rc::unwrap_or_clone(a),
-        Value::Object(inner) => {
-            let mut out = PhpArray::new();
-            let slots = inner.slots.borrow();
-            for (p, v) in inner.class.properties.iter().zip(slots.iter()) {
-                if p.visibility == Visibility::Public && !p.is_internal() && !matches!(v, Value::Undef) {
-                    out.insert(Key::from_string(p.name.clone()), v.deref());
-                }
-            }
-            for (k, v) in inner.dynamic.borrow().iter() {
-                out.insert(k, v.deref());
-            }
-            out
+    let storage = get(o, "storage");
+    let Some(inner) = storage.as_object() else { return array_of(storage) };
+    let mut out = PhpArray::new();
+    let slots = inner.slots.borrow();
+    for (p, v) in inner.class.properties.iter().zip(slots.iter()) {
+        if p.visibility == Visibility::Public && !p.is_internal() && !v.is_undef() {
+            out.insert(Key::from_string(p.name.clone()), v.deref());
         }
-        _ => PhpArray::new(),
     }
+    for (k, v) in inner.dynamic.borrow().iter() {
+        out.insert(k, v.deref());
+    }
+    out
 }
 
 /// Change the elements (an object's properties are written back to it).
 fn change<R>(o: &Object, f: impl FnOnce(&mut PhpArray) -> R) -> R {
-    match get(o, "storage") {
-        Value::Object(inner) => {
+    match get(o, "storage").into_object() {
+        Ok(inner) => {
             let mut els = elements(o);
             let r = f(&mut els);
             let mut dynamic = PhpArray::new();
@@ -131,10 +127,10 @@ fn change<R>(o: &Object, f: impl FnOnce(&mut PhpArray) -> R) -> R {
             *inner.dynamic.borrow_mut() = dynamic;
             r
         }
-        other => {
+        Err(other) => {
             let mut a = array_of(other);
             let r = f(&mut a);
-            set(o, "storage", Value::Array(Rc::new(a)));
+            set(o, "storage", Value::array(a));
             r
         }
     }
@@ -151,9 +147,9 @@ fn object_storage_deprecated(ctx: &mut dyn Ctx, this: &Rc<Object>, method: &str)
 
 fn ao_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let storage = match arg(args, 0) {
-        Value::Null | Value::Undef => Value::Array(Rc::new(PhpArray::new())),
-        v @ Value::Array(_) => v,
-        v @ Value::Object(_) => {
+        v if v.is_null_or_undef() => Value::array(PhpArray::new()),
+        v if v.is_array() => v,
+        v if v.is_object() => {
             object_storage_deprecated(ctx, this, "__construct");
             v
         }
@@ -163,19 +159,19 @@ fn ao_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
         }
     };
     // An ArrayObject/ArrayIterator given: its elements.
-    let storage = match &storage {
-        Value::Object(o) if slot(o, "storage").is_some() && (o.class.is_a(b"arrayobject") || o.class.is_a(b"arrayiterator")) => Value::Array(Rc::new(elements(o))),
+    let storage = match storage.as_object() {
+        Some(o) if slot(o, "storage").is_some() && (o.class.is_a(b"arrayobject") || o.class.is_a(b"arrayiterator")) => Value::array(elements(o)),
         _ => storage,
     };
     set(this, "storage", storage);
     if args.len() > 1 {
-        set(this, "\0flags", Value::Int(arg(args, 1).to_int()));
+        set(this, "\0flags", Value::int(arg(args, 1).to_int()));
     }
     if args.len() > 2 {
         set(this, "\0itclass", arg(args, 2));
     }
-    set(this, "\0pos", Value::Int(0));
-    Ok(Value::Null)
+    set(this, "\0pos", Value::int(0));
+    Ok(Value::NULL)
 }
 
 fn ao_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -184,7 +180,7 @@ fn ao_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
         Some(v) => Ok(v.deref()),
         None => {
             ctx.warn(&format!("Undefined array key {}", shown_key(&key)));
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     }
 }
@@ -192,7 +188,7 @@ fn ao_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
 fn ao_offset_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let v = arg(args, 1);
     match arg(args, 0) {
-        Value::Null => {
+        k if k.is_null() => {
             change(this, |a| {
                 let _ = a.push(v);
             });
@@ -202,12 +198,12 @@ fn ao_offset_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
             change(this, |a| a.insert(key, v));
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ao_offset_exists(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let key = array_key(ctx, &arg(args, 0))?;
-    Ok(Value::Bool(elements(this).get(&key).is_some_and(|v| !matches!(v.deref(), Value::Null))))
+    Ok(Value::bool(elements(this).get(&key).is_some_and(|v| !v.deref().is_null())))
 }
 
 fn ao_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -215,7 +211,7 @@ fn ao_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
     change(this, |a| {
         a.remove(&key);
     });
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ao_append(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -223,22 +219,22 @@ fn ao_append(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<V
     change(this, |a| {
         let _ = a.push(v);
     });
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ao_count(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(elements(this).len() as i64))
+    Ok(Value::int(elements(this).len() as i64))
 }
 
 fn ao_get_array_copy(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(elements(this))))
+    Ok(Value::array(elements(this)))
 }
 
 fn ao_exchange_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let old = elements(this);
     let new = match arg(args, 0) {
-        v @ Value::Array(_) => v,
-        v @ Value::Object(_) => {
+        v if v.is_array() => v,
+        v if v.is_object() => {
             object_storage_deprecated(ctx, this, "exchangeArray");
             v
         }
@@ -247,7 +243,7 @@ fn ao_exchange_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
         }
     };
     set(this, "storage", new);
-    Ok(Value::Array(Rc::new(old)))
+    Ok(Value::array(old))
 }
 
 /// The object's own properties for Serializable's form: those a subclass
@@ -257,7 +253,7 @@ fn members(o: &Object) -> PhpArray {
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         let name = p.name.as_bytes();
-        if name.starts_with(b"\0") || name == b"storage" || matches!(v, Value::Undef) {
+        if name.starts_with(b"\0") || name == b"storage" || v.is_undef() {
             continue;
         }
         let key = match p.visibility {
@@ -278,8 +274,8 @@ fn ao_serialize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
     let mut out = format!("x:i:{};", int(this, "\0flags")).into_bytes();
     out.extend(crate::serial::serialized(ctx, &get(this, "storage"))?);
     out.extend_from_slice(b";m:");
-    out.extend(crate::serial::serialized(ctx, &Value::Array(Rc::new(members(this))))?);
-    Ok(Value::Str(PhpStr::new(out)))
+    out.extend(crate::serial::serialized(ctx, &Value::array(members(this)))?);
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 /// Serializable::unserialize(): what ao_serialize wrote, back.
@@ -287,13 +283,14 @@ fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     let data = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
     let bytes = data.as_bytes();
     if bytes.is_empty() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let bad = |ctx: &mut dyn Ctx, at: usize| {
         Err(ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len())))
     };
     let Some(rest) = bytes.strip_prefix(b"x:") else { return bad(ctx, 0) };
-    let Some((Value::Int(flags), n)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, 2) };
+    let Some((flags, n)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, 2) };
+    let Some(flags) = flags.as_int() else { return bad(ctx, 2) };
     let at = 2 + n;
     let Some((storage, n)) = crate::serial::read_value(ctx, &bytes[at..])? else { return bad(ctx, at) };
     let mut at = at + n;
@@ -301,9 +298,10 @@ fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         at += 1;
     }
     let Some(rest) = bytes[at..].strip_prefix(b"m:") else { return bad(ctx, at) };
-    let Some((Value::Array(m), _)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, at + 2) };
-    set(this, "\0flags", Value::Int(flags));
-    if matches!(storage, Value::Object(_)) {
+    let Some((m, _)) = crate::serial::read_value(ctx, rest)? else { return bad(ctx, at + 2) };
+    let Ok(m) = m.into_array() else { return bad(ctx, at + 2) };
+    set(this, "\0flags", Value::int(flags));
+    if storage.is_object() {
         object_storage_deprecated(ctx, this, "unserialize");
     }
     set(this, "storage", storage);
@@ -324,16 +322,16 @@ fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
             this.dynamic.borrow_mut().insert(k, v.clone());
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ao_get_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(int(this, "\0flags")))
+    Ok(Value::int(int(this, "\0flags")))
 }
 
 fn ao_set_flags(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "\0flags", Value::Int(arg(args, 0).to_int()));
-    Ok(Value::Null)
+    set(this, "\0flags", Value::int(arg(args, 0).to_int()));
+    Ok(Value::NULL)
 }
 
 fn ao_get_iterator_class(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -342,7 +340,7 @@ fn ao_get_iterator_class(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) ->
 
 fn ao_set_iterator_class(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     set(this, "\0itclass", arg(args, 0));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ao_get_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -350,14 +348,14 @@ fn ao_get_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
     let Some(class) = ctx.class_load(name.as_bytes())? else {
         return Err(ctx.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name.as_bytes()))));
     };
-    let it = ctx.new_instance(&class, &mut [Value::Array(Rc::new(elements(this)))], true)?;
-    Ok(Value::Object(it))
+    let it = ctx.new_instance(&class, &mut [Value::array(elements(this))], true)?;
+    Ok(Value::object(it))
 }
 
 /// The array sorts: the builtin of that name on the elements.
 fn sorted(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], builtin: &str) -> Result<Value, Throw> {
-    let cell = Rc::new(RefCell::new(Value::Array(Rc::new(elements(this)))));
-    let mut call_args = vec![Value::Ref(Rc::clone(&cell))];
+    let cell = Rc::new(RefCell::new(Value::array(elements(this))));
+    let mut call_args = vec![Value::reference(Rc::clone(&cell))];
     call_args.extend(args.iter().map(Value::deref));
     let r = ctx.call(&s(builtin), &mut call_args)?;
     let sorted = array_of(cell.borrow().clone());
@@ -393,28 +391,28 @@ fn ao_natcasesort(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 
 fn ai_current(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let els = elements(this);
-    Ok(els.entry_at(int(this, "\0pos") as usize).map_or(Value::Null, |(_, _, v)| v.deref()))
+    Ok(els.entry_at(int(this, "\0pos") as usize).map_or(Value::NULL, |(_, _, v)| v.deref()))
 }
 
 fn ai_key(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let els = elements(this);
-    Ok(els.entry_at(int(this, "\0pos") as usize).map_or(Value::Null, |(_, k, _)| k.into_value()))
+    Ok(els.entry_at(int(this, "\0pos") as usize).map_or(Value::NULL, |(_, k, _)| k.into_value()))
 }
 
 fn ai_next(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let els = elements(this);
     let pos = els.entry_at(int(this, "\0pos") as usize).map_or(els.end_pos(), |(p, _, _)| p + 1);
-    set(this, "\0pos", Value::Int(pos as i64));
-    Ok(Value::Null)
+    set(this, "\0pos", Value::int(pos as i64));
+    Ok(Value::NULL)
 }
 
 fn ai_rewind(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "\0pos", Value::Int(0));
-    Ok(Value::Null)
+    set(this, "\0pos", Value::int(0));
+    Ok(Value::NULL)
 }
 
 fn ai_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(elements(this).entry_at(int(this, "\0pos") as usize).is_some()))
+    Ok(Value::bool(elements(this).entry_at(int(this, "\0pos") as usize).is_some()))
 }
 
 fn ai_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -429,8 +427,8 @@ fn ai_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<V
     }
     match els.entry_at(pos) {
         Some((p, _, _)) if n >= 0 => {
-            set(this, "\0pos", Value::Int(p as i64));
-            Ok(Value::Null)
+            set(this, "\0pos", Value::int(p as i64));
+            Ok(Value::NULL)
         }
         _ => Err(ctx.throw("OutOfBoundsException", format!("Seek position {n} is out of range"))),
     }
@@ -441,24 +439,23 @@ fn ai_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<V
 fn rai_has_children(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let els = elements(this);
     let child_arrays_only = int(this, "\0flags") & 4 != 0;
-    Ok(Value::Bool(match els.entry_at(int(this, "\0pos") as usize).map(|(_, _, v)| v.deref()) {
-        Some(Value::Array(_)) => true,
-        Some(Value::Object(_)) => !child_arrays_only,
+    Ok(Value::bool(match els.entry_at(int(this, "\0pos") as usize).map(|(_, _, v)| v.deref()) {
+        Some(v) if v.is_array() => true,
+        Some(v) if v.is_object() => !child_arrays_only,
         _ => false,
     }))
 }
 
 fn rai_get_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let els = elements(this);
-    let child = els.entry_at(int(this, "\0pos") as usize).map_or(Value::Null, |(_, _, v)| v.deref());
-    let child = match child {
-        Value::Object(o) if o.class.is_a(b"recursivearrayiterator") => return Ok(Value::Object(o)),
-        v => v,
-    };
+    let child = els.entry_at(int(this, "\0pos") as usize).map_or(Value::NULL, |(_, _, v)| v.deref());
+    if child.as_object().is_some_and(|o| o.class.is_a(b"recursivearrayiterator")) {
+        return Ok(child);
+    }
     // A new iterator of this one's class, with its flags.
     let class = Rc::clone(&this.class);
-    let it = ctx.new_instance(&class, &mut [child, Value::Int(int(this, "\0flags"))], true)?;
-    Ok(Value::Object(it))
+    let it = ctx.new_instance(&class, &mut [child, Value::int(int(this, "\0flags"))], true)?;
+    Ok(Value::object(it))
 }
 
 // ---------------------------------------------------------------------------
@@ -476,15 +473,16 @@ fn fixed_info(o: &Object) -> PhpArray {
 
 /// An SplFixedArray index (spl_offset_convert_to_long), checked.
 fn fixed_index(ctx: &mut dyn Ctx, o: &Object, k: &Value) -> Result<usize, Throw> {
-    let i = match k.deref() {
-        Value::Int(i) => i,
-        Value::Bool(b) => i64::from(b),
-        Value::Float(f) => f as i64,
-        Value::Str(s) => match p8_runtime::numeric::numeric_string(s.as_bytes()) {
+    let k = k.deref();
+    let i = match k.kind() {
+        Kind::Int => k.as_int().expect("an int"),
+        Kind::Bool => i64::from(k.as_bool().expect("a bool")),
+        Kind::Float => k.as_float().expect("a float") as i64,
+        Kind::Str => match p8_runtime::numeric::numeric_string(k.as_str().expect("a string").as_bytes()) {
             Some(p8_runtime::numeric::Number::Int(i)) => i,
             _ => return Err(ctx.throw("TypeError", "Cannot access offset of type string on SplFixedArray".into())),
         },
-        other => return Err(ctx.throw("TypeError", format!("Cannot access offset of type {} on SplFixedArray", other.type_name()))),
+        _ => return Err(ctx.throw("TypeError", format!("Cannot access offset of type {} on SplFixedArray", k.type_name()))),
     };
     let len = fixed(o).len() as i64;
     if i < 0 || i >= len {
@@ -498,41 +496,41 @@ fn fa_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     if n < 0 {
         return Err(ctx.throw("ValueError", "SplFixedArray::__construct(): Argument #1 ($size) must be greater than or equal to 0".into()));
     }
-    set(this, "\0data", Value::Array(Rc::new(PhpArray::from_list(vec![Value::Null; n as usize]))));
-    Ok(Value::Null)
+    set(this, "\0data", Value::array(PhpArray::from_list(vec![Value::NULL; n as usize])));
+    Ok(Value::NULL)
 }
 
 fn fa_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let i = fixed_index(ctx, this, &arg(args, 0))?;
-    Ok(fixed(this).get_int(i as i64).map_or(Value::Null, Value::deref))
+    Ok(fixed(this).get_int(i as i64).map_or(Value::NULL, Value::deref))
 }
 
 fn fa_offset_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    if matches!(arg(args, 0), Value::Null) {
+    if arg(args, 0).is_null() {
         return Err(ctx.throw("Error", "[] operator not supported for SplFixedArray".into()));
     }
     let i = fixed_index(ctx, this, &arg(args, 0))?;
     let mut data = fixed(this);
     data.insert(Key::Int(i as i64), arg(args, 1));
-    set(this, "\0data", Value::Array(Rc::new(data)));
-    Ok(Value::Null)
+    set(this, "\0data", Value::array(data));
+    Ok(Value::NULL)
 }
 
 fn fa_offset_exists(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let i = arg(args, 0).to_int();
-    Ok(Value::Bool(fixed(this).get_int(i).is_some_and(|v| !matches!(v.deref(), Value::Null))))
+    Ok(Value::bool(fixed(this).get_int(i).is_some_and(|v| !v.deref().is_null())))
 }
 
 fn fa_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let i = fixed_index(ctx, this, &arg(args, 0))?;
     let mut data = fixed(this);
-    data.insert(Key::Int(i as i64), Value::Null);
-    set(this, "\0data", Value::Array(Rc::new(data)));
-    Ok(Value::Null)
+    data.insert(Key::Int(i as i64), Value::NULL);
+    set(this, "\0data", Value::array(data));
+    Ok(Value::NULL)
 }
 
 fn fa_count(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(fixed(this).len() as i64))
+    Ok(Value::int(fixed(this).len() as i64))
 }
 
 fn fa_set_size(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -541,17 +539,17 @@ fn fa_set_size(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Resu
         return Err(ctx.throw("ValueError", "SplFixedArray::setSize(): Argument #1 ($size) must be greater than or equal to 0".into()));
     }
     let mut list: Vec<Value> = fixed(this).values().cloned().collect();
-    list.resize(n as usize, Value::Null);
-    set(this, "\0data", Value::Array(Rc::new(PhpArray::from_list(list))));
-    Ok(Value::Bool(true))
+    list.resize(n as usize, Value::NULL);
+    set(this, "\0data", Value::array(PhpArray::from_list(list)));
+    Ok(Value::TRUE)
 }
 
 fn fa_to_array(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(fixed(this))))
+    Ok(Value::array(fixed(this)))
 }
 
 fn fa_from_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Array(a) = arg(args, 0) else {
+    let Ok(a) = arg(args, 0).into_array() else {
         return Err(ctx.throw("TypeError", "SplFixedArray::fromArray(): Argument #1 ($array) must be of type array".into()));
     };
     let keep = args.len() < 2 || arg(args, 1).to_bool();
@@ -563,7 +561,7 @@ fn fa_from_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
                 _ => return Err(ctx.throw("ValueError", "array must contain only positive integer keys".into())),
             }
         }
-        let mut list = vec![Value::Null; (max + 1) as usize];
+        let mut list = vec![Value::NULL; (max + 1) as usize];
         for (k, v) in a.iter() {
             if let Key::Int(i) = k {
                 list[i as usize] = v.deref();
@@ -575,18 +573,18 @@ fn fa_from_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     };
     let class = ctx.class(b"SplFixedArray").expect("SplFixedArray");
     let o = ctx.new_object(&class);
-    set(&o, "\0data", Value::Array(Rc::new(PhpArray::from_list(list))));
-    Ok(Value::Object(o))
+    set(&o, "\0data", Value::array(PhpArray::from_list(list)));
+    Ok(Value::object(o))
 }
 
 fn fa_get_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let class = ctx.class(b"ArrayIterator").expect("ArrayIterator");
-    let it = ctx.new_instance(&class, &mut [Value::Array(Rc::new(fixed(this)))], true)?;
-    Ok(Value::Object(it))
+    let it = ctx.new_instance(&class, &mut [Value::array(fixed(this))], true)?;
+    Ok(Value::object(it))
 }
 
 fn no_op(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +599,7 @@ fn store(o: &Object) -> PhpArray {
 }
 
 fn put_store(o: &Object, map: PhpArray) {
-    set(o, "\0map", Value::Array(Rc::new(map)));
+    set(o, "\0map", Value::array(map));
 }
 
 fn store_info(o: &Object) -> PhpArray {
@@ -609,26 +607,26 @@ fn store_info(o: &Object) -> PhpArray {
     for v in store(o).values() {
         let pair = array_of(v.clone());
         let mut e = PhpArray::new();
-        e.insert(Key::from_string(PhpStr::from("obj")), pair.get_int(0).cloned().unwrap_or(Value::Null));
-        e.insert(Key::from_string(PhpStr::from("inf")), pair.get_int(1).cloned().unwrap_or(Value::Null));
-        let _ = list.push(Value::Array(Rc::new(e)));
+        e.insert(Key::from_string(PhpStr::from("obj")), pair.get_int(0).cloned().unwrap_or(Value::NULL));
+        e.insert(Key::from_string(PhpStr::from("inf")), pair.get_int(1).cloned().unwrap_or(Value::NULL));
+        let _ = list.push(Value::array(e));
     }
     let mut out = PhpArray::new();
-    out.insert(Key::from_string(PhpStr::from("\0SplObjectStorage\0storage")), Value::Array(Rc::new(list)));
+    out.insert(Key::from_string(PhpStr::from("\0SplObjectStorage\0storage")), Value::array(list));
     out
 }
 
 fn object_arg(ctx: &mut dyn Ctx, args: &[Value], method: &str) -> Result<Rc<Object>, Throw> {
-    match arg(args, 0) {
-        Value::Object(o) => Ok(o),
-        other => Err(ctx.throw("TypeError", format!("SplObjectStorage::{method}(): Argument #1 ($object) must be of type object, {} given", other.type_name()))),
+    match arg(args, 0).into_object() {
+        Ok(o) => Ok(o),
+        Err(other) => Err(ctx.throw("TypeError", format!("SplObjectStorage::{method}(): Argument #1 ($object) must be of type object, {} given", other.type_name()))),
     }
 }
 
 fn os_attach_to(this: &Object, o: Rc<Object>, inf: Value) {
     let mut map = store(this);
-    let pair = PhpArray::from_list(vec![Value::Object(Rc::clone(&o)), inf]);
-    map.insert(Key::Int(i64::from(o.id)), Value::Array(Rc::new(pair)));
+    let pair = PhpArray::from_list(vec![Value::object(Rc::clone(&o)), inf]);
+    map.insert(Key::Int(i64::from(o.id)), Value::array(pair));
     put_store(this, map);
 }
 
@@ -638,17 +636,17 @@ fn os_serialize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
     let map = store(this);
     let mut s = crate::serial::Serializer::new(ctx);
     s.raw(b"x:");
-    s.value(&Value::Int(map.len() as i64))?;
+    s.value(&Value::int(map.len() as i64))?;
     for pair in map.values() {
         let pair = array_of(pair.deref());
-        s.value(&pair.get(&Key::Int(0)).map_or(Value::Null, Value::deref))?;
+        s.value(&pair.get(&Key::Int(0)).map_or(Value::NULL, Value::deref))?;
         s.raw(b",");
-        s.value(&pair.get(&Key::Int(1)).map_or(Value::Null, Value::deref))?;
+        s.value(&pair.get(&Key::Int(1)).map_or(Value::NULL, Value::deref))?;
         s.raw(b";");
     }
     s.raw(b"m:");
-    s.value(&Value::Array(Rc::new(spl_members(this, b"splobjectstorage"))))?;
-    Ok(Value::Str(PhpStr::new(s.finish())))
+    s.value(&Value::array(spl_members(this, b"splobjectstorage")))?;
+    Ok(Value::str(PhpStr::new(s.finish())))
 }
 
 /// SplObjectStorage::unserialize(string): what serialize() wrote.
@@ -656,7 +654,7 @@ fn os_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     let data = crate::str_arg(args, 0);
     let bytes = data.as_bytes();
     if bytes.is_empty() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let bad = |ctx: &mut dyn Ctx, at: usize| ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len()));
     if !bytes.starts_with(b"x:") {
@@ -664,12 +662,12 @@ fn os_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     }
     let mut u = crate::serial::Unserializer::new(bytes);
     u.seek(2);
-    let count = match u.value(ctx)? {
-        Ok(Value::Int(n)) if n >= 0 => n,
+    let count = match u.value(ctx)?.ok().and_then(|v| v.as_int()) {
+        Some(n) if n >= 0 => n,
         _ => return Err(bad(ctx, u.at())),
     };
     for _ in 0..count {
-        let Ok(Value::Object(o)) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
+        let Some(o) = u.value(ctx)?.ok().and_then(|v| v.into_object().ok()) else { return Err(bad(ctx, u.at())) };
         if bytes.get(u.at()) != Some(&b',') {
             return Err(bad(ctx, u.at()));
         }
@@ -685,10 +683,10 @@ fn os_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         return Err(bad(ctx, u.at()));
     }
     u.seek(u.at() + 2);
-    let Ok(Value::Array(members)) = u.value(ctx)? else { return Err(bad(ctx, u.at())) };
+    let Some(members) = u.value(ctx)?.ok().and_then(|v| v.into_array().ok()) else { return Err(bad(ctx, u.at())) };
     u.finish(ctx)?;
     spl_restore_members(ctx, this, b"splobjectstorage", &members);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// SplObjectStorage::__serialize(): [[object, info, ...], other properties].
@@ -696,18 +694,19 @@ fn os_magic_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
     let mut flat = Vec::new();
     for pair in store(this).values() {
         let pair = array_of(pair.deref());
-        flat.push(pair.get(&Key::Int(0)).map_or(Value::Null, Value::deref));
-        flat.push(pair.get(&Key::Int(1)).map_or(Value::Null, Value::deref));
+        flat.push(pair.get(&Key::Int(0)).map_or(Value::NULL, Value::deref));
+        flat.push(pair.get(&Key::Int(1)).map_or(Value::NULL, Value::deref));
     }
     let members = spl_members(this, b"splobjectstorage");
-    Ok(Value::Array(Rc::new(PhpArray::from_list(vec![Value::Array(Rc::new(PhpArray::from_list(flat))), Value::Array(Rc::new(members))]))))
+    Ok(Value::array(PhpArray::from_list(vec![Value::array(PhpArray::from_list(flat)), Value::array(members)])))
 }
 
 /// SplObjectStorage::__unserialize(array $data).
 fn os_magic_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let data = array_of(arg(args, 0));
     let bad = |ctx: &mut dyn Ctx| ctx.throw("UnexpectedValueException", "Incomplete or ill-typed serialization data".into());
-    let (Some(Value::Array(pairs)), Some(Value::Array(members))) = (data.get(&Key::Int(0)).map(Value::deref), data.get(&Key::Int(1)).map(Value::deref)) else {
+    let array_at = |i: i64| data.get(&Key::Int(i)).map(Value::deref).and_then(|v| v.into_array().ok());
+    let (Some(pairs), Some(members)) = (array_at(0), array_at(1)) else {
         return Err(bad(ctx));
     };
     let items: Vec<Value> = pairs.values().map(Value::deref).collect();
@@ -715,19 +714,19 @@ fn os_magic_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
         return Err(ctx.throw("UnexpectedValueException", "Odd number of elements".into()));
     }
     for pair in items.chunks(2) {
-        let Value::Object(o) = &pair[0] else {
+        let Some(o) = pair[0].as_object() else {
             return Err(ctx.throw("UnexpectedValueException", "Non-object key".into()));
         };
         os_attach_to(this, Rc::clone(o), pair[1].clone());
     }
     spl_restore_members(ctx, this, b"splobjectstorage", &members);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn os_attach(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "attach")?;
     os_attach_to(this, o, arg(args, 1));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn os_detach(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -735,23 +734,23 @@ fn os_detach(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
     let mut map = store(this);
     map.remove(&Key::Int(i64::from(o.id)));
     put_store(this, map);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn os_contains(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "contains")?;
-    Ok(Value::Bool(store(this).contains_key(&Key::Int(i64::from(o.id)))))
+    Ok(Value::bool(store(this).contains_key(&Key::Int(i64::from(o.id)))))
 }
 
 fn os_offset_exists(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "offsetExists")?;
-    Ok(Value::Bool(store(this).contains_key(&Key::Int(i64::from(o.id)))))
+    Ok(Value::bool(store(this).contains_key(&Key::Int(i64::from(o.id)))))
 }
 
 fn os_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "offsetGet")?;
     match store(this).get(&Key::Int(i64::from(o.id))) {
-        Some(pair) => Ok(array_of(pair.clone()).get_int(1).cloned().unwrap_or(Value::Null)),
+        Some(pair) => Ok(array_of(pair.clone()).get_int(1).cloned().unwrap_or(Value::NULL)),
         None => Err(ctx.throw("UnexpectedValueException", "Object not found".into())),
     }
 }
@@ -759,7 +758,7 @@ fn os_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
 fn os_offset_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "offsetSet")?;
     os_attach_to(this, o, arg(args, 1));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn os_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -772,21 +771,22 @@ fn os_count(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<
         // COUNT_RECURSIVE: the stored objects' own counts too.
         let mut n = map.len() as i64;
         for v in map.values() {
-            if let Some(Value::Object(inner)) = array_of(v.clone()).get_int(0).cloned()
+            if let Some(inner) = array_of(v.clone()).get_int(0).and_then(Value::cloned_object)
                 && inner.class.is_a(b"countable")
             {
                 n += call_this(ctx, &inner, "count", &mut [])?.to_int();
             }
         }
-        return Ok(Value::Int(n));
+        return Ok(Value::int(n));
     }
-    Ok(Value::Int(map.len() as i64))
+    Ok(Value::int(map.len() as i64))
 }
 
 fn storage_arg(ctx: &mut dyn Ctx, args: &[Value], method: &str) -> Result<Rc<Object>, Throw> {
-    match arg(args, 0) {
-        Value::Object(o) if o.class.is_a(b"splobjectstorage") => Ok(o),
-        other => Err(ctx.throw("TypeError", format!("SplObjectStorage::{method}(): Argument #1 ($storage) must be of type SplObjectStorage, {} given", other.type_name()))),
+    let other = arg(args, 0);
+    match other.as_object() {
+        Some(o) if o.class.is_a(b"splobjectstorage") => Ok(Rc::clone(o)),
+        _ => Err(ctx.throw("TypeError", format!("SplObjectStorage::{method}(): Argument #1 ($storage) must be of type SplObjectStorage, {} given", other.type_name()))),
     }
 }
 
@@ -798,7 +798,7 @@ fn os_add_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Resul
     }
     let n = map.len();
     put_store(this, map);
-    Ok(Value::Int(n as i64))
+    Ok(Value::int(n as i64))
 }
 
 fn os_remove_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -809,7 +809,7 @@ fn os_remove_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     }
     let n = map.len();
     put_store(this, map);
-    Ok(Value::Int(n as i64))
+    Ok(Value::int(n as i64))
 }
 
 fn os_remove_all_except(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -823,7 +823,7 @@ fn os_remove_all_except(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     }
     let n = map.len();
     put_store(this, map);
-    Ok(Value::Int(n as i64))
+    Ok(Value::int(n as i64))
 }
 
 /// The entry at the position, if valid.
@@ -832,22 +832,22 @@ fn os_entry(o: &Object) -> Option<PhpArray> {
 }
 
 fn os_rewind(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "\0pos", Value::Int(0));
-    set(this, "\0index", Value::Int(0));
-    Ok(Value::Null)
+    set(this, "\0pos", Value::int(0));
+    set(this, "\0index", Value::int(0));
+    Ok(Value::NULL)
 }
 
 fn os_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(os_entry(this).is_some()))
+    Ok(Value::bool(os_entry(this).is_some()))
 }
 
 fn os_key(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(int(this, "\0index")))
+    Ok(Value::int(int(this, "\0index")))
 }
 
 fn os_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     match os_entry(this) {
-        Some(pair) => Ok(pair.get_int(0).cloned().unwrap_or(Value::Null)),
+        Some(pair) => Ok(pair.get_int(0).cloned().unwrap_or(Value::NULL)),
         None => Err(ctx.throw("RuntimeException", "Called current() on invalid iterator".into())),
     }
 }
@@ -855,14 +855,14 @@ fn os_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 fn os_next(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let map = store(this);
     if let Some((p, _, _)) = map.entry_at(int(this, "\0pos") as usize) {
-        set(this, "\0pos", Value::Int(p as i64 + 1));
-        set(this, "\0index", Value::Int(int(this, "\0index") + 1));
+        set(this, "\0pos", Value::int(p as i64 + 1));
+        set(this, "\0index", Value::int(int(this, "\0index") + 1));
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn os_get_info(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(os_entry(this).and_then(|p| p.get_int(1).cloned()).unwrap_or(Value::Null))
+    Ok(os_entry(this).and_then(|p| p.get_int(1).cloned()).unwrap_or(Value::NULL))
 }
 
 fn os_set_info(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -870,15 +870,15 @@ fn os_set_info(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
     if let Some((_, k, v)) = map.entry_at(int(this, "\0pos") as usize) {
         let mut pair = array_of(v.clone());
         pair.insert(Key::Int(1), arg(args, 0));
-        map.insert(k, Value::Array(Rc::new(pair)));
+        map.insert(k, Value::array(pair));
         put_store(this, map);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn os_get_hash(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "getHash")?;
-    Ok(Value::Str(PhpStr::from(format!("{:032x}", o.id))))
+    Ok(Value::str(PhpStr::from(format!("{:032x}", o.id))))
 }
 
 // ---------------------------------------------------------------------------
@@ -898,7 +898,7 @@ fn dll_flags(o: &Object) -> i64 {
     let f = int(o, "flags");
     if f & IT_FIX == 0 && (o.class.is_a(b"splstack") || o.class.is_a(b"splqueue")) {
         let f = if o.class.is_a(b"splstack") { IT_MODE_LIFO | IT_FIX } else { IT_FIX };
-        set(o, "flags", Value::Int(f));
+        set(o, "flags", Value::int(f));
         return f;
     }
     f
@@ -910,7 +910,7 @@ fn dll(o: &Object) -> Vec<Value> {
 }
 
 fn put_dll(o: &Object, list: Vec<Value>) {
-    set(o, "dllist", Value::Array(Rc::new(PhpArray::from_list(list))));
+    set(o, "dllist", Value::array(PhpArray::from_list(list)));
 }
 
 /// The properties a subclass or its user added to an SPL object whose own
@@ -919,7 +919,7 @@ fn spl_members(o: &Object, own: &[u8]) -> PhpArray {
     let mut out = PhpArray::new();
     let slots = o.slots.borrow();
     for (i, p) in o.class.properties.iter().enumerate() {
-        if p.declaring.as_slice() == own || p.name.as_bytes().starts_with(b"\0") || matches!(slots[i], Value::Undef) {
+        if p.declaring.as_slice() == own || p.name.as_bytes().starts_with(b"\0") || slots[i].is_undef() {
             continue;
         }
         let key = match p.visibility {
@@ -972,7 +972,7 @@ fn dll_serialize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resul
         s.raw(b":");
         s.value(&v)?;
     }
-    Ok(Value::Str(PhpStr::new(s.finish())))
+    Ok(Value::str(PhpStr::new(s.finish())))
 }
 
 /// SplDoublyLinkedList::unserialize(string): the elements serialize() wrote.
@@ -980,13 +980,13 @@ fn dll_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
     let data = crate::str_arg(args, 0);
     let bytes = data.as_bytes();
     if bytes.is_empty() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let bad = |ctx: &mut dyn Ctx, at: usize| ctx.throw("UnexpectedValueException", format!("Error at offset {at} of {} bytes", bytes.len()));
     let mut u = crate::serial::Unserializer::new(bytes);
-    let flags = match u.value(ctx)? {
-        Ok(Value::Int(f)) => f,
-        Ok(_) | Err(_) => return Err(bad(ctx, 0)),
+    let flags = match u.value(ctx)?.ok().and_then(|v| v.as_int()) {
+        Some(f) => f,
+        None => return Err(bad(ctx, 0)),
     };
     let mut list = Vec::new();
     while u.at() < bytes.len() {
@@ -1000,44 +1000,46 @@ fn dll_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
         }
     }
     u.finish(ctx)?;
-    set(this, "flags", Value::Int(flags));
+    set(this, "flags", Value::int(flags));
     put_dll(this, list);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// SplDoublyLinkedList::__serialize(): [flags, elements, other properties].
 fn dll_magic_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let flags = dll_flags(this);
-    let list = Value::Array(Rc::new(PhpArray::from_list(dll(this))));
-    let members = Value::Array(Rc::new(spl_members(this, b"spldoublylinkedlist")));
-    Ok(Value::Array(Rc::new(PhpArray::from_list(vec![Value::Int(flags), list, members]))))
+    let list = Value::array(PhpArray::from_list(dll(this)));
+    let members = Value::array(spl_members(this, b"spldoublylinkedlist"));
+    Ok(Value::array(PhpArray::from_list(vec![Value::int(flags), list, members])))
 }
 
 /// SplDoublyLinkedList::__unserialize(array $data).
 fn dll_magic_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let data = array_of(arg(args, 0));
     let (flags, list, members) = (data.get(&Key::Int(0)).map(Value::deref), data.get(&Key::Int(1)).map(Value::deref), data.get(&Key::Int(2)).map(Value::deref));
-    let (Some(Value::Int(flags)), Some(Value::Array(list)), Some(Value::Array(members))) = (flags, list, members) else {
+    let (Some(flags), Some(list), Some(members)) =
+        (flags.and_then(|v| v.as_int()), list.and_then(|v| v.into_array().ok()), members.and_then(|v| v.into_array().ok()))
+    else {
         return Err(ctx.throw("UnexpectedValueException", "Incomplete or ill-typed serialization data".into()));
     };
-    set(this, "flags", Value::Int(flags));
+    set(this, "flags", Value::int(flags));
     put_dll(this, list.values().map(Value::deref).collect());
     spl_restore_members(ctx, this, b"spldoublylinkedlist", &members);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dll_push(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut l = dll(this);
     l.push(arg(args, 0));
     put_dll(this, l);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dll_unshift(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut l = dll(this);
     l.insert(0, arg(args, 0));
     put_dll(this, l);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dll_pop(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1072,23 +1074,24 @@ fn dll_bottom(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 }
 
 fn dll_is_empty(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(dll(this).is_empty()))
+    Ok(Value::bool(dll(this).is_empty()))
 }
 
 fn dll_count(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(dll(this).len() as i64))
+    Ok(Value::int(dll(this).len() as i64))
 }
 
 /// An index into the list (`what` names the method for the error).
 fn dll_index(ctx: &mut dyn Ctx, len: usize, k: &Value, what: &str, inclusive: bool) -> Result<usize, Throw> {
-    let i = match k.deref() {
-        Value::Int(i) => i,
-        Value::Str(s) => match p8_runtime::numeric::numeric_string(s.as_bytes()) {
+    let k = k.deref();
+    let i = match k.kind() {
+        Kind::Int => k.as_int().expect("an int"),
+        Kind::Str => match p8_runtime::numeric::numeric_string(k.as_str().expect("a string").as_bytes()) {
             Some(p8_runtime::numeric::Number::Int(i)) => i,
             _ => -1,
         },
-        Value::Float(f) => f as i64,
-        Value::Bool(b) => i64::from(b),
+        Kind::Float => k.as_float().expect("a float") as i64,
+        Kind::Bool => i64::from(k.as_bool().expect("a bool")),
         _ => -1,
     };
     let limit = if inclusive { len as i64 } else { len as i64 - 1 };
@@ -1100,7 +1103,7 @@ fn dll_index(ctx: &mut dyn Ctx, len: usize, k: &Value, what: &str, inclusive: bo
 
 fn dll_offset_exists(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let i = arg(args, 0).to_int();
-    Ok(Value::Bool(i >= 0 && (i as usize) < dll(this).len()))
+    Ok(Value::bool(i >= 0 && (i as usize) < dll(this).len()))
 }
 
 fn dll_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1112,14 +1115,14 @@ fn dll_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 fn dll_offset_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut l = dll(this);
     match arg(args, 0) {
-        Value::Null => l.push(arg(args, 1)),
+        k if k.is_null() => l.push(arg(args, 1)),
         k => {
             let i = dll_index(ctx, l.len(), &k, "offsetSet", false)?;
             l[i] = arg(args, 1);
         }
     }
     put_dll(this, l);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dll_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1127,7 +1130,7 @@ fn dll_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
     let i = dll_index(ctx, l.len(), &arg(args, 0), "offsetUnset", false)?;
     l.remove(i);
     put_dll(this, l);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dll_add(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1135,7 +1138,7 @@ fn dll_add(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<V
     let i = dll_index(ctx, l.len(), &arg(args, 0), "add", true)?;
     l.insert(i, arg(args, 1));
     put_dll(this, l);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dll_set_iterator_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1145,33 +1148,33 @@ fn dll_set_iterator_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
         return Err(ctx.throw("RuntimeException", "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen".into()));
     }
     let new = (mode & (IT_MODE_LIFO | IT_MODE_DELETE)) | (f & IT_FIX);
-    set(this, "flags", Value::Int(new));
-    Ok(Value::Int(new))
+    set(this, "flags", Value::int(new));
+    Ok(Value::int(new))
 }
 
 fn dll_get_iterator_mode(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(dll_flags(this) & !IT_FIX))
+    Ok(Value::int(dll_flags(this) & !IT_FIX))
 }
 
 fn dll_rewind(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let len = dll(this).len() as i64;
     let lifo = dll_flags(this) & IT_MODE_LIFO != 0;
-    set(this, "\0pos", Value::Int(if lifo { len - 1 } else { 0 }));
-    Ok(Value::Null)
+    set(this, "\0pos", Value::int(if lifo { len - 1 } else { 0 }));
+    Ok(Value::NULL)
 }
 
 fn dll_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let pos = int(this, "\0pos");
-    Ok(Value::Bool(pos >= 0 && (pos as usize) < dll(this).len()))
+    Ok(Value::bool(pos >= 0 && (pos as usize) < dll(this).len()))
 }
 
 fn dll_current(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let pos = int(this, "\0pos");
-    Ok(if pos < 0 { Value::Null } else { dll(this).get(pos as usize).cloned().unwrap_or(Value::Null) })
+    Ok(if pos < 0 { Value::NULL } else { dll(this).get(pos as usize).cloned().unwrap_or(Value::NULL) })
 }
 
 fn dll_key(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(int(this, "\0pos")))
+    Ok(Value::int(int(this, "\0pos")))
 }
 
 fn dll_step(this: &Object, forward: bool) {
@@ -1187,21 +1190,21 @@ fn dll_step(this: &Object, forward: bool) {
         }
         let len = l.len() as i64;
         put_dll(this, l);
-        set(this, "\0pos", Value::Int(if lifo { len - 1 } else { 0 }));
+        set(this, "\0pos", Value::int(if lifo { len - 1 } else { 0 }));
         return;
     }
     let step = if lifo == forward { -1 } else { 1 };
-    set(this, "\0pos", Value::Int(pos + step));
+    set(this, "\0pos", Value::int(pos + step));
 }
 
 fn dll_next(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     dll_step(this, true);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dll_prev(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     dll_step(this, false);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---------------------------------------------------------------------------
@@ -1219,7 +1222,7 @@ fn heap(o: &Object) -> Vec<Value> {
 }
 
 fn put_heap(o: &Object, h: Vec<Value>) {
-    set(o, "heap", Value::Array(Rc::new(PhpArray::from_list(h))));
+    set(o, "heap", Value::array(PhpArray::from_list(h)));
 }
 
 fn is_pq(o: &Object) -> bool {
@@ -1229,7 +1232,7 @@ fn is_pq(o: &Object) -> bool {
 /// What compare() looks at: the element, or a queue entry's priority.
 fn compared(o: &Object, v: &Value) -> Value {
     if is_pq(o) {
-        array_of(v.clone()).get(&Key::from_string(PhpStr::from("priority"))).cloned().unwrap_or(Value::Null)
+        array_of(v.clone()).get(&Key::from_string(PhpStr::from("priority"))).cloned().unwrap_or(Value::NULL)
     } else {
         v.clone()
     }
@@ -1240,7 +1243,7 @@ fn cmp(ctx: &mut dyn Ctx, this: &Rc<Object>, a: &Value, b: &Value) -> Result<i64
     match call_this(ctx, this, "compare", &mut [x, y]) {
         Ok(v) => Ok(v.to_int()),
         Err(e) => {
-            set(this, "isCorrupted", Value::Bool(true));
+            set(this, "isCorrupted", Value::TRUE);
             Err(e)
         }
     }
@@ -1302,8 +1305,8 @@ fn heap_extract_value(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Value, Thr
 /// A queue entry as its extract flags give it.
 fn pq_out(this: &Object, entry: &Value) -> Value {
     let e = array_of(entry.clone());
-    let data = e.get(&Key::from_string(PhpStr::from("data"))).cloned().unwrap_or(Value::Null);
-    let priority = e.get(&Key::from_string(PhpStr::from("priority"))).cloned().unwrap_or(Value::Null);
+    let data = e.get(&Key::from_string(PhpStr::from("data"))).cloned().unwrap_or(Value::NULL);
+    let priority = e.get(&Key::from_string(PhpStr::from("priority"))).cloned().unwrap_or(Value::NULL);
     match int(this, "flags") & 3 {
         2 => priority,
         3 => entry.clone(),
@@ -1313,7 +1316,7 @@ fn pq_out(this: &Object, entry: &Value) -> Value {
 
 fn heap_insert(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     heap_insert_value(ctx, this, arg(args, 0))?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn heap_extract(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1330,35 +1333,35 @@ fn heap_top(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Val
 }
 
 fn heap_count(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(heap(this).len() as i64))
+    Ok(Value::int(heap(this).len() as i64))
 }
 
 fn heap_is_empty(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(heap(this).is_empty()))
+    Ok(Value::bool(heap(this).is_empty()))
 }
 
 fn heap_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(!heap(this).is_empty()))
+    Ok(Value::bool(!heap(this).is_empty()))
 }
 
 fn heap_current(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(heap(this).first().map_or(Value::Null, |v| if is_pq(this) { pq_out(this, v) } else { v.clone() }))
+    Ok(heap(this).first().map_or(Value::NULL, |v| if is_pq(this) { pq_out(this, v) } else { v.clone() }))
 }
 
 fn heap_key(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(heap(this).len() as i64 - 1))
+    Ok(Value::int(heap(this).len() as i64 - 1))
 }
 
 fn heap_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     if !heap(this).is_empty() {
         heap_extract_value(ctx, this)?;
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn heap_recover(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "isCorrupted", Value::Bool(false));
-    Ok(Value::Bool(true))
+    set(this, "isCorrupted", Value::FALSE);
+    Ok(Value::TRUE)
 }
 
 fn heap_is_corrupted(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1375,19 +1378,19 @@ fn spaceship(a: &Value, b: &Value) -> i64 {
 }
 
 fn min_compare(_: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(spaceship(&arg(args, 1), &arg(args, 0))))
+    Ok(Value::int(spaceship(&arg(args, 1), &arg(args, 0))))
 }
 
 fn max_compare(_: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(spaceship(&arg(args, 0), &arg(args, 1))))
+    Ok(Value::int(spaceship(&arg(args, 0), &arg(args, 1))))
 }
 
 fn pq_insert(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut e = PhpArray::new();
     e.insert(Key::from_string(PhpStr::from("data")), arg(args, 0));
     e.insert(Key::from_string(PhpStr::from("priority")), arg(args, 1));
-    heap_insert_value(ctx, this, Value::Array(Rc::new(e)))?;
-    Ok(Value::Bool(true))
+    heap_insert_value(ctx, this, Value::array(e))?;
+    Ok(Value::TRUE)
 }
 
 fn pq_set_extract_flags(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1395,12 +1398,12 @@ fn pq_set_extract_flags(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     if f == 0 {
         return Err(ctx.throw("RuntimeException", "Must specify at least one extract flag".into()));
     }
-    set(this, "flags", Value::Int(f));
-    Ok(Value::Int(f))
+    set(this, "flags", Value::int(f));
+    Ok(Value::int(f))
 }
 
 fn pq_get_extract_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(int(this, "flags")))
+    Ok(Value::int(int(this, "flags")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1408,9 +1411,10 @@ fn pq_get_extract_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> 
 
 /// The class an object or name gives (after autoloading when asked).
 fn class_from(ctx: &mut dyn Ctx, v: &Value, autoload: bool, func: &str) -> Result<Option<Rc<p8_runtime::object::Class>>, Throw> {
-    match v {
-        Value::Object(o) => Ok(Some(Rc::clone(&o.class))),
-        other => {
+    match v.as_object() {
+        Some(o) => Ok(Some(Rc::clone(&o.class))),
+        None => {
+            let other = v;
             let name = other.to_php_string().unwrap_or_else(PhpStr::empty);
             let found = if autoload { ctx.class_load(name.as_bytes())? } else { ctx.class(name.as_bytes()) };
             if found.is_none() {
@@ -1425,50 +1429,50 @@ fn class_from(ctx: &mut dyn Ctx, v: &Value, autoload: bool, func: &str) -> Resul
 /// class_implements(object|string $object_or_class, bool $autoload = true): name => name
 fn class_implements(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let autoload = args.len() < 2 || arg(args, 1).to_bool();
-    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_implements")? else { return Ok(Value::Bool(false)) };
+    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_implements")? else { return Ok(Value::FALSE) };
     let mut out = PhpArray::new();
     for i in &class.interfaces {
         let name = ctx.class(i).map_or_else(|| PhpStr::from(&**i), |c| c.name.clone());
-        out.insert(Key::from_string(name.clone()), Value::Str(name));
+        out.insert(Key::from_string(name.clone()), Value::str(name));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// class_parents(object|string $object_or_class, bool $autoload = true): name => name
 fn class_parents(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let autoload = args.len() < 2 || arg(args, 1).to_bool();
-    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_parents")? else { return Ok(Value::Bool(false)) };
+    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_parents")? else { return Ok(Value::FALSE) };
     let mut out = PhpArray::new();
     let mut c = class.parent.clone();
     while let Some(p) = c {
-        out.insert(Key::from_string(p.name.clone()), Value::Str(p.name.clone()));
+        out.insert(Key::from_string(p.name.clone()), Value::str(p.name.clone()));
         c = p.parent.clone();
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// class_uses(object|string $object_or_class, bool $autoload = true): the
 /// traits the class itself uses, name => name
 fn class_uses(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let autoload = args.len() < 2 || arg(args, 1).to_bool();
-    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_uses")? else { return Ok(Value::Bool(false)) };
+    let Some(class) = class_from(ctx, &arg(args, 0), autoload, "class_uses")? else { return Ok(Value::FALSE) };
     let mut out = PhpArray::new();
     for t in ctx.reflect_meta(&p8_runtime::reflect::Subject::Class(class)).traits {
         let name = ctx.class(t.as_bytes()).map_or(t, |c| c.name.clone());
-        out.insert(Key::from_string(name.clone()), Value::Str(name));
+        out.insert(Key::from_string(name.clone()), Value::str(name));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// iterator_apply(Traversable $iterator, callable $callback, ?array $args = null): the count
 fn iterator_apply(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(it) = arg(args, 0) else {
+    let Ok(it) = arg(args, 0).into_object() else {
         return Err(ctx.throw("TypeError", "iterator_apply(): Argument #1 ($iterator) must be of type Traversable".into()));
     };
     let callback = arg(args, 1);
-    let call_args: Vec<Value> = match arg(args, 2) {
-        Value::Array(a) => a.values().cloned().collect(),
-        _ => Vec::new(),
+    let call_args: Vec<Value> = match arg(args, 2).as_array() {
+        Some(a) => a.values().cloned().collect(),
+        None => Vec::new(),
     };
     call_this(ctx, &it, "rewind", &mut [])?;
     let mut n = 0;
@@ -1480,7 +1484,7 @@ fn iterator_apply(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         }
         call_this(ctx, &it, "next", &mut [])?;
     }
-    Ok(Value::Int(n))
+    Ok(Value::int(n))
 }
 
 pub static BUILTINS: &[Builtin] = &[
