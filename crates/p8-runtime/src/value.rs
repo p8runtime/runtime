@@ -62,27 +62,25 @@ impl fmt::Debug for Value {
 }
 
 impl Drop for Value {
-    /// Inline: a scalar (the common case on every register overwrite)
-    /// is a tag compare and a return; a value holding memory goes to one
-    /// out-of-line call, which releases it exactly as before (the same
-    /// `Rc` drops, so a destructor is queued at the same point and the
-    /// collector sees the same counts).
+    /// Inline, as PHP's `zval_ptr_dtor`. The representation's own drop
+    /// follows this, inline: the scalars come first (tags 0..=4), so for
+    /// them it is one compare and nothing else; a value holding memory is
+    /// its `Rc` count's decrement, and `Rc`'s out-of-line free only when
+    /// it was the last handle (PHP's `GC_DELREF`, then `rc_dtor_func` at
+    /// zero). That is the same `Rc` drop as before the newtype, so a
+    /// destructor is queued at the same point and the collector sees the
+    /// same counts.
+    ///
+    /// Deliberately not an out-of-line call for every heap value: measured
+    /// on addis (#324's PR), that costs WordPress +3.1% and Laravel +2.3%
+    /// instructions, and +1.5% / +1.3% with the call only for the last
+    /// handle. The interpreter's register overwrite (`fast::put`) already
+    /// tests the tag in the slot and makes its one cold call itself.
+    ///
+    /// Being a `Drop` type also keeps a `Value` from being destructured by
+    /// move: the `into_*` take the representation with `mem::replace`.
     #[inline(always)]
-    fn drop(&mut self) {
-        if self.is_plain() {
-            return;
-        }
-        // Moved out first, so what is left (Undef) is known to need
-        // nothing and the field's own drop folds away.
-        release(mem::replace(&mut self.0, Repr::Undef));
-    }
-}
-
-/// The heap half of `Drop for Value`.
-#[cold]
-#[inline(never)]
-fn release(r: Repr) {
-    drop(r);
+    fn drop(&mut self) {}
 }
 
 impl Clone for Value {
