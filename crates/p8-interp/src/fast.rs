@@ -495,21 +495,102 @@ impl Context<'_> {
                     put(&mut w[dst as usize], Value::Int(if post { i } else { n }));
                     pc += 1;
                 }
+                Instr::LoadNull { dst } => {
+                    put(&mut w[dst as usize], Value::Null);
+                    pc += 1;
+                }
+                // `!x` and a condition made a value: as `truth` decides
+                // (NAN and an undefined variable warn: `step`).
+                Instr::Not { dst, src } => {
+                    let t = match &w[src as usize] {
+                        Value::Bool(b) => *b,
+                        v => match truth(v) {
+                            Some(t) => t,
+                            None => slow!(),
+                        },
+                    };
+                    put(&mut w[dst as usize], Value::Bool(!t));
+                    pc += 1;
+                }
+                Instr::ToBool { dst, src } => {
+                    let t = match &w[src as usize] {
+                        Value::Bool(b) => *b,
+                        v => match truth(v) {
+                            Some(t) => t,
+                            None => slow!(),
+                        },
+                    };
+                    put(&mut w[dst as usize], Value::Bool(t));
+                    pc += 1;
+                }
+                Instr::IssetVar { dst, var } => {
+                    let set = is_set(&w[var as usize]);
+                    put(&mut w[dst as usize], Value::Bool(set));
+                    pc += 1;
+                }
+                // `a ?? b`: a set and not null goes to dst and jumps.
+                Instr::JumpIfSet { src, dst, target } => {
+                    let v = match &w[src as usize] {
+                        Value::Undef | Value::Null => None,
+                        Value::Ref(cell) => match read_ref(cell) {
+                            Some(Value::Null) | None => None,
+                            v => v,
+                        },
+                        v => Some(v.clone()),
+                    };
+                    match v {
+                        Some(v) => {
+                            put(&mut w[dst as usize], v);
+                            pc = target as usize;
+                        }
+                        None => pc += 1,
+                    }
+                }
+                // An array literal: the empty array, then its elements
+                // pushed or set (an int or string key; a value defined and
+                // read through a reference; anything else, a next key
+                // occupied included, is `step`'s).
+                Instr::NewArray { dst, n } => {
+                    let a = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize)));
+                    put(&mut w[dst as usize], a);
+                    pc += 1;
+                }
+                Instr::ArrayPush { arr, val, take } => {
+                    let Value::Array(a) = &w[arr as usize] else { slow!() };
+                    if a.next_key().is_none() {
+                        slow!();
+                    }
+                    let Some(v) = taken(w, val, take) else { slow!() };
+                    let Value::Array(a) = &mut w[arr as usize] else { unreachable!("checked above") };
+                    let _ = Rc::make_mut(a).push(v);
+                    pc += 1;
+                }
+                Instr::ArraySet { arr, key, val, take } => {
+                    let k = match (&w[arr as usize], &w[key as usize]) {
+                        (Value::Array(_), Value::Int(k)) => Key::Int(*k),
+                        (Value::Array(_), Value::Str(s)) => Key::from_string(s.clone()),
+                        _ => slow!(),
+                    };
+                    let Some(v) = taken(w, val, take) else { slow!() };
+                    let Value::Array(a) = &mut w[arr as usize] else { unreachable!("checked above") };
+                    Rc::make_mut(a).insert(k, v);
+                    pc += 1;
+                }
+                // A constant the site resolved (a deprecated one is never
+                // cached: it warns on every fetch).
+                Instr::FetchConst { site, dst } => {
+                    let Some(Callee::Constant(v)) = clo.sites[site as usize].get() else { slow!() };
+                    let v = v.clone();
+                    put(&mut w[dst as usize], v);
+                    pc += 1;
+                }
                 // Every other instruction (listed, so dispatch needs no range check).
                 Instr::AssignDim { .. }
                 | Instr::AssignDimOp { .. }
-                | Instr::LoadNull { .. }
-                | Instr::Not { .. }
                 | Instr::Neg { .. }
                 | Instr::BitNot { .. }
-                | Instr::ToBool { .. }
                 | Instr::Cast { .. }
-                | Instr::JumpIfSet { .. }
-                | Instr::NewArray { .. }
-                | Instr::ArrayPush { .. }
-                | Instr::ArraySet { .. }
                 | Instr::IssetDim { .. }
-                | Instr::IssetVar { .. }
                 | Instr::UnsetVar { .. }
                 | Instr::UnsetDim { .. }
                 | Instr::IterInit { .. }
@@ -519,7 +600,6 @@ impl Context<'_> {
                 | Instr::StaticArgByRef { .. }
                 | Instr::FuncArgByRef { .. }
                 | Instr::Echo { .. }
-                | Instr::FetchConst { .. }
                 | Instr::BindGlobal { .. }
                 | Instr::ArgDefault { .. }
                 | Instr::Exit { .. }
@@ -856,6 +936,24 @@ pub(crate) fn read_ref(cell: &RefCell<Value>) -> Option<Value> {
 #[inline(always)]
 pub(crate) fn clear(r: &mut Value) {
     put(r, Value::Undef);
+}
+
+/// An operand to store (`operand_take`): moved out of its register when
+/// `take` (a temporary read for the last time), else copied; a reference's
+/// value is read through it (the taken register lets go of the
+/// reference). None when undefined (`step` warns).
+#[inline(always)]
+fn taken(w: &mut [Value], r: Reg, take: bool) -> Option<Value> {
+    let v = match &w[r as usize] {
+        Value::Undef => return None,
+        Value::Ref(cell) => read_ref(cell)?,
+        _ if take => return Some(std::mem::take(&mut w[r as usize])),
+        v => return Some(v.clone()),
+    };
+    if take {
+        clear(&mut w[r as usize]);
+    }
+    Some(v)
 }
 
 /// isset's test of an element: there and not null (through a reference).
