@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 const PORTED: &[&str] = &["p8-runtime", "p8-interp", "p8-compiler", "p8-bytecode", "p8", "p8-ext-mbstring", "php-cli", "p8-syntax", "p8-stubs", "p8-pcre",
     "p8-ext-pdo", "p8-ext-mysqli", "p8-ext-gd", "p8-ext-pdo-pgsql", "p8-ext-pcre", "p8-ext-sockets", "p8-ext-tokenizer",
     "p8-ext-pdo-mysql", "p8-ext-pdo-sqlite", "p8-ext-fileinfo", "p8-mysqlnd",
-    "p8-ext-curl", "p8-ext-openssl", "p8-ext-zip", "p8-ext-session"];
+    "p8-ext-curl", "p8-ext-openssl", "p8-ext-zip", "p8-ext-session",
+    "p8-ext-xml", "p8-ext-intl"];
 
 const VARIANTS: &[&str] = &["Null", "Bool", "Int", "Float", "Str", "Array", "Ref", "Object", "Undef"];
 
