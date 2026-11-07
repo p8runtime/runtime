@@ -79,38 +79,39 @@ pub(crate) fn build(ctx: &mut dyn Ctx, fields: &PhpArray) -> Result<Result<Form,
             Key::Str(s) => s.as_bytes().to_vec(),
         };
         let value = value.deref();
-        match &value {
-            Value::Object(o) if o.class.is_a(b"curlfile") => {
-                let Value::Str(path) = prop(o, b"name", b"CURLFile") else {
-                    let func = ctx.builtin_name();
-                    ctx.warn(&format!("{func}(): Invalid filename for key {}", lossy(&name)));
-                    continue;
-                };
-                let mime = match prop(o, b"mime", b"CURLFile") {
-                    Value::Str(m) if !m.is_empty() => m.as_bytes().to_vec(),
-                    _ => b"application/octet-stream".to_vec(),
-                };
-                let postname = match prop(o, b"postname", b"CURLFile") {
-                    Value::Str(m) if !m.is_empty() => m.as_bytes().to_vec(),
-                    _ => path.as_bytes().to_vec(),
-                };
-                let Ok(data) = std::fs::read(lossy(path.as_bytes())) else {
-                    return Ok(Err(CurlErr { code: 26, message: "Failed to open/read local data from file/application".into() }));
-                };
-                part(&mut body, &boundary, &name, Some(&postname), Some(&mime), &data);
+        if let Some(o) = value.as_object()
+            && o.class.is_a(b"curlfile")
+        {
+            let Ok(path) = prop(o, b"name", b"CURLFile").into_str() else {
+                let func = ctx.builtin_name();
+                ctx.warn(&format!("{func}(): Invalid filename for key {}", lossy(&name)));
+                continue;
+            };
+            let mime = match prop(o, b"mime", b"CURLFile").as_str() {
+                Some(m) if !m.is_empty() => m.as_bytes().to_vec(),
+                _ => b"application/octet-stream".to_vec(),
+            };
+            let postname = match prop(o, b"postname", b"CURLFile").as_str() {
+                Some(m) if !m.is_empty() => m.as_bytes().to_vec(),
+                _ => path.as_bytes().to_vec(),
+            };
+            let Ok(data) = std::fs::read(lossy(path.as_bytes())) else {
+                return Ok(Err(CurlErr { code: 26, message: "Failed to open/read local data from file/application".into() }));
+            };
+            part(&mut body, &boundary, &name, Some(&postname), Some(&mime), &data);
+        } else if let Some(o) = value.as_object()
+            && o.class.is_a(b"curlstringfile")
+        {
+            let data = bytes_of(&prop(o, b"data", b"CURLStringFile"));
+            let postname = bytes_of(&prop(o, b"postname", b"CURLStringFile"));
+            let mime = bytes_of(&prop(o, b"mime", b"CURLStringFile"));
+            part(&mut body, &boundary, &name, Some(&postname), Some(&mime), &data);
+        } else if let Some(items) = value.as_array() {
+            for item in items.values() {
+                part(&mut body, &boundary, &name, None, None, &bytes_of(&item.deref()));
             }
-            Value::Object(o) if o.class.is_a(b"curlstringfile") => {
-                let data = bytes_of(&prop(o, b"data", b"CURLStringFile"));
-                let postname = bytes_of(&prop(o, b"postname", b"CURLStringFile"));
-                let mime = bytes_of(&prop(o, b"mime", b"CURLStringFile"));
-                part(&mut body, &boundary, &name, Some(&postname), Some(&mime), &data);
-            }
-            Value::Array(items) => {
-                for item in items.values() {
-                    part(&mut body, &boundary, &name, None, None, &bytes_of(&item.deref()));
-                }
-            }
-            other => part(&mut body, &boundary, &name, None, None, &bytes_of(other)),
+        } else {
+            part(&mut body, &boundary, &name, None, None, &bytes_of(&value));
         }
     }
     body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
