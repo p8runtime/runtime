@@ -12,7 +12,6 @@ use p8_runtime::user_stream::{self, Located, Stat};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use p8_runtime::os::MetadataExt;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "stat", run: stat, by_ref: &[] },
@@ -63,7 +62,7 @@ fn stat_array(m: &std::fs::Metadata) -> Value {
         blksize: m.blksize() as i64,
         blocks: m.blocks() as i64,
     };
-    Value::Array(Rc::new(st.to_array()))
+    Value::array(st.to_array())
 }
 
 fn stat_of(ctx: &mut dyn Ctx, func: &str, p: &str, follow: bool) -> Option<std::fs::Metadata> {
@@ -80,18 +79,18 @@ fn stat_of(ctx: &mut dyn Ctx, func: &str, p: &str, follow: bool) -> Option<std::
 
 fn stat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
-    if let Some(v) = user_field(ctx, "stat", &p, false, |st| Value::Array(Rc::new(st.to_array())))? {
+    if let Some(v) = user_field(ctx, "stat", &p, false, |st| Value::array(st.to_array()))? {
         return Ok(v);
     }
-    Ok(stat_of(ctx, "stat", &p, true).map_or(Value::Bool(false), |m| stat_array(&m)))
+    Ok(stat_of(ctx, "stat", &p, true).map_or(Value::FALSE, |m| stat_array(&m)))
 }
 
 fn lstat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
-    if let Some(v) = user_field(ctx, "lstat", &p, true, |st| Value::Array(Rc::new(st.to_array())))? {
+    if let Some(v) = user_field(ctx, "lstat", &p, true, |st| Value::array(st.to_array()))? {
         return Ok(v);
     }
-    Ok(stat_of(ctx, "lstat", &p, false).map_or(Value::Bool(false), |m| stat_array(&m)))
+    Ok(stat_of(ctx, "lstat", &p, false).map_or(Value::FALSE, |m| stat_array(&m)))
 }
 
 fn fstat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -102,12 +101,12 @@ fn fstat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if crate::file::is_user(&o) {
         // The wrapper's stream_stat.
         let st = crate::file::with_user(ctx, &o, None, |ctx, s| user_stream::stat(ctx, "fstat", s))?;
-        return Ok(st.map_or(Value::Bool(false), |st| Value::Array(Rc::new(st.to_array()))));
+        return Ok(st.map_or(Value::FALSE, |st| Value::array(st.to_array())));
     }
-    let Some(r) = resource(&o) else { return Ok(Value::Bool(false)) };
+    let Some(r) = resource(&o) else { return Ok(Value::FALSE) };
     let s = r.stream.borrow();
     match &s.target {
-        Target::File(f) => Ok(f.metadata().map_or(Value::Bool(false), |m| stat_array(&m))),
+        Target::File(f) => Ok(f.metadata().map_or(Value::FALSE, |m| stat_array(&m))),
         Target::Memory(data) => {
             // A memory stream: its size, and a file's mode.
             let mut out = PhpArray::new();
@@ -120,14 +119,14 @@ fn fstat(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                 _ => 0,
             };
             for (i, k) in names.iter().enumerate() {
-                out.insert(Key::Int(i as i64), Value::Int(value(k)));
+                out.insert(Key::Int(i as i64), Value::int(value(k)));
             }
             for k in names {
-                out.insert(Key::from_string(PhpStr::from(k)), Value::Int(value(k)));
+                out.insert(Key::from_string(PhpStr::from(k)), Value::int(value(k)));
             }
-            Ok(Value::Array(Rc::new(out)))
+            Ok(Value::array(out))
         }
-        _ => Ok(Value::Bool(false)),
+        _ => Ok(Value::FALSE),
     }
 }
 
@@ -143,10 +142,10 @@ fn os_error(e: &std::io::Error) -> String {
 fn symlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (target, link) = (path(args), String::from_utf8_lossy(str_arg(args, 1).as_bytes()).into_owned());
     match p8_runtime::os::symlink(&target, &link) {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             ctx.warn(&format!("symlink(): {}", os_error(&e)));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -154,10 +153,10 @@ fn symlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn link(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (target, link) = (path(args), String::from_utf8_lossy(str_arg(args, 1).as_bytes()).into_owned());
     match std::fs::hard_link(&target, &link) {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             ctx.warn(&format!("link(): {}", os_error(&e)));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -165,11 +164,11 @@ fn link(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn readlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
     match std::fs::read_link(&p) {
-        Ok(t) => Ok(Value::Str(PhpStr::from(t.to_string_lossy().into_owned()))),
+        Ok(t) => Ok(Value::str(PhpStr::from(t.to_string_lossy().into_owned()))),
         Err(e) => {
             let msg = if e.kind() == std::io::ErrorKind::InvalidInput { "Invalid argument".to_string() } else { os_error(&e) };
             ctx.warn(&format!("readlink(): {msg}"));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -178,10 +177,10 @@ fn readlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// file's metadata (`f`).
 fn stat_field(ctx: &mut dyn Ctx, func: &str, args: &[Value], user: impl FnOnce(&Stat) -> i64, f: impl Fn(&std::fs::Metadata) -> i64) -> Result<Value, Throw> {
     let p = path(args);
-    if let Some(v) = user_field(ctx, func, &p, false, |st| Value::Int(user(st)))? {
+    if let Some(v) = user_field(ctx, func, &p, false, |st| Value::int(user(st)))? {
         return Ok(v);
     }
-    Ok(stat_of(ctx, func, &p, true).map_or(Value::Bool(false), |m| Value::Int(f(&m))))
+    Ok(stat_of(ctx, func, &p, true).map_or(Value::FALSE, |m| Value::int(f(&m))))
 }
 
 fn fileinode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -216,9 +215,9 @@ fn type_of_mode(ctx: &mut dyn Ctx, mode: i64) -> &'static str {
 fn filetype(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
     if let Some(st) = crate::file::user_stat(ctx, "filetype", &p, true, false)? {
-        return Ok(st.map_or(Value::Bool(false), |st| Value::str(type_of_mode(ctx, st.mode))));
+        return Ok(st.map_or(Value::FALSE, |st| Value::str(type_of_mode(ctx, st.mode))));
     }
-    let Some(m) = stat_of(ctx, "filetype", &p, false) else { return Ok(Value::Bool(false)) };
+    let Some(m) = stat_of(ctx, "filetype", &p, false) else { return Ok(Value::FALSE) };
     let t = m.file_type();
     Ok(Value::str(if t.is_symlink() {
         "link"
@@ -244,31 +243,31 @@ fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
         if limit > 0 && i as i64 >= limit {
             break;
         }
-        let mut frame = match frame {
-            Value::Array(f) => (**f).clone(),
-            _ => continue,
+        let mut frame = match frame.as_array() {
+            Some(f) => f.clone(),
+            None => continue,
         };
         if options & DEBUG_BACKTRACE_IGNORE_ARGS != 0 {
             frame.remove(&Key::from_string(PhpStr::from("args")));
         }
-        let _ = out.push(Value::Array(Rc::new(frame)));
+        let _ = out.push(Value::array(frame));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// debug_print_backtrace: the trace as getTraceAsString shows it, no {main}.
 fn debug_print_backtrace(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let trace = Value::Array(Rc::new(ctx.backtrace(false)));
+    let trace = Value::array(ctx.backtrace(false));
     let shown = p8_runtime::trace::trace_string(&trace);
     // Everything up to the "#N {main}" line.
     let cut = shown.rfind('#').unwrap_or(0);
     ctx.echo(&shown.as_bytes()[..cut]);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn get_included_files(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let files: Vec<Value> = ctx.included_files().into_iter().map(|f| Value::Str(PhpStr::from(f))).collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(files))))
+    let files: Vec<Value> = ctx.included_files().into_iter().map(|f| Value::str(PhpStr::from(f))).collect();
+    Ok(Value::array(PhpArray::from_list(files)))
 }
 
 /// vfprintf(resource $stream, string $format, array $values)
@@ -283,15 +282,15 @@ fn vfprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if resource(&o).is_some() {
         crate::file::with_user(ctx, &o, None, |ctx, s| s.write(ctx, &bytes))?;
     }
-    Ok(Value::Int(bytes.len() as i64))
+    Ok(Value::int(bytes.len() as i64))
 }
 
 /// A user or group given by number, or by name from /etc/passwd or
 /// /etc/group (the name's third field).
 fn id_of(ctx: &mut dyn Ctx, func: &str, v: &Value, table: &str, what: &str) -> Option<u32> {
-    match v {
-        Value::Int(i) => Some(*i as u32),
-        v => {
+    match v.as_int() {
+        Some(i) => Some(i as u32),
+        None => {
             let name = v.to_php_string().unwrap_or_else(PhpStr::empty);
             let found = std::fs::read_to_string(table).ok().and_then(|t| {
                 t.lines().filter(|l| !l.starts_with('#')).find_map(|l| {
@@ -314,26 +313,26 @@ fn change_owner(ctx: &mut dyn Ctx, args: &mut [Value], func: &str, group: bool, 
     if let Located::User(w, _) = user_stream::locate(ctx, func, &path) {
         // stream_metadata with the name or the number.
         let who = arg(args, 1);
-        let option = match (group, matches!(who, Value::Int(_))) {
+        let option = match (group, who.is_int()) {
             (false, false) => user_stream::META_OWNER_NAME,
             (false, true) => user_stream::META_OWNER,
             (true, false) => user_stream::META_GROUP_NAME,
             (true, true) => user_stream::META_GROUP,
         };
-        let value = if matches!(who, Value::Int(_)) { who } else { Value::Str(who.to_php_string().unwrap_or_else(PhpStr::empty)) };
-        let mut call = [Value::str(path.as_str()), Value::Int(option), value];
-        return Ok(Value::Bool(user_stream::url_op(ctx, func, &w, "stream_metadata", &mut call, Value::Null)?));
+        let value = if who.is_int() { who } else { Value::str(who.to_php_string().unwrap_or_else(PhpStr::empty)) };
+        let mut call = [Value::str(path.as_str()), Value::int(option), value];
+        return Ok(Value::bool(user_stream::url_op(ctx, func, &w, "stream_metadata", &mut call, Value::NULL)?));
     }
     user_stream::clear_stat_cache(ctx);
     let id = if group { id_of(ctx, func, &arg(args, 1), "/etc/group", "gid") } else { id_of(ctx, func, &arg(args, 1), "/etc/passwd", "uid") };
-    let Some(id) = id else { return Ok(Value::Bool(false)) };
+    let Some(id) = id else { return Ok(Value::FALSE) };
     let (uid, gid) = if group { (None, Some(id)) } else { (Some(id), None) };
     let r = if link { p8_runtime::os::lchown(&path, uid, gid) } else { p8_runtime::os::chown(&path, uid, gid) };
     match r {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             ctx.warn(&format!("{func}(): {}", crate::file::os_error(&e)));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }

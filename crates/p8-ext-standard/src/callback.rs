@@ -57,18 +57,15 @@ fn iterator_to_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
             let _ = out.push(v);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn iterator_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(ctx.iterate(&arg(args, 0))?.len() as i64))
+    Ok(Value::int(ctx.iterate(&arg(args, 0))?.len() as i64))
 }
 
 fn array(args: &[Value], i: usize) -> Rc<PhpArray> {
-    match arg(args, i) {
-        Value::Array(a) => a,
-        _ => Rc::new(PhpArray::new()),
-    }
+    arg(args, i).into_array().unwrap_or_else(|_| Rc::new(PhpArray::new()))
 }
 
 fn call_user_func(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -89,32 +86,34 @@ fn is_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = arg(args, 0);
     // A syntax-only check passes any string or two-element array.
     if args.len() > 1 && arg(args, 1).to_bool() {
-        return Ok(Value::Bool(match &v {
-            Value::Str(_) => true,
-            Value::Array(a) => a.len() == 2,
-            Value::Object(_) => ctx.is_callable(&v),
-            _ => false,
+        return Ok(Value::bool(if v.is_str() {
+            true
+        } else if let Some(a) = v.as_array() {
+            a.len() == 2
+        } else if v.is_object() {
+            ctx.is_callable(&v)
+        } else {
+            false
         }));
     }
     // The class a callable names is looked up (autoloaded) first, as
     // zend_is_callable_check_class does ([Class, 'm'], 'Class::m'): an
     // exception an autoloader throws goes on, and a class still missing
     // makes it not callable. self, parent and static name no class.
-    let class = match &v {
-        Value::Array(a) if a.len() == 2 => match a.get_int(0).map(Value::deref) {
-            Some(Value::Str(c)) => Some(c),
-            _ => None,
-        },
-        Value::Str(s) => s.as_bytes().windows(2).position(|w| w == b"::").map(|at| PhpStr::from(&s.as_bytes()[..at])),
-        _ => None,
+    let class = if let Some(a) = v.as_array() {
+        if a.len() == 2 { a.get_int(0).map(Value::deref).and_then(|c| c.into_str().ok()) } else { None }
+    } else if let Some(s) = v.as_str() {
+        s.as_bytes().windows(2).position(|w| w == b"::").map(|at| PhpStr::from(&s.as_bytes()[..at]))
+    } else {
+        None
     };
     if let Some(c) = class
         && !matches!(c.as_bytes().to_ascii_lowercase().as_slice(), b"self" | b"parent" | b"static")
         && ctx.class_load(c.as_bytes())?.is_none()
     {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(ctx.is_callable(&v)))
+    Ok(Value::bool(ctx.is_callable(&v)))
 }
 
 /// array_map(?callable $callback, array $array, array ...$arrays)
@@ -123,29 +122,29 @@ fn array_map(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let arrays: Vec<Rc<PhpArray>> = (1..args.len()).map(|i| array(args, i)).collect();
     if arrays.len() == 1 {
         let a = &arrays[0];
-        if matches!(callback, Value::Null) {
-            return Ok(Value::Array(Rc::clone(a)));
+        if callback.is_null() {
+            return Ok(Value::array(Rc::clone(a)));
         }
         let mut out = PhpArray::new();
         for (k, v) in a.iter() {
             let r = ctx.call(&callback, &mut [v.deref()])?;
             out.insert(k, r);
         }
-        return Ok(Value::Array(Rc::new(out)));
+        return Ok(Value::array(out));
     }
     // Several arrays: by position, the shorter ones padded with null.
     let longest = arrays.iter().map(|a| a.len()).max().unwrap_or(0);
     let columns: Vec<Vec<Value>> = arrays.iter().map(|a| a.values().map(Value::deref).collect()).collect();
     let mut out = Vec::with_capacity(longest);
     for i in 0..longest {
-        let mut row: Vec<Value> = columns.iter().map(|c| c.get(i).cloned().unwrap_or(Value::Null)).collect();
-        out.push(if matches!(callback, Value::Null) {
-            Value::Array(Rc::new(PhpArray::from_list(row)))
+        let mut row: Vec<Value> = columns.iter().map(|c| c.get(i).cloned().unwrap_or(Value::NULL)).collect();
+        out.push(if callback.is_null() {
+            Value::array(PhpArray::from_list(row))
         } else {
             ctx.call(&callback, &mut row)?
         });
     }
-    Ok(Value::Array(Rc::new(PhpArray::from_list(out))))
+    Ok(Value::array(PhpArray::from_list(out)))
 }
 
 const ARRAY_FILTER_USE_BOTH: i64 = 1;
@@ -158,8 +157,8 @@ fn array_filter(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mode = arg(args, 2).to_int();
     let mut out = PhpArray::new();
     for (k, v) in a.iter() {
-        let keep = match (&callback, mode) {
-            (Value::Null, _) => v.to_bool(),
+        let keep = match (callback.is_null(), mode) {
+            (true, _) => v.to_bool(),
             (_, ARRAY_FILTER_USE_KEY) => ctx.call(&callback, &mut [k.to_value()])?.to_bool(),
             (_, ARRAY_FILTER_USE_BOTH) => ctx.call(&callback, &mut [v.deref(), k.to_value()])?.to_bool(),
             _ => ctx.call(&callback, &mut [v.deref()])?.to_bool(),
@@ -168,7 +167,7 @@ fn array_filter(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             out.insert(k, v.clone());
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// The first entry for which `callback($value, $key)` is true (PHP 8.4's
@@ -187,17 +186,17 @@ fn find_entry(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Option<(Value, Value)
 
 /// array_find(array $array, callable $callback): the first value the callback accepts, or null.
 fn array_find(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(find_entry(ctx, args)?.map_or(Value::Null, |(_, v)| v))
+    Ok(find_entry(ctx, args)?.map_or(Value::NULL, |(_, v)| v))
 }
 
 /// array_find_key(array $array, callable $callback): its key, or null.
 fn array_find_key(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(find_entry(ctx, args)?.map_or(Value::Null, |(k, _)| k))
+    Ok(find_entry(ctx, args)?.map_or(Value::NULL, |(k, _)| k))
 }
 
 /// array_any(array $array, callable $callback): whether the callback accepts any entry.
 fn array_any(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(find_entry(ctx, args)?.is_some()))
+    Ok(Value::bool(find_entry(ctx, args)?.is_some()))
 }
 
 /// array_all(array $array, callable $callback): whether it accepts every entry (true for none).
@@ -206,10 +205,10 @@ fn array_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callback = arg(args, 1);
     for (k, v) in a.iter() {
         if !ctx.call(&callback, &mut [v.deref(), k.to_value()])?.to_bool() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// array_reduce(array $array, callable $callback, mixed $initial = null)
@@ -226,18 +225,15 @@ fn array_reduce(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// The by-reference array argument's current value (not held while
 /// callbacks run: they may use the same variable).
 fn take_array(args: &[Value]) -> Option<(Rc<RefCell<Value>>, Rc<PhpArray>)> {
-    let Some(Value::Ref(cell)) = args.first() else { return None };
-    let a = match &*cell.borrow() {
-        Value::Array(a) => Rc::clone(a),
-        _ => return None,
-    };
+    let cell = args.first()?.as_reference()?;
+    let a = cell.borrow().cloned_array()?;
     Some((Rc::clone(cell), a))
 }
 
 /// array_walk(array|object &$array, callable $callback, mixed $arg = UNKNOWN):
 /// the callback gets each value by reference, its key, and `$arg`.
 fn array_walk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some((cell, _)) = take_array(args) else { return Ok(Value::Bool(true)) };
+    let Some((cell, _)) = take_array(args) else { return Ok(Value::TRUE) };
     let callback = arg(args, 1);
     let extra = (args.len() > 2).then(|| arg(args, 2));
     // The live array, walked by position as foreach walks it: an element a
@@ -246,31 +242,27 @@ fn array_walk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     // array itself).
     let mut pos = 0;
     loop {
-        let next = match &*cell.borrow() {
-            Value::Array(current) => current.entry_at(pos).map(|(p, k, v)| (p, k, v.deref())),
-            _ => None,
-        };
+        let next = cell.borrow().as_array().and_then(|current| current.entry_at(pos).map(|(p, k, v)| (p, k, v.deref())));
         let Some((at, k, live)) = next else { break };
         pos = at + 1;
         let element = Rc::new(RefCell::new(live));
-        let mut call_args = vec![Value::Ref(Rc::clone(&element)), k.to_value()];
+        let mut call_args = vec![Value::reference(Rc::clone(&element)), k.to_value()];
         call_args.extend(extra.clone());
         ctx.call(&callback, &mut call_args)?;
         let new = element.borrow().clone();
-        if let Value::Array(current) = &mut *cell.borrow_mut()
-            && current.contains_key(&k)
-        {
-            Rc::make_mut(current).insert(k, new);
+        let mut current = cell.borrow_mut();
+        if current.as_array().is_some_and(|c| c.contains_key(&k)) {
+            current.array_mut().expect("an array").insert(k, new);
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// Sort the by-reference array with a user comparison: of values or of
 /// keys, keeping keys or renumbering. The first exception a comparison
 /// throws ends the sort and leaves the array as it was.
 fn user_sort(ctx: &mut dyn Ctx, args: &[Value], by_key: bool, keep_keys: bool) -> Result<Value, Throw> {
-    let Some((cell, a)) = take_array(args) else { return Ok(Value::Bool(true)) };
+    let Some((cell, a)) = take_array(args) else { return Ok(Value::TRUE) };
     let callback = arg(args, 1);
     // (position, key, value): zend_sort calls the callback with PHP's
     // pairs; ties are broken on the position.
@@ -302,8 +294,8 @@ fn user_sort(ctx: &mut dyn Ctx, args: &[Value], by_key: bool, keep_keys: bool) -
     } else {
         PhpArray::from_list(entries.into_iter().map(|(_, v)| v).collect())
     };
-    *cell.borrow_mut() = Value::Array(Rc::new(sorted));
-    Ok(Value::Bool(true))
+    *cell.borrow_mut() = Value::array(sorted);
+    Ok(Value::TRUE)
 }
 
 fn usort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -343,10 +335,7 @@ enum Compare {
 fn user_set(ctx: &mut dyn Ctx, args: &[Value], callbacks: usize, values: Compare, keys: Compare, intersect: bool) -> Result<Value, Throw> {
     let arrays = args.len().saturating_sub(callbacks);
     let list: Vec<Rc<PhpArray>> = (0..arrays)
-        .map(|i| match args[i].deref() {
-            Value::Array(a) => a,
-            _ => Rc::new(PhpArray::new()),
-        })
+        .map(|i| args[i].deref().into_array().unwrap_or_else(|_| Rc::new(PhpArray::new())))
         .collect();
     let text = |v: &Value| v.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty);
     let same = |ctx: &mut dyn Ctx, how: &Compare, a: Value, b: Value| -> Result<bool, Throw> {
@@ -360,7 +349,7 @@ fn user_set(ctx: &mut dyn Ctx, args: &[Value], callbacks: usize, values: Compare
         }
     };
     let mut out = PhpArray::new();
-    let Some(first) = list.first() else { return Ok(Value::Array(Rc::new(out))) };
+    let Some(first) = list.first() else { return Ok(Value::array(out)) };
     for (k, v) in first.iter() {
         let mut found_in_all = true;
         let mut found_in_any = false;
@@ -379,7 +368,7 @@ fn user_set(ctx: &mut dyn Ctx, args: &[Value], callbacks: usize, values: Compare
             out.insert(k, v.clone());
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn array_udiff(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
