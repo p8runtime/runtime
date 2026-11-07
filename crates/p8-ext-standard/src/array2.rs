@@ -44,7 +44,7 @@ pub static BUILTINS: &[Builtin] = &[
 /// same overwrites the value, in the first one's place.
 fn array_change_key_case(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let upper = args.len() > 1 && arg(args, 1).to_int() != 0;
-    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(a) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
     let mut out = PhpArray::new();
     for (k, v) in a.iter() {
         let k = match k {
@@ -56,40 +56,36 @@ fn array_change_key_case(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
         };
         out.insert(k, v.clone());
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// The builtins here that reach the caller's variables or run PHP code.
 pub const REENTER: &[&str] = &["compact", "extract", "get_defined_vars", "func_get_arg", "func_num_args"];
 
 fn array_of(v: &Value) -> Option<Rc<PhpArray>> {
-    match v.deref() {
-        Value::Array(a) => Some(a),
-        _ => None,
-    }
+    v.deref().into_array().ok()
 }
 
 /// current($array): the element at the internal pointer, or false.
 fn current(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(a) = array_of(&arg(args, 0)) else { return Ok(Value::Bool(false)) };
-    Ok(a.entry_at(a.cursor()).map_or(Value::Bool(false), |(_, _, v)| v.deref()))
+    let Some(a) = array_of(&arg(args, 0)) else { return Ok(Value::FALSE) };
+    Ok(a.entry_at(a.cursor()).map_or(Value::FALSE, |(_, _, v)| v.deref()))
 }
 
 fn key(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(a) = array_of(&arg(args, 0)) else { return Ok(Value::Null) };
-    Ok(a.entry_at(a.cursor()).map_or(Value::Null, |(_, k, _)| k.to_value()))
+    let Some(a) = array_of(&arg(args, 0)) else { return Ok(Value::NULL) };
+    Ok(a.entry_at(a.cursor()).map_or(Value::NULL, |(_, k, _)| k.to_value()))
 }
 
 /// Move the by-reference array's pointer (`step` gives the new position)
 /// and return the element there, or false.
 fn move_cursor(args: &[Value], step: impl FnOnce(&PhpArray) -> Option<usize>) -> Value {
-    let Some(Value::Ref(cell)) = args.first() else { return Value::Bool(false) };
+    let Some(cell) = args.first().and_then(Value::as_reference) else { return Value::FALSE };
     let mut value = cell.borrow_mut();
-    let Value::Array(a) = &mut *value else { return Value::Bool(false) };
+    let Some(a) = value.array_mut() else { return Value::FALSE };
     let to = step(a).unwrap_or(a.end_pos());
-    let a = Rc::make_mut(a);
     a.set_cursor(to);
-    a.entry_at(to).map_or(Value::Bool(false), |(_, _, v)| v.deref())
+    a.entry_at(to).map_or(Value::FALSE, |(_, _, v)| v.deref())
 }
 
 fn next(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -111,24 +107,23 @@ fn end(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// array_splice(array &$array, int $offset, ?int $length = null, mixed $replacement = []):
 /// the removed elements; the rest renumbered (string keys kept).
 fn array_splice(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(Value::Ref(cell)) = args.first().cloned() else { return Ok(Value::Array(Rc::new(PhpArray::new()))) };
-    let a = match &*cell.borrow() {
-        Value::Array(a) => Rc::clone(a),
-        _ => return Ok(Value::Array(Rc::new(PhpArray::new()))),
-    };
+    let Some(cell) = args.first().and_then(Value::cloned_reference) else { return Ok(Value::array(PhpArray::new())) };
+    let Some(a) = cell.borrow().cloned_array() else { return Ok(Value::array(PhpArray::new())) };
     let entries: Vec<(Key, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
     let n = entries.len() as i64;
     let offset = arg(args, 1).to_int();
     let start = if offset < 0 { (n + offset).max(0) } else { offset.min(n) } as usize;
     let length = match args.get(2).map(Value::deref) {
-        None | Some(Value::Null) => n - start as i64,
-        Some(v) => v.to_int(),
+        Some(v) if !v.is_null() => v.to_int(),
+        _ => n - start as i64,
     };
     let stop = if length < 0 { (n + length).max(start as i64) } else { (start as i64 + length).min(n) } as usize;
     let replacement: Vec<Value> = match args.get(3).map(Value::deref) {
         None => Vec::new(),
-        Some(Value::Array(r)) => r.values().cloned().collect(),
-        Some(v) => vec![v],
+        Some(v) => match v.as_array() {
+            Some(r) => r.values().cloned().collect(),
+            None => vec![v],
+        },
     };
     let mut kept = PhpArray::new();
     let mut removed = PhpArray::new();
@@ -155,8 +150,8 @@ fn array_splice(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             let _ = kept.push(r);
         }
     }
-    *cell.borrow_mut() = Value::Array(Rc::new(kept));
-    Ok(Value::Array(Rc::new(removed)))
+    *cell.borrow_mut() = Value::array(kept);
+    Ok(Value::array(removed))
 }
 
 /// Merge `from` into `into` recursively (array_merge_recursive): int keys
@@ -170,17 +165,17 @@ fn merge_into(into: &mut PhpArray, from: &PhpArray) {
             }
             Key::Str(_) => match into.get(&k).map(Value::deref) {
                 Some(existing) => {
-                    let mut merged = match existing {
-                        Value::Array(e) => (*e).clone(),
-                        other => PhpArray::from_list(vec![other]),
+                    let mut merged = match existing.into_array() {
+                        Ok(e) => (*e).clone(),
+                        Err(other) => PhpArray::from_list(vec![other]),
                     };
-                    match &v {
-                        Value::Array(va) => merge_into(&mut merged, va),
-                        other => {
-                            let _ = merged.push(other.clone());
+                    match v.as_array() {
+                        Some(va) => merge_into(&mut merged, va),
+                        None => {
+                            let _ = merged.push(v.clone());
                         }
                     }
-                    into.insert(k, Value::Array(Rc::new(merged)));
+                    into.insert(k, Value::array(merged));
                 }
                 None => into.insert(k, v),
             },
@@ -195,17 +190,18 @@ fn array_merge_recursive(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
             merge_into(&mut out, &a);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn replace_into(into: &mut PhpArray, from: &PhpArray) {
     for (k, v) in from.iter() {
         let v = v.deref();
-        match (into.get(&k).map(Value::deref), &v) {
-            (Some(Value::Array(e)), Value::Array(va)) => {
-                let mut merged = (*e).clone();
+        let existing = into.get(&k).map(Value::deref);
+        match (existing.as_ref().and_then(Value::as_array), v.as_array()) {
+            (Some(e), Some(va)) => {
+                let mut merged = e.clone();
                 replace_into(&mut merged, va);
-                into.insert(k, Value::Array(Rc::new(merged)));
+                into.insert(k, Value::array(merged));
             }
             _ => into.insert(k, v),
         }
@@ -219,68 +215,72 @@ fn array_replace_recursive(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
             replace_into(&mut out, &a);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// array_walk_recursive(array &$array, callable $callback, mixed $arg)
 fn array_walk_recursive(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(Value::Ref(cell)) = args.first().cloned() else { return Ok(Value::Bool(true)) };
+    let Some(cell) = args.first().and_then(Value::cloned_reference) else { return Ok(Value::TRUE) };
     let callback = arg(args, 1);
     let extra = (args.len() > 2).then(|| arg(args, 2));
     let walked = walk(ctx, cell.borrow().clone(), &callback, &extra)?;
     *cell.borrow_mut() = walked;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn walk(ctx: &mut dyn Ctx, v: Value, callback: &Value, extra: &Option<Value>) -> Result<Value, Throw> {
-    let Value::Array(a) = v else { return Ok(v) };
+    let a = match v.into_array() {
+        Ok(a) => a,
+        Err(v) => return Ok(v),
+    };
     let mut out = (*a).clone();
     for (k, v) in a.iter() {
         let v = v.deref();
-        let new = if let Value::Array(_) = v {
+        let new = if v.is_array() {
             walk(ctx, v, callback, extra)?
         } else {
             let element = Rc::new(RefCell::new(v));
-            let mut call = vec![Value::Ref(Rc::clone(&element)), k.to_value()];
+            let mut call = vec![Value::reference(Rc::clone(&element)), k.to_value()];
             call.extend(extra.clone());
             ctx.call(callback, &mut call)?;
-            element.replace(Value::Null)
+            element.replace(Value::NULL)
         };
         out.insert(k, new);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// array_column(array $array, int|string|null $column_key, int|string|null $index_key = null)
 fn array_column(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let rows = array_of(&arg(args, 0)).unwrap_or_default();
     let column = arg(args, 1);
-    let index = if args.len() > 2 { arg(args, 2) } else { Value::Null };
+    let index = if args.len() > 2 { arg(args, 2) } else { Value::NULL };
     let pick = |row: &Value, k: &Value| -> Option<Value> {
         let key = Key::from_value(k).ok()?.0;
-        match row.deref() {
-            Value::Array(r) => r.get(&key).map(Value::deref),
-            Value::Object(o) => {
-                let name = k.to_php_string()?;
-                let slot = o.class.slot(name.as_bytes(), None)?;
-                let p = &o.class.properties[slot];
-                (p.visibility == p8_runtime::object::Visibility::Public)
-                    .then(|| o.slots.borrow()[slot].deref())
-                    .or_else(|| o.dynamic.borrow().get(&key).map(Value::deref))
-            }
-            _ => None,
+        let row = row.deref();
+        if let Some(r) = row.as_array() {
+            r.get(&key).map(Value::deref)
+        } else if let Some(o) = row.as_object() {
+            let name = k.to_php_string()?;
+            let slot = o.class.slot(name.as_bytes(), None)?;
+            let p = &o.class.properties[slot];
+            (p.visibility == p8_runtime::object::Visibility::Public)
+                .then(|| o.slots.borrow()[slot].deref())
+                .or_else(|| o.dynamic.borrow().get(&key).map(Value::deref))
+        } else {
+            None
         }
     };
     let mut out = PhpArray::new();
     for row in rows.values() {
         let value = match &column {
-            Value::Null => row.deref(),
+            c if c.is_null() => row.deref(),
             k => match pick(row, k) {
                 Some(v) => v,
                 None => continue,
             },
         };
-        match (!matches!(index, Value::Null)).then(|| pick(row, &index)).flatten() {
+        match (!index.is_null()).then(|| pick(row, &index)).flatten() {
             Some(i) => match Key::from_value(&i) {
                 Ok((k, _)) => out.insert(k, value),
                 Err(_) => {
@@ -292,7 +292,7 @@ fn array_column(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             }
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn assoc_set(args: &[Value], keep_when_found: bool) -> Value {
@@ -307,7 +307,7 @@ fn assoc_set(args: &[Value], keep_when_found: bool) -> Value {
             out.insert(k, v.clone());
         }
     }
-    Value::Array(Rc::new(out))
+    Value::array(out)
 }
 
 fn array_diff_assoc(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -322,13 +322,14 @@ fn array_intersect_assoc(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
 fn compact(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut names = Vec::new();
     fn collect(v: &Value, names: &mut Vec<PhpStr>) {
-        match v.deref() {
-            Value::Array(a) => {
+        let v = v.deref();
+        match v.as_array() {
+            Some(a) => {
                 for x in a.values() {
                     collect(x, names);
                 }
             }
-            other => names.push(other.to_php_string().unwrap_or_else(PhpStr::empty)),
+            None => names.push(v.to_php_string().unwrap_or_else(PhpStr::empty)),
         }
     }
     for v in args.iter() {
@@ -341,7 +342,7 @@ fn compact(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             None => ctx.warn(&format!("compact(): Undefined variable ${}", String::from_utf8_lossy(n.as_bytes()))),
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 const EXTR_OVERWRITE: i64 = 0;
@@ -379,7 +380,7 @@ fn extract(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             n += 1;
         }
     }
-    Ok(Value::Int(n))
+    Ok(Value::int(n))
 }
 
 fn get_defined_vars(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
@@ -387,7 +388,7 @@ fn get_defined_vars(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> 
     for (n, v) in ctx.locals() {
         out.insert(Key::from_string(n), v);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn func_get_arg(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -406,28 +407,28 @@ fn func_get_arg(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn func_num_args(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(ctx.call_args().len() as i64))
+    Ok(Value::int(ctx.call_args().len() as i64))
 }
 
 /// settype(mixed &$var, string $type)
 fn settype(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(Value::Ref(cell)) = args.first().cloned() else { return Ok(Value::Bool(false)) };
+    let Some(cell) = args.first().and_then(Value::cloned_reference) else { return Ok(Value::FALSE) };
     let ty = str_arg(args, 1).as_bytes().to_ascii_lowercase();
     let v = cell.borrow().clone();
     let new = match ty.as_slice() {
-        b"bool" | b"boolean" => Value::Bool(v.to_bool()),
-        b"int" | b"integer" => Value::Int(v.to_int()),
-        b"float" | b"double" => Value::Float(v.to_float()),
-        b"string" => Value::Str(v.to_php_string().unwrap_or_else(|| PhpStr::from("Array"))),
+        b"bool" | b"boolean" => Value::bool(v.to_bool()),
+        b"int" | b"integer" => Value::int(v.to_int()),
+        b"float" | b"double" => Value::float(v.to_float()),
+        b"string" => Value::str(v.to_php_string().unwrap_or_else(|| PhpStr::from("Array"))),
         b"array" => match v {
-            Value::Array(_) => v,
-            Value::Null => Value::Array(Rc::new(PhpArray::new())),
-            other => Value::Array(Rc::new(PhpArray::from_list(vec![other]))),
+            v if v.is_array() => v,
+            v if v.is_null() => Value::array(PhpArray::new()),
+            other => Value::array(PhpArray::from_list(vec![other])),
         },
-        b"null" => Value::Null,
+        b"null" => Value::NULL,
         b"resource" => return Err(ctx.throw("ValueError", "Cannot convert to resource type".into())),
         _ => return Err(ctx.throw("ValueError", "settype(): Argument #2 ($type) must be a valid type".into())),
     };
     *cell.borrow_mut() = new;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
