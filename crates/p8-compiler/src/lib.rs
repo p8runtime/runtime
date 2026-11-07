@@ -449,7 +449,7 @@ impl FnBuilder<'_> {
 
     /// Lay the frame out and renumber every register. `order` is scratch
     /// space the compiler keeps for every function's constant order.
-    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder) -> Function {
+    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder, eval: bool) -> Function {
         if !self.returns_ref {
             thread_returns(&mut self.code);
         }
@@ -548,6 +548,7 @@ impl FnBuilder<'_> {
             handlers: self.handlers,
             lambdas: self.lambdas,
             is_generator: self.is_generator,
+            eval,
             own_location: false,
             bound: self.bound,
             meta: self.meta,
@@ -1519,7 +1520,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        let mut main = f.finish(self.file.clone(), &mut self.const_order);
+        let mut main = f.finish(self.file.clone(), &mut self.const_order, self.eval);
         main.compile_diags = std::mem::take(&mut self.diags);
         let main = Arc::new(main);
         Ok(Program { main, functions: self.functions, classes: self.classes })
@@ -2544,7 +2545,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        Ok((f.finish(self.file.clone(), &mut self.const_order), captures))
+        Ok((f.finish(self.file.clone(), &mut self.const_order, self.eval), captures))
     }
 
     /// Take apart the array in `src` into the targets of `items` (keyed,

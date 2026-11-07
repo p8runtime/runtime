@@ -5712,6 +5712,10 @@ fn set_str_elem(w: &mut [Value], var: Reg, keys: Reg, val: Reg, dst: Reg) -> boo
 /// place unless the string is shared. False (nothing done) otherwise.
 #[inline(never)]
 fn append_str(w: &mut [Value], var: Reg, src: Reg) -> bool {
+    // A literal is read in place (program memory: never the target).
+    if let Some(s) = w[src as usize].as_istr() {
+        return w[var as usize].str_push(s.as_bytes());
+    }
     // A handle of its own: `$s .= $s` reads what it appends to.
     let Some(tail) = w[src as usize].cloned_str() else { return false };
     w[var as usize].str_push(tail.as_bytes())

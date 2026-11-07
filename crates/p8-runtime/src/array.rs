@@ -4,7 +4,7 @@
 //! kept. Arrays are values: `Rc<PhpArray>` is shared until written
 //! (`Rc::make_mut`). Key rules follow zend_hash.c / zend_operators.c.
 
-use crate::string::PhpStr;
+use crate::string::{PhpStr, StrHead};
 use crate::value::{Kind, Value};
 use crate::number::dval_to_lval;
 use std::cell::RefCell;
@@ -293,13 +293,32 @@ impl Bucket {
     }
 
     #[inline]
-    fn is(&self, h: u64, key: &Key) -> bool {
+    fn is(&self, h: u64, key: Probe<'_>) -> bool {
         self.h == h
             && match (key, &self.key) {
-                (Key::Int(_), None) => true,
-                (Key::Str(s), Some(k)) => PhpStr::ptr_eq(s, k) || s.as_bytes() == k.as_bytes(),
+                (Probe::Int, None) => true,
+                (Probe::Str(s), Some(k)) => std::ptr::eq(s, &**k) || s.as_bytes() == k.as_bytes(),
                 _ => false,
             }
+    }
+}
+
+/// A key looked for, borrowed: an int key (its hash `h` is the int), or a
+/// string key's head, whatever handle holds it (a program-memory string
+/// is looked up with no handle made).
+#[derive(Clone, Copy)]
+enum Probe<'a> {
+    Int,
+    Str(&'a StrHead),
+}
+
+impl Key {
+    #[inline(always)]
+    fn probe(&self) -> Probe<'_> {
+        match self {
+            Key::Int(_) => Probe::Int,
+            Key::Str(s) => Probe::Str(s),
+        }
     }
 }
 
@@ -368,7 +387,7 @@ impl Hashed {
     /// fast loop inlines array reads, and only their packed part belongs
     /// there.
     #[inline(never)]
-    fn find(&self, h: u64, key: &Key) -> Option<usize> {
+    fn find(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         if self.small() {
             return self.scan(h, key);
         }
@@ -422,11 +441,11 @@ impl Hashed {
     /// the key compared only where the hash matches. An unset entry has no
     /// string key, so only an int key needs the unset mark.
     #[inline(always)]
-    fn scan(&self, h: u64, key: &Key) -> Option<usize> {
+    fn scan(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         let taken = &self.buckets[..self.used];
         match key {
-            Key::Str(s) => taken.iter().position(|b| b.h == h && b.key.as_ref().is_some_and(|k| PhpStr::ptr_eq(s, k) || s.as_bytes() == k.as_bytes())),
-            Key::Int(_) => taken.iter().position(|b| b.h == h && b.key.is_none() && b.next != UNSET),
+            Probe::Str(s) => taken.iter().position(|b| b.h == h && b.key.as_ref().is_some_and(|k| std::ptr::eq(s, &**k) || s.as_bytes() == k.as_bytes())),
+            Probe::Int => taken.iter().position(|b| b.h == h && b.key.is_none() && b.next != UNSET),
         }
     }
 
@@ -436,7 +455,7 @@ impl Hashed {
     #[inline(never)]
     fn set(&mut self, key: Key, value: Value) {
         let h = hash_of(&key);
-        let found = if self.small() { self.scan(h, &key) } else { self.find(h, &key) };
+        let found = if self.small() { self.scan(h, key.probe()) } else { self.find(h, key.probe()) };
         match found {
             Some(i) => self.buckets[i].value = value,
             None => {
@@ -476,7 +495,7 @@ impl Hashed {
     }
 
     #[inline(never)]
-    fn remove(&mut self, h: u64, key: &Key) -> Option<Value> {
+    fn remove(&mut self, h: u64, key: Probe<'_>) -> Option<Value> {
         let i = if self.small() {
             self.find(h, key)?
         } else {
@@ -643,7 +662,21 @@ impl PhpArray {
                 Key::Int(i) => p.get(*i),
                 _ => None,
             },
-            Storage::Hashed(h) => h.find(hash_of(key), key).and_then(|i| h.get(i)),
+            Storage::Hashed(h) => h.find(hash_of(key), key.probe()).and_then(|i| h.get(i)),
+        }
+    }
+
+    /// `get` of the key a string names (`Key::from_string`), with no handle
+    /// to it made: what a lookup by a literal (a program-memory string)
+    /// or any borrowed string uses.
+    #[inline]
+    pub fn get_str(&self, s: &StrHead) -> Option<&Value> {
+        if let Some(i) = canonical_int(s.as_bytes()) {
+            return self.get_int(i);
+        }
+        match &self.storage {
+            Storage::Packed(_) => None,
+            Storage::Hashed(h) => h.find(s.hash(), Probe::Str(s)).and_then(|i| h.get(i)),
         }
     }
 
@@ -652,7 +685,7 @@ impl PhpArray {
     pub fn get_int(&self, i: i64) -> Option<&Value> {
         match &self.storage {
             Storage::Packed(p) => p.get(i),
-            Storage::Hashed(h) => h.find(i as u64, &Key::Int(i)).and_then(|i| h.get(i)),
+            Storage::Hashed(h) => h.find(i as u64, Probe::Int).and_then(|i| h.get(i)),
         }
     }
 
@@ -662,7 +695,7 @@ impl PhpArray {
         match &mut self.storage {
             Storage::Packed(p) => p.get_mut(i),
             Storage::Hashed(h) => {
-                let i = h.find(i as u64, &Key::Int(i))?;
+                let i = h.find(i as u64, Probe::Int)?;
                 Some(&mut h.buckets[i].value)
             }
         }
@@ -675,7 +708,7 @@ impl PhpArray {
                 _ => None,
             },
             Storage::Hashed(h) => {
-                let i = h.find(hash_of(key), key)?;
+                let i = h.find(hash_of(key), key.probe())?;
                 Some(&mut h.buckets[i].value)
             }
         }
@@ -743,7 +776,7 @@ impl PhpArray {
                 Key::Int(i) if p.get(*i).is_some() => Some(*i as usize),
                 _ => None,
             },
-            Storage::Hashed(h) => h.find(hash_of(key), key),
+            Storage::Hashed(h) => h.find(hash_of(key), key.probe()),
         };
         let Some(i) = at else {
             self.insert(key.clone(), Value::NULL);
@@ -791,7 +824,7 @@ impl PhpArray {
                 }
                 Some(old)
             }
-            Storage::Hashed(h) => h.remove(hash_of(key), key),
+            Storage::Hashed(h) => h.remove(hash_of(key), key.probe()),
         }
     }
 

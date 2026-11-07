@@ -273,7 +273,9 @@ impl Context<'_> {
         let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
-            let default = p.default.as_ref().map_or(Value::UNDEF, |d| self.isolate.thaw(d));
+            // (A class's literals are program memory even when eval()
+            // declared it: few, and the pool is bounded.)
+            let default = p.default.as_ref().map_or(Value::UNDEF, |d| self.isolate.thaw(d, true));
             let init = p.code.as_ref().map(|c| Thunk(Rc::new(Arc::clone(c))));
             if p.is_static {
                 if let Some(t) = init {
@@ -476,7 +478,7 @@ impl Context<'_> {
         }
         let enum_flags = if def.flags & CLASS_ENUM != 0 {
             let backing = def.enum_backing.as_ref().map(text_of);
-            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::NULL, |v| self.isolate.thaw(v)))).collect();
+            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::NULL, |v| self.isolate.thaw(v, true)))).collect();
             EnumMembers { interfaces: &mut interfaces, properties: &mut properties, constants: &mut constants, methods: &mut methods }.add(&declaring, &class_name, backing.as_deref(), cases)
         } else {
             0
@@ -489,7 +491,7 @@ impl Context<'_> {
             constants.insert(
                 c.name.as_bytes().to_vec(),
                 Rc::new(Constant {
-                    value: self.isolate.thaw(&c.value),
+                    value: self.isolate.thaw(&c.value, true),
                     visibility: c.visibility,
                     declaring_name: class_name.clone(),
                     is_case: false,

@@ -36,7 +36,8 @@ impl Closure {
     /// A closure of `code` for this request, its constants the isolate's
     /// (made once: `Isolate::thaw`).
     pub(crate) fn new(code: Arc<Function>, isolate: &crate::Isolate) -> Rc<Closure> {
-        Closure::with_consts(code, |c| isolate.thaw(c))
+        let program = !code.eval;
+        Closure::with_consts(code, |c| isolate.thaw(c, program))
     }
 
     fn with_consts(code: Arc<Function>, thaw: impl Fn(&p8_runtime::frozen::Frozen) -> Value) -> Rc<Closure> {
@@ -95,6 +96,7 @@ impl Closure {
             handlers: Vec::new(),
             decls: Vec::new(),
             is_generator: false,
+            eval: false,
             own_location: false,
             lambdas: Vec::new(),
             bound: Vec::new(),

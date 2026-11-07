@@ -269,8 +269,13 @@ impl Isolate {
     }
 
     /// A constant of compiled code as a value: a string or an array made
-    /// once for the isolate (see `thawed`), anything else as it is.
-    pub(crate) fn thaw(&self, f: &p8_runtime::frozen::Frozen) -> Value {
+    /// once for the isolate (see `thawed`), anything else as it is. A
+    /// string of `program` code (a file's, not eval()'s) is the
+    /// program-memory string of its bytes ([`IStr::intern`], one for the
+    /// process; an ordinary string once the pool is full).
+    ///
+    /// [`IStr::intern`]: p8_runtime::string::IStr::intern
+    pub(crate) fn thaw(&self, f: &p8_runtime::frozen::Frozen, program: bool) -> Value {
         use p8_runtime::frozen::Frozen;
         let at = match f {
             Frozen::Str(t) => t.as_bytes().as_ptr() as usize,
@@ -286,7 +291,10 @@ impl Isolate {
         if thawed.len() >= 1 << 18 {
             thawed.clear();
         }
-        let v = f.to_value();
+        let v = match f {
+            Frozen::Str(t) if program => p8_runtime::string::IStr::intern(t.as_bytes()).map_or_else(|| f.to_value(), Value::istr),
+            _ => f.to_value(),
+        };
         thawed.insert(at, (f.clone(), v.clone()));
         v
     }

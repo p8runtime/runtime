@@ -845,6 +845,10 @@ pub struct Function {
     /// A generator function (its code contains `yield`): a call returns a
     /// Generator that runs it.
     pub is_generator: bool,
+    /// eval()'d code (and what it declares): its string literals stay
+    /// ordinary strings, made per isolate, never program memory (code
+    /// made at run time, again and again, must not grow it).
+    pub eval: bool,
     /// A declaration's constant expression (CONST_EXPR) evaluated as an
     /// expression, not a bare constant's name: in a class, what it raises
     /// is reported where it is written, the trace saying where it was

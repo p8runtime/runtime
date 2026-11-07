@@ -2,20 +2,32 @@
 //! (copy-on-write through `Rc::make_mut`), with the hash computed once and
 //! cached for use as array keys and names.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What a string handle points at: the bytes and the cached hash. This is
 /// the view a `Value` lends out ([`Value::as_str`]), whatever handle holds
-/// the string (today an `Rc`; a program-memory string later): read it
-/// through [`PhpStr`]'s `Deref`.
-#[derive(Clone)]
+/// the string (an `Rc`, or a program-memory [`IStr`]): read it through
+/// [`PhpStr`]'s `Deref`.
+///
+/// The hash is an atomic so that a head can live in program memory,
+/// shared by every thread (`Sync`): a relaxed load or store is a plain
+/// `mov` on x86-64 and aarch64, the same code a `Cell` made.
 pub struct StrHead {
     /// 0 until computed (a real hash of 0 is stored as 1).
-    hash: Cell<u64>,
+    hash: AtomicU64,
     bytes: Bytes,
+}
+
+impl Clone for StrHead {
+    fn clone(&self) -> Self {
+        StrHead { hash: AtomicU64::new(self.hash.load(Ordering::Relaxed)), bytes: self.bytes.clone() }
+    }
 }
 
 impl StrHead {
@@ -38,13 +50,132 @@ impl StrHead {
     /// code sees depends on it (arrays keep insertion order).
     #[inline]
     pub fn hash(&self) -> u64 {
-        let cached = self.hash.get();
+        let cached = self.hash.load(Ordering::Relaxed);
         if cached != 0 {
             return cached;
         }
         let h = hash_bytes(self.as_bytes()).max(1);
-        self.hash.set(h);
+        self.hash.store(h, Ordering::Relaxed);
         h
+    }
+
+    /// A head of these bytes, its hash not computed yet.
+    fn of(bytes: Bytes) -> StrHead {
+        StrHead { hash: AtomicU64::new(0), bytes }
+    }
+}
+
+/// A string in program memory (PHP's interned strings): a compiled
+/// literal, made once for the process and never freed, so a value
+/// holding one is a plain pointer: copied with no count, never released.
+/// Its hash is computed when it is made.
+///
+/// Made by [`IStr::intern`] only, from a pool bounded in size (literals
+/// past the bound stay ordinary strings), and the same bytes give the
+/// same `IStr`: compiling a file again (a new version, another request
+/// with no code cache) adds only the literals not seen before.
+#[repr(C)]
+pub struct IStr {
+    /// First (`repr(C)`), so a value's string view is at the pointer.
+    head: StrHead,
+    /// Its index in each thread's twins (`IStr::to_php_str`).
+    id: u32,
+}
+
+/// The program-memory strings, by their bytes.
+struct Pool {
+    by_bytes: HashMap<&'static [u8], &'static IStr>,
+    /// Bytes held (the strings' and about their overhead).
+    size: usize,
+}
+
+static POOL: Mutex<Option<Pool>> = Mutex::new(None);
+
+/// What the pool may hold, in bytes (PHP's opcache.interned_strings_buffer
+/// is 8 MB by default, for names as well; past it PHP too makes literals
+/// per request). Bounded so that code compiled again and again (eval,
+/// generated files) cannot grow program memory without end.
+const POOL_LIMIT: usize = 64 << 20;
+
+/// What one pooled string costs besides its bytes (the IStr, the map's
+/// entry), counted against the limit.
+const POOL_ENTRY: usize = 64;
+
+thread_local! {
+    /// Each program-memory string as this thread's ordinary string, made
+    /// the first time one is wanted (an array key, an owned handle) and
+    /// kept: by the `IStr`'s id. Taking one is an `Rc` count, not a copy.
+    static TWINS: RefCell<Vec<Option<PhpStr>>> = const { RefCell::new(Vec::new()) };
+}
+
+impl IStr {
+    /// The program-memory string of `bytes`: the one already made, or a
+    /// new one while the pool has room. None past the bound.
+    pub fn intern(bytes: &[u8]) -> Option<&'static IStr> {
+        let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+        let pool = pool.get_or_insert_with(|| Pool { by_bytes: HashMap::new(), size: 0 });
+        if let Some(s) = pool.by_bytes.get(bytes) {
+            return Some(s);
+        }
+        let size = bytes.len() + POOL_ENTRY;
+        if pool.size + size > POOL_LIMIT {
+            return None;
+        }
+        let id = u32::try_from(pool.by_bytes.len()).ok()?;
+        let bytes = if bytes.len() <= INLINE {
+            let mut buf = [0; INLINE];
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Bytes::Inline { len: bytes.len() as u8, buf }
+        } else {
+            Bytes::Heap(bytes.to_vec())
+        };
+        let s: &'static IStr = Box::leak(Box::new(IStr { head: StrHead::of(bytes), id }));
+        s.head.hash();
+        pool.by_bytes.insert(s.as_bytes(), s);
+        pool.size += size;
+        Some(s)
+    }
+
+    /// The program-memory string of `bytes` if one was made (none is made here).
+    pub fn lookup(bytes: &[u8]) -> Option<&'static IStr> {
+        let pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+        pool.as_ref()?.by_bytes.get(bytes).copied()
+    }
+
+    /// The string as an ordinary one, owned: this thread's twin of it
+    /// (one `Rc` count; made once per thread).
+    pub fn to_php_str(&'static self) -> PhpStr {
+        let twin = TWINS.try_with(|twins| {
+            let mut twins = twins.borrow_mut();
+            let i = self.id as usize;
+            if let Some(Some(s)) = twins.get(i) {
+                return s.clone();
+            }
+            if twins.len() <= i {
+                twins.resize(i + 1, None);
+            }
+            let s = PhpStr::copy_of(self.as_bytes());
+            s.hash.store(self.head.hash(), Ordering::Relaxed);
+            twins[i] = Some(s.clone());
+            s
+        });
+        // (While the thread is torn down: a copy.)
+        twin.unwrap_or_else(|_| PhpStr::copy_of(self.as_bytes()))
+    }
+}
+
+impl Deref for IStr {
+    type Target = StrHead;
+
+    #[inline(always)]
+    fn deref(&self) -> &StrHead {
+        &self.head
+    }
+}
+
+impl fmt::Debug for IStr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.head.fmt(f)
     }
 }
 
@@ -131,7 +262,7 @@ impl PhpStr {
         if let Some(s) = Self::small(&bytes) {
             return s;
         }
-        PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes: Bytes::Heap(bytes) }))
+        PhpStr(Rc::new(Inner::of(Bytes::Heap(bytes))))
     }
 
     /// A buffer to build a string in (smart_str), with room for `hint`
@@ -197,14 +328,14 @@ impl PhpStr {
     fn inline(bytes: &[u8]) -> PhpStr {
         let mut buf = [0; INLINE];
         buf[..bytes.len()].copy_from_slice(bytes);
-        PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes: Bytes::Inline { len: bytes.len() as u8, buf } }))
+        PhpStr(Rc::new(Inner::of(Bytes::Inline { len: bytes.len() as u8, buf })))
     }
 
     /// A copy of `bytes`: in the string's own allocation when short, and
     /// no allocation at all for zero or one bytes.
     fn copy_of(bytes: &[u8]) -> Self {
         if bytes.len() > INLINE {
-            return PhpStr(Rc::new(Inner { hash: Cell::new(0), bytes: Bytes::Heap(bytes.to_vec()) }));
+            return PhpStr(Rc::new(Inner::of(Bytes::Heap(bytes.to_vec()))));
         }
         Self::small(bytes).unwrap_or_else(|| Self::inline(bytes))
     }
@@ -277,11 +408,11 @@ impl PhpStr {
                 let old = self.as_bytes();
                 let mut v = Vec::with_capacity(grown(old.len(), more));
                 v.extend_from_slice(old);
-                self.0 = Rc::new(Inner { hash: Cell::new(0), bytes: Bytes::Heap(v) });
+                self.0 = Rc::new(Inner::of(Bytes::Heap(v)));
             }
         }
         let inner = Rc::get_mut(&mut self.0).expect("unshared above");
-        inner.hash.set(0);
+        *inner.hash.get_mut() = 0;
         match &mut inner.bytes {
             Bytes::Heap(v) => v,
             Bytes::Inline { .. } => unreachable!("moved to the heap above"),
@@ -491,6 +622,27 @@ mod tests {
         assert!(matches!(PhpStr::concat_all(&[b"ab", b"cd"]).0.bytes, Bytes::Inline { .. }));
         assert_eq!(PhpStr::concat_all(&[&[b'y'; 30], b"z"]).len(), 31);
         assert!(PhpStr::ptr_eq(&PhpStr::concat_all(&[]), &PhpStr::empty()));
+    }
+
+    #[test]
+    fn program_memory_strings_are_made_once_with_their_hash_and_one_twin_per_thread() {
+        let bytes = b"a literal in program memory, longer than inline";
+        assert!(IStr::lookup(bytes).is_none());
+        let s = IStr::intern(bytes).expect("room");
+        assert!(std::ptr::eq(s, IStr::intern(bytes).expect("room")));
+        assert!(std::ptr::eq(s, IStr::lookup(bytes).expect("made")));
+        assert_eq!(s.as_bytes(), bytes);
+        // Hashed when made, and as an ordinary string of the same bytes.
+        assert_eq!(s.hash.load(Ordering::Relaxed), PhpStr::from(&bytes[..]).hash());
+        // The thread's twin is shared, not copied each time.
+        let (a, b) = (s.to_php_str(), s.to_php_str());
+        assert!(PhpStr::ptr_eq(&a, &b));
+        assert_eq!(a.as_bytes(), bytes);
+        // Another thread has its own.
+        let other = std::thread::spawn(move || s.to_php_str().as_bytes().as_ptr() as usize).join().expect("ran");
+        assert_ne!(other, a.as_bytes().as_ptr() as usize);
+        let short = IStr::intern(b"ab").expect("room");
+        assert!(matches!(short.bytes, Bytes::Inline { .. }));
     }
 
     #[test]

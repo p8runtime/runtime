@@ -274,8 +274,8 @@ impl Context<'_> {
                             let Some(arr) = $w[rx!(args as usize + 1)].as_array() else { slow!() };
                             if let Some(k) = x.as_int() {
                                 Value::bool(arr.contains_key(&Key::Int(k)))
-                            } else if let Some(s) = x.cloned_str() {
-                                Value::bool(arr.contains_key(&Key::from_string(s)))
+                            } else if let Some(s) = x.as_str() {
+                                Value::bool(arr.get_str(s).is_some())
                             } else {
                                 slow!()
                             }
@@ -1257,8 +1257,8 @@ fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
         let key = &w[usize::from(key)];
         if let Some(k) = key.as_int() {
             a.get_int(k).cloned()
-        } else if let Some(s) = key.cloned_str() {
-            a.get(&Key::from_string(s)).cloned()
+        } else if let Some(s) = key.as_str() {
+            a.get_str(s).cloned()
         } else {
             None
         }
@@ -1284,7 +1284,7 @@ fn isset_elem(w: &[Value], var: Reg, keys: Reg) -> Option<bool> {
         if let Some(k) = key.as_int() {
             Some(a.get_int(k).is_some_and(is_set))
         } else {
-            key.cloned_str().map(|s| a.get(&Key::from_string(s)).is_some_and(is_set))
+            key.as_str().map(|s| a.get_str(s).is_some_and(is_set))
         }
     };
     let var = &w[usize::from(var)];

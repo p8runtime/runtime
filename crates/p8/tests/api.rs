@@ -89,6 +89,32 @@ fn a_partial_application_is_compiled_once_per_function_it_applies() {
 }
 
 #[test]
+fn a_files_literal_strings_are_program_memory_and_evals_are_not() {
+    use p8_runtime::string::IStr;
+    let (file, method, constant, evald) = ("a file literal, #324", "a method literal, #324", "a class constant, #324", "an eval() literal, #324");
+    for s in [file, method, constant, evald] {
+        assert!(IStr::lookup(s.as_bytes()).is_none());
+    }
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    let source = format!(
+        "<?php class C {{ const K = '{constant}'; function m() {{ return '{method}'; }} }}
+        $a = ['{file}' => 1]; $a['{file}'] .= 'x'; $s = '{file}'; $s .= '!';
+        eval('$e = \"{evald}\"; $e .= \"?\";');
+        echo isset($a['{file}']), (new C)->m() === '{method}' ? 'm' : '-', C::K === '{constant}' ? 'k' : '-', $s, $e;"
+    );
+    let (status, out) = request(&platform, &mut isolate, &source);
+    assert_eq!((status, out), (0, format!("1mk{file}!{evald}?")));
+    // One string for the process, for every request and isolate: the
+    // file's, its functions' and its classes'. eval()'s code is made
+    // again and again at run time: its literals are ordinary strings.
+    for s in [file, method, constant] {
+        assert!(IStr::lookup(s.as_bytes()).is_some(), "{s}");
+    }
+    assert!(IStr::lookup(evald.as_bytes()).is_none());
+}
+
+#[test]
 fn literals_written_in_one_request_are_as_written_in_the_next() {
     // An isolate makes a script's literal strings and arrays once; every
     // request's writes go to copies.
