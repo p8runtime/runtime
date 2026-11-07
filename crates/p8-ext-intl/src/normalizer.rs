@@ -76,7 +76,7 @@ fn f_normalize(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Ok(text) = std::str::from_utf8(&bytes) else {
         crate::set_global_code(ctx, 10);
         crate::set_message(ctx, None, "Error converting input string to UTF-16")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     Ok(s(normalize(text, form)))
 }
@@ -88,7 +88,7 @@ fn f_is_normalized(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Ok(text) = std::str::from_utf8(&bytes) else {
         crate::set_global_code(ctx, 10);
         crate::set_message(ctx, None, "Error converting string to UTF-16.")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let ok = match form {
         FORM_D => DecomposingNormalizerBorrowed::new_nfd().is_normalized(text),
@@ -97,7 +97,7 @@ fn f_is_normalized(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         FORM_KC_CF => nfkc_casefold(text) == text,
         _ => ComposingNormalizerBorrowed::new_nfc().is_normalized(text),
     };
-    Ok(Value::Bool(ok))
+    Ok(Value::bool(ok))
 }
 
 fn f_get_raw_decomposition(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -107,19 +107,19 @@ fn f_get_raw_decomposition(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if std::str::from_utf8(&bytes).is_err() && one_invalid_sequence(&bytes) {
         crate::set_global_code(ctx, crate::U_ILLEGAL_ARGUMENT_ERROR);
         crate::set_message(ctx, None, "Code point out of range")?;
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let text = String::from_utf8_lossy(&bytes);
     let mut chars = text.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else {
         crate::set_global_code(ctx, crate::U_ILLEGAL_ARGUMENT_ERROR);
         crate::set_message(ctx, None, "Input string must be exactly one UTF-8 encoded code point long.")?;
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     };
     if std::str::from_utf8(&bytes).is_err() {
         crate::set_global_code(ctx, crate::U_ILLEGAL_ARGUMENT_ERROR);
         crate::set_message(ctx, None, "Input string must be exactly one UTF-8 encoded code point long.")?;
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let canonical = match CanonicalDecompositionBorrowed::new().decompose(c) {
         Decomposed::Default => None,
@@ -127,18 +127,18 @@ fn f_get_raw_decomposition(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         Decomposed::Expansion(a, b) => Some(format!("{a}{b}")),
     };
     match form {
-        FORM_D | FORM_C => Ok(canonical.map_or(Value::Null, s)),
+        FORM_D | FORM_C => Ok(canonical.map_or(Value::NULL, s)),
         _ => {
             // compatibility forms: the raw mapping is the canonical one unless the
             // character has a compatibility decomposition of its own
             let nfd = DecomposingNormalizerBorrowed::new_nfd().normalize(&text).into_owned();
             let nfkd = DecomposingNormalizerBorrowed::new_nfkd().normalize(&text).into_owned();
             if nfd == nfkd || canonical.is_some() {
-                return Ok(canonical.map_or(Value::Null, s));
+                return Ok(canonical.map_or(Value::NULL, s));
             }
             // ICU4X does not expose the one-level compatibility mapping
             set_error(ctx, None, crate::U_UNSUPPORTED_ERROR, "normalizer_get_raw_decomposition: the raw compatibility decomposition is not available")?;
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     }
 }

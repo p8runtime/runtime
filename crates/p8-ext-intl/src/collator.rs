@@ -209,21 +209,21 @@ fn f_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let class = ctx.class(b"Collator").expect("Collator");
     let o = ctx.new_object(&class);
     match construct(ctx, state(&o), args)? {
-        Ok(()) => Ok(Value::Object(o)),
-        Err(()) => Ok(Value::Null),
+        Ok(()) => Ok(Value::object(o)),
+        Err(()) => Ok(Value::NULL),
     }
 }
 
 fn m_construct(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(this) = arg(args, 0) else { unreachable!() };
+    let Ok(this) = arg(args, 0).into_object() else { unreachable!() };
     match construct(ctx, state(&this), &args[1..])? {
-        Ok(()) => Ok(Value::Null),
+        Ok(()) => Ok(Value::NULL),
         Err(()) => Err(ctx.throw("IntlException", "Constructor failed".into())),
     }
 }
 
 fn obj(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Rc<Object>, Throw> {
-    let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
     if state(&o).coll.borrow().is_none() {
         return Err(ctx.throw("Error", "Object not initialized".into()));
     }
@@ -255,10 +255,10 @@ fn f_compare(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         st.err.code.set(10);
         crate::set_global_code(ctx, 10);
         crate::set_message(ctx, Some(&st.err), &format!("Error converting {which} argument to UTF-16"))?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let c = coll(&o).collator().expect("collator");
-    Ok(Value::Int(match c.compare(a, b2) {
+    Ok(Value::int(match c.compare(a, b2) {
         Ordering::Less => -1,
         Ordering::Equal => 0,
         Ordering::Greater => 1,
@@ -274,21 +274,21 @@ fn compare_values(c: &CollatorBorrowed, flags: i64, a: &Value, b2: &Value) -> Or
     let as_str = |v: &Value| v.to_php_string().map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned()).unwrap_or_default();
     match flags {
         SORT_NUMERIC => {
-            let n = |v: &Value| match v {
-                Value::Str(s) => p8_runtime::numeric::leading_numeric(s.as_bytes()).map(|(n, _)| match n {
+            let n = |v: &Value| match v.as_str() {
+                Some(s) => p8_runtime::numeric::leading_numeric(s.as_bytes()).map(|(n, _)| match n {
                     p8_runtime::numeric::Number::Int(i) => i as f64,
                     p8_runtime::numeric::Number::Float(f) => f,
                 }).unwrap_or(0.0),
-                v => v.to_float(),
+                None => v.to_float(),
             };
             ord(n(a).partial_cmp(&n(b2)))
         }
         SORT_STRING => c.compare(&as_str(a), &as_str(b2)),
         _ => {
-            let numeric = |v: &Value| matches!(v, Value::Str(s) if p8_runtime::numeric::numeric_string(s.as_bytes()).is_some());
-            match (a, b2) {
-                (Value::Str(_), Value::Str(_)) if !numeric(a) || !numeric(b2) => c.compare(&as_str(a), &as_str(b2)),
-                (Value::Str(_), Value::Str(_)) => ord(a.compare(b2)),
+            let numeric = |v: &Value| v.as_str().is_some_and(|s| p8_runtime::numeric::numeric_string(s.as_bytes()).is_some());
+            match (a.is_str(), b2.is_str()) {
+                (true, true) if !numeric(a) || !numeric(b2) => c.compare(&as_str(a), &as_str(b2)),
+                (true, true) => ord(a.compare(b2)),
                 // a string against a non-string: the string's numeric value, else as strings
                 _ => ord(a.compare(b2)),
             }
@@ -300,18 +300,18 @@ fn sort_impl(ctx: &mut dyn Ctx, args: &mut [Value], keep_keys: bool) -> R {
     let o = obj(ctx, args)?;
     let st = state(&o);
     let flags = if args.len() > 2 { arg(args, 2).to_int() } else { SORT_REGULAR };
-    let Some(Value::Ref(cell)) = args.get(1).cloned() else { return Ok(Value::Bool(false)) };
+    let Some(cell) = args.get(1).and_then(Value::cloned_reference) else { return Ok(Value::FALSE) };
     let current = cell.borrow().deref();
-    let Value::Array(arr) = current else { return Ok(Value::Bool(false)) };
+    let Some(arr) = current.as_array() else { return Ok(Value::FALSE) };
     let c = coll(&o).collator().expect("collator");
     let mut entries: Vec<(Key, Value)> = arr.iter().map(|(k, v)| (k, v.clone())).collect();
     for (_, v) in &entries {
-        if let Value::Str(s) = v.deref()
+        if let Some(s) = v.deref().as_str()
             && std::str::from_utf8(s.as_bytes()).is_err()
         {
             st.err.code.set(10);
             check(ctx, st, "Error converting hash from UTF-8 to UTF-16")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     p8_runtime::sort::zend_sort(&mut entries, &mut |x: &(Key, Value), y: &(Key, Value)| compare_values(&c, flags, &x.1.deref(), &y.1.deref()));
@@ -323,8 +323,8 @@ fn sort_impl(ctx: &mut dyn Ctx, args: &mut [Value], keep_keys: bool) -> R {
             let _ = out.push(v);
         }
     }
-    *cell.borrow_mut() = Value::Array(Rc::new(out));
-    Ok(Value::Bool(true))
+    *cell.borrow_mut() = Value::array(out);
+    Ok(Value::TRUE)
 }
 
 fn f_sort(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -337,9 +337,9 @@ fn f_asort(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 fn f_sort_with_sort_keys(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    let Some(Value::Ref(cell)) = args.get(1).cloned() else { return Ok(Value::Bool(false)) };
+    let Some(cell) = args.get(1).and_then(Value::cloned_reference) else { return Ok(Value::FALSE) };
     let current = cell.borrow().deref();
-    let Value::Array(arr) = current else { return Ok(Value::Bool(false)) };
+    let Some(arr) = current.as_array() else { return Ok(Value::FALSE) };
     let c = coll(&o).collator().expect("collator");
     let mut entries: Vec<(Vec<u8>, Value)> = arr
         .values()
@@ -351,8 +351,8 @@ fn f_sort_with_sort_keys(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     // ICU's keys compared as C strings (strcmp), with zend_sort
     p8_runtime::sort::zend_sort(&mut entries, &mut |x: &(Vec<u8>, Value), y: &(Vec<u8>, Value)| x.0.cmp(&y.0));
     let out = PhpArray::from_list(entries.into_iter().map(|(_, v)| v).collect());
-    *cell.borrow_mut() = Value::Array(Rc::new(out));
-    Ok(Value::Bool(true))
+    *cell.borrow_mut() = Value::array(out);
+    Ok(Value::TRUE)
 }
 
 fn sort_key(c: &CollatorBorrowed, text: &str) -> Vec<u8> {
@@ -368,10 +368,10 @@ fn f_get_sort_key(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Ok(text) = std::str::from_utf8(&text) else {
         st.err.code.set(10);
         check(ctx, st, "Error converting first argument to UTF-16")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let c = coll(&o).collator().expect("collator");
-    Ok(Value::Str(p8_runtime::string::PhpStr::new(sort_key(&c, text))))
+    Ok(Value::str(p8_runtime::string::PhpStr::new(sort_key(&c, text))))
 }
 
 fn f_get_attribute(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -381,9 +381,9 @@ fn f_get_attribute(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if !(0..8).contains(&a) {
         st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
         check(ctx, st, "Error getting attribute value")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Int(coll(&o).attrs[a as usize]))
+    Ok(Value::int(coll(&o).attrs[a as usize]))
 }
 
 fn valid(a: i64, v: i64, c: &Coll) -> bool {
@@ -418,22 +418,22 @@ fn f_set_attribute(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if !set_attr(&o, arg(args, 1).to_int(), arg(args, 2).to_int()) {
         st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
         check(ctx, st, "Error setting attribute value")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     check(ctx, st, "Error setting attribute value")?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn f_get_strength(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Int(coll(&o).attrs[A_STRENGTH as usize]))
+    Ok(Value::int(coll(&o).attrs[A_STRENGTH as usize]))
 }
 
 fn f_set_strength(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
     // ucol_setStrength with an invalid value: ICU reports nothing; PHP returns true
     let _ = set_attr(&o, A_STRENGTH, arg(args, 1).to_int());
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn f_get_locale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -443,7 +443,7 @@ fn f_get_locale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if ty != 0 && ty != 1 {
         st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
         check(ctx, st, "Error getting locale by type")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let locale = coll(&o).locale;
     let p = crate::uloc::parts(&locale);
@@ -473,11 +473,11 @@ fn has_tailoring(locale: &str) -> bool {
 }
 
 fn f_get_error_code(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
-    Ok(Value::Int(state(&o).err.code.get()))
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
+    Ok(Value::int(state(&o).err.code.get()))
 }
 
 fn f_get_error_message(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
     Ok(s(state(&o).err.message()))
 }

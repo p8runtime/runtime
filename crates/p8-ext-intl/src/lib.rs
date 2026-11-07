@@ -119,7 +119,7 @@ macro_rules! methods {
             fn m(ctx: &mut dyn p8_runtime::ext::Ctx, this: &std::rc::Rc<p8_runtime::object::Object>, args: &mut [p8_runtime::value::Value]) -> crate::R {
                 crate::prep(ctx, concat!($class, "::", $name), args)?;
                 let mut all = Vec::with_capacity(args.len() + 1);
-                all.push(p8_runtime::value::Value::Object(std::rc::Rc::clone(this)));
+                all.push(p8_runtime::value::Value::object(std::rc::Rc::clone(this)));
                 all.extend(args.iter().cloned());
                 let prev = crate::CALLED.with(|c| c.replace(Some(concat!($class, "::", $name))));
                 let r = $func(ctx, &mut all);
@@ -344,7 +344,7 @@ pub(crate) fn global_message(ctx: &mut dyn Ctx) -> String {
 }
 
 fn intl_get_error_code(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Int(global(ctx).code.get()))
+    Ok(Value::int(global(ctx).code.get()))
 }
 
 fn intl_get_error_message(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
@@ -352,7 +352,7 @@ fn intl_get_error_message(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
 }
 
 fn intl_is_failure(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Bool(arg(args, 0).to_int() > U_ZERO_ERROR))
+    Ok(Value::bool(arg(args, 0).to_int() > U_ZERO_ERROR))
 }
 
 fn intl_error_name(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -374,15 +374,16 @@ pub(crate) fn called(function: &'static str) -> &'static str {
 }
 
 pub(crate) fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 /// Argument `i` as a string (after the stub's checks), or None when absent or null.
 pub(crate) fn opt_str(args: &[Value], i: usize) -> Option<String> {
-    match arg(args, i) {
-        Value::Null | Value::Undef => None,
-        v => Some(lossy(v.to_php_string().as_ref().map(|s| s.as_bytes()).unwrap_or_default())),
+    let v = arg(args, i);
+    if v.is_null_or_undef() {
+        return None;
     }
+    Some(lossy(v.to_php_string().as_ref().map(|s| s.as_bytes()).unwrap_or_default()))
 }
 
 pub(crate) fn str_arg(args: &[Value], i: usize) -> String {
@@ -398,7 +399,7 @@ pub(crate) fn lossy(b: &[u8]) -> String {
 }
 
 pub(crate) fn s(text: impl Into<String>) -> Value {
-    Value::Str(PhpStr::new(text.into().into_bytes()))
+    Value::str(PhpStr::new(text.into().into_bytes()))
 }
 
 /// PHP's argument checks for the method `stub` ("NumberFormatter::format").

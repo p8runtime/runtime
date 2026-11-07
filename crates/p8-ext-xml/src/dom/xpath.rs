@@ -31,7 +31,7 @@ pub fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     let Some(doc) = arg_node(args, 0) else { return Err(ctx.throw("TypeError", "DOMXPath::__construct(): Argument #1 ($document) must be of type DOMDocument".into())) };
     *obj(this).doc.borrow_mut() = Some(doc.at(super::tree::DOC));
     obj(this).register_node_ns.set(args.len() < 2 || arg(args, 1).to_bool());
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn this_doc(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<NodeRef, Throw> {
@@ -44,12 +44,12 @@ pub fn document_get(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
 }
 
 pub fn register_node_ns_get(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Bool(obj(this).register_node_ns.get()))
+    Ok(Value::bool(obj(this).register_node_ns.get()))
 }
 
 pub fn register_node_ns_set(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     obj(this).register_node_ns.set(arg(args, 0).to_bool());
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn register_namespace(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -59,7 +59,7 @@ pub fn register_namespace(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
         Some(e) => e.1 = uri,
         None => ns.push((prefix, uri)),
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// The namespaces in scope at `id`, nearest first (xmlGetNsList; the
@@ -112,14 +112,14 @@ fn eval_method(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], query: 
         Ok(v) => v,
         Err(e) => {
             ctx.warn(&format!("{func}(): {}", e.message()));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     match v {
         XValue::Nodes(ids) => super::lists::node_list(ctx, super::lists::Src::Fixed(ids.into_iter().map(|id| doc.at(id)).collect())),
         _ if query => super::lists::node_list(ctx, super::lists::Src::Fixed(Vec::new())),
-        XValue::Bool(b) => Ok(Value::Bool(b)),
-        XValue::Num(n) => Ok(Value::Float(n)),
+        XValue::Bool(b) => Ok(Value::bool(b)),
+        XValue::Num(n) => Ok(Value::float(n)),
         XValue::Str(s) => Ok(str(&s)),
     }
 }

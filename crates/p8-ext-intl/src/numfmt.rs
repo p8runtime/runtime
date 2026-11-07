@@ -1462,15 +1462,15 @@ fn f_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = ctx.new_object(&class);
     let st = state(&o);
     match construct(ctx, st, args, "numfmt_create")? {
-        Ok(()) => Ok(Value::Object(o)),
-        Err(()) => Ok(Value::Null),
+        Ok(()) => Ok(Value::object(o)),
+        Err(()) => Ok(Value::NULL),
     }
 }
 
 fn m_construct(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(this) = arg(args, 0) else { unreachable!() };
+    let Ok(this) = arg(args, 0).into_object() else { unreachable!() };
     match construct(ctx, state(&this), &args[1..], "NumberFormatter::__construct") {
-        Ok(Ok(())) => Ok(Value::Null),
+        Ok(Ok(())) => Ok(Value::NULL),
         Ok(Err(())) => Err(ctx.throw("IntlException", "Constructor failed".into())),
         Err(t) => Err(t),
     }
@@ -1478,7 +1478,7 @@ fn m_construct(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 /// The formatter argument (procedural) or $this; Error when it is not constructed.
 fn obj(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Rc<Object>, Throw> {
-    let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
     if state(&o).fmt.borrow().is_none() {
         return Err(ctx.throw("Error", "Found unconstructed NumberFormatter".into()));
     }
@@ -1501,7 +1501,7 @@ fn check(ctx: &mut dyn Ctx, st: &State, msg: &str) -> Result<bool, Throw> {
 fn fail(ctx: &mut dyn Ctx, st: &State, code: i64, msg: &str) -> R {
     st.err.code.set(code);
     check(ctx, st, msg)?;
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 fn with<T>(o: &Object, f: impl FnOnce(&mut Formatter) -> T) -> T {
@@ -1516,17 +1516,14 @@ fn f_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let number = arg(args, 1);
     let mut ty = if args.len() > 2 { arg(args, 2).to_int() } else { TYPE_DEFAULT };
     if ty == TYPE_DEFAULT {
-        ty = match number {
-            Value::Int(_) => TYPE_INT64,
-            _ => TYPE_DOUBLE,
-        };
+        ty = if number.is_int() { TYPE_INT64 } else { TYPE_DOUBLE };
     }
     let is_method = crate::CALLED.with(|c| c.get()).is_some();
     let num = match ty {
         TYPE_INT32 => Num::Dec(Dec::from_i64(number.to_int() as i32 as i64)),
-        TYPE_INT64 => Num::Dec(Dec::from_i64(match number {
-            Value::Float(f) => f as i64,
-            v => v.to_int(),
+        TYPE_INT64 => Num::Dec(Dec::from_i64(match number.as_float() {
+            Some(f) => f as i64,
+            None => number.to_int(),
         })),
         TYPE_DOUBLE => Num::from_f64(number.to_float()),
         TYPE_CURRENCY => {
@@ -1570,7 +1567,7 @@ fn f_format_currency(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn set_position(args: &mut [Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
@@ -1603,32 +1600,32 @@ fn f_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         Some((n, end, _)) => {
             let v = n.to_f64();
             let value = match ty {
-                TYPE_INT32 => Value::Int(clamp_i32(v)),
+                TYPE_INT32 => Value::int(clamp_i32(v)),
                 TYPE_INT64 => match n {
                     Num::Dec(d) => {
                         let mut t = d.clone();
                         t.round_at(0, decimal::ROUND_DOWN);
                         match t.to_i64() {
-                            Some(i) => Value::Int(i),
-                            None => Value::Int(if d.neg { i64::MIN } else { i64::MAX }),
+                            Some(i) => Value::int(i),
+                            None => Value::int(if d.neg { i64::MIN } else { i64::MAX }),
                         }
                     }
-                    _ => Value::Int(0),
+                    _ => Value::int(0),
                 },
-                _ => Value::Float(v),
+                _ => Value::float(v),
             };
             (value, end)
         }
         None => {
             st.err.code.set(crate::U_PARSE_ERROR);
-            (Value::Bool(false), start)
+            (Value::FALSE, start)
         }
     };
     if has_pos {
-        set_position(args, 3, Value::Int(pos as i64));
+        set_position(args, 3, Value::int(pos as i64));
     }
     if !check(ctx, st, "Number parsing failed")? {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     Ok(value)
 }
@@ -1645,7 +1642,7 @@ fn f_parse_currency(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
     let st = state(&o);
     let text = lossy(&crate::bytes_arg(args, 1));
-    let has_pos = args.len() > 3 && !matches!(arg(args, 3), Value::Null);
+    let has_pos = args.len() > 3 && !arg(args, 3).is_null();
     let start = if has_pos { arg(args, 3).to_int().max(0) as usize } else { 0 };
     let parsed = with(&o, |f| {
         let mut g = f.clone();
@@ -1657,15 +1654,15 @@ fn f_parse_currency(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match parsed {
         Some((n, end, cur)) => {
             if has_pos {
-                set_position(args, 3, Value::Int(end as i64));
+                set_position(args, 3, Value::int(end as i64));
             }
             set_position(args, 2, s(cur.unwrap_or_default()));
             check(ctx, st, "Number parsing failed")?;
-            Ok(Value::Float(n.to_f64()))
+            Ok(Value::float(n.to_f64()))
         }
         None => {
             if has_pos {
-                set_position(args, 3, Value::Int(start as i64));
+                set_position(args, 3, Value::int(start as i64));
             }
             fail(ctx, st, crate::U_PARSE_ERROR, "Number parsing failed")
         }
@@ -1700,26 +1697,26 @@ fn f_get_attribute(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let v: Option<Value> = with(&o, |f| {
         let p = &f.props;
         let cd = f.currency_digits().filter(|_| !p.frac_explicit);
-        let int = |v: i32| if v == -1 { None } else { Some(Value::Int(v as i64)) };
+        let int = |v: i32| if v == -1 { None } else { Some(Value::int(v as i64)) };
         match a {
-            A_PARSE_INT_ONLY => Some(Value::Int(p.parse_int_only as i64)),
-            A_GROUPING_USED => Some(Value::Int(p.grouping_used as i64)),
-            A_DECIMAL_ALWAYS_SHOWN => Some(Value::Int(p.decimal_always as i64)),
+            A_PARSE_INT_ONLY => Some(Value::int(p.parse_int_only as i64)),
+            A_GROUPING_USED => Some(Value::int(p.grouping_used as i64)),
+            A_DECIMAL_ALWAYS_SHOWN => Some(Value::int(p.decimal_always as i64)),
             A_MAX_INTEGER_DIGITS => int(p.max_int),
             A_MIN_INTEGER_DIGITS | A_INTEGER_DIGITS => int(p.min_int),
             A_MAX_FRACTION_DIGITS => int(cd.unwrap_or(p.max_frac)),
             A_MIN_FRACTION_DIGITS | A_FRACTION_DIGITS => int(cd.unwrap_or(p.min_frac)),
-            A_MULTIPLIER => Some(Value::Int(p.multiplier)),
-            A_GROUPING_SIZE => Some(Value::Int(p.g1 as i64)),
-            A_ROUNDING_MODE => Some(Value::Int(p.rounding_mode)),
-            A_ROUNDING_INCREMENT => Some(Value::Float(p.increment)),
+            A_MULTIPLIER => Some(Value::int(p.multiplier)),
+            A_GROUPING_SIZE => Some(Value::int(p.g1 as i64)),
+            A_ROUNDING_MODE => Some(Value::int(p.rounding_mode)),
+            A_ROUNDING_INCREMENT => Some(Value::float(p.increment)),
             A_FORMAT_WIDTH => int(p.width),
-            A_PADDING_POSITION => Some(Value::Int(p.pad_pos)),
-            A_SECONDARY_GROUPING_SIZE => Some(Value::Int(p.g2 as i64)),
-            A_SIGNIFICANT_DIGITS_USED => Some(Value::Int(p.sig_used as i64)),
+            A_PADDING_POSITION => Some(Value::int(p.pad_pos)),
+            A_SECONDARY_GROUPING_SIZE => Some(Value::int(p.g2 as i64)),
+            A_SIGNIFICANT_DIGITS_USED => Some(Value::int(p.sig_used as i64)),
             A_MIN_SIGNIFICANT_DIGITS => int(p.min_sig),
             A_MAX_SIGNIFICANT_DIGITS => int(p.max_sig),
-            A_LENIENT_PARSE => Some(Value::Int(p.lenient as i64)),
+            A_LENIENT_PARSE => Some(Value::int(p.lenient as i64)),
             _ => None,
         }
     });
@@ -1826,7 +1823,7 @@ fn f_set_attribute(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return fail(ctx, st, U_UNSUPPORTED_ERROR, "Error setting attribute value");
     }
     check(ctx, st, "Error setting attribute value")?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 const T_POSITIVE_PREFIX: i64 = 0;
@@ -1911,14 +1908,14 @@ fn f_set_text_attribute(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return fail(ctx, st, U_UNSUPPORTED_ERROR, "Error setting text attribute");
     }
     check(ctx, st, "Error setting text attribute")?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn f_get_symbol(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let sym = arg(args, 1).to_int();
     if !(0..SYMBOL_COUNT).contains(&sym) {
         set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "numfmt_get_symbol: invalid symbol value")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let o = obj(ctx, args)?;
     let st = state(&o);
@@ -1931,7 +1928,7 @@ fn f_set_symbol(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let sym = arg(args, 1).to_int();
     if !(0..SYMBOL_COUNT).contains(&sym) {
         set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "numfmt_set_symbol: invalid symbol value")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let o = obj(ctx, args)?;
     let st = state(&o);
@@ -1952,7 +1949,7 @@ fn f_set_symbol(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
     });
     check(ctx, st, "Error setting symbol value")?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn f_get_pattern(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -1971,13 +1968,13 @@ fn f_set_pattern(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         Ok(p) => {
             with(&o, |f| f.props = p);
             check(ctx, st, "Error setting pattern value")?;
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => {
             st.err.code.set(e.code);
             crate::set_global_code(ctx, e.code);
             crate::set_message(ctx, Some(&st.err), &format!("Error setting pattern value at line 0, offset {}", e.offset))?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1995,11 +1992,11 @@ fn f_get_locale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn f_get_error_code(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
-    Ok(Value::Int(state(&o).err.code.get()))
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
+    Ok(Value::int(state(&o).err.code.get()))
 }
 
 fn f_get_error_message(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
     Ok(s(state(&o).err.message()))
 }

@@ -41,7 +41,7 @@ fn new_list(ctx: &mut dyn Ctx, class: &[u8], src: Src) -> R {
     let class = ctx.class(class).expect("DOM list classes are declared");
     let o = ctx.new_object(&class);
     *o.native::<ListObj>().expect("a DOM list").src.borrow_mut() = Some(src);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 pub fn node_list(ctx: &mut dyn Ctx, src: Src) -> R {
@@ -93,7 +93,7 @@ fn this_items(_: &mut dyn Ctx, this: &Rc<Object>) -> Result<Vec<NodeRef>, Throw>
 }
 
 pub fn length_get(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(this_items(ctx, this)?.len() as i64))
+    Ok(Value::int(this_items(ctx, this)?.len() as i64))
 }
 
 pub fn count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -105,7 +105,7 @@ pub fn item(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let list = this_items(ctx, this)?;
     match usize::try_from(i).ok().and_then(|i| list.get(i)) {
         Some(n) => wrap(ctx, n),
-        None => Ok(Value::Null),
+        None => Ok(Value::NULL),
     }
 }
 
@@ -124,8 +124,8 @@ pub fn get_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
         }
     }
     let class = ctx.class(b"ArrayIterator").expect("SPL is loaded");
-    let it = ctx.new_instance(&class, &mut [Value::Array(Rc::new(arr))], true)?;
-    Ok(Value::Object(it))
+    let it = ctx.new_instance(&class, &mut [Value::array(arr)], true)?;
+    Ok(Value::object(it))
 }
 
 /// `$list[k]`: an index, or (a map) a name.
@@ -133,16 +133,16 @@ pub fn dim_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let key = arg(args, 0);
     let named = matches!(this_src(this), Some(Src::Attrs(_) | Src::Decls(..)));
     // A string key that isn't an integer names an item.
-    let by_name = named && matches!(key, Value::Str(_)) && !matches!(Key::from_value(&key), Ok((Key::Int(_), _)));
+    let by_name = named && key.is_str() && !matches!(Key::from_value(&key), Ok((Key::Int(_), _)));
     if by_name {
         return get_named_item(ctx, this, args);
     }
-    item(ctx, this, &mut [Value::Int(key.to_int())])
+    item(ctx, this, &mut [Value::int(key.to_int())])
 }
 
 /// isset($list[k])
 pub fn dim_has(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    Ok(Value::Bool(!matches!(dim_get(ctx, this, args)?, Value::Null)))
+    Ok(Value::bool(!dim_get(ctx, this, args)?.is_null()))
 }
 
 // DOMNamedNodeMap
@@ -153,7 +153,7 @@ pub fn get_named_item(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
             return wrap(ctx, &n);
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn get_named_item_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -169,7 +169,7 @@ pub fn get_named_item_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
             return wrap(ctx, &n);
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// Element::getElementsByTagName(NS) and Document's.

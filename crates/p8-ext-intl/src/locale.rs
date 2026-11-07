@@ -10,7 +10,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassSpec, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub const MAX_LOCALE_LEN: usize = 156;
 const FULLNAME_CAPACITY: usize = 157;
@@ -84,7 +83,7 @@ fn f_set_default(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         name = crate::icu_default_locale();
     }
     ctx.ini_set(b"intl.default_locale", s(name));
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -156,14 +155,14 @@ fn get_value(ctx: &mut dyn Ctx, args: &mut [Value], tag: Tag, tag_name: &str) ->
         loc = default_locale(ctx);
     }
     if too_long(ctx, loc.len())? {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     match icu_value(&loc, tag, false) {
         Ok(Some(v)) => Ok(s(v)),
         Ok(None) => Ok(s("")),
         Err(()) => {
             set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, &format!("locale_get_{tag_name} : unable to get locale {tag_name}"))?;
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     }
 }
@@ -188,24 +187,24 @@ fn f_get_keywords(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     reset_global(ctx);
     let mut loc = str_arg(args, 0);
     if too_long(ctx, loc.len())? {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     if loc.is_empty() {
         loc = default_locale(ctx);
     }
     let parts = uloc::parts(&loc);
     if parts.keywords.is_empty() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     if parts.keywords.iter().any(|(_, v)| !v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/' | '.'))) {
         set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "locale_get_keywords: Error encountered while getting the keyword  value for the  keyword")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let mut out = PhpArray::new();
     for (k, v) in parts.keywords {
         out.insert(Key::from_string(PhpStr::from(k.as_bytes())), s(v));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 // ---- display names ----
@@ -306,7 +305,7 @@ fn get_display(ctx: &mut dyn Ctx, args: &mut [Value], what: Disp, tag_name: &str
     let mut loc = str_arg(args, 0);
     if loc.len() > FULLNAME_CAPACITY {
         set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, &format!("locale_get_display_{tag_name} : name too long"))?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if loc.is_empty() {
         loc = default_locale(ctx);
@@ -317,7 +316,7 @@ fn get_display(ctx: &mut dyn Ctx, args: &mut [Value], what: Disp, tag_name: &str
         if what == Disp::Lang {
             loc = preferred.unwrap_or(tag).to_string();
         } else {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     let display_loc = match opt_str(args, 1) {
@@ -361,17 +360,13 @@ enum Appended {
 }
 
 fn append_key(out: &mut String, a: &PhpArray, key: &str) -> Appended {
-    match find(a, key).map(Value::deref) {
-        Some(Value::Str(v)) => {
-            if key != "language" && key != "grandfathered" {
-                out.push('_');
-            }
-            out.push_str(&lossy(v.as_bytes()));
-            Appended::Done
-        }
-        Some(_) => Appended::NotString,
-        None => Appended::Missing,
+    let Some(v) = find(a, key).map(Value::deref) else { return Appended::Missing };
+    let Some(v) = v.as_str() else { return Appended::NotString };
+    if key != "language" && key != "grandfathered" {
+        out.push('_');
     }
+    out.push_str(&lossy(v.as_bytes()));
+    Appended::Done
 }
 
 fn append_multiple(out: &mut String, a: &PhpArray, key: &str) -> Appended {
@@ -380,17 +375,18 @@ fn append_multiple(out: &mut String, a: &PhpArray, key: &str) -> Appended {
             out.push_str("_x");
         }
     };
-    match find(a, key).map(Value::deref) {
-        Some(Value::Str(v)) => {
+    if let Some(found) = find(a, key).map(Value::deref) {
+        if let Some(v) = found.as_str() {
             prefix(out);
             out.push('_');
             out.push_str(&lossy(v.as_bytes()));
             return Appended::Done;
         }
-        Some(Value::Array(list)) => {
+        if let Some(list) = found.as_array() {
             let mut first = true;
             for v in list.values() {
-                let Value::Str(v) = v.deref() else { return Appended::NotString };
+                let v = v.deref();
+                let Some(v) = v.as_str() else { return Appended::NotString };
                 if first {
                     prefix(out);
                     first = false;
@@ -400,8 +396,7 @@ fn append_multiple(out: &mut String, a: &PhpArray, key: &str) -> Appended {
             }
             return Appended::Done;
         }
-        Some(_) => return Appended::NotString,
-        None => {}
+        return Appended::NotString;
     }
     let max = match key {
         "variant" => 15,
@@ -410,17 +405,14 @@ fn append_multiple(out: &mut String, a: &PhpArray, key: &str) -> Appended {
     };
     let mut first = true;
     for i in 0..max {
-        match find(a, &format!("{key}{i}")).map(Value::deref) {
-            Some(Value::Str(v)) => {
-                if first {
-                    prefix(out);
-                    first = false;
-                }
-                out.push('_');
-                out.push_str(&lossy(v.as_bytes()));
+        if let Some(found) = find(a, &format!("{key}{i}")).map(Value::deref) {
+            let Some(v) = found.as_str() else { return Appended::NotString };
+            if first {
+                prefix(out);
+                first = false;
             }
-            Some(_) => return Appended::NotString,
-            None => {}
+            out.push('_');
+            out.push_str(&lossy(v.as_bytes()));
         }
     }
     Appended::Done
@@ -428,14 +420,14 @@ fn append_multiple(out: &mut String, a: &PhpArray, key: &str) -> Appended {
 
 fn f_compose(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     reset_global(ctx);
-    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Bool(false)) };
+    let Ok(a) = arg(args, 0).into_array() else { return Ok(Value::FALSE) };
     if a.is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let mut out = String::new();
     let not_string = |ctx: &mut dyn Ctx| -> R {
         set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "locale_compose: parameter array element is not a string")?;
-        Ok(Value::Bool(false))
+        Ok(Value::FALSE)
     };
     match append_key(&mut out, &a, "grandfathered") {
         Appended::Done => return Ok(s(out)),
@@ -498,7 +490,7 @@ fn f_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     reset_global(ctx);
     let mut loc = str_arg(args, 0);
     if too_long(ctx, loc.len())? {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     if loc.is_empty() {
         loc = default_locale(ctx);
@@ -507,7 +499,7 @@ fn f_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let put = |out: &mut PhpArray, k: &str, v: String| out.insert(Key::from_string(PhpStr::from(k.as_bytes())), s(v));
     if uloc::grandfathered(&loc).is_some() {
         put(&mut out, "grandfathered", loc);
-        return Ok(Value::Array(Rc::new(out)));
+        return Ok(Value::array(out));
     }
     for (tag, key) in [(Tag::Lang, "language"), (Tag::Script, "script"), (Tag::Region, "region")] {
         if let Ok(Some(v)) = icu_value(&loc, tag, true) {
@@ -524,7 +516,7 @@ fn f_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             put(&mut out, &format!("private{i}"), t);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn f_get_all_variants(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -534,7 +526,7 @@ fn f_get_all_variants(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         loc = default_locale(ctx);
     }
     if too_long(ctx, loc.len())? {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let mut out = PhpArray::new();
     if uloc::grandfathered(&loc).is_none()
@@ -544,7 +536,7 @@ fn f_get_all_variants(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             let _ = out.push(s(t));
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 // ---- matching ----
@@ -563,35 +555,35 @@ fn f_filter_matches(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         range = default_locale(ctx);
     }
     if range == "*" {
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     if too_long(ctx, range.len())? || too_long(ctx, tag.len())? {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let (t, r) = if canonical {
         let r = uloc::canonicalize(&range);
         if r.is_empty() {
             set_error(ctx, None, crate::U_ZERO_ERROR, "locale_filter_matches : unable to canonicalize loc_range")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         let t = uloc::canonicalize(&tag);
         if t.is_empty() {
             set_error(ctx, None, crate::U_ZERO_ERROR, "locale_filter_matches : unable to canonicalize lang_tag")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         (to_match(&t), to_match(&r))
     } else {
         if tag.is_empty() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         (to_match(&tag), to_match(&range))
     };
     if let Some(rest) = t.strip_prefix(r.as_str()) {
         let next = rest.as_bytes().first();
         let ok = matches!(next, None | Some(b'_') | Some(b'-')) || (canonical && next == Some(&b'@'));
-        return Ok(Value::Bool(ok));
+        return Ok(Value::bool(ok));
     }
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 /// getStrrtokenPos.
@@ -611,7 +603,7 @@ fn strrtoken_pos(s: &[u8], saved: usize) -> Option<usize> {
 
 fn f_lookup(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     reset_global(ctx);
-    let Value::Array(tags) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(tags) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
     let mut range = str_arg(args, 1);
     let canonical = arg(args, 2).to_bool();
     let fallback = opt_str(args, 3);
@@ -622,18 +614,19 @@ fn f_lookup(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         };
     }
     if too_long(ctx, range.len())? {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     if tags.is_empty() {
         return Ok(s(""));
     }
     let fail = |ctx: &mut dyn Ctx, what: &str| -> R {
         set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, &format!("lookup_loc_range: unable to canonicalize {what}"))?;
-        Ok(Value::Null)
+        Ok(Value::NULL)
     };
     let mut list: Vec<(String, String)> = Vec::new();
     for v in tags.values() {
-        let Value::Str(t) = v.deref() else {
+        let v = v.deref();
+        let Some(t) = v.as_str() else {
             let name = crate::called("locale_lookup");
             return Err(ctx.throw("TypeError", format!("{name}(): Argument #2 ($languageTag) must only contain string values")));
         };
@@ -683,7 +676,7 @@ fn f_accept_from_http(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let header = str_arg(args, 0);
     if header.len() > FULLNAME_CAPACITY && header.split(',').any(|p| p.len() > FULLNAME_CAPACITY) {
         set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "locale_accept_from_http: locale string too long")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let mut prefs: Vec<(f64, usize, String)> = Vec::new();
     for (i, item) in header.split(',').enumerate() {
@@ -730,5 +723,5 @@ fn f_accept_from_http(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             }
         }
     }
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
