@@ -26,26 +26,47 @@ pub struct Value(Repr);
 /// first (tags 0..=4) and the ones holding memory after, so "is there
 /// anything to release" is one compare of the tag (PHP's
 /// `Z_REFCOUNTED`): what `Drop` and `is_plain` test.
+///
+/// `repr(u8)` with explicit discriminants makes the tag a byte with
+/// exactly these values (the reference's primitive-representation
+/// layout), so `is_plain` is `tag < 5` by definition, not by codegen.
 #[derive(Debug)]
+#[repr(u8)]
 enum Repr {
-    Null,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
+    Null = 0,
+    Bool(bool) = 1,
+    Int(i64) = 2,
+    Float(f64) = 3,
     /// A variable never assigned (only in registers; reads warn and give null).
-    Undef,
-    Str(PhpStr),
-    Array(Rc<PhpArray>),
+    Undef = 4,
+    Str(PhpStr) = 5,
+    Array(Rc<PhpArray>) = 6,
     /// A PHP reference: the shared cell `$a = &$b` makes.
-    Ref(Rc<RefCell<Value>>),
+    Ref(Rc<RefCell<Value>>) = 7,
     /// An object: a shared handle (copying the value copies the handle).
-    Object(Rc<Object>),
+    Object(Rc<Object>) = 8,
 }
+
+/// The first tag holding memory: tags below it are plain.
+const FIRST_HEAP_TAG: u8 = 5;
 
 // The layout the engine is tuned for: a zval's 16 bytes, and `Option<Value>`
 // no bigger (the tag's spare values are its `None`).
 const _: () = assert!(mem::size_of::<Value>() == 16);
 const _: () = assert!(mem::size_of::<Option<Value>>() == 16);
+// `Kind` mirrors the tags one for one, so `kind()` is the tag itself.
+const _: () = {
+    assert!(Kind::Null as u8 == 0);
+    assert!(Kind::Bool as u8 == 1);
+    assert!(Kind::Int as u8 == 2);
+    assert!(Kind::Float as u8 == 3);
+    assert!(Kind::Undef as u8 == 4);
+    assert!(Kind::Str as u8 == FIRST_HEAP_TAG);
+    assert!(Kind::Array as u8 == 6);
+    assert!(Kind::Ref as u8 == 7);
+    assert!(Kind::Object as u8 == 8);
+    assert!(mem::size_of::<Kind>() == 1);
+};
 
 impl Default for Value {
     /// Null: what `mem::take` leaves.
@@ -106,16 +127,17 @@ impl Clone for Value {
 /// representation gains variants (a program-memory string is `Kind::Str`,
 /// a program-memory array `Kind::Array`). In the representation's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum Kind {
-    Null,
-    Bool,
-    Int,
-    Float,
-    Undef,
-    Str,
-    Array,
-    Ref,
-    Object,
+    Null = 0,
+    Bool = 1,
+    Int = 2,
+    Float = 3,
+    Undef = 4,
+    Str = 5,
+    Array = 6,
+    Ref = 7,
+    Object = 8,
 }
 
 /// The accessor API: the only way code outside this module reads, writes
@@ -258,7 +280,7 @@ impl Value {
     /// representation's first tags, so this is one compare.
     #[inline(always)]
     pub fn is_plain(&self) -> bool {
-        matches!(self.0, Repr::Null | Repr::Bool(_) | Repr::Int(_) | Repr::Float(_) | Repr::Undef)
+        (self.kind() as u8) < FIRST_HEAP_TAG
     }
 
     #[inline(always)]
