@@ -390,8 +390,8 @@ pub fn mb_parse_str(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let to = internal(ctx);
     // Split into names and values, URL-decoded, as the input handler does.
     let mut parts: Vec<Vec<u8>> = Vec::new();
-    let seps: Vec<u8> = match ctx.ini_get(b"arg_separator.input") {
-        Some(Value::Str(s)) if !s.is_empty() => s.as_bytes().to_vec(),
+    let seps: Vec<u8> = match ctx.ini_get(b"arg_separator.input").as_ref().and_then(Value::as_str) {
+        Some(s) if !s.is_empty() => s.as_bytes().to_vec(),
         _ => b"&".to_vec(),
     };
     for var in query.split(|c| seps.contains(c)).filter(|v| !v.is_empty()) {
@@ -443,22 +443,22 @@ pub fn mb_parse_str(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         rebuilt.push(b'=');
         url_encode(&conv[1], &mut rebuilt);
     }
-    let cell = Rc::new(RefCell::new(Value::Array(Rc::new(PhpArray::new()))));
+    let cell = Rc::new(RefCell::new(Value::array(PhpArray::new())));
     if !rebuilt.is_empty() {
-        let mut a = [Value::Str(PhpStr::new(rebuilt)), Value::Ref(Rc::clone(&cell))];
+        let mut a = [Value::str(PhpStr::new(rebuilt)), Value::reference(Rc::clone(&cell))];
         ctx.call(&Value::str("parse_str"), &mut a)?;
     }
     let result = cell.borrow().clone();
-    if let Some(Value::Ref(r)) = args.get(1) {
+    if let Some(r) = args.get(1).and_then(Value::as_reference) {
         *r.borrow_mut() = result;
     }
     // The encoding the input was identified as; "pass" (no conversion) counts.
     *ctx.state("mb_http_identify") = match from {
         Some(Some(f)) => Value::str(f.name),
         Some(None) => Value::str("pass"),
-        None => Value::Null,
+        None => Value::NULL,
     };
-    Ok(Value::Bool(from.is_some()))
+    Ok(Value::bool(from.is_some()))
 }
 
 pub fn mb_output_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -469,7 +469,7 @@ pub fn mb_output_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return out(s);
     }
     if status & 1 != 0 {
-        *ctx.state("mb_outconv") = Value::Bool(true);
+        *ctx.state("mb_outconv") = Value::TRUE;
     }
     if !ctx.state("mb_outconv").to_bool() {
         return out(s);
@@ -478,7 +478,7 @@ pub fn mb_output_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let from = internal(ctx);
     let res = convert(ctx, &s, to, from);
     if status & 8 != 0 {
-        *ctx.state("mb_outconv") = Value::Bool(false);
+        *ctx.state("mb_outconv") = Value::FALSE;
     }
     let _ = bool_arg;
     out(res)

@@ -7,7 +7,7 @@
 use crate::Context;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -35,23 +35,24 @@ impl Context<'_> {
 
     /// `root[k1]..[kn] = &cell`: the element is the reference itself.
     pub(crate) fn dim_set_ref(&mut self, root: &mut Value, path: &[Key], append: bool, cell: Cell) -> Result<(), Throw> {
-        self.walk(root, path, append, At::Set(Value::Ref(cell))).map(|_| ())
+        self.walk(root, path, append, At::Set(Value::reference(cell))).map(|_| ())
     }
 
     fn walk(&mut self, target: &mut Value, path: &[Key], append: bool, at: At) -> Result<Option<Cell>, Throw> {
-        if matches!(target, Value::Null | Value::Undef) {
-            *target = Value::Array(Rc::new(PhpArray::new()));
+        if target.is_null_or_undef() {
+            *target = Value::array(PhpArray::new());
         }
-        let arr = match target {
-            Value::Array(a) => Rc::make_mut(a),
-            Value::Ref(cell) => {
+        let arr = match target.kind() {
+            Kind::Array => target.array_mut().expect("an array"),
+            Kind::Ref => {
+                let cell = target.as_reference().expect("a reference");
                 let mut inner = std::mem::take(&mut *cell.borrow_mut());
                 let r = self.walk(&mut inner, path, append, at);
                 *cell.borrow_mut() = inner;
                 return r;
             }
-            Value::Str(_) => return Err(self.throw("Error", "Cannot create references to/from string offsets")),
-            Value::Object(_) => return Err(self.throw("Error", "Cannot use object as array")),
+            Kind::Str => return Err(self.throw("Error", "Cannot create references to/from string offsets")),
+            Kind::Object => return Err(self.throw("Error", "Cannot use object as array")),
             _ => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
         };
         match path.split_first() {
@@ -59,8 +60,8 @@ impl Context<'_> {
                 // `[]`: a new element.
                 let (value, cell) = match at {
                     At::Ref => {
-                        let cell = Rc::new(RefCell::new(Value::Null));
-                        (Value::Ref(Rc::clone(&cell)), Some(cell))
+                        let cell = Rc::new(RefCell::new(Value::NULL));
+                        (Value::reference(Rc::clone(&cell)), Some(cell))
                     }
                     At::Set(v) => (v, None),
                 };
@@ -76,7 +77,7 @@ impl Context<'_> {
                 }
                 At::Ref => {
                     if !arr.contains_key(key) {
-                        arr.insert(key.clone(), Value::Null);
+                        arr.insert(key.clone(), Value::NULL);
                     }
                     let slot = arr.get_mut(key).expect("just inserted");
                     Ok(Some(make_ref(slot)))
@@ -84,7 +85,7 @@ impl Context<'_> {
             },
             Some((key, rest)) => {
                 if !arr.contains_key(key) {
-                    arr.insert(key.clone(), Value::Null);
+                    arr.insert(key.clone(), Value::NULL);
                 }
                 let mut child = std::mem::take(arr.get_mut(key).expect("present"));
                 let r = self.walk(&mut child, rest, append, at);
@@ -101,7 +102,7 @@ impl Context<'_> {
         match statics.get(&index) {
             Some(cell) => (Rc::clone(cell), false),
             None => {
-                let cell = Rc::new(RefCell::new(Value::Null));
+                let cell = Rc::new(RefCell::new(Value::NULL));
                 statics.insert(index, Rc::clone(&cell));
                 (cell, true)
             }
@@ -111,15 +112,13 @@ impl Context<'_> {
 
 /// A value in place made a reference (if it is not one): its cell.
 pub(crate) fn make_ref(slot: &mut Value) -> Cell {
-    if let Value::Ref(cell) = slot {
+    if let Some(cell) = slot.as_reference() {
         return Rc::clone(cell);
     }
-    let value = match std::mem::take(slot) {
-        Value::Undef => Value::Null,
-        v => v,
-    };
+    let value = std::mem::take(slot);
+    let value = if value.is_undef() { Value::NULL } else { value };
     let cell = Rc::new(RefCell::new(value));
-    *slot = Value::Ref(Rc::clone(&cell));
+    *slot = Value::reference(Rc::clone(&cell));
     cell
 }
 
@@ -127,8 +126,7 @@ pub(crate) fn make_ref(slot: &mut Value) -> Cell {
 /// array in `cell`, made a reference: (its position, key, cell).
 pub(crate) fn next_ref(cell: &Cell, pos: usize) -> Option<(usize, Key, Cell)> {
     let mut value = cell.borrow_mut();
-    let Value::Array(a) = &mut *value else { return None };
-    let (p, key) = a.entry_at(pos).map(|(p, k, _)| (p, k))?;
-    let slot = Rc::make_mut(a).get_mut(&key).expect("the element just found");
+    let (p, key) = value.as_array()?.entry_at(pos).map(|(p, k, _)| (p, k))?;
+    let slot = value.array_mut().expect("an array").get_mut(&key).expect("the element just found");
     Some((p, key, make_ref(slot)))
 }

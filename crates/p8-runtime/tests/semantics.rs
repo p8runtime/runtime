@@ -8,34 +8,33 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cmp::Ordering;
-use std::rc::Rc;
 
 fn arr(pairs: &[(Key, Value)]) -> Value {
     let mut a = PhpArray::new();
     for (k, v) in pairs {
         a.insert(k.clone(), v.clone());
     }
-    Value::Array(Rc::new(a))
+    Value::array(a)
 }
 
 /// The same values, in the same order, as the generator's $values.
 fn values() -> Vec<Value> {
-    let s = |x: &str| Value::Str(PhpStr::from(x));
+    let s = |x: &str| Value::str(PhpStr::from(x));
     let i = Key::Int;
     let k = |x: &str| Key::Str(PhpStr::from(x));
     vec![
-        Value::Null,
-        Value::Bool(true),
-        Value::Bool(false),
-        Value::Int(0),
-        Value::Int(1),
-        Value::Int(-1),
-        Value::Float(1.5),
-        Value::Float(-0.0),
-        Value::Float(f64::INFINITY),
-        Value::Float(f64::NAN),
-        Value::Int(i64::MAX),
-        Value::Float(i64::MAX as f64),
+        Value::NULL,
+        Value::TRUE,
+        Value::FALSE,
+        Value::int(0),
+        Value::int(1),
+        Value::int(-1),
+        Value::float(1.5),
+        Value::float(-0.0),
+        Value::float(f64::INFINITY),
+        Value::float(f64::NAN),
+        Value::int(i64::MAX),
+        Value::float(i64::MAX as f64),
         s(""),
         s("0"),
         s("1"),
@@ -52,13 +51,13 @@ fn values() -> Vec<Value> {
         s(" "),
         s("0.0"),
         arr(&[]),
-        arr(&[(i(0), Value::Int(1))]),
-        arr(&[(i(0), Value::Int(1)), (i(1), Value::Int(2))]),
-        arr(&[(k("a"), Value::Int(1))]),
-        arr(&[(i(1), Value::Int(2)), (i(0), Value::Int(1))]),
-        arr(&[(i(0), Value::Int(1)), (i(1), Value::Int(2))]),
-        arr(&[(k("a"), Value::Int(1)), (k("b"), Value::Int(2))]),
-        arr(&[(k("b"), Value::Int(2)), (k("a"), Value::Int(1))]),
+        arr(&[(i(0), Value::int(1))]),
+        arr(&[(i(0), Value::int(1)), (i(1), Value::int(2))]),
+        arr(&[(k("a"), Value::int(1))]),
+        arr(&[(i(1), Value::int(2)), (i(0), Value::int(1))]),
+        arr(&[(i(0), Value::int(1)), (i(1), Value::int(2))]),
+        arr(&[(k("a"), Value::int(1)), (k("b"), Value::int(2))]),
+        arr(&[(k("b"), Value::int(2)), (k("a"), Value::int(1))]),
     ]
 }
 
@@ -83,10 +82,7 @@ fn matches_php_8_6() {
                 let v = &values[parts[1].parse::<usize>().unwrap()];
                 let got_bool = v.to_bool().to_string();
                 let got_int = v.to_int().to_string();
-                let got_float = match v {
-                    Value::Array(_) => "x".to_string(),
-                    _ => hex(&v.to_float().to_be_bytes()),
-                };
+                let got_float = if v.is_array() { "x".to_string() } else { hex(&v.to_float().to_be_bytes()) };
                 let got_str = v.to_php_string().map_or("ARRAY".into(), |s| hex(s.as_bytes()));
                 let want = (parts[2], parts[3], parts[4], parts.get(5).copied().unwrap_or(""));
                 if (got_bool.as_str(), got_int.as_str(), got_float.as_str(), got_str.as_str()) != want {

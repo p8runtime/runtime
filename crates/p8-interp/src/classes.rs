@@ -16,7 +16,7 @@ use p8_runtime::object::{
 };
 use p8_runtime::string::PhpStr;
 use p8_runtime::symbol::{Sym, known};
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cell::RefCell;
 use p8_runtime::fast::HashMap;
 use std::rc::Rc;
@@ -273,7 +273,7 @@ impl Context<'_> {
         let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
-            let default = p.default.as_ref().map_or(Value::Undef, |d| self.isolate.thaw(d));
+            let default = p.default.as_ref().map_or(Value::UNDEF, |d| self.isolate.thaw(d));
             let init = p.code.as_ref().map(|c| Thunk(Rc::new(Arc::clone(c))));
             if p.is_static {
                 if let Some(t) = init {
@@ -476,7 +476,7 @@ impl Context<'_> {
         }
         let enum_flags = if def.flags & CLASS_ENUM != 0 {
             let backing = def.enum_backing.as_ref().map(text_of);
-            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::Null, |v| self.isolate.thaw(v)))).collect();
+            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::NULL, |v| self.isolate.thaw(v)))).collect();
             EnumMembers { interfaces: &mut interfaces, properties: &mut properties, constants: &mut constants, methods: &mut methods }.add(&declaring, &class_name, backing.as_deref(), cases)
         } else {
             0
@@ -640,18 +640,24 @@ impl Context<'_> {
     /// The class a code operand names.
     pub(crate) fn class_of(&mut self, func: &Function, i: u16, w: &[Value]) -> Result<Rc<Class>, Throw> {
         match &func.classes[i as usize] {
-            ClassRef::Dynamic(r) => match w[*r as usize].deref() {
-                Value::Object(o) => Ok(Rc::clone(&o.class)),
-                Value::Str(name) => match self.sym_of(name.as_bytes()).and_then(|key| self.classes.get(&key)) {
-                    Some(c) => Ok(Rc::clone(c)),
-                    None => self.find_class(name.as_bytes()),
-                },
-                Value::Undef => {
-                    self.undefined(func, *r);
-                    Err(self.throw("Error", "Class name must be a valid object or a string"))
+            ClassRef::Dynamic(r) => {
+                let v = w[*r as usize].deref();
+                match v.kind() {
+                    Kind::Object => Ok(Rc::clone(&v.as_object().expect("an object").class)),
+                    Kind::Str => {
+                        let name = v.as_str().expect("a string");
+                        match self.sym_of(name.as_bytes()).and_then(|key| self.classes.get(&key)) {
+                            Some(c) => Ok(Rc::clone(c)),
+                            None => self.find_class(name.as_bytes()),
+                        }
+                    }
+                    Kind::Undef => {
+                        self.undefined(func, *r);
+                        Err(self.throw("Error", "Class name must be a valid object or a string"))
+                    }
+                    _ => Err(self.throw("Error", "Class name must be a valid object or a string")),
                 }
-                _ => Err(self.throw("Error", "Class name must be a valid object or a string")),
-            },
+            }
             ClassRef::Named(name) | ClassRef::Forward(name) => match self.classes.get(&name.sym) {
                 Some(c) => Ok(Rc::clone(c)),
                 None => self.find_class(name.display.as_bytes()),
@@ -700,10 +706,10 @@ impl Context<'_> {
             // Where it was made, and the calls that led there.
             let (file, line) = self.location();
             let root: &[u8] = if class.is_a(b"exception") { b"exception" } else { b"error" };
-            class.write(&object, b"file", root, Value::Str(PhpStr::from(&*file)));
-            class.write(&object, b"line", root, Value::Int(i64::from(line)));
+            class.write(&object, b"file", root, Value::str(PhpStr::from(&*file)));
+            class.write(&object, b"line", root, Value::int(i64::from(line)));
             let trace = self.trace(regs);
-            class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
+            class.write(&object, b"trace", root, Value::array(trace));
         }
         let Some(ctor) = &info.ctor else { return Ok((object, None)) };
         if !construct {
@@ -764,7 +770,7 @@ impl Context<'_> {
             return Rc::clone(o);
         }
         let object = Object::new(Rc::clone(class), &self.ids);
-        class.write(&object, b"name", &class.lower, Value::Str(PhpStr::from(case)));
+        class.write(&object, b"name", &class.lower, Value::str(PhpStr::from(case)));
         if class.enum_backing.is_some()
             && let Some(c) = class.constants.get(case)
         {
@@ -805,15 +811,15 @@ impl Context<'_> {
 
     /// `$obj->method(args)`: the frame to push.
     pub(crate) fn method_frame(&mut self, target: &Value, key: Option<Sym>, display: &[u8]) -> Result<MethodFrame, Throw> {
-        let object = match target {
-            Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.method_frame(&cell.borrow().clone(), key, display),
-            other => {
-                return Err(self.throw(
-                    "Error",
-                    format!("Call to a member function {}() on {}", String::from_utf8_lossy(display), other.type_name()),
-                ));
-            }
+        let object = if let Some(o) = target.as_object() {
+            Rc::clone(o)
+        } else if let Some(cell) = target.as_reference() {
+            return self.method_frame(&cell.borrow().clone(), key, display);
+        } else {
+            return Err(self.throw(
+                "Error",
+                format!("Call to a member function {}() on {}", String::from_utf8_lossy(display), target.type_name()),
+            ));
         };
         let class = Rc::clone(&object.class);
         let Some(method) = method_of(&class, key).cloned() else {
@@ -826,7 +832,7 @@ impl Context<'_> {
                 && let Some(inner) = forward(&object)
                 && answers(&inner, key)
             {
-                return self.method_frame(&Value::Object(inner), key, display);
+                return self.method_frame(&Value::object(inner), key, display);
             }
             return Err(self.throw(
                 "Error",
@@ -1007,31 +1013,36 @@ impl Context<'_> {
     /// `$obj->name`
     pub(crate) fn fetch_prop(&mut self, target: &Value, name: &Value, quiet: bool) -> Result<Value, Throw> {
         let name = self.prop_name(name)?;
-        let object = match target {
-            Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.fetch_prop(&cell.borrow().clone(), &Value::Str(name), quiet),
-            other => {
-                if !quiet {
-                    self.warn(format!("Attempt to read property \"{}\" on {}", text(&name), other.type_name()));
-                }
-                return Ok(Value::Null);
+        let object = if let Some(o) = target.as_object() {
+            Rc::clone(o)
+        } else if let Some(cell) = target.as_reference() {
+            return self.fetch_prop(&cell.borrow().clone(), &Value::str(name), quiet);
+        } else {
+            if !quiet {
+                self.warn(format!("Attempt to read property \"{}\" on {}", text(&name), target.type_name()));
             }
+            return Ok(Value::NULL);
         };
         match self.prop_slot(&object, name.as_bytes())? {
             Some((slot, prop)) => {
                 let value = object.slots.borrow()[slot].clone();
-                match value {
-                    Value::Undef if quiet => Ok(Value::Null),
-                    Value::Undef if prop.ty.is_some() => Err(self.throw(
-                        "Error",
-                        format!("Typed property {}::${} must not be accessed before initialization", text(&prop.declaring_name), text(&name)),
-                    )),
-                    Value::Undef => {
+                if value.is_undef() {
+                    if quiet {
+                        Ok(Value::NULL)
+                    } else if prop.ty.is_some() {
+                        Err(self.throw(
+                            "Error",
+                            format!("Typed property {}::${} must not be accessed before initialization", text(&prop.declaring_name), text(&name)),
+                        ))
+                    } else {
                         self.warn(format!("Undefined property: {}::${}", text(&object.class.name), text(&name)));
-                        Ok(Value::Null)
+                        Ok(Value::NULL)
                     }
-                    Value::Ref(cell) => Ok(cell.borrow().clone()),
-                    v => Ok(v),
+                } else {
+                    match value.into_reference() {
+                        Ok(cell) => Ok(cell.borrow().clone()),
+                        Err(v) => Ok(v),
+                    }
                 }
             }
             None => {
@@ -1039,10 +1050,10 @@ impl Context<'_> {
                 let found = object.dynamic.borrow().get(&key).map(Value::deref);
                 match found {
                     Some(v) => Ok(v),
-                    None if quiet => Ok(Value::Null),
+                    None if quiet => Ok(Value::NULL),
                     None => {
                         self.warn(format!("Undefined property: {}::${}", text(&object.class.name), text(&name)));
-                        Ok(Value::Null)
+                        Ok(Value::NULL)
                     }
                 }
             }
@@ -1050,18 +1061,21 @@ impl Context<'_> {
     }
 
     fn prop_name(&self, name: &Value) -> Result<PhpStr, Throw> {
-        match name.deref() {
-            Value::Str(s) => Ok(s),
-            v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Null) => Ok(v.to_php_string().unwrap_or_else(PhpStr::empty)),
-            other => Err(self.throw("Error", format!("Cannot access property of type {}", other.type_name()))),
+        let v = name.deref();
+        match v.kind() {
+            Kind::Str => Ok(v.into_str().expect("a string")),
+            Kind::Int | Kind::Float | Kind::Bool | Kind::Null => Ok(v.to_php_string().unwrap_or_else(PhpStr::empty)),
+            _ => Err(self.throw("Error", format!("Cannot access property of type {}", v.type_name()))),
         }
     }
 
     fn target_object(&self, target: &Value, name: &PhpStr, verb: &str) -> Result<Rc<Object>, Throw> {
-        match target {
-            Value::Object(o) => Ok(Rc::clone(o)),
-            Value::Ref(cell) => self.target_object(&cell.borrow(), name, verb),
-            other => Err(self.throw("Error", format!("Attempt to {verb} property \"{}\" on {}", text(name), other.type_name()))),
+        if let Some(o) = target.as_object() {
+            Ok(Rc::clone(o))
+        } else if let Some(cell) = target.as_reference() {
+            self.target_object(&cell.borrow(), name, verb)
+        } else {
+            Err(self.throw("Error", format!("Attempt to {verb} property \"{}\" on {}", text(name), target.type_name())))
         }
     }
 
@@ -1081,20 +1095,22 @@ impl Context<'_> {
                 // An object is handed out as a copy; anything else is not
                 // to be had (zend_std_read_property for BP_VAR_W).
                 if prop.readonly {
-                    match object.slots.borrow()[slot].deref() {
-                        v @ Value::Object(_) => return Ok(Rc::new(RefCell::new(v))),
-                        Value::Undef if for_unset => return Ok(Rc::new(RefCell::new(Value::Null))),
-                        _ => {}
+                    let v = object.slots.borrow()[slot].deref();
+                    if v.is_object() {
+                        return Ok(Rc::new(RefCell::new(v)));
+                    } else if v.is_undef() && for_unset {
+                        return Ok(Rc::new(RefCell::new(Value::NULL)));
                     }
                     return Err(self.throw("Error", format!("Cannot indirectly modify readonly property {}::${}", text(&prop.declaring_name), text(&name))));
                 }
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
                     // An object is handed out as a copy (writes through it
                     // change the object, not the property).
-                    match object.slots.borrow()[slot].deref() {
-                        v @ Value::Object(_) => return Ok(Rc::new(RefCell::new(v))),
-                        Value::Undef if for_unset => return Ok(Rc::new(RefCell::new(Value::Null))),
-                        _ => {}
+                    let v = object.slots.borrow()[slot].deref();
+                    if v.is_object() {
+                        return Ok(Rc::new(RefCell::new(v)));
+                    } else if v.is_undef() && for_unset {
+                        return Ok(Rc::new(RefCell::new(Value::NULL)));
                     }
                     return Err(self.set_visibility_error(prop, "indirectly modify"));
                 }
@@ -1112,7 +1128,7 @@ impl Context<'_> {
                         )));
                         self.report_diags();
                     }
-                    object.dynamic.borrow_mut().insert(key.clone(), Value::Null);
+                    object.dynamic.borrow_mut().insert(key.clone(), Value::NULL);
                 }
                 let mut dynamic = object.dynamic.borrow_mut();
                 let slot = dynamic.get_mut(&key).expect("just made");
@@ -1130,15 +1146,15 @@ impl Context<'_> {
         }
         match self.prop_slot(&object, pname.as_bytes())? {
             Some((slot, prop)) if prop.set_visibility.is_some() && !self.may_set(&object, prop) => {
-                if matches!(object.slots.borrow()[slot].deref(), Value::Object(_)) {
+                if object.slots.borrow()[slot].deref().is_object() {
                     return Err(self.throw("Error", "Cannot assign by reference to overloaded object"));
                 }
                 return Err(self.set_visibility_error(prop, "indirectly modify"));
             }
-            Some((slot, _)) => object.slots.borrow_mut()[slot] = Value::Ref(cell),
+            Some((slot, _)) => object.slots.borrow_mut()[slot] = Value::reference(cell),
             None => {
-                self.write_prop(target, name, Value::Null)?;
-                object.dynamic.borrow_mut().insert(Key::from_string(pname), Value::Ref(cell));
+                self.write_prop(target, name, Value::NULL)?;
+                object.dynamic.borrow_mut().insert(Key::from_string(pname), Value::reference(cell));
             }
         }
         Ok(())
@@ -1178,9 +1194,10 @@ impl Context<'_> {
         let prop = &object.class.properties[slot];
         if !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.as_ref().is_none_or(|t| t.quick(&value)) {
             let mut slots = object.slots.borrow_mut();
-            match &mut slots[slot] {
-                Value::Ref(cell) => *cell.borrow_mut() = value,
-                s => *s = value,
+            let s = &mut slots[slot];
+            match s.as_reference() {
+                Some(cell) => *cell.borrow_mut() = value,
+                None => *s = value,
             }
             return Ok(());
         }
@@ -1194,7 +1211,7 @@ impl Context<'_> {
         // Who may initialize a readonly property is its set
         // visibility's business (implicitly protected(set)).
         // (In a clone's __clone or clone()'s updates, once more.)
-        if prop.readonly && !matches!(object.slots.borrow()[slot], Value::Undef) && !self.reinitable(object, slot) {
+        if prop.readonly && !object.slots.borrow()[slot].is_undef() && !self.reinitable(object, slot) {
             return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(name))));
         }
         if prop.set_visibility.is_some() && !self.may_set(object, prop) {
@@ -1228,9 +1245,9 @@ impl Context<'_> {
             self.reinit_done(object, slot);
         }
         let mut slots = object.slots.borrow_mut();
-        match &slots[slot] {
-            Value::Ref(cell) => *cell.borrow_mut() = value,
-            _ => slots[slot] = value,
+        match slots[slot].as_reference() {
+            Some(cell) => *cell.borrow_mut() = value,
+            None => slots[slot] = value,
         }
         Ok(())
     }
@@ -1289,60 +1306,64 @@ impl Context<'_> {
         op: Option<p8_runtime::ops::BinOp>,
     ) -> Result<crate::Written, Throw> {
         fn take(v: &mut Value) -> Value {
-            match v {
-                Value::Ref(cell) => std::mem::take(&mut *cell.borrow_mut()),
-                v => std::mem::take(v),
+            match v.as_reference() {
+                Some(cell) => std::mem::take(&mut *cell.borrow_mut()),
+                None => std::mem::take(v),
             }
         }
         fn put(v: &mut Value, root: Value) {
-            match v {
-                Value::Ref(cell) => *cell.borrow_mut() = root,
-                v => *v = root,
+            match v.as_reference() {
+                Some(cell) => *cell.borrow_mut() = root,
+                None => *v = root,
             }
         }
         let key = || Key::from_string(pname.clone());
         let mut root = match slot {
             Some(i) => take(&mut object.slots.borrow_mut()[i]),
-            None => match take(object.dynamic.borrow_mut().slot_mut(&key())) {
-                Value::Undef => Value::Null,
-                v => v,
-            },
+            None => {
+                let v = take(object.dynamic.borrow_mut().slot_mut(&key()));
+                if v.is_undef() { Value::NULL } else { v }
+            }
         };
         let result = self.update_path(&mut root, keys, 0, append, val, op);
         // (A destructor the old value's release leaves due runs after the
         // instruction, as every `step` write's does.)
-        let _ = match slot {
+        match slot {
             Some(i) => put(&mut object.slots.borrow_mut()[i], root),
             None => put(object.dynamic.borrow_mut().slot_mut(&key()), root),
-        };
+        }
         result
     }
 
     /// `isset($obj->name)`
     pub(crate) fn isset_prop(&mut self, target: &Value, name: &Value) -> Result<bool, Throw> {
         let Ok(name) = self.prop_name(name) else { return Ok(false) };
-        let object = match target {
-            Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.isset_prop(&cell.borrow().clone(), &Value::Str(name)),
-            _ => return Ok(false),
+        let object = if let Some(o) = target.as_object() {
+            Rc::clone(o)
+        } else if let Some(cell) = target.as_reference() {
+            return self.isset_prop(&cell.borrow().clone(), &Value::str(name));
+        } else {
+            return Ok(false);
         };
         let slot = match self.prop_slot(&object, name.as_bytes()) {
             Ok(s) => s,
             Err(_) => return Ok(false),
         };
         Ok(match slot {
-            Some((i, _)) => !matches!(object.slots.borrow()[i].deref(), Value::Null | Value::Undef),
-            None => object.dynamic.borrow().get(&Key::from_string(name)).is_some_and(|v| !matches!(v.deref(), Value::Null)),
+            Some((i, _)) => !object.slots.borrow()[i].deref().is_null_or_undef(),
+            None => object.dynamic.borrow().get(&Key::from_string(name)).is_some_and(|v| !v.deref().is_null()),
         })
     }
 
     /// `unset($obj->name)`
     pub(crate) fn unset_prop(&mut self, target: &Value, name: &Value) -> Result<(), Throw> {
         let name = self.prop_name(name)?;
-        let object = match target {
-            Value::Object(o) => Rc::clone(o),
-            Value::Ref(cell) => return self.unset_prop(&cell.borrow().clone(), &Value::Str(name)),
-            _ => return Ok(()),
+        let object = if let Some(o) = target.as_object() {
+            Rc::clone(o)
+        } else if let Some(cell) = target.as_reference() {
+            return self.unset_prop(&cell.borrow().clone(), &Value::str(name));
+        } else {
+            return Ok(());
         };
         match self.prop_slot(&object, name.as_bytes())? {
             Some((i, prop)) => {
@@ -1352,7 +1373,7 @@ impl Context<'_> {
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
                     return Err(self.set_visibility_error(prop, "unset"));
                 }
-                object.slots.borrow_mut()[i] = Value::Undef;
+                object.slots.borrow_mut()[i] = Value::UNDEF;
             }
             None => {
                 object.dynamic.borrow_mut().remove(&Key::from_string(name));
@@ -1366,7 +1387,7 @@ impl Context<'_> {
         let class = self.class_of(func, class, w)?;
         let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
-            return Ok(Value::Str(class.name.clone()));
+            return Ok(Value::str(class.name.clone()));
         }
         match class.constants.get(name.as_bytes()) {
             Some(c) => {
@@ -1387,11 +1408,11 @@ impl Context<'_> {
                     }
                 }
                 if c.is_case {
-                    return Ok(Value::Object(self.enum_case(&class, name.as_bytes())));
+                    return Ok(Value::object(self.enum_case(&class, name.as_bytes())));
                 }
                 if c.init.is_some() {
                     let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.as_bytes().to_vec());
-                    return Ok(self.const_cache.get(&key).cloned().unwrap_or(Value::Null));
+                    return Ok(self.const_cache.get(&key).cloned().unwrap_or(Value::NULL));
                 }
                 Ok(c.value.clone())
             }
@@ -1454,7 +1475,7 @@ impl Context<'_> {
     }
 
     pub(crate) fn prop_hook_seen(&mut self, target: &Value, name: &Value, bit: u8, check_visibility: bool) -> Option<Result<MethodFrame, Throw>> {
-        let Value::Object(o) = target else { return None };
+        let o = target.as_object()?;
         if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
             return None;
         }
@@ -1483,7 +1504,7 @@ impl Context<'_> {
     /// untyped one that was unset; and the method is not already running
     /// for this object and property. With the guard key to hold while it runs.
     pub(crate) fn prop_magic(&mut self, target: &Value, name: &Value, kind: Magic) -> Option<(MethodFrame, (usize, PhpStr, Magic))> {
-        let Value::Object(o) = target else { return None };
+        let o = target.as_object()?;
         if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 {
             return None;
         }
@@ -1505,7 +1526,7 @@ impl Context<'_> {
                 }
                 let prop = &o.class.properties[slot];
                 let declaring = self.declaring(&o.class, &prop.declaring);
-                if visible(prop.visibility, &declaring, scope.as_deref()) && !(prop.ty.is_none() && matches!(o.slots.borrow()[slot], Value::Undef)) {
+                if visible(prop.visibility, &declaring, scope.as_deref()) && !(prop.ty.is_none() && o.slots.borrow()[slot].is_undef()) {
                     return None;
                 }
             }
@@ -1619,7 +1640,7 @@ impl Context<'_> {
         }
         // `callable`: whether the code checking can call it (zend_is_callable).
         let callable = ty.mask & p8_runtime::types::T_CALLABLE != 0
-            && matches!(v.deref(), Value::Str(_) | Value::Array(_) | Value::Object(_))
+            && matches!(v.deref().kind(), Kind::Str | Kind::Array | Kind::Object)
             && self.why_not_callable(v, true)?.is_none();
         let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
         let is_a = |o: &Object, name: &[u8]| match name {
@@ -1672,7 +1693,7 @@ impl Context<'_> {
             let Some(ty) = &p.ty else { continue };
             if p.variadic {
                 // Each extra argument, by the same type.
-                let Value::Array(list) = regs[base + i].clone() else { continue };
+                let Some(list) = regs[base + i].cloned_array() else { continue };
                 let mut checked = (*list).clone();
                 for (k, v) in list.iter() {
                     let coerced = match self.check_type(ty, &v.deref(), strict)? {
@@ -1691,10 +1712,10 @@ impl Context<'_> {
                         }
                     }
                 }
-                regs[base + i] = Value::Array(Rc::new(checked));
+                regs[base + i] = Value::array(checked);
                 continue;
             }
-            if i >= argc || matches!(regs[base + i], Value::Undef) || ty.quick(&regs[base + i]) {
+            if i >= argc || regs[base + i].is_undef() || ty.quick(&regs[base + i]) {
                 continue;
             }
             let v = regs[base + i].deref();
@@ -1706,9 +1727,9 @@ impl Context<'_> {
                 },
             };
             if let Some(converted) = converted {
-                match &regs[base + i] {
-                    Value::Ref(cell) => *cell.borrow_mut() = converted,
-                    _ => regs[base + i] = converted,
+                match regs[base + i].as_reference() {
+                    Some(cell) => *cell.borrow_mut() = converted,
+                    None => regs[base + i] = converted,
                 }
             }
         }
@@ -1718,14 +1739,12 @@ impl Context<'_> {
     /// Coercive typing's last resort: an object with __toString() for a
     /// type that takes a string, as the string (None: not so).
     pub(crate) fn stringable(&mut self, regs: &mut Vec<Value>, ty: &p8_runtime::types::TypeDecl, v: &Value, strict: bool) -> Result<Option<Value>, Throw> {
-        let Value::Object(o) = v else { return Ok(None) };
+        let Some(o) = v.as_object() else { return Ok(None) };
         if strict || ty.mask & p8_runtime::types::T_STRING == 0 || o.class.method(b"__tostring").is_none() {
             return Ok(None);
         }
-        Ok(match self.string_of(regs, v.clone())? {
-            s @ Value::Str(_) => Some(s),
-            _ => None,
-        })
+        let s = self.string_of(regs, v.clone())?;
+        Ok(if s.is_str() { Some(s) } else { None })
     }
 
     fn arg_type_error(&self, pos: usize, name: Option<&p8_runtime::frozen::Text>, ty: &p8_runtime::types::TypeDecl, v: &Value, called_at: Option<(Rc<str>, u32)>) -> Throw {
@@ -1769,7 +1788,7 @@ impl Context<'_> {
     /// `(object) $v`: an object as is; an array's entries as a stdClass's
     /// properties; null an empty stdClass; another value its `scalar`.
     pub(crate) fn object_cast(&mut self, v: Value) -> Value {
-        if let Value::Object(_) = v {
+        if v.is_object() {
             return v;
         }
         if v.is_nan() {
@@ -1779,19 +1798,16 @@ impl Context<'_> {
         let o = Object::new(class, &self.ids);
         {
             let mut props = o.dynamic.borrow_mut();
-            match v {
-                Value::Null | Value::Undef => {}
-                Value::Array(a) => {
-                    for (k, v) in a.iter() {
-                        props.insert(k, v.clone());
-                    }
+            if v.is_null_or_undef() {
+            } else if let Some(a) = v.as_array() {
+                for (k, v) in a.iter() {
+                    props.insert(k, v.clone());
                 }
-                v => {
-                    props.insert(Key::from_string(PhpStr::from("scalar")), v);
-                }
+            } else {
+                props.insert(Key::from_string(PhpStr::from("scalar")), v);
             }
         }
-        Value::Object(o)
+        Value::object(o)
     }
 
     /// `isset(C::$name)`: declared, visible here, and not null (an
@@ -1801,7 +1817,7 @@ impl Context<'_> {
         let Some(name) = name.to_php_string() else { return Ok(false) };
         let Some((cell, visibility, declaring)) = class.statics.get(name.as_bytes()) else { return Ok(false) };
         let declaring = self.class_named(declaring).cloned().unwrap_or_else(|| Rc::clone(&class));
-        Ok(visible(*visibility, &declaring, self.scope().0.as_deref()) && !matches!(cell.borrow().deref(), Value::Null | Value::Undef))
+        Ok(visible(*visibility, &declaring, self.scope().0.as_deref()) && !cell.borrow().deref().is_null_or_undef())
     }
 
     /// The cell of static property `C::$name`.
@@ -1825,13 +1841,19 @@ impl Context<'_> {
 
     /// `$x instanceof C` (an unknown class: false).
     pub(crate) fn instance_of(&self, func: &Function, v: &Value, class: u16, w: &[Value]) -> bool {
-        let Value::Object(o) = v.deref() else { return false };
+        let v = v.deref();
+        let Some(o) = v.as_object() else { return false };
         match &func.classes[class as usize] {
-            ClassRef::Dynamic(r) => match w[*r as usize].deref() {
-                Value::Object(c) => o.class.is_a(&c.class.lower),
-                Value::Str(name) => self.is_a_named(&o.class, &name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase()),
-                _ => false,
-            },
+            ClassRef::Dynamic(r) => {
+                let c = w[*r as usize].deref();
+                if let Some(c) = c.as_object() {
+                    o.class.is_a(&c.class.lower)
+                } else if let Some(name) = c.as_str() {
+                    self.is_a_named(&o.class, &name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes()).to_ascii_lowercase())
+                } else {
+                    false
+                }
+            }
             ClassRef::Named(name) | ClassRef::Forward(name) => o.class.is_a(name.lower.as_bytes()) || self.classes.get(&name.sym).is_some_and(|c| c.lower != name.lower.as_bytes() && o.class.is_a(&c.lower)),
             ClassRef::Static => self.scope().1.is_some_and(|c| o.class.is_a(&c.lower)),
             ClassRef::Scope => self.scope().0.is_some_and(|c| o.class.is_a(&c.lower)),
@@ -1848,9 +1870,12 @@ impl Context<'_> {
 
     /// `clone $x`: the copy, and its `__clone`'s frame (if any).
     pub(crate) fn clone_object(&mut self, v: &Value) -> Result<(Rc<Object>, Option<MethodFrame>), Throw> {
-        let Value::Object(o) = v.deref() else {
-            let given = p8_runtime::args::value_name(&v.deref());
-            return Err(self.throw("TypeError", format!("clone(): Argument #1 ($object) must be of type object, {given} given")));
+        let o = match v.deref().into_object() {
+            Ok(o) => o,
+            Err(v) => {
+                let given = p8_runtime::args::value_name(&v);
+                return Err(self.throw("TypeError", format!("clone(): Argument #1 ($object) must be of type object, {given} given")));
+            }
         };
         if o.class.flags & p8_runtime::object::CLASS_UNCLONEABLE != 0 {
             return Err(self.throw("Error", format!("Trying to clone an uncloneable object of class {}", text(&o.class.name))));
@@ -1858,11 +1883,11 @@ impl Context<'_> {
         // An initialized lazy proxy: a new proxy for a clone of the instance;
         // the instance's __clone runs, the proxy's doesn't.
         if let Some(inst) = o.proxy_instance() {
-            let (inst_copy, hook) = self.clone_object(&Value::Object(inst))?;
+            let (inst_copy, hook) = self.clone_object(&Value::object(inst))?;
             let copy = o.copy();
             copy.lazy.set(p8_runtime::object::LAZY_PROXY);
             *copy.lazy_info.borrow_mut() = Some(Box::new(p8_runtime::object::Lazy {
-                initializer: Value::Null,
+                initializer: Value::NULL,
                 options: o.lazy_info.borrow().as_ref().map_or(0, |l| l.options),
                 lazy_slots: vec![true; o.class.properties.len()],
                 instance: Some(inst_copy),
@@ -1902,7 +1927,7 @@ impl Context<'_> {
         if object.is_uninit_lazy() {
             self.lazy_init(regs, object)?;
         }
-        let (copy, hook) = self.clone_object(&Value::Object(Rc::clone(object)))?;
+        let (copy, hook) = self.clone_object(&Value::object(Rc::clone(object)))?;
         if let Some(hook) = hook {
             self.run_clone_hook(regs, &copy, hook)?;
         }
@@ -1914,21 +1939,22 @@ impl Context<'_> {
             }
             r?;
         }
-        Ok(Value::Object(copy))
+        Ok(Value::object(copy))
     }
 
     fn clone_updates(&mut self, regs: &mut Vec<Value>, copy: &Rc<Object>, with: &PhpArray) -> Result<(), Throw> {
-        let target = Value::Object(Rc::clone(copy));
+        let target = Value::object(Rc::clone(copy));
         for (key, value) in with.iter() {
-            let value = match value {
+            let value = match value.as_reference() {
                 // A reference only the array holds is its value.
-                Value::Ref(cell) if Rc::strong_count(cell) == 1 => cell.borrow().clone(),
-                Value::Ref(_) => return Err(self.throw("Error", "Cannot assign by reference when cloning with updated properties")),
-                v => v.clone(),
+                Some(cell) if Rc::strong_count(cell) == 1 => cell.borrow().clone(),
+                Some(_) => return Err(self.throw("Error", "Cannot assign by reference when cloning with updated properties")),
+                None => value.clone(),
             };
-            let name = match key.to_value() {
-                Value::Int(n) => Value::Str(PhpStr::new(n.to_string().into_bytes())),
-                name => name,
+            let name = key.to_value();
+            let name = match name.as_int() {
+                Some(n) => Value::str(PhpStr::new(n.to_string().into_bytes())),
+                None => name,
             };
             self.assign_prop_value(regs, &target, &name, value)?;
         }
@@ -1943,7 +1969,7 @@ impl Context<'_> {
             return Ok(());
         }
         if let Some(found) = self.prop_magic(target, name, Magic::Set) {
-            let pname = Value::Str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+            let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
             self.run_magic(regs, found, &mut [pname, value])?;
             return Ok(());
         }
@@ -2019,7 +2045,7 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     let slots = o.slots.borrow();
     let mut out = p8_runtime::array::PhpArray::hashed(slots.len() + o.dynamic.borrow().len());
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-        if matches!(v, Value::Undef) || p.is_internal() {
+        if v.is_undef() || p.is_internal() {
             continue;
         }
         // A public property's key is its name itself; the others' are
@@ -2068,7 +2094,7 @@ impl EnumMembers<'_> {
         }
         let prop = |n: &str, ty: &str| Property {
             name: PhpStr::from(n),
-            default: Value::Undef,
+            default: Value::UNDEF,
             visibility: Visibility::Public,
             set_visibility: Some(Visibility::Protected),
             declaring: declaring.to_vec(),

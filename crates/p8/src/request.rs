@@ -10,7 +10,6 @@ use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 /// The ini settings that shape parsing.
 pub struct Limits {
@@ -82,10 +81,10 @@ pub fn parse(input: &Input, limits: &Limits) -> Parsed {
 /// php_autoglobal_merge(): arrays merge, anything else replaces.
 fn autoglobal_merge(dest: &mut PhpArray, src: &PhpArray) {
     for (key, value) in src.iter() {
-        if let Value::Array(s) = value
-            && let Some(Value::Array(d)) = dest.get_mut(&key)
+        if let Some(s) = value.as_array()
+            && let Some(d) = dest.get_mut(&key).and_then(Value::array_mut)
         {
-            autoglobal_merge(Rc::make_mut(d), s);
+            autoglobal_merge(d, s);
             continue;
         }
         dest.insert(key, value.clone());
@@ -146,7 +145,7 @@ fn treat_data(dest: &mut PhpArray, data: &[u8], separators: &[u8], cookie: bool,
             None => (var, Vec::new()),
         };
         let name = if cookie { name.to_vec() } else { url_decode(name, false) };
-        register_variable(dest, &name, Value::Str(PhpStr::new(value)), cookie, limits.max_input_nesting_level, warnings);
+        register_variable(dest, &name, Value::str(PhpStr::new(value)), cookie, limits.max_input_nesting_level, warnings);
     }
 }
 
@@ -178,7 +177,7 @@ fn post(input: &Input, content_type: &[u8], limits: &Limits, out: &mut Parsed) {
                     break;
                 }
                 let name = url_decode(name, false);
-                register_variable(&mut out.post, &name, Value::Str(PhpStr::new(value)), false, limits.max_input_nesting_level, &mut out.warnings);
+                register_variable(&mut out.post, &name, Value::str(PhpStr::new(value)), false, limits.max_input_nesting_level, &mut out.warnings);
             }
         }
         b"multipart/form-data" => multipart(input.body, content_type, limits, too_big, out),
@@ -319,17 +318,14 @@ fn child_array(table: &mut PhpArray, k: Option<Key>) -> Option<&mut PhpArray> {
         Some(k) => k,
         None => {
             let next = table.next_key().unwrap_or(0);
-            table.push(Value::Array(Rc::new(PhpArray::new()))).ok()?;
+            table.push(Value::array(PhpArray::new())).ok()?;
             Key::Int(next)
         }
     };
-    if !matches!(table.get(&k), Some(Value::Array(_))) {
-        table.insert(k.clone(), Value::Array(Rc::new(PhpArray::new())));
+    if !table.get(&k).is_some_and(Value::is_array) {
+        table.insert(k.clone(), Value::array(PhpArray::new()));
     }
-    match table.get_mut(&k) {
-        Some(Value::Array(rc)) => Some(Rc::make_mut(rc)),
-        _ => None,
-    }
+    table.get_mut(&k).and_then(Value::array_mut)
 }
 
 fn plain_var(table: &mut PhpArray, var: &[u8], index: Option<(usize, usize)>, value: Value, cookie_top: bool, pre: &[u8], _warnings: &mut Vec<String>) {
@@ -475,7 +471,7 @@ impl Uploads {
 }
 
 fn text(s: &[u8]) -> Value {
-    Value::Str(PhpStr::from(s))
+    Value::str(PhpStr::from(s))
 }
 
 /// A temporary file for an upload: `php` and six random letters or digits.
@@ -821,8 +817,8 @@ fn multipart(body: &[u8], content_type: &[u8], limits: &Limits, too_big: bool, o
         uploads.protected.insert(normalize_protected(&tmp_name));
         let tmp_value = temp.as_ref().map_or_else(Vec::new, |p| p.to_string_lossy().into_owned().into_bytes());
         uploads.register(files, &tmp_name, text(&tmp_value), true, limits, w);
-        uploads.register(files, &field("error"), Value::Int(cancel), false, limits, w);
-        uploads.register(files, &field("size"), Value::Int(if cancel != 0 { 0 } else { total }), false, limits, w);
+        uploads.register(files, &field("error"), Value::int(cancel), false, limits, w);
+        uploads.register(files, &field("size"), Value::int(if cancel != 0 { 0 } else { total }), false, limits, w);
     }
 }
 

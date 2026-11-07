@@ -35,7 +35,7 @@ impl Context<'_> {
     /// The uninitialized lazy object an access to `name` on `target` must
     /// initialize first.
     pub(crate) fn lazy_pending(&self, target: &Value, name: &Value) -> Option<Rc<Object>> {
-        let Value::Object(o) = target else { return None };
+        let o = target.as_object()?;
         if !o.is_uninit_lazy() {
             return None;
         }
@@ -46,7 +46,7 @@ impl Context<'_> {
     /// Where an access to `name` on an initialized proxy goes: its real
     /// instance (followed through proxies of proxies).
     pub(crate) fn lazy_forward(&self, target: &Value, name: &Value) -> Option<Value> {
-        let Value::Object(o) = target else { return None };
+        let o = target.as_object()?;
         if o.lazy.get() != LAZY_PROXY {
             return None;
         }
@@ -58,7 +58,7 @@ impl Context<'_> {
         while let Some(next) = inst.proxy_instance() {
             inst = next;
         }
-        Some(Value::Object(inst))
+        Some(Value::object(inst))
     }
 
     /// zend_object_make_lazy: `obj` (or a new instance of `class`) made
@@ -103,7 +103,7 @@ impl Context<'_> {
                     }
                     if options & SKIP_DESTRUCTOR == 0 && !o.destructed.get() && o.class.method(b"__destruct").is_some() {
                         o.destructed.set(true);
-                        let m = self.method_frame(&Value::Object(Rc::clone(&o)), Some(p8_runtime::symbol::known::DESTRUCT), b"__destruct")?;
+                        let m = self.method_frame(&Value::object(Rc::clone(&o)), Some(p8_runtime::symbol::known::DESTRUCT), b"__destruct")?;
                         let mut regs = std::mem::take(&mut self.isolate.regs);
                         let r = self.run_nested(&mut regs, m, &mut []);
                         self.isolate.regs = regs;
@@ -126,11 +126,11 @@ impl Context<'_> {
                 if p.is_internal() || p.hooks & p8_runtime::object::HOOK_VIRTUAL != 0 {
                     continue;
                 }
-                let keep = p.readonly && !matches!(slots[i], Value::Undef) && o.class.flags & p8_runtime::object::CLASS_FINAL != 0;
+                let keep = p.readonly && !slots[i].is_undef() && o.class.flags & p8_runtime::object::CLASS_FINAL != 0;
                 if keep {
                     continue;
                 }
-                slots[i] = Value::Undef;
+                slots[i] = Value::UNDEF;
                 lazy_slots[i] = true;
                 count += 1;
             }
@@ -191,7 +191,7 @@ impl Context<'_> {
         if !o.is_uninit_lazy() {
             return Ok(Rc::clone(o));
         }
-        let initializer = o.lazy_info.borrow().as_ref().map(|l| l.initializer.clone()).unwrap_or(Value::Null);
+        let initializer = o.lazy_info.borrow().as_ref().map(|l| l.initializer.clone()).unwrap_or(Value::NULL);
         if o.lazy.get() & LAZY_PROXY != 0 {
             return self.lazy_init_proxy(regs, o, initializer);
         }
@@ -212,7 +212,7 @@ impl Context<'_> {
                 }
             }
         }
-        let r = self.call_with_regs(regs, &initializer, &mut [Value::Object(Rc::clone(o))]);
+        let r = self.call_with_regs(regs, &initializer, &mut [Value::object(Rc::clone(o))]);
         let revert = |o: &Rc<Object>| {
             *o.slots.borrow_mut() = snapshot.clone();
             *o.dynamic.borrow_mut() = dyn_snapshot.clone();
@@ -223,7 +223,7 @@ impl Context<'_> {
                 revert(o);
                 Err(t)
             }
-            Ok(v) if !matches!(v.deref(), Value::Null) => {
+            Ok(v) if !v.deref().is_null() => {
                 revert(o);
                 Err(self.throw("TypeError", "Lazy object initializer must return NULL or no value"))
             }
@@ -237,7 +237,7 @@ impl Context<'_> {
     fn lazy_init_proxy(&mut self, regs: &mut Vec<Value>, o: &Rc<Object>, factory: Value) -> Result<Rc<Object>, Throw> {
         // No reentrant initialization while the factory runs.
         o.lazy.set(0);
-        let r = self.call_with_regs(regs, &factory, &mut [Value::Object(Rc::clone(o))]);
+        let r = self.call_with_regs(regs, &factory, &mut [Value::object(Rc::clone(o))]);
         let restore = |o: &Rc<Object>| o.lazy.set(LAZY_UNINIT | LAZY_PROXY);
         let v = match r {
             Ok(v) => v.deref(),
@@ -246,16 +246,19 @@ impl Context<'_> {
                 return Err(t);
             }
         };
-        let Value::Object(inst) = v else {
-            restore(o);
-            return Err(self.throw(
-                "TypeError",
-                format!(
-                    "Lazy proxy factory must return an instance of a class compatible with {}, {} returned",
-                    text(&o.class.name),
-                    p8_runtime::args::value_name(&v)
-                ),
-            ));
+        let inst = match v.into_object() {
+            Ok(inst) => inst,
+            Err(v) => {
+                restore(o);
+                return Err(self.throw(
+                    "TypeError",
+                    format!(
+                        "Lazy proxy factory must return an instance of a class compatible with {}, {} returned",
+                        text(&o.class.name),
+                        p8_runtime::args::value_name(&v)
+                    ),
+                ));
+            }
         };
         let compatible = Rc::ptr_eq(&inst.class, &o.class)
             || (o.class.is_a(&inst.class.lower)
@@ -284,13 +287,13 @@ impl Context<'_> {
             let mut slots = o.slots.borrow_mut();
             for (i, p) in o.class.properties.iter().enumerate() {
                 if !p.is_internal() {
-                    slots[i] = Value::Undef;
+                    slots[i] = Value::UNDEF;
                 }
             }
         }
         if let Some(l) = o.lazy_info.borrow_mut().as_mut() {
             l.instance = Some(Rc::clone(&inst));
-            l.initializer = Value::Null;
+            l.initializer = Value::NULL;
             l.lazy_slots = vec![true; n];
         }
         o.lazy.set(LAZY_PROXY);

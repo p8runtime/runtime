@@ -438,8 +438,9 @@ impl Context<'_> {
     pub fn serve(&mut self, request: &Request, carried: Option<Carried>) {
         use request::{Input, Limits};
         let ini = |inner: &p8_interp::Context, name: &str| match Ctx::ini_get(inner, name.as_bytes()) {
-            Some(Value::Str(s)) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
-            Some(Value::Null) | None => None,
+            Some(v) if v.is_str() => Some(String::from_utf8_lossy(v.as_str().expect("a string").as_bytes()).into_owned()),
+            Some(v) if v.is_null() => None,
+            None => None,
             Some(v) => v.to_php_string().map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned()),
         };
         let number = |inner: &p8_interp::Context, name: &str, default: i64| ini(inner, name).map_or(default, |v| ini_number(&v));
@@ -465,7 +466,7 @@ impl Context<'_> {
         let mut warnings = Vec::new();
         let mut server = PhpArray::new();
         for (name, value, known) in &request.server {
-            let value = Value::Str(PhpStr::from(value.as_slice()));
+            let value = Value::str(PhpStr::from(value.as_slice()));
             if *known {
                 server.insert(Key::Str(PhpStr::from(name.as_slice())), value);
             } else {
@@ -477,28 +478,28 @@ impl Context<'_> {
                 if let Some(decoded) = request::base64_decode(&auth[6..])
                     && let Some(colon) = decoded.iter().position(|&c| c == b':')
                 {
-                    server.insert(Key::Str(PhpStr::from("PHP_AUTH_USER")), Value::Str(PhpStr::from(&decoded[..colon])));
+                    server.insert(Key::Str(PhpStr::from("PHP_AUTH_USER")), Value::str(PhpStr::from(&decoded[..colon])));
                     if colon + 1 < decoded.len() {
-                        server.insert(Key::Str(PhpStr::from("PHP_AUTH_PW")), Value::Str(PhpStr::from(&decoded[colon + 1..])));
+                        server.insert(Key::Str(PhpStr::from("PHP_AUTH_PW")), Value::str(PhpStr::from(&decoded[colon + 1..])));
                     }
                 }
             } else if auth.len() > 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
-                server.insert(Key::Str(PhpStr::from("PHP_AUTH_DIGEST")), Value::Str(PhpStr::from(&auth[7..])));
+                server.insert(Key::Str(PhpStr::from("PHP_AUTH_DIGEST")), Value::str(PhpStr::from(&auth[7..])));
             }
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        server.insert(Key::Str(PhpStr::from("REQUEST_TIME_FLOAT")), Value::Float(now.as_secs_f64()));
-        server.insert(Key::Str(PhpStr::from("REQUEST_TIME")), Value::Int(now.as_secs() as i64));
+        server.insert(Key::Str(PhpStr::from("REQUEST_TIME_FLOAT")), Value::float(now.as_secs_f64()));
+        server.insert(Key::Str(PhpStr::from("REQUEST_TIME")), Value::int(now.as_secs() as i64));
         let register_argv = !matches!(ini(&self.inner, "register_argc_argv").as_deref(), Some("" | "0" | "off" | "no" | "false"));
         if register_argv {
             // php_build_argv(): the query string split on '+'.
             let argv: Vec<Value> = match request.query.as_deref() {
-                Some(q) if !q.is_empty() => q.split(|&c| c == b'+').map(|a| Value::Str(PhpStr::from(a))).collect(),
+                Some(q) if !q.is_empty() => q.split(|&c| c == b'+').map(|a| Value::str(PhpStr::from(a))).collect(),
                 _ => Vec::new(),
             };
             let argc = argv.len() as i64;
-            server.insert(Key::Str(PhpStr::from("argv")), Value::Array(Rc::new(PhpArray::from_list(argv))));
-            server.insert(Key::Str(PhpStr::from("argc")), Value::Int(argc));
+            server.insert(Key::Str(PhpStr::from("argv")), Value::array(PhpArray::from_list(argv)));
+            server.insert(Key::Str(PhpStr::from("argc")), Value::int(argc));
         }
         let mut globals = p8_interp::RequestGlobals { server, get: parsed.get, post: parsed.post, cookie: parsed.cookie, files: parsed.files, request: parsed.request };
         // A router that declined the request left its arrays as they were.
@@ -509,14 +510,14 @@ impl Context<'_> {
         // php://input: the body, except what the multipart parser took.
         let multipart = content_type.is_some_and(|ct| ct.len() >= 19 && ct[..19].eq_ignore_ascii_case(b"multipart/form-data"));
         let input = if request.method == "POST" && multipart { Vec::new() } else { request.body.clone() };
-        self.inner.set_state("php_input", Value::Str(PhpStr::new(input)));
+        self.inner.set_state("php_input", Value::str(PhpStr::new(input)));
         let mut headers = PhpArray::new();
         for (name, value) in &request.headers_original {
-            headers.insert(Key::from_string(PhpStr::from(name.as_slice())), Value::Str(PhpStr::from(value.as_slice())));
+            headers.insert(Key::from_string(PhpStr::from(name.as_slice())), Value::str(PhpStr::from(value.as_slice())));
         }
-        self.inner.set_state(p8_ext_standard::server::REQUEST_HEADERS, Value::Array(Rc::new(headers)));
-        let uploaded: Vec<Value> = self.uploads.iter().map(|p| Value::Str(PhpStr::from(p.to_string_lossy().as_ref()))).collect();
-        self.inner.set_state("rfc1867_uploaded_files", Value::Array(Rc::new(PhpArray::from_list(uploaded))));
+        self.inner.set_state(p8_ext_standard::server::REQUEST_HEADERS, Value::array(headers));
+        let uploaded: Vec<Value> = self.uploads.iter().map(|p| Value::str(PhpStr::from(p.to_string_lossy().as_ref()))).collect();
+        self.inner.set_state("rfc1867_uploaded_files", Value::array(PhpArray::from_list(uploaded)));
 
         let mut headers = Vec::new();
         if ini(&self.inner, "expose_php").is_none_or(|v| ini_bool(&v)) {
@@ -531,7 +532,7 @@ impl Context<'_> {
     /// the request): the request arrays it left, for the script that serves
     /// the request instead ([`Context::serve`]).
     pub fn declined(&mut self) -> Option<Carried> {
-        let declined = matches!(self.inner.take_main_return(), Some(Value::Bool(false)));
+        let declined = self.inner.take_main_return().is_some_and(|v| v.as_bool() == Some(false));
         let carried = self.inner.take_carry();
         declined.then_some(Carried(carried))
     }

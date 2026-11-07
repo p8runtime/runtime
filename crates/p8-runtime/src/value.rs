@@ -5,7 +5,7 @@
 
 use crate::array::PhpArray;
 use crate::object::Object;
-use crate::string::PhpStr;
+use crate::string::{PhpStr, StrHead};
 use crate::numeric::{Number, leading_numeric, numeric_string};
 use crate::number::{Precision, dval_to_lval, float_to_string};
 use std::borrow::Cow;
@@ -48,11 +48,404 @@ impl Clone for Value {
     }
 }
 
+/// The kind of a value: one per PHP type, and Undef. This is the tag code
+/// outside this module dispatches on; it stays as it is when the
+/// representation gains variants (a program-memory string is `Kind::Str`,
+/// a program-memory array `Kind::Array`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Null,
+    Bool,
+    Int,
+    Float,
+    Str,
+    Array,
+    Ref,
+    Object,
+    Undef,
+}
+
+/// The accessor API: the only way code outside this module reads, writes
+/// or builds a `Value`. Nothing here names a variant to its callers, so
+/// the representation can change underneath (`IStr`/`IArr` variants, a
+/// `Drop` impl, a newtype over a private enum) without touching them.
+///
+/// - Constructors: the consts and `bool`/`int`/`float`/`str`/`array`/
+///   `object`/`reference`, and `From`.
+/// - `kind()` for an exhaustive dispatch; `is_*` for one test.
+/// - Borrowing views `as_*`: a scalar by value, a string as its
+///   [`StrHead`], an array as the [`PhpArray`] behind its handle, an
+///   object or a reference as its `Rc`. `as_int_mut` writes an int in
+///   place; `array_mut` separates a shared array (`Rc::make_mut`) and
+///   `str_mut`/`str_push` a shared string.
+/// - `cloned_*`: an owned handle, the value kept.
+/// - `into_*`: the handle out of a value being consumed. These never
+///   destructure a `Value` by move, so they stay legal under a `Drop`
+///   impl (there: `mem::replace` on the inner enum, then `mem::forget`).
 impl Value {
+    pub const NULL: Value = Value::Null;
+    pub const UNDEF: Value = Value::Undef;
+    pub const TRUE: Value = Value::Bool(true);
+    pub const FALSE: Value = Value::Bool(false);
+
+    #[inline(always)]
+    pub const fn bool(b: bool) -> Value {
+        Value::Bool(b)
+    }
+
+    #[inline(always)]
+    pub const fn int(i: i64) -> Value {
+        Value::Int(i)
+    }
+
+    #[inline(always)]
+    pub const fn float(f: f64) -> Value {
+        Value::Float(f)
+    }
+
     pub fn str(s: impl Into<PhpStr>) -> Value {
         Value::Str(s.into())
     }
 
+    /// An array value: from a `PhpArray` (one allocation for the handle)
+    /// or an `Rc<PhpArray>` already shared.
+    #[inline(always)]
+    pub fn array(a: impl Into<Rc<PhpArray>>) -> Value {
+        Value::Array(a.into())
+    }
+
+    #[inline(always)]
+    pub fn object(o: impl Into<Rc<Object>>) -> Value {
+        Value::Object(o.into())
+    }
+
+    /// A PHP reference to the cell `$a = &$b` shares.
+    #[inline(always)]
+    pub fn reference(cell: Rc<RefCell<Value>>) -> Value {
+        Value::Ref(cell)
+    }
+
+    /// A PHP reference to a fresh cell holding `v`.
+    pub fn new_reference(v: Value) -> Value {
+        Value::Ref(Rc::new(RefCell::new(v)))
+    }
+
+    #[inline(always)]
+    pub fn kind(&self) -> Kind {
+        match self {
+            Value::Null => Kind::Null,
+            Value::Bool(_) => Kind::Bool,
+            Value::Int(_) => Kind::Int,
+            Value::Float(_) => Kind::Float,
+            Value::Str(_) => Kind::Str,
+            Value::Array(_) => Kind::Array,
+            Value::Ref(_) => Kind::Ref,
+            Value::Object(_) => Kind::Object,
+            Value::Undef => Kind::Undef,
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
+
+    #[inline(always)]
+    pub fn is_undef(&self) -> bool {
+        matches!(self, Value::Undef)
+    }
+
+    /// Null or undefined: what reads as null (isset is false, the type
+    /// name is "null").
+    #[inline(always)]
+    pub fn is_null_or_undef(&self) -> bool {
+        matches!(self, Value::Null | Value::Undef)
+    }
+
+    #[inline(always)]
+    pub fn is_bool(&self) -> bool {
+        matches!(self, Value::Bool(_))
+    }
+
+    #[inline(always)]
+    pub fn is_int(&self) -> bool {
+        matches!(self, Value::Int(_))
+    }
+
+    #[inline(always)]
+    pub fn is_float(&self) -> bool {
+        matches!(self, Value::Float(_))
+    }
+
+    /// An int or a float.
+    #[inline(always)]
+    pub fn is_number(&self) -> bool {
+        matches!(self, Value::Int(_) | Value::Float(_))
+    }
+
+    #[inline(always)]
+    pub fn is_str(&self) -> bool {
+        matches!(self, Value::Str(_))
+    }
+
+    #[inline(always)]
+    pub fn is_array(&self) -> bool {
+        matches!(self, Value::Array(_))
+    }
+
+    #[inline(always)]
+    pub fn is_object(&self) -> bool {
+        matches!(self, Value::Object(_))
+    }
+
+    #[inline(always)]
+    pub fn is_reference(&self) -> bool {
+        matches!(self, Value::Ref(_))
+    }
+
+    /// Whether the value holds nothing to release (null, a bool, an int,
+    /// a float, undefined): overwriting it is a store. The scalars are
+    /// listed, so any value holding memory is not plain.
+    #[inline(always)]
+    pub fn is_plain(&self) -> bool {
+        matches!(self, Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Undef)
+    }
+
+    #[inline(always)]
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Value::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            Value::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    /// The int, for writing in place.
+    #[inline(always)]
+    pub fn as_int_mut(&mut self) -> Option<&mut i64> {
+        match self {
+            Value::Int(i) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// The float, for writing in place.
+    #[inline(always)]
+    pub fn as_float_mut(&mut self) -> Option<&mut f64> {
+        match self {
+            Value::Float(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// The string, read through its head (bytes, length, hash). To own
+    /// it, `cloned_str`; to consume the value, `into_str`.
+    #[inline(always)]
+    pub fn as_str(&self) -> Option<&StrHead> {
+        match self {
+            Value::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The array, for reading. To write, `array_mut`.
+    #[inline(always)]
+    pub fn as_array(&self) -> Option<&PhpArray> {
+        match self {
+            Value::Array(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_object(&self) -> Option<&Rc<Object>> {
+        match self {
+            Value::Object(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    /// The cell a PHP reference shares.
+    #[inline(always)]
+    pub fn as_reference(&self) -> Option<&Rc<RefCell<Value>>> {
+        match self {
+            Value::Ref(cell) => Some(cell),
+            _ => None,
+        }
+    }
+
+    /// The array, for writing: separated first if shared (`Rc::make_mut`,
+    /// PHP's SEPARATE_ARRAY). A program-memory array is copied here too.
+    #[inline(always)]
+    pub fn array_mut(&mut self) -> Option<&mut PhpArray> {
+        match self {
+            Value::Array(a) => Some(Rc::make_mut(a)),
+            _ => None,
+        }
+    }
+
+    /// The string's bytes, for writing: separated first if shared
+    /// (`PhpStr::make_mut`).
+    pub fn str_mut(&mut self) -> Option<&mut Vec<u8>> {
+        match self {
+            Value::Str(s) => Some(s.make_mut()),
+            _ => None,
+        }
+    }
+
+    /// Append to the string, as `.=` does (in place when it is the only
+    /// holder). False, nothing done, when this is not a string.
+    pub fn str_push(&mut self, bytes: &[u8]) -> bool {
+        match self {
+            Value::Str(s) => {
+                s.push_bytes(bytes);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    #[inline(always)]
+    pub fn cloned_str(&self) -> Option<PhpStr> {
+        match self {
+            Value::Str(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// The array's handle (shared, not copied). Own one to write or to
+    /// keep an array apart from the value; to read, `as_array`.
+    #[inline(always)]
+    pub fn cloned_array(&self) -> Option<Rc<PhpArray>> {
+        match self {
+            Value::Array(a) => Some(Rc::clone(a)),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn cloned_object(&self) -> Option<Rc<Object>> {
+        match self {
+            Value::Object(o) => Some(Rc::clone(o)),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn cloned_reference(&self) -> Option<Rc<RefCell<Value>>> {
+        match self {
+            Value::Ref(cell) => Some(Rc::clone(cell)),
+            _ => None,
+        }
+    }
+
+    /// The string out of a value being consumed; the value back when it
+    /// is not one.
+    #[inline]
+    pub fn into_str(self) -> Result<PhpStr, Value> {
+        match self {
+            Value::Str(s) => Ok(s),
+            v => Err(v),
+        }
+    }
+
+    #[inline]
+    pub fn into_array(self) -> Result<Rc<PhpArray>, Value> {
+        match self {
+            Value::Array(a) => Ok(a),
+            v => Err(v),
+        }
+    }
+
+    #[inline]
+    pub fn into_object(self) -> Result<Rc<Object>, Value> {
+        match self {
+            Value::Object(o) => Ok(o),
+            v => Err(v),
+        }
+    }
+
+    #[inline]
+    pub fn into_reference(self) -> Result<Rc<RefCell<Value>>, Value> {
+        match self {
+            Value::Ref(cell) => Ok(cell),
+            v => Err(v),
+        }
+    }
+}
+
+impl From<bool> for Value {
+    #[inline(always)]
+    fn from(b: bool) -> Value {
+        Value::Bool(b)
+    }
+}
+
+impl From<i64> for Value {
+    #[inline(always)]
+    fn from(i: i64) -> Value {
+        Value::Int(i)
+    }
+}
+
+impl From<f64> for Value {
+    #[inline(always)]
+    fn from(f: f64) -> Value {
+        Value::Float(f)
+    }
+}
+
+impl From<PhpStr> for Value {
+    #[inline(always)]
+    fn from(s: PhpStr) -> Value {
+        Value::Str(s)
+    }
+}
+
+impl From<Rc<PhpArray>> for Value {
+    #[inline(always)]
+    fn from(a: Rc<PhpArray>) -> Value {
+        Value::Array(a)
+    }
+}
+
+impl From<PhpArray> for Value {
+    #[inline(always)]
+    fn from(a: PhpArray) -> Value {
+        Value::Array(Rc::new(a))
+    }
+}
+
+impl From<Rc<Object>> for Value {
+    #[inline(always)]
+    fn from(o: Rc<Object>) -> Value {
+        Value::Object(o)
+    }
+}
+
+impl From<Rc<RefCell<Value>>> for Value {
+    #[inline(always)]
+    fn from(cell: Rc<RefCell<Value>>) -> Value {
+        Value::Ref(cell)
+    }
+}
+
+impl Value {
     /// The value itself, looking through a reference.
     #[inline]
     pub fn deref(&self) -> Value {

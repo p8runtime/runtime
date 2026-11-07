@@ -4,14 +4,65 @@
 
 use std::cell::Cell;
 use std::fmt;
+use std::ops::Deref;
 use std::rc::Rc;
 
+/// What a string handle points at: the bytes and the cached hash. This is
+/// the view a `Value` lends out ([`Value::as_str`]), whatever handle holds
+/// the string (today an `Rc`; a program-memory string later): read it
+/// through [`PhpStr`]'s `Deref`.
 #[derive(Clone)]
-struct Inner {
+pub struct StrHead {
     /// 0 until computed (a real hash of 0 is stored as 1).
     hash: Cell<u64>,
     bytes: Bytes,
 }
+
+impl StrHead {
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.as_bytes().is_empty()
+    }
+
+    /// The string's hash, computed on first use and kept. Nothing PHP
+    /// code sees depends on it (arrays keep insertion order).
+    #[inline]
+    pub fn hash(&self) -> u64 {
+        let cached = self.hash.get();
+        if cached != 0 {
+            return cached;
+        }
+        let h = hash_bytes(self.as_bytes()).max(1);
+        self.hash.set(h);
+        h
+    }
+}
+
+impl PartialEq for StrHead {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other) || (self.hash() == other.hash() && self.as_bytes() == other.as_bytes())
+    }
+}
+
+impl Eq for StrHead {}
+
+impl fmt::Debug for StrHead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", String::from_utf8_lossy(self.as_bytes()))
+    }
+}
+
+type Inner = StrHead;
 
 /// Up to this many bytes live in the string's own allocation.
 const INLINE: usize = 22;
@@ -204,19 +255,6 @@ impl PhpStr {
         Self::copy_of(&[b])
     }
 
-    #[inline]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.0.bytes.as_slice()
-    }
-
-    pub fn len(&self) -> usize {
-        self.as_bytes().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.as_bytes().is_empty()
-    }
-
     /// The bytes for writing; copies them first if the string is shared.
     pub fn make_mut(&mut self) -> &mut Vec<u8> {
         self.writable(0)
@@ -255,22 +293,19 @@ impl PhpStr {
         self.writable(bytes.len()).extend_from_slice(bytes);
     }
 
-    /// The string's hash, computed on first use and kept. Nothing PHP
-    /// code sees depends on it (arrays keep insertion order).
-    #[inline]
-    pub fn hash(&self) -> u64 {
-        let cached = self.0.hash.get();
-        if cached != 0 {
-            return cached;
-        }
-        let h = hash_bytes(self.as_bytes()).max(1);
-        self.0.hash.set(h);
-        h
-    }
-
     /// Whether two values share one string (no copy was made).
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         Rc::ptr_eq(&a.0, &b.0)
+    }
+}
+
+/// A handle reads as its head: `s.as_bytes()`, `s.len()`, `s.hash()`.
+impl Deref for PhpStr {
+    type Target = StrHead;
+
+    #[inline(always)]
+    fn deref(&self) -> &StrHead {
+        &self.0
     }
 }
 

@@ -499,7 +499,7 @@ impl Class {
     pub fn read(&self, object: &Object, name: &[u8], scope: &[u8]) -> Value {
         match self.slot(name, Some(scope)) {
             Some(i) => object.slots.borrow()[i].deref(),
-            None => Value::Undef,
+            None => Value::UNDEF,
         }
     }
 
@@ -779,7 +779,7 @@ impl Props {
         match &mut self.0 {
             PropsRepr::Inline { len, values } => {
                 for v in &mut values[..*len as usize] {
-                    *v = Value::Undef;
+                    *v = Value::UNDEF;
                 }
                 *len = 0;
             }
@@ -990,13 +990,13 @@ mod props_tests {
     #[test]
     fn a_few_properties_live_in_the_object_more_in_a_buffer() {
         for n in [0, 1, 3, 4, 5, 9] {
-            let values: Vec<Value> = (0..n).map(Value::Int).collect();
+            let values: Vec<Value> = (0..n).map(Value::int).collect();
             let mut p = Props::from_slice(&values);
             assert_eq!((p.len(), matches!(p.0, PropsRepr::Inline { .. })), (n as usize, n <= INLINE_PROPS as i64));
             assert!(p.iter().map(Value::to_int).eq(0..n));
             assert!(Props::from(values.clone()).iter().map(Value::to_int).eq(0..n));
             if n > 0 {
-                p[n as usize - 1] = Value::Int(99);
+                p[n as usize - 1] = Value::int(99);
                 assert_eq!(p.last().map(Value::to_int), Some(99));
             }
             let copy = p.clone();

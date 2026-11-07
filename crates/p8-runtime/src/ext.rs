@@ -447,11 +447,11 @@ pub enum Constant {
 impl Constant {
     pub fn to_value(self) -> Value {
         match self {
-            Constant::Null => Value::Null,
-            Constant::Bool(b) => Value::Bool(b),
-            Constant::Int(i) => Value::Int(i),
-            Constant::Float(f) => Value::Float(f),
-            Constant::Str(s) => Value::Str(PhpStr::from(s)),
+            Constant::Null => Value::NULL,
+            Constant::Bool(b) => Value::bool(b),
+            Constant::Int(i) => Value::int(i),
+            Constant::Float(f) => Value::float(f),
+            Constant::Str(s) => Value::str(PhpStr::from(s)),
         }
     }
 }

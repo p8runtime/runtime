@@ -167,15 +167,15 @@ fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty:
 /// Exception's and Error's properties, in PHP's order.
 fn throwable_props(root: &str) -> Vec<Property> {
     use Visibility::{Private, Protected};
-    let empty = || Value::Str(PhpStr::empty());
+    let empty = || Value::str(PhpStr::empty());
     vec![
         prop("message", empty(), Protected, root, None),
         prop("string", empty(), Private, root, Some("string")),
-        prop("code", Value::Int(0), Protected, root, None),
+        prop("code", Value::int(0), Protected, root, None),
         prop("file", empty(), Protected, root, Some("string")),
-        prop("line", Value::Int(0), Protected, root, Some("int")),
-        prop("trace", Value::Array(Rc::new(PhpArray::new())), Private, root, Some("array")),
-        prop("previous", Value::Null, Private, root, Some("?Throwable")),
+        prop("line", Value::int(0), Protected, root, Some("int")),
+        prop("trace", Value::array(PhpArray::new()), Private, root, Some("array")),
+        prop("previous", Value::NULL, Private, root, Some("?Throwable")),
     ]
 }
 
@@ -263,7 +263,7 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
         0,
         Some("Exception"),
         &[],
-        vec![prop("severity", Value::Int(1), Visibility::Protected, "ErrorException", Some("int"))],
+        vec![prop("severity", Value::int(1), Visibility::Protected, "ErrorException", Some("int"))],
         &[("__construct", Some(error_exception_construct), false), ("getSeverity", Some(get_severity), true)],
     );
     for (name, parent) in [
@@ -416,54 +416,54 @@ fn method_deprecation(class: &str, method: &str) -> Option<Rc<str>> {
 }
 
 fn gen_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    ctx.generator(this, "current", Value::Null)
+    ctx.generator(this, "current", Value::NULL)
 }
 
 fn gen_key(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    ctx.generator(this, "key", Value::Null)
+    ctx.generator(this, "key", Value::NULL)
 }
 
 fn gen_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    ctx.generator(this, "next", Value::Null)
+    ctx.generator(this, "next", Value::NULL)
 }
 
 fn gen_send(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let v = args.first().map(Value::deref).unwrap_or(Value::NULL);
     ctx.generator(this, "send", v)
 }
 
 fn gen_valid(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    ctx.generator(this, "valid", Value::Null)
+    ctx.generator(this, "valid", Value::NULL)
 }
 
 fn gen_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    ctx.generator(this, "rewind", Value::Null)
+    ctx.generator(this, "rewind", Value::NULL)
 }
 
 fn gen_get_return(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    ctx.generator(this, "getreturn", Value::Null)
+    ctx.generator(this, "getreturn", Value::NULL)
 }
 
 fn gen_throw(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     match args.first().map(Value::deref) {
-        Some(e @ Value::Object(_)) => ctx.generator(this, "throw", e),
+        Some(e) if e.is_object() => ctx.generator(this, "throw", e),
         _ => Err(ctx.throw("TypeError", "Generator::throw(): Argument #1 ($exception) must be of type Throwable".into())),
     }
 }
 
 /// An enum's cases(), in order.
 pub(crate) fn enum_cases(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let Some(class) = ctx.native_class() else { return Ok(Value::Null) };
+    let Some(class) = ctx.native_class() else { return Ok(Value::NULL) };
     let cases: Vec<Value> = class.enum_cases.iter().map(|n| ctx.enum_case(&class, n.as_bytes())).collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(cases))))
+    Ok(Value::array(PhpArray::from_list(cases)))
 }
 
 /// The case backed by `v` (converted to the backing type), if any.
 fn backed_case(ctx: &mut dyn Ctx, args: &[Value]) -> Result<(Rc<Class>, Value, Option<Value>), Throw> {
     let class = ctx.native_class().expect("an enum's method");
-    let v = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let v = args.first().map(Value::deref).unwrap_or(Value::NULL);
     let int = class.enum_backing.as_ref().is_some_and(|t| t.as_bytes() == b"int");
-    let v = if int { Value::Int(v.to_int()) } else { Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty)) };
+    let v = if int { Value::int(v.to_int()) } else { Value::str(v.to_php_string().unwrap_or_else(PhpStr::empty)) };
     let found = class.enum_cases.iter().find(|n| class.constants.get(n.as_bytes()).is_some_and(|c| c.value.identical(&v))).cloned();
     let case = found.map(|n| ctx.enum_case(&class, n.as_bytes()));
     Ok((class, v, case))
@@ -475,9 +475,9 @@ pub(crate) fn enum_from(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
     match case {
         Some(c) => Ok(c),
         None => {
-            let shown = match &v {
-                Value::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
-                other => String::from_utf8_lossy(other.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
+            let shown = match v.as_str() {
+                Some(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
+                None => String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
             };
             Err(ctx.throw("ValueError", format!("{shown} is not a valid backing value for enum {}", String::from_utf8_lossy(class.name.as_bytes()))))
         }
@@ -486,22 +486,22 @@ pub(crate) fn enum_from(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
 
 /// BackedEnum::tryFrom(int|string $value)
 pub(crate) fn enum_try_from(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(backed_case(ctx, args)?.2.unwrap_or(Value::Null))
+    Ok(backed_case(ctx, args)?.2.unwrap_or(Value::NULL))
 }
 
 /// Closure::bindTo(?object $newThis, object|string|null $newScope = "static")
 fn closure_bind_to(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let new_this = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let new_this = args.first().map(Value::deref).unwrap_or(Value::NULL);
     let scope = args.get(1).map(Value::deref);
     ctx.bind_closure(this, new_this, scope)
 }
 
 /// Closure::bind(Closure $closure, ?object $newThis, object|string|null $newScope = "static")
 fn closure_bind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(Value::Object(closure)) = args.first().map(Value::deref) else {
+    let Some(closure) = args.first().map(Value::deref).and_then(|v| v.into_object().ok()) else {
         return Err(ctx.throw("TypeError", "Closure::bind(): Argument #1 ($closure) must be of type Closure".into()));
     };
-    let new_this = args.get(1).map(Value::deref).unwrap_or(Value::Null);
+    let new_this = args.get(1).map(Value::deref).unwrap_or(Value::NULL);
     let scope = args.get(2).map(Value::deref);
     ctx.bind_closure(&closure, new_this, scope)
 }
@@ -509,10 +509,10 @@ fn closure_bind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// Closure::call(object $newThis, mixed ...$args): bound to the object
 /// and its class for this one call.
 fn closure_call(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let new_this = args.first().map(Value::deref).unwrap_or(Value::Null);
-    let scope = match &new_this {
-        Value::Object(o) => Value::Str(o.class.name.clone()),
-        _ => Value::Null,
+    let new_this = args.first().map(Value::deref).unwrap_or(Value::NULL);
+    let scope = match new_this.as_object() {
+        Some(o) => Value::str(o.class.name.clone()),
+        None => Value::NULL,
     };
     let bound = ctx.bind_closure(this, new_this, Some(scope))?;
     let rest = if args.is_empty() { &mut [][..] } else { &mut args[1..] };
@@ -520,12 +520,12 @@ fn closure_call(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
 }
 
 fn closure_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    ctx.call(&Value::Object(Rc::clone(this)), args)
+    ctx.call(&Value::object(Rc::clone(this)), args)
 }
 
 /// Closure::fromCallable(callable $callback)
 fn closure_from_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let callable = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let callable = args.first().map(Value::deref).unwrap_or(Value::NULL);
     ctx.closure_from(&callable)
 }
 
@@ -543,10 +543,8 @@ fn root(o: &Object) -> &'static [u8] {
 }
 
 fn read(o: &Object, name: &[u8]) -> Value {
-    match o.class.read(o, name, root(o)) {
-        Value::Undef => Value::Null,
-        v => v,
-    }
+    let v = o.class.read(o, name, root(o));
+    if v.is_undef() { Value::NULL } else { v }
 }
 
 fn write(o: &Object, name: &[u8], value: Value) {
@@ -561,12 +559,12 @@ pub(crate) fn set_previous(e: &Rc<Object>, previous: Rc<Object>) {
         if Rc::ptr_eq(&last, &previous) {
             return;
         }
-        match read(&last, b"previous") {
-            Value::Object(p) => last = p,
-            _ => break,
+        match read(&last, b"previous").into_object() {
+            Ok(p) => last = p,
+            Err(_) => break,
         }
     }
-    write(&last, b"previous", Value::Object(previous));
+    write(&last, b"previous", Value::object(previous));
 }
 
 /// Exception::__construct(string $message = "", int $code = 0, ?Throwable $previous = null)
@@ -576,44 +574,44 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
         return Err(ctx.throw("ArgumentCountError", format!("{class}::__construct() expects at most 3 arguments, {} given", args.len())));
     }
     if let Some(m) = args.first().map(Value::deref) {
-        let message = match m {
-            Value::Array(_) | Value::Object(_) => {
-                return Err(ctx.throw(
-                    "TypeError",
-                    format!("{class}::__construct(): Argument #1 ($message) must be of type string, {} given", m.type_name()),
-                ));
-            }
-            v => Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty)),
-        };
+        if m.is_array() || m.is_object() {
+            return Err(ctx.throw(
+                "TypeError",
+                format!("{class}::__construct(): Argument #1 ($message) must be of type string, {} given", m.type_name()),
+            ));
+        }
+        let message = Value::str(m.to_php_string().unwrap_or_else(PhpStr::empty));
         write(this, b"message", message);
     }
     if let Some(c) = args.get(1).map(Value::deref) {
-        let code = match c {
-            Value::Int(i) => i,
-            Value::Bool(b) => i64::from(b),
-            Value::Float(f) if f.fract() == 0.0 => f as i64,
-            other => {
-                return Err(ctx.throw(
-                    "TypeError",
-                    format!("{class}::__construct(): Argument #2 ($code) must be of type int, {} given", other.type_name()),
-                ));
-            }
+        let code = if let Some(i) = c.as_int() {
+            i
+        } else if let Some(b) = c.as_bool() {
+            i64::from(b)
+        } else if let Some(f) = c.as_float()
+            && f.fract() == 0.0
+        {
+            f as i64
+        } else {
+            return Err(ctx.throw(
+                "TypeError",
+                format!("{class}::__construct(): Argument #2 ($code) must be of type int, {} given", c.type_name()),
+            ));
         };
-        write(this, b"code", Value::Int(code));
+        write(this, b"code", Value::int(code));
     }
     if let Some(p) = args.get(2).map(Value::deref) {
-        match &p {
-            Value::Null => {}
-            Value::Object(o) if o.class.is_a(b"throwable") => write(this, b"previous", p.clone()),
-            other => {
-                return Err(ctx.throw(
-                    "TypeError",
-                    format!("{class}::__construct(): Argument #3 ($previous) must be of type ?Throwable, {} given", other.type_name()),
-                ));
-            }
+        if p.is_null() {
+        } else if p.as_object().is_some_and(|o| o.class.is_a(b"throwable")) {
+            write(this, b"previous", p.clone());
+        } else {
+            return Err(ctx.throw(
+                "TypeError",
+                format!("{class}::__construct(): Argument #3 ($previous) must be of type ?Throwable, {} given", p.type_name()),
+            ));
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// ErrorException::__construct($message = "", $code = 0, $severity = E_ERROR,
@@ -621,20 +619,20 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
 fn error_exception_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut base: Vec<Value> = args.iter().take(2).cloned().collect();
     if let Some(p) = args.get(5) {
-        base.resize(2, Value::Int(0));
+        base.resize(2, Value::int(0));
         base.push(p.clone());
     }
     construct(ctx, this, &mut base)?;
     if let Some(s) = args.get(2) {
-        this.class.write(this, b"severity", b"errorexception", Value::Int(s.to_int()));
+        this.class.write(this, b"severity", b"errorexception", Value::int(s.to_int()));
     }
-    if let Some(f) = args.get(3).map(Value::deref).filter(|v| !matches!(v, Value::Null)) {
-        write(this, b"file", Value::Str(f.to_php_string().unwrap_or_else(PhpStr::empty)));
+    if let Some(f) = args.get(3).map(Value::deref).filter(|v| !v.is_null()) {
+        write(this, b"file", Value::str(f.to_php_string().unwrap_or_else(PhpStr::empty)));
     }
-    if let Some(l) = args.get(4).map(Value::deref).filter(|v| !matches!(v, Value::Null)) {
-        write(this, b"line", Value::Int(l.to_int()));
+    if let Some(l) = args.get(4).map(Value::deref).filter(|v| !v.is_null()) {
+        write(this, b"line", Value::int(l.to_int()));
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn get_severity(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -642,7 +640,7 @@ fn get_severity(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 }
 
 fn wakeup(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn get_message(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -670,11 +668,11 @@ fn get_previous(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 }
 
 fn get_trace_as_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::from(p8_runtime::trace::trace_string(&read(this, b"trace")))))
+    Ok(Value::str(PhpStr::from(p8_runtime::trace::trace_string(&read(this, b"trace")))))
 }
 
 fn to_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::from(describe(this))))
+    Ok(Value::str(PhpStr::from(describe(this))))
 }
 
 /// What Exception::__toString gives: the exception and its previous ones,
@@ -699,10 +697,7 @@ pub(crate) fn describe(this: &Rc<Object>) -> String {
         } else {
             format!("{class}: {message} in {file}:{line}\nStack trace:\n{trace}{next}")
         };
-        current = match read(&e, b"previous") {
-            Value::Object(p) => Some(p),
-            _ => None,
-        };
+        current = read(&e, b"previous").into_object().ok();
     }
     out
 }

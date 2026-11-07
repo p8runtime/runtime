@@ -381,7 +381,7 @@ pub(crate) fn arg(args: &[Value], i: usize) -> Value {
 pub(crate) fn opt_str(args: &[Value], i: usize) -> Option<String> {
     match arg(args, i) {
         Value::Null | Value::Undef => None,
-        v => Some(lossy(v.to_php_string().as_ref().map(PhpStr::as_bytes).unwrap_or_default())),
+        v => Some(lossy(v.to_php_string().as_ref().map(|s| s.as_bytes()).unwrap_or_default())),
     }
 }
 

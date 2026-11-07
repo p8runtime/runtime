@@ -131,26 +131,35 @@ impl Output<'_> {
 
 /// How ob_list_handlers() names a buffer's handler.
 pub(crate) fn handler_name(handler: &Option<Value>) -> String {
-    match handler {
-        None => "default output handler".into(),
-        Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-        // A closure of user code by its function's name ({closure:file:line}, 8.5+).
-        Some(Value::Object(o)) if o.class.lower == b"closure" => match crate::callable::closure_data(o).and_then(|d| d.func.user()) {
-            Some(c) => String::from_utf8_lossy(c.code.name.as_bytes()).into_owned(),
-            None => "Closure::__invoke".into(),
-        },
-        Some(Value::Array(a)) => {
+    let Some(handler) = handler else { return "default output handler".into() };
+    match handler.kind() {
+        Kind::Str => String::from_utf8_lossy(handler.as_str().expect("a string").as_bytes()).into_owned(),
+        Kind::Object => {
+            let o = handler.as_object().expect("an object");
+            if o.class.lower == b"closure" {
+                // A closure of user code by its function's name ({closure:file:line}, 8.5+).
+                match crate::callable::closure_data(o).and_then(|d| d.func.user()) {
+                    Some(c) => String::from_utf8_lossy(c.code.name.as_bytes()).into_owned(),
+                    None => "Closure::__invoke".into(),
+                }
+            } else {
+                format!("{}::__invoke", String::from_utf8_lossy(o.class.name.as_bytes()))
+            }
+        }
+        Kind::Array => {
+            let a = handler.as_array().expect("an array");
             let parts: Vec<Value> = a.values().map(Value::deref).collect();
             let class = match parts.first() {
-                Some(Value::Object(o)) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
-                Some(v) => String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
+                Some(v) => match v.as_object() {
+                    Some(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    None => String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
+                },
                 None => String::new(),
             };
             let method = parts.get(1).map_or_else(String::new, |m| String::from_utf8_lossy(m.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned());
             format!("{class}::{method}")
         }
-        Some(Value::Object(o)) => format!("{}::__invoke", String::from_utf8_lossy(o.class.name.as_bytes())),
-        Some(_) => "???".into(),
+        _ => "???".into(),
     }
 }
 

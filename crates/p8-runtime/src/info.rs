@@ -23,7 +23,6 @@ use crate::ext::{Ctx, Throw};
 use crate::string::PhpStr;
 use crate::value::Value;
 use p8_stubs::{IniDisplay, ModuleSpec};
-use std::rc::Rc;
 
 /// The ext state key set once phpinfo() or ini_get_all() has sorted the
 /// directives (zend_ini_sort_entries): from then on a module's directives
@@ -121,8 +120,8 @@ pub fn print_ini_entries(ctx: &mut dyn Ctx, spec: &ModuleSpec) {
     }
     ctx.echo(b"\nDirective => Local Value => Master Value\n");
     for (name, _, display) in entries {
-        let local = ctx.ini_get(name.as_bytes()).filter(|v| !matches!(v, Value::Null)).map(|v| bytes(&v));
-        let master = ctx.ini_master(name.as_bytes()).filter(|v| !matches!(v, Value::Null)).map(|v| bytes(&v));
+        let local = ctx.ini_get(name.as_bytes()).filter(|v| !v.is_null()).map(|v| bytes(&v));
+        let master = ctx.ini_master(name.as_bytes()).filter(|v| !v.is_null()).map(|v| bytes(&v));
         let local = shown(ctx, display, local.as_deref());
         let master = shown(ctx, display, master.as_deref());
         ctx.echo(&[name.as_bytes(), b" => ", &local, b" => ", &master, b"\n"].concat());
@@ -207,7 +206,7 @@ fn accel_info(ctx: &mut dyn Ctx) -> Result<(), Throw> {
     // php_format_date(DATE_ISO8601, t, localtime): date() in the default timezone.
     let format = ctx.constant(b"DATE_ISO8601").unwrap_or(Value::str("Y-m-d\\TH:i:sO"));
     let date = |ctx: &mut dyn Ctx, t: i64| -> Result<String, Throw> {
-        let v = ctx.call(&Value::str("date"), &mut [format.clone(), Value::Int(t)])?;
+        let v = ctx.call(&Value::str("date"), &mut [format.clone(), Value::int(t)])?;
         Ok(String::from_utf8_lossy(&bytes(&v)).into_owned())
     };
     let start = date(ctx, status.start_time)?;
@@ -247,16 +246,16 @@ fn source(ctx: &mut dyn Ctx, spec: &str) -> Result<Option<Vec<u8>>, Throw> {
             },
             None => ctx.constant(arg.as_bytes()),
         },
-        "ini" => ctx.ini_get(arg.as_bytes()).map(|v| if matches!(v, Value::Null) { Value::Str(PhpStr::empty()) } else { v }),
+        "ini" => ctx.ini_get(arg.as_bytes()).map(|v| if v.is_null() { Value::str(PhpStr::empty()) } else { v }),
         "call" => {
             let mut path = arg.split('/');
             let callee = path.next().expect("a function to call");
             let (callee, mut args) = match callee.strip_suffix(')').and_then(|c| c.split_once('(')) {
-                Some((f, n)) => (f, vec![Value::Int(n.parse().expect("an int argument"))]),
+                Some((f, n)) => (f, vec![Value::int(n.parse().expect("an int argument"))]),
                 None => (callee, Vec::new()),
             };
             let callable = match callee.split_once("::") {
-                Some((class, method)) => Value::Array(Rc::new(crate::array::PhpArray::from_list(vec![Value::str(class), Value::str(method)]))),
+                Some((class, method)) => Value::array(crate::array::PhpArray::from_list(vec![Value::str(class), Value::str(method)])),
                 None => Value::str(callee),
             };
             if !ctx.is_callable(&callable) {
@@ -264,9 +263,9 @@ fn source(ctx: &mut dyn Ctx, spec: &str) -> Result<Option<Vec<u8>>, Throw> {
             }
             let mut v = ctx.call(&callable, &mut args)?;
             for key in path {
-                v = match &v {
-                    Value::Array(a) => a.get(&crate::array::Key::from_string(PhpStr::from(key))).cloned().unwrap_or(Value::Null),
-                    _ => Value::Null,
+                v = match v.as_array() {
+                    Some(a) => a.get(&crate::array::Key::from_string(PhpStr::from(key))).cloned().unwrap_or(Value::NULL),
+                    None => Value::NULL,
                 };
             }
             Some(v)
@@ -274,12 +273,12 @@ fn source(ctx: &mut dyn Ctx, spec: &str) -> Result<Option<Vec<u8>>, Throw> {
         _ => unreachable!("a source of kind {kind}"),
     };
     let Some(v) = value.map(|v| v.deref()) else { return Ok(None) };
-    if matches!(v, Value::Null) || (matches!(v, Value::Bool(false)) && modifier.is_empty()) {
+    if v.is_null() || (v.as_bool() == Some(false) && modifier.is_empty()) {
         return Ok(None);
     }
-    let list = |v: &Value| match v {
-        Value::Array(a) => a.values().map(bytes).collect::<Vec<_>>(),
-        _ => Vec::new(),
+    let list = |v: &Value| match v.as_array() {
+        Some(a) => a.values().map(bytes).collect::<Vec<_>>(),
+        None => Vec::new(),
     };
     Ok(match modifier {
         "yesno" => Some((if v.to_bool() { "Yes" } else { "No" }).into()),

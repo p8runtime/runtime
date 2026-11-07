@@ -8,7 +8,7 @@
 use crate::args::{Accept, accepts, convert};
 use crate::frozen::Text;
 use crate::object::Object;
-use crate::value::Value;
+use crate::value::{Kind, Value};
 pub use p8_stubs::{T_ARRAY, T_BOOL, T_CALLABLE, T_FALSE, T_FLOAT, T_INT, T_MIXED, T_NEVER, T_NULL, T_OBJECT, T_STATIC, T_STRING, T_TRUE, T_VOID};
 
 /// A declared type: p8_stubs' T_* bits, and class names (resolved, but
@@ -67,18 +67,18 @@ impl TypeDecl {
     /// False only means the full check (`verify`) decides.
     #[inline]
     pub fn quick(&self, v: &Value) -> bool {
-        let bit = match v {
-            Value::Null => T_NULL,
-            Value::Bool(true) => T_BOOL | T_TRUE,
-            Value::Bool(false) => T_BOOL | T_FALSE,
-            Value::Int(_) => T_INT,
-            Value::Float(_) => T_FLOAT,
-            Value::Str(_) => T_STRING,
-            Value::Array(_) => T_ARRAY,
+        let bit = match v.kind() {
+            Kind::Null => T_NULL,
+            Kind::Bool => T_BOOL | if v.as_bool().expect("a bool") { T_TRUE } else { T_FALSE },
+            Kind::Int => T_INT,
+            Kind::Float => T_FLOAT,
+            Kind::Str => T_STRING,
+            Kind::Array => T_ARRAY,
             // A named class or interface the object's class is or extends
             // (`self`/`parent` never match a class name here: `verify`
             // resolves them), or a Closure where a callable is wanted.
-            Value::Object(o) => {
+            Kind::Object => {
+                let o = v.as_object().expect("an object");
                 return self.mask & (T_OBJECT | T_MIXED) != 0
                     || (self.mask & T_CALLABLE != 0 && o.class.lower.as_slice() == b"closure")
                     || if self.intersection {
@@ -87,7 +87,7 @@ impl TypeDecl {
                         self.lower.iter().any(|c| o.class.is_a(c.as_bytes()))
                     };
             }
-            Value::Undef | Value::Ref(_) => return false,
+            Kind::Undef | Kind::Ref => return false,
         };
         self.mask & (bit | T_MIXED) != 0
     }
@@ -102,14 +102,15 @@ impl TypeDecl {
         if self.mask & T_MIXED != 0 {
             return Verdict::Accepted(None);
         }
-        let exact = match &v {
-            Value::Null | Value::Undef => self.mask & T_NULL != 0,
-            Value::Bool(b) => self.mask & T_BOOL != 0 || self.mask & if *b { T_TRUE } else { T_FALSE } != 0,
-            Value::Int(_) => self.mask & T_INT != 0,
-            Value::Float(_) => self.mask & T_FLOAT != 0,
-            Value::Str(_) => self.mask & T_STRING != 0,
-            Value::Array(_) => self.mask & T_ARRAY != 0,
-            Value::Object(o) => {
+        let exact = match v.kind() {
+            Kind::Null | Kind::Undef => self.mask & T_NULL != 0,
+            Kind::Bool => self.mask & T_BOOL != 0 || self.mask & if v.as_bool().expect("a bool") { T_TRUE } else { T_FALSE } != 0,
+            Kind::Int => self.mask & T_INT != 0,
+            Kind::Float => self.mask & T_FLOAT != 0,
+            Kind::Str => self.mask & T_STRING != 0,
+            Kind::Array => self.mask & T_ARRAY != 0,
+            Kind::Object => {
+                let o = v.as_object().expect("an object");
                 self.mask & T_OBJECT != 0
                     || self.mask & T_STATIC != 0 && static_ok(o)
                     || !self.classes.is_empty() && {
@@ -117,30 +118,30 @@ impl TypeDecl {
                         if self.intersection { self.lower.iter().all(hit) } else { self.lower.iter().any(hit) }
                     }
             }
-            Value::Ref(_) => false,
+            Kind::Ref => false,
         };
         if exact {
             return Verdict::Accepted(None);
         }
         // A callable: one the engine found it can call.
-        if self.mask & T_CALLABLE != 0 && callable && matches!(v, Value::Str(_) | Value::Array(_) | Value::Object(_)) {
+        if self.mask & T_CALLABLE != 0 && callable && matches!(v.kind(), Kind::Str | Kind::Array | Kind::Object) {
             return Verdict::Accepted(None);
         }
         let scalars = T_BOOL | T_TRUE | T_FALSE | T_INT | T_FLOAT | T_STRING;
         if strict {
-            return match v {
-                Value::Int(i) if self.mask & T_FLOAT != 0 => Verdict::Accepted(Some(Value::Float(i as f64))),
+            return match v.as_int() {
+                Some(i) if self.mask & T_FLOAT != 0 => Verdict::Accepted(Some(Value::float(i as f64))),
                 _ => Verdict::Refused,
             };
         }
         // Weak mode: scalars (not null) convert to a scalar type.
-        if !matches!(v, Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)) || self.mask & scalars == 0 {
+        if !matches!(v.kind(), Kind::Bool | Kind::Int | Kind::Float | Kind::Str) || self.mask & scalars == 0 {
             // A Stringable object to a string.
             return Verdict::Refused;
         }
         // A fractional float to int|string (no float): int, with the
         // precision deprecation (as PHP 8.4 does for user types).
-        if let Value::Float(f) = v
+        if let Some(f) = v.as_float()
             && self.mask & T_INT != 0
             && self.mask & T_STRING != 0
             && self.mask & T_FLOAT == 0
@@ -148,7 +149,7 @@ impl TypeDecl {
             && (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f)
         {
             let shown = crate::number::float_to_string(f, crate::number::Precision::SERIALIZE, 'E');
-            return Verdict::Deprecated(format!("Implicit conversion from float {shown} to int loses precision"), Some(Value::Int(f as i64)));
+            return Verdict::Deprecated(format!("Implicit conversion from float {shown} to int loses precision"), Some(Value::int(f as i64)));
         }
         let param = p8_stubs::Param { name: "", mask: self.mask & (scalars | T_NULL), classes: &[], by_ref: false, variadic: false, default: None };
         match accepts(&param, &v) {

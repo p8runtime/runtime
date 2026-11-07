@@ -54,9 +54,9 @@ impl Closure {
                     // An int default of a `float` parameter is a float (the
                     // one conversion PHP makes of a default).
                     let float = p.ty.as_ref().is_some_and(|t| t.mask & p8_runtime::types::T_FLOAT != 0 && t.mask & p8_runtime::types::T_INT == 0);
-                    Some(match v {
-                        Value::Int(i) if float => Value::Float(i as f64),
-                        v => v,
+                    Some(match v.as_int() {
+                        Some(i) if float => Value::float(i as f64),
+                        _ => v,
                     })
                 })
                 .collect()
@@ -179,10 +179,14 @@ pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
-    match o.slots.borrow().get(site.slot as usize)? {
-        Value::Undef => None,
-        Value::Ref(cell) => Some(cell.borrow().clone()),
-        v => Some(v.clone()),
+    let slots = o.slots.borrow();
+    let v = slots.get(site.slot as usize)?;
+    if v.is_undef() {
+        None
+    } else if let Some(cell) = v.as_reference() {
+        Some(cell.borrow().clone())
+    } else {
+        Some(v.clone())
     }
 }
 
@@ -195,7 +199,7 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
         return None;
     }
     let slot = site.slot as usize;
-    let unset = matches!(o.slots.borrow().get(slot)?, Value::Undef);
+    let unset = o.slots.borrow().get(slot)?.is_undef();
     (!unset || o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0).then_some(slot)
 }
 
@@ -210,7 +214,7 @@ pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: 
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
-    if matches!(v, Value::Undef | Value::Ref(_)) {
+    if v.is_undef() || v.is_reference() {
         return None;
     }
     let slot = site.slot as usize;
@@ -356,7 +360,7 @@ impl Context<'_> {
     /// After a full property read: remember where a declared, visible,
     /// hookless property of this class is, for the next read here.
     pub(crate) fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, name: &Value) {
-        let Value::Str(name) = name else { return };
+        let Some(name) = name.as_str() else { return };
         let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes()) else { return };
         if prop.hooks != 0 {
             return;

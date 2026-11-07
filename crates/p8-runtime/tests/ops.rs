@@ -6,36 +6,35 @@
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ops::{BinOp, Diag, OpError, binary};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
-use std::rc::Rc;
+use p8_runtime::value::{Kind, Value};
 
 /// The generator's $values, in order.
 fn values() -> Vec<Value> {
-    let s = |x: &str| Value::Str(PhpStr::from(x));
+    let s = |x: &str| Value::str(PhpStr::from(x));
     let list = |items: &[(i64, Value)]| {
         let mut a = PhpArray::new();
         for (k, v) in items {
             a.insert(Key::Int(*k), v.clone());
         }
-        Value::Array(Rc::new(a))
+        Value::array(a)
     };
     vec![
-        Value::Null,
-        Value::Bool(true),
-        Value::Bool(false),
-        Value::Int(0),
-        Value::Int(1),
-        Value::Int(-1),
-        Value::Int(7),
-        Value::Int(-7),
-        Value::Int(3),
-        Value::Int(i64::MAX),
-        Value::Int(i64::MIN),
-        Value::Float(1.5),
-        Value::Float(-2.5),
-        Value::Float(0.0),
-        Value::Float(7.5),
-        Value::Float(f64::INFINITY),
+        Value::NULL,
+        Value::TRUE,
+        Value::FALSE,
+        Value::int(0),
+        Value::int(1),
+        Value::int(-1),
+        Value::int(7),
+        Value::int(-7),
+        Value::int(3),
+        Value::int(i64::MAX),
+        Value::int(i64::MIN),
+        Value::float(1.5),
+        Value::float(-2.5),
+        Value::float(0.0),
+        Value::float(7.5),
+        Value::float(f64::INFINITY),
         s(""),
         s("0"),
         s("5"),
@@ -47,10 +46,10 @@ fn values() -> Vec<Value> {
         s("ab"),
         s("AB"),
         list(&[]),
-        list(&[(0, Value::Int(1))]),
+        list(&[(0, Value::int(1))]),
         list(&[(2, s("x"))]),
-        Value::Int(64),
-        Value::Int(2),
+        Value::int(64),
+        Value::int(2),
     ]
 }
 
@@ -60,10 +59,14 @@ fn hex(bytes: &[u8]) -> String {
 
 /// json_encode of the arrays the matrix produces (lists and int-keyed maps of scalars).
 fn json(a: &PhpArray) -> String {
-    let scalar = |v: &Value| match v {
-        Value::Int(i) => i.to_string(),
-        Value::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
-        other => format!("{:?}", other),
+    let scalar = |v: &Value| {
+        if let Some(i) = v.as_int() {
+            i.to_string()
+        } else if let Some(s) = v.as_str() {
+            format!("\"{}\"", String::from_utf8_lossy(s.as_bytes()))
+        } else {
+            format!("{:?}", v)
+        }
     };
     if a.is_list() {
         format!("[{}]", a.values().map(scalar).collect::<Vec<_>>().join(","))
@@ -80,14 +83,14 @@ fn json(a: &PhpArray) -> String {
 }
 
 fn show(v: &Value) -> String {
-    match v {
-        Value::Null => "N".into(),
-        Value::Bool(b) => format!("b:{}", u8::from(*b)),
-        Value::Int(i) => format!("i:{}", i),
-        Value::Float(f) => format!("f:{}", hex(&f.to_be_bytes())),
-        Value::Str(s) => format!("s:{}", hex(s.as_bytes())),
-        Value::Array(a) => format!("a:{}", hex(json(a).as_bytes())),
-        Value::Ref(_) | Value::Undef | Value::Object(_) => "ref".into(),
+    match v.kind() {
+        Kind::Null => "N".into(),
+        Kind::Bool => format!("b:{}", u8::from(v.as_bool().expect("a bool"))),
+        Kind::Int => format!("i:{}", v.as_int().expect("an int")),
+        Kind::Float => format!("f:{}", hex(&v.as_float().expect("a float").to_be_bytes())),
+        Kind::Str => format!("s:{}", hex(v.as_str().expect("a string").as_bytes())),
+        Kind::Array => format!("a:{}", hex(json(v.as_array().expect("an array")).as_bytes())),
+        Kind::Ref | Kind::Undef | Kind::Object => "ref".into(),
     }
 }
 
@@ -164,10 +167,10 @@ fn negating_a_nan_is_multiplying_it_by_minus_one() {
     let minus_one = std::hint::black_box(-1.0f64);
     for bits in [0x7ff8_0000_0000_0000u64, 0xfff8_0000_0000_0000, 0x7ff8_0000_0000_0001, 0xfff0_0000_0000_0001] {
         let nan = f64::from_bits(bits);
-        let negated = p8_runtime::ops::negate(&Value::Float(nan), &mut Vec::new()).expect("a float");
-        let Value::Float(f) = negated else { panic!("a float") };
+        let negated = p8_runtime::ops::negate(&Value::float(nan), &mut Vec::new()).expect("a float");
+        let Some(f) = negated.as_float() else { panic!("a float") };
         assert_eq!(f.to_bits(), (nan * minus_one).to_bits(), "{bits:016x}");
     }
-    let Ok(Value::Float(z)) = p8_runtime::ops::negate(&Value::Float(0.0), &mut Vec::new()) else { panic!("a float") };
+    let Some(z) = p8_runtime::ops::negate(&Value::float(0.0), &mut Vec::new()).ok().and_then(|v| v.as_float()) else { panic!("a float") };
     assert!(z == 0.0 && z.is_sign_negative());
 }

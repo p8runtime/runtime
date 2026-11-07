@@ -57,11 +57,11 @@ pub enum Frozen {
 impl Frozen {
     pub fn to_value(&self) -> Value {
         match self {
-            Frozen::Null => Value::Null,
-            Frozen::Bool(b) => Value::Bool(*b),
-            Frozen::Int(i) => Value::Int(*i),
-            Frozen::Float(f) => Value::Float(*f),
-            Frozen::Str(s) => Value::Str(PhpStr::from(s.as_bytes())),
+            Frozen::Null => Value::NULL,
+            Frozen::Bool(b) => Value::bool(*b),
+            Frozen::Int(i) => Value::int(*i),
+            Frozen::Float(f) => Value::float(*f),
+            Frozen::Str(s) => Value::str(PhpStr::from(s.as_bytes())),
             Frozen::Array(entries) => {
                 let mut array = PhpArray::new();
                 for (k, v) in entries.iter() {
@@ -72,7 +72,7 @@ impl Frozen {
                         }
                     }
                 }
-                Value::Array(std::rc::Rc::new(array))
+                Value::array(array)
             }
         }
     }

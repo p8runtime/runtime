@@ -131,7 +131,7 @@ impl Context<'_> {
     /// Run the autoloaders on `name`, in order, until one declares it.
     fn run_loaders(&mut self, regs: &mut Vec<Value>, name: PhpStr, lower: &[u8]) -> Result<(), Throw> {
         for loader in self.autoloaders.clone() {
-            self.call_with_regs(regs, &loader, &mut [Value::Str(name.clone())])?;
+            self.call_with_regs(regs, &loader, &mut [Value::str(name.clone())])?;
             if self.class_named(lower).is_some() {
                 break;
             }
@@ -162,14 +162,14 @@ impl Context<'_> {
         for (level, message, file, line) in pending {
             self.in_handler = true;
             let mut args = [
-                Value::Int(level),
-                Value::Str(PhpStr::from(message.as_str())),
-                Value::Str(PhpStr::from(&*file)),
-                Value::Int(i64::from(line)),
+                Value::int(level),
+                Value::str(PhpStr::from(message.as_str())),
+                Value::str(PhpStr::from(&*file)),
+                Value::int(i64::from(line)),
             ];
             let r = self.call_with_regs(regs, &handler, &mut args);
             self.in_handler = false;
-            if let Value::Bool(false) = r? {
+            if r?.as_bool() == Some(false) {
                 // An E_USER_ERROR the handler declines is fatal.
                 if level == 256 {
                     self.failed_call = raised_in;
@@ -269,11 +269,11 @@ impl Context<'_> {
             for r in (0..ncv).rev() {
                 // (Resources stay: PHP frees them after the output buffers,
                 // a user-space stream's stream_close then.)
-                if let Value::Object(o) = &regs[r]
+                if let Some(o) = regs[r].as_object()
                     && Rc::strong_count(o) == 1
                     && o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0
                 {
-                    regs[r] = Value::Undef;
+                    regs[r] = Value::UNDEF;
                     freed = true;
                     self.run_destructors(regs)?;
                 }
@@ -285,7 +285,7 @@ impl Context<'_> {
         // What the globals still hold lives on past the output buffers, as
         // PHP's symbol table does (a resource is freed then: a user-space
         // stream's stream_close runs after the buffers are flushed).
-        let kept = regs[..ncv.min(regs.len())].iter().filter(|v| !matches!(v, Value::Undef)).cloned();
+        let kept = regs[..ncv.min(regs.len())].iter().filter(|v| !v.is_undef()).cloned();
         self.ended_globals.extend(kept);
         self.destruct_remaining(regs)
     }
@@ -332,12 +332,12 @@ impl Context<'_> {
     /// An exception nothing caught: the exception handler's, if one is set.
     pub(crate) fn handle_uncaught(&mut self, regs: &mut Vec<Value>, t: Throw) -> Throw {
         let Throw::Object(e) = t else { return t };
-        let Some(handler) = self.exception_handlers.last().cloned().filter(|h| !matches!(h, Value::Null)) else {
+        let Some(handler) = self.exception_handlers.last().cloned().filter(|h| !h.is_null()) else {
             return Throw::Object(e);
         };
         // The handler is called once; an exception it throws is uncaught.
         self.exception_handlers.clear();
-        match self.call_with_regs(regs, &handler, &mut [Value::Object(e)]) {
+        match self.call_with_regs(regs, &handler, &mut [Value::object(e)]) {
             Ok(_) => Throw::Exit(0),
             Err(t) => t,
         }

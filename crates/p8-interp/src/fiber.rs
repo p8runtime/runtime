@@ -77,7 +77,7 @@ impl Context<'_> {
     /// A FiberError, made now: its trace shows the Fiber method it came from.
     fn fiber_error(&mut self, message: &str) -> Throw {
         let t = self.throw("FiberError", message.to_owned());
-        self.exception(&|_| Value::Undef, t)
+        self.exception(&|_| Value::UNDEF, t)
     }
 
     pub(crate) fn fiber_op(&mut self, fiber: Option<&Rc<Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
@@ -99,29 +99,29 @@ impl Context<'_> {
 
     fn fiber_op_inner(&mut self, fiber: Option<&Rc<Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
         match op {
-            SUSPEND => self.fiber_suspend(args.first().map(Value::deref).unwrap_or(Value::Null)),
+            SUSPEND => self.fiber_suspend(args.first().map(Value::deref).unwrap_or(Value::NULL)),
             DESTROY => {
                 let fiber = fiber.expect("a Fiber");
                 if state(fiber).borrow().status != Status::Suspended {
-                    return Ok(Value::Null);
+                    return Ok(Value::NULL);
                 }
                 // A suspended fiber destroyed: unwound by an exit no catch
                 // matches (a plain object, not Throwable), its finally blocks run.
                 state(fiber).borrow_mut().closing = true;
                 let marker = Ctx::new_object(self, &Rc::clone(&self.classes[&self.isolate.known.stdclass]));
                 self.fiber_exit = Some(Rc::clone(&marker));
-                let r = self.fiber_resume(fiber, Value::Object(Rc::clone(&marker)), true);
+                let r = self.fiber_resume(fiber, Value::object(Rc::clone(&marker)), true);
                 self.fiber_exit = None;
                 match r {
-                    Err(Throw::Object(o)) if Rc::ptr_eq(&o, &marker) => Ok(Value::Null),
+                    Err(Throw::Object(o)) if Rc::ptr_eq(&o, &marker) => Ok(Value::NULL),
                     other => other,
                 }
             }
-            CURRENT => Ok(self.fibers.last().map_or(Value::Null, |r| Value::Object(Rc::clone(&r.fiber)))),
+            CURRENT => Ok(self.fibers.last().map_or(Value::NULL, |r| Value::object(Rc::clone(&r.fiber)))),
             START => self.fiber_start(fiber.expect("a Fiber method"), args),
             _ => {
                 let fiber = fiber.expect("a Fiber method");
-                let v = args.first().map(Value::deref).unwrap_or(Value::Null);
+                let v = args.first().map(Value::deref).unwrap_or(Value::NULL);
                 self.fiber_resume(fiber, v, op == THROW)
             }
         }
@@ -145,7 +145,7 @@ impl Context<'_> {
                 return match r {
                     Ok(v) => {
                         s.returned = Some(v);
-                        Ok(Value::Null)
+                        Ok(Value::NULL)
                     }
                     Err(t) => {
                         s.threw = true;
@@ -162,7 +162,7 @@ impl Context<'_> {
     fn fiber_start_frame(&mut self, fiber: &Rc<Object>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
         let at = FIRST_REG;
         let mut task = Task::default();
-        task.regs.resize(at + args.len() + 1, Value::Undef);
+        task.regs.resize(at + args.len() + 1, Value::UNDEF);
         for (n, a) in args.iter().enumerate() {
             task.regs[at + n] = a.deref();
         }
@@ -197,8 +197,8 @@ impl Context<'_> {
             return Err(self.fiber_error("Cannot resume a fiber that is not suspended"));
         }
         let exception = if throw {
-            match &value {
-                Value::Object(e) if e.class.is_a(b"throwable") || self.fiber_exit.as_ref().is_some_and(|m| Rc::ptr_eq(m, e)) => Some(Rc::clone(e)),
+            match value.as_object() {
+                Some(e) if e.class.is_a(b"throwable") || self.fiber_exit.as_ref().is_some_and(|m| Rc::ptr_eq(m, e)) => Some(Rc::clone(e)),
                 _ => return Err(self.throw("TypeError", format!("Fiber::throw(): Argument #1 ($exception) must be of type Throwable, {} given", p8_runtime::args::value_name(&value)))),
             }
         } else {
@@ -254,7 +254,7 @@ impl Context<'_> {
             Ok(()) => {
                 let v = task.regs.get_mut(FIRST_REG).map(std::mem::take).unwrap_or_default();
                 s.returned = Some(v.deref());
-                Ok(Value::Null)
+                Ok(Value::NULL)
             }
             Err(t) => {
                 s.threw = true;
@@ -285,7 +285,7 @@ impl Context<'_> {
             return Err(self.fiber_error("Cannot switch fibers in current execution context"));
         }
         self.fiber_suspended = Some(value);
-        Ok(Value::Null)
+        Ok(Value::NULL)
     }
 }
 
@@ -301,15 +301,15 @@ fn call_dst(code: &[Instr], pc: usize) -> Option<p8_bytecode::Reg> {
 // ---- the Fiber class ----
 
 fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let callable = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let callable = args.first().map(Value::deref).unwrap_or(Value::NULL);
     if !ctx.is_callable(&callable) {
         return Err(ctx.throw("TypeError", format!("Fiber::__construct(): Argument #1 ($callback) must be a valid callback, {}", p8_runtime::args::value_name(&callable))));
     }
-    if !matches!(state(this).borrow().callable, Value::Null) {
+    if !state(this).borrow().callable.is_null() {
         return Err(ctx.throw("FiberError", "Cannot call constructor twice".into()));
     }
     state(this).borrow_mut().callable = callable;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn start(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -345,7 +345,7 @@ fn get_return(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 }
 
 fn status_is(this: &Object, f: impl Fn(Status) -> bool) -> Value {
-    Value::Bool(f(state(this).borrow().status))
+    Value::bool(f(state(this).borrow().status))
 }
 
 fn is_started(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -426,13 +426,13 @@ mod tests {
     }
 
     fn probe(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-        let Value::Object(f) = args[0].deref() else { panic!("probe(a Fiber)") };
+        let Ok(f) = args[0].deref().into_object() else { panic!("probe(a Fiber)") };
         let s = state(&f).borrow();
         assert_eq!(s.status, Status::Suspended);
         let t = &s.task;
         let bases = t.frames.slots[..t.frames.len()].iter().map(|fr| fr.base).collect();
         SHAPES.with(|v| v.borrow_mut().push((t.regs.as_ptr() as usize, t.regs.len(), t.frames.slots.as_ptr() as usize, bases)));
-        Ok(Value::Null)
+        Ok(Value::NULL)
     }
 
     static PROBE: [Builtin; 1] = [Builtin { name: "probe", run: probe, by_ref: &[] }];

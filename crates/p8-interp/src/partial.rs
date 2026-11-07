@@ -174,16 +174,13 @@ impl Context<'_> {
         // A Closure is applied as it is; another callable as the closure
         // `f(...)` would make of it (no object made: only the partial
         // application's own is).
-        let target = match callee.deref() {
-            Value::Object(o) if closure_data(&o).is_some() => Some(o),
-            _ => None,
-        };
+        let target = callee.deref().into_object().ok().filter(|o| closure_data(o).is_some());
         let is_closure = target.is_some();
         let resolved = match target {
             Some(_) => None,
             None => Some(self.callable_data(&callee)?),
         };
-        let Some(data) = target.as_deref().and_then(closure_data).or(resolved.as_ref()) else { return Ok(Value::Null) };
+        let Some(data) = target.as_deref().and_then(closure_data).or(resolved.as_ref()) else { return Ok(Value::NULL) };
         let (this, scope, called) = (data.this.clone(), data.scope.clone(), data.called.clone());
         let applied = self.applied(data, is_closure, this.is_some());
         let (mut argv, extra, named_positions) = self.send_args(site, &applied, values)?;
@@ -243,7 +240,7 @@ impl Context<'_> {
         if matches!(applied.call, Call::Closure)
             && let Some(target) = &target
         {
-            captured.push(Value::Object(Rc::clone(target)));
+            captured.push(Value::object(Rc::clone(target)));
         }
         for (offset, slot) in argv.iter().enumerate() {
             let Slot::Value(v) = slot else { continue };
@@ -251,11 +248,11 @@ impl Context<'_> {
             let mut v = v.clone();
             // A value (not a variable) for a parameter taking a reference
             // (ZEND_SEND_VAL_EX: zend_cannot_pass_by_reference).
-            if param.is_some_and(|p| p.by_ref) && !matches!(v, Value::Ref(_)) {
+            if param.is_some_and(|p| p.by_ref) && !v.is_reference() {
                 return Err(self.cannot_pass_by_ref(&applied, offset));
             }
             if let Some(ty) = param.and_then(|p| p.ty.as_ref())
-                && !matches!(v, Value::Ref(_))
+                && !v.is_reference()
             {
                 match self.check_type(ty, &v, strict)? {
                     Ok(Some(converted)) => v = converted,
@@ -272,7 +269,7 @@ impl Context<'_> {
             captured.push(v);
         }
         if let Some(extra) = extra {
-            captured.push(Value::Array(Rc::new(extra)));
+            captured.push(Value::array(extra));
         }
         let closure = {
             let key = Arc::as_ptr(&func) as usize;
@@ -287,7 +284,7 @@ impl Context<'_> {
         };
         let data = ClosureData { func: ClosureFunc::User(closure), is_static, this: object, scope, called, captured: RefCell::new(captured), trampoline: None, fake: true };
         let class = Rc::clone(&self.classes[&self.isolate.known.closure]);
-        Ok(Value::Object(p8_runtime::object::Object::with_data(class, &self.ids, Some(Rc::new(data)))))
+        Ok(Value::object(p8_runtime::object::Object::with_data(class, &self.ids, Some(Rc::new(data)))))
     }
 
     /// The function a closure of the callable runs, as zend_partial.c
@@ -523,13 +520,13 @@ impl Context<'_> {
                         // A placeholder for no parameter: zp_args_check's error.
                         Slot::Placeholder => return Err(self.throw("Error", format!("Cannot use named placeholder for unknown or variadic parameter ${}", text(name)))),
                         Slot::Value(v) if applied.variadic.as_ref().is_some_and(|p| p.by_ref) => {
-                            if !matches!(v, Value::Ref(_)) {
+                            if !v.is_reference() {
                                 return Err(self.cannot_pass_by_ref(applied, applied.params.len()));
                             }
                             v
                         }
                         Slot::Value(v) => v.deref(),
-                        Slot::Undef => Value::Null,
+                        Slot::Undef => Value::NULL,
                     };
                     extra.insert(key, v);
                 }
