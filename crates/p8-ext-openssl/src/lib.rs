@@ -234,11 +234,11 @@ fn key_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
 // ---- helpers ----
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn given(args: &[Value], i: usize) -> bool {
-    !matches!(args.get(i).map(Value::deref), None | Some(Value::Null) | Some(Value::Undef))
+    args.get(i).map(Value::deref).is_some_and(|v| !v.is_null_or_undef())
 }
 
 fn bytes(args: &[Value], i: usize) -> Vec<u8> {
@@ -250,13 +250,13 @@ fn opt_bytes(args: &[Value], i: usize) -> Option<Vec<u8>> {
 }
 
 fn set_ref(args: &[Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
 
 fn s(b: impl Into<Vec<u8>>) -> Value {
-    Value::Str(PhpStr::new(b.into()))
+    Value::str(PhpStr::new(b.into()))
 }
 
 fn warn(ctx: &mut dyn Ctx, message: &str) {
@@ -316,7 +316,7 @@ fn restore_mark(ctx: &mut dyn Ctx) {
 fn openssl_error_string(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     match errors(ctx).queue.pop_front() {
         Some(e) => Ok(s(e)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -370,7 +370,7 @@ fn new_cert(ctx: &mut dyn Ctx, cert: Rc<Cert>) -> Value {
     if let Some(h) = o.native::<CertHandle>() {
         *h.0.borrow_mut() = Some(cert);
     }
-    Value::Object(o)
+    Value::object(o)
 }
 
 /// php_openssl_x509_from_str
@@ -387,7 +387,7 @@ fn cert_from_bytes(ctx: &mut dyn Ctx, v: &[u8]) -> Option<Rc<Cert>> {
 
 /// php_openssl_x509_from_zval: an OpenSSLCertificate, or a string (PEM, or file://).
 fn cert_from_value(ctx: &mut dyn Ctx, v: &Value) -> Option<Rc<Cert>> {
-    if let Value::Object(o) = v
+    if let Some(o) = v.as_object()
         && let Some(c) = cert_of(o)
     {
         return Some(c);
@@ -402,71 +402,71 @@ fn openssl_x509_read(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         Some(c) => Ok(new_cert(ctx, c)),
         None => {
             warn(ctx, "X.509 Certificate cannot be retrieved");
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
 
 fn openssl_x509_free(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn openssl_x509_export(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else {
         warn(ctx, "X.509 Certificate cannot be retrieved");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     set_ref(args, 1, s(cert.pem()));
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn openssl_x509_export_to_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else {
         warn(ctx, "X.509 Certificate cannot be retrieved");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
-    let Some(path) = output_path(ctx, &bytes(args, 1), "output_filename") else { return Ok(Value::Bool(false)) };
+    let Some(path) = output_path(ctx, &bytes(args, 1), "output_filename") else { return Ok(Value::FALSE) };
     if std::fs::write(&path, cert.pem()).is_err() {
         push_error(ctx, "error:80000002:system library::No such file or directory");
         warn(ctx, &format!("Error opening file {}", path.display()));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn openssl_x509_fingerprint(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else {
         warn(ctx, "X.509 Certificate cannot be retrieved");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let method = if given(args, 1) { bytes(args, 1) } else { b"sha1".to_vec() };
     let Some(md) = digest::by_name(&method) else {
         warn(ctx, "Unknown digest algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let h = md.hash(&cert.der);
     Ok(s(if arg(args, 2).to_bool() { h } else { hex(&h) }))
 }
 
 fn openssl_x509_check_private_key(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::Bool(false)) };
-    let Some(key) = key_from_value(ctx, &arg(args, 1), false, Some(Vec::new()))? else { return Ok(Value::Bool(false)) };
-    Ok(Value::Bool(cert.public_key().is_some_and(|p| p.same_public(&key))))
+    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::FALSE) };
+    let Some(key) = key_from_value(ctx, &arg(args, 1), false, Some(Vec::new()))? else { return Ok(Value::FALSE) };
+    Ok(Value::bool(cert.public_key().is_some_and(|p| p.same_public(&key))))
 }
 
 fn openssl_x509_verify(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::Int(-1)) };
-    let Some(key) = key_from_value(ctx, &arg(args, 1), true, None)? else { return Ok(Value::Int(-1)) };
-    Ok(Value::Int(cert.verify(&key)))
+    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::int(-1)) };
+    let Some(key) = key_from_value(ctx, &arg(args, 1), true, None)? else { return Ok(Value::int(-1)) };
+    Ok(Value::int(cert.verify(&key)))
 }
 
 /// openssl_x509_checkpurpose: the purpose checked on the certificate, and
 /// its chain verified against the CA files and directories given.
 fn openssl_x509_checkpurpose(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::Int(-1)) };
+    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::int(-1)) };
     let purpose = arg(args, 1).to_int();
     let mut trusted: Vec<Cert> = Vec::new();
-    if let Value::Array(list) = arg(args, 2) {
+    if let Ok(list) = arg(args, 2).into_array() {
         for v in list.values() {
             let path = std::path::PathBuf::from(String::from_utf8_lossy(v.deref().to_php_string().unwrap_or_default().as_bytes()).into_owned());
             let files: Vec<std::path::PathBuf> = if path.is_dir() {
@@ -489,10 +489,10 @@ fn openssl_x509_checkpurpose(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
     }
     if !(1..=10).contains(&purpose) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if cert.check_purpose(purpose) != Some(true) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     // Walk up to a trusted certificate, each link's signature and dates checked.
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
@@ -504,37 +504,37 @@ fn openssl_x509_checkpurpose(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let mut current: &Cert = &cert;
     for _ in 0..10 {
         if !in_date(current) {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         if let Some(root) = trusted.iter().find(|t| t.der == current.der) {
-            return Ok(Value::Bool(root.purposes().iter().any(|p| p.0 == purpose)));
+            return Ok(Value::bool(root.purposes().iter().any(|p| p.0 == purpose)));
         }
         let issuer = trusted.iter().chain(untrusted.iter()).find(|c| c.subject.same(&current.issuer) && c.public_key().is_some_and(|k| current.verify(&k) == 1));
         match issuer {
             Some(i) => {
                 if std::ptr::eq(i, current) {
-                    return Ok(Value::Bool(false));
+                    return Ok(Value::FALSE);
                 }
                 if trusted.iter().any(|t| t.der == i.der) {
-                    return Ok(Value::Bool(true));
+                    return Ok(Value::TRUE);
                 }
                 current = i;
             }
-            None => return Ok(Value::Bool(false)),
+            None => return Ok(Value::FALSE),
         }
     }
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 fn openssl_x509_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::Bool(false)) };
+    let Some(cert) = cert_from_value(ctx, &arg(args, 0)) else { return Ok(Value::FALSE) };
     let short = !given(args, 1) || arg(args, 1).to_bool();
     let mut a = PhpArray::new();
     put(&mut a, "name", s(cert.subject.oneline()));
     put(&mut a, "subject", name_array(&cert.subject, short));
     put(&mut a, "hash", s(format!("{:08x}", cert.subject.hash())));
     put(&mut a, "issuer", name_array(&cert.issuer, short));
-    put(&mut a, "version", Value::Int(cert.version));
+    put(&mut a, "version", Value::int(cert.version));
     let (dec, hexs) = x509::serial_strings(&cert.serial);
     put(&mut a, "serialNumber", s(dec));
     put(&mut a, "serialNumberHex", s(hexs));
@@ -548,33 +548,33 @@ fn openssl_x509_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 -1
             }
         };
-        put(&mut a, key, Value::Int(n));
+        put(&mut a, key, Value::int(n));
     }
     let sig = oids::by_oid(&cert.sig_oid);
     put(&mut a, "signatureTypeSN", s(sig.map_or("UNDEF", |o| o.sn)));
     put(&mut a, "signatureTypeLN", s(sig.map_or("undefined", |o| o.ln)));
-    put(&mut a, "signatureTypeNID", Value::Int(sig.map_or(0, |o| o.nid)));
+    put(&mut a, "signatureTypeNID", Value::int(sig.map_or(0, |o| o.nid)));
     let mut purposes = PhpArray::new();
     for (id, sn, ln, leaf, ca) in cert.purposes() {
-        let item = PhpArray::from_list(vec![Value::Bool(leaf), Value::Bool(ca), s(if short { sn } else { ln })]);
-        purposes.insert(AKey::Int(id), Value::Array(Rc::new(item)));
+        let item = PhpArray::from_list(vec![Value::bool(leaf), Value::bool(ca), s(if short { sn } else { ln })]);
+        purposes.insert(AKey::Int(id), Value::array(item));
     }
-    put(&mut a, "purposes", Value::Array(Rc::new(purposes)));
+    put(&mut a, "purposes", Value::array(purposes));
     let mut exts = PhpArray::new();
     for e in &cert.exts {
         let name = x509::ext_name(&e.oid);
         let shown = if e.oid == "2.5.29.17" {
             match x509::subject_alt_name(&e.value) {
                 Some(v) => v,
-                None => return Ok(Value::Bool(false)),
+                None => return Ok(Value::FALSE),
             }
         } else {
             x509::print_ext(e).unwrap_or_else(|| e.value.clone())
         };
         exts.insert(AKey::from_string(PhpStr::from(name)), s(shown));
     }
-    put(&mut a, "extensions", Value::Array(Rc::new(exts)));
-    Ok(Value::Array(Rc::new(a)))
+    put(&mut a, "extensions", Value::array(exts));
+    Ok(Value::array(a))
 }
 
 /// php_openssl_add_assoc_name_entry: a repeated attribute becomes a list.
@@ -582,20 +582,20 @@ fn name_array(name: &x509::Name, short: bool) -> Value {
     let mut a = PhpArray::new();
     for (key, value) in name.pairs(short) {
         let k = AKey::from_string(PhpStr::from(key));
-        match a.get(&k).cloned() {
-            Some(Value::Array(list)) => {
+        match a.get(&k).cloned().map(Value::into_array) {
+            Some(Ok(list)) => {
                 let mut list = (*list).clone();
                 let _ = list.push(s(value));
-                a.insert(k, Value::Array(Rc::new(list)));
+                a.insert(k, Value::array(list));
             }
-            Some(first) => {
+            Some(Err(first)) => {
                 let list = PhpArray::from_list(vec![first, s(value)]);
-                a.insert(k, Value::Array(Rc::new(list)));
+                a.insert(k, Value::array(list));
             }
             None => a.insert(k, s(value)),
         }
     }
-    Value::Array(Rc::new(a))
+    Value::array(a)
 }
 
 fn openssl_get_cert_locations(_: &mut dyn Ctx, _: &mut [Value]) -> R {
@@ -608,7 +608,7 @@ fn openssl_get_cert_locations(_: &mut dyn Ctx, _: &mut [Value]) -> R {
     put(&mut a, "default_default_cert_area", s("/usr/local/ssl"));
     put(&mut a, "ini_cafile", s(""));
     put(&mut a, "ini_capath", s(""));
-    Ok(Value::Array(Rc::new(a)))
+    Ok(Value::array(a))
 }
 
 // ---- keys ----
@@ -624,14 +624,11 @@ fn new_key(ctx: &mut dyn Ctx, key: Rc<Key>, private: bool) -> Value {
     if let Some(h) = o.native::<KeyHandle>() {
         *h.0.borrow_mut() = Some((key, private));
     }
-    Value::Object(o)
+    Value::object(o)
 }
 
 fn key_handle(v: &Value) -> Option<(Rc<Key>, bool)> {
-    match v {
-        Value::Object(o) => o.native::<KeyHandle>()?.0.borrow().clone(),
-        _ => None,
-    }
+    v.as_object()?.native::<KeyHandle>()?.0.borrow().clone()
 }
 
 /// php_openssl_pkey_from_zval: a key object, a certificate (its public
@@ -639,7 +636,7 @@ fn key_handle(v: &Value) -> Option<(Rc<Key>, bool)> {
 fn key_from_value(ctx: &mut dyn Ctx, v: &Value, public: bool, pass: Option<Vec<u8>>) -> Result<Option<Rc<Key>>, Throw> {
     let mut pass = pass;
     let mut v = v.clone();
-    if let Value::Array(a) = &v {
+    if let Some(a) = v.as_array() {
         let Some(phrase) = a.get(&AKey::Int(1)) else {
             return Err(ctx.throw("ValueError", "Key array must be of the form array(0 => key, 1 => phrase)".into()));
         };
@@ -660,7 +657,7 @@ fn key_from_value(ctx: &mut dyn Ctx, v: &Value, public: bool, pass: Option<Vec<u
         }
         return Ok(Some(key));
     }
-    if let Value::Object(o) = &v
+    if let Some(o) = v.as_object()
         && let Some(c) = cert_of(o)
     {
         if !public {
@@ -668,7 +665,7 @@ fn key_from_value(ctx: &mut dyn Ctx, v: &Value, public: bool, pass: Option<Vec<u
         }
         return Ok(c.public_key().map(Rc::new));
     }
-    if !matches!(v, Value::Str(_) | Value::Object(_)) {
+    if !(v.is_str() || v.is_object()) {
         return Ok(None);
     }
     let Some(text) = v.to_php_string() else { return Ok(None) };
@@ -702,7 +699,7 @@ fn key_from_value(ctx: &mut dyn Ctx, v: &Value, public: bool, pass: Option<Vec<u
 fn openssl_pkey_get_public(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match key_from_value(ctx, &arg(args, 0), true, None)? {
         Some(k) => Ok(new_key(ctx, k, false)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -710,19 +707,19 @@ fn openssl_pkey_get_private(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let pass = if args.len() > 1 { opt_bytes(args, 1) } else { Some(Vec::new()) };
     match key_from_value(ctx, &arg(args, 0), false, pass)? {
         Some(k) => Ok(new_key(ctx, k, true)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
 fn openssl_pkey_free(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn openssl_pkey_get_details(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let v = arg(args, 0);
-    let Some((key, _)) = key_handle(&v) else { return Ok(Value::Bool(false)) };
+    let Some((key, _)) = key_handle(&v) else { return Ok(Value::FALSE) };
     let mut a = PhpArray::new();
-    put(&mut a, "bits", Value::Int(key.bits() as i64));
+    put(&mut a, "bits", Value::int(key.bits() as i64));
     put(&mut a, "key", s(key.public_pem()));
     let mut parts = PhpArray::new();
     let section = match &*key {
@@ -758,53 +755,47 @@ fn openssl_pkey_get_details(_: &mut dyn Ctx, args: &mut [Value]) -> R {
             "x25519"
         }
     };
-    put(&mut a, section, Value::Array(Rc::new(parts)));
-    put(&mut a, "type", Value::Int(key.keytype()));
-    Ok(Value::Array(Rc::new(a)))
+    put(&mut a, section, Value::array(parts));
+    put(&mut a, "type", Value::int(key.keytype()));
+    Ok(Value::array(a))
 }
 
 /// A string option of openssl_pkey_new()'s and openssl_pkey_export()'s options.
 fn option(args: &[Value], i: usize, name: &str) -> Option<Value> {
-    match arg(args, i) {
-        Value::Array(a) => a.get(&AKey::from_string(PhpStr::from(name))).map(Value::deref),
-        _ => None,
-    }
+    arg(args, i).as_array()?.get(&AKey::from_string(PhpStr::from(name))).map(Value::deref)
 }
 
 fn bn(a: &PhpArray, name: &str) -> Option<Vec<u8>> {
-    match a.get(&AKey::from_string(PhpStr::from(name))).map(Value::deref) {
-        Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
-        _ => None,
-    }
+    a.get(&AKey::from_string(PhpStr::from(name))).map(Value::deref)?.as_str().map(|s| s.as_bytes().to_vec())
 }
 
 fn openssl_pkey_new(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    if let Some(Value::Array(data)) = option(args, 0, "rsa") {
-        let (Some(n), Some(d)) = (bn(&data, "n"), bn(&data, "d")) else { return Ok(Value::Bool(false)) };
+    if let Some(Ok(data)) = option(args, 0, "rsa").map(Value::into_array) {
+        let (Some(n), Some(d)) = (bn(&data, "n"), bn(&data, "d")) else { return Ok(Value::FALSE) };
         let e = bn(&data, "e").unwrap_or_else(|| vec![1, 0, 1]);
         return match Key::rsa_from_parts(&n, &e, Some(&d), bn(&data, "p").as_deref(), bn(&data, "q").as_deref()) {
             Ok(k) => Ok(new_key(ctx, Rc::new(k), true)),
             Err(e) => {
                 push_error(ctx, e.queued());
-                Ok(Value::Bool(false))
+                Ok(Value::FALSE)
             }
         };
     }
-    if let Some(Value::Array(data)) = option(args, 0, "ec") {
-        let curve = match data.get(&AKey::from_string(PhpStr::from("curve_name"))).map(Value::deref) {
-            Some(Value::Str(c)) if !c.is_empty() => {
+    if let Some(Ok(data)) = option(args, 0, "ec").map(Value::into_array) {
+        let curve = match data.get(&AKey::from_string(PhpStr::from("curve_name"))).map(Value::deref).and_then(|v| v.into_str().ok()) {
+            Some(c) if !c.is_empty() => {
                 let name = String::from_utf8_lossy(c.as_bytes()).into_owned();
                 match pkey::Curve::by_name(&name) {
                     Some(c) => c,
                     None => {
                         warn(ctx, &format!("Unknown elliptic curve (short) name {name}"));
-                        return Ok(Value::Bool(false));
+                        return Ok(Value::FALSE);
                     }
                 }
             }
             _ => {
                 warn(ctx, "Missing params: curve_name");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         };
         let (d, x, y) = (bn(&data, "d"), bn(&data, "x"), bn(&data, "y"));
@@ -814,28 +805,28 @@ fn openssl_pkey_new(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         let private = d.is_some();
         return match Key::ec_from_parts(curve, d.as_deref(), x.as_deref(), y.as_deref()) {
             Ok(k) => Ok(new_key(ctx, Rc::new(k), private)),
-            Err(_) => Ok(Value::Bool(false)),
+            Err(_) => Ok(Value::FALSE),
         };
     }
     // DSA, DH and the 448-bit curves are not implemented: no key, as when
     // OpenSSL cannot make one from the parts given.
     for name in ["dsa", "dh", "x448", "ed448"] {
-        if let Some(Value::Array(_)) = option(args, 0, name) {
+        if option(args, 0, name).is_some_and(|v| v.is_array()) {
             push_error(ctx, UNSUPPORTED);
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     for (name, x) in [("ed25519", false), ("x25519", true)] {
-        if let Some(Value::Array(data)) = option(args, 0, name) {
+        if let Some(Ok(data)) = option(args, 0, name).map(Value::into_array) {
             let private = bn(&data, "priv_key");
             let public = bn(&data, "pub_key");
             let key = match (private, public) {
                 (Some(p), _) => {
-                    let Ok(p): Result<[u8; 32], _> = p.try_into() else { return Ok(Value::Bool(false)) };
+                    let Ok(p): Result<[u8; 32], _> = p.try_into() else { return Ok(Value::FALSE) };
                     if x { Key::x25519_from_secret(p) } else { Key::ed25519_from_seed(p) }
                 }
                 (None, Some(p)) => {
-                    let Ok(p): Result<[u8; 32], _> = p.try_into() else { return Ok(Value::Bool(false)) };
+                    let Ok(p): Result<[u8; 32], _> = p.try_into() else { return Ok(Value::FALSE) };
                     let k = if x { Key::X25519 { public: p, secret: None } } else { Key::Ed25519 { public: p, seed: None } };
                     return Ok(new_key(ctx, Rc::new(k), false));
                 }
@@ -854,27 +845,27 @@ fn openssl_pkey_new(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let bits = option(args, 0, "private_key_bits").map_or(2048, |v| v.to_int());
     if matches!(kind, pkey::KEYTYPE_RSA | pkey::KEYTYPE_DSA | pkey::KEYTYPE_DH) && bits < 384 {
         warn(ctx, &format!("Private key length must be at least 384 bits, configured to {bits}"));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let key = match kind {
         pkey::KEYTYPE_RSA => match Key::generate_rsa(bits as usize, 65537) {
             Ok(k) => k,
             Err(e) => {
                 push_error(ctx, e.queued());
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         },
         pkey::KEYTYPE_EC => {
-            let Some(Value::Str(name)) = option(args, 0, "curve_name") else {
+            let Some(name) = option(args, 0, "curve_name").and_then(|v| v.into_str().ok()) else {
                 warn(ctx, "Missing configuration value: \"curve_name\" not set");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             };
             let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
             match pkey::Curve::by_name(&name) {
                 Some(c) => Key::generate_ec(c),
                 None => {
                     warn(ctx, &format!("Unknown elliptic curve (short) name {name}"));
-                    return Ok(Value::Bool(false));
+                    return Ok(Value::FALSE);
                 }
             }
         }
@@ -882,7 +873,7 @@ fn openssl_pkey_new(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         pkey::KEYTYPE_X25519 => Key::generate_x25519(),
         _ => {
             warn(ctx, "Unsupported private key type");
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     Ok(new_key(ctx, Rc::new(key), true))
@@ -897,8 +888,8 @@ fn export_pem(ctx: &mut dyn Ctx, args: &[Value], out_arg: usize) -> Result<Optio
     };
     let _ = out_arg;
     let encrypt = option(args, 3, "encrypt_key").is_none_or(|v| v.to_bool());
-    let cipher = match option(args, 3, "encrypt_key_cipher") {
-        Some(Value::Int(c)) => match c {
+    let cipher = match option(args, 3, "encrypt_key_cipher").and_then(|v| v.as_int()) {
+        Some(c) => match c {
             5 => "aes-128-cbc",
             6 => "aes-192-cbc",
             7 => "aes-256-cbc",
@@ -921,20 +912,20 @@ fn openssl_pkey_export(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match export_pem(ctx, args, 1)? {
         Some(pem) => {
             set_ref(args, 1, s(pem));
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
 fn openssl_pkey_export_to_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some(pem) = export_pem(ctx, args, 1)? else { return Ok(Value::Bool(false)) };
-    let Some(path) = output_path(ctx, &bytes(args, 1), "output_filename") else { return Ok(Value::Bool(false)) };
+    let Some(pem) = export_pem(ctx, args, 1)? else { return Ok(Value::FALSE) };
+    let Some(path) = output_path(ctx, &bytes(args, 1), "output_filename") else { return Ok(Value::FALSE) };
     if std::fs::write(&path, pem).is_err() {
         push_error(ctx, "error:80000002:system library::No such file or directory");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn openssl_pkey_derive(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -942,8 +933,8 @@ fn openssl_pkey_derive(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if len < 0 {
         return Err(value_error(ctx, "Argument #3 ($key_length) must be greater than or equal to 0".into()));
     }
-    let Some(own) = key_from_value(ctx, &arg(args, 1), false, Some(Vec::new()))? else { return Ok(Value::Bool(false)) };
-    let Some(peer) = key_from_value(ctx, &arg(args, 0), true, None)? else { return Ok(Value::Bool(false)) };
+    let Some(own) = key_from_value(ctx, &arg(args, 1), false, Some(Vec::new()))? else { return Ok(Value::FALSE) };
+    let Some(peer) = key_from_value(ctx, &arg(args, 0), true, None)? else { return Ok(Value::FALSE) };
     match own.derive(&peer) {
         Ok(mut secret) => {
             if len > 0 && (len as usize) < secret.len() {
@@ -953,7 +944,7 @@ fn openssl_pkey_derive(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
         Err(e) => {
             push_error(ctx, e.queued());
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -963,39 +954,38 @@ fn sign_md(args: &[Value], i: usize) -> Result<Option<digest::Md>, ()> {
     if !given(args, i) {
         return Ok(Some(digest::Md::Sha1));
     }
-    match arg(args, i) {
-        Value::Str(name) => digest::by_name(name.as_bytes()).map(Some).ok_or(()),
-        v => {
-            let n = v.to_int();
-            if n == 0 {
-                return Ok(None);
-            }
-            digest::by_algo(n).map(Some).ok_or(())
-        }
+    let v = arg(args, i);
+    if let Some(name) = v.as_str() {
+        return digest::by_name(name.as_bytes()).map(Some).ok_or(());
     }
+    let n = v.to_int();
+    if n == 0 {
+        return Ok(None);
+    }
+    digest::by_algo(n).map(Some).ok_or(())
 }
 
 fn openssl_sign(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Some(key) = key_from_value(ctx, &arg(args, 2), false, Some(Vec::new()))? else {
         warn(ctx, "Supplied key param cannot be coerced into a private key");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let Ok(md) = sign_md(args, 3) else {
         warn(ctx, "Unknown digest algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     if md.is_some_and(|m| !m.usable()) {
         push_error(ctx, UNSUPPORTED);
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     match key.sign(md, &bytes(args, 0)) {
         Ok(sig) => {
             set_ref(args, 1, s(sig));
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => {
             push_error(ctx, e.queued());
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1003,13 +993,13 @@ fn openssl_sign(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn openssl_verify(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Ok(md) = sign_md(args, 3) else {
         warn(ctx, "Unknown digest algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let Some(key) = key_from_value(ctx, &arg(args, 2), true, None)? else {
         warn(ctx, "Supplied key param cannot be coerced into a public key");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
-    Ok(Value::Int(key.verify(md, &bytes(args, 0), &bytes(args, 1))))
+    Ok(Value::int(key.verify(md, &bytes(args, 0), &bytes(args, 1))))
 }
 
 /// An RSA operation with a padding (Key::public_encrypt and the rest).
@@ -1019,17 +1009,17 @@ fn rsa_op(ctx: &mut dyn Ctx, args: &mut [Value], public: bool, missing: &str, op
     let pass = if public { None } else { Some(Vec::new()) };
     let Some(key) = key_from_value(ctx, &arg(args, 2), public, pass)? else {
         warn(ctx, missing);
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let padding = if given(args, 3) { arg(args, 3).to_int() } else { pkey::PKCS1_PADDING };
     match op(&key, &bytes(args, 0), padding) {
         Ok(out) => {
             set_ref(args, 1, s(out));
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => {
             push_error(ctx, e.queued());
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1052,14 +1042,14 @@ fn openssl_private_decrypt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 /// openssl_seal: the data under a random key, that key under each public key.
 fn openssl_seal(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Array(keys) = arg(args, 3) else { return Ok(Value::Bool(false)) };
+    let Ok(keys) = arg(args, 3).into_array() else { return Ok(Value::FALSE) };
     if keys.is_empty() {
         return Err(value_error(ctx, "Argument #4 ($public_key) must not be empty".into()));
     }
     let method = bytes(args, 4);
     let Some(spec) = cipher::by_name(&method) else {
         warn(ctx, "Unknown cipher algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     if args.len() < 6 && spec.iv_len > 0 {
         return Err(value_error(ctx, "Argument #6 ($iv) cannot be null for the chosen cipher algorithm".into()));
@@ -1070,41 +1060,41 @@ fn openssl_seal(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             Some(k) => pubkeys.push(k),
             None => {
                 warn(ctx, &format!("Not a public key ({}th member of pubkeys)", i + 1));
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
     let secret = pkey::random(spec.key_len);
     let iv = pkey::random(spec.iv_len);
     let job = cipher::Job { spec, key: &secret, iv: &iv, data: &bytes(args, 0), aad: &[], pad: true, tag_len: 16, tag: &[] };
-    let Ok((sealed, _)) = cipher::encrypt(&job) else { return Ok(Value::Bool(false)) };
+    let Ok((sealed, _)) = cipher::encrypt(&job) else { return Ok(Value::FALSE) };
     let mut ekeys = Vec::new();
     for k in &pubkeys {
         match k.public_encrypt(&secret, pkey::PKCS1_PADDING) {
             Ok(e) => ekeys.push(s(e)),
             Err(e) => {
                 push_error(ctx, e.queued());
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
     if !sealed.is_empty() {
         set_ref(args, 1, s(sealed.clone()));
-        set_ref(args, 2, Value::Array(Rc::new(PhpArray::from_list(ekeys))));
+        set_ref(args, 2, Value::array(PhpArray::from_list(ekeys)));
         set_ref(args, 5, s(iv));
     }
-    Ok(Value::Int(sealed.len() as i64))
+    Ok(Value::int(sealed.len() as i64))
 }
 
 fn openssl_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Some(key) = key_from_value(ctx, &arg(args, 3), false, Some(Vec::new()))? else {
         warn(ctx, "Unable to coerce parameter 4 into a private key");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let method = bytes(args, 4);
     let Some(spec) = cipher::by_name(&method) else {
         warn(ctx, "Unknown cipher algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let iv = opt_bytes(args, 5);
     if spec.iv_len > 0 {
@@ -1113,30 +1103,30 @@ fn openssl_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         };
         if iv.len() != spec.iv_len {
             warn(ctx, "IV length is invalid");
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     let iv = iv.unwrap_or_default();
     let secret = match key.private_decrypt(&bytes(args, 2), pkey::PKCS1_PADDING) {
         Ok(s) if s.len() == spec.key_len => s,
-        Ok(_) => return Ok(Value::Bool(false)),
+        Ok(_) => return Ok(Value::FALSE),
         Err(e) => {
             push_error(ctx, e.queued());
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let job = cipher::Job { spec, key: &secret, iv: &iv, data: &bytes(args, 0), aad: &[], pad: true, tag_len: 0, tag: &[] };
     match cipher::decrypt(&job) {
         Ok(out) if !out.is_empty() => {
             set_ref(args, 1, s(out));
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
-        Ok(_) => Ok(Value::Bool(false)),
+        Ok(_) => Ok(Value::FALSE),
         Err(e) => {
             if let Some(q) = e.queued() {
                 push_error(ctx, q);
             }
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1232,14 +1222,14 @@ fn openssl_encrypt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let method = bytes(args, 1);
     let Some(spec) = cipher::by_name(&method) else {
         warn(ctx, "Unknown cipher algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let options = arg(args, 3).to_int();
     let iv = bytes(args, 4);
     let tag_len = if given(args, 7) { arg(args, 7).to_int() } else { 16 };
     let has_tag = args.len() > 5;
     let Some((key, iv)) = prepare(ctx, &spec, &bytes(args, 2), &iv, options, Tag::Make(tag_len.max(0) as usize)) else {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let data = bytes(args, 0);
     let aad = bytes(args, 6);
@@ -1250,7 +1240,7 @@ fn openssl_encrypt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             if let Some(q) = e.queued() {
                 push_error(ctx, q);
             }
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let out = if options & RAW_DATA != 0 { out } else { der::base64_encode(&out).into_bytes() };
@@ -1262,14 +1252,14 @@ fn openssl_encrypt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         if !ok {
             push_error(ctx, "error:1C80006E:Provider routines::invalid tag");
             warn(ctx, "Retrieving verification tag failed");
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         set_ref(args, 5, s(full_tag[..tag_len as usize].to_vec()));
     } else if has_tag {
-        set_ref(args, 5, Value::Null);
+        set_ref(args, 5, Value::NULL);
     } else if spec.is_aead() {
         warn(ctx, "A tag should be provided when using AEAD mode");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     Ok(s(out))
 }
@@ -1281,7 +1271,7 @@ fn openssl_decrypt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     let Some(spec) = cipher::by_name(&method) else {
         warn(ctx, "Unknown cipher algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let options = arg(args, 3).to_int();
     let mut data = bytes(args, 0);
@@ -1290,7 +1280,7 @@ fn openssl_decrypt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     let tag = opt_bytes(args, 5);
     let Some((key, iv)) = prepare(ctx, &spec, &bytes(args, 2), &bytes(args, 4), options, Tag::Check(tag.as_deref())) else {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let aad = bytes(args, 6);
     let tag = tag.unwrap_or_default();
@@ -1301,7 +1291,7 @@ fn openssl_decrypt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             if let Some(q) = e.queued() {
                 push_error(ctx, q);
             }
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1312,10 +1302,10 @@ fn cipher_length(ctx: &mut dyn Ctx, args: &[Value], iv: bool) -> R {
         return Err(value_error(ctx, "Argument #1 ($cipher_algo) must not be empty".into()));
     }
     match cipher::by_name(&method) {
-        Some(spec) => Ok(Value::Int(if iv { spec.iv_len } else { spec.key_len } as i64)),
+        Some(spec) => Ok(Value::int(if iv { spec.iv_len } else { spec.key_len } as i64)),
         None => {
             warn(ctx, "Unknown cipher algorithm");
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1333,11 +1323,11 @@ fn openssl_cipher_key_length(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn openssl_digest(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Some(md) = digest::by_name(&bytes(args, 1)) else {
         warn(ctx, "Unknown digest algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     if !md.usable() {
         push_error(ctx, UNSUPPORTED);
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let h = md.hash(&bytes(args, 0));
     Ok(s(if arg(args, 2).to_bool() { h } else { hex(&h) }))
@@ -1355,13 +1345,13 @@ fn openssl_pbkdf2(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let name = if given(args, 4) { bytes(args, 4) } else { b"sha1".to_vec() };
     let Some(md) = digest::by_name(&name).filter(|m| m.has_hmac() && m.usable()) else {
         warn(ctx, "Unknown digest algorithm");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     Ok(s(md.pbkdf2(&bytes(args, 0), &bytes(args, 1), iterations.min(i64::from(u32::MAX)) as u32, len as usize)))
 }
 
 fn list(names: Vec<&'static str>) -> Value {
-    Value::Array(Rc::new(PhpArray::from_list(names.into_iter().map(s).collect())))
+    Value::array(PhpArray::from_list(names.into_iter().map(s).collect()))
 }
 
 fn openssl_get_md_methods(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -1379,14 +1369,14 @@ fn openssl_get_curve_names(_: &mut dyn Ctx, _: &mut [Value]) -> R {
 fn openssl_random_pseudo_bytes(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let len = arg(args, 0).to_int();
     if len <= 0 {
-        set_ref(args, 1, Value::Bool(false));
+        set_ref(args, 1, Value::FALSE);
         return Err(value_error(ctx, "Argument #1 ($length) must be greater than 0".into()));
     }
     if len > i64::from(i32::MAX) {
-        set_ref(args, 1, Value::Bool(false));
+        set_ref(args, 1, Value::FALSE);
         return Err(value_error(ctx, format!("Argument #1 ($length) must be less than or equal to {}", i32::MAX)));
     }
     let out = pkey::random(len as usize);
-    set_ref(args, 1, Value::Bool(true));
+    set_ref(args, 1, Value::TRUE);
     Ok(s(out))
 }
