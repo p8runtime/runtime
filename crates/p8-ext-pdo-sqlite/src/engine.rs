@@ -3,7 +3,7 @@
 
 use std::num::NonZero;
 use std::sync::Arc;
-use turso_core::{Connection, Database, DatabaseOpts, LimboError, OpenFlags, OpenOptions, PlatformIO, SqliteDialect, StepResult, Value, IO};
+use turso_core::{Connection, Database, DatabaseOpts, LimboError, OpenFlags, OpenOptions, PlatformIO, SqliteDialect, StepResult, Value as SqlValue, IO};
 
 /// SQLite's primary result codes, the ones PDO tells apart.
 pub const SQLITE_ERROR: i64 = 1;
@@ -182,7 +182,7 @@ pub struct Prepared {
     conn: Arc<Connection>,
 }
 
-fn to_turso(v: Val) -> Value {
+fn to_turso(v: Val) -> SqlValue {
     match v {
         Val::Null => Value::Null,
         Val::Int(i) => Value::from_i64(i),
@@ -200,13 +200,13 @@ fn to_turso(v: Val) -> Value {
     }
 }
 
-fn from_turso(v: &Value) -> Val {
+fn from_turso(v: &SqlValue) -> Val {
     match v {
-        Value::Null => Val::Null,
-        Value::Numeric(turso_core::Numeric::Integer(i)) => Val::Int(*i),
-        Value::Numeric(turso_core::Numeric::Float(f)) => Val::Float(f64::from(*f)),
-        Value::Text(t) => Val::Text(t.as_str().as_bytes().to_vec()),
-        Value::Blob(b) => Val::Blob(b.to_vec()),
+        SqlValue::Null => Val::Null,
+        SqlValue::Numeric(turso_core::Numeric::Integer(i)) => Val::Int(*i),
+        SqlValue::Numeric(turso_core::Numeric::Float(f)) => Val::Float(f64::from(*f)),
+        SqlValue::Text(t) => Val::Text(t.as_str().as_bytes().to_vec()),
+        SqlValue::Blob(b) => Val::Blob(b.to_vec()),
     }
 }
 
