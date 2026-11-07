@@ -41,7 +41,7 @@ fn register(registry: &mut Registry) {
 static BUILTINS: &[Builtin] = &[Builtin { name: "pdo_drivers", run: dbh::pdo_drivers, by_ref: &[] }];
 
 fn row_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, p8_runtime::ext::Throw> {
-    Err(state::exception(ctx, "You may not create a PDORow manually".into(), Value::Int(0), None))
+    Err(state::exception(ctx, "You may not create a PDORow manually".into(), Value::int(0), None))
 }
 
 macro_rules! m {
