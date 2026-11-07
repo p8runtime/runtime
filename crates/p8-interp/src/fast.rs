@@ -1044,12 +1044,21 @@ pub(crate) fn put(slot: &mut Value, v: Value) -> bool {
 }
 
 /// `put` into a variable: through the reference it holds, if it is one.
+/// The plain test comes first (a plain value is never a reference), so
+/// the common store is the one tag compare `put` makes.
 #[inline(always)]
 #[must_use = "a released value may leave a destructor due: test `ids.has_pending()`"]
 pub(crate) fn put_var(slot: &mut Value, v: Value) -> bool {
+    if is_plain(slot) {
+        std::mem::forget(std::mem::replace(slot, v));
+        return false;
+    }
     match slot.as_reference() {
         Some(cell) => write_ref(cell, v),
-        None => put(slot, v),
+        None => {
+            release(std::mem::replace(slot, v));
+            true
+        }
     }
 }
 
