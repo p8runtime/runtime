@@ -108,13 +108,13 @@ fn result(o: &Object) -> &ResultData {
 }
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 /// An optional string argument: None when missing or null.
 fn opt_str(args: &[Value], i: usize) -> Option<PhpStr> {
     match arg(args, i) {
-        Value::Null => None,
+        v if v.is_null() => None,
         v => Some(v.to_php_string().unwrap_or_else(PhpStr::empty)),
     }
 }
@@ -125,7 +125,7 @@ fn str_arg(args: &[Value], i: usize) -> PhpStr {
 
 fn report_mode(ctx: &mut dyn Ctx) -> i64 {
     match ctx.state("mysqli.report_mode") {
-        Value::Null => REPORT_ERROR | REPORT_STRICT,
+        v if v.is_null() => REPORT_ERROR | REPORT_STRICT,
         v => v.to_int(),
     }
 }
@@ -139,7 +139,7 @@ fn sql_error(ctx: &mut dyn Ctx, func: &str, e: &p8_mysqlnd::Error) -> Result<(),
     }
     let mut t = ctx.throw("mysqli_sql_exception", e.message.clone());
     if let Throw::Error { props, .. } = &mut t {
-        props.push(("code", Value::Int(e.code as i64)));
+        props.push(("code", Value::int(e.code as i64)));
         props.push(("sqlstate", Value::str(e.sqlstate.as_str())));
     }
     Err(t)
@@ -186,13 +186,13 @@ fn link_props(o: &Object) -> Vec<(&'static str, Value)> {
     let l = link(o);
     let mut v = vec![
         ("client_info", Value::str(CLIENT_INFO)),
-        ("client_version", Value::Int(CLIENT_VERSION)),
+        ("client_version", Value::int(CLIENT_VERSION)),
     ];
     let connect = CONNECT_ERROR.with(|c| c.borrow().clone());
-    v.push(("connect_errno", Value::Int(connect.0)));
-    v.push(("connect_error", connect.1.map_or(Value::Null, |s| Value::str(s.as_str()))));
+    v.push(("connect_errno", Value::int(connect.0)));
+    v.push(("connect_error", connect.1.map_or(Value::NULL, |s| Value::str(s.as_str()))));
     if l.state.get() != LinkState::Connected {
-        v.push(("errno", Value::Int(l.errno.get() as i64)));
+        v.push(("errno", Value::int(l.errno.get() as i64)));
         v.push(("error", Value::str(l.error.borrow().as_str())));
         return v;
     }
@@ -201,26 +201,26 @@ fn link_props(o: &Object) -> Vec<(&'static str, Value)> {
     let mut list = PhpArray::new();
     if l.errno.get() != 0 {
         let mut e = PhpArray::new();
-        e.insert(Key::from_string(PhpStr::from("errno")), Value::Int(l.errno.get() as i64));
+        e.insert(Key::from_string(PhpStr::from("errno")), Value::int(l.errno.get() as i64));
         e.insert(Key::from_string(PhpStr::from("sqlstate")), Value::str(l.sqlstate.borrow().as_str()));
         e.insert(Key::from_string(PhpStr::from("error")), Value::str(l.error.borrow().as_str()));
-        let _ = list.push(Value::Array(Rc::new(e)));
+        let _ = list.push(Value::array(e));
     }
     v.extend([
-        ("affected_rows", Value::Int(l.affected.get())),
-        ("errno", Value::Int(l.errno.get() as i64)),
+        ("affected_rows", Value::int(l.affected.get())),
+        ("errno", Value::int(l.errno.get() as i64)),
         ("error", Value::str(l.error.borrow().as_str())),
-        ("error_list", Value::Array(Rc::new(list))),
-        ("field_count", Value::Int(l.field_count.get() as i64)),
+        ("error_list", Value::array(list)),
+        ("field_count", Value::int(l.field_count.get() as i64)),
         ("host_info", Value::str(c.host_info.as_str())),
-        ("info", if c.info.is_empty() { Value::Null } else { Value::Str(PhpStr::new(c.info.clone())) }),
-        ("insert_id", Value::Int(l.insert_id.get() as i64)),
+        ("info", if c.info.is_empty() { Value::NULL } else { Value::str(PhpStr::new(c.info.clone())) }),
+        ("insert_id", Value::int(l.insert_id.get() as i64)),
         ("server_info", Value::str(c.server_version.as_str())),
-        ("server_version", Value::Int(server_version(&c.server_version))),
+        ("server_version", Value::int(server_version(&c.server_version))),
         ("sqlstate", Value::str(l.sqlstate.borrow().as_str())),
-        ("protocol_version", Value::Int(c.protocol_version as i64)),
-        ("thread_id", Value::Int(c.thread_id as i64)),
-        ("warning_count", Value::Int(c.warnings as i64)),
+        ("protocol_version", Value::int(c.protocol_version as i64)),
+        ("thread_id", Value::int(c.thread_id as i64)),
+        ("warning_count", Value::int(c.warnings as i64)),
     ]);
     v
 }
@@ -256,15 +256,15 @@ fn result_props(o: &Object) -> [(&'static str, Value); 5] {
     let r = result(o);
     let set = r.set.borrow();
     let lengths = match &*r.lengths.borrow() {
-        Some(l) => Value::Array(Rc::new(PhpArray::from_list(l.iter().map(|&n| Value::Int(n)).collect()))),
-        None => Value::Null,
+        Some(l) => Value::array(PhpArray::from_list(l.iter().map(|&n| Value::int(n)).collect())),
+        None => Value::NULL,
     };
     [
-        ("current_field", Value::Int(r.field.get() as i64)),
-        ("field_count", Value::Int(set.columns.len() as i64)),
+        ("current_field", Value::int(r.field.get() as i64)),
+        ("field_count", Value::int(set.columns.len() as i64)),
         ("lengths", lengths),
-        ("num_rows", Value::Int(set.rows.len() as i64)),
-        ("type", Value::Int(0)),
+        ("num_rows", Value::int(set.rows.len() as i64)),
+        ("type", Value::int(0)),
     ]
 }
 
@@ -300,7 +300,7 @@ fn real_connect(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], func: &str
     let password = opt_str(args, 2).or_else(|| ini(ctx, b"mysqli.default_pw")).unwrap_or_else(PhpStr::empty);
     let database = opt_str(args, 3);
     let port = match arg(args, 4) {
-        Value::Null => ini(ctx, b"mysqli.default_port").map_or(3306, |p| String::from_utf8_lossy(p.as_bytes()).trim().parse().unwrap_or(3306)),
+        v if v.is_null() => ini(ctx, b"mysqli.default_port").map_or(3306, |p| String::from_utf8_lossy(p.as_bytes()).trim().parse().unwrap_or(3306)),
         v => v.to_int(),
     };
     let socket = opt_str(args, 5).or_else(|| ini(ctx, b"mysqli.default_socket"));
@@ -353,17 +353,17 @@ fn new_link(ctx: &mut dyn Ctx) -> Rc<Object> {
 }
 
 fn mysqli_init(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Object(new_link(ctx)))
+    Ok(Value::object(new_link(ctx)))
 }
 
 fn mysqli_connect(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = new_link(ctx);
-    Ok(if real_connect(ctx, &o, args, "mysqli_connect")? { Value::Object(o) } else { Value::Bool(false) })
+    Ok(if real_connect(ctx, &o, args, "mysqli_connect")? { Value::object(o) } else { Value::FALSE })
 }
 
 fn mysqli_real_connect(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
-    Ok(Value::Bool(real_connect(ctx, &o, &args[1..], "mysqli_real_connect")?))
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
+    Ok(Value::bool(real_connect(ctx, &o, &args[1..], "mysqli_real_connect")?))
 }
 
 fn m_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -372,24 +372,24 @@ fn m_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     if !args.is_empty() {
         real_connect(ctx, this, args, "mysqli::__construct")?;
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn m_real_connect(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    Ok(Value::Bool(real_connect(ctx, this, args, "mysqli::real_connect")?))
+    Ok(Value::bool(real_connect(ctx, this, args, "mysqli::real_connect")?))
 }
 
 fn mysqli_connect_errno(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Int(CONNECT_ERROR.with(|c| c.borrow().0)))
+    Ok(Value::int(CONNECT_ERROR.with(|c| c.borrow().0)))
 }
 
 fn mysqli_connect_error(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(CONNECT_ERROR.with(|c| c.borrow().1.clone()).map_or(Value::Null, |s| Value::str(s.as_str())))
+    Ok(CONNECT_ERROR.with(|c| c.borrow().1.clone()).map_or(Value::NULL, |s| Value::str(s.as_str())))
 }
 
 fn mysqli_report(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    *ctx.state("mysqli.report_mode") = Value::Int(arg(args, 0).to_int());
-    Ok(Value::Bool(true))
+    *ctx.state("mysqli.report_mode") = Value::int(arg(args, 0).to_int());
+    Ok(Value::TRUE)
 }
 
 // ---- operations on a link (function and method) ----
@@ -406,7 +406,7 @@ macro_rules! link_op {
     };
     ($op:ident, $func:ident, $fname:literal) => {
         fn $func(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-            let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
+            let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
             $op(ctx, &o, &mut args[1..], $fname)
         }
     };
@@ -452,7 +452,7 @@ fn outcome_value(ctx: &mut dyn Ctx, this: &Rc<Object>, outcome: Outcome) -> Valu
             l.field_count.set(0);
             drop(conn);
             sync(this);
-            Value::Bool(true)
+            Value::TRUE
         }
         Outcome::Rows(set) => {
             l.affected.set(set.rows.len() as i64);
@@ -460,7 +460,7 @@ fn outcome_value(ctx: &mut dyn Ctx, this: &Rc<Object>, outcome: Outcome) -> Valu
             l.field_count.set(set.columns.len() as u32);
             drop(conn);
             sync(this);
-            Value::Object(new_result(ctx, set))
+            Value::object(new_result(ctx, set))
         }
     }
 }
@@ -502,7 +502,7 @@ fn query(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -
         Err(e) => {
             sync(this);
             report(ctx, func, &e)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -513,12 +513,12 @@ fn simple(ctx: &mut dyn Ctx, this: &Rc<Object>, sql: &[u8], func: &str) -> R {
     match run(this, sql) {
         Ok(_) => {
             sync(this);
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => {
             sync(this);
             report(ctx, func, &e)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -530,10 +530,10 @@ fn select_db(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &st
     l.set_error(r.as_ref().err());
     sync(this);
     match r {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             report(ctx, func, &e)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -545,10 +545,10 @@ fn set_charset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &
     l.set_error(r.as_ref().err());
     sync(this);
     match r {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             report(ctx, func, &e)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -564,33 +564,33 @@ fn character_set_name(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: 
 fn get_charset(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
     let nr = l.conn.borrow().as_ref().expect("connected").charset;
-    let Some(cs) = p8_mysqlnd::charset_by_nr(nr) else { return Ok(Value::Null) };
+    let Some(cs) = p8_mysqlnd::charset_by_nr(nr) else { return Ok(Value::NULL) };
     let class = ctx.class(b"stdClass").expect("stdClass");
     let o = ctx.new_object(&class);
     for (k, v) in [
         ("charset", Value::str(cs.name)),
         ("collation", Value::str(cs.collation)),
         ("dir", Value::str("")),
-        ("min_length", Value::Int(1)),
-        ("max_length", Value::Int(i64::from(cs.max_len))),
-        ("number", Value::Int(i64::from(cs.nr))),
-        ("state", Value::Int(1)),
+        ("min_length", Value::int(1)),
+        ("max_length", Value::int(i64::from(cs.max_len))),
+        ("number", Value::int(i64::from(cs.nr))),
+        ("state", Value::int(1)),
         ("comment", Value::str(cs.comment)),
     ] {
         o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(k)), v);
     }
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn escape(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
     let nr = l.conn.borrow().as_ref().expect("connected").charset;
     let cs = p8_mysqlnd::charset_by_nr(nr).or_else(|| p8_mysqlnd::charset("utf8mb4")).expect("a known charset");
-    Ok(Value::Str(PhpStr::new(p8_mysqlnd::escape(&cs, str_arg(args, 0).as_bytes()))))
+    Ok(Value::str(PhpStr::new(p8_mysqlnd::escape(&cs, str_arg(args, 0).as_bytes()))))
 }
 
 fn errno(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
-    Ok(Value::Int(connected(ctx, this)?.errno.get() as i64))
+    Ok(Value::int(connected(ctx, this)?.errno.get() as i64))
 }
 
 fn error(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
@@ -607,7 +607,7 @@ fn close(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
         c.close();
     }
     l.state.set(LinkState::Closed);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn ping(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], func: &str) -> R {
@@ -616,20 +616,20 @@ fn ping(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], func: &str) -> R 
     l.set_error(r.as_ref().err());
     sync(this);
     match r {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             report(ctx, func, &e)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
 
 fn insert_id(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
-    Ok(Value::Int(connected(ctx, this)?.insert_id.get() as i64))
+    Ok(Value::int(connected(ctx, this)?.insert_id.get() as i64))
 }
 
 fn affected_rows(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
-    Ok(Value::Int(connected(ctx, this)?.affected.get()))
+    Ok(Value::int(connected(ctx, this)?.affected.get()))
 }
 
 fn server_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
@@ -639,7 +639,7 @@ fn server_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -
 
 fn server_version_op(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
-    Ok(Value::Int(server_version(&l.conn.borrow().as_ref().expect("connected").server_version)))
+    Ok(Value::int(server_version(&l.conn.borrow().as_ref().expect("connected").server_version)))
 }
 
 fn host_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
@@ -649,17 +649,17 @@ fn host_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> 
 
 fn proto_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
-    Ok(Value::Int(l.conn.borrow().as_ref().expect("connected").protocol_version as i64))
+    Ok(Value::int(l.conn.borrow().as_ref().expect("connected").protocol_version as i64))
 }
 
 fn thread_id(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
-    Ok(Value::Int(l.conn.borrow().as_ref().expect("connected").thread_id as i64))
+    Ok(Value::int(l.conn.borrow().as_ref().expect("connected").thread_id as i64))
 }
 
 fn more_results(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
-    Ok(Value::Bool(l.conn.borrow().as_ref().expect("connected").more_results()))
+    Ok(Value::bool(l.conn.borrow().as_ref().expect("connected").more_results()))
 }
 
 /// next_result(): read the next result (mysqli then hands it out through
@@ -668,34 +668,34 @@ fn next_result(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], func: &str
     let l = connected(ctx, this)?;
     let r = l.conn.borrow_mut().as_mut().expect("connected").next_result();
     match r {
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
         Some(Ok(_)) => {
             l.set_error(None);
             sync(this);
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Some(Err(e)) => {
             l.set_error(Some(&e));
             sync(this);
             report(ctx, func, &e)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
 
 fn field_count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
-    Ok(Value::Int(connected(ctx, this)?.field_count.get() as i64))
+    Ok(Value::int(connected(ctx, this)?.field_count.get() as i64))
 }
 
 fn warning_count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
-    Ok(Value::Int(l.conn.borrow().as_ref().expect("connected").warnings as i64))
+    Ok(Value::int(l.conn.borrow().as_ref().expect("connected").warnings as i64))
 }
 
 fn info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let l = connected(ctx, this)?;
     let info = l.conn.borrow().as_ref().expect("connected").info.clone();
-    Ok(if info.is_empty() { Value::Null } else { Value::Str(PhpStr::new(info)) })
+    Ok(if info.is_empty() { Value::NULL } else { Value::str(PhpStr::new(info)) })
 }
 
 fn autocommit(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
@@ -732,7 +732,7 @@ fn mysqli_get_client_info(_: &mut dyn Ctx, _: &mut [Value]) -> R {
 }
 
 fn mysqli_get_client_version(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Int(CLIENT_VERSION))
+    Ok(Value::int(CLIENT_VERSION))
 }
 
 fn m_get_client_info(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
@@ -754,7 +754,7 @@ macro_rules! result_op {
     };
     ($op:ident, $func:ident, $fname:literal) => {
         fn $func(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-            let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
+            let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
             $op(ctx, &o, &mut args[1..], $fname)
         }
     };
@@ -796,7 +796,7 @@ fn next_row(r: &ResultData) -> Option<Vec<(Vec<u8>, Value)>> {
         set.columns
             .iter()
             .zip(row)
-            .map(|(c, v)| (c.name.clone(), v.as_ref().map_or(Value::Null, |v| Value::Str(PhpStr::new(v.clone())))))
+            .map(|(c, v)| (c.name.clone(), v.as_ref().map_or(Value::NULL, |v| Value::str(PhpStr::new(v.clone())))))
             .collect(),
     )
 }
@@ -817,7 +817,7 @@ fn row_array(row: Vec<(Vec<u8>, Value)>, mode: i64) -> PhpArray {
 
 fn fetch(ctx: &mut dyn Ctx, this: &Rc<Object>, mode: i64) -> R {
     let r = live(ctx, this)?;
-    let row = next_row(r).map_or(Value::Null, |row| Value::Array(Rc::new(row_array(row, mode))));
+    let row = next_row(r).map_or(Value::NULL, |row| Value::array(row_array(row, mode)));
     sync_result(this);
     Ok(row)
 }
@@ -849,9 +849,9 @@ fn fetch_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &st
     let r = live(ctx, this)?;
     let mut all = PhpArray::new();
     while let Some(row) = next_row(r) {
-        let _ = all.push(Value::Array(Rc::new(row_array(row, mode))));
+        let _ = all.push(Value::array(row_array(row, mode)));
     }
-    Ok(Value::Array(Rc::new(all)))
+    Ok(Value::array(all))
 }
 
 fn fetch_column(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
@@ -862,7 +862,7 @@ fn fetch_column(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: 
         let n = if func.contains("::") { 1 } else { 2 };
         return Err(ctx.throw("ValueError", format!("{func}(): Argument #{n} ($column) must be greater than or equal to 0 and less than the number of fields")));
     }
-    Ok(next_row(r).map_or(Value::Bool(false), |mut row| row.swap_remove(column as usize).1))
+    Ok(next_row(r).map_or(Value::FALSE, |mut row| row.swap_remove(column as usize).1))
 }
 
 fn fetch_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
@@ -872,7 +872,7 @@ fn fetch_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: 
         return Err(ctx.throw("TypeError", format!("{func}(): Argument #{n} ($class) must be a valid class name, {} given", String::from_utf8_lossy(class_name.as_bytes()))));
     };
     let r = live(ctx, this)?;
-    let Some(row) = next_row(r) else { return Ok(Value::Null) };
+    let Some(row) = next_row(r) else { return Ok(Value::NULL) };
     let object = ctx.new_instance(&class, &mut [], false)?;
     for (name, value) in row {
         match class.slot(&name, Some(&class.lower)) {
@@ -883,14 +883,14 @@ fn fetch_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: 
         }
     }
     if class.method(b"__construct").is_some() {
-        let mut ctor_args: Vec<Value> = match arg(args, 1) {
-            Value::Array(a) => a.iter().map(|(_, v)| v.deref()).collect(),
-            _ => Vec::new(),
+        let mut ctor_args: Vec<Value> = match arg(args, 1).as_array() {
+            Some(a) => a.iter().map(|(_, v)| v.deref()).collect(),
+            None => Vec::new(),
         };
-        let callable = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(&object)), Value::str("__construct")])));
+        let callable = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(&object)), Value::str("__construct")]));
         ctx.call(&callable, &mut ctor_args)?;
     }
-    Ok(Value::Object(object))
+    Ok(Value::object(object))
 }
 
 /// A column as fetch_field() describes it (an stdClass).
@@ -899,7 +899,7 @@ fn field_object(ctx: &mut dyn Ctx, r: &ResultData, i: usize) -> Value {
     let c = &set.columns[i];
     let class = ctx.class(b"stdClass").expect("stdClass");
     let o = ctx.new_object(&class);
-    let bytes = |b: &[u8]| Value::Str(PhpStr::new(b.to_vec()));
+    let bytes = |b: &[u8]| Value::str(PhpStr::new(b.to_vec()));
     let fields = [
         ("name", bytes(&c.name)),
         ("orgname", bytes(&c.org_name)),
@@ -909,26 +909,26 @@ fn field_object(ctx: &mut dyn Ctx, r: &ResultData, i: usize) -> Value {
         ("db", bytes(&c.db)),
         ("catalog", bytes(&c.catalog)),
         // Always 0 for a buffered result since PHP 8.1.
-        ("max_length", Value::Int(0)),
-        ("length", Value::Int(c.length as i64)),
-        ("charsetnr", Value::Int(c.charsetnr as i64)),
-        ("flags", Value::Int(c.flags as i64)),
-        ("type", Value::Int(c.kind as i64)),
-        ("decimals", Value::Int(c.decimals as i64)),
+        ("max_length", Value::int(0)),
+        ("length", Value::int(c.length as i64)),
+        ("charsetnr", Value::int(c.charsetnr as i64)),
+        ("flags", Value::int(c.flags as i64)),
+        ("type", Value::int(c.kind as i64)),
+        ("decimals", Value::int(c.decimals as i64)),
     ];
     let mut dynamic = o.dynamic.borrow_mut();
     for (name, value) in fields {
         dynamic.insert(Key::from_string(PhpStr::from(name)), value);
     }
     drop(dynamic);
-    Value::Object(o)
+    Value::object(o)
 }
 
 fn fetch_field(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let r = live(ctx, this)?;
     let i = r.field.get();
     if i >= r.set.borrow().columns.len() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     r.field.set(i + 1);
     sync_result(this);
@@ -939,7 +939,7 @@ fn fetch_fields(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) 
     let r = live(ctx, this)?;
     let n = r.set.borrow().columns.len();
     let fields: Vec<Value> = (0..n).map(|i| field_object(ctx, r, i)).collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(fields))))
+    Ok(Value::array(PhpArray::from_list(fields)))
 }
 
 fn fetch_field_direct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
@@ -961,11 +961,11 @@ fn field_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &s
     }
     r.field.set(i as usize);
     sync_result(this);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn field_tell(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
-    Ok(Value::Int(live(ctx, this)?.field.get() as i64))
+    Ok(Value::int(live(ctx, this)?.field.get() as i64))
 }
 
 fn data_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
@@ -976,32 +976,32 @@ fn data_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &st
         return Err(ctx.throw("ValueError", format!("{func}(): Argument #{n} ($offset) must be greater than or equal to 0")));
     }
     if i >= r.set.borrow().rows.len() as i64 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     r.row.set(i as usize);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn num_rows(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
-    Ok(Value::Int(live(ctx, this)?.set.borrow().rows.len() as i64))
+    Ok(Value::int(live(ctx, this)?.set.borrow().rows.len() as i64))
 }
 
 fn num_fields(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
-    Ok(Value::Int(live(ctx, this)?.set.borrow().columns.len() as i64))
+    Ok(Value::int(live(ctx, this)?.set.borrow().columns.len() as i64))
 }
 
 fn free(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let r = live(ctx, this)?;
     *r.set.borrow_mut() = ResultSet::default();
     r.freed.set(true);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn fetch_lengths(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -> R {
     let r = live(ctx, this)?;
     Ok(match &*r.lengths.borrow() {
-        Some(l) if r.row.get() <= r.set.borrow().rows.len() => Value::Array(Rc::new(PhpArray::from_list(l.iter().map(|&n| Value::Int(n)).collect()))),
-        _ => Value::Bool(false),
+        Some(l) if r.row.get() <= r.set.borrow().rows.len() => Value::array(PhpArray::from_list(l.iter().map(|&n| Value::int(n)).collect())),
+        _ => Value::FALSE,
     })
 }
 
@@ -1011,10 +1011,10 @@ fn r_get_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     r.row.set(0);
     let mut rows = Vec::new();
     while let Some(row) = next_row(r) {
-        rows.push(Value::Array(Rc::new(row_array(row, ASSOC))));
+        rows.push(Value::array(row_array(row, ASSOC)));
     }
     let class = ctx.class(b"ArrayIterator").expect("ArrayIterator");
-    Ok(Value::Object(ctx.new_instance(&class, &mut [Value::Array(Rc::new(PhpArray::from_list(rows)))], true)?))
+    Ok(Value::object(ctx.new_instance(&class, &mut [Value::array(PhpArray::from_list(rows))], true)?))
 }
 
 fn result_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
