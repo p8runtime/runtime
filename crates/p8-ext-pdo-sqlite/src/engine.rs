@@ -184,19 +184,19 @@ pub struct Prepared {
 
 fn to_turso(v: Val) -> SqlValue {
     match v {
-        Val::Null => Value::Null,
-        Val::Int(i) => Value::from_i64(i),
+        Val::Null => SqlValue::Null,
+        Val::Int(i) => SqlValue::from_i64(i),
         // SQLite stores a NaN as NULL.
         Val::Float(f) => match turso_core::NonNan::new(f) {
-            Some(n) => Value::Numeric(turso_core::Numeric::Float(n)),
-            None => Value::Null,
+            Some(n) => SqlValue::Numeric(turso_core::Numeric::Float(n)),
+            None => SqlValue::Null,
         },
         // Turso's text is UTF-8 (a Rust str); anything else is kept as a blob.
         Val::Text(b) => match String::from_utf8(b) {
-            Ok(s) => Value::from_text(s),
-            Err(e) => Value::from_blob(e.into_bytes().into_iter().collect()),
+            Ok(s) => SqlValue::from_text(s),
+            Err(e) => SqlValue::from_blob(e.into_bytes().into_iter().collect()),
         },
-        Val::Blob(b) => Value::from_blob(b.into_iter().collect()),
+        Val::Blob(b) => SqlValue::from_blob(b.into_iter().collect()),
     }
 }
 
