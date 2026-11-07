@@ -19,7 +19,7 @@ fn call_handler(ctx: &mut dyn Ctx, s: &Shared, func: &Value, args: &mut [Value])
     let r = ctx.call(func, args);
     s.borrow_mut().in_save_handler = false;
     match r {
-        Ok(Value::Undef) => Ok(Some(Value::Null)),
+        Ok(v) if v.is_undef() => Ok(Some(Value::NULL)),
         Ok(v) => Ok(Some(v.deref())),
         Err(t) => Err(t),
     }
@@ -28,17 +28,19 @@ fn call_handler(ctx: &mut dyn Ctx, s: &Shared, func: &Value, args: &mut [Value])
 /// verify_bool_return_type_userland_calls()
 fn verify_bool(ctx: &mut dyn Ctx, ret: &Option<Value>) -> Result<bool, Throw> {
     let Some(value) = ret else { return Ok(false) };
-    match value {
-        Value::Bool(b) => Ok(*b),
-        Value::Int(-1) => {
+    if let Some(b) = value.as_bool() {
+        return Ok(b);
+    }
+    match value.as_int() {
+        Some(-1) => {
             deprecated(ctx, &format!("Session callback must have a return value of type bool, {} returned", value.type_name()));
             Ok(false)
         }
-        Value::Int(0) => {
+        Some(0) => {
             deprecated(ctx, &format!("Session callback must have a return value of type bool, {} returned", value.type_name()));
             Ok(true)
         }
-        other => Err(ctx.throw("TypeError", format!("Session callback must have a return value of type bool, {} returned", other.type_name()))),
+        _ => Err(ctx.throw("TypeError", format!("Session callback must have a return value of type bool, {} returned", value.type_name()))),
     }
 }
 
@@ -47,7 +49,7 @@ fn handler(s: &Shared, pick: impl Fn(&crate::state::Handlers) -> &Option<Value>)
 }
 
 fn string(b: &[u8]) -> Value {
-    Value::Str(p8_runtime::string::PhpStr::from(b))
+    Value::str(p8_runtime::string::PhpStr::from(b))
 }
 
 /// PS_OPEN_FUNC(user)
@@ -77,10 +79,7 @@ pub(crate) fn close(ctx: &mut dyn Ctx, s: &Shared) -> Result<bool, Throw> {
 /// PS_READ_FUNC(user)
 pub(crate) fn read(ctx: &mut dyn Ctx, s: &Shared, key: &[u8]) -> Result<Option<Vec<u8>>, Throw> {
     let Some(f) = handler(s, |n| &n.read) else { return Ok(None) };
-    Ok(match call_handler(ctx, s, &f, &mut [string(key)])? {
-        Some(Value::Str(v)) => Some(v.as_bytes().to_vec()),
-        _ => None,
-    })
+    Ok(call_handler(ctx, s, &f, &mut [string(key)])?.as_ref().and_then(Value::as_str).map(|v| v.as_bytes().to_vec()))
 }
 
 /// PS_WRITE_FUNC(user)
@@ -100,10 +99,11 @@ pub(crate) fn destroy(ctx: &mut dyn Ctx, s: &Shared, key: &[u8]) -> Result<bool,
 /// PS_GC_FUNC(user): the number of sessions removed, -1 for an error.
 pub(crate) fn gc(ctx: &mut dyn Ctx, s: &Shared, maxlifetime: i64) -> Result<i64, Throw> {
     let Some(f) = handler(s, |n| &n.gc) else { return Ok(-1) };
-    Ok(match call_handler(ctx, s, &f, &mut [Value::Int(maxlifetime)])? {
-        Some(Value::Int(n)) => n,
+    let r = call_handler(ctx, s, &f, &mut [Value::int(maxlifetime)])?;
+    Ok(match r.as_ref().map(|v| (v.as_int(), v.as_bool())) {
+        Some((Some(n), _)) => n,
         // for older API compatibility
-        Some(Value::Bool(true)) => 1,
+        Some((_, Some(true))) => 1,
         _ => -1,
     })
 }
@@ -117,7 +117,7 @@ pub(crate) fn create_sid(ctx: &mut dyn Ctx, s: &Shared) -> Result<Option<Vec<u8>
     };
     match call_handler(ctx, s, &f, &mut [])? {
         None => Err(ctx.throw("Error", "No session id returned by function".into())),
-        Some(Value::Str(id)) => Ok(Some(id.as_bytes().to_vec())),
+        Some(v) if v.is_str() => Ok(Some(v.as_str().expect("a string").as_bytes().to_vec())),
         Some(_) => Err(ctx.throw("Error", "Session id must be a string".into())),
     }
 }

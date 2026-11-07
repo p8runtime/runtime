@@ -12,7 +12,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub(crate) type Res<T> = Result<T, Throw>;
 
@@ -242,7 +241,7 @@ pub(crate) fn abort(ctx: &mut dyn Ctx, s: &Shared) -> Res<bool> {
 /// php_session_track_init(): $_SESSION is a new, empty array.
 fn track_init(ctx: &mut dyn Ctx, s: &Shared) {
     let cell = ctx.global_cell(b"_SESSION");
-    *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
+    *cell.borrow_mut() = Value::array(PhpArray::new());
     s.borrow_mut().vars = Some(cell);
 }
 
@@ -271,7 +270,7 @@ pub(crate) fn encode(ctx: &mut dyn Ctx, s: &Shared) -> Res<Option<Vec<u8>>> {
     match ser {
         Serializer::PhpSerialize => {
             let mut w = Writer::new(ctx);
-            w.value(&Value::Array(vars))?;
+            w.value(&Value::array(vars))?;
             Ok(Some(w.finish()))
         }
         Serializer::Php | Serializer::PhpBinary => {
@@ -341,12 +340,12 @@ fn decode_with(ctx: &mut dyn Ctx, s: &Shared, ser: Serializer, data: &[u8]) -> R
             let mut r = Reader::new(data);
             let value = r.value(ctx)?;
             let result = value.is_ok();
-            let mut value = value.unwrap_or(Value::Null);
+            let mut value = value.unwrap_or(Value::NULL);
             if result {
                 r.finish(ctx)?;
             }
-            if matches!(value, Value::Null) {
-                value = Value::Array(Rc::new(PhpArray::new()));
+            if value.is_null() {
+                value = Value::array(PhpArray::new());
             }
             let cell = ctx.global_cell(b"_SESSION");
             *cell.borrow_mut() = value;
@@ -425,8 +424,9 @@ fn now() -> i64 {
 
 /// last_modified(): the script's modification time.
 fn last_modified(ctx: &mut dyn Ctx) {
-    let path = match ctx.global_value(b"_SERVER").map(|v| v.deref()) {
-        Some(Value::Array(server)) => ["PATH_TRANSLATED", "SCRIPT_FILENAME"]
+    let server = ctx.global_value(b"_SERVER").map(|v| v.deref());
+    let path = match server.as_ref().and_then(Value::as_array) {
+        Some(server) => ["PATH_TRANSLATED", "SCRIPT_FILENAME"]
             .iter()
             .find_map(|k| server.get(&Key::Str(PhpStr::from(*k))).and_then(|v| v.deref().to_php_string())),
         _ => None,
@@ -568,7 +568,7 @@ pub(crate) fn reset_id(ctx: &mut dyn Ctx, s: &Shared) -> bool {
     } else {
         Vec::new()
     };
-    ctx.set_constant(b"SID", Value::Str(PhpStr::new(sid)));
+    ctx.set_constant(b"SID", Value::str(PhpStr::new(sid)));
     true
 }
 
@@ -577,12 +577,9 @@ pub(crate) fn reset_id(ctx: &mut dyn Ctx, s: &Shared) -> bool {
 /// The id a request variable (cookie, query, form) names `lookup`, if it
 /// is there: ppid2sid() on it.
 fn request_id(ctx: &mut dyn Ctx, array: &[u8], name: &[u8]) -> Option<Option<Vec<u8>>> {
-    let Some(Value::Array(a)) = ctx.global_value(array).map(|v| v.deref()) else { return None };
+    let Some(Ok(a)) = ctx.global_value(array).map(|v| v.deref().into_array()) else { return None };
     let v = a.get(&Key::from_string(PhpStr::from(name)))?.deref();
-    Some(match v {
-        Value::Str(s) => Some(s.as_bytes().to_vec()),
-        _ => None,
-    })
+    Some(v.as_str().map(|s| s.as_bytes().to_vec()))
 }
 
 /// php_session_initialize(): the session is not active after an exception
@@ -756,12 +753,10 @@ pub(crate) fn start(ctx: &mut dyn Ctx, s: &Shared) -> Res<bool> {
             // an external site that referred to this request invalidates the id
             let referer_check = text(ctx, "session.referer_check");
             if s.borrow().id.is_some() && !referer_check.is_empty() {
-                let referer = match ctx.global_value(b"_SERVER").map(|v| v.deref()) {
-                    Some(Value::Array(server)) => match server.get(&Key::Str(PhpStr::from("HTTP_REFERER"))).map(Value::deref) {
-                        Some(Value::Str(r)) => Some(r.as_bytes().to_vec()),
-                        _ => None,
-                    },
-                    _ => None,
+                let server = ctx.global_value(b"_SERVER").map(|v| v.deref());
+                let referer = match server.as_ref().and_then(Value::as_array) {
+                    Some(server) => server.get(&Key::Str(PhpStr::from("HTTP_REFERER"))).map(Value::deref).as_ref().and_then(Value::as_str).map(|r| r.as_bytes().to_vec()),
+                    None => None,
                 };
                 if referer.is_some_and(|r| !r.is_empty() && !r.windows(referer_check.len()).any(|w| w == referer_check.as_slice())) {
                     s.borrow_mut().id = None;
