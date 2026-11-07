@@ -214,7 +214,7 @@ fn non_callable_string(ctx: &mut dyn Ctx, v: &Value) -> bool {
 fn set_handler(ctx: &mut dyn Ctx, args: &[Value], which: usize, func: &str) -> Result<Value, Throw> {
     let o = parser_arg(ctx, func, args)?;
     let v = arg(args, 1);
-    if !(v.is_null() || v.is_str()) && !ctx.is_callable(&v) {
+    if !(v.is_null() || v.is_str() || ctx.is_callable(&v)) {
         return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($handler) must be of type callable|string|null")));
     }
     if non_callable_string(ctx, &v) {
@@ -236,7 +236,7 @@ fn xml_set_element_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
     let func = "xml_set_element_handler";
     let o = parser_arg(ctx, func, args)?;
     let (a, b) = (arg(args, 1), arg(args, 2));
-    let invalid = |ctx: &mut dyn Ctx, v: &Value| !(v.is_null() || v.is_str()) && !ctx.is_callable(v);
+    let invalid = |ctx: &mut dyn Ctx, v: &Value| !(v.is_null() || v.is_str() || ctx.is_callable(v));
     if invalid(ctx, &a) || invalid(ctx, &b) {
         // PHP's fallback parse blames the start handler unless it is null
         // or a string (even when it is a valid callable).
