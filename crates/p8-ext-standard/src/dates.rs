@@ -13,7 +13,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "date", run: date, by_ref: &[] },
@@ -88,10 +87,10 @@ fn fixed_name(offset: i32, colon: bool) -> String {
 /// The zone date() and friends use: date_default_timezone_set's, else
 /// date.timezone, else UTC.
 pub(crate) fn default_zone(ctx: &mut dyn Ctx) -> (Zone, String) {
-    let name = match ctx.state("date_tz") {
-        Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-        _ => match ctx.ini_get(b"date.timezone") {
-            Some(Value::Str(s)) if !s.is_empty() => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+    let name = match ctx.state("date_tz").as_str() {
+        Some(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+        None => match ctx.ini_get(b"date.timezone").as_ref().and_then(Value::as_str) {
+            Some(s) if !s.is_empty() => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             _ => "UTC".into(),
         },
     };
@@ -108,8 +107,8 @@ fn now() -> i64 {
 /// The optional timestamp argument `i` (null or missing: now).
 fn timestamp_arg(args: &[Value], i: usize) -> i64 {
     match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) => now(),
-        Some(v) => v.to_int(),
+        Some(v) if !v.is_null() => v.to_int(),
+        _ => now(),
     }
 }
 
@@ -229,14 +228,14 @@ fn date(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let ts = timestamp_arg(args, 1);
     let (zone, name) = default_zone(ctx);
     let l = zone.at(ts);
-    Ok(Value::Str(PhpStr::new(format(str_arg(args, 0).as_bytes(), ts, &l, &name))))
+    Ok(Value::str(PhpStr::new(format(str_arg(args, 0).as_bytes(), ts, &l, &name))))
 }
 
 fn gmdate(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let ts = timestamp_arg(args, 1);
     let mut l = Zone::Named(Tz::UTC).at(ts);
     l.abbr = "GMT".into();
-    Ok(Value::Str(PhpStr::new(format(str_arg(args, 0).as_bytes(), ts, &l, "UTC"))))
+    Ok(Value::str(PhpStr::new(format(str_arg(args, 0).as_bytes(), ts, &l, "UTC"))))
 }
 
 /// strftime's format as glibc's strftime gives it in the C locale (which
@@ -377,23 +376,23 @@ pub(crate) fn strftime_format(fmt: &[u8], ts: i64, l: &Local) -> Vec<u8> {
 fn strftime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let fmt = str_arg(args, 0);
     if fmt.is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let ts = timestamp_arg(args, 1);
     let (zone, _) = default_zone(ctx);
-    Ok(Value::Str(PhpStr::new(strftime_format(fmt.as_bytes(), ts, &zone.at(ts)))))
+    Ok(Value::str(PhpStr::new(strftime_format(fmt.as_bytes(), ts, &zone.at(ts)))))
 }
 
 /// gmstrftime(string $format, ?int $timestamp = null), in GMT.
 fn gmstrftime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let fmt = str_arg(args, 0);
     if fmt.is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let ts = timestamp_arg(args, 1);
     let mut l = Zone::Named(Tz::UTC).at(ts);
     l.abbr = "GMT".into();
-    Ok(Value::Str(PhpStr::new(strftime_format(fmt.as_bytes(), ts, &l))))
+    Ok(Value::str(PhpStr::new(strftime_format(fmt.as_bytes(), ts, &l))))
 }
 
 /// idate(string $format, ?int $timestamp = null): one part, as an int.
@@ -428,7 +427,7 @@ fn idate(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         b'Z' => i64::from(l.offset),
         _ => return Err(ctx.throw("ValueError", "idate(): Argument #1 ($format) must be a valid date format character".into())),
     };
-    Ok(Value::Int(v))
+    Ok(Value::int(v))
 }
 
 /// A wall-clock time from parts that may overflow (month 13, day 0,
@@ -447,8 +446,8 @@ fn make_time(ctx: &mut dyn Ctx, args: &[Value], zone: Zone) -> Value {
     let l = zone.at(now());
     let d = l.dt;
     let part = |i: usize, default: i64| match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) => default,
-        Some(v) => v.to_int(),
+        Some(v) if !v.is_null() => v.to_int(),
+        _ => default,
     };
     let mut year = part(5, i64::from(d.year()));
     // Two-digit years: 0-69 are 2000-2069, 70-100 are 1970-2000.
@@ -459,7 +458,7 @@ fn make_time(ctx: &mut dyn Ctx, args: &[Value], zone: Zone) -> Value {
     }
     let dt = civil(year, part(3, i64::from(d.month())), part(4, i64::from(d.day())), part(0, i64::from(d.hour())), part(1, i64::from(d.minute())), part(2, i64::from(d.second())));
     let _ = ctx;
-    dt.map_or(Value::Bool(false), |dt| Value::Int(zone.timestamp(dt)))
+    dt.map_or(Value::FALSE, |dt| Value::int(zone.timestamp(dt)))
 }
 
 fn mktime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -474,7 +473,7 @@ fn gmmktime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn checkdate(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (m, d, y) = (arg(args, 0).to_int(), arg(args, 1).to_int(), arg(args, 2).to_int());
     let ok = (1..=32767).contains(&y) && (1..=12).contains(&m) && d >= 1 && d <= i64::from(days_in_month(y as i32, m as u32));
-    Ok(Value::Bool(ok))
+    Ok(Value::bool(ok))
 }
 
 fn getdate(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -483,18 +482,18 @@ fn getdate(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let d = zone.at(ts).dt;
     let mut out = PhpArray::new();
     let mut put = |k: &str, v: Value| out.insert(Key::from_string(PhpStr::from(k)), v);
-    put("seconds", Value::Int(i64::from(d.second())));
-    put("minutes", Value::Int(i64::from(d.minute())));
-    put("hours", Value::Int(i64::from(d.hour())));
-    put("mday", Value::Int(i64::from(d.day())));
-    put("wday", Value::Int(i64::from(d.weekday().num_days_from_sunday())));
-    put("mon", Value::Int(i64::from(d.month())));
-    put("year", Value::Int(i64::from(d.year())));
-    put("yday", Value::Int(i64::from(d.ordinal0())));
+    put("seconds", Value::int(i64::from(d.second())));
+    put("minutes", Value::int(i64::from(d.minute())));
+    put("hours", Value::int(i64::from(d.hour())));
+    put("mday", Value::int(i64::from(d.day())));
+    put("wday", Value::int(i64::from(d.weekday().num_days_from_sunday())));
+    put("mon", Value::int(i64::from(d.month())));
+    put("year", Value::int(i64::from(d.year())));
+    put("yday", Value::int(i64::from(d.ordinal0())));
     put("weekday", Value::str(DAYS[d.weekday().num_days_from_sunday() as usize]));
     put("month", Value::str(MONTHS[d.month0() as usize]));
-    out.insert(Key::Int(0), Value::Int(ts));
-    Ok(Value::Array(Rc::new(out)))
+    out.insert(Key::Int(0), Value::int(ts));
+    Ok(Value::array(out))
 }
 
 /// localtime(?int $timestamp = null, bool $associative = false)
@@ -518,13 +517,13 @@ fn localtime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut out = PhpArray::new();
     for (i, (k, v)) in parts.iter().enumerate() {
         let key = if assoc { Key::from_string(PhpStr::from(*k)) } else { Key::Int(i as i64) };
-        out.insert(key, Value::Int(*v));
+        out.insert(key, Value::int(*v));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn date_default_timezone_get(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::from(default_zone(ctx).1)))
+    Ok(Value::str(PhpStr::from(default_zone(ctx).1)))
 }
 
 fn date_default_timezone_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -534,12 +533,12 @@ fn date_default_timezone_set(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Va
     let found = text.parse::<Tz>().ok().or_else(|| chrono_tz::TZ_VARIANTS.iter().find(|z| z.name().eq_ignore_ascii_case(&text)).copied());
     match found {
         Some(tz) => {
-            *ctx.state("date_tz") = Value::Str(PhpStr::from(tz.name()));
-            Ok(Value::Bool(true))
+            *ctx.state("date_tz") = Value::str(PhpStr::from(tz.name()));
+            Ok(Value::TRUE)
         }
         None => {
             ctx.report(8, &format!("date_default_timezone_set(): Timezone ID '{text}' is invalid"));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1034,7 +1033,7 @@ fn strtotime(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let base = timestamp_arg(args, 1);
     let (zone, _) = default_zone(ctx);
     if text.trim().is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(resolve(&text, base, zone).map_or(Value::Bool(false), Value::Int))
+    Ok(resolve(&text, base, zone).map_or(Value::FALSE, Value::int))
 }

@@ -76,7 +76,7 @@ fn bytes(v: &Value) -> Vec<u8> {
 }
 
 fn string(b: impl Into<Vec<u8>>) -> Value {
-    Value::Str(PhpStr::new(b.into()))
+    Value::str(PhpStr::new(b.into()))
 }
 
 fn is_dot(name: &[u8]) -> bool {
@@ -202,7 +202,7 @@ fn glob_dir(pattern: &[u8]) -> Option<Vec<u8>> {
 
 fn info_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     set_filename(&mut state(this).borrow_mut(), &bytes(&arg(args, 0)));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn not_initialized(ctx: &mut dyn Ctx) -> Throw {
@@ -306,14 +306,14 @@ macro_rules! stat_getter {
     };
 }
 
-stat_getter!(get_perms, "getPerms", false, |m| Value::Int(m.mode() as i64));
-stat_getter!(get_inode, "getInode", false, |m| Value::Int(m.ino() as i64));
-stat_getter!(get_size, "getSize", false, |m| Value::Int(m.len() as i64));
-stat_getter!(get_owner, "getOwner", false, |m| Value::Int(m.uid() as i64));
-stat_getter!(get_group, "getGroup", false, |m| Value::Int(m.gid() as i64));
-stat_getter!(get_atime, "getATime", false, |m| Value::Int(m.atime()));
-stat_getter!(get_mtime, "getMTime", false, |m| Value::Int(m.mtime()));
-stat_getter!(get_ctime, "getCTime", false, |m| Value::Int(m.ctime()));
+stat_getter!(get_perms, "getPerms", false, |m| Value::int(m.mode() as i64));
+stat_getter!(get_inode, "getInode", false, |m| Value::int(m.ino() as i64));
+stat_getter!(get_size, "getSize", false, |m| Value::int(m.len() as i64));
+stat_getter!(get_owner, "getOwner", false, |m| Value::int(m.uid() as i64));
+stat_getter!(get_group, "getGroup", false, |m| Value::int(m.gid() as i64));
+stat_getter!(get_atime, "getATime", false, |m| Value::int(m.atime()));
+stat_getter!(get_mtime, "getMTime", false, |m| Value::int(m.mtime()));
+stat_getter!(get_ctime, "getCTime", false, |m| Value::int(m.ctime()));
 stat_getter!(get_type, "getType", true, |m| Value::str(file_type(&m)));
 
 fn file_type(m: &std::fs::Metadata) -> &'static str {
@@ -341,7 +341,7 @@ fn file_type(m: &std::fs::Metadata) -> &'static str {
 /// The is*() checks: false (and no exception) for a file that is not there.
 fn check(ctx: &mut dyn Ctx, this: &Object, f: impl Fn(&str) -> bool) -> R {
     let name = stat_name(ctx, this)?;
-    Ok(Value::Bool(f(&name)))
+    Ok(Value::bool(f(&name)))
 }
 
 /// The access checks, as is_readable() and the like make them.
@@ -393,12 +393,12 @@ fn get_real_path(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let name = state(this).borrow_mut().pathname();
     let name = match name {
         Some(n) => n,
-        None => return Ok(Value::Bool(false)),
+        None => return Ok(Value::FALSE),
     };
     let name = if name.is_empty() { b".".to_vec() } else { name };
     Ok(match p8_runtime::os::canonicalize(s(&name)) {
         Ok(p) => string(p.into_os_string().into_encoded_bytes()),
-        Err(_) => Value::Bool(false),
+        Err(_) => Value::FALSE,
     })
 }
 
@@ -411,7 +411,7 @@ fn info_object(ctx: &mut dyn Ctx, class: Option<Rc<Class>>, path: Vec<u8>, dir_p
     };
     let own_constructor = class.method(b"__construct").is_some_and(|m| !m.declaring_name.as_bytes().eq_ignore_ascii_case(b"SplFileInfo"));
     if own_constructor {
-        return Ok(Value::Object(ctx.new_instance(&class, &mut [string(path)], true)?));
+        return Ok(Value::object(ctx.new_instance(&class, &mut [string(path)], true)?));
     }
     let o = ctx.new_instance(&class, &mut [], false)?;
     {
@@ -424,14 +424,14 @@ fn info_object(ctx: &mut dyn Ctx, class: Option<Rc<Class>>, path: Vec<u8>, dir_p
             None => set_filename(&mut st, &path),
         }
     }
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// A class argument (getFileInfo, setInfoClass...): it must be SplFileInfo
 /// or derive from it.
 fn class_arg(ctx: &mut dyn Ctx, args: &[Value], method: &str) -> Result<Option<Rc<Class>>, Throw> {
     match arg(args, 0) {
-        Value::Null => Ok(None),
+        v if v.is_null() => Ok(None),
         v => {
             let name = bytes(&v);
             match ctx.class_load(&name)? {
@@ -467,7 +467,7 @@ fn get_path_info(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     };
     match name {
         Some(n) if !n.is_empty() => info_object(ctx, class.or(info_class), dirname(&n), None),
-        _ => Ok(Value::Null),
+        _ => Ok(Value::NULL),
     }
 }
 
@@ -493,12 +493,12 @@ fn dirname(p: &[u8]) -> Vec<u8> {
 fn set_info_class(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let class = class_arg(ctx, args, "setInfoClass")?;
     state(this).borrow_mut().info_class = class;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn set_file_class(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
     // The file class is for openFile(): SplFileObject, which p8 lacks yet.
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn open_file(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
@@ -522,14 +522,14 @@ fn debug_info(o: &Object) -> PhpArray {
         out.insert(private("SplFileInfo", "fileName"), string(name));
     }
     if let Some(d) = &st.dir {
-        out.insert(private("DirectoryIterator", "glob"), if d.glob { string(d.source.clone()) } else { Value::Bool(false) });
+        out.insert(private("DirectoryIterator", "glob"), if d.glob { string(d.source.clone()) } else { Value::FALSE });
         out.insert(private("RecursiveDirectoryIterator", "subPathName"), string(d.sub_path.clone().unwrap_or_default()));
     }
     out
 }
 
 fn debug_info_method(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Array(Rc::new(debug_info(this))))
+    Ok(Value::array(debug_info(this)))
 }
 
 fn bad_state(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
@@ -574,7 +574,7 @@ fn open(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], flags: i64, glob: 
             d.at += 1;
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn constructor_flags(args: &[Value], default: i64) -> i64 {
@@ -616,28 +616,28 @@ fn di_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     st.flags &= !SKIP_DOTS;
     st.rewind();
     st.flags = flags;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn fsi_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     opened(ctx, this)?;
     state(this).borrow_mut().rewind();
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn di_valid(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     opened(ctx, this)?;
-    Ok(Value::Bool(!state(this).borrow().entry().is_empty()))
+    Ok(Value::bool(!state(this).borrow().entry().is_empty()))
 }
 
 fn di_key(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     opened(ctx, this)?;
-    Ok(Value::Int(state(this).borrow().dir.as_ref().map_or(0, |d| d.index)))
+    Ok(Value::int(state(this).borrow().dir.as_ref().map_or(0, |d| d.index)))
 }
 
 fn di_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     opened(ctx, this)?;
-    Ok(Value::Object(Rc::clone(this)))
+    Ok(Value::object(Rc::clone(this)))
 }
 
 fn di_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -647,7 +647,7 @@ fn di_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
         d.index += 1;
     }
     st.read();
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn di_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -663,12 +663,12 @@ fn di_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         }
         crate::spl::call_this(ctx, this, "next", &mut [])?;
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn di_is_dot(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     opened(ctx, this)?;
-    Ok(Value::Bool(is_dot(&state(this).borrow().entry())))
+    Ok(Value::bool(is_dot(&state(this).borrow().entry())))
 }
 
 fn di_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -698,18 +698,18 @@ fn fsi_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
         }
         return info_object(ctx, info_class, name.unwrap_or_default(), Some(path.unwrap_or_default()));
     }
-    Ok(Value::Object(Rc::clone(this)))
+    Ok(Value::object(Rc::clone(this)))
 }
 
 fn fsi_get_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(state(this).borrow().flags & (KEY_MODE_MASK | CURRENT_MODE_MASK | OTHER_MODE_MASK)))
+    Ok(Value::int(state(this).borrow().flags & (KEY_MODE_MASK | CURRENT_MODE_MASK | OTHER_MODE_MASK)))
 }
 
 fn fsi_set_flags(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let mask = KEY_MODE_MASK | CURRENT_MODE_MASK | OTHER_MODE_MASK;
     let mut st = state(this).borrow_mut();
     st.flags = (st.flags & !mask) | (arg(args, 0).to_int() & mask);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn rdi_has_children(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -717,17 +717,17 @@ fn rdi_has_children(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     let mut st = state(this).borrow_mut();
     let entry = st.entry();
     if entry.is_empty() || is_dot(&entry) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let name = s(&st.file_name().unwrap_or_default());
-    let Ok(m) = std::fs::symlink_metadata(&name) else { return Ok(Value::Bool(false)) };
+    let Ok(m) = std::fs::symlink_metadata(&name) else { return Ok(Value::FALSE) };
     if !m.file_type().is_symlink() {
-        return Ok(Value::Bool(m.is_dir()));
+        return Ok(Value::bool(m.is_dir()));
     }
     if !allow_links && st.flags & FOLLOW_SYMLINKS == 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(std::fs::metadata(&name).is_ok_and(|m| m.is_dir())))
+    Ok(Value::bool(std::fs::metadata(&name).is_ok_and(|m| m.is_dir())))
 }
 
 fn rdi_get_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -738,7 +738,7 @@ fn rdi_get_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
         (st.file_name().unwrap_or_default(), st.flags, entry, sub, st.info_class.clone())
     };
     let class = Rc::clone(&this.class);
-    let child = ctx.new_instance(&class, &mut [string(name), Value::Int(flags)], true)?;
+    let child = ctx.new_instance(&class, &mut [string(name), Value::int(flags)], true)?;
     let sub_path = match sub {
         Some(p) if !p.is_empty() => [p.as_slice(), b"/", &entry].concat(),
         _ => entry,
@@ -750,7 +750,7 @@ fn rdi_get_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
         }
         st.info_class = info_class;
     }
-    Ok(Value::Object(child))
+    Ok(Value::object(child))
 }
 
 fn rdi_get_sub_path(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -767,7 +767,7 @@ fn rdi_get_sub_pathname(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> 
 }
 
 fn glob_count(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(state(this).borrow().dir.as_ref().map_or(0, |d| d.entries.len() as i64)))
+    Ok(Value::int(state(this).borrow().dir.as_ref().map_or(0, |d| d.entries.len() as i64)))
 }
 
 const fn m(f: p8_runtime::object::NativeMethod) -> Option<Native> {

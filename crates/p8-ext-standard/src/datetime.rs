@@ -235,7 +235,7 @@ struct State {
 fn read(o: &Object, name: &str) -> Value {
     match o.class.slot(name.as_bytes(), None) {
         Some(i) => o.slots.borrow()[i].clone(),
-        None => Value::Null,
+        None => Value::NULL,
     }
 }
 
@@ -255,10 +255,10 @@ fn state(o: &Object) -> State {
 }
 
 fn put(o: &Object, s: &State) {
-    write(o, TS, Value::Int(s.ts));
-    write(o, US, Value::Int(s.us));
-    write(o, ZTYPE, Value::Int(s.ztype));
-    write(o, ZONE, Value::Str(PhpStr::from(s.zone.as_str())));
+    write(o, TS, Value::int(s.ts));
+    write(o, US, Value::int(s.us));
+    write(o, ZTYPE, Value::int(s.ztype));
+    write(o, ZONE, Value::str(PhpStr::from(s.zone.as_str())));
 }
 
 /// The zone a state names.
@@ -296,8 +296,8 @@ fn offset_of(z: &str) -> i32 {
 
 /// The zone a DateTimeZone object (or null: the default) names.
 fn zone_arg(ctx: &mut dyn Ctx, v: &Value) -> (i64, String) {
-    match v.deref() {
-        Value::Object(o) if o.class.is_a(b"datetimezone") => (
+    match v.deref().into_object() {
+        Ok(o) if o.class.is_a(b"datetimezone") => (
             read(&o, ZTYPE).to_int(),
             String::from_utf8_lossy(read(&o, ZONE).to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
         ),
@@ -337,7 +337,7 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
                 s.us = fraction;
             }
             put(this, &s);
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
         None => Err(ctx.throw(
             "DateMalformedStringException",
@@ -399,20 +399,20 @@ fn escape_into(out: &mut Vec<u8>, text: &str) {
 }
 
 fn m_format(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::new(format_state(&state(this), str_arg(args, 0).as_bytes()))))
+    Ok(Value::str(PhpStr::new(format_state(&state(this), str_arg(args, 0).as_bytes()))))
 }
 
 fn get_timestamp(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(state(this).ts))
+    Ok(Value::int(state(this).ts))
 }
 
 fn get_microsecond(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(state(this).us))
+    Ok(Value::int(state(this).us))
 }
 
 fn get_offset(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let s = state(this);
-    Ok(Value::Int(i64::from(local_of(&s).offset)))
+    Ok(Value::int(i64::from(local_of(&s).offset)))
 }
 
 /// The object a change applies to: `this` for a DateTime, a copy for a
@@ -433,16 +433,16 @@ fn set_timestamp(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     s.ts = arg(args, 0).to_int();
     s.us = 0;
     put(&o, &s);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn get_timezone(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let s = state(this);
-    let Some(class) = ctx.class(b"DateTimeZone") else { return Ok(Value::Bool(false)) };
+    let Some(class) = ctx.class(b"DateTimeZone") else { return Ok(Value::FALSE) };
     let z = ctx.new_object(&class);
-    write(&z, ZTYPE, Value::Int(s.ztype));
-    write(&z, ZONE, Value::Str(PhpStr::from(s.zone.as_str())));
-    Ok(Value::Object(z))
+    write(&z, ZTYPE, Value::int(s.ztype));
+    write(&z, ZONE, Value::str(PhpStr::from(s.zone.as_str())));
+    Ok(Value::object(z))
 }
 
 fn set_timezone(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -450,7 +450,7 @@ fn set_timezone(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     let mut s = state(&o);
     (s.ztype, s.zone) = zone_arg(ctx, &arg(args, 0));
     put(&o, &s);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn modify(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -470,7 +470,7 @@ fn modify(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Va
     new.us = us.rem_euclid(1_000_000);
     let o = target(ctx, this);
     put(&o, &new);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// The wall-clock parts of a state.
@@ -491,7 +491,7 @@ fn set_date(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<
     let (_, _, _, h, i, sec) = parts(&s);
     set_parts(&mut s, (arg(args, 0).to_int(), arg(args, 1).to_int(), arg(args, 2).to_int(), h, i, sec));
     put(&o, &s);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn set_iso_date(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -506,7 +506,7 @@ fn set_iso_date(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     let date = monday + chrono::Duration::days((week - 1) * 7 + (day - 1));
     set_parts(&mut s, (i64::from(date.year()), i64::from(date.month()), i64::from(date.day()), h, i, sec));
     put(&o, &s);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn set_time(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -517,7 +517,7 @@ fn set_time(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<
     set_parts(&mut s, (y, m, d, arg(args, 0).to_int(), arg(args, 1).to_int(), sec));
     s.us = if args.len() > 3 { arg(args, 3).to_int() } else { 0 };
     put(&o, &s);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// An interval's parts (sign applied when `invert`).
@@ -527,7 +527,7 @@ fn interval(o: &Object) -> [i64; 6] {
 }
 
 fn shift(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], dir: i64) -> Result<Value, Throw> {
-    let Value::Object(iv) = arg(args, 0) else { return Ok(Value::Bool(false)) };
+    let Ok(iv) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
     let o = target(ctx, this);
     let mut s = state(&o);
     let p = parts(&s);
@@ -536,8 +536,8 @@ fn shift(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], dir: i64) -> Resu
     let us = s.us + dir * sign * (read(&iv, "f").to_float() * 1e6).round() as i64;
     // Whole days counted by diff() ("days") move by days.
     let days = read(&iv, "days");
-    if let Value::Int(total) = days
-        && read(&iv, "from_string").to_bool()
+    if let Some(total) = days.as_int()
+        &&read(&iv, "from_string").to_bool()
     {
         let _ = total;
     }
@@ -545,7 +545,7 @@ fn shift(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], dir: i64) -> Resu
     set_parts(&mut s, (p.0 + dir * d[0], p.1 + dir * d[1], p.2 + dir * d[2], p.3 + dir * d[3], p.4 + dir * d[4], p.5 + dir * d[5] + carry));
     s.us = us.rem_euclid(1_000_000);
     put(&o, &s);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn add(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -558,21 +558,21 @@ fn sub(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value
 
 /// A new DateInterval with these parts.
 fn new_interval(ctx: &mut dyn Ctx, p: [i64; 6], f: f64, invert: bool, days: Value) -> Value {
-    let Some(class) = ctx.class(b"DateInterval") else { return Value::Null };
+    let Some(class) = ctx.class(b"DateInterval") else { return Value::NULL };
     let o = ctx.new_object(&class);
     for (k, v) in ["y", "m", "d", "h", "i", "s"].iter().zip(p) {
-        write(&o, k, Value::Int(v));
+        write(&o, k, Value::int(v));
     }
-    write(&o, "f", Value::Float(f));
-    write(&o, "invert", Value::Int(i64::from(invert)));
+    write(&o, "f", Value::float(f));
+    write(&o, "invert", Value::int(i64::from(invert)));
     write(&o, "days", days);
-    Value::Object(o)
+    Value::object(o)
 }
 
 /// DateTimeInterface::diff(DateTimeInterface $targetObject, bool $absolute = false):
 /// the calendar difference (as timelib_diff, in the first one's zone).
 fn diff(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(other) = arg(args, 0) else { return Ok(Value::Bool(false)) };
+    let Ok(other) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
     let absolute = args.len() > 1 && arg(args, 1).to_bool();
     let a = state(this);
     let mut b = state(&other);
@@ -622,19 +622,19 @@ fn diff(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Valu
         }
         _ => 0,
     };
-    Ok(new_interval(ctx, p, us as f64 / 1e6, invert && !absolute, Value::Int(total)))
+    Ok(new_interval(ctx, p, us as f64 / 1e6, invert && !absolute, Value::int(total)))
 }
 
 fn get_last_errors(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 fn create_from_interface(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(src) = arg(args, 0) else { return Ok(Value::Bool(false)) };
+    let Ok(src) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
     let class = ctx.native_class().or_else(|| ctx.class(b"DateTime")).expect("a date class");
     let o = ctx.new_object(&class);
     put(&o, &state(&src));
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// createFromFormat(string $format, string $datetime, ?DateTimeZone $timezone = null)
@@ -777,11 +777,11 @@ fn from_format(ctx: &mut dyn Ctx, class: &Rc<p8_runtime::object::Class>, args: &
             }
         };
         if !ok {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     if at < t.len() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if let Some(ts) = stamp {
         s.ts = ts;
@@ -811,7 +811,7 @@ fn from_format(ctx: &mut dyn Ctx, class: &Rc<p8_runtime::object::Class>, args: &
     }
     let o = ctx.new_object(class);
     put(&o, &s);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// var_dump of a DateTime: date, timezone_type, timezone.
@@ -819,9 +819,9 @@ fn datetime_info(o: &Object) -> PhpArray {
     let s = state(o);
     let mut out = PhpArray::new();
     let date = format!("{}.{:06}", String::from_utf8_lossy(&format_state(&s, b"Y-m-d H:i:s")), s.us);
-    out.insert(Key::from_string(PhpStr::from("date")), Value::Str(PhpStr::from(date)));
-    out.insert(Key::from_string(PhpStr::from("timezone_type")), Value::Int(s.ztype));
-    out.insert(Key::from_string(PhpStr::from("timezone")), Value::Str(PhpStr::from(s.zone.as_str())));
+    out.insert(Key::from_string(PhpStr::from("date")), Value::str(PhpStr::from(date)));
+    out.insert(Key::from_string(PhpStr::from("timezone_type")), Value::int(s.ztype));
+    out.insert(Key::from_string(PhpStr::from("timezone")), Value::str(PhpStr::from(s.zone.as_str())));
     out
 }
 
@@ -830,7 +830,7 @@ fn datetime_info(o: &Object) -> PhpArray {
 fn own_props(o: &Object, out: &mut PhpArray) {
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-        if !p.is_internal() && !matches!(v, Value::Undef) {
+        if !p.is_internal() && !v.is_undef() {
             out.insert(Key::from_string(p.name.clone()), v.deref());
         }
     }
@@ -860,16 +860,16 @@ fn restore_props(o: &Object, a: &PhpArray, skip: &[&str]) {
 fn dt_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let mut out = datetime_info(this);
     own_props(this, &mut out);
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn field(a: &PhpArray, name: &str) -> Value {
-    a.get(&Key::from_string(PhpStr::from(name))).map_or(Value::Null, Value::deref)
+    a.get(&Key::from_string(PhpStr::from(name))).map_or(Value::NULL, Value::deref)
 }
 
 /// DateTime::__unserialize(array $data): back from date, timezone_type, timezone.
 fn dt_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(a) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
     let date = String::from_utf8_lossy(field(&a, "date").to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned();
     let ztype = field(&a, "timezone_type").to_int();
     let zone = String::from_utf8_lossy(field(&a, "timezone").to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned();
@@ -881,7 +881,7 @@ fn dt_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
             s.us = format!("{micro:0<6}")[..6].parse().unwrap_or(0);
             put(this, &s);
             restore_props(this, &a, &["date", "timezone_type", "timezone"]);
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
         None => Err(ctx.throw("Error", format!("Invalid serialization data for {} object", class_name(this)))),
     }
@@ -890,15 +890,15 @@ fn dt_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 fn zone_serialize(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let mut out = zone_info(this);
     own_props(this, &mut out);
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn zone_unserialize(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Null) };
-    write(this, ZTYPE, Value::Int(field(&a, "timezone_type").to_int()));
+    let Ok(a) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
+    write(this, ZTYPE, Value::int(field(&a, "timezone_type").to_int()));
     write(this, ZONE, field(&a, "timezone"));
     restore_props(this, &a, &["timezone_type", "timezone"]);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn zone_info(o: &Object) -> PhpArray {
@@ -926,9 +926,9 @@ fn zone_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
             return Err(ctx.throw("DateInvalidTimeZoneException", format!("DateTimeZone::__construct(): Unknown or bad timezone ({name})")));
         }
     };
-    write(this, ZTYPE, Value::Int(ztype));
-    write(this, ZONE, Value::Str(PhpStr::from(zone)));
-    Ok(Value::Null)
+    write(this, ZTYPE, Value::int(ztype));
+    write(this, ZONE, Value::str(PhpStr::from(zone)));
+    Ok(Value::NULL)
 }
 
 fn zone_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -941,11 +941,11 @@ fn zone_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Valu
 /// range is open, as the zone database's own list ends in 2037.
 fn zone_transitions(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     if read(this, ZTYPE).to_int() != 3 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let bound = |i: usize, default: i64| match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) | Some(Value::Undef) => default,
-        Some(v) => v.to_int(),
+        Some(v) if !v.is_null_or_undef() => v.to_int(),
+        _ => default,
     };
     let (begin, end) = (bound(0, i64::MIN), bound(1, i64::MAX));
     let zone = zone_of(&State {
@@ -958,12 +958,12 @@ fn zone_transitions(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         let l = zone.at(ts);
         let utc = Zone::Fixed(0).at(ts);
         let mut e = PhpArray::new();
-        e.insert(Key::from_string(PhpStr::from("ts")), Value::Int(ts));
-        e.insert(Key::from_string(PhpStr::from("time")), Value::Str(PhpStr::new(format(b"Y-m-d\\TH:i:sP", ts, &utc, "UTC"))));
-        e.insert(Key::from_string(PhpStr::from("offset")), Value::Int(i64::from(l.offset)));
-        e.insert(Key::from_string(PhpStr::from("isdst")), Value::Bool(l.dst));
+        e.insert(Key::from_string(PhpStr::from("ts")), Value::int(ts));
+        e.insert(Key::from_string(PhpStr::from("time")), Value::str(PhpStr::new(format(b"Y-m-d\\TH:i:sP", ts, &utc, "UTC"))));
+        e.insert(Key::from_string(PhpStr::from("offset")), Value::int(i64::from(l.offset)));
+        e.insert(Key::from_string(PhpStr::from("isdst")), Value::bool(l.dst));
         e.insert(Key::from_string(PhpStr::from("abbr")), Value::str(l.abbr.as_str()));
-        Value::Array(Rc::new(e))
+        Value::array(e)
     };
     let state = |ts: i64| {
         let l = zone.at(ts);
@@ -987,18 +987,18 @@ fn zone_transitions(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         }
         t = next;
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn zone_offset(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(dt) = arg(args, 0) else { return Ok(Value::Bool(false)) };
+    let Ok(dt) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
     let s = State {
         ts: state(&dt).ts,
         us: 0,
         ztype: read(this, ZTYPE).to_int(),
         zone: String::from_utf8_lossy(read(this, ZONE).to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
     };
-    Ok(Value::Int(i64::from(local_of(&s).offset)))
+    Ok(Value::int(i64::from(local_of(&s).offset)))
 }
 
 /// The zones PHP's timezone database marks canonical, which
@@ -1043,7 +1043,7 @@ fn list_identifiers(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
             .filter(|n| (*n == "UTC" && group & 1024 != 0) || GROUPS.iter().any(|(bit, prefix)| group & bit != 0 && n.starts_with(prefix)))
             .collect()
     };
-    Ok(Value::Array(Rc::new(PhpArray::from_list(names.into_iter().map(Value::str).collect()))))
+    Ok(Value::array(PhpArray::from_list(names.into_iter().map(Value::str).collect())))
 }
 
 /// DateInterval::__construct(string $duration): ISO 8601 (P1Y2M3DT4H5M6S, P2W).
@@ -1078,9 +1078,9 @@ fn interval_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
         return Err(bad(ctx));
     }
     for (k, v) in ["y", "m", "d", "h", "i", "s"].iter().zip(p) {
-        write(this, k, Value::Int(v));
+        write(this, k, Value::int(v));
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// DateInterval::format: %y %Y %m %M %d %D %h %H %i %I %s %S %a %R %r %f %F %%.
@@ -1114,9 +1114,9 @@ fn interval_format(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
             b'S' => format!("{:02}", get("s")),
             b'f' => "0".into(),
             b'F' => "000000".into(),
-            b'a' => match read(this, "days") {
-                Value::Int(n) => n.to_string(),
-                _ => "(unknown)".into(),
+            b'a' => match read(this, "days").as_int() {
+                Some(n) => n.to_string(),
+                None => "(unknown)".into(),
             },
             b'R' => if invert { "-" } else { "+" }.into(),
             b'r' => if invert { "-" } else { "" }.into(),
@@ -1125,7 +1125,7 @@ fn interval_format(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
         };
         out.push_str(&s);
     }
-    Ok(Value::Str(PhpStr::from(out)))
+    Ok(Value::str(PhpStr::from(out)))
 }
 
 /// DateInterval::createFromDateString(string $datetime): "1 day", "2 weeks"...
@@ -1162,20 +1162,20 @@ fn interval_from_string(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
         }
     }
     let _ = after;
-    let v = new_interval(ctx, p, us as f64 / 1e6, false, Value::Bool(false));
-    if let Value::Object(o) = &v {
-        write(o, "from_string", Value::Bool(true));
+    let v = new_interval(ctx, p, us as f64 / 1e6, false, Value::FALSE);
+    if let Some(o) = v.as_object() {
+        write(o, "from_string", Value::TRUE);
     }
     Ok(v)
 }
 
 fn new_date(ctx: &mut dyn Ctx, class: &[u8], args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(class) = ctx.class(class) else { return Ok(Value::Bool(false)) };
+    let Some(class) = ctx.class(class) else { return Ok(Value::FALSE) };
     let o = ctx.new_object(&class);
     match construct(ctx, &o, args) {
-        Ok(_) => Ok(Value::Object(o)),
+        Ok(_) => Ok(Value::object(o)),
         // The procedural form gives false for a bad string.
-        Err(_) => Ok(Value::Bool(false)),
+        Err(_) => Ok(Value::FALSE),
     }
 }
 
@@ -1188,12 +1188,12 @@ fn date_create_immutable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 }
 
 fn date_create_from_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(class) = ctx.class(b"DateTime") else { return Ok(Value::Bool(false)) };
+    let Some(class) = ctx.class(b"DateTime") else { return Ok(Value::FALSE) };
     from_format(ctx, &class, args)
 }
 
 fn date_create_immutable_from_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(class) = ctx.class(b"DateTimeImmutable") else { return Ok(Value::Bool(false)) };
+    let Some(class) = ctx.class(b"DateTimeImmutable") else { return Ok(Value::FALSE) };
     from_format(ctx, &class, args)
 }
 
@@ -1215,7 +1215,7 @@ fn date_interval_create_from_date_string(ctx: &mut dyn Ctx, args: &mut [Value]) 
     match interval_from_string(ctx, args) {
         Err(Throw::Error { class: "DateMalformedIntervalStringException", message, .. }) => {
             ctx.warn(&format!("date_interval_create_from_date_string(): {message}"));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
         r => r,
     }
@@ -1225,7 +1225,7 @@ fn date_interval_create_from_date_string(ctx: &mut dyn Ctx, args: &mut [Value]) 
 type Method = fn(&mut dyn Ctx, &Rc<Object>, &mut [Value]) -> Result<Value, Throw>;
 
 fn with_object(ctx: &mut dyn Ctx, args: &mut [Value], method: Method) -> Result<Value, Throw> {
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Bool(false)) };
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
     let mut rest: Vec<Value> = args[1..].to_vec();
     method(ctx, &o, &mut rest)
 }
@@ -1283,14 +1283,14 @@ fn date_interval_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
 }
 
 fn timezone_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(class) = ctx.class(b"DateTimeZone") else { return Ok(Value::Bool(false)) };
+    let Some(class) = ctx.class(b"DateTimeZone") else { return Ok(Value::FALSE) };
     let o = ctx.new_object(&class);
     match zone_construct(ctx, &o, args) {
-        Ok(_) => Ok(Value::Object(o)),
+        Ok(_) => Ok(Value::object(o)),
         Err(_) => {
             let name = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
             ctx.warn(&format!("timezone_open(): Unknown or bad timezone ({name})"));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1309,24 +1309,24 @@ fn copy_object(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Rc<Object> {
 }
 
 fn copy_value(ctx: &mut dyn Ctx, v: Value) -> Value {
-    match v {
-        Value::Object(o) => Value::Object(copy_object(ctx, &o)),
-        v => v,
+    match v.into_object() {
+        Ok(o) => Value::object(copy_object(ctx, &o)),
+        Err(v) => v,
     }
 }
 
 /// DatePeriod::__construct(DateTimeInterface $start, DateInterval $interval,
 /// int|DateTimeInterface $end_or_recurrences, int $options = 0).
 fn period_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let (Value::Object(start), Value::Object(interval)) = (arg(args, 0), arg(args, 1)) else {
+    let (Ok(start), Ok(interval)) = (arg(args, 0).into_object(), arg(args, 1).into_object()) else {
         return Err(ctx.throw("Error", "p8 cannot construct a DatePeriod from an ISO 8601 string yet".into()));
     };
     let options = arg(args, 3).to_int();
     let include_start = options & 1 == 0;
     let include_end = options & 2 != 0;
-    let (end, recurrences) = match arg(args, 2) {
-        Value::Object(e) => (Value::Object(copy_object(ctx, &e)), 1),
-        v => {
+    let (end, recurrences) = match arg(args, 2).into_object() {
+        Ok(e) => (Value::object(copy_object(ctx, &e)), 1),
+        Err(v) => {
             let r = v.to_int();
             if !(1..2147483640).contains(&r) {
                 return Err(ctx.throw(
@@ -1334,19 +1334,19 @@ fn period_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
                     "DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640".into(),
                 ));
             }
-            (Value::Null, r + i64::from(include_start))
+            (Value::NULL, r + i64::from(include_start))
         }
     };
-    let start = Value::Object(copy_object(ctx, &start));
-    let interval = Value::Object(copy_object(ctx, &interval));
+    let start = Value::object(copy_object(ctx, &start));
+    let interval = Value::object(copy_object(ctx, &interval));
     write(this, "start", start);
-    write(this, "current", Value::Null);
+    write(this, "current", Value::NULL);
     write(this, "end", end);
     write(this, "interval", interval);
-    write(this, "recurrences", Value::Int(recurrences));
-    write(this, "include_start_date", Value::Bool(include_start));
-    write(this, "include_end_date", Value::Bool(include_end));
-    Ok(Value::Null)
+    write(this, "recurrences", Value::int(recurrences));
+    write(this, "include_start_date", Value::bool(include_start));
+    write(this, "include_end_date", Value::bool(include_end));
+    Ok(Value::NULL)
 }
 
 fn period_start(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1363,10 +1363,10 @@ fn period_interval(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
 
 /// The recurrences asked for; null for a period with an end date.
 fn period_recurrences(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    if !matches!(read(this, "end"), Value::Null) {
-        return Ok(Value::Null);
+    if !read(this, "end").is_null() {
+        return Ok(Value::NULL);
     }
-    Ok(Value::Int(read(this, "recurrences").to_int() - i64::from(read(this, "include_start_date").to_bool())))
+    Ok(Value::int(read(this, "recurrences").to_int() - i64::from(read(this, "include_start_date").to_bool())))
 }
 
 /// The dates: from the start (or one interval on), an interval apart, up
@@ -1374,22 +1374,16 @@ fn period_recurrences(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
 fn period_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     // A bound for a period that never reaches its end (a zero interval).
     const MOST: usize = 1 << 20;
-    let Value::Object(start) = read(this, "start") else { return crate::weak::internal_iterator(ctx, Vec::new()) };
+    let Ok(start) = read(this, "start").into_object() else { return crate::weak::internal_iterator(ctx, Vec::new()) };
     let interval = read(this, "interval");
-    let end = match read(this, "end") {
-        Value::Object(e) => Some(state(&e)),
-        _ => None,
-    };
+    let end = read(this, "end").as_object().map(|e| state(e));
     let include_start = read(this, "include_start_date").to_bool();
     let include_end = read(this, "include_end_date").to_bool();
     let count = read(this, "recurrences").to_int().max(0) as usize;
     let step = |ctx: &mut dyn Ctx, d: &Rc<Object>| -> Result<Rc<Object>, Throw> {
         // A copy moved on (shift() makes its own for an immutable date).
         let copy = copy_object(ctx, d);
-        Ok(match shift(ctx, &copy, std::slice::from_ref(&interval), 1)? {
-            Value::Object(next) => next,
-            _ => copy,
-        })
+        Ok(shift(ctx, &copy, std::slice::from_ref(&interval), 1)?.into_object().unwrap_or(copy))
     };
     let mut d = copy_object(ctx, &start);
     if !include_start {
@@ -1407,7 +1401,7 @@ fn period_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
             break;
         }
         let next = step(ctx, &d)?;
-        items.push((Value::Int(items.len() as i64), Value::Object(d)));
+        items.push((Value::int(items.len() as i64), Value::object(d)));
         d = next;
     }
     crate::weak::internal_iterator(ctx, items)
