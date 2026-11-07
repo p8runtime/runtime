@@ -916,7 +916,11 @@ pub(crate) fn put_var(slot: &mut Value, v: Value) {
     }
 }
 
-/// Write through a reference. Out of line: common (`global $x`), not hot.
+/// Write through a reference. Out of line, and cold to the loop so that
+/// the plain store is each arm's straight path: common (`global $x`),
+/// not hot. (The cold helpers below are all the inner loop's branches
+/// off its inline cases.)
+#[cold]
 #[inline(never)]
 pub(crate) fn write_ref(cell: &RefCell<Value>, v: Value) {
     put(&mut cell.borrow_mut(), v);
@@ -924,6 +928,7 @@ pub(crate) fn write_ref(cell: &RefCell<Value>, v: Value) {
 
 /// A reference's value, for a read: None when it is undefined (a global
 /// another file unset: `step` warns).
+#[cold]
 #[inline(never)]
 pub(crate) fn read_ref(cell: &RefCell<Value>) -> Option<Value> {
     match &*cell.borrow() {
@@ -976,6 +981,7 @@ fn int_of(v: &Value) -> Option<i64> {
     }
 }
 
+#[cold]
 #[inline(never)]
 fn int_in(cell: &RefCell<Value>) -> Option<i64> {
     match *cell.borrow() {
@@ -999,6 +1005,7 @@ fn num_of(v: &Value) -> Option<Value> {
 
 /// `++`/`--` of an int through a reference: the new value (None: not an
 /// int there, or it overflows: `step`).
+#[cold]
 #[inline(never)]
 fn step_ref(cell: &RefCell<Value>, step: fn(i64, i64) -> Option<i64>) -> Option<i64> {
     let mut v = cell.borrow_mut();
@@ -1012,6 +1019,7 @@ fn step_ref(cell: &RefCell<Value>, step: fn(i64, i64) -> Option<i64>) -> Option<
 /// `num_test`, and every other pair of defined values as `step` compares
 /// them (`test_values`: nothing there warns). None for an undefined
 /// variable (`step` warns) or `<=>`.
+#[cold]
 #[inline(never)]
 fn test(w: &[Value], cmp: Cmp, a: Reg, b: Reg) -> Option<bool> {
     if cmp == Cmp::Spaceship {
@@ -1041,6 +1049,7 @@ fn deref_defined(v: &Value) -> Option<Value> {
 /// `dst = a op b` beyond two ints: floats, operands through references,
 /// `.` on strings. False (nothing done) when `step` must run it: a
 /// warning, an error, a conversion with side effects, an overflow.
+#[cold]
 #[inline(never)]
 fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
     let (x, y) = (&w[a as usize], &w[b as usize]);
@@ -1062,6 +1071,7 @@ fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
 
 /// `var op= src` beyond two ints: numbers (through references), `.=` on
 /// strings. False when `step` must run it.
+#[cold]
 #[inline(never)]
 fn assign_op(w: &mut [Value], op: BinOp, var: Reg, src: Reg) -> bool {
     let (x, y) = (&w[var as usize], &w[src as usize]);
@@ -1083,6 +1093,7 @@ fn assign_op(w: &mut [Value], op: BinOp, var: Reg, src: Reg) -> bool {
 
 /// A condition that is not a bool: what i_zend_is_true says, when
 /// nothing can warn (NAN, an undefined variable: None, `step`'s).
+#[cold]
 #[inline(never)]
 fn truth(v: &Value) -> Option<bool> {
     match v {
@@ -1100,6 +1111,7 @@ fn truth(v: &Value) -> Option<bool> {
 /// `$a[k]` beyond an array and an int key: a string key, an array held
 /// through a reference; None (`step`: a warning, an object, a string's
 /// offset) otherwise. The element must not be a reference.
+#[cold]
 #[inline(never)]
 fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
     let at = |a: &PhpArray| match &w[key as usize] {
@@ -1123,6 +1135,7 @@ fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
 
 /// isset($a[k]) beyond an array and an int key: a string key, an array
 /// held through a reference; None (`step`) otherwise.
+#[cold]
 #[inline(never)]
 fn isset_elem(w: &[Value], var: Reg, keys: Reg) -> Option<bool> {
     let at = |a: &PhpArray| match &w[keys as usize] {
