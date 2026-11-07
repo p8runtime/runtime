@@ -693,9 +693,23 @@ impl Value {
         })
     }
 
+    /// `to_php_string` to read: a string is lent as it is (no handle
+    /// made, a program-memory one's included), anything else converted.
+    #[inline]
+    pub fn to_str_view(&self) -> Option<crate::string::StrView<'_>> {
+        match self.as_str() {
+            Some(s) => Some(crate::string::StrView::Borrowed(s)),
+            None => self.to_php_string().map(crate::string::StrView::Owned),
+        }
+    }
+
     /// `===` (zend_is_identical).
     pub fn identical(&self, other: &Value) -> bool {
         match (&self.0, &other.0) {
+            // One program-memory string per bytes: the same bytes are
+            // the same pointer.
+            (Repr::IStr(a), Repr::IStr(b)) => std::ptr::eq(*a, *b),
+            (Repr::Str(a), Repr::Str(b)) => a == b,
             (Repr::Ref(a), _) => a.borrow().identical(other),
             (_, Repr::Ref(b)) => self.identical(&b.borrow()),
             (Repr::Null | Repr::Undef, Repr::Null | Repr::Undef) => true,

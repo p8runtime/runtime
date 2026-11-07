@@ -1327,11 +1327,13 @@ pub(crate) fn copied(v: &Value) -> Option<Value> {
     }
 }
 
-/// A copy of a value that holds nothing reference-counted (and is
-/// defined): a scalar, null, or a program-memory string.
+/// A copy of a value that holds nothing reference-counted (and is defined).
 #[inline(always)]
 pub(crate) fn plain(v: &Value) -> Option<Value> {
-    (v.is_plain() && !v.is_undef()).then(|| v.clone())
+    match v.kind() {
+        Kind::Null | Kind::Bool | Kind::Int | Kind::Float => Some(v.clone()),
+        _ => None,
+    }
 }
 
 /// `x cmp y` for two numbers, when that is a plain numeric comparison

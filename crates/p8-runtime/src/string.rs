@@ -3,7 +3,6 @@
 //! cached for use as array keys and names.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -84,7 +83,7 @@ pub struct IStr {
 
 /// The program-memory strings, by their bytes.
 struct Pool {
-    by_bytes: HashMap<&'static [u8], &'static IStr>,
+    by_bytes: crate::fast::HashMap<&'static [u8], &'static IStr>,
     /// Bytes held (the strings' and about their overhead).
     size: usize,
 }
@@ -113,7 +112,7 @@ impl IStr {
     /// new one while the pool has room. None past the bound.
     pub fn intern(bytes: &[u8]) -> Option<&'static IStr> {
         let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-        let pool = pool.get_or_insert_with(|| Pool { by_bytes: HashMap::new(), size: 0 });
+        let pool = pool.get_or_insert_with(|| Pool { by_bytes: Default::default(), size: 0 });
         if let Some(s) = pool.by_bytes.get(bytes) {
             return Some(s);
         }
@@ -161,6 +160,26 @@ impl IStr {
         });
         // (While the thread is torn down: a copy.)
         twin.unwrap_or_else(|_| PhpStr::copy_of(self.as_bytes()))
+    }
+}
+
+/// A value's string, to read: the string itself when the value is one
+/// (any handle, a literal's included, with no handle made), else the
+/// string it converts to. Reads as its head (`as_bytes`, `len`, `hash`).
+pub enum StrView<'a> {
+    Borrowed(&'a StrHead),
+    Owned(PhpStr),
+}
+
+impl Deref for StrView<'_> {
+    type Target = StrHead;
+
+    #[inline(always)]
+    fn deref(&self) -> &StrHead {
+        match self {
+            StrView::Borrowed(s) => s,
+            StrView::Owned(s) => s,
+        }
     }
 }
 
