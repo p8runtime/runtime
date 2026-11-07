@@ -193,7 +193,7 @@ static BUILTINS: &[Builtin] = &[
 // ---- argument helpers ----
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn int(args: &[Value], i: usize) -> i64 {
@@ -206,13 +206,13 @@ fn ci(args: &[Value], i: usize) -> i32 {
 }
 
 fn given(args: &[Value], i: usize) -> bool {
-    !matches!(arg(args, i), Value::Null)
+    !arg(args, i).is_null()
 }
 
 fn object(args: &[Value], i: usize) -> Rc<Object> {
-    match arg(args, i) {
-        Value::Object(o) => o,
-        _ => unreachable!("checked against the stub"),
+    match arg(args, i).into_object() {
+        Ok(o) => o,
+        Err(_) => unreachable!("checked against the stub"),
     }
 }
 
@@ -231,7 +231,7 @@ fn read<T>(args: &[Value], i: usize, f: impl FnOnce(&Img) -> T) -> T {
 fn new_image(ctx: &mut dyn Ctx, im: Img) -> Value {
     let class = ctx.class(b"GdImage").expect("GdImage");
     let o = ctx.new_object(&class);
-    Value::Object(o.sibling(class, Some(Rc::new(Handle { im: RefCell::new(Some(im)) }))))
+    Value::object(o.sibling(class, Some(Rc::new(Handle { im: RefCell::new(Some(im)) }))))
 }
 
 fn value_error(ctx: &mut dyn Ctx, arg: usize, name: &str, msg: &str) -> Throw {
@@ -240,7 +240,7 @@ fn value_error(ctx: &mut dyn Ctx, arg: usize, name: &str, msg: &str) -> Throw {
 }
 
 fn ok() -> R {
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn lossy(b: &[u8]) -> String {
@@ -253,24 +253,24 @@ fn gd_info(_: &mut dyn Ctx, _: &mut [Value]) -> R {
     let mut a = PhpArray::new();
     let mut set = |k: &str, v: Value| a.insert(Key::from_string(k.into()), v);
     set("GD Version", Value::str("bundled (2.1.0 compatible)"));
-    set("FreeType Support", Value::Bool(false));
-    set("GIF Read Support", Value::Bool(true));
-    set("GIF Create Support", Value::Bool(true));
-    set("JPEG Support", Value::Bool(true));
-    set("PNG Support", Value::Bool(true));
-    set("WBMP Support", Value::Bool(true));
-    set("XPM Support", Value::Bool(false));
-    set("XBM Support", Value::Bool(false));
-    set("WebP Support", Value::Bool(true));
-    set("BMP Support", Value::Bool(true));
-    set("AVIF Support", Value::Bool(false));
-    set("TGA Read Support", Value::Bool(false));
-    set("JIS-mapped Japanese Font Support", Value::Bool(false));
-    Ok(Value::Array(Rc::new(a)))
+    set("FreeType Support", Value::FALSE);
+    set("GIF Read Support", Value::TRUE);
+    set("GIF Create Support", Value::TRUE);
+    set("JPEG Support", Value::TRUE);
+    set("PNG Support", Value::TRUE);
+    set("WBMP Support", Value::TRUE);
+    set("XPM Support", Value::FALSE);
+    set("XBM Support", Value::FALSE);
+    set("WebP Support", Value::TRUE);
+    set("BMP Support", Value::TRUE);
+    set("AVIF Support", Value::FALSE);
+    set("TGA Read Support", Value::FALSE);
+    set("JIS-mapped Japanese Font Support", Value::FALSE);
+    Ok(Value::array(a))
 }
 
 fn imagetypes(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Int(SUPPORTED))
+    Ok(Value::int(SUPPORTED))
 }
 
 // ---- creating ----
@@ -286,7 +286,7 @@ fn create(ctx: &mut dyn Ctx, args: &[Value], tc: bool) -> R {
     if w.checked_mul(h).is_none_or(|n| n > (1 << 28)) {
         let f = ctx.builtin_name();
         ctx.warn(&format!("{f}(): Product of memory allocation multiplication would exceed INT_MAX, failing operation gracefully\n"));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let mut im = Img::new(w as i32, h as i32, tc);
     if !tc {
@@ -308,7 +308,7 @@ fn imagecreatefromstring(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let sniffed = if data.as_bytes().len() < 12 { None } else { codec::sniff(data.as_bytes()) };
     let Some(format) = sniffed else {
         ctx.warn("imagecreatefromstring(): Data is not in a recognized format");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     match codec::decode(format, data.as_bytes()) {
         Some(im) => Ok(new_image(ctx, im)),
@@ -318,7 +318,7 @@ fn imagecreatefromstring(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             }
             ctx.warn(&format!("imagecreatefromstring(): Passed data is not in \"{}\" format", format.name()));
             ctx.warn("imagecreatefromstring(): Couldn't create GD Image Stream out of Data");
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -332,10 +332,7 @@ fn read_input(ctx: &mut dyn Ctx, func: &str, path: &[u8]) -> Result<Option<Vec<u
     let shown = lossy(path);
     if shown.contains("://") && !shown.starts_with("file://") || shown.starts_with("data:") {
         let r = ctx.call(&Value::str("file_get_contents"), &mut [Value::str(shown.as_str())])?;
-        return Ok(match r {
-            Value::Str(s) => Some(s.as_bytes().to_vec()),
-            _ => None,
-        });
+        return Ok(r.as_str().map(|s| s.as_bytes().to_vec()));
     }
     let p = shown.strip_prefix("file://").unwrap_or(&shown);
     match std::fs::read(p) {
@@ -364,7 +361,7 @@ fn os_error(e: &std::io::Error) -> String {
 
 fn from_file(ctx: &mut dyn Ctx, args: &[Value], func: &'static str, format: Format) -> R {
     let path = arg(args, 0).to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty);
-    let Some(data) = read_input(ctx, func, path.as_bytes())? else { return Ok(Value::Bool(false)) };
+    let Some(data) = read_input(ctx, func, path.as_bytes())? else { return Ok(Value::FALSE) };
     match codec::decode(format, &data) {
         Some(im) => Ok(new_image(ctx, im)),
         None => {
@@ -376,7 +373,7 @@ fn from_file(ctx: &mut dyn Ctx, args: &[Value], func: &'static str, format: Form
                 ctx.warn(&format!("{func}(): gd-webp cannot get webp info"));
             }
             ctx.warn(&format!("{func}(): \"{}\" is not a valid {} file", lossy(path.as_bytes()), format.name()));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -431,15 +428,15 @@ fn imagedestroy(_: &mut dyn Ctx, _: &mut [Value]) -> R {
 // ---- properties ----
 
 fn imagesx(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Int(i64::from(read(args, 0, |im| im.w))))
+    Ok(Value::int(i64::from(read(args, 0, |im| im.w))))
 }
 
 fn imagesy(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Int(i64::from(read(args, 0, |im| im.h))))
+    Ok(Value::int(i64::from(read(args, 0, |im| im.h))))
 }
 
 fn imageistruecolor(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Bool(read(args, 0, |im| im.tc)))
+    Ok(Value::bool(read(args, 0, |im| im.tc)))
 }
 
 fn imagepalettetotruecolor(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -477,7 +474,7 @@ fn imagepalettecopy(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imagecolorstotal(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Int(read(args, 0, |im| im.pal.len() as i64)))
+    Ok(Value::int(read(args, 0, |im| im.pal.len() as i64)))
 }
 
 fn imagealphablending(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -493,7 +490,7 @@ fn imagesavealpha(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imageantialias(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Bool(read(args, 0, |im| im.tc)))
+    Ok(Value::bool(read(args, 0, |im| im.tc)))
 }
 
 fn imagelayereffect(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -504,7 +501,7 @@ fn imagelayereffect(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 fn imageinterlace(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let set = given(args, 1).then(|| arg(args, 1).to_bool());
-    Ok(Value::Bool(with(args, 0, |im| {
+    Ok(Value::bool(with(args, 0, |im| {
         if let Some(on) = set {
             im.interlace = on;
         }
@@ -518,7 +515,7 @@ fn imagesetinterpolation(_: &mut dyn Ctx, args: &mut [Value]) -> R {
         method = 3;
     }
     if !(0..=21).contains(&method) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if method == 0 {
         method = 3;
@@ -528,13 +525,13 @@ fn imagesetinterpolation(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn imagegetinterpolation(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Int(read(args, 0, |im| im.interp)))
+    Ok(Value::int(read(args, 0, |im| im.interp)))
 }
 
 fn imageresolution(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if !given(args, 1) && !given(args, 2) {
         let (x, y) = read(args, 0, |im| im.res);
-        return Ok(Value::Array(Rc::new(PhpArray::from_list(vec![Value::Int(x), Value::Int(y)]))));
+        return Ok(Value::array(PhpArray::from_list(vec![Value::int(x), Value::int(y)])));
     }
     let range = |ctx: &mut dyn Ctx, v: i64, n: usize, name: &str| -> Result<(), Throw> {
         if (0..=i64::from(u32::MAX)).contains(&v) { Ok(()) } else { Err(value_error(ctx, n, name, "must be between 0 and 4294967295")) }
@@ -578,7 +575,7 @@ fn imagesetclip(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 fn imagegetclip(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let (a, b, c, d) = read(args, 0, |im| im.clip);
-    Ok(Value::Array(Rc::new(PhpArray::from_list(vec![Value::Int(a.into()), Value::Int(b.into()), Value::Int(c.into()), Value::Int(d.into())]))))
+    Ok(Value::array(PhpArray::from_list(vec![Value::int(a.into()), Value::int(b.into()), Value::int(c.into()), Value::int(d.into())])))
 }
 
 // ---- colours ----
@@ -608,7 +605,7 @@ fn rgba(ctx: &mut dyn Ctx, args: &[Value], with_alpha: bool) -> Result<(i32, i32
 fn alloc(ctx: &mut dyn Ctx, args: &[Value], with_alpha: bool) -> R {
     let (r, g, b, a) = rgba(ctx, args, with_alpha)?;
     let c = with(args, 0, |im| im.allocate(r, g, b, a));
-    Ok(if c == -1 { Value::Bool(false) } else { Value::Int(i64::from(c)) })
+    Ok(if c == -1 { Value::FALSE } else { Value::int(i64::from(c)) })
 }
 
 fn imagecolorallocate(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -623,10 +620,10 @@ fn imagecolorat(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let (x, y) = (ci(args, 1), ci(args, 2));
     let v = read(args, 0, |im| if im.safe(x, y) { Some(im.get(x, y)) } else { None });
     match v {
-        Some(c) => Ok(Value::Int(i64::from(c))),
+        Some(c) => Ok(Value::int(i64::from(c))),
         None => {
             ctx.warn(&format!("imagecolorat(): {x},{y} is out of bounds"));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -647,14 +644,14 @@ fn imagecolorsforindex(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let Some((r, g, b, a)) = r else { return Err(value_error(ctx, 2, "color", "is out of range")) };
     let mut out = PhpArray::new();
     for (k, v) in [("red", r), ("green", g), ("blue", b), ("alpha", a)] {
-        out.insert(Key::from_string(k.into()), Value::Int(i64::from(v)));
+        out.insert(Key::from_string(k.into()), Value::int(i64::from(v)));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn find(ctx: &mut dyn Ctx, args: &[Value], with_alpha: bool, how: fn(&mut Img, i32, i32, i32, i32) -> i32) -> R {
     let (r, g, b, a) = rgba(ctx, args, with_alpha)?;
-    Ok(Value::Int(i64::from(with(args, 0, |im| how(im, r, g, b, a)))))
+    Ok(Value::int(i64::from(with(args, 0, |im| how(im, r, g, b, a)))))
 }
 
 fn imagecolorclosest(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -709,12 +706,12 @@ fn imagecolorset(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             false
         }
     });
-    Ok(if set { Value::Null } else { Value::Bool(false) })
+    Ok(if set { Value::NULL } else { Value::FALSE })
 }
 
 fn imagecolortransparent(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let set = given(args, 1).then(|| ci(args, 1));
-    Ok(Value::Int(i64::from(with(args, 0, |im| {
+    Ok(Value::int(i64::from(with(args, 0, |im| {
         if let Some(c) = set
             && (im.tc || (c >= -1 && (c as isize) < im.pal.len() as isize))
         {
@@ -764,7 +761,7 @@ fn imagefilledellipse(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 /// imagepolygon(image, points, num_points_or_color, color = null).
 fn poly(ctx: &mut dyn Ctx, args: &[Value]) -> Result<(Vec<(i32, i32)>, i32), Throw> {
-    let Value::Array(a) = arg(args, 1) else { unreachable!("checked against the stub") };
+    let Ok(a) = arg(args, 1).into_array() else { unreachable!("checked against the stub") };
     let vals: Vec<i32> = a.values().map(|v| v.deref().to_int().clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32).collect();
     let (num, color) = if given(args, 3) {
         let f = ctx.builtin_name();
@@ -894,7 +891,7 @@ fn rect_field(ctx: &mut dyn Ctx, rect: &PhpArray, key: &str, missing: &str) -> R
 }
 
 fn imagecrop(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Array(rect) = arg(args, 1) else { unreachable!("checked against the stub") };
+    let Ok(rect) = arg(args, 1).into_array() else { unreachable!("checked against the stub") };
     let x = rect_field(ctx, &rect, "x", "imagecrop(): Argument #2 ($rectangle) must have a \"x\" key")?;
     let y = rect_field(ctx, &rect, "y", "imagecrop(): Argument #2 ($rectangle) must have a \"y\" key")?;
     let w = rect_field(ctx, &rect, "width", "imagecrop(): Argument #2 ($rectangle) must have a \"width\" key")?;
@@ -909,10 +906,10 @@ fn imagecrop(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     if w <= 0 || h <= 0 {
         ctx.warn("imagecrop(): One parameter to a memory allocation multiplication is negative or zero, failing operation gracefully\n");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if i64::from(w) * i64::from(h) > (1 << 28) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let out = read(args, 0, |im| gd::crop(im, x, y, w, h));
     Ok(new_image(ctx, out))
@@ -936,7 +933,7 @@ fn imagecropauto(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let r = read(args, 0, |im| crop_auto(im, mode, threshold, color));
     match r {
         Some(out) => Ok(new_image(ctx, out)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -1016,7 +1013,7 @@ fn imagescale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return Err(value_error(ctx, 3, "height", "must be between 1 and 2147483647"));
     }
     if w * h > (1 << 28) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let out = read(args, 0, |im| gd::scale(im, w as i32, h as i32, mode == 16, mode == 3 || mode == 5 || mode == 0));
     Ok(new_image(ctx, out))
@@ -1030,7 +1027,7 @@ fn imagerotate(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     let bg = ci(args, 2);
     if bg < 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let out = read(args, 0, |im| gd::rotate(im, angle, bg));
     Ok(new_image(ctx, out))
@@ -1283,19 +1280,19 @@ fn imagefilter(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
     });
     if (filter == 11 && a1 <= 0) || (filter == 12 && a1 >= a2) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     ok()
 }
 
 fn imageconvolution(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Array(rows) = arg(args, 1) else { unreachable!("checked against the stub") };
+    let Ok(rows) = arg(args, 1).into_array() else { unreachable!("checked against the stub") };
     if rows.len() != 3 {
         return Err(value_error(ctx, 2, "matrix", "must be a 3x3 array"));
     }
     let mut m = [[0.0f32; 3]; 3];
     for (j, row) in rows.values().enumerate() {
-        let Value::Array(cols) = row.deref() else { continue };
+        let Ok(cols) = row.deref().into_array() else { continue };
         if cols.len() < 3 {
             return Err(value_error(ctx, 2, "matrix", &format!("must be a 3x3 array, matrix[{j}] only has {} elements", cols.len())));
         }
@@ -1328,18 +1325,18 @@ fn imageconvolution(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 /// Send encoded bytes where `to` says: the output, a stream, or a file.
 fn send(ctx: &mut dyn Ctx, func: &str, to: &Value, bytes: &[u8]) -> R {
     match to {
-        Value::Null => {
+        v if v.is_null() => {
             ctx.echo(bytes);
             ok()
         }
         v if p8_runtime::stream::resource_of(v).is_some() => {
             let r = p8_runtime::stream::resource_of(v).expect("a resource");
-            let Some(res) = p8_runtime::stream::resource(&r) else { return Ok(Value::Bool(false)) };
+            let Some(res) = p8_runtime::stream::resource(&r) else { return Ok(Value::FALSE) };
             if res.closed.get() {
                 return Err(ctx.throw("TypeError", format!("{func}(): supplied resource is not a valid stream resource")));
             }
             let mut stream = res.stream.borrow_mut();
-            Ok(Value::Bool(stream.write(ctx, bytes)?.is_some()))
+            Ok(Value::bool(stream.write(ctx, bytes)?.is_some()))
         }
         other => {
             let path = other.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty);
@@ -1352,8 +1349,8 @@ fn send(ctx: &mut dyn Ctx, func: &str, to: &Value, bytes: &[u8]) -> R {
             let shown = lossy(path.as_bytes());
             if shown.starts_with("php://") {
                 let h = ctx.call(&Value::str("fopen"), &mut [Value::str(shown.as_str()), Value::str("wb")])?;
-                if matches!(h, Value::Bool(false)) {
-                    return Ok(Value::Bool(false));
+                if h.as_bool() == Some(false) {
+                    return Ok(Value::FALSE);
                 }
                 ctx.call(&Value::str("fwrite"), &mut [h.clone(), Value::str(p8_runtime::string::PhpStr::new(bytes.to_vec()))])?;
                 ctx.call(&Value::str("fclose"), &mut [h])?;
@@ -1364,7 +1361,7 @@ fn send(ctx: &mut dyn Ctx, func: &str, to: &Value, bytes: &[u8]) -> R {
                 Ok(()) => ok(),
                 Err(e) => {
                     ctx.warn(&format!("{func}({shown}): Failed to open stream: {}", os_error(&e)));
-                    Ok(Value::Bool(false))
+                    Ok(Value::FALSE)
                 }
             }
         }
@@ -1373,7 +1370,7 @@ fn send(ctx: &mut dyn Ctx, func: &str, to: &Value, bytes: &[u8]) -> R {
 
 /// The output target's own checks, before any work.
 fn check_target(ctx: &mut dyn Ctx, func: &str, to: &Value) -> Result<(), Throw> {
-    if matches!(to, Value::Null) || p8_runtime::stream::resource_of(to).is_some() {
+    if to.is_null() ||p8_runtime::stream::resource_of(to).is_some() {
         return Ok(());
     }
     let path = to.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty);
@@ -1388,7 +1385,7 @@ fn check_target(ctx: &mut dyn Ctx, func: &str, to: &Value) -> Result<(), Throw> 
 
 fn encode_failed(ctx: &mut dyn Ctx, func: &str) -> R {
     ctx.warn(&format!("{func}(): Could not encode the image"));
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 fn imagejpeg(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {

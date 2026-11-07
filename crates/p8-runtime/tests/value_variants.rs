@@ -12,7 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Crates that name no variant any more: a regression here fails.
-const PORTED: &[&str] = &["p8-runtime", "p8-interp", "p8-compiler", "p8-bytecode", "p8", "p8-ext-mbstring", "php-cli", "p8-syntax", "p8-stubs", "p8-pcre"];
+const PORTED: &[&str] = &["p8-runtime", "p8-interp", "p8-compiler", "p8-bytecode", "p8", "p8-ext-mbstring", "php-cli", "p8-syntax", "p8-stubs", "p8-pcre",
+    "p8-ext-pdo", "p8-ext-mysqli", "p8-ext-gd", "p8-ext-pdo-pgsql", "p8-ext-pcre", "p8-ext-sockets", "p8-ext-tokenizer",
+    "p8-ext-pdo-mysql", "p8-ext-pdo-sqlite", "p8-ext-fileinfo", "p8-mysqlnd"];
 
 const VARIANTS: &[&str] = &["Null", "Bool", "Int", "Float", "Str", "Array", "Ref", "Object", "Undef"];
 
@@ -40,6 +42,12 @@ fn names_variant(line: &str) -> bool {
     let mut rest = code;
     while let Some(at) = rest.find("Value::") {
         let after = &rest[at + "Value::".len()..];
+        // `ConstValue::Int` and co are other enums, not `Value`.
+        let joined = rest[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if joined {
+            rest = after;
+            continue;
+        }
         let ident: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
         if VARIANTS.contains(&ident.as_str()) {
             return true;

@@ -400,7 +400,7 @@ fn tokens(src: &[u8], parse: bool) -> Vec<Token> {
 }
 
 fn text(src: &[u8], t: &Token) -> Value {
-    Value::Str(PhpStr::from(&src[t.start..t.end]))
+    Value::str(PhpStr::from(&src[t.start..t.end]))
 }
 
 fn code_arg(args: &[Value]) -> PhpStr {
@@ -416,12 +416,12 @@ fn token_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     let mut out = PhpArray::new();
     for t in tokens(src, parse) {
         let v = match t.tok {
-            Tok::Char(c) => Value::Str(PhpStr::from(&[c][..])),
-            Tok::Id(i) => Value::Array(Rc::new(PhpArray::from_list(vec![Value::Int(i), text(src, &t), Value::Int(t.line)]))),
+            Tok::Char(c) => Value::str(PhpStr::from(&[c][..])),
+            Tok::Id(i) => Value::array(PhpArray::from_list(vec![Value::int(i), text(src, &t), Value::int(t.line)])),
         };
         let _ = out.push(v);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// php_strip_whitespace(string $filename): the file's code without its
@@ -433,7 +433,7 @@ fn php_strip_whitespace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
         Err(e) => {
             let reason = if e.kind() == std::io::ErrorKind::NotFound { "No such file or directory".to_string() } else { e.to_string() };
             ctx.warn(&format!("php_strip_whitespace({}): Failed to open stream: {reason}", String::from_utf8_lossy(path.as_bytes())));
-            return Ok(Value::Str(PhpStr::empty()));
+            return Ok(Value::str(PhpStr::empty()));
         }
     };
     let (whitespace, comment, doc_comment, end_heredoc) = (id("T_WHITESPACE"), id("T_COMMENT"), id("T_DOC_COMMENT"), id("T_END_HEREDOC"));
@@ -470,7 +470,7 @@ fn php_strip_whitespace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
         }
         prev_space = false;
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 /// TOKEN_PARSE: the code must parse (a ParseError if not); whether it is set.
@@ -488,7 +488,7 @@ fn check(ctx: &mut dyn Ctx, src: &[u8], args: &[Value]) -> Result<bool, Throw> {
 /// token_name(int $id): T_* (or the character, for an id below 256).
 fn token_name(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let i = args.first().map_or(0, |v| v.deref().to_int());
-    Ok(Value::Str(PhpStr::from(name_of(i).unwrap_or_else(|| "UNKNOWN".into()).as_str())))
+    Ok(Value::str(PhpStr::from(name_of(i).unwrap_or_else(|| "UNKNOWN".into()).as_str())))
 }
 
 fn name_of(i: i64) -> Option<String> {
@@ -507,12 +507,12 @@ fn set(o: &Object, name: &[u8], v: Value) {
 }
 
 fn construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let arg = |i: usize, default: i64| args.get(i).map_or(Value::Int(default), Value::deref);
+    let arg = |i: usize, default: i64| args.get(i).map_or(Value::int(default), Value::deref);
     set(this, b"id", arg(0, 0));
-    set(this, b"text", args.get(1).map_or(Value::Str(PhpStr::empty()), Value::deref));
+    set(this, b"text", args.get(1).map_or(Value::str(PhpStr::empty()), Value::deref));
     set(this, b"line", arg(2, -1));
     set(this, b"pos", arg(3, -1));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// PhpToken::tokenize(string $code, int $flags = 0): static[], made
@@ -521,7 +521,7 @@ fn tokenize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let code = code_arg(args);
     let src = code.as_bytes();
     let parse = check(ctx, src, args)?;
-    let Some(class) = ctx.native_class() else { return Ok(Value::Null) };
+    let Some(class) = ctx.native_class() else { return Ok(Value::NULL) };
     if class.flags & p8_runtime::object::CLASS_ABSTRACT != 0 {
         return Err(ctx.throw("Error", format!("Cannot instantiate abstract class {}", String::from_utf8_lossy(class.name.as_bytes()))));
     }
@@ -532,60 +532,60 @@ fn tokenize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             Tok::Char(c) => i64::from(c),
             Tok::Id(i) => i,
         };
-        set(&o, b"id", Value::Int(id));
+        set(&o, b"id", Value::int(id));
         set(&o, b"text", text(src, &t));
-        set(&o, b"line", Value::Int(t.line));
-        set(&o, b"pos", Value::Int(t.start as i64));
-        let _ = out.push(Value::Object(o));
+        set(&o, b"line", Value::int(t.line));
+        set(&o, b"pos", Value::int(t.start as i64));
+        let _ = out.push(Value::object(o));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn matches_kind(ctx: &mut dyn Ctx, this: &Object, kind: &Value) -> Result<bool, Throw> {
-    Ok(match kind.deref() {
-        Value::Int(i) => prop(this, b"id").to_int() == i,
-        Value::Str(s) => prop(this, b"text").to_php_string().is_some_and(|t| t.as_bytes() == s.as_bytes()),
-        Value::Array(a) => {
-            for (_, k) in a.iter() {
-                match k.deref() {
-                    v @ (Value::Int(_) | Value::Str(_)) => {
-                        if matches_kind(ctx, this, &v)? {
-                            return Ok(true);
-                        }
-                    }
-                    v => {
-                        return Err(ctx.throw("TypeError", format!("PhpToken::is(): Argument #1 ($kind) must only have elements of type string|int, {} given", v.type_name())));
-                    }
+    let v = kind.deref();
+    Ok(if let Some(i) = v.as_int() {
+        prop(this, b"id").to_int() == i
+    } else if let Some(s) = v.as_str() {
+        prop(this, b"text").to_php_string().is_some_and(|t| t.as_bytes() == s.as_bytes())
+    } else if let Some(a) = v.as_array() {
+        for (_, k) in a.iter() {
+            let v = k.deref();
+            if v.is_int() || v.is_str() {
+                if matches_kind(ctx, this, &v)? {
+                    return Ok(true);
                 }
+            } else {
+                return Err(ctx.throw("TypeError", format!("PhpToken::is(): Argument #1 ($kind) must only have elements of type string|int, {} given", v.type_name())));
             }
-            false
         }
-        v => return Err(ctx.throw("TypeError", format!("PhpToken::is(): Argument #1 ($kind) must be of type string|int|array, {} given", v.type_name()))),
+        false
+    } else {
+        return Err(ctx.throw("TypeError", format!("PhpToken::is(): Argument #1 ($kind) must be of type string|int|array, {} given", v.type_name())));
     })
 }
 
 fn is(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let kind = args.first().map_or(Value::Null, Value::deref);
-    Ok(Value::Bool(matches_kind(ctx, this, &kind)?))
+    let kind = args.first().map_or(Value::NULL, Value::deref);
+    Ok(Value::bool(matches_kind(ctx, this, &kind)?))
 }
 
 fn is_ignorable(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let i = prop(this, b"id").to_int();
-    Ok(Value::Bool(["T_WHITESPACE", "T_COMMENT", "T_DOC_COMMENT", "T_OPEN_TAG"].iter().any(|n| id(n) == i)))
+    Ok(Value::bool(["T_WHITESPACE", "T_COMMENT", "T_DOC_COMMENT", "T_OPEN_TAG"].iter().any(|n| id(n) == i)))
 }
 
 fn get_token_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let i = prop(this, b"id").to_int();
     Ok(match i {
-        0..=255 => Value::Str(PhpStr::from(&[i as u8][..])),
-        _ => name_of(i).map_or(Value::Null, |n| Value::Str(PhpStr::from(n.as_str()))),
+        0..=255 => Value::str(PhpStr::from(&[i as u8][..])),
+        _ => name_of(i).map_or(Value::NULL, |n| Value::str(PhpStr::from(n.as_str()))),
     })
 }
 
 fn to_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(match prop(this, b"text") {
-        v @ Value::Str(_) => v,
-        v => Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty)),
+        v if v.is_str() => v,
+        v => Value::str(v.to_php_string().unwrap_or_else(PhpStr::empty)),
     })
 }
 

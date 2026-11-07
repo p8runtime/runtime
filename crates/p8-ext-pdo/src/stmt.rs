@@ -107,7 +107,7 @@ fn qmark_position(q: &QMarks, key: &PKey) -> Result<usize, NoPosition> {
 fn typed_value_of(b: &Bound) -> Option<DbValue> {
     let v = b.value.deref();
     let ty = b.ty & 0xFFFF;
-    if ty == PARAM_NULL || matches!(v, Value::Null) {
+    if ty == PARAM_NULL || v.is_null() {
         return Some(DbValue::Null);
     }
     if ty == PARAM_STMT {
@@ -118,17 +118,19 @@ fn typed_value_of(b: &Bound) -> Option<DbValue> {
     {
         let bytes = p8_runtime::stream::resource(&r).map(|res| res.stream.borrow_mut().read_all()).unwrap_or_default();
         // The bound variable becomes what was read from it.
-        if let Value::Ref(cell) = &b.value {
-            *cell.borrow_mut() = Value::Str(PhpStr::new(bytes.clone()));
+        if let Some(cell) = b.value.as_reference() {
+            *cell.borrow_mut() = Value::str(PhpStr::new(bytes.clone()));
         }
         return Some(DbValue::Text(bytes));
     }
-    match v {
-        Value::Str(s) => Some(DbValue::Text(s.as_bytes().to_vec())),
-        Value::Int(i) => Some(DbValue::Int(i)),
-        Value::Float(f) => Some(DbValue::Float(f)),
-        Value::Bool(b) => Some(DbValue::Bool(b)),
-        _ => None,
+    if let Some(s) = v.as_str() {
+        Some(DbValue::Text(s.as_bytes().to_vec()))
+    } else if let Some(i) = v.as_int() {
+        Some(DbValue::Int(i))
+    } else if let Some(f) = v.as_float() {
+        Some(DbValue::Float(f))
+    } else {
+        v.as_bool().map(DbValue::Bool)
     }
 }
 
@@ -179,7 +181,7 @@ fn impl_err(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, state: &str, supp:
 }
 
 pub fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 pub fn value_name(v: &Value) -> String {
@@ -188,11 +190,11 @@ pub fn value_name(v: &Value) -> String {
 
 fn db_to_value(v: &DbValue) -> Value {
     match v {
-        DbValue::Null => Value::Null,
-        DbValue::Int(i) => Value::Int(*i),
-        DbValue::Float(f) => Value::Float(*f),
-        DbValue::Text(b) | DbValue::Blob(b) | DbValue::Lob(b) => Value::Str(PhpStr::new(b.clone())),
-        DbValue::Bool(b) => Value::Bool(*b),
+        DbValue::Null => Value::NULL,
+        DbValue::Int(i) => Value::int(*i),
+        DbValue::Float(f) => Value::float(*f),
+        DbValue::Text(b) | DbValue::Blob(b) | DbValue::Lob(b) => Value::str(PhpStr::new(b.clone())),
+        DbValue::Bool(b) => Value::bool(*b),
     }
 }
 
@@ -209,47 +211,47 @@ fn column_value(ctx: &mut dyn Ctx, st: &StmtState, col: usize, ty: Option<i64>) 
     // another scalar, which is what the string converts to).
     if let Some(DbValue::Lob(bytes)) = st.row.get(col) {
         let ty = if dbh.stringify.get() { Some(PARAM_STR) } else { ty };
-        let s = || Value::Str(PhpStr::new(bytes.clone()));
+        let s = || Value::str(PhpStr::new(bytes.clone()));
         return match ty {
             Some(PARAM_STR) => s(),
-            Some(PARAM_INT) => Value::Int(s().to_int()),
-            Some(PARAM_BOOL) => Value::Bool(true),
-            Some(PARAM_NULL) => Value::Null,
+            Some(PARAM_INT) => Value::int(s().to_int()),
+            Some(PARAM_BOOL) => Value::TRUE,
+            Some(PARAM_NULL) => Value::NULL,
             _ => lob_stream(ctx, bytes.clone()),
         };
     }
     if ty == Some(PARAM_LOB)
         && let Some(bytes) = st.driver.as_ref().and_then(|d| d.lob_column(col))
     {
-        return if dbh.stringify.get() { Value::Str(PhpStr::new(bytes)) } else { lob_stream(ctx, bytes) };
+        return if dbh.stringify.get() { Value::str(PhpStr::new(bytes)) } else { lob_stream(ctx, bytes) };
     }
-    let mut v = st.row.get(col).map_or(Value::Null, db_to_value);
-    if let Value::Str(s) = &v
+    let mut v = st.row.get(col).map_or(Value::NULL, db_to_value);
+    if let Some(s) = v.as_str()
         && s.is_empty()
         && dbh.oracle_nulls.get() == NULL_EMPTY_STRING
     {
-        v = Value::Null;
+        v = Value::NULL;
     }
     let ty = if dbh.stringify.get() { Some(PARAM_STR) } else { ty };
     if let Some(t) = ty
-        && !matches!(v, Value::Null)
+        && !v.is_null()
     {
         v = match t {
-            PARAM_INT => Value::Int(v.to_int()),
-            PARAM_BOOL => Value::Bool(v.to_bool()),
-            PARAM_STR => match v {
-                Value::Bool(false) => Value::str("0"),
-                other => Value::Str(other.to_php_string().unwrap_or_else(PhpStr::empty)),
+            PARAM_INT => Value::int(v.to_int()),
+            PARAM_BOOL => Value::bool(v.to_bool()),
+            PARAM_STR => match v.as_bool() {
+                Some(false) => Value::str("0"),
+                _ => Value::str(v.to_php_string().unwrap_or_else(PhpStr::empty)),
             },
-            PARAM_NULL => Value::Null,
-            PARAM_LOB => match v {
-                Value::Str(s) => lob_stream(ctx, s.as_bytes().to_vec()),
-                other => other,
+            PARAM_NULL => Value::NULL,
+            PARAM_LOB => match v.as_str() {
+                Some(s) => lob_stream(ctx, s.as_bytes().to_vec()),
+                None => v,
             },
             _ => v,
         };
     }
-    if matches!(v, Value::Null) && dbh.oracle_nulls.get() == NULL_TO_STRING {
+    if v.is_null() &&dbh.oracle_nulls.get() == NULL_TO_STRING {
         v = Value::str("");
     }
     v
@@ -320,8 +322,8 @@ fn fetch_common(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<bool, Throw> {
     let updates: Vec<(Rc<std::cell::RefCell<Value>>, usize, i64)> = with(ctx, this, |st| {
         st.cols
             .iter()
-            .filter_map(|b| match (&b.value, b.colno) {
-                (Value::Ref(cell), Some(c)) => Some((Rc::clone(cell), c, b.ty)),
+            .filter_map(|b| match (b.value.as_reference(), b.colno) {
+                (Some(cell), Some(c)) => Some((Rc::clone(cell), c, b.ty)),
                 _ => None,
             })
             .collect()
@@ -340,20 +342,19 @@ fn fetch_common(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<bool, Throw> {
 /// The text of a value as a bound parameter or a class name, running
 /// __toString for an object; None (with the exception pending) when it has none.
 fn to_text(ctx: &mut dyn Ctx, v: &Value) -> Result<PhpStr, Throw> {
-    match v.deref() {
-        Value::Array(_) => {
-            ctx.warn("Array to string conversion");
-            Ok(PhpStr::from("Array"))
+    let v = v.deref();
+    if v.is_array() {
+        ctx.warn("Array to string conversion");
+        Ok(PhpStr::from("Array"))
+    } else if let Some(o) = v.as_object() {
+        if o.class.method(b"__tostring").is_some() {
+            let callable = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str("__toString")]));
+            let r = ctx.call(&callable, &mut [])?;
+            return Ok(r.to_php_string().unwrap_or_else(PhpStr::empty));
         }
-        Value::Object(o) => {
-            if o.class.method(b"__tostring").is_some() {
-                let callable = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(&o)), Value::str("__toString")])));
-                let r = ctx.call(&callable, &mut [])?;
-                return Ok(r.to_php_string().unwrap_or_else(PhpStr::empty));
-            }
-            Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.shown()))))
-        }
-        other => Ok(other.to_php_string().unwrap_or_else(PhpStr::empty)),
+        Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.shown()))))
+    } else {
+        Ok(v.to_php_string().unwrap_or_else(PhpStr::empty))
     }
 }
 
@@ -362,25 +363,27 @@ fn bind_value_of(ctx: &mut dyn Ctx, b: &Bound) -> Result<Option<DbValue>, Throw>
     Ok(Some(match b.ty & 0xFFFF {
         PARAM_STMT => return Ok(None),
         PARAM_NULL => DbValue::Null,
-        PARAM_INT | PARAM_BOOL => match v {
-            Value::Null => DbValue::Null,
-            Value::Bool(b) => DbValue::Bool(b),
-            other => DbValue::Int(other.to_int()),
-        },
+        PARAM_INT | PARAM_BOOL => {
+            if v.is_null() {
+                DbValue::Null
+            } else if let Some(b) = v.as_bool() {
+                DbValue::Bool(b)
+            } else {
+                DbValue::Int(v.to_int())
+            }
+        }
         PARAM_LOB => {
             if let Some(r) = p8_runtime::stream::resource_of(&v) {
                 let bytes = p8_runtime::stream::resource(&r).map(|res| res.stream.borrow_mut().read_all()).unwrap_or_default();
                 DbValue::Blob(bytes)
-            } else if matches!(v, Value::Null) {
+            } else if v.is_null() {
                 DbValue::Null
             } else {
                 DbValue::Blob(to_text(ctx, &v)?.as_bytes().to_vec())
             }
         }
-        _ => match v {
-            Value::Null => DbValue::Null,
-            other => DbValue::Text(to_text(ctx, &other)?.as_bytes().to_vec()),
-        },
+        _ if v.is_null() => DbValue::Null,
+        _ => DbValue::Text(to_text(ctx, &v)?.as_bytes().to_vec()),
     }))
 }
 
@@ -400,12 +403,14 @@ fn dollar_value_of(ctx: &mut dyn Ctx, d: &Dbh, b: &Bound) -> Result<DbValue, Thr
         let bytes = res.stream.borrow_mut().read_all();
         return Ok(DbValue::Blob(bytes));
     }
-    Ok(match v {
-        _ if ty == PARAM_NULL => DbValue::Null,
-        Value::Null => DbValue::Null,
-        Value::Bool(x) => DbValue::Bool(x),
-        other if ty == PARAM_LOB => DbValue::Blob(to_text(ctx, &other)?.as_bytes().to_vec()),
-        other => DbValue::Text(to_text(ctx, &other)?.as_bytes().to_vec()),
+    Ok(if ty == PARAM_NULL || v.is_null() {
+        DbValue::Null
+    } else if let Some(x) = v.as_bool() {
+        DbValue::Bool(x)
+    } else if ty == PARAM_LOB {
+        DbValue::Blob(to_text(ctx, &v)?.as_bytes().to_vec())
+    } else {
+        DbValue::Text(to_text(ctx, &v)?.as_bytes().to_vec())
     })
 }
 
@@ -554,7 +559,7 @@ fn run_emulated(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, d: &Rc<Dbh>, p
             };
             let value = b.value.deref();
             let lob = if b.ty & 0xFFFF == PARAM_LOB { p8_runtime::stream::resource_of(&value) } else { None };
-            let ty = if matches!(value, Value::Null) { PARAM_NULL } else { b.ty & 0xFFFF };
+            let ty = if value.is_null() { PARAM_NULL } else { b.ty & 0xFFFF };
             let q = match ty {
                 _ if lob.is_some() => {
                     let bytes = lob.as_ref().and_then(|r| p8_runtime::stream::resource(r)).map(|res| res.stream.borrow_mut().read_all()).unwrap_or_default();
@@ -701,17 +706,20 @@ fn invalidate(st: &mut StmtState) {
 // ---- binding ----
 
 fn param_key(ctx: &mut dyn Ctx, func: &str, arg: &Value, is_param: bool) -> Result<PKey, Throw> {
-    match arg {
-        Value::Str(s) => {
-            if s.is_empty() {
-                return Err(ctx.throw("ValueError", format!("{func}(): Argument #1 ($param) must not be empty")));
-            }
-            let _ = is_param;
-            Ok(PKey::Name(String::from_utf8_lossy(s.as_bytes()).into_owned()))
+    if let Some(s) = arg.as_str() {
+        if s.is_empty() {
+            return Err(ctx.throw("ValueError", format!("{func}(): Argument #1 ($param) must not be empty")));
         }
-        Value::Int(i) if *i > 0 => Ok(PKey::Pos(*i - 1)),
-        Value::Int(_) => Err(ctx.throw("ValueError", format!("{func}(): Argument #1 ($param) must be greater than or equal to 1"))),
-        other => Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($param) must be of type string|int, {} given", value_name(other)))),
+        let _ = is_param;
+        Ok(PKey::Name(String::from_utf8_lossy(s.as_bytes()).into_owned()))
+    } else if let Some(i) = arg.as_int() {
+        if i > 0 {
+            Ok(PKey::Pos(i - 1))
+        } else {
+            Err(ctx.throw("ValueError", format!("{func}(): Argument #1 ($param) must be greater than or equal to 1")))
+        }
+    } else {
+        Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($param) must be of type string|int, {} given", value_name(arg))))
     }
 }
 
@@ -719,13 +727,21 @@ fn param_key(ctx: &mut dyn Ctx, func: &str, arg: &Value, is_param: bool) -> Resu
 fn register(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, mut b: Bound, is_param: bool) -> Result<bool, Throw> {
     // Convert the variable the way PDO does when it is bound.
     {
-        let cell = if let Value::Ref(c) = &b.value { Some(Rc::clone(c)) } else { None };
+        let cell = b.value.cloned_reference();
         let cur = b.value.deref();
-        let converted = match (b.ty & 0xFFFF, &cur) {
-            (PARAM_STR, v) if b.max_len <= 0 && !matches!(v, Value::Null) => Some(Value::Str(to_text(ctx, v)?)),
-            (PARAM_INT, Value::Bool(x)) => Some(Value::Int(i64::from(*x))),
-            (PARAM_BOOL, Value::Int(i)) => Some(Value::Bool(*i != 0)),
-            _ => None,
+        let t = b.ty & 0xFFFF;
+        let converted = if t == PARAM_STR && b.max_len <= 0 && !cur.is_null() {
+            Some(Value::str(to_text(ctx, &cur)?))
+        } else if t == PARAM_INT
+            && let Some(x) = cur.as_bool()
+        {
+            Some(Value::int(i64::from(x)))
+        } else if t == PARAM_BOOL
+            && let Some(i) = cur.as_int()
+        {
+            Some(Value::bool(i != 0))
+        } else {
+            None
         };
         if let Some(c) = converted {
             match cell {
@@ -750,7 +766,7 @@ fn register(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, mut b: Bound, is_p
             let d = dbh(ctx, this)?;
             let text = d.conn.borrow_mut().emulated_bool(truth);
             if let Some(text) = text {
-                b.value = Value::Str(PhpStr::new(text));
+                b.value = Value::str(PhpStr::new(text));
                 b.ty = PARAM_STR;
             }
         }
@@ -813,12 +829,12 @@ fn bind_common(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &
     // bindParam / bindColumn keep the variable's reference; bindValue the value.
     let value = if by_ref { args[1].clone() } else { arg(args, 1) };
     let ty = match arg(args, 2) {
-        Value::Null => PARAM_STR,
+        v if v.is_null() => PARAM_STR,
         v => v.to_int(),
     };
     let max_len = arg(args, 3).to_int();
     let b = Bound { key, value, ty, max_len, colno: None };
-    Ok(Value::Bool(register(ctx, func, this, b, is_param)?))
+    Ok(Value::bool(register(ctx, func, this, b, is_param)?))
 }
 
 pub fn m_bind_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -835,10 +851,10 @@ pub fn m_bind_column(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
 
 pub fn m_execute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let func = "PDOStatement::execute";
-    let input = match arg(args, 0) {
-        Value::Null => None,
-        Value::Array(a) => Some(a),
-        other => {
+    let input = match arg(args, 0).into_array() {
+        Ok(a) => Some(a),
+        Err(v) if v.is_null() => None,
+        Err(other) => {
             return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($params) must be of type ?array, {} given", value_name(&other))));
         }
     };
@@ -860,11 +876,11 @@ pub fn m_execute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
             };
             let b = Bound { key, value: v.deref(), ty: PARAM_STR, max_len: 0, colno: None };
             if !register(ctx, func, this, b, true)? {
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
-    Ok(Value::Bool(run(ctx, func, this)?))
+    Ok(Value::bool(run(ctx, func, this)?))
 }
 
 // ---- fetching ----
@@ -946,13 +962,13 @@ fn lookup_class(ctx: &mut dyn Ctx, name: &PhpStr) -> Result<Option<Rc<Class>>, T
 /// on the constructor, as PDO does).
 pub fn call_ctor(ctx: &mut dyn Ctx, obj: &Rc<Object>, args: &Option<Rc<PhpArray>>) -> Result<(), Throw> {
     // Each argument is a reference, so a by-reference parameter takes it.
-    let mut a: Vec<Value> = args.as_ref().map(|a| a.iter().map(|(_, v)| Value::Ref(Rc::new(RefCell::new(v.deref())))).collect()).unwrap_or_default();
+    let mut a: Vec<Value> = args.as_ref().map(|a| a.iter().map(|(_, v)| Value::new_reference(v.deref())).collect()).unwrap_or_default();
     let callee = p8_runtime::reflect::Callee::Method(Rc::clone(&obj.class), PhpStr::from("__construct"));
     ctx.invoke(&callee, Some(Rc::clone(obj)), &mut a)?;
     Ok(())
 }
 
-/// do_fetch(): one row in `how` (Value::Null result is `false`: None).
+/// do_fetch(): one row in `how` (a null result is `false`: None).
 /// With `all`, the row is added to the result of fetchAll() as the group
 /// and key modes ask.
 fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Option<&mut PhpArray>) -> Result<Option<Value>, Throw> {
@@ -966,7 +982,7 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
         return Ok(None);
     }
     if how == FETCH_BOUND {
-        return Ok(Some(Value::Bool(true)));
+        return Ok(Some(Value::TRUE));
     }
     let column_count = with(ctx, this, |st| st.column_count)?;
     let colno = if flags & FETCH_GROUP != 0 && fetch_cfg.column == -1 { 1 } else { fetch_cfg.column };
@@ -976,7 +992,7 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
     let names: Vec<PhpStr> = with(ctx, this, |st| st.columns.clone().unwrap_or_default())?;
     let has_all = all.is_some();
     let mut i = 0usize;
-    let mut result = Value::Bool(false);
+    let mut result = Value::FALSE;
     let mut obj_class: Option<Rc<Class>> = None;
     let mut cfg = fetch_cfg.clone();
     let mut array = PhpArray::new();
@@ -1023,7 +1039,7 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
             if flags & FETCH_CLASSTYPE != 0 {
                 let v = fetch_col(ctx, this, i)?;
                 i += 1;
-                if !matches!(v, Value::Null) {
+                if !v.is_null() {
                     let name = to_text(ctx, &v)?;
                     cfg.class = Some(name);
                 }
@@ -1055,7 +1071,7 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
                 impl_err(ctx, func, this, "HY000", Some("No fetch-into object specified."))?;
                 return Ok(None);
             };
-            if let Value::Object(o) = &into {
+            if let Some(o) = into.as_object() {
                 if o.class.lower == b"stdclass" {
                     how = FETCH_OBJ;
                 }
@@ -1069,10 +1085,10 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
         }
         _ => {}
     }
-    let mut grp = Value::Null;
+    let mut grp = Value::NULL;
     if has_all && how != FETCH_KEY_PAIR {
         let v = if flags == FETCH_GROUP && how == FETCH_COLUMN && fetch_cfg.column > 0 { fetch_col(ctx, this, colno as usize)? } else { fetch_col(ctx, this, i)? };
-        grp = Value::Str(to_text(ctx, &v)?);
+        grp = Value::str(to_text(ctx, &v)?);
         if how == FETCH_COLUMN {
             i = column_count;
         } else {
@@ -1090,18 +1106,18 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
             }
             FETCH_KEY_PAIR => {
                 let tmp = fetch_col(ctx, this, i + 1)?;
-                let k = match val {
-                    Value::Int(n) => Key::Int(n),
-                    other => Key::from_string(to_text(ctx, &other)?),
+                let k = match val.as_int() {
+                    Some(n) => Key::Int(n),
+                    None => Key::from_string(to_text(ctx, &val)?),
                 };
                 match all {
                     Some(all) => {
                         all.insert(k, tmp);
-                        return Ok(Some(Value::Bool(true)));
+                        return Ok(Some(Value::TRUE));
                     }
                     None => {
                         array.insert(k, tmp);
-                        return Ok(Some(Value::Array(Rc::new(array))));
+                        return Ok(Some(Value::array(array)));
                     }
                 }
             }
@@ -1114,16 +1130,16 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
             FETCH_NAMED => {
                 let k = column_key(&name);
                 match array.get(&k).cloned() {
-                    Some(Value::Array(existing)) if existing.is_list() && named_is_group(&array, &k) => {
-                        let mut a = (*existing).clone();
+                    Some(cur) if cur.as_array().is_some_and(|a| a.is_list()) && named_is_group(&array, &k) => {
+                        let mut a = cur.as_array().expect("an array").clone();
                         let _ = a.push(val);
-                        array.insert(k, Value::Array(Rc::new(a)));
+                        array.insert(k, Value::array(a));
                     }
                     Some(cur) => {
                         let mut a = PhpArray::new();
                         let _ = a.push(cur);
                         let _ = a.push(val);
-                        array.insert(k, Value::Array(Rc::new(a)));
+                        array.insert(k, Value::array(a));
                         mark_named(&mut array, &name);
                     }
                     None => {
@@ -1153,10 +1169,7 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
                         return Ok(None);
                     }
                     let o = ctx.new_instance(&class, &mut [], false)?;
-                    let text = match val {
-                        Value::Str(s) => Value::Str(s),
-                        _ => Value::str(""),
-                    };
+                    let text = if val.is_str() { val } else { Value::str("") };
                     let callee = p8_runtime::reflect::Callee::Method(Rc::clone(&class), PhpStr::from("unserialize"));
                     ctx.invoke(&callee, Some(Rc::clone(&o)), &mut [text])?;
                     ret_obj = Some(o);
@@ -1172,10 +1185,10 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
     }
     match how {
         FETCH_USE_DEFAULT | FETCH_ASSOC | FETCH_BOTH | FETCH_NUM | FETCH_NAMED => {
-            result = Value::Array(Rc::new(array));
+            result = Value::array(array);
         }
         FETCH_OBJ | FETCH_INTO => {
-            result = Value::Object(ret_obj.clone().expect("object"));
+            result = Value::object(ret_obj.clone().expect("object"));
         }
         FETCH_CLASS => {
             let o = ret_obj.clone().expect("object");
@@ -1183,7 +1196,7 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
             if class.method(b"__construct").is_some() && flags & (FETCH_PROPS_LATE | FETCH_SERIALIZE) == 0 {
                 call_ctor(ctx, &o, &cfg.ctor_args)?;
             }
-            result = Value::Object(o);
+            result = Value::object(o);
         }
         FETCH_FUNC => {
             let f = cfg.func.clone().expect("function");
@@ -1193,21 +1206,18 @@ fn do_fetch(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, how: i64, all: Opt
     }
     flags &= !0;
     if let Some(all) = all {
-        let key = match &grp {
-            Value::Str(s) => Key::from_string(s.clone()),
-            _ => Key::Int(0),
+        let key = match grp.cloned_str() {
+            Some(s) => Key::from_string(s),
+            None => Key::Int(0),
         };
         if (flags & FETCH_UNIQUE) == FETCH_UNIQUE {
             all.insert(key, result);
         } else {
-            let mut g = match all.get(&key) {
-                Some(Value::Array(a)) => (**a).clone(),
-                _ => PhpArray::new(),
-            };
+            let mut g = all.get(&key).and_then(Value::as_array).map_or_else(PhpArray::new, PhpArray::clone);
             let _ = g.push(result);
-            all.insert(key, Value::Array(Rc::new(g)));
+            all.insert(key, Value::array(g));
         }
-        return Ok(Some(Value::Bool(true)));
+        return Ok(Some(Value::TRUE));
     }
     Ok(Some(result))
 }
@@ -1228,7 +1238,7 @@ fn named_marker(key: &Key) -> Key {
 }
 
 fn mark_named(array: &mut PhpArray, name: &PhpStr) {
-    array.insert(named_marker(&column_key(name)), Value::Bool(true));
+    array.insert(named_marker(&column_key(name)), Value::TRUE);
 }
 
 /// The PDORow of the current row (PDO::FETCH_LAZY).
@@ -1236,7 +1246,7 @@ fn lazy_row(ctx: &mut dyn Ctx, this: &Rc<Object>) -> R {
     let class = ctx.class(b"PDORow").expect("PDORow");
     let o = ctx.new_object(&class);
     let (names, query) = with(ctx, this, |st| (st.columns.clone().unwrap_or_default(), st.query.clone()))?;
-    let _ = set_prop(ctx, &o, &class, b"queryString", Value::Str(query), true);
+    let _ = set_prop(ctx, &o, &class, b"queryString", Value::str(query), true);
     for (i, n) in names.iter().enumerate() {
         let v = {
             let d = data(this).s.borrow();
@@ -1246,13 +1256,13 @@ fn lazy_row(ctx: &mut dyn Ctx, this: &Rc<Object>) -> R {
             o.dynamic.borrow_mut().insert(column_key(n), v);
         }
     }
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// Remove the markers FETCH_NAMED left in a row.
 fn strip_named(v: Value) -> Value {
-    match v {
-        Value::Array(a) => {
+    match v.into_array() {
+        Ok(a) => {
             let mut out = PhpArray::new();
             for (k, val) in a.iter() {
                 if let Key::Str(s) = &k
@@ -1262,9 +1272,9 @@ fn strip_named(v: Value) -> Value {
                 }
                 out.insert(k, val.clone());
             }
-            Value::Array(Rc::new(out))
+            Value::array(out)
         }
-        other => other,
+        Err(other) => other,
     }
 }
 
@@ -1280,25 +1290,25 @@ pub fn m_fetch(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         Some(v) => Ok(strip_named(v)),
         None => {
             handle_err(ctx, func, this)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
 
 pub fn m_fetch_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let func = "PDOStatement::fetchObject";
-    let class = match arg(args, 0) {
-        Value::Null => None,
-        Value::Str(s) => match lookup_class(ctx, &s)? {
+    let class = match arg(args, 0).into_str() {
+        Err(v) if v.is_null() => None,
+        Ok(s) => match lookup_class(ctx, &s)? {
             Some(c) => Some(c),
             None => {
                 return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($class) must be a valid class name or null, {} given", String::from_utf8_lossy(s.as_bytes()))));
             }
         },
-        other => return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($class) must be of type ?string, {} given", value_name(&other)))),
+        Err(other) => return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($class) must be of type ?string, {} given", value_name(&other)))),
     };
-    let ctor = match arg(args, 1) {
-        Value::Array(a) if !a.is_empty() => Some(a),
+    let ctor = match arg(args, 1).into_array() {
+        Ok(a) if !a.is_empty() => Some(a),
         _ => None,
     };
     clear_err(this);
@@ -1313,7 +1323,7 @@ pub fn m_fetch_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
         Some(v) => Ok(v),
         None => {
             handle_err(ctx, func, this)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1324,7 +1334,7 @@ pub fn m_fetch_column(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
     clear_err(this);
     if !fetch_common(ctx, this)? {
         handle_err(ctx, func, this)?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if col < 0 {
         return Err(ctx.throw("ValueError", "Column index must be greater than or equal to 0".into()));
@@ -1339,7 +1349,7 @@ pub fn m_fetch_column(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
 
 pub fn m_fetch_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let func = "PDOStatement::fetchAll";
-    let mut how = if args.is_empty() || matches!(arg(args, 0), Value::Null) { FETCH_USE_DEFAULT } else { arg(args, 0).to_int() };
+    let mut how = if args.is_empty() || arg(args, 0).is_null() { FETCH_USE_DEFAULT } else { arg(args, 0).to_int() };
     let nargs = args.len();
     verify_mode(ctx, this, func, how, 1, "mode", true)?;
     let old = with(ctx, this, |st| st.fetch.clone())?;
@@ -1347,18 +1357,20 @@ pub fn m_fetch_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
         let _ = with(ctx, this, |st| st.fetch = old);
     };
     let arg2 = if nargs > 1 { Some(arg(args, 1)) } else { None };
-    let ctor = match arg(args, 2) {
-        Value::Array(a) if !a.is_empty() => Some(a),
+    let ctor = match arg(args, 2).into_array() {
+        Ok(a) if !a.is_empty() => Some(a),
         _ => None,
     };
     let base = how & !FETCH_FLAGS;
     let bad = match base {
         FETCH_CLASS => {
             let name = match &arg2 {
-                Some(Value::Str(s)) => s.clone(),
-                Some(other) => {
-                    return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($args) must be of type string, {} given", value_name(other))));
-                }
+                Some(v) => match v.cloned_str() {
+                    Some(s) => s,
+                    None => {
+                        return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($args) must be of type string, {} given", value_name(v))));
+                    }
+                },
                 None => PhpStr::from("stdClass"),
             };
             if lookup_class(ctx, &name)?.is_none() {
@@ -1375,14 +1387,14 @@ pub fn m_fetch_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
                 return Err(ctx.throw("ArgumentCountError", format!("{func}() expects exactly 2 argument for PDO::FETCH_FUNC, {nargs} given")));
             }
             match arg2 {
-                Some(Value::Null) | None => return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 must be a callable, null given"))),
-                Some(f) => {
+                Some(f) if !f.is_null() => {
                     if !ctx.is_callable(&f) {
                         let why = p8_runtime::args::callable_error(ctx, &f);
                         return Err(ctx.throw("TypeError", why));
                     }
                     with(ctx, this, |st| st.fetch.func = Some(f))?;
                 }
+                _ => return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 must be a callable, null given"))),
             }
             None
         }
@@ -1391,7 +1403,8 @@ pub fn m_fetch_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
                 return Err(ctx.throw("ArgumentCountError", format!("{func}() expects at most 2 argument for the fetch mode provided, {nargs} given")));
             }
             match arg2 {
-                Some(Value::Int(n)) => {
+                Some(v) if v.is_int() => {
+                    let n = v.as_int().expect("an int");
                     if n < 0 {
                         return Err(ctx.throw("ValueError", format!("{func}(): Argument #2 ($args) must be greater than or equal to 0")));
                     }
@@ -1453,21 +1466,21 @@ pub fn m_fetch_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
     if failed {
         handle_err(ctx, func, this)?;
     }
-    Ok(Value::Array(Rc::new(if grouped { all } else { list })))
+    Ok(Value::array(if grouped { all } else { list }))
 }
 
 pub fn m_row_count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(with(ctx, this, |st| st.row_count)?))
+    Ok(Value::int(with(ctx, this, |st| st.row_count)?))
 }
 
 pub fn m_column_count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(with(ctx, this, |st| st.column_count as i64)?))
+    Ok(Value::int(with(ctx, this, |st| st.column_count as i64)?))
 }
 
 pub fn m_error_code(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     with(ctx, this, |_| ())?;
     let e = data(this).err.borrow();
-    Ok(if e.sqlstate.is_empty() { Value::Null } else { Value::str(e.sqlstate.as_str()) })
+    Ok(if e.sqlstate.is_empty() { Value::NULL } else { Value::str(e.sqlstate.as_str()) })
 }
 
 pub fn m_error_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -1477,13 +1490,13 @@ pub fn m_error_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R 
     if e.sqlstate != "00000"
         && let Some((code, msg)) = &e.info
     {
-        items.push(Value::Int(*code));
+        items.push(Value::int(*code));
         items.push(Value::str(msg.as_str()));
     }
     while items.len() < 3 {
-        items.push(Value::Null);
+        items.push(Value::NULL);
     }
-    Ok(Value::Array(Rc::new(PhpArray::from_list(items))))
+    Ok(Value::array(PhpArray::from_list(items)))
 }
 
 pub fn m_close_cursor(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -1498,9 +1511,9 @@ pub fn m_close_cursor(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> 
     if let Err(e) = r {
         *data(this).err.borrow_mut() = ErrState { sqlstate: e.sqlstate, info: Some((e.code, e.message)) };
         handle_err(ctx, "PDOStatement::closeCursor", this)?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 pub fn m_next_rowset(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -1508,7 +1521,7 @@ pub fn m_next_rowset(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R
     let r = with(ctx, this, |st| st.driver.as_mut().and_then(|d| d.next_rowset()))?;
     let Some(r) = r else {
         impl_err(ctx, func, this, "IM001", Some("driver does not support multiple rowsets"))?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     clear_err(this);
     // pdo_stmt_do_next_rowset(): the columns are described anew.
@@ -1535,11 +1548,11 @@ pub fn m_next_rowset(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R
         }
     })?;
     match ok {
-        Ok(more) => Ok(Value::Bool(more)),
+        Ok(more) => Ok(Value::bool(more)),
         Err(e) => {
             *data(this).err.borrow_mut() = ErrState { sqlstate: e.sqlstate, info: Some((e.code, e.message)) };
             handle_err(ctx, func, this)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1548,7 +1561,7 @@ pub fn m_set_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
     with(ctx, this, |_| ())?;
     let _ = args;
     impl_err(ctx, "PDOStatement::setAttribute", this, "IM001", Some("This driver doesn't support setting attributes"))?;
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 pub fn m_get_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1560,10 +1573,10 @@ pub fn m_get_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
     }
     if attr == ATTR_EMULATE_PREPARES {
         let emulated = with(ctx, this, |st| st.scan.is_some())?;
-        return Ok(Value::Bool(emulated));
+        return Ok(Value::bool(emulated));
     }
     impl_err(ctx, "PDOStatement::getAttribute", this, "IM001", Some("driver doesn't support getting that attribute"))?;
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 pub fn m_get_column_meta(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1587,11 +1600,11 @@ pub fn m_get_column_meta(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
         } else {
             impl_err(ctx, func, this, "07009", Some("invalid column index"))?;
         }
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let Some(name) = name else {
         impl_err(ctx, func, this, "07009", Some("invalid column index"))?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let mut a = PhpArray::new();
     if let Some(entries) = &meta.ordered {
@@ -1602,17 +1615,17 @@ pub fn m_get_column_meta(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
         if let Some(t) = &meta.native_type {
             a.insert(str_key(b"native_type"), Value::str(t.as_str()));
         }
-        a.insert(str_key(b"pdo_type"), Value::Int(meta.pdo_type));
+        a.insert(str_key(b"pdo_type"), Value::int(meta.pdo_type));
         for (k, v) in &meta.extra {
             a.insert(str_key(k.as_bytes()), Value::str(v.as_str()));
         }
         let flags: Vec<Value> = meta.flags.iter().map(|f| Value::str(f.as_str())).collect();
-        a.insert(str_key(b"flags"), Value::Array(Rc::new(PhpArray::from_list(flags))));
+        a.insert(str_key(b"flags"), Value::array(PhpArray::from_list(flags)));
     }
-    a.insert(str_key(b"name"), Value::Str(name));
-    a.insert(str_key(b"len"), Value::Int(meta.len.unwrap_or(-1)));
-    a.insert(str_key(b"precision"), Value::Int(meta.precision.unwrap_or(0)));
-    Ok(Value::Array(Rc::new(a)))
+    a.insert(str_key(b"name"), Value::str(name));
+    a.insert(str_key(b"len"), Value::int(meta.len.unwrap_or(-1)));
+    a.insert(str_key(b"precision"), Value::int(meta.precision.unwrap_or(0)));
+    Ok(Value::array(a))
 }
 
 /// pdo_stmt_setup_fetch_mode(): `args` are the arguments after the mode.
@@ -1639,7 +1652,8 @@ pub fn setup_fetch_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, func: &str, mode: 
                 return Err(count_err(ctx, "exactly", arg1));
             }
             match arg(args, 0) {
-                Value::Int(c) => {
+                v if v.is_int() => {
+                    let c = v.as_int().expect("an int");
                     if c < 0 {
                         return Err(ctx.throw("ValueError", format!("{func}(): Argument #{arg1} ($args) must be greater than or equal to 0")));
                     }
@@ -1660,16 +1674,16 @@ pub fn setup_fetch_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, func: &str, mode: 
                 if n > 2 {
                     return Err(count_err(ctx, "at most", mode_arg + 2));
                 }
-                let Value::Str(name) = arg(args, 0) else {
+                let Ok(name) = arg(args, 0).into_str() else {
                     return Err(ctx.throw("TypeError", format!("{func}(): Argument #{arg1} ($args) must be of type string, {} given", value_name(&arg(args, 0)))));
                 };
                 let Some(class) = lookup_class(ctx, &name)? else {
                     return Err(ctx.throw("TypeError", format!("{func}(): Argument #{arg1} ($args) must be a valid class")));
                 };
                 if n == 2 {
-                    match arg(args, 1) {
-                        Value::Null => {}
-                        Value::Array(a) => {
+                    match arg(args, 1).into_array() {
+                        Err(v) if v.is_null() => {}
+                        Ok(a) => {
                             if !a.is_empty() {
                                 if class.method(b"__construct").is_none() {
                                     return Err(ctx.throw("Error", "User-supplied statement does not accept constructor arguments".into()));
@@ -1677,7 +1691,7 @@ pub fn setup_fetch_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, func: &str, mode: 
                                 fetch_ctor = Some(a);
                             }
                         }
-                        other => {
+                        Err(other) => {
                             return Err(ctx.throw("TypeError", format!("{func}(): Argument #{} ($args) must be of type ?array, {} given", mode_arg + 2, value_name(&other))));
                         }
                     }
@@ -1690,7 +1704,7 @@ pub fn setup_fetch_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, func: &str, mode: 
                 return Err(count_err(ctx, "exactly", arg1));
             }
             match arg(args, 0) {
-                v @ Value::Object(_) => fetch_into = Some(v),
+                v if v.is_object() => fetch_into = Some(v),
                 other => return Err(ctx.throw("TypeError", format!("{func}(): Argument #{arg1} ($args) must be of type object, {} given", value_name(&other)))),
             }
         }
@@ -1719,7 +1733,7 @@ pub fn m_set_fetch_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     let mode = arg(args, 0).to_int();
     let rest: Vec<Value> = args[1..].iter().map(Value::deref).collect();
     setup_fetch_mode(ctx, this, func, mode, 1, "mode", &rest)?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 pub fn m_debug_dump_params(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -1749,7 +1763,7 @@ pub fn m_debug_dump_params(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]
         }
     }
     ctx.echo(&out);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- iteration ----
@@ -1796,46 +1810,48 @@ pub fn m_get_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> 
         d.key.set(-1);
     }
     iter_step(ctx, &it)?;
-    Ok(Value::Object(it))
+    Ok(Value::object(it))
 }
 
 pub fn it_current(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(iter_data(this).ahead.borrow().clone().unwrap_or(Value::Null))
+    Ok(iter_data(this).ahead.borrow().clone().unwrap_or(Value::NULL))
 }
 
 pub fn it_key(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let d = iter_data(this);
-    Ok(if d.ahead.borrow().is_none() && d.key.get() < 0 { Value::Null } else { Value::Int(d.key.get()) })
+    Ok(if d.ahead.borrow().is_none() && d.key.get() < 0 { Value::NULL } else { Value::int(d.key.get()) })
 }
 
 pub fn it_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     iter_step(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn it_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Bool(iter_data(this).ahead.borrow().is_some()))
+    Ok(Value::bool(iter_data(this).ahead.borrow().is_some()))
 }
 
 pub fn it_rewind(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- PDORow (PDO::FETCH_LAZY) as an array ----
 
 pub fn row_offset_get(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let d = this.dynamic.borrow();
-    Ok(match arg(args, 0) {
-        Value::Int(i) => d.values().nth(i.max(0) as usize).map_or(Value::Null, Value::deref),
-        other => d.get(&Key::from_string(other.to_php_string().unwrap_or_else(PhpStr::empty))).map_or(Value::Null, Value::deref),
+    let k = arg(args, 0);
+    Ok(match k.as_int() {
+        Some(i) => d.values().nth(i.max(0) as usize).map_or(Value::NULL, Value::deref),
+        None => d.get(&Key::from_string(k.to_php_string().unwrap_or_else(PhpStr::empty))).map_or(Value::NULL, Value::deref),
     })
 }
 
 pub fn row_offset_exists(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let d = this.dynamic.borrow();
-    Ok(Value::Bool(match arg(args, 0) {
-        Value::Int(i) => i >= 0 && (i as usize) < d.len(),
-        other => d.contains_key(&Key::from_string(other.to_php_string().unwrap_or_else(PhpStr::empty))),
+    let k = arg(args, 0);
+    Ok(Value::bool(match k.as_int() {
+        Some(i) => i >= 0 && (i as usize) < d.len(),
+        None => d.contains_key(&Key::from_string(k.to_php_string().unwrap_or_else(PhpStr::empty))),
     }))
 }
 

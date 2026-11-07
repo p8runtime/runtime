@@ -204,7 +204,7 @@ static CLASSES: &[ClassSpec] = &[ClassSpec {
 // ---- helpers ----
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn bytes(args: &[Value], i: usize) -> Vec<u8> {
@@ -250,7 +250,7 @@ fn new_finfo(ctx: &mut dyn Ctx, opened: Opened) -> Value {
     let h = Handle::default();
     h.flags.set(Some(opened.flags));
     *h.rules.borrow_mut() = opened.rules;
-    Value::Object(o.sibling(class, Some(Rc::new(h))))
+    Value::object(o.sibling(class, Some(Rc::new(h))))
 }
 
 struct Opened {
@@ -282,7 +282,7 @@ fn load_magic(path: &std::path::Path) -> Option<magic::Rules> {
 fn open(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<(Option<Opened>, Vec<String>), Throw> {
     let flags = if args.is_empty() { 0 } else { arg(args, 0).to_int() };
     let db = match arg(args, 1) {
-        Value::Null => Vec::new(),
+        v if v.is_null() => Vec::new(),
         v => v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
     };
     if db.contains(&0) {
@@ -331,7 +331,7 @@ fn finfo_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     match opened {
         Some(o) => Ok(new_finfo(ctx, o)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -346,7 +346,7 @@ fn m_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         Some(o) => {
             handle(this).flags.set(Some(o.flags));
             *handle(this).rules.borrow_mut() = o.rules;
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
         None => Err(ctx.throw("Exception", "Constructor failed".into())),
     }
@@ -360,20 +360,20 @@ fn flags_of(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Result<i64, Throw> {
 }
 
 fn this_arg(args: &[Value]) -> Rc<Object> {
-    match arg(args, 0) {
-        Value::Object(o) => o,
-        _ => unreachable!("checked against the stub"),
+    match arg(args, 0).into_object() {
+        Ok(o) => o,
+        Err(_) => unreachable!("checked against the stub"),
     }
 }
 
 fn finfo_close(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn set_flags(ctx: &mut dyn Ctx, o: &Rc<Object>, flags: i64) -> R {
     flags_of(ctx, o)?;
     handle(o).flags.set(Some(flags));
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn finfo_set_flags(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -391,10 +391,10 @@ fn m_set_flags(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
 fn identify(ctx: &mut dyn Ctx, func: &str, flags: i64, data: &[u8], custom: Option<Rc<magic::Rules>>, env: magic::Env) -> R {
     let rules = custom.unwrap_or_else(|| PARSED.with(Rc::clone));
     match detect::identify(&rules, &data[..data.len().min(BYTES_MAX)], flags, env) {
-        Ok(out) => Ok(Value::Str(PhpStr::new(printable(out)))),
+        Ok(out) => Ok(Value::str(PhpStr::new(printable(out)))),
         Err(e) => {
             ctx.warn(&format!("{func}(): Failed identify data 0:{e}"));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -444,10 +444,7 @@ fn read_source(ctx: &mut dyn Ctx, func: &str, path: &[u8]) -> Result<Option<Sour
     let shown = lossy(path);
     if shown.contains("://") && !shown.starts_with("file://") || shown.starts_with("data:") {
         let r = ctx.call(&Value::str("file_get_contents"), &mut [Value::str(shown.as_str())])?;
-        return Ok(match r {
-            Value::Str(s) => Some(Source::Data(s.as_bytes().to_vec(), magic::Env::default())),
-            _ => None,
-        });
+        return Ok(r.as_str().map(|s| Source::Data(s.as_bytes().to_vec(), magic::Env::default())));
     }
     let p = shown.strip_prefix("file://").unwrap_or(&shown);
     match std::fs::metadata(p) {
@@ -486,7 +483,7 @@ fn do_file(ctx: &mut dyn Ctx, func: &str, o: Option<&Rc<Object>>, path: &[u8], f
     }
     let flags = if flags != 0 { flags } else { base };
     match read_source(ctx, func, path)? {
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
         Some(Source::Dir) => Ok(Value::str("directory")),
         Some(Source::Data(d, env)) => {
             let rules = o.and_then(|o| handle(o).rules.borrow().clone());
@@ -511,7 +508,7 @@ fn m_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
 fn mime_content_type(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let a = arg(args, 0);
     if let Some(r) = p8_runtime::stream::resource_of(&a) {
-        let Some(res) = p8_runtime::stream::resource(&r) else { return Ok(Value::Bool(false)) };
+        let Some(res) = p8_runtime::stream::resource(&r) else { return Ok(Value::FALSE) };
         let data = {
             let mut s = res.stream.borrow_mut();
             let at = s.tell();
@@ -523,9 +520,9 @@ fn mime_content_type(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         };
         return identify(ctx, "mime_content_type", 16, &data, None, magic::Env::default());
     }
-    match a {
-        Value::Str(s) => do_file(ctx, "mime_content_type", None, s.as_bytes(), 0, 1, "filename"),
-        other => Err(ctx.throw("TypeError", format!("mime_content_type(): Argument #1 ($filename) must be of type resource|string, {} given", other.type_name()))),
+    match a.as_str() {
+        Some(s) => do_file(ctx, "mime_content_type", None, s.as_bytes(), 0, 1, "filename"),
+        None => Err(ctx.throw("TypeError", format!("mime_content_type(): Argument #1 ($filename) must be of type resource|string, {} given", a.type_name()))),
     }
 }
 

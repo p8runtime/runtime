@@ -159,7 +159,7 @@ pub fn exception(ctx: &mut dyn Ctx, message: String, code: Value, info: Option<P
     if let Throw::Error { props, .. } = &mut t {
         props.push(("code", code));
         if let Some(info) = info {
-            props.push(("errorInfo", Value::Array(Rc::new(info))));
+            props.push(("errorInfo", Value::array(info)));
         }
     }
     t
@@ -184,7 +184,7 @@ pub fn impl_error(ctx: &mut dyn Ctx, func: &str, dbh: &Dbh, at: Where, sqlstate:
         ctx.warn(&format!("{func}(): {message}"));
         return Ok(());
     }
-    let info = info_array(vec![Value::str(sqlstate), Value::Int(0)]);
+    let info = info_array(vec![Value::str(sqlstate), Value::int(0)]);
     Err(exception(ctx, message, Value::str(sqlstate), Some(info)))
 }
 
@@ -210,7 +210,7 @@ pub fn handle_error(ctx: &mut dyn Ctx, func: &str, dbh: &Dbh, at: Where) -> Resu
     let mut items = vec![Value::str(sqlstate.as_str())];
     let message = match &native {
         Some((code, supp)) => {
-            items.push(Value::Int(*code));
+            items.push(Value::int(*code));
             items.push(Value::str(supp.as_str()));
             if *code != 0 {
                 format!("SQLSTATE[{sqlstate}]: {}: {code} {supp}", description(&sqlstate))
@@ -246,7 +246,7 @@ pub fn dispatch_notices(ctx: &mut dyn Ctx, dbh: &Dbh) -> Result<(), Throw> {
     let pending = dbh.conn.borrow_mut().take_notices();
     if let Some((callback, messages)) = pending {
         for m in messages {
-            ctx.call(&callback, &mut [Value::Str(PhpStr::new(m))])?;
+            ctx.call(&callback, &mut [Value::str(PhpStr::new(m))])?;
         }
     }
     Ok(())

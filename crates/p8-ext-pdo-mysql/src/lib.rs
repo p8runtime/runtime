@@ -297,23 +297,28 @@ impl MyConn {
 
 /// pdo_get_bool_param()
 fn bool_param(ctx: &mut dyn Ctx, value: &Value) -> Result<bool, Throw> {
-    match value {
-        Value::Bool(b) => Ok(*b),
-        Value::Int(i) => Ok(*i != 0),
-        other => Err(ctx.throw("TypeError", format!("Attribute value must be of type bool for selected attribute, {} given", p8_runtime::args::value_name(other)))),
+    if let Some(b) = value.as_bool() {
+        Ok(b)
+    } else if let Some(i) = value.as_int() {
+        Ok(i != 0)
+    } else {
+        Err(ctx.throw("TypeError", format!("Attribute value must be of type bool for selected attribute, {} given", p8_runtime::args::value_name(value))))
     }
 }
 
 /// pdo_get_long_param()
 fn long_param(ctx: &mut dyn Ctx, value: &Value) -> Result<i64, Throw> {
-    match value {
-        Value::Int(i) => Ok(*i),
-        Value::Bool(b) => Ok(i64::from(*b)),
-        Value::Str(s) => match p8_runtime::numeric::numeric_string(s.as_bytes()) {
+    if let Some(i) = value.as_int() {
+        Ok(i)
+    } else if let Some(b) = value.as_bool() {
+        Ok(i64::from(b))
+    } else if let Some(s) = value.as_str() {
+        match p8_runtime::numeric::numeric_string(s.as_bytes()) {
             Some(p8_runtime::numeric::Number::Int(i)) => Ok(i),
             _ => Err(ctx.throw("TypeError", format!("Attribute value must be of type int for selected attribute, {} given", p8_runtime::args::value_name(value)))),
-        },
-        other => Err(ctx.throw("TypeError", format!("Attribute value must be of type int for selected attribute, {} given", p8_runtime::args::value_name(other)))),
+        }
+    } else {
+        Err(ctx.throw("TypeError", format!("Attribute value must be of type int for selected attribute, {} given", p8_runtime::args::value_name(value))))
     }
 }
 
@@ -435,13 +440,13 @@ impl Connection for MyConn {
             ATTR_CLIENT_VERSION => Value::str(p8_mysqlnd::CLIENT_INFO),
             ATTR_SERVER_VERSION => Value::str(c.server_version.as_str()),
             ATTR_CONNECTION_STATUS => Value::str(c.host_info.as_str()),
-            ATTR_AUTOCOMMIT => Value::Bool(self.autocommit),
-            ATTR_DEFAULT_STR_PARAM => Value::Int(if self.national { PARAM_STR_NATL } else { PARAM_STR_CHAR }),
-            MYSQL_ATTR_USE_BUFFERED_QUERY => Value::Bool(self.shared.buffered.get()),
-            ATTR_EMULATE_PREPARES | MYSQL_ATTR_DIRECT_QUERY => Value::Bool(self.emulate),
-            MYSQL_ATTR_LOCAL_INFILE => Value::Bool(self.local_infile),
-            MYSQL_ATTR_LOCAL_INFILE_DIRECTORY => self.local_infile_directory.as_ref().map_or(Value::Null, |d| Value::Str(p8_runtime::string::PhpStr::new(d.clone()))),
-            ATTR_FETCH_TABLE_NAMES => Value::Bool(self.shared.table_names.get()),
+            ATTR_AUTOCOMMIT => Value::bool(self.autocommit),
+            ATTR_DEFAULT_STR_PARAM => Value::int(if self.national { PARAM_STR_NATL } else { PARAM_STR_CHAR }),
+            MYSQL_ATTR_USE_BUFFERED_QUERY => Value::bool(self.shared.buffered.get()),
+            ATTR_EMULATE_PREPARES | MYSQL_ATTR_DIRECT_QUERY => Value::bool(self.emulate),
+            MYSQL_ATTR_LOCAL_INFILE => Value::bool(self.local_infile),
+            MYSQL_ATTR_LOCAL_INFILE_DIRECTORY => self.local_infile_directory.as_ref().map_or(Value::NULL, |d| Value::str(p8_runtime::string::PhpStr::new(d.clone()))),
+            ATTR_FETCH_TABLE_NAMES => Value::bool(self.shared.table_names.get()),
             _ => return None,
         })
     }
@@ -453,7 +458,7 @@ impl Connection for MyConn {
         // mysqlnd_stat(): COM_STATISTICS.
         let r = self.shared.conn.borrow_mut().stat();
         match r {
-            Ok(s) => Ok(Some(Value::Str(p8_runtime::string::PhpStr::new(s)))),
+            Ok(s) => Ok(Some(Value::str(p8_runtime::string::PhpStr::new(s)))),
             Err(e) => Err(self.error(&e)),
         }
     }
@@ -736,9 +741,9 @@ impl Statement for MyStmt {
             p8_mysqlnd::TYPE_BIT | p8_mysqlnd::TYPE_YEAR | p8_mysqlnd::TYPE_TINY | p8_mysqlnd::TYPE_SHORT | p8_mysqlnd::TYPE_INT24 | p8_mysqlnd::TYPE_LONG | p8_mysqlnd::TYPE_LONGLONG => PARAM_INT,
             _ => PARAM_STR,
         };
-        entries.push(("pdo_type".to_string(), Value::Int(pdo_type)));
-        entries.push(("flags".to_string(), Value::Array(Rc::new(p8_runtime::array::PhpArray::from_list(flags)))));
-        entries.push(("table".to_string(), Value::Str(p8_runtime::string::PhpStr::new(col.table.clone()))));
+        entries.push(("pdo_type".to_string(), Value::int(pdo_type)));
+        entries.push(("flags".to_string(), Value::array(p8_runtime::array::PhpArray::from_list(flags))));
+        entries.push(("table".to_string(), Value::str(p8_runtime::string::PhpStr::new(col.table.clone()))));
         Some(ColumnMeta { ordered: Some(entries), len: Some(i64::from(col.length)), precision: Some(i64::from(col.decimals)), ..ColumnMeta::default() })
     }
 
@@ -795,7 +800,7 @@ fn get_warning_count(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
     let dbh = p8_ext_pdo::dbh_of(ctx, this)?;
     let mut c = dbh.conn.borrow_mut();
     let warnings = c.as_any().downcast_mut::<MyConn>().map_or(0, |my| my.shared.conn.borrow().warnings);
-    Ok(Value::Int(i64::from(warnings)))
+    Ok(Value::int(i64::from(warnings)))
 }
 
 static CLASSES: &[ClassSpec] = &[ClassSpec {
