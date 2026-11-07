@@ -756,6 +756,18 @@ impl Context<'_> {
                         continue 'frame;
                     }
                     Some(&Callee::Builtin(i)) => {
+                        // Frameless when the builtin is on the borrowed ABI
+                        // and its arguments need no conversion (and no
+                        // header callback can run before output).
+                        let call = self.isolate.registry.call(i);
+                        let start = base + args as usize;
+                        if let (Some(run), Some(sig)) = (call.frameless, call.sig)
+                            && p8_runtime::args::plain_call(sig, call.counts, &regs[start..start + n as usize])
+                            && !(self.header_callback_set && !self.out.started)
+                        {
+                            pc = self.frameless_call(regs, pc, i, run, (start, n as usize, base + dst as usize))?;
+                            continue 'frame;
+                        }
                         pc = self.builtin_call(regs, pc, base, i, (args, n, dst))?;
                         continue 'frame;
                     }

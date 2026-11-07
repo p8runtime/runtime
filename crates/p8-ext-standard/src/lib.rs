@@ -4,7 +4,8 @@
 //! php-src directories).
 
 use p8_runtime::array::PhpArray;
-use p8_runtime::ext::{Ob, Builtin, Constant, Ctx, Extension, Registry, Throw};
+use p8_runtime::ext::{Ob, Builtin, Constant, Ctx, Extension, Fault, FastBuiltin, OrFault, Registry, Throw};
+use p8_runtime::lent;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -54,10 +55,14 @@ mod var;
 mod weak;
 mod zlib;
 
+/// Builtins on the borrowed ABI ([`p8_runtime::ext::Fast`]).
+static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "strlen", run: strlen },
+    FastBuiltin { name: "count", run: count },
+];
+
 static BUILTINS: &[Builtin] = &[
-    Builtin { name: "strlen", run: strlen, by_ref: &[] },
     Builtin { name: "str_repeat", run: str_repeat, by_ref: &[] },
-    Builtin { name: "count", run: count, by_ref: &[] },
     Builtin { name: "dechex", run: dechex, by_ref: &[] },
     Builtin { name: "hrtime", run: hrtime, by_ref: &[] },
     Builtin { name: "microtime", run: microtime, by_ref: &[] },
@@ -151,7 +156,9 @@ fn register(registry: &mut Registry) {
         registry.add_ini(name, *default);
     }
     registry.add_functions(BUILTINS);
+    registry.add_fast(FAST);
     registry.add_functions(array::BUILTINS);
+    registry.add_fast(array::FAST);
     registry.add_classes(array::CLASSES);
     registry.add_classes(math::CLASSES);
     // basic_functions.stub.php: `@prefer-ref $array`, `@prefer-ref $rest`.
@@ -206,6 +213,7 @@ fn register(registry: &mut Registry) {
     registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);
     registry.add_functions(math::BUILTINS);
+    registry.add_fast(math::FAST);
     registry.add_functions(head::BUILTINS);
     registry.add_functions(misc::BUILTINS);
     registry.add_functions(phpinfo::BUILTINS);
@@ -240,7 +248,10 @@ fn register(registry: &mut Registry) {
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(class::REENTER);
-    registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
+    registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export"]);
+    // (count: a Countable's count() is PHP code; on an array it is not,
+    // so a call with no object argument may still be frameless.)
+    registry.mark_reenters_on_objects(&["count", "sizeof"]);
     for (module, name, value, deprecation) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
@@ -264,8 +275,11 @@ fn str_arg(args: &[Value], i: usize) -> PhpStr {
     arg(args, i).to_php_string().unwrap_or_else(PhpStr::empty)
 }
 
-fn strlen(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::int(str_arg(args, 0).len() as i64))
+fn strlen(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::int(match lent::str(args, 0) {
+        Some(s) => s.len(),
+        None => lent::string(args, 0).len(),
+    } as i64))
 }
 
 fn str_repeat(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -274,15 +288,19 @@ fn str_repeat(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::str(PhpStr::new(s.as_bytes().repeat(n))))
 }
 
-fn count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mode = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
-    let v = arg(args, 0);
+fn count(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let mode = lent::int(args, 1);
+    if let Some(a) = lent::array(args, 0) {
+        return Ok(Value::int(if mode == 1 { count_recursive(a) } else { a.len() as i64 }));
+    }
+    let v = lent::at(args, 0).deref();
     Ok(Value::int(if let Some(a) = v.as_array() {
         if mode == 1 { count_recursive(a) } else { a.len() as i64 }
     } else if let Some(o) = v.as_object().filter(|o| o.class.is_a(b"countable")) {
-        // A Countable: its count().
+        // A Countable: its count() (PHP code: count is marked as one
+        // that may run it, so it is never frameless on an object).
         let callable = Value::array(PhpArray::from_list(vec![Value::object(o.clone()), Value::str("count")]));
-        ctx.call(&callable, &mut [])?.to_int()
+        ctx.call(&callable, &mut []).or_fault(ctx)?.to_int()
     } else {
         1
     }))

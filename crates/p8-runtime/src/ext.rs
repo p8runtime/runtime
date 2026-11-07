@@ -176,6 +176,23 @@ pub trait Ctx {
     fn extra_args(&self) -> &[Value];
     /// A Throw with PHP's error `class` at the current line.
     fn throw(&self, class: &'static str, message: String) -> Throw;
+    /// Keep `t` for the engine to raise once the running builtin returns:
+    /// how a builtin on the borrowed ABI ([`Fast`]) ends with an error.
+    /// Use [`Ctx::fault`]; this is the storage under it.
+    fn set_fault(&mut self, t: Throw);
+    /// The error side of a [`Fast`] builtin's result: `t` waits in the
+    /// context, the builtin returns `Err(ctx.fault(t))`. (A [`Fault`] is
+    /// made only here, so an `Err` always has its Throw.)
+    fn fault(&mut self, t: Throw) -> Fault {
+        self.set_fault(t);
+        Fault(())
+    }
+    /// [`Ctx::throw`] as a [`Fault`]: the error `class` raised at the
+    /// current line.
+    fn fault_with(&mut self, class: &'static str, message: String) -> Fault {
+        let t = self.throw(class, message);
+        self.fault(t)
+    }
     /// The class `name` (any case, optional leading `\`), if declared.
     fn class(&mut self, name: &[u8]) -> Option<Rc<Class>>;
     /// The class the running code is in (None outside any class).
@@ -413,6 +430,61 @@ pub struct Builtin {
     pub by_ref: &'static [usize],
 }
 
+/// The error of a [`Fast`] builtin: zero-sized, so `Result<Value, Fault>`
+/// is a `Value`'s 16 bytes (the error in the tag's niche) and comes back
+/// in two registers. What was thrown waits in the context: only
+/// [`Ctx::fault`] makes one.
+#[derive(Debug)]
+pub struct Fault(());
+
+/// A builtin on the borrowed ABI: its arguments are the caller's argument
+/// registers, lent (no copy, nothing moved; a builtin that needs one owned
+/// clones it), and it takes no parameter by reference. When the arguments
+/// are plainly of their declared types (nothing to convert, nothing to
+/// warn about) the call is frameless: the call site's arm calls the
+/// function pointer directly, with no frame of either kind. Anything else
+/// goes through the checked path first, which converts the arguments in
+/// place and then lends them the same way.
+pub type Fast = fn(&mut dyn Ctx, &[Value]) -> Result<Value, Fault>;
+
+/// A builtin of the borrowed ABI, as an extension declares it.
+pub struct FastBuiltin {
+    /// Lowercase.
+    pub name: &'static str,
+    pub run: Fast,
+}
+
+/// A builtin's name and by-reference parameters, whichever ABI it has.
+#[derive(Clone, Copy)]
+pub struct Entry {
+    /// Lowercase.
+    pub name: &'static str,
+    /// Parameters passed by reference.
+    pub by_ref: &'static [usize],
+}
+
+/// How a builtin is called.
+#[derive(Clone, Copy)]
+pub enum Imp {
+    /// The arguments moved out of the caller's registers ([`Run`]).
+    Moved(Run),
+    /// The arguments lent ([`Fast`]).
+    Lent(Fast),
+}
+
+/// [`Ctx::fault`]'s Throw, for a [`Fast`] builtin calling code that
+/// returns `Result<_, Throw>`: `helper(..).or_fault(ctx)?`.
+pub trait OrFault<T> {
+    fn or_fault(self, ctx: &mut dyn Ctx) -> Result<T, Fault>;
+}
+
+impl<T> OrFault<T> for Result<T, Throw> {
+    #[inline]
+    fn or_fault(self, ctx: &mut dyn Ctx) -> Result<T, Fault> {
+        self.map_err(|t| ctx.fault(t))
+    }
+}
+
 /// What calling a builtin needs, read from one place on every call: the
 /// function, its stub signature (None: its arguments are not checked) with
 /// the argument counts it takes ([`crate::args::counts`], worked out once),
@@ -420,7 +492,10 @@ pub struct Builtin {
 /// whether it may run PHP code (the registers are lent to it).
 #[derive(Clone, Copy)]
 pub struct Call {
-    pub run: Run,
+    pub run: Imp,
+    /// The function, when a call may be frameless (see [`frameless`]);
+    /// the call site still checks that the arguments need no conversion.
+    pub frameless: Option<Imp>,
     pub sig: Option<&'static p8_stubs::Sig>,
     pub counts: (usize, usize),
     pub deprecated: bool,
@@ -432,6 +507,17 @@ pub struct Call {
     /// Its by-reference parameters take a value too (the stub's
     /// `@prefer-ref`: ZEND_SEND_PREFER_REF).
     pub prefer_ref: bool,
+}
+
+/// Whether a call of `call` may be frameless: the builtin has a signature
+/// (the call site checks the arguments against it), is not deprecated
+/// (the notice is the checked path's), takes nothing by reference and
+/// cannot run PHP code. Either ABI: a builtin of the moved one ([`Run`])
+/// gets the registers mutably, as the checked path's common case already
+/// gave them; one of the borrowed ABI ([`Fast`]) reads them in place and
+/// answers in two registers.
+fn frameless(call: &Call, by_ref: &[usize]) -> Option<Imp> {
+    (call.sig.is_some() && !call.deprecated && !call.reenters && by_ref.is_empty()).then_some(call.run)
 }
 
 /// A constant's value as an extension declares it.
@@ -470,7 +556,7 @@ pub struct Registry {
     /// Where log_errors writes an error (php_log_err: the error_log ini's
     /// file, dated, or the SAPI's log), as the standard extension does it.
     error_logger: Option<fn(&mut dyn Ctx, &[u8])>,
-    functions: Vec<&'static Builtin>,
+    functions: Vec<Entry>,
     /// What a call of each function reads, by index (see [`Call`]).
     calls: Vec<Call>,
     /// "Function f() is deprecated…" for the functions PHP deprecates.
@@ -607,26 +693,41 @@ impl Registry {
 
     pub fn add_functions(&mut self, functions: &'static [Builtin]) {
         for f in functions {
-            let i = self.functions.len();
-            self.functions.push(f);
-            let sig = p8_stubs::lookup(f.name.as_bytes());
-            let deprecation = sig.and_then(p8_stubs::deprecation);
-            self.calls.push(Call {
-                run: f.run,
-                sig,
-                counts: sig.map_or((0, 0), crate::args::counts),
-                deprecated: deprecation.is_some(),
-                // A callable, or a Traversable (gone through by running its code).
-                reenters: sig.is_some_and(|s| {
-                    s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
-                }),
-                own_callbacks: false,
-                prefer_ref: false,
-            });
-            self.deprecations.push(deprecation);
-            let sym = self.symbols.intern(f.name.as_bytes());
-            self.index.insert(sym, i);
+            self.add_function(Entry { name: f.name, by_ref: f.by_ref }, Imp::Moved(f.run));
         }
+    }
+
+    /// Builtins of the borrowed ABI ([`Fast`]).
+    pub fn add_fast(&mut self, functions: &'static [FastBuiltin]) {
+        for f in functions {
+            self.add_function(Entry { name: f.name, by_ref: &[] }, Imp::Lent(f.run));
+        }
+    }
+
+    fn add_function(&mut self, entry: Entry, run: Imp) {
+        let i = self.functions.len();
+        self.functions.push(entry);
+        let sig = p8_stubs::lookup(entry.name.as_bytes());
+        let deprecation = sig.and_then(p8_stubs::deprecation);
+        // A callable, or a Traversable (gone through by running its code).
+        let reenters = sig.is_some_and(|s| {
+            s.params.iter().any(|p| p.mask & p8_stubs::T_CALLABLE != 0 || p.classes.iter().any(|c| c.eq_ignore_ascii_case("Traversable")))
+        });
+        let mut call = Call {
+            run,
+            frameless: None,
+            sig,
+            counts: sig.map_or((0, 0), crate::args::counts),
+            deprecated: deprecation.is_some(),
+            reenters,
+            own_callbacks: false,
+            prefer_ref: false,
+        };
+        call.frameless = frameless(&call, entry.by_ref);
+        self.calls.push(call);
+        self.deprecations.push(deprecation);
+        let sym = self.symbols.intern(entry.name.as_bytes());
+        self.index.insert(sym, i);
     }
 
     /// The names' symbol table, shared by the compiler and every isolate.
@@ -727,7 +828,7 @@ impl Registry {
         self.functions.iter().map(|f| f.name)
     }
 
-    pub fn function(&self, i: usize) -> &'static Builtin {
+    pub fn function(&self, i: usize) -> Entry {
         self.functions[i]
     }
 
@@ -760,6 +861,7 @@ impl Registry {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
                 self.calls[i].sig = None;
+                self.calls[i].frameless = None;
             }
         }
     }
@@ -767,6 +869,19 @@ impl Registry {
     /// Builtins that run PHP code or reach the caller's variables though
     /// they take no callable (serialize, compact): the registers are lent.
     pub fn mark_reenters(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(i) = self.lookup(n.as_bytes()) {
+                self.calls[i].reenters = true;
+                self.calls[i].frameless = None;
+            }
+        }
+    }
+
+    /// Builtins that run PHP code only on an object argument (count: a
+    /// Countable's count()): the checked path lends them the registers,
+    /// and a frameless call stays possible, since a frameless call has no
+    /// object argument ([`crate::args::plain_call`]).
+    pub fn mark_reenters_on_objects(&mut self, names: &[&str]) {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
                 self.calls[i].reenters = true;

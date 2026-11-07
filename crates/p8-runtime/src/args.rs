@@ -43,6 +43,33 @@ pub fn counts(sig: &Sig) -> (usize, usize) {
     (required, if variadic { usize::MAX } else { params.len() })
 }
 
+/// Whether a frameless call can skip [`check_counted`]: as many arguments
+/// as `sig` takes, each plainly of its parameter's type (nothing to
+/// convert, warn about or refuse), and none an object (one may need its
+/// __toString(), or be a Countable: PHP code, which the checked path
+/// runs with the builtin's frame pushed). (ZEND_FRAMELESS_ICALL's
+/// operands are type-tested the same way before the handler runs.)
+#[inline(always)]
+pub fn plain_call(sig: &Sig, (required, max): (usize, usize), args: &[Value]) -> bool {
+    if args.len() < required || args.len() > max {
+        return false;
+    }
+    let params = sig.params;
+    for (i, arg) in args.iter().enumerate() {
+        let param = match params.get(i) {
+            Some(p) => p,
+            None => match params.last() {
+                Some(p) if p.variadic => p,
+                _ => return false,
+            },
+        };
+        if arg.is_object() || !plainly(param, arg) {
+            return false;
+        }
+    }
+    true
+}
+
 /// [`check`], with `sig`'s [`counts`] already known.
 #[inline]
 pub fn check_counted(sig: &Sig, (required, max): (usize, usize), args: &mut [Value], diags: &mut Diags) -> Result<(), Refused> {
